@@ -4797,16 +4797,37 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
             throw std::runtime_error(fmt::format("Keyspace '{}' has no tables", ks_name));
         }
 
-        for (const auto& schema : tables) {
-            if (!tablet_metadata.has_tablet_map(schema->id())) {
+        // The topology coordinator checks this too; failing here saves the operator a
+        // topology request that could only be rejected.
+        if (!replica::is_keyspace_under_tablets_migration(*ks.metadata(), tablet_metadata)) {
+            throw std::runtime_error(fmt::format(
+                "No table in keyspace '{}' has a tablet map; there is no migration to finalize", ks_name));
+        }
+
+        // Going forward every table needs a tablet map, or it stays on vnodes in a
+        // keyspace that switched to tablets; one is missing when the table was created
+        // mid-migration. A rollback drops the maps that exist, so such a table is
+        // already final.
+        //
+        // Decide the direction as the topology coordinator does: forward only when every
+        // node is set to tablets. All unset rolls back and a mix is refused, so neither
+        // may be turned away here for a missing map.
+        bool forward = std::ranges::all_of(_topology_state_machine._topology.normal_nodes, [] (const auto& e) {
+            return e.second.intended_storage_mode == storage_mode::tablets;
+        });
+        if (forward) {
+            for (const auto& schema : tables) {
+                if (tablet_metadata.has_tablet_map(schema->id())) {
+                    continue;
+                }
                 throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
                     "all tables in keyspace '{}' must be prepared for migration before finalizing",
                     ks_name, schema->cf_name(), ks_name));
             }
         }
 
-        slogger.info("All {} table(s) in keyspace '{}' have tablet maps, submitting finalization request",
-                     tables.size(), ks_name);
+        slogger.info("Submitting finalization request for keyspace '{}' with {} table(s)",
+                     ks_name, tables.size());
 
         request_id = guard.new_group0_state_id();
 
