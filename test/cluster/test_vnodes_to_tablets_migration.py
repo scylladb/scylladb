@@ -4577,3 +4577,85 @@ async def test_upgrade_repairs_a_table_left_without_a_tablet_map(manager: Scylla
             "Keyspace is still using vnodes after migration finalization"
 
         await verify_data_integrity(cql, ks, "orphan", num_keys)
+
+
+async def test_create_view_and_index_during_migration(manager: ScyllaClusterManager):
+    """SCYLLADB-1169: views and an index created mid-migration join it and finalize with it.
+
+    They reach storage_service through prepare_new_view_announcement() rather than CREATE
+    TABLE and must get the layout prepare_for_tablets_migration() gives views: a view
+    with the base table's partition key is co-located with it, any other view and an
+    index's backing view get a vnode-derived map of their own. Forward finalization must
+    insist on those maps as it does for base tables, or a view stays on vnodes in a
+    tablets keyspace and the next schema change fails to build its replication map.
+
+    Steps:
+    1. Start a single node, create a vnode keyspace with one table and populate it.
+    2. Start the migration; create two materialized views and a secondary index on the
+       table. The view keyed by the base's partition key must be co-located with it, the
+       other view and the index must get the vnode-derived tablet map.
+    3. Upgrade the node and restart it.
+    4. Finalize. The keyspace must switch to tablets, and the base table, the view and
+       the index must all still answer.
+    """
+    num_keys = 100
+
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=MIGRATION_TEST_CONFIG)
+    server = servers[0]
+    host_id = await manager.get_host_id(server.server_id)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    vnode_boundaries = await get_all_vnode_tokens(cql)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int, d int)")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c, d) VALUES (?, ?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k, k % 10]) for k in range(num_keys)))
+
+        logger.info("Starting vnodes-to-tablets migration")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Creating a materialized view and a secondary index on the migrating table")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.test_by_c AS SELECT * FROM {ks}.test "
+                            "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, pk)")
+        await cql.run_async(f"CREATE INDEX test_d_idx ON {ks}.test (d)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.test_by_pk AS SELECT * FROM {ks}.test "
+                            "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+        await read_barrier(manager.api, server.ip_addr)
+        for view in ("test_by_c", "test_d_idx_index"):
+            await verify_new_table_tablet_map(manager, server, ks, view, vnode_boundaries)
+        base_id = await manager.get_table_or_view_id(ks, "test")
+        view_id = await manager.get_table_or_view_id(ks, "test_by_pk")
+        assert await get_base_table(manager, view_id) == base_id, \
+            "The view with the base table's partition key was not co-located with it"
+        for view in ("test_by_c", "test_d_idx_index", "test_by_pk"):
+            await wait_for_view(cql, view, len(servers))
+
+        logger.info("Upgrading the node and restarting it")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        await verify_migration_status(manager, server, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id: ('tablets', 'tablets')})
+
+        logger.info("Finalizing the migration")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await read_barrier(manager.api, server.ip_addr)
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
+
+        await verify_data_integrity(cql, ks, "test", num_keys)
+
+        for view in ("test_by_c", "test_by_pk"):
+            rows = await cql.run_async(f"SELECT pk, c FROM {ks}.{view}")
+            assert {r.pk: r.c for r in rows} == {k: k for k in range(num_keys)}, \
+                f"View {view} does not match the base table after finalization"
+
+        rows = await cql.run_async(f"SELECT pk FROM {ks}.test WHERE d = 3")
+        assert sorted(r.pk for r in rows) == [k for k in range(num_keys) if k % 10 == 3], \
+            "The index lookup returned the wrong rows after finalization"
