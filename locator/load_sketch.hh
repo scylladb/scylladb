@@ -20,6 +20,7 @@
 #include <absl/container/btree_set.h>
 #include <seastar/util/defer.hh>
 
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -122,6 +123,10 @@ class load_sketch {
     // treat all tablet as having the same size: _default_tablet_size
     bool _force_capacity_based_load = false;
 
+    // Selects the tables whose replicas may lack a tablet size without making the
+    // node's data incomplete, see set_tables_with_optional_sizes().
+    std::function<bool(table_id)> _sizes_optional;
+
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -154,6 +159,7 @@ private:
 
     future<> populate_table(table_id table, const tablet_map& tmap, std::optional<host_id> host, std::optional<sstring> only_dc) {
         const topology& topo = _tm->get_topology();
+        const bool sizes_optional = _sizes_optional && _sizes_optional(table);
         co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
             auto trinfo = tmap.get_tablet_transition_info(tid);
             for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
@@ -175,7 +181,7 @@ private:
                 if (replica.shard < n._shards.size()) {
                     const range_based_tablet_id rb_tid {table, tmap.get_token_range(tid)};
                     auto tablet_size_opt = get_tablet_size(replica.host, rb_tid, ti, trinfo);
-                    if (!tablet_size_opt && _load_stats) {
+                    if (!tablet_size_opt && _load_stats && !sizes_optional) {
                         n._has_all_tablet_sizes = false;
                     }
                     const uint64_t tablet_size = std::max(tablet_size_opt.value_or(_default_tablet_size), _minimal_tablet_size);
@@ -204,6 +210,12 @@ public:
 
     future<> clear() {
         return utils::clear_gently(_nodes);
+    }
+
+    // Lets replicas of the tables `pred` selects lack a tablet size without making the
+    // node's data incomplete; the sizes which are known still count. Call before populating.
+    void set_tables_with_optional_sizes(std::function<bool(table_id)> pred) {
+        _sizes_optional = std::move(pred);
     }
 
     future<> populate(std::optional<host_id> host = std::nullopt,
