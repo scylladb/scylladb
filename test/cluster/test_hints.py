@@ -1565,3 +1565,67 @@ async def test_hint_retransmission_keeps_column_mappings(manager: ScyllaClusterM
     rows = await cql.run_async(SimpleStatement(f"SELECT pk, v FROM {table}",
                                                 consistency_level=ConsistencyLevel.ONE))
     assert sorted((row.pk, row.v) for row in rows) == [(i, i + 1) for i in range(row_count)]
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections aren't enabled in release mode")
+async def test_idle_endpoint_manager_does_not_churn_segments(manager: ScyllaClusterManager):
+    """
+    Once hints are replayed, the periodic flush must stop re-creating the store (each re-creation
+    churns a reserve segment file), without delaying sync points or hints written later.
+    """
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    cmdline = ["--smp", "2", "--logger-log-level", "commitlog=debug"]
+    s1, s2 = await manager.servers_add(2, config=config, cmdline=cmdline, auto_rack_dc="dc1")
+    s1_hints_dir = await get_hints_dir(manager, s1)
+    s2_host_id = await manager.get_host_id(s2.server_id)
+
+    cql = await manager.get_cql_exclusive(s1)
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        # Spread the keys over both shards, so both get an endpoint manager.
+        extra = "WITH tablets = {'min_tablet_count': 16}" if await keyspace_has_tablets(manager, ks) else ""
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int", extra) as table:
+
+            async def write_hints(keys) -> float:
+                await manager.server_stop_gracefully(s2.server_id)
+                await manager.others_not_see_server(s2.ip_addr)
+                for k in keys:
+                    await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({k}, {k})",
+                                                        consistency_level=ConsistencyLevel.ONE))
+                await wait_until_hint_writing_settled(manager, [s1])
+                return await get_hint_metrics(manager.metrics, s1.ip_addr, "written")
+
+            written = await write_hints(range(20))
+            assert written >= 20
+            assert all(hint_dir_exists(s1_hints_dir, s2_host_id, shard) for shard in (0, 1))
+            await manager.server_start(s2.server_id)
+            await wait_until_hints_are_sent_from(manager, [s1], written)
+
+            log = await manager.server_open_log(s1.server_id)
+            churn = r"Created new segment HintsLog|Deleting segment file .*HintsLog"
+
+            # The flushes that follow the replay still re-create the store; wait until they are done.
+            # hints_flush_period is 1s here, so a 3s quiet window spans several flushes on both shards.
+            async def settled():
+                mark = await log.mark()
+                await asyncio.sleep(3)
+                return None if await log.grep(churn, from_mark=mark) else True
+            await wait_for(settled, time.time() + 60, label="hint segment churn to stop")
+
+            # A sync point on the idle store resolves right away.
+            sync_point = await create_sync_point(manager.api.client, s1.ip_addr, target_hosts=s2.ip_addr)
+            assert await await_sync_point(manager.api.client, s1.ip_addr, sync_point, 5)
+
+            # The idle skip must not stick: a new hint is written, waited for and replayed.
+            written2 = await write_hints([100])
+            assert written2 > written
+            sync_point = await create_sync_point(manager.api.client, s1.ip_addr, target_hosts=s2.ip_addr)
+            assert not await await_sync_point(manager.api.client, s1.ip_addr, sync_point, 1)
+            await manager.server_start(s2.server_id)
+            assert await await_sync_point(manager.api.client, s1.ip_addr, sync_point, 30)
+
+            # MUTATION_FRAGMENTS reads only s2's local data, so no need to stop s1.
+            cql = await manager.get_cql_exclusive(s2)
+            rows = await cql.run_async(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 100")
+            assert any(r.mutation_fragment_kind == "clustering row" for r in rows), \
+                "The hint written after the idle period was not replayed"
