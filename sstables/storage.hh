@@ -125,8 +125,10 @@ public:
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;
-    // Must never return an exceptional future: implementations are expected
-    // to catch and log any errors internally.
+    // Must never return an exceptional future when `deletion` is null:
+    // implementations are expected to catch and log any errors internally.
+    // With `deletion` set, a failure that may leave the sstable on storage is
+    // returned, so the atomic deletion keeps its record of the batch.
     virtual future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept = 0;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) = 0;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) = 0;
