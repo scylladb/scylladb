@@ -118,10 +118,16 @@ segment_info make_segment_info(const chunk_headers& headers) {
     return seg_info;
 }
 
-// Reads the body of the chunk whose headers the reader read last - its record frames. Returns
-// nullopt if the body goes past the end of the segment or the stream ends first. The caller
-// checks the body against the header's body CRC.
-future<std::optional<temporary_buffer<char>>> read_chunk_body(segment_reader& reader,
+// The body of a chunk, and whether it matches the body CRC of the chunk header.
+struct chunk_body {
+    temporary_buffer<char> buf;
+    bool valid;
+};
+
+// Reads the body of the chunk whose headers the reader read last, and checks it against the body
+// CRC of the header. Returns nullopt if the body goes past the end of the segment or the stream
+// ends first.
+future<std::optional<chunk_body>> read_chunk_body(segment_reader& reader,
         const ondisk::chunk_header& ch,
         size_t segment_size) {
     if (ch.records_size > segment_size - reader.position()) {
@@ -131,7 +137,8 @@ future<std::optional<temporary_buffer<char>>> read_chunk_body(segment_reader& re
     if (body.size() < ch.records_size) {
         co_return std::nullopt;
     }
-    co_return body;
+    const bool valid = ondisk::validate_chunk_body(ch, std::span(body.get(), body.size()));
+    co_return chunk_body{std::move(body), valid};
 }
 
 struct parsed_record {
@@ -251,16 +258,16 @@ future<> scan_segment(seastar::input_stream<char>& in,
         auto seg_info = make_segment_info(*headers);
         co_await on_segment_info(seg_info);
 
-        auto body_buf = co_await read_chunk_body(reader, ch, segment_size);
-        if (!body_buf) {
+        auto body = co_await read_chunk_body(reader, ch, segment_size);
+        if (!body) {
             break;
         }
 
-        // Validate the chunk before delivering records - a torn chunk can hold records of an
+        // Deliver the records only from a valid body - a torn chunk can hold records of an
         // earlier use of the segment that parse cleanly.
-        if (ondisk::validate_chunk_body(ch, std::span(body_buf->get(), body_buf->size()))) {
+        if (body->valid) {
             last_chunk_failed = false;
-            auto records = simple_memory_input_stream(body_buf->get(), body_buf->size());
+            auto records = simple_memory_input_stream(body->buf.get(), body->buf.size());
             co_await scan_chunk_records(records, reader.position() - records.size(), segment_id, on_record_header, on_record);
         } else {
             // The valid header gives the size of the chunk, so the scan continues at the next
