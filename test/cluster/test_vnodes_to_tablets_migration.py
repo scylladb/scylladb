@@ -3354,6 +3354,65 @@ async def test_create_table_during_rollback(manager: ScyllaClusterManager):
             await verify_data_integrity(cql, ks, table, num_keys)
 
 
+async def test_create_table_during_abandoned_rollback(manager: ScyllaClusterManager):
+    """SCYLLADB-1169: a table created during a rollback the operator then abandons.
+
+    The table gets the same tablet map whichever way the migration is heading, so the
+    change of direction needs no repair: the node is upgraded again and restarted, and
+    the keyspace finalizes forward with the table on tablets like the rest.
+
+    Steps:
+    1. Start a single node, create a vnode keyspace with one table.
+    2. Start the migration, upgrade the node and restart it.
+    3. Downgrade the node, then create and populate a table - it must get a tablet map.
+    4. Upgrade the node again, abandoning the rollback, and restart it.
+    5. Finalize forward; the keyspace must switch to tablets with its data.
+    """
+    num_keys = 100
+
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=MIGRATION_TEST_CONFIG)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    vnode_boundaries = await get_all_vnode_tokens(cql)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        logger.info("Starting vnodes-to-tablets migration and upgrading the node")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Downgrading the node, then creating a table while it rolls back")
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+        await cql.run_async(f"CREATE TABLE {ks}.late (pk int PRIMARY KEY, c int)")
+        stmt = cql.prepare(f"INSERT INTO {ks}.late (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+        await read_barrier(manager.api, server.ip_addr)
+        await verify_new_table_tablet_map(manager, server, ks, 'late', vnode_boundaries)
+
+        logger.info("Abandoning the rollback by upgrading the node again")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+        logger.info("Restarting the node")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Finalizing the migration forward")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await read_barrier(manager.api, server.ip_addr)
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
+
+        await verify_data_integrity(cql, ks, "late", num_keys)
+
+
 async def test_lwt_during_migration_refuses_forward_finalization(manager: ScyllaClusterManager):
     """SCYLLADB-1169: a $paxos table created mid-migration gets no tablet map of its own.
 
