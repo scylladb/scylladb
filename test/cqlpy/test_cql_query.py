@@ -2959,6 +2959,38 @@ def test_query_limit(cql, test_keyspace, scylla_only):
                     else:
                         assert list(cql.execute(select)) == expected_rows
 
+# test_query_limit above checks that an unpaged query fails if its result
+# needs more memory than max_memory_for_unlimited_query_hard_limit. But Scylla
+# reads some unpaged queries in internal pages of select_internal_page_size
+# rows - queries which need filtering, and aggregation queries including
+# GROUP BY - and checks the limit on each of these pages separately, not on
+# the whole result, which it keeps in memory. Here the result is about 20 KB,
+# the limit is 4 KB, and each internal page is about 2 KB. The plain query is
+# rejected, as it should be, but the others succeed and return all the rows.
+# Reproduces SCYLLADB-5480.
+@pytest.mark.parametrize('what, where', [
+    pytest.param('*', '', id='plain'),
+    pytest.param('*', "WHERE v = '{v}' ALLOW FILTERING", id='filtering',
+        marks=pytest.mark.xfail(reason='SCYLLADB-5480')),
+    pytest.param('*', "WHERE p IN (0, 1) AND v = '{v}' ORDER BY c DESC ALLOW FILTERING", id='filtering_in_order_by',
+        marks=pytest.mark.xfail(reason='SCYLLADB-5480')),
+    pytest.param('p, c, v', 'WHERE p IN (0, 1) GROUP BY p, c ORDER BY c DESC', id='group_by',
+        marks=pytest.mark.xfail(reason='SCYLLADB-5480')),
+])
+def test_query_limit_internal_paging(cql, test_keyspace, scylla_only, what, where):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v text, PRIMARY KEY (p, c)') as table:
+        v = 'a' * 1024
+        insert = cql.prepare(f'INSERT INTO {table} (p, c, v) VALUES (?, ?, ?)')
+        for p in range(2):
+            for c in range(10):
+                cql.execute(insert, [p, c, v])
+        select = SimpleStatement(f'SELECT {what} FROM {table} ' + where.format(v=v), fetch_size=None)
+        with config_value_context(cql, 'select_internal_page_size', '2'), \
+                config_value_context(cql, 'max_memory_for_unlimited_query_soft_limit', '4096'), \
+                config_value_context(cql, 'max_memory_for_unlimited_query_hard_limit', '4096'):
+            with pytest.raises(ReadFailure):
+                list(cql.execute(select))
+
 
 # Reproduces https://github.com/scylladb/scylla/issues/3552
 # when clustering-key filtering is enabled in filter_sstable_for_reader.
