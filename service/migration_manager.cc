@@ -571,7 +571,7 @@ static future<utils::chunked_vector<mutation>> do_prepare_new_column_families_an
         const keyspace_metadata& ksm, std::vector<schema_ptr> cfms, api::timestamp_type timestamp) {
     auto& db = sp.local_db();
 
-    return seastar::async([&sp, &db, &ksm, timestamp, cfms = std::move(cfms)] mutable {
+    return seastar::async([&db, &ksm, timestamp, cfms = std::move(cfms)] mutable {
         for (auto cfm : cfms) {
             if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
                 throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
@@ -580,7 +580,6 @@ static future<utils::chunked_vector<mutation>> do_prepare_new_column_families_an
                 throw exceptions::invalid_request_exception(format("Table with ID {} already exists: {}", cfm->id(), db.find_schema(cfm->id())));
             }
         }
-        validate_no_tablets_migration(sp, ksm, "create table");
 
         for (auto cfm : cfms) {
             mlogger.info("Create new ColumnFamily: {}", cfm);

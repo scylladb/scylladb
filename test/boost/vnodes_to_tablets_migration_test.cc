@@ -894,7 +894,6 @@ static void require_rejected_during_migration(cql_test_env& e, const sstring& cq
 SEASTAR_TEST_CASE(test_block_table_schema_changes_during_migration) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto ks = start_migration_with_views(e, "test_migration_ks");
-        require_rejected_during_migration(e, format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks));
         require_rejected_during_migration(e, format("DROP TABLE {}.t", ks));
         require_rejected_during_migration(e, format("DROP KEYSPACE {}", ks));
         // Other table updates don't change the set of tables.

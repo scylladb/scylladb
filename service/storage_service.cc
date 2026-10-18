@@ -4746,6 +4746,98 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
     }
 }
 
+void storage_service::on_before_create_column_family(const data_dictionary::keyspace_metadata& ksm, const schema& s,
+        utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
+    allocate_tablets_for_new_tables_under_migration(ksm, {s.shared_from_this()}, muts, ts);
+}
+
+void storage_service::on_before_create_column_families(const data_dictionary::keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms,
+        utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
+    allocate_tablets_for_new_tables_under_migration(ksm, cfms, muts, ts);
+}
+
+void storage_service::allocate_tablets_for_new_tables_under_migration(const data_dictionary::keyspace_metadata& ksm,
+        const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
+    // The notifier calls us from within a seastar thread, so blocking is allowed here.
+    if (!_feature_service.vnodes_to_tablets_migrations) {
+        return;
+    }
+
+    // Decide from `ksm`, which need not be in the database yet (see
+    // migration_listener::on_before_create_column_family): a keyspace created by this
+    // statement has no mapped table, so it never reaches find_keyspace() below.
+    auto tmptr = get_token_metadata_ptr();
+    if (!locator::is_keyspace_undergoing_tablets_migration(tmptr->tablets(), ksm)) {
+        return;
+    }
+
+    // Whichever way the migration is heading: a node still on tablets holds the new
+    // table like its siblings, and a rollback drops this map with every other.
+    auto erm = _db.local().find_keyspace(ksm.name()).get_static_effective_replication_map();
+    append_tablet_maps_for_unmapped_tables(std::move(erm), cfms, ts, [&] (mutation m) -> future<> {
+        muts.emplace_back(std::move(m));
+        return make_ready_future<>();
+    }).get();
+}
+
+future<size_t> storage_service::append_tablet_maps_for_unmapped_tables(locator::static_effective_replication_map_ptr erm,
+        std::vector<schema_ptr> cfms, api::timestamp_type ts,
+        std::function<future<>(mutation)> add_mutation) {
+    auto& db = _db.local();
+    const auto& tablet_metadata = get_token_metadata().tablets();
+
+    // Laid out as prepare_for_tablets_migration() lays tables out: a view with its base
+    // table's partition key shares the base's map, every other table gets its own.
+    auto new_cfms = cfms
+            | std::views::transform([] (const schema_ptr& s) { return std::pair(s->id(), s); })
+            | std::ranges::to<std::unordered_map<table_id, schema_ptr>>();
+    std::vector<schema_ptr> own_map;
+    std::vector<std::pair<schema_ptr, table_id>> colocated;
+    for (const auto& cfm : cfms) {
+        if (tablet_metadata.has_tablet_map(cfm->id())) {
+            continue;
+        }
+        if (auto base = cfm->is_view() ? db.get_base_table_for_tablet_colocation(*cfm, new_cfms) : std::nullopt) {
+            colocated.emplace_back(cfm, *base);
+        } else {
+            own_map.push_back(cfm);
+        }
+    }
+
+    size_t mapped = 0;
+    if (!own_map.empty()) {
+        // One tablet per vnode range with its replicas, as prepare builds them, so both
+        // ERM flavours route alike and a rollback has a layout to return to. No pow2
+        // pre-split target: the tables are empty, so one map serves them all. The maps
+        // go whole into the caller's group0 command, under the size limit prepare's
+        // FIXME is about.
+        auto tmap = co_await build_tablet_map_for_migration(erm, 0);
+        for (const auto& cfm : own_map) {
+            slogger.info("Built a {}-tablet map for {}.{} for the vnodes-to-tablets migration of its keyspace",
+                         tmap.tablet_count(), cfm->ks_name(), cfm->cf_name());
+            co_await replica::tablet_map_to_mutations(tmap, cfm->id(), cfm->ks_name(), cfm->cf_name(), ts,
+                    _feature_service, add_mutation);
+            ++mapped;
+        }
+    }
+
+    for (const auto& [view, base_id] : colocated) {
+        // A co-located entry loads only once its base has a map: a view whose base has
+        // none waits for the backfill on upgrade, which maps both in one command.
+        if (!tablet_metadata.has_tablet_map(base_id) && !std::ranges::contains(own_map, base_id, &schema::id)) {
+            slogger.warn("Leaving {}.{} without a tablet map for now: its base table has none either",
+                         view->ks_name(), view->cf_name());
+            continue;
+        }
+        slogger.info("Co-located {}.{} with its base table {} for the vnodes-to-tablets migration of its keyspace",
+                     view->ks_name(), view->cf_name(), base_id);
+        co_await add_mutation(replica::colocated_tablet_map_to_mutation(view->id(), view->ks_name(), view->cf_name(), base_id, ts));
+        ++mapped;
+    }
+
+    co_return mapped;
+}
+
 future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
@@ -5002,9 +5094,9 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
         }
 
         // Going forward every table needs a tablet map, or it stays on vnodes in a
-        // keyspace that switched to tablets; one is missing when the table was created
-        // mid-migration. A rollback drops the maps that exist, so such a table is
-        // already final.
+        // keyspace that switched to tablets; one is missing when the CREATE TABLE was
+        // coordinated by a node without allocate_tablets_for_new_tables_under_migration().
+        // A rollback drops the maps that exist, so such a table is already final.
         //
         // Decide the direction as the topology coordinator does: forward only when every
         // node is set to tablets. All unset rolls back and a mix is refused, so neither
