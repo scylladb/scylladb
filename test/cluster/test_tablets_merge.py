@@ -322,7 +322,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
 
 @pytest.mark.parametrize("racks", [2, 3])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks):
+async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks, scale_timeout):
     cmdline = ['--target-tablet-size-in-bytes', '30000',]
     config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
     servers = []
@@ -354,7 +354,7 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks)
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         return tablet_count >= 16 or None
     # Give enough time for split to happen in debug mode
-    await wait_for(finished_splitting, time.time() + 120)
+    await wait_for(finished_splitting, time.time() + scale_timeout(120))
 
     delete_keys = range(total_keys - 1)
     await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk={k};") for k in delete_keys])
@@ -369,11 +369,11 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks)
     async def finished_merging():
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         return tablet_count < old_tablet_count or None
-    await wait_for(finished_merging, time.time() + 120)
+    await wait_for(finished_merging, time.time() + scale_timeout(120))
 
 # Reproduces #23284
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: ManagerClient, racks = 2):
+async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: ManagerClient, scale_timeout, racks = 2):
     cmdline = ['--smp', '4', '-m', '2G', '--target-tablet-size-in-bytes', '30000', '--max-task-backlog', '200', '--logger-log-level', 'load_balancer=debug']
     config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
 
@@ -415,7 +415,7 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Man
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         return tablet_count >= 16 or None
     # Give enough time for split to happen in debug mode
-    await wait_for(finished_splitting, time.time() + 120)
+    await wait_for(finished_splitting, time.time() + scale_timeout(120))
 
     await check_logs("after split completion")
 
@@ -432,7 +432,7 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Man
     async def finished_merging():
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         return tablet_count < old_tablet_count or None
-    await wait_for(finished_merging, time.time() + 120)
+    await wait_for(finished_merging, time.time() + scale_timeout(120))
 
     await check_logs("after merge completion")
 
