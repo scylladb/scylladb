@@ -3698,3 +3698,65 @@ async def test_drop_table_during_migration(manager: ScyllaClusterManager, rollba
             expected_status='vnodes' if rollback else 'tablets',
             expected_node_statuses={})
         await verify_data_integrity(cql, ks, "test", num_keys)
+
+
+async def test_drop_keyspace_during_migration(manager: ScyllaClusterManager):
+    """SCYLLADB-1098: dropping the only migrating keyspace does not wedge later migrations.
+
+    Dropping the keyspace ends its migration without a finalization, so nothing clears
+    the storage modes the node was given for it, and with a mode set any new migration
+    used to be refused as "another migration is in progress". The keyspace's tablet
+    maps must go with it, and the next migration must start, clear the leftover modes
+    and run to completion.
+
+    Steps:
+    1. Start a single node, create a vnode keyspace, start its migration, upgrade the
+       node and restart it onto tablets.
+    2. Drop the keyspace. Its tablet map must be gone.
+    3. Migrate another keyspace: it must start, report the node on vnodes, and finalize
+       forward after an upgrade and a restart.
+    """
+    num_keys = 100
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
+
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=MIGRATION_TEST_CONFIG)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
+    host_id = await manager.get_host_id(server.server_id)
+
+    async with new_test_keyspace(manager, ks_opts) as dropped_ks:
+        await cql.run_async(f"CREATE TABLE {dropped_ks}.test (pk int PRIMARY KEY, c int)")
+        table_id = await manager.get_table_id(dropped_ks, "test")
+
+        logger.info("Starting a migration and moving the node onto tablets")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, dropped_ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Dropping the migrating keyspace")
+        await cql.run_async(f"DROP KEYSPACE {dropped_ks}")
+        await read_barrier(manager.api, server.ip_addr)
+        await assert_no_tablet_map(cql, server, table_id, f"{dropped_ks}.test")
+
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        logger.info("Starting a migration of another keyspace")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await verify_migration_status(manager, server, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id: ('vnodes', 'vnodes')})
+
+        logger.info("Upgrading the node, restarting it and finalizing")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await read_barrier(manager.api, server.ip_addr)
+        await verify_migration_status(manager, server, ks, expected_status='tablets', expected_node_statuses={})
+        await verify_data_integrity(cql, ks, "test", num_keys)
