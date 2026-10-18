@@ -5644,7 +5644,13 @@ bool topology_coordinator::handle_topology_coordinator_error(std::exception_ptr 
         rtlogger.warn("topology change coordinator fiber got rpc::remote_verb_error {:t}", std::current_exception());
         return true;
     } catch (...) {
-        rtlogger.error("topology change coordinator fiber got error {:t}", std::current_exception());
+        if (_as.abort_requested()) {
+            // E.g. a topology command failed because this node is shutting down. Don't
+            // report it as an error, but keep it visible in case it is unrelated.
+            rtlogger.warn("topology change coordinator fiber got error while being aborted: {:t}", std::current_exception());
+        } else {
+            rtlogger.error("topology change coordinator fiber got error {:t}", std::current_exception());
+        }
         return true;
     }
     return false;
