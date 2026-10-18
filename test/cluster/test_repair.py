@@ -13,6 +13,8 @@ import random
 import uuid
 
 from cassandra.cluster import ConsistencyLevel
+from cassandra.policies import FallthroughRetryPolicy
+from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement
 
 from test.pylib.internal_types import ServerInfo
@@ -245,7 +247,11 @@ async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
     host1 = next(h for h in hosts if h.address == str(node1.rpc_address))
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {{'mode': 'repair'}}")
+        # A batch is replayed once older than the smaller of twice write_request_timeout_in_ms
+        # (30s scaled by build mode under the test harness) and the table's propagation
+        # delay, so let the flush replay it right away.
+        await cql.run_async(f"CREATE TABLE {ks}.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) "
+                            f"WITH tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': '0'}}")
 
         # Leave a batch in the batchlog for the flush to pick up: fail its
         # removal once it has been written, and keep the periodic replay loop
@@ -253,13 +259,14 @@ async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
         await manager.api.enable_injection(node1.ip_addr, "storage_proxy_fail_remove_from_batchlog", one_shot=False)
         for node in (node1, node2):
             await manager.api.enable_injection(node.ip_addr, "skip_batch_replay", one_shot=False)
-        try:
-            await cql.run_async(f"BEGIN BATCH "
+        # FallthroughRetryPolicy: the driver would otherwise retry the failed
+        # batch on the pinned host until its request timeout.
+        batch = SimpleStatement(f"BEGIN BATCH "
                                 f"INSERT INTO {ks}.tbl (pk, ck) VALUES (0, 0); "
                                 f"INSERT INTO {ks}.tbl (pk, ck) VALUES (1, 1); "
-                                f"APPLY BATCH", host=host1)
-        except Exception as e:
-            logger.info(f"Batch failed as expected: {e}")
+                                f"APPLY BATCH", retry_policy=FallthroughRetryPolicy())
+        with pytest.raises(ServerError):
+            await cql.run_async(batch, host=host1)
         await manager.api.disable_injection(node1.ip_addr, "storage_proxy_fail_remove_from_batchlog")
 
         # The batch lands on the batchlog endpoints picked by the coordinator,
@@ -267,10 +274,6 @@ async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
         counts = [(await cql.run_async("SELECT COUNT(*) FROM system.batchlog_v2", host=h))[0].count for h in hosts]
         logger.info(f"Batchlog rows per node: {counts}")
         assert sum(counts) > 0
-
-        # A batch is only replayed once it is older than twice
-        # write_request_timeout_in_ms, 4s with the default of 2s.
-        await asyncio.sleep(5)
 
         await manager.api.enable_injection(node1.ip_addr, "repair_flush_hints_batchlog_timeout", one_shot=False,
                                            parameters={"batchlog_timeout_in_s": "2"})
