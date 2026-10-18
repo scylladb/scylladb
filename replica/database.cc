@@ -1676,6 +1676,28 @@ bool database::column_family_exists(const table_id& uuid) const {
     return _tables_metadata.contains(uuid);
 }
 
+std::optional<service::storage_mode> database::migrating_tables_storage_mode(const keyspace& ks, const locator::tablet_metadata& tablets) const {
+    if (ks.uses_tablets()) {
+        return std::nullopt;
+    }
+    std::optional<service::storage_mode> mode;
+    // Base tables suffice: a node holds every migrating table of a keyspace on one flavour.
+    for (const auto& schema : ks.metadata()->tables()) {
+        if (!tablets.has_tablet_map(schema->id())) {
+            continue;
+        }
+        auto table = _tables_metadata.get_table_if_exists(schema->id());
+        if (!table) {
+            continue;
+        }
+        if (table->uses_tablets()) {
+            return service::storage_mode::tablets;
+        }
+        mode = service::storage_mode::vnodes;
+    }
+    return mode;
+}
+
 locator::replication_strategy_ptr
 keyspace::create_replication_strategy(lw_shared_ptr<keyspace_metadata> metadata, const locator::topology& topology) {
     using namespace locator;

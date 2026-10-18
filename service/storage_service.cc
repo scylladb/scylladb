@@ -2266,18 +2266,37 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
                     const locator::abstract_replication_strategy *old_rs = ss.get_database().column_family_exists(id)
                             ? &ss.get_database().find_column_family(id).get_effective_replication_map()->get_replication_strategy()
                             : nullptr;
-                    if (old_rs && old_rs->uses_tablets()) {
-                        // The table is under vnodes-to-tablets migration:
-                        // the keyspace uses vnodes, but the table uses a tablet-based ERM.
+                    // Non-null iff the table is under vnodes-to-tablets migration: the
+                    // keyspace uses vnodes, but the table uses a tablet-based ERM.
+                    auto old_tablet_rs = old_rs ? old_rs->maybe_as_tablet_aware() : nullptr;
+                    // A table created by this change has no ERM yet: give it its siblings'
+                    // flavour on this node, as database::add_column_family() does, or it is
+                    // built with a tablet ERM and handed the keyspace's vnode one here. A
+                    // keyspace created by this change (every keyspace, on a node joining
+                    // from the group0 snapshot) is not in the database yet; its tables start
+                    // on vnodes, as commit_tables_and_views() finds no sibling either.
+                    auto& db = ss.get_database();
+                    const auto* ks = db.has_keyspace(table_schema->ks_name()) ? &db.find_keyspace(table_schema->ks_name()) : nullptr;
+                    bool new_table_under_migration = !old_rs && ks
+                            && tmptr->tablets().has_tablet_map(id)
+                            && db.migrating_tables_storage_mode(*ks, tmptr->tablets()) == storage_mode::tablets;
+                    if (old_tablet_rs || new_table_under_migration) {
                         // Preserve the tablet flavor of the ERM.
                         // The ERM flavor is a node-local setting that expresses
                         // the node's storage organization, which can change only
                         // on startup after resharding (while the node is offline).
                         // It is determined on startup by the distributed loader.
-                        auto old_tablet_rs = old_rs->maybe_as_tablet_aware();
-                        locator::replication_strategy_params params(rs->get_config_options(), old_tablet_rs->get_initial_tablets(), old_tablet_rs->get_consistency());
-                        auto& ks = ss.get_database().find_keyspace(table_schema->ks_name());
-                        auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(ks.metadata()->strategy_name(), params, tmptr->get_topology());
+                        // A new table has no tablet-aware strategy to copy these from; 0
+                        // initial tablets means "auto", as database::add_column_family() uses.
+                        std::optional<unsigned> initial_tablets = 0;
+                        std::optional<data_dictionary::consistency_config_option> consistency;
+                        if (old_tablet_rs) {
+                            initial_tablets = old_tablet_rs->get_initial_tablets();
+                            consistency = old_tablet_rs->get_consistency();
+                        }
+                        locator::replication_strategy_params params(rs->get_config_options(), initial_tablets, consistency);
+                        // An existing table's keyspace is in the database, and a new one's by the check above.
+                        auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(ks->metadata()->strategy_name(), params, tmptr->get_topology());
                         auto pt_rs = tablet_rs->maybe_as_per_table();
                         erm = pt_rs->make_replication_map(id, tmptr);
                     } else {
