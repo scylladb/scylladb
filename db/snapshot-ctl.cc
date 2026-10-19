@@ -124,6 +124,9 @@ future<> snapshot_ctl::take_snapshot(sstring tag, std::vector<sstring> keyspace_
     if (tag.empty()) {
         throw std::runtime_error("You must supply a snapshot name.");
     }
+    if (!db::is_valid_user_snapshot_tag(tag)) {
+        throw std::invalid_argument(fmt::format("Invalid snapshot tag '{}': a tag must not contain '/'", tag));
+    }
 
     if (keyspace_names.size() == 0) {
         std::ranges::copy(_db.local().get_keyspaces() | std::views::keys, std::back_inserter(keyspace_names));
@@ -153,6 +156,9 @@ future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<
     if (tag.empty()) {
         throw std::runtime_error("You must supply a snapshot name.");
     }
+    if (!db::is_valid_user_snapshot_tag(tag)) {
+        throw std::invalid_argument(fmt::format("Invalid snapshot tag '{}': a tag must not contain '/'", tag));
+    }
 
     return run_snapshot_modify_operation([this, ks_name = std::move(ks_name), tables = std::move(tables), tag = std::move(tag), opts] () mutable {
         return do_take_column_family_snapshot(std::move(ks_name), std::move(tables), std::move(tag), opts);
@@ -175,27 +181,56 @@ future<> snapshot_ctl::take_cluster_column_family_snapshot(std::vector<sstring> 
     });
 }
 
+future<> snapshot_ctl::check_object_storage_snapshot_preconditions(const std::unordered_multimap<sstring, sstring>& ks_tables, const sstring& tag,
+        const snapshot_options& opts, reject_committed_snapshot reject_committed) {
+    auto object_storage = std::ranges::any_of(ks_tables, [this] (const auto& kscf) {
+        const auto& [ks_name, cf_name] = kscf;
+        if (cf_name.empty()) {
+            return _db.local().find_keyspace(ks_name).metadata()->get_storage_options().is_object_storage_type();
+        }
+        return _db.local().find_column_family(ks_name, cf_name).get_storage_options().is_object_storage_type();
+    });
+    if (!object_storage) {
+        co_return;
+    }
+    // Nothing enforces expiration for object-storage snapshots yet. Reject
+    // the TTL here rather than accept it and keep the snapshot forever.
+    if (opts.expires_at) {
+        throw std::invalid_argument("Snapshots of tables on object storage do not support expiration yet");
+    }
+
+    // Check if a snapshot with the same tag already exists in the catalog.
+    if (!reject_committed) {
+        co_return;
+    }
+    db::snapshot_table_helper sth(_qp.local());
+    if ((co_await sth.get_snapshot(tag, db::consistency_level::QUORUM)).has_value()) {
+        throw std::invalid_argument(fmt::format("Cannot take snapshot '{}': a snapshot with this tag already exists in the snapshot catalog", tag));
+    }
+}
+
 future<> snapshot_ctl::do_take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts) {
+    // A cluster snapshot attempt is named "{tag}/{attempt}" in the catalog,
+    // so the user tag itself cannot contain '/'.
+    if (!db::is_valid_user_snapshot_tag(tag)) {
+        throw std::invalid_argument(fmt::format("Invalid snapshot tag '{}': a tag must be non-empty and must not contain '/'", tag));
+    }
+    std::unordered_multimap<sstring, sstring> ks_tables;
     if (tables.empty()) {
         co_await coroutine::parallel_for_each(ks_names, [tag, this] (const auto& ks_name) {
             return check_snapshot_not_exist(ks_name, tag);
         });
-        co_await _sp.local().snapshot_keyspace(
-            ks_names | std::views::transform([&](auto& ks) { return std::make_pair(ks, sstring{}); }) 
-                | std::ranges::to<std::unordered_multimap>(),
-                tag, opts
-        );
-        co_return;
-    };
+        ks_tables = ks_names | std::views::transform([&](auto& ks) { return std::make_pair(ks, sstring{}); })
+                | std::ranges::to<std::unordered_multimap>();
+    } else {
+        auto ks = ks_names[0];
+        co_await check_snapshot_not_exist(ks, tag, tables);
+        ks_tables = tables | std::views::transform([&](auto& cf) { return std::make_pair(ks, cf); })
+                | std::ranges::to<std::unordered_multimap>();
+    }
 
-    auto ks = ks_names[0];
-    co_await check_snapshot_not_exist(ks, tag, tables);
-
-    co_await _sp.local().snapshot_keyspace(
-        tables | std::views::transform([&](auto& cf) { return std::make_pair(ks, cf); }) 
-            | std::ranges::to<std::unordered_multimap>(),
-            tag, opts
-    );
+    co_await check_object_storage_snapshot_preconditions(ks_tables, tag, opts, reject_committed_snapshot::yes);
+    co_await _sp.local().snapshot_keyspace(std::move(ks_tables), tag, opts);
 }
 
 sstring snapshot_ctl::resolve_table_name(const sstring& ks_name, const sstring& name) const {
@@ -362,6 +397,10 @@ future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstr
     if (tag.empty()) {
         throw std::invalid_argument("You must supply a snapshot name.");
     }
+    // The backup may take the snapshot itself, so tag should be valid.
+    if (!db::is_valid_user_snapshot_tag(tag)) {
+        throw std::invalid_argument(fmt::format("Invalid snapshot tag '{}': a tag must be non-empty and must not contain '/'", tag));
+    }
     if (ks_names.size() != 1 && !tables.empty()) {
         throw std::invalid_argument("Cannot name tables when doing multiple keyspaces snapshot backup");
     }
@@ -384,6 +423,11 @@ future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstr
             ks_tables.emplace(ks_name, cf_name);
         }
     }
+
+    // The backup auto-snapshots through storage_proxy::snapshot_keyspace(),
+    // bypassing the cluster-snapshot entry point, so the object-storage
+    // preconditions must run here as well.
+    co_await check_object_storage_snapshot_preconditions(ks_tables, tag, {}, reject_committed_snapshot::no);
 
     co_await coroutine::switch_to(_config.backup_sched_group);
     snap_log.info("Backup sstables from {}(cluster snapshot {}) to {}", ks_tables, tag, locations);
