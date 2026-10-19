@@ -52,6 +52,21 @@ static logging::logger llog("sstables_loader");
 
 namespace {
 
+// Helper for conversion to dht::token
+dht::token to_token(const rjson::value& v) {
+    if (!v.IsInt64()) {
+        throw std::runtime_error(fmt::format("to_token expects a 64-bit signed integer value, got: {}", rjson::type_name(v.GetType())));
+    }
+    return dht::token::from_int64(v.GetInt64());
+}
+// Helper for conversion to sstables::sstable_id
+sstables::sstable_id to_sstable_id(const rjson::value& v) {
+    if (!v.IsString()) {
+        throw std::runtime_error(fmt::format("to_sstable_id expects a string value, got: {}", rjson::type_name(v.GetType())));
+    }
+    return sstables::sstable_id(utils::UUID(rjson::to_string_view(v)));
+}
+
 class send_meta_data {
     locator::host_id _node;
     seastar::rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd> _sink;
@@ -1210,9 +1225,9 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
         if (!sstable_entry.IsObject()) {
             throw std::runtime_error("Malformed manifest, the entry in the 'sstables' array is not an object");
         }
-        auto id = rjson::to_sstable_id(rjson::get(sstable_entry, "id"));
-        auto first_token = rjson::to_token(rjson::get(sstable_entry, "first_token"));
-        auto last_token = rjson::to_token(rjson::get(sstable_entry, "last_token"));
+        auto id = to_sstable_id(rjson::get(sstable_entry, "id"));
+        auto first_token = to_token(rjson::get(sstable_entry, "first_token"));
+        auto last_token = to_token(rjson::get(sstable_entry, "last_token"));
         auto toc_name = rjson::to_sstring(rjson::get(sstable_entry, "toc_name"));
         auto tablet_id = rjson::get<uint64_t>(sstable_entry, "tablet_id");
         // The fields below are not needed to restore the sstable, they are only recorded
