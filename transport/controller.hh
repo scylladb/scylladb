@@ -35,10 +35,12 @@ class updateable_timeout_config;
 namespace cql_transport {
 
 class cql_server;
+class cql_processor;
 struct connection_service_level_params;
 class controller : public protocol_server {
     std::vector<socket_address> _listen_addresses;
     std::unique_ptr<sharded<cql_server>> _server;
+    std::unique_ptr<sharded<cql_processor>> _processor;
     semaphore _ops_sem; /* protects start/stop operations on _server */
     named_gate _bg_stops;
     bool _stopped = false;

@@ -239,6 +239,7 @@ future<> controller::do_start_server() {
     attr.sched_group = _sched_group;
     return seastar::async(std::move(attr), [this] {
         auto cserver = std::make_unique<sharded<cql_server>>();
+        auto processor = std::make_unique<sharded<cql_processor>>();
 
         auto& cfg = _config;
         smp_service_group_config cql_server_smp_service_group_config;
@@ -263,7 +264,6 @@ future<> controller::do_start_server() {
               .shard_aware_transport_port = shard_aware_transport_port,
               .shard_aware_transport_port_ssl = shard_aware_transport_port_ssl,
               .allow_shard_aware_drivers = cfg.enable_shard_aware_drivers(),
-              .bounce_request_smp_service_group = bounce_request_smp_service_group,
               .max_concurrent_requests = cfg.max_concurrent_requests_per_shard,
               .cql_duplicate_bind_variable_names_refer_to_same_variable = cfg.cql_duplicate_bind_variable_names_refer_to_same_variable,
               .max_relations_in_where_clause = cfg.max_relations_in_where_clause,
@@ -273,7 +273,10 @@ future<> controller::do_start_server() {
             };
         });
 
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket, std::ref(_messaging)).get();
+        processor->start(std::ref(_qp), std::ref(_messaging), std::ref(_mem_limiter), bounce_request_smp_service_group, _used_by_maintenance_socket).get();
+        auto stop_processor_on_error = defer([&processor] noexcept { processor->stop().get(); });
+
+        cserver->start(std::ref(_qp), std::ref(*processor), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket, std::ref(_messaging)).get();
         auto on_error = defer([&cserver] noexcept { cserver->stop().get(); });
 
         subscribe_server(*cserver).get();
@@ -294,7 +297,9 @@ future<> controller::do_start_server() {
 
         on_error.cancel();
         on_error_unsub.cancel();
+        stop_processor_on_error.cancel();
         _server = std::move(cserver);
+        _processor = std::move(processor);
     });
 }
 
@@ -326,6 +331,7 @@ future<> controller::do_stop_server() {
     if (!cserver) {
         co_return;
     }
+    auto processor = std::move(_processor);
 
     std::exception_ptr ex;
 
@@ -346,7 +352,9 @@ future<> controller::do_stop_server() {
         }
     }
 
-    (void)server.stop().finally([s = std::move(cserver), h = _bg_stops.hold()] {});
+    (void)server.stop().finally([&processor = *processor] {
+        return processor.stop();
+    }).finally([s = std::move(cserver), p = std::move(processor), h = _bg_stops.hold()] {});
 
     if (ex) {
         std::rethrow_exception(std::move(ex));
