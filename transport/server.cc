@@ -568,6 +568,7 @@ cql_server::forward_cql(
     uint16_t stream,
     tracing::trace_state_ptr trace_state,
     forward_cql_execute_request req,
+    seastar::abort_source& as,
     const locator::host_id_or_exception_callback& on_forwarding_finished)
 {
     clogger.trace("Forwarding CQL request to {} shard {}", target_host, target_shard);
@@ -624,7 +625,7 @@ cql_server::forward_cql(
             auto result = std::make_unique<cql_transport::response>(stream, cql_binary_opcode::ERROR,
                                                         response.response_flags, std::move(response.response_body));
             if (response.timeout) {
-                co_return co_await sleep_until_timeout_passes(*response.timeout, std::move(result));
+                co_return co_await sleep_until_timeout_passes(*response.timeout, std::move(result), as);
             }
             co_return std::move(result);
         }
@@ -751,9 +752,9 @@ cql_server::connection::read_frame() {
 // This function intentionally sleeps to the end of the query timeout in CQL server.
 // It was introduced to remove similar waiting in storage_proxy (ref. scylladb#3699),
 // because storage proxy was blocking ERM (thus topology changes).
-future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, foreign_ptr<std::unique_ptr<cql_server::response>>&& resp) {
+future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, foreign_ptr<std::unique_ptr<cql_server::response>>&& resp, seastar::abort_source& as) {
     auto time_left = timeout - seastar::lowres_clock::now();
-    return seastar::sleep_abortable(time_left, _abort_source).then_wrapped([resp = std::move(resp)](auto&& f) mutable {
+    return seastar::sleep_abortable(time_left, as).then_wrapped([resp = std::move(resp)](auto&& f) mutable {
         if (f.failed()) {
             clogger.debug("Got exception {} while waiting for a request timeout.", f.get_exception());
         }
@@ -1142,7 +1143,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             auto response = _server.handle_exception(stream, eptr, trace_state, _version, client_state);
             if (auto timeout = _server.timeout_for_sleep(eptr)) {
                 // Return read timeout exception, as we wait here until the timeout passes
-                return _server.sleep_until_timeout_passes(*timeout, std::move(response));
+                return _server.sleep_until_timeout_passes(*timeout, std::move(response), _server._abort_source);
             }
             return utils::result_into_future<result_with_foreign_response_ptr>(std::move(response));
         });
@@ -2221,7 +2222,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
 
             auto response = co_await forward_cql(
                 target_host, shard, (*bounce_msg)->timeout().value(), (*bounce_msg)->is_write().value(),
-                stream, trace_state, std::move(req), (*bounce_msg)->on_forwarding_finished());
+                stream, trace_state, std::move(req), _abort_source, (*bounce_msg)->on_forwarding_finished());
 
             co_return cql_server::result_with_foreign_response_ptr(std::move(response));
         }
