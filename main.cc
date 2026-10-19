@@ -1306,7 +1306,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             debug::gossip_scheduling_group = dbcfg.gossip_scheduling_group;
             dbcfg.commitlog_scheduling_group = create_scheduling_group("commitlog", "clog", 1000).get();
             dbcfg.schema_commitlog_scheduling_group = create_scheduling_group("schema_commitlog", "sclg", 1000).get();
-            dbcfg.backup_scheduling_group = create_scheduling_group("backup", "bckp", 200, maintenance_supergroup).get(),
+            dbcfg.backup_scheduling_group = create_scheduling_group("backup", "bckp", 200, maintenance_supergroup).get();
+            dbcfg.export_import_scheduling_group = create_scheduling_group("export_import", "exim", 200, maintenance_supergroup).get();
             dbcfg.available_memory = memory::stats().total_memory();
 
             // Make sure to initialize the scheduling group keys at a point where we are sure
@@ -1766,9 +1767,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             }
 
             netw::messaging_service::scheduling_config scfg;
+            // All the maintenance scheduling groups share the "$maintenance" RPC tenant.
             scfg.statement_tenants = {
                     {default_scheduling_group(), "$system"},
-                    {dbcfg.streaming_scheduling_group, "$maintenance", false}
+                    {dbcfg.streaming_scheduling_group, "$maintenance", false},
+                    {dbcfg.export_import_scheduling_group, "$maintenance", false}
             };
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = dbcfg.gossip_scheduling_group;

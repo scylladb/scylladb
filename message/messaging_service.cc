@@ -357,11 +357,26 @@ bool messaging_service::is_same_rack(inet_address addr) const {
 //   statis for connections that are in advance known to have different
 //   timings and rates
 // - The verb-idx to tell different RPC channels from each other. For
-//   that the isolation cookie suits very well, because these cookies
-//   are different for different indices and are more informative than
-//   plain numbers
+//   that the isolation cookie suits very well, because it's more
+//   informative than a plain number. The cookies are not always unique
+//   though -- tenants sharing a name (the $maintenance one, for example)
+//   get the same cookie while running in different scheduling groups --
+//   so in that case the scheduling group name is appended to keep the
+//   channels apart. Only the indices that follow the first one with a
+//   given cookie get the suffix, so that adding a scheduling group to an
+//   existing tenant doesn't rename the domain of the already existing
+//   channels (and of the metrics labelled with it)
 sstring messaging_service::client_metrics_domain(unsigned idx, inet_address addr, std::optional<locator::host_id> id) const {
-    sstring ret = _scheduling_info_for_connection_index[idx].isolation_cookie;
+    const auto& info = _scheduling_info_for_connection_index[idx];
+    sstring ret = info.isolation_cookie;
+    // Once per connection, so a loop is fine.
+    for (unsigned i = 0; i < idx; ++i) {
+        const auto& other = _scheduling_info_for_connection_index[i];
+        if (other.isolation_cookie == info.isolation_cookie && other.sched_group != info.sched_group) {
+            ret += "/" + info.sched_group.name();
+            break;
+        }
+    }
     if (!id) {
         id = _address_to_host_id_mapper(addr);
     }
@@ -1078,11 +1093,13 @@ void messaging_service::init_feature_listeners() {
 }
 
 void messaging_service::enable_scheduling_tenant(std::string_view name) {
+    // More than one scheduling group can be registered under the same tenant name -
+    // the $maintenance tenant, for example, has several entries - so enable every
+    // entry with this name and not only the first one.
     for (size_t i = 0; i < _scheduling_config.statement_tenants.size(); ++i) {
         if (_scheduling_config.statement_tenants[i].name == name) {
             _scheduling_config.statement_tenants[i].enabled = true;
             _connection_index_for_tenant[i].enabled = true;
-            return;
         }
     }
 }
