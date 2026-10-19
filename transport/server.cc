@@ -1613,8 +1613,10 @@ static void record_client_timestamp_drift(cql_sg_stats& sg_stats, bool init_trac
     if (!init_trace || client_ts == api::missing_timestamp) {
         return;
     }
-    auto drift = std::abs(server_ts - client_ts);
-    sg_stats._client_timestamp_drift.add_micro(drift);
+    // The client picks its timestamp, so subtract unsigned to avoid overflow, and cap
+    // the drift at the top bucket's bound so that it cannot wrap the histogram's sum.
+    uint64_t drift = uint64_t(std::max(server_ts, client_ts)) - uint64_t(std::min(server_ts, client_ts));
+    sg_stats._client_timestamp_drift.add_micro(std::min(drift, utils::time_estimated_histogram::MAX));
 }
 
 // Runs user statements under the user service level. The connection's scheduling
