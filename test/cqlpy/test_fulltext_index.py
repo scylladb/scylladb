@@ -547,14 +547,13 @@ def test_bm25_group_by_rejected(cql, fulltext_table):
 
 
 @pytest.mark.parametrize("selection", ["p", "p, BM25(content, 'hello')"], ids=["key", "key_and_score"])
-@pytest.mark.xfail(reason="DISTINCT is accepted and answered with duplicate partition keys")
 def test_bm25_distinct_rejected(cql, test_keyspace, selection):
     """The same queries as test_invalid_ann_queries.py::test_ann_query_with_distinct_rejected,
-    reached through BM25(), with the same outcome."""
+    reached through BM25(), with the same outcome. Reproduces SCYLLADB-5051."""
     schema = "p int, c int, content text, PRIMARY KEY (p, c)"
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
-        with pytest.raises(InvalidRequest):
+        with pytest.raises(InvalidRequest, match="do not support SELECT DISTINCT"):
             cql.prepare(f"SELECT DISTINCT {selection} FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
 
 
