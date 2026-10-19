@@ -175,6 +175,28 @@ sstring vector_index::get_target_column(const sstring& targets) {
     return cql3::statements::index_target::column_name_from_target_string(targets);
 }
 
+std::vector<sstring> vector_index::get_all_target_columns(const sstring& targets) {
+    std::optional<rjson::value> json_value = rjson::try_parse(targets);
+    if (!json_value || !json_value->IsObject()) {
+        return {cql3::statements::index_target::column_name_from_target_string(targets)};
+    }
+
+    std::vector<sstring> columns;
+    const rjson::value* tc = rjson::find(*json_value, TC_TARGET_KEY);
+    if (tc && tc->IsString()) {
+        columns.emplace_back(rjson::to_string_view(*tc));
+    }
+    for (auto key : {PK_TARGET_KEY, FC_TARGET_KEY}) {
+        const rjson::value* array = rjson::find(*json_value, key);
+        if (array && array->IsArray()) {
+            for (const rjson::value& column : array->GetArray()) {
+                columns.emplace_back(rjson::to_string_view(column));
+            }
+        }
+    }
+    return columns;
+}
+
 bool vector_index::is_rescoring_enabled(const index_options_map& properties) {
     auto q = properties.find("quantization");
     auto r = properties.find("rescoring");
