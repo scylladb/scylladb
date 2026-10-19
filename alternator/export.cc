@@ -1061,13 +1061,13 @@ static future<foreign_ptr<lw_shared_ptr<query::result>>> read_exports(service::s
 }
 
 // Returns the export with the given ARN, or nullopt if there is no such export.
-static future<std::optional<export_row>> get_export(service::storage_proxy& proxy, service::client_state& client_state, service_permit permit, sstring export_arn) {
+static future<std::optional<export_row>> get_export(service::storage_proxy& proxy, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, sstring export_arn) {
     using sdks = db::system_distributed_keyspace;
     schema_ptr schema = proxy.data_dictionary().find_schema(sdks::NAME, sdks::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
     partition_key pk = partition_key::from_single_value(*schema, utf8_type->decompose(export_arn));
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
     const query::partition_slice& partition_slice = schema->full_slice();
-    auto result = co_await read_exports(proxy, schema, std::move(partition_ranges), partition_slice, query::row_limit::max, client_state, nullptr, std::move(permit));
+    auto result = co_await read_exports(proxy, schema, std::move(partition_ranges), partition_slice, query::row_limit::max, client_state, std::move(trace_state), std::move(permit));
     query::result_set rs = query::result_set::from_raw_result(schema, partition_slice, *result);
     if (rs.empty()) {
         co_return std::nullopt;
@@ -1096,7 +1096,7 @@ static future<std::optional<export_row>> get_export(service::storage_proxy& prox
     };
 }
 
-future<executor::request_return_type> executor::describe_export(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+future<executor::request_return_type> executor::describe_export(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.describe_export++;
 
     // Parsing the export ARN also tells us which table the export belongs to.
@@ -1114,7 +1114,7 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
         }
     }
 
-    auto exp = co_await get_export(_proxy, client_state, std::move(permit), sstring(export_arn));
+    auto exp = co_await get_export(_proxy, client_state, std::move(trace_state), std::move(permit), sstring(export_arn));
     // DynamoDB answers ExportNotFoundException also when the ARN names a table it does not have,
     // but ValidationException when no table can have the name the ARN gives.
     if (!exp) {
