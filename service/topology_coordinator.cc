@@ -3527,6 +3527,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     using desc_func = std::function<std::string()>;
     using before_finalize_func = std::function<future<>()>;
 
+    // `bf` runs after the operation's session is cleared
+    // and with the group0 guard RELEASED, so its I/O does not stall
+    // group0 operations on this node. Nothing serializes coordinators while
+    // the guard is out: a deposed coordinator can still be inside bf() when
+    // the new one retries the request and runs it again, so bf must tolerate
+    // a concurrent bf of the same request.
     future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_rpc_func send_rpc, desc_func desc, std::string_view what, before_finalize_func bf = {}) {
         // Execute a barrier to make sure the nodes we are performing truncate on see the session
         // and are able to create a topology_guard using the frozen_guard we are sending over RPC
@@ -3625,8 +3631,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
         guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
 
+        std::optional<sstring> bf_error;
         if (bf) {
-            co_await bf();
+            // See the bf contract above.
+            release_guard(std::move(guard));
+            try {
+                co_await bf();
+            } catch (term_changed_error&) {
+                throw;
+            } catch (raft::request_aborted&) {
+                throw;
+            } catch (seastar::abort_requested_exception&) {
+                throw;
+            } catch (...) {
+                // A failed finalize step fails the REQUEST instead of running
+                // the coordinator into an infinite loop.
+                bf_error = fmt::format("{}", std::current_exception());
+                rtlogger.warn("{} finalize step failed: {}", desc(), *bf_error);
+            }
         }
 
         // Finalize the request
@@ -3641,7 +3663,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 .del_global_topology_request_id()
                                 .build());
             updates.push_back(topology_request_tracking_mutation_builder(global_request_id)
-                                .done()
+                                .done(bf_error)
                                 .build());
 
             try {
