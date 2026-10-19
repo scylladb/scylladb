@@ -719,4 +719,32 @@ SEASTAR_TEST_CASE(test_no_marking_or_finalizing_mid_preparation) {
     });
 }
 
+// Verify that preparation covers the materialized views of a keyspace: it maps a view as
+// well as its base table, and a preparation which fails halfway drops a view's map as
+// well as a base table's. The two are prepared in the order of their ids, so which one
+// gets its map before the failure is up to chance; the test holds either way.
+SEASTAR_TEST_CASE(test_preparation_covers_views) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection one_table_per_command("prepare_migration_one_table_per_command");
+        scoped_error_injection fail_on_resume("prepare_migration_fail_on_resume", true);
+        const sstring ks = "test_migration_ks";
+        auto tables = create_vnode_keyspace(e, ks, 1);
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT pk, c FROM {}.{} "
+                "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, pk)", ks, ks, tables[0])).get();
+        tables.push_back("mv");
+        auto& ss = e.get_storage_service().local();
+
+        require_error([&] { ss.prepare_for_tablets_migration(ks).get(); }, "injected prepare_migration failure");
+        require_mapped(e, ks, tables, 0);
+        require_status(e, ks, migration_status::vnodes);
+
+        ss.prepare_for_tablets_migration(ks).get();
+        require_mapped(e, ks, tables, tables.size());
+        require_status(e, ks, migration_status::migrating_to_tablets);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
