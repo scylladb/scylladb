@@ -98,7 +98,7 @@ SEASTAR_TEST_CASE(test_alter_cluster_without_auth_enabled_is_allowed) {
 
 SEASTAR_TEST_CASE(test_registry_backed_cluster_config_statements_reject_when_feature_is_disabled) {
     cql_test_config cfg;
-    cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V0");
+    cfg.disabled_features.emplace("CLUSTER_CONFIG");
 
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto feature_disabled = [] (const exceptions::invalid_request_exception& ex) {
@@ -153,10 +153,9 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_persist_and_bump_version_witho
                 db::cluster_config_registry::scope::datacenter,
                 db::cluster_config_registry::scope::rack,
                 db::cluster_config_registry::scope::node>();
-        db::cluster_config_registry::add_test_only_option_on_all_shards(db::cluster_config_registry::option{
+        db::cluster_config_registry::add_test_only_option_on_all_shards(e.get_feature_service(), db::cluster_config_registry::option{
             .name = "test_node_only_option",
             .scopes = node_oriented_scopes,
-            .min_version = db::cluster_config_registry::version::v0,
             .default_value = int64_t(0),
         }).get();
         auto clear_test_options = defer([] noexcept {
@@ -216,10 +215,9 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
                 db::cluster_config_registry::scope::datacenter,
                 db::cluster_config_registry::scope::rack,
                 db::cluster_config_registry::scope::node>();
-        db::cluster_config_registry::add_test_only_option_on_all_shards(db::cluster_config_registry::option{
+        db::cluster_config_registry::add_test_only_option_on_all_shards(e.get_feature_service(), db::cluster_config_registry::option{
             .name = "test_node_only_option",
             .scopes = node_oriented_scopes,
-            .min_version = db::cluster_config_registry::version::v0,
             .default_value = int64_t(0),
         }).get();
         auto clear_test_options = defer([] noexcept {

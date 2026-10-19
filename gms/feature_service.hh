@@ -11,6 +11,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
+#include <map>
 #include <unordered_map>
 #include <functional>
 #include <set>
@@ -200,10 +201,31 @@ public:
     // rolling upgrade.
     gms::feature small_table_optimization_size_probe { *this, "SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"sv };
     gms::feature alternator_composite_gsi_keys { *this, "ALTERNATOR_COMPOSITE_GSI_KEYS"sv };
-    gms::feature cluster_config_registry_v0 { *this, "CLUSTER_CONFIG_REGISTRY_V0"sv };
+    gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+
+    // Features created at run time rather than declared above: one per cluster config
+    // option, from the registry at construction, plus any a test adds. Node-based, so a
+    // listener's reference stays valid when another entry is added.
+    std::map<sstring, feature> _dynamic_features;
+    // The feature of each cluster config option, by option name. The name is a view of
+    // the registry entry's, which has static storage.
+    std::unordered_map<std::string_view, std::reference_wrapper<feature>> _cluster_config_option_features;
 public:
+    // Creates the feature of the cluster config option called `option_name` (a view with
+    // static storage) and returns it, or returns the one created earlier. Called at
+    // construction for every registered option, and by the test hook that injects one.
+    feature& add_cluster_config_option_feature(std::string_view option_name);
+    // The feature of the cluster config option called `option_name`, or nullptr when no
+    // such option was added.
+    const feature* cluster_config_option_feature(std::string_view option_name) const;
+    // The feature called `name`, created if no feature of that name exists yet. A created
+    // feature is advertised and enabled like a declared one. When `name` is already
+    // registered, declared or created, that feature is returned as is.
+    // Call it only at construction or from tests: a feature added after the node has
+    // advertised its feature set to the cluster is not seen by the other nodes.
+    feature& add_feature(const sstring& name);
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
 

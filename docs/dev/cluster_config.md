@@ -28,7 +28,7 @@ The easiest way to think about it is:
 - one schema-backed persistence path for all writes
 
 
-Registry metadata lives in `db/cluster_config_registry.{hh,cc}` and is the source of truth for which keys exist, which scopes they support, what types they accept, and which registry epoch they require. Resolution and callback dispatch center on `db::cluster_config_manager`, which loads from schema-backed metadata.
+Registry metadata lives in `db/cluster_config_registry.{hh,cc}` and is the source of truth for which keys exist, which scopes they support, what types they accept, and the cluster feature advertised for each. Resolution and callback dispatch center on `db::cluster_config_manager`, which loads from schema-backed metadata.
 
 Every option, regardless of category, uses the same stored-override model — overrides live in a `configs` map column in the schema tables (see Storage Model) — and the same scope-resolution model. The categories differ only in two things: the CQL syntax used to set and read an option at each scope, and how (or whether) the resolved value is applied to a running node. The schema-version, digest, and prepared-statement consequences of a write are uniform across options (see Schema-Backed Ownership).
 
@@ -164,7 +164,7 @@ ALTER TABLE ks.tbl WITH some_table_option = NULL;
 
 #### Common Validation Rules
 
-- the feature is validated against cluster feature gating and registry version visibility
+- an option is rejected until its own cluster feature and the registry's base feature are enabled cluster-wide
 - unknown keys are rejected before any schema mutation is generated
 - known keys are validated against allowed scope and declared value type before write
 - `= NULL` means remove the stored override at the addressed scope and return to inheritance. Only the bare `NULL` keyword removes: the string literal `= 'null'` is an ordinary value and is validated like any other, so a boolean or numeric option rejects it and a text option stores it
@@ -227,22 +227,18 @@ The registry is the source of truth for:
 - a one-line description
 - declared value type, derived from the type of the built-in default
 - allowed scopes
-- minimum registry version
+- the cluster feature advertised for it, derived from its name
 - validation of textual values before persistence
 
 An option's allowed scopes must belong to a single resolution domain: a scope set may combine `CLUSTER` with the table-oriented scopes (`KEYSPACE`, `TABLE`) or with the node-oriented scopes (`DATACENTER`, `RACK`, `NODE`), but never mix the two. A mixed-domain set is a registration error, rejected when the registry is built, so every option resolves through exactly one of the two precedence chains with no ambiguity about which one wins.
 
-### Registry Versioning
+### Feature Gating
 
-The registry version controls which options are visible, gated by cluster features rather than an operator-set value.
+Every node advertises a cluster feature per registered option, named `CLUSTER_CONFIG_<NAME>` after the option, and an option can be set or described only once that feature is enabled cluster-wide, that is, once every node knows the option. Nothing is declared on the entry for this and nothing is operator-set. `CLUSTER_CONFIG` is the base feature that creates the config tables and the CQL surface; every option requires it as well.
 
-The minimum implementation supports a single coarse-grained registry epoch:
+Because each option is gated on its own, an option can be backported by cherry-picking its entry and its consumer into a release that has the registry: the patched nodes advertise the name, the option is accepted once every node in the cluster does, and a node upgraded from that release advertises the same name, so it can always join. A feature once enabled on a cluster must stay supported, or a node without it cannot join, so the feature name of an option that is removed or renamed goes to the registry's retired list, which the feature service advertises forever.
 
-- existing options belong to registry epoch `v0`
-- the minimum implementation is gated by `CLUSTER_CONFIG_REGISTRY_V0`
-- the current registry version is derived from enabled cluster features, not from an operator-set value
-
-Each later epoch is introduced when a new batch of options is added: the new options are declared with `min_version` set to that epoch (`v1`, `v2`, ...) and gated by a matching cluster feature (`CLUSTER_CONFIG_REGISTRY_V1`, `CLUSTER_CONFIG_REGISTRY_V2`, ...). The current registry version is the highest epoch whose feature is enabled cluster-wide, so an option only becomes visible once every node supports its epoch. This keeps option visibility tied to feature gating during upgrades, without an operator-set version. The minimum implementation defines only `v0`; the concrete `v1` and later rollouts are deferred until those option batches land.
+The cost is one feature name per option, about fifty bytes, in gossip and in `system.topology`, sent once per peer per restart. If the number of options ever makes that matter, the names can move to a transport of their own without changing the registry or the CQL paths.
 
 ### Value Encoding And Type Validation
 
@@ -466,7 +462,7 @@ A native cluster-config option is designed for cluster config from the start, ra
 
 The model for native cluster-config options is:
 
-- the registry defines the canonical option name, type, supported scopes, and minimum registry version
+- the registry defines the canonical option name, type, supported scopes, and the feature advertised for it
 - the CQL surface uses the registry-defined name directly rather than preserving a legacy property spelling
 - stored overrides use the same `configs`-based override model
 - if you do not set the value at a scope, that scope keeps no override for it
@@ -478,14 +474,13 @@ In short, native options use the cluster-config model directly: they do not inhe
 
 #### Default Values
 
-The registry owns a native option's name, type, supported scopes, minimum registry version, and built-in default. The default is declared in the option's native type, as `default_value` on the registry entry:
+The registry owns a native option's name, type, supported scopes, advertised feature, and built-in default. The default is declared in the option's native type, as `default_value` on the registry entry:
 
 ```cpp
 option{
     .name = "auto_repair_enabled",
     .description = "Enable automatic repair for tablet-based tables",
     .scopes = table_oriented_scopes,
-    .min_version = version::v0,
     .default_value = false,
 }
 ```
@@ -576,7 +571,7 @@ Use this path when the key is persisted in cluster config and consumed directly 
 
 1. Add the key to `db/cluster_config_registry.cc`.
 2. Define which scopes it supports.
-3. Set its `min_version` to the registry epoch its batch belongs to, and gate that epoch behind the matching `CLUSTER_CONFIG_REGISTRY_V*` feature (see [Registry Versioning](#registry-versioning)).
+3. Nothing to declare for upgrades or backports: the feature service advertises `CLUSTER_CONFIG_<NAME>` for the entry, and the option is accepted once every node advertises it. If the option is later removed or renamed, move its old feature name to the retired list in the registry source (see [Feature Gating](#feature-gating)).
 4. Decide whether its consumer reads the value on demand or needs a callback.
 5. If it needs a callback, register one with the manager, keep the returned registration handle alive, and make the callback idempotent — `register_config_callback(name, on_change)` (see [Live Config Application](#live-config-application)).
 6. Define clear parsing, defaulting, and restore-on-unset behavior for that consumer. For a period, interval or threshold option, `0` means disabled and a positive value is the period, as with the corresponding `db/config.cc` options; do not introduce a negative sentinel.
