@@ -353,7 +353,7 @@ def test_many_partition_scan(cql, test_keyspace, scylla_only):
         # since this scan is very slow, we create an extra patient cql connection,
         # with an abundant 10 minutes timeout
         ep = cql.hosts[0].endpoint
-        with util.cql_session(ep.address, ep.port, False, 'cassandra', 'cassandra', 600) as patient_cql:
+        with util.cql_session(ep.address, ep.port, cql.cluster.ssl_context is not None, 'cassandra', 'cassandra', 600) as patient_cql:
             res_all = list(patient_cql.execute(f"SELECT pk, mutation_source, mutation_fragment_kind, metadata FROM MUTATION_FRAGMENTS({test_table});"))
 
         actual_partitions = {}
@@ -684,7 +684,7 @@ def test_many_partitions(cql, test_keyspace, scylla_only):
         # since this scan is very slow, we create an extra patient cql connection,
         # with an abundant 10 minutes timeout
         ep = cql.hosts[0].endpoint
-        with util.cql_session(ep.address, ep.port, False, 'cassandra', 'cassandra', 600) as patient_cql:
+        with util.cql_session(ep.address, ep.port, cql.cluster.ssl_context is not None, 'cassandra', 'cassandra', 600) as patient_cql:
             res = list(patient_cql.execute(
                 f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE mutation_source > 'sstable:' ALLOW FILTERING"))
         pks = set()
