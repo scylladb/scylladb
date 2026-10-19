@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -68,6 +69,20 @@ inline constexpr std::string_view repair_hints_batchlog_flush_discard_unreplayed
 
 }
 
+// The values an integer option accepts, both ends inclusive. Declared on the registry entry
+// so that validate_value() rejects a value outside it at the statement, where the operator
+// can see why, and a consumer can trust what to_integer() returns without a range check of
+// its own. Bound an option whose value is added to a clock or used as a size, since a value
+// far outside its useful range overflows there rather than failing visibly.
+struct integer_range {
+    int64_t min = std::numeric_limits<int64_t>::min();
+    int64_t max = std::numeric_limits<int64_t>::max();
+
+    constexpr bool contains(int64_t value) const {
+        return min <= value && value <= max;
+    }
+};
+
 struct option {
     std::string_view name;
     std::string_view description;
@@ -75,6 +90,8 @@ struct option {
     // The value a consumer gets when no scope stores an override. Its alternative also
     // defines the option's type. Read it through the to_* converters, not directly.
     config_value default_value;
+    // Only for an integer option; the default must lie within it.
+    std::optional<integer_range> range;
 
     constexpr value_type type() const {
         return static_cast<value_type>(default_value.index());

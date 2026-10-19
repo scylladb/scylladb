@@ -194,6 +194,25 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_converts_values_and_applie
     BOOST_REQUIRE(ccr::validate_value(integer_option, "42x").has_value());
     BOOST_REQUIRE(ccr::validate_value(integer_option, "").has_value());
 
+    // A declared range narrows both: validation rejects a value outside it, and the
+    // converter treats a stored one as it treats unparsable text.
+    const auto bounded_integer_option = ccr::option{
+        .name = "test_bounded_integer_option",
+        .scopes = ccr::scope_set::of<ccr::scope::cluster>(),
+        .default_value = int64_t(7),
+        .range = ccr::integer_range{.min = 1, .max = 100},
+    };
+    BOOST_REQUIRE(!ccr::validate_value(bounded_integer_option, "1"));
+    BOOST_REQUIRE(!ccr::validate_value(bounded_integer_option, "100"));
+    BOOST_REQUIRE(ccr::validate_value(bounded_integer_option, "0").has_value());
+    BOOST_REQUIRE(ccr::validate_value(bounded_integer_option, "101").has_value());
+    BOOST_REQUIRE(ccr::validate_value(bounded_integer_option, "-1").has_value());
+    BOOST_REQUIRE(ccr::validate_value(bounded_integer_option, "9223372036854775808").has_value());
+    BOOST_REQUIRE_EQUAL(ccr::to_integer(bounded_integer_option, std::nullopt), 7);
+    BOOST_REQUIRE_EQUAL(ccr::to_integer(bounded_integer_option, sstring("100")), 100);
+    BOOST_REQUIRE_EQUAL(ccr::to_integer(bounded_integer_option, sstring("0")), 7);
+    BOOST_REQUIRE_EQUAL(ccr::to_integer(bounded_integer_option, sstring("101")), 7);
+
     const auto floating_point_option = ccr::option{
         .name = "test_floating_point_option",
         .scopes = ccr::scope_set::of<ccr::scope::cluster>(),
