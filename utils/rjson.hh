@@ -71,8 +71,6 @@ public:
 #include <rapidjson/ostreamwrapper.h>
 #include <seastar/core/sstring.hh>
 #include "utils/UUID.hh"
-#include "dht/token.hh"
-#include "sstables/types.hh"
 
 #include "seastarx.hh"
 
@@ -275,20 +273,6 @@ inline std::string to_string(const rjson::value& str) {
         throw std::runtime_error(fmt::format("rjson::to_string expects a string value, got: {}", type_name(str.GetType())));
     }
     return std::string(str.GetString(), str.GetStringLength());
-}
-// Helper for conversion to dht::token
-inline dht::token to_token(const rjson::value& v) {
-    if (!v.IsInt64()) {
-        throw std::runtime_error(fmt::format("rjson::to_token expects a 64-bit signed integer value, got: {}", type_name(v.GetType())));
-    }
-    return dht::token::from_int64(v.GetInt64());
-}
-// Helper for conversion to sstables::sstable_id
-inline sstables::sstable_id to_sstable_id(const rjson::value& v) {
-    if (!v.IsString()) {
-        throw std::runtime_error(fmt::format("rjson::to_sstable_id expects a string value, got: {}", type_name(v.GetType())));
-    }
-    return sstables::sstable_id(utils::UUID(rjson::to_string_view(v)));
 }
 // Returns a pointer to JSON member if it exists, nullptr otherwise
 rjson::value* find(rjson::value& value, std::string_view name);

@@ -29,6 +29,7 @@
 #include <seastar/util/defer.hh>
 
 #include "utils/base64.hh"
+#include "bytes.hh"
 #include "utils/hashers.hh"
 
 #include <chrono>
