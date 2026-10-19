@@ -107,7 +107,7 @@ namespace internal {
 
 template<typename Reducer, ExceptionContainer ExCont>
 struct result_reducer_traits {
-    using result_type = bo::result<void, ExCont, exception_container_throw_policy>;
+    using result_type = bo::basic_result<void, ExCont, exception_container_throw_policy>;
 
     static seastar::future<result_type> maybe_call_get(Reducer&& r) {
         return seastar::make_ready_future<result_type>(bo::success());
@@ -120,7 +120,7 @@ requires requires (Reducer r) {
 }
 struct result_reducer_traits<Reducer, ExCont> {
     using original_type = seastar::futurize_t<decltype(std::declval<Reducer>().get())>;
-    using result_type = bo::result<typename original_type::value_type, ExCont, exception_container_throw_policy>;
+    using result_type = bo::basic_result<typename original_type::value_type, ExCont, exception_container_throw_policy>;
 
     static seastar::future<result_type> maybe_call_get(Reducer&& r) {
         auto x = r.get();

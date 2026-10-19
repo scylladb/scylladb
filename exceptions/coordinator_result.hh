@@ -9,7 +9,6 @@
 #pragma once
 
 #include "exceptions.hh"
-#include <boost/outcome/result.hpp>
 #include "utils/exception_container.hh"
 #include "utils/result.hh"
 
@@ -38,7 +37,7 @@ using coordinator_exception_container = utils::exception_container<
 >;
 
 template<typename T = void>
-using coordinator_result = bo::result<T,
+using coordinator_result = bo::basic_result<T,
     coordinator_exception_container,
     utils::exception_container_throw_policy
 >;

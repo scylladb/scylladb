@@ -84,9 +84,9 @@ struct result_wrapped_call_traits<C, result_with_exception<void, Exs...>, false>
 };
 
 template<typename C, ExceptionContainer ExCont, typename... Args>
-struct result_wrapped_call_traits<C, bo::result<std::tuple<Args...>, ExCont, exception_container_throw_policy>, true> {
+struct result_wrapped_call_traits<C, bo::basic_result<std::tuple<Args...>, ExCont, exception_container_throw_policy>, true> {
 private:
-    using result_type = bo::result<std::tuple<Args...>, ExCont, exception_container_throw_policy>;
+    using result_type = bo::basic_result<std::tuple<Args...>, ExCont, exception_container_throw_policy>;
 
 public:
     using return_type = decltype(seastar::futurize_apply(std::declval<C>(), std::declval<std::tuple<Args...>>()));

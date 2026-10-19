@@ -15,7 +15,7 @@
 #include <boost/outcome/basic_result.hpp>
 #include <boost/outcome/config.hpp>
 #include <boost/outcome/policy/base.hpp>
-#include <boost/outcome/result.hpp>
+#include <boost/outcome/std_result.hpp>
 #include "utils/exception_container.hh"
 
 namespace bo = BOOST_OUTCOME_V2_NAMESPACE;
@@ -39,7 +39,7 @@ struct exception_container_throw_policy : bo::policy::base {
 };
 
 template<typename T, typename... Exs>
-using result_with_exception = bo::result<T, exception_container<Exs...>, exception_container_throw_policy>;
+using result_with_exception = bo::basic_result<T, exception_container<Exs...>, exception_container_throw_policy>;
 
 template<typename R>
 concept ExceptionContainerResult = bo::is_basic_result<R>::value && ExceptionContainer<typename R::error_type>;
@@ -57,7 +57,7 @@ concept ResultRebindableTo =
 // Creates a result type which has the same error type as R, but has a different value type.
 // The name was inspired by std::allocator::rebind.
 template<typename T, ExceptionContainerResult R>
-using rebind_result = bo::result<T, typename R::error_type, exception_container_throw_policy>;
+using rebind_result = bo::basic_result<T, typename R::error_type, exception_container_throw_policy>;
 
 struct result_with_exception_ptr_throw_policy : bo::policy::base {
     template<class Impl> static constexpr void wide_value_check(Impl&& self) {
@@ -74,7 +74,7 @@ struct result_with_exception_ptr_throw_policy : bo::policy::base {
 };
 
 template<typename T>
-using result_with_exception_ptr = bo::result<T, std::exception_ptr, result_with_exception_ptr_throw_policy>;
+using result_with_exception_ptr = bo::basic_result<T, std::exception_ptr, result_with_exception_ptr_throw_policy>;
 
 template<typename R>
 concept ExceptionPtrResult = bo::is_basic_result<R>::value && std::same_as<typename R::error_type, std::exception_ptr>;

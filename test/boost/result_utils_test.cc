@@ -39,7 +39,7 @@ public:
 using exc_container = utils::exception_container<foo_exception, bar_exception>;
 
 template<typename T = void>
-using result = bo::result<T, exc_container,utils::exception_container_throw_policy>;
+using result = bo::basic_result<T, exc_container,utils::exception_container_throw_policy>;
 
 SEASTAR_TEST_CASE(test_exception_container_throw_policy) {
     result<> r_ok = bo::success();
