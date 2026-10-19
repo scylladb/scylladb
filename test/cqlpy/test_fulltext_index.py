@@ -310,6 +310,20 @@ def test_drop_fulltext_index(cql, test_keyspace):
         cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
 
 
+def test_drop_column_with_fulltext_index_fails(cql, test_keyspace):
+    """A column with a fulltext index cannot be dropped until the index is
+    dropped. Reproduces SCYLLADB-4875."""
+    schema = 'p int primary key, content text, other text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(content) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match=f"Cannot drop column content from base table {table} because it has dependent indexes \\({index_name}\\)"):
+            cql.execute(f"ALTER TABLE {table} DROP content")
+        cql.execute(f"ALTER TABLE {table} DROP other")
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        cql.execute(f"ALTER TABLE {table} DROP content")
+
+
 def test_cannot_disable_cdc_with_fulltext_index(cql, test_keyspace):
     """ALTER TABLE to disable CDC must fail when a fulltext index exists on the table."""
     schema = 'p int primary key, content text'
