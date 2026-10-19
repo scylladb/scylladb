@@ -1289,7 +1289,8 @@ The ``ALTER TABLE`` statement can:
 - Remove column(s) from the table. This drops both the column and all its content, but note that while the column
   becomes immediately unavailable, its content is only removed lazily during compaction. Please also note the warnings
   below. Due to lazy removal, the altering itself is a constant (in the amount of data removed or contained in the
-  cluster) time operation.
+  cluster) time operation. A column that an index or a materialized view uses cannot be removed; drop the index or
+  the view first.
 - Change data type of the column to a compatible type.
 - Change some of the table options (through the ``WITH`` instruction). The :ref:`supported options
   <create-table-options>` are the same that when creating a table (outside of ``COMPACT STORAGE`` and ``CLUSTERING
