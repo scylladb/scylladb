@@ -244,7 +244,6 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
         }
         case tablet_transition_kind::restore: {
             auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
-            result.stream_weight = locator::tablet_migration_stream_weight_restore;
             result.written_to = std::move(s);
             return result;
         }
