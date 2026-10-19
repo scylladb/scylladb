@@ -1025,7 +1025,7 @@ def unknown_export_id():
 # Test that DescribeExport rejects with ValidationException an ARN which carries no export id: an
 # absent or empty one, the ARN of a table, whether the table exists or not, and a table ARN which
 # stops at `/export/`.
-def test_describe_export_nonexistent(test_table_s):
+def test_describe_export_no_export_id(test_table_s):
     client = test_table_s.meta.client
     table_arn = get_table_arn(test_table_s)
     with pytest.raises(ClientError, match='ValidationException.*Export ?(ARN|Arn)'):

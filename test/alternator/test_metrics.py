@@ -331,8 +331,9 @@ def test_export_table_operations(test_table_s, metrics):
             test_table_s.meta.client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket')
 
 # DescribeExport counts against the table named by the export ARN, whether the export exists or
-# not - the counter tracks the request, not its outcome. Nothing writes export rows until export
-# orchestration lands, so the existing export's row is put there over CQL, as test_export.py does.
+# not - the counter tracks the request, not its outcome. A table outside Alternator gets no per-table
+# counter. Nothing writes export rows until export orchestration lands, so the existing export's row
+# is put there over CQL, as test_export.py does.
 def test_describe_export_operations(test_table_s, cql, metrics):
     client = test_table_s.meta.client
     table_arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
@@ -345,6 +346,9 @@ def test_describe_export_operations(test_table_s, cql, metrics):
         with check_table_increases_operation(metrics, ['DescribeExport'], test_table_s.name):
             with pytest.raises(ClientError, match='ExportNotFoundException'):
                 client.describe_export(ExportArn=f'{table_arn}/export/01790264607542-abcdef12')
+    with pytest.raises(ClientError, match='ExportNotFoundException'):
+        client.describe_export(ExportArn='arn:aws:dynamodb:us-east-1:000000000000:table/system@peers/export/01790264607542-abcdef12')
+    assert get_metric(metrics, 'scylla_alternator_table_operation', {'ks': 'system', 'cf': 'peers'}) == 0
 
 # ListExports has no table of its own, so like ListTables it only counts against the cluster.
 def test_list_exports_operations(dynamodb, metrics):
