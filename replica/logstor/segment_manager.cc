@@ -261,7 +261,7 @@ using seg_ptr = lw_shared_ptr<writeable_segment>;
 // been met, and six times faster below the target. The exact output at the target is not critical:
 // the loop settles at whatever shares match the write rate, and this constant only decides how far
 // below the target it settles.
-class logstor_compaction_controller : public backlog_controller {
+class compaction_shares_controller : public backlog_controller {
 public:
     static constexpr float idle_shares = 50.0f;
     static constexpr float target_shares = 200.0f;
@@ -269,7 +269,7 @@ public:
     // as a misconfiguration rather than as a choice to honour.
     static constexpr float min_max_shares = 1.0f;
 
-    logstor_compaction_controller(scheduling_group sg, float static_shares, float max_shares,
+    compaction_shares_controller(scheduling_group sg, float static_shares, float max_shares,
             std::chrono::milliseconds interval, std::function<float()> current_backlog)
         : backlog_controller(std::move(sg), interval, make_control_points(max_shares),
                 std::move(current_backlog), static_shares) {
@@ -329,18 +329,18 @@ private:
     }
 
     struct stats {
-        uint64_t compaction_segments_in{0};
-        uint64_t compaction_segments_out{0};
-        uint64_t compaction_records_skipped{0};
-        uint64_t compaction_records_rewritten{0};
-        uint64_t compaction_bytes_read{0};
-        uint64_t compaction_failures{0};
-        uint64_t separator_buffer_flushed{0};
+        uint64_t segments_in{0};
+        uint64_t segments_out{0};
+        uint64_t records_skipped{0};
+        uint64_t records_rewritten{0};
+        uint64_t bytes_read{0};
+        uint64_t failures{0};
+        uint64_t separator_buffers_flushed{0};
         uint64_t separator_segments_freed{0};
         uint64_t separator_flush_failures{0};
     } _stats;
 
-    logstor_compaction_controller _shares_controller;
+    compaction_shares_controller _shares_controller;
     utils::observer<float> _compaction_static_shares_observer;
     utils::observer<float> _compaction_max_shares_observer;
 
@@ -425,8 +425,8 @@ public:
 private:
 
     // Cached result of make_free_segment_watermarks(). should_run_auto_compaction() calls
-    // get_free_segment_watermarks() on every write, so caching avoids repeating the same
-    // computation on every hot-path call.
+    // get_free_segment_watermarks() on every segment allocation, so the cache avoids the same
+    // computation on each allocation.
     free_segment_watermarks _free_segment_watermarks{};
     compaction_limits _compaction_limits{};
 
@@ -1074,13 +1074,13 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of bytes written to the disk by compaction.")),
         sm::make_counter("compaction_data_bytes_written", _stats.data_bytes_written[static_cast<size_t>(write_source::compaction)],
                        sm::description("Counts number of data bytes written to the disk by compaction.")),
-        sm::make_counter("compaction_segments_in", _compaction_mgr.get_stats().compaction_segments_in,
+        sm::make_counter("compaction_segments_in", _compaction_mgr.get_stats().segments_in,
                        sm::description("Counts number of input segments selected for compaction.")),
-        sm::make_counter("compaction_segments_out", _compaction_mgr.get_stats().compaction_segments_out,
+        sm::make_counter("compaction_segments_out", _compaction_mgr.get_stats().segments_out,
                        sm::description("Counts number of output segments written by compaction.")),
-        sm::make_counter("compaction_records_skipped", _compaction_mgr.get_stats().compaction_records_skipped,
+        sm::make_counter("compaction_records_skipped", _compaction_mgr.get_stats().records_skipped,
                        sm::description("Counts number of records skipped during compaction.")),
-        sm::make_counter("compaction_records_rewritten", _compaction_mgr.get_stats().compaction_records_rewritten,
+        sm::make_counter("compaction_records_rewritten", _compaction_mgr.get_stats().records_rewritten,
                        sm::description("Counts number of records rewritten during compaction.")),
         sm::make_gauge("compaction_buffers_in_use", [this] { return _compaction_buffer_pool.used_buffer_count(); },
                        sm::description("Counts number of write buffers currently held by compaction. The pool size is the cap on concurrent compactions.")),
@@ -1088,15 +1088,15 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of times a compaction had to wait for a write buffer to become available.")),
         sm::make_counter("compaction_buffers_dropped", _compaction_buffer_pool.get_stats().buffers_dropped,
                        sm::description("Counts number of write buffers permanently removed from the pool after they could not be reclaimed.")),
-        sm::make_counter("compaction_bytes_read", _compaction_mgr.get_stats().compaction_bytes_read,
+        sm::make_counter("compaction_bytes_read", _compaction_mgr.get_stats().bytes_read,
                         sm::description("Counts number of bytes read by compaction.")),
-        sm::make_counter("compaction_failures", _compaction_mgr.get_stats().compaction_failures,
+        sm::make_counter("compaction_failures", _compaction_mgr.get_stats().failures,
                        sm::description("Counts number of logstor compaction failures.")),
         sm::make_counter("separator_bytes_written", _stats.bytes_written[static_cast<size_t>(write_source::separator)],
                        sm::description("Counts number of bytes written to the separator.")),
         sm::make_counter("separator_data_bytes_written", _stats.data_bytes_written[static_cast<size_t>(write_source::separator)],
                        sm::description("Counts number of data bytes written to the separator.")),
-        sm::make_counter("separator_buffer_flushed", _compaction_mgr.get_stats().separator_buffer_flushed,
+        sm::make_counter("separator_buffer_flushed", _compaction_mgr.get_stats().separator_buffers_flushed,
                        sm::description("Counts number of times the separator buffer has been flushed.")),
         sm::make_counter("separator_segments_freed", _compaction_mgr.get_stats().separator_segments_freed,
                        sm::description("Counts number of segments freed by the separator.")),
@@ -1607,7 +1607,7 @@ future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std
         state->completion = shared_future(with_scheduling_group(sg, [state, op = std::move(op)] {
             return op(*state);
         }).handle_exception([this] (std::exception_ptr ep) {
-            ++_stats.compaction_failures;
+            ++_stats.failures;
             logstor_logger.warn("logstor compaction failed: {}", ep);
             return make_exception_future<>(std::move(ep));
         }));
@@ -2012,11 +2012,11 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_ba
         }
     }
 
-    _stats.compaction_segments_in += compaction_segments_in;
-    _stats.compaction_segments_out += compaction_segments_out;
-    _stats.compaction_records_rewritten += cb_stats.records_rewritten;
-    _stats.compaction_records_skipped += cb_stats.records_skipped;
-    _stats.compaction_bytes_read += nonempty_segments.size() * _sm.get_segment_size();
+    _stats.segments_in += compaction_segments_in;
+    _stats.segments_out += compaction_segments_out;
+    _stats.records_rewritten += cb_stats.records_rewritten;
+    _stats.records_skipped += cb_stats.records_skipped;
+    _stats.bytes_read += nonempty_segments.size() * _sm.get_segment_size();
 }
 
 future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutation_writer::classify_by_token_group classifier, split_target_group target_group, abort_source& as) {
@@ -2109,7 +2109,7 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
         logstor_logger.debug("Split compaction: flushed {} times from {} segments",
                              batch_stats.flush_count, batch.size());
 
-        _stats.compaction_bytes_read += nonempty_segments.size() * _sm.get_segment_size();
+        _stats.bytes_read += nonempty_segments.size() * _sm.get_segment_size();
 
         // All records are safely written to new segments in src.
         // Await pending reads before freeing the source segments.
@@ -2188,7 +2188,7 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
             co_await with_scheduling_group(_cfg.separator_sg, [&] {
                 return _sm.write_full_segment(*buf.buf, cg, write_source::separator);
             });
-            _stats.separator_buffer_flushed++;
+            _stats.separator_buffers_flushed++;
         }
 
         auto updates = std::move(buf.pending_updates);
