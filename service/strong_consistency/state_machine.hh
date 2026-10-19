@@ -15,6 +15,8 @@
 #include "locator/tablets.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 #include "utils/loading_cache.hh"
+#include "utils/histogram.hh"
+#include <seastar/core/metrics_registration.hh>
 
 namespace db {
 class system_keyspace;
@@ -30,12 +32,22 @@ struct raft_command {
     frozen_mutation mutation;
 };
 
+// Shared by the state machines of all strongly consistent tablets on a shard.
+struct state_machine_stats {
+    utils::timed_rate_moving_average_summary_and_histogram apply;
+
+    seastar::metrics::metric_groups _metrics;
+
+    void register_stats();
+};
+
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
     raft::group_id gid,
     replica::database& db,
     service::migration_manager& mm,
     db::system_keyspace& sys_ks,
-    raft_groups_storage& storage);
+    raft_groups_storage& storage,
+    state_machine_stats& stats);
 
 // Resolves schemas for frozen mutations and upgrades them to the current schema if needed.
 //

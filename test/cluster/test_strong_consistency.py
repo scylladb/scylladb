@@ -1687,6 +1687,31 @@ async def test_redirected_requests_latency_metrics(manager: ScyllaClusterManager
             assert on_replica.get('scylla_strong_consistency_coordinator_read_latency_count') == 3
 
 @pytest.mark.asyncio
+async def test_apply_latency_metrics(manager: ScyllaClusterManager):
+    """
+    Verify that every replica counts the raft log entries it applies in the apply
+    latency metrics: 3 writes to a tablet with 3 replicas are applied 3 times on
+    each replica.
+    """
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='dc1')
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            for pk in range(3):
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({pk}, {pk})")
+
+            for server in servers:
+                async def applied_entries():
+                    metrics = await manager.metrics.query(server.ip_addr)
+                    return metrics.get('scylla_strong_consistency_state_machine_apply_latency_count')
+                # A follower may apply the entries after the writes have returned.
+                async def three_applied():
+                    return (await applied_entries() or 0) >= 3 or None
+                await wait_for(three_applied, time.time() + 60, label=f"{server} to apply 3 entries")
+                assert await applied_entries() == 3
+
+@pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_stepdown_on_graceful_shutdown(manager: ScyllaClusterManager):
     """

@@ -166,6 +166,7 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     , _gossiper(gossiper)
     , _raft_replay_buffer(raft_replay_buffer)
 {
+    _state_machine_stats.register_stats();
     init_messaging_service();
 }
 
@@ -206,7 +207,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(),
         *commitlog, tablet.table, std::move(replayed_data));
 
-    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
+    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage, _state_machine_stats);
 
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id,

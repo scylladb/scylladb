@@ -2224,9 +2224,10 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
                 const auto segments_before = log.get_active_segment_names();
                 BOOST_REQUIRE(!segments_before.empty());
 
+                service::strong_consistency::state_machine_stats stats;
                 auto state_machine = service::strong_consistency::make_state_machine(
                         locator::global_tablet_id{schema->id(), locator::tablet_id(0)}, gid, db,
-                        env.migration_manager().local(), env.get_system_keyspace().local(), storage);
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, stats);
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 // Abort the apply after the handle is acquired and before the entry reaches a memtable.
