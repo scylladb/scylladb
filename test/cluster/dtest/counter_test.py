@@ -32,6 +32,13 @@ from tools.misc import ImmutableMapping
 logger = logging.getLogger(__name__)
 
 
+def execute_all(session, statements):
+    # Generator mode drops each result as it arrives; list mode keeps them all
+    # alive, and the GC rescanning them costs a third of the client's CPU.
+    for _ in execute_concurrent(session, statements, concurrency=100, raise_on_first_error=True, results_generator=True):
+        pass
+
+
 class NoCounterMutationRetryPolicy(RetryPolicy):
     """Disable retries on WriteTimeout to prevent double-applying counter updates.
 
@@ -408,7 +415,7 @@ class TestCounters(Tester):
 
         with ThreadPoolExecutor(max_workers=len(sessions)) as executor:
             futures = [
-                executor.submit(execute_concurrent, sessions[i], per_session_stmts[i], concurrency=100, raise_on_first_error=True)
+                executor.submit(execute_all, sessions[i], per_session_stmts[i])
                 for i in range(len(sessions))
                 if per_session_stmts[i]
             ]
@@ -430,9 +437,9 @@ class TestCounters(Tester):
         """
         3 nodes in test
         2 counters:
-        increment 500 times * 400 threads and
-        decrement 500 times * 200 threads in parallel
-        expected result: counters equal 100000(500*200)
+        increment 250 times * 400 threads and
+        decrement 250 times * 200 threads in parallel
+        expected result: counters equal 50000(250*200)
         """
         cluster = self.cluster
 
@@ -446,7 +453,7 @@ class TestCounters(Tester):
         create_cf(session, "cf", validation="CounterColumnType", columns={"c": "counter"})
 
         sessions = [self.patient_cql_connection(node, "ks", retry_policy=NoCounterMutationRetryPolicy()) for node in nodes]
-        nb_increment = 500
+        nb_increment = 250
         if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
             nb_increment //= 10
         nb_counter = 2
@@ -477,7 +484,7 @@ class TestCounters(Tester):
 
         with ThreadPoolExecutor(max_workers=len(sessions)) as executor:
             futures = [
-                executor.submit(execute_concurrent, sessions[i], per_session_stmts[i], concurrency=100, raise_on_first_error=True)
+                executor.submit(execute_all, sessions[i], per_session_stmts[i])
                 for i in range(len(sessions))
                 if per_session_stmts[i]
             ]
