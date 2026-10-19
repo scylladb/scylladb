@@ -103,8 +103,8 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
     a QUORUM (linearizable) read and a CL=ONE (relaxed) read alike.
 
     The request timeouts are raised to 10s so that "fast" and "timed out" cannot be
-    confused, and the coordinator's error counters are checked to be untouched: the
-    refusal happens before the coordinator starts waiting for anything. Once the replicas
+    confused, and the coordinator's error counters are checked to count the refusal only
+    as unavailable: it happens before the coordinator starts waiting for anything. Once the replicas
     are back, the acknowledged write is still there and the refused one left nothing.
     """
     config = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 10000, 'read_request_timeout_in_ms': 10000}
@@ -124,8 +124,12 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
                 assert e.alive_replicas == 0 and "All replicas" in str(e), str(e)
                 assert elapsed < 5.0, f"{query} took {elapsed:.1f}s to be refused"
 
-            errors_after = [await get_metric(manager, non_replica, name) for name in (WRITE_ERRORS, READ_ERRORS)]
-            assert errors_after == errors_before, "the refusal was accounted as a coordinator error"
+            metrics = await manager.metrics.query(non_replica.ip_addr)
+            errors_after = [metrics.get(name) or 0 for name in (WRITE_ERRORS, READ_ERRORS)]
+            unavailable = [metrics.get(name, {'reason': 'unavailable'}) or 0 for name in (WRITE_ERRORS, READ_ERRORS)]
+            assert all(unavailable), "the refusal was not accounted as unavailable"
+            assert [after - before for after, before in zip(errors_after, errors_before)] == unavailable, \
+                "the refusal was accounted as an error other than unavailable"
 
         await wait_for_leader(manager, leader, group_id)
         assert [r.c for r in await cql.run_async(reads[0], host=coordinator)] == [1]
