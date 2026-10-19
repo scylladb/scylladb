@@ -119,6 +119,11 @@ private:
 
     std::multimap<db::replay_position, lw_shared_ptr<std::optional<promise<>>>> _replay_waiters;
 
+    // If set, segments containing hints at or below this replay position are
+    // discarded instead of replayed.
+    // Reset once all such segments have been processed.
+    std::optional<db::replay_position> _discard_up_to_rp;
+
 public:
     hint_sender(hint_endpoint_manager& parent, service::storage_proxy& local_storage_proxy, replica::database& local_db, const gms::gossiper& local_gossiper, scheduling_group sg) noexcept;
     ~hint_sender();
@@ -165,6 +170,14 @@ public:
     /// \brief Waits until hints are replayed up to a given replay position, or given abort source is triggered.
     future<> wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp);
 
+    /// \brief Makes the sender discard, instead of replaying, all segments
+    /// containing hints at or below \param rp.
+    ///
+    /// Foreign segments are considered to precede all replay positions, so
+    /// they're discarded too. If called again before all such segments have been
+    /// processed, the greater of the replay positions is used.
+    void discard_segments_up_to(db::replay_position rp);
+
 private:
     /// \brief Gets the name of the current segment that should be sent.
     ///
@@ -173,6 +186,23 @@ private:
 
     /// \brief Removes the current segment from the queue.
     void pop_current_segment();
+
+    bool segment_discarding_in_progress() const noexcept;
+
+    /// \brief Checks if the current segment should be discarded
+    /// (see \ref discard_segments_up_to).
+    bool should_discard_current_segment() const;
+
+    /// \brief Deletes the current segment without replaying it, removes it
+    /// from the queue, and notifies the replay waiters whose target positions
+    /// it covered.
+    future<> discard_current_segment();
+
+    /// \brief Deletes a segment file from the disk without taking any lock.
+    future<> delete_segment_unsafe(sstring segment_name);
+
+    /// \brief Deletes a segment file from the disk.
+    future<> delete_segment(sstring segment_name);
 
     /// \brief Send hints collected so far.
     ///

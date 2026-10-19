@@ -1,0 +1,50 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/hinted_handoff_test",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/hinted_handoff_test/discard_segments",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Discards, without replaying them, regular hint segments containing hints at or below the replay positions of a hints sync point. The segments are discarded asynchronously.",
+               "type":"void",
+               "nickname":"discard_hint_segments",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"id",
+                     "description":"The ID of a hint sync point created on this node",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/hinted_handoff_test/flush",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Flushes the regular hints written so far to the disk. The hint segments currently being written to are closed and new ones are created.",
+               "type":"void",
+               "nickname":"flush_hints",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      }
+   ]
+}

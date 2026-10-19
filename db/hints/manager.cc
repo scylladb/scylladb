@@ -141,6 +141,30 @@ future<> directory_initializer::ensure_rebalanced() {
     });
 }
 
+/// Translates the keys of `rps` to host IDs. IP addresses that cannot be
+/// mapped to host IDs are skipped.
+static
+std::unordered_map<manager::endpoint_id, replay_position>
+to_host_id_rps(const shared_ptr<const gms::gossiper>& gossiper, const sync_point::shard_rps& rps) {
+    std::unordered_map<endpoint_id, replay_position> result{};
+    result.reserve(rps.size());
+
+    for (const auto& [addr, rp] : rps) {
+        if (std::holds_alternative<gms::inet_address>(addr)) {
+            try {
+                const auto hid = gossiper->get_host_id(std::get<gms::inet_address>(addr));
+                result.emplace(hid, rp);
+            } catch (...) {
+                // Ignore the IPs we cannot map.
+            }
+        } else {
+            result.emplace(std::get<locator::host_id>(addr), rp);
+        }
+    }
+
+    return result;
+}
+
 manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter, int64_t max_hint_window_ms,
         resource_manager& res_manager, sharded<replica::database>& db, scheduling_group sg)
     : _hints_dir(fs::path(hints_directory) / fmt::to_string(this_shard_id()))
@@ -187,6 +211,9 @@ void manager::register_metrics(const sstring& group_name) {
 
         sm::make_counter("corrupted_files", _stats.corrupted_files,
                         sm::description("Number of hints files that were discarded during sending because the file was corrupted.")).set_skip_when_empty(),
+
+        sm::make_counter("discarded_segments", _stats.discarded_segments,
+                        sm::description("Number of hints files that were discarded without being replayed.")),
 
         sm::make_gauge("pending_drains",
                         sm::description("Number of tasks waiting in the queue for draining hints"),
@@ -326,21 +353,7 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     }
 
     const auto tmptr = _proxy.get_token_metadata_ptr();
-    std::unordered_map<endpoint_id, replay_position> hid_rps{};
-    hid_rps.reserve(rps.size());
-
-    for (const auto& [addr, rp] : rps) {
-        if (std::holds_alternative<gms::inet_address>(addr)) {
-            try {
-                const auto hid = _gossiper_anchor->get_host_id(std::get<gms::inet_address>(addr));
-                hid_rps.emplace(hid, rp);
-            } catch (...) {
-                // Ignore the IPs we cannot map.
-            }
-        } else {
-            hid_rps.emplace(std::get<locator::host_id>(addr), rp);
-        }
-    }
+    const auto hid_rps = to_host_id_rps(_gossiper_anchor, rps);
 
     bool was_aborted = false;
     co_await coroutine::parallel_for_each(_ep_managers,
@@ -376,6 +389,22 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
     if (was_aborted) {
         co_await coroutine::return_exception(abort_requested_exception{});
     }
+}
+
+void manager::discard_segments_up_to(const sync_point::shard_rps& rps) {
+    const auto host_id_rps = to_host_id_rps(_gossiper_anchor, rps);
+    for (const auto& [ep, rp] : host_id_rps) {
+        auto it = _ep_managers.find(ep);
+        if (it != _ep_managers.end()) {
+            it->second.discard_segments_up_to(rp);
+        }
+    }
+}
+
+future<> manager::flush_hints() {
+    co_await coroutine::parallel_for_each(_ep_managers | std::views::values, [] (hint_endpoint_manager& ep_man) {
+        return ep_man.flush_current_hints();
+    });
 }
 
 hint_endpoint_manager& manager::get_ep_manager(const endpoint_id& host_id) {

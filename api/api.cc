@@ -25,6 +25,7 @@
 #include "compaction_manager.hh"
 #include "storage_manager.hh"
 #include "hinted_handoff.hh"
+#include "hinted_handoff_test.hh"
 #include "error_injection.hh"
 #include "authorization_cache.hh"
 #include <seastar/http/exception.hh>
@@ -362,6 +363,16 @@ future<> set_server_cql_server_test(http_context& ctx, cql_transport::controller
 
 future<> unset_server_cql_server_test(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_cql_server_test(ctx, r); });
+}
+
+future<> set_hinted_handoff_test(http_context& ctx, sharded<service::storage_proxy>& proxy) {
+    return register_api(ctx, "hinted_handoff_test", "The hinted handoff test API", [&proxy] (http_context& ctx, routes& r) {
+        set_hinted_handoff_test(ctx, r, proxy);
+    });
+}
+
+future<> unset_hinted_handoff_test(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_hinted_handoff_test(ctx, r); });
 }
 
 #endif

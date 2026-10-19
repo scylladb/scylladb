@@ -253,6 +253,29 @@ public:
     /// \brief Waits until hint replay reach replay positions described in `rps`.
     future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
 
+    /// \brief Discards, without replaying them, hint segments containing hints
+    /// at or below replay positions described in rps.
+    ///
+    /// For each endpoint in rps that has an endpoint manager, every segment of
+    /// that endpoint containing at least one hint whose replay position is smaller
+    /// than or equal to the corresponding replay position is going to be deleted
+    /// instead of replayed once the hint sender reaches it. That includes segments
+    /// that were moved from other shards at start-up, which are considered to
+    /// precede all replay positions. Replay waiters whose target positions are
+    /// covered by the discarded segments are notified as if those segments had been
+    /// replayed.
+    ///
+    /// The segments are discarded asynchronously by the hint senders. Endpoints
+    /// without an endpoint manager are ignored.
+    void discard_segments_up_to(const sync_point::shard_rps& rps);
+
+    /// \brief Flushes the hints written so far to the disk for all endpoints.
+    ///
+    /// The segments currently being written to are closed and new ones are created.
+    /// The closed segments become available for replay once the hint senders are done
+    /// with the segments they're already replaying.
+    future<> flush_hints();
+
 private:
     future<> compute_hints_dir_device_id();
 

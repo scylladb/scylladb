@@ -42,6 +42,7 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 
 namespace db::hints {
 namespace internal {
@@ -54,6 +55,12 @@ public:
 future<> hint_sender::flush_maybe() noexcept {
     auto current_time = clock::now();
     if (current_time >= _next_flush_tp) {
+        if (utils::get_local_injector().enter("hinted_handoff_skip_periodic_flush")) {
+            // Keep the segments currently being written to open. Still update the time point
+            // of the next flush. Otherwise, the hint sender would never sleep.
+            _next_flush_tp = current_time + manager::hints_flush_period;
+            return make_ready_future<>();
+        }
         return _ep_manager.flush_current_hints().then([this, current_time] {
             _next_flush_tp = current_time + manager::hints_flush_period;
         }).handle_exception([this] (auto eptr) {
@@ -547,10 +554,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
     }
 
     // If we got here we are done with the current segment and we can remove it.
-    with_shared(_file_update_mutex, [&fname, this] {
-        auto p = _ep_manager.get_or_load().get();
-        return p->delete_segments({ fname });
-    }).get();
+    delete_segment(fname).get();
 
     // clear the replay position - we are going to send the next segment...
     _last_not_complete_rp = replay_position();
@@ -578,6 +582,98 @@ void hint_sender::pop_current_segment() {
     }
 }
 
+void hint_sender::discard_segments_up_to(db::replay_position rp) {
+    manager_logger.debug("hint_sender[{}]:discard_segments_up_to: Requested to "
+            "discard segments up to {}", _ep_key, rp);
+    if (!_discard_up_to_rp || *_discard_up_to_rp < rp) {
+        _discard_up_to_rp = rp;
+    }
+}
+
+future<> hint_sender::delete_segment_unsafe(sstring segment_name) {
+    auto entry = co_await _ep_manager.get_or_load();
+    co_await entry->delete_segments({std::move(segment_name)});
+}
+
+future<> hint_sender::delete_segment(sstring segment_name) {
+    const auto holder = co_await get_shared_lock(_file_update_mutex);
+    co_await delete_segment_unsafe(std::move(segment_name));
+}
+
+bool hint_sender::segment_discarding_in_progress() const noexcept {
+    return _discard_up_to_rp.has_value();
+}
+
+bool hint_sender::should_discard_current_segment() const {
+    if (!segment_discarding_in_progress()) {
+        return false;
+    }
+
+    const sstring* maybe_segment_name = name_of_current_segment();
+    if (!maybe_segment_name) {
+        return false;
+    }
+
+    // Foreign segments are replayed first and are considered to precede
+    // all replay positions.
+    if (!_foreign_segments_to_replay.empty()) {
+        return true;
+    }
+
+    const commitlog::descriptor desc{*maybe_segment_name, manager::FILENAME_PREFIX};
+    return desc.id <= _discard_up_to_rp->id;
+}
+
+future<> hint_sender::discard_current_segment() {
+    manager_logger.debug("hint_sender[{}]:discard_current_segment: Discarding starts", _ep_key);
+    const auto holder = co_await get_shared_lock(_file_update_mutex);
+
+    const sstring* maybe_segment_name = name_of_current_segment();
+    if (!maybe_segment_name) {
+        on_internal_error(manager_logger, seastar::format(
+                "hint_sender[{}]:discard_current_segment: No segment to discard", _ep_key));
+        std::unreachable();
+    }
+
+    const sstring segment_name = *maybe_segment_name;
+    const bool is_foreign = !_foreign_segments_to_replay.empty();
+    const commitlog::descriptor desc{segment_name, manager::FILENAME_PREFIX};
+    const db::replay_position segment_end{desc.id, std::numeric_limits<db::position_type>::max()};
+
+    try {
+        manager_logger.debug("hint_sender[{}]:discard_current_segment: Discarding segment: {}",
+                _ep_key, segment_name);
+        // We already hold a lock, so we can call the unsafe version of the function.
+        co_await delete_segment_unsafe(segment_name);
+    } catch (...) {
+        manager_logger.error("hint_sender[{}]:discard_current_segment: Deleting segment {} failed: {:t}",
+                _ep_key, segment_name, std::current_exception());
+        throw;
+    }
+
+    manager_logger.debug("hint_sender[{}]:discard_current_segment: Segment {} has been deleted",
+            _ep_key, segment_name);
+
+    // The segment might have been partially replayed before. Make sure that we
+    // start from the beginning of the next one.
+    _last_not_complete_rp = replay_position();
+    _last_schema_ver_to_column_mapping.clear();
+    ++shard_stats().discarded_segments;
+
+    pop_current_segment();
+
+    // Segments from other shards are considered to be "before" replay position 0,
+    // so the sent upper bound only advances past local segments.
+    if (!is_foreign) {
+        _sent_upper_bound_rp = std::max(_sent_upper_bound_rp, segment_end);
+    }
+
+    notify_replay_waiters();
+
+    manager_logger.debug("hint_sender[{}]:discard_current_segment: Discarding "
+            "segment {} has finished successfully", _ep_key, segment_name);
+}
+
 // Runs in the seastar::async context
 void hint_sender::send_hints_maybe() noexcept {
     using namespace std::literals::chrono_literals;
@@ -592,13 +688,33 @@ void hint_sender::send_hints_maybe() noexcept {
                 manager_logger.debug("hint_sender[{}]:send_hints_maybe: Exiting loop in send_hints_maybe because of canceled draining", _ep_key);
                 break;
             }
+
             const sstring* seg_name = name_of_current_segment();
-            if (!seg_name || !replay_allowed() || !can_send()) {
+            if (!seg_name || (stopping() && !draining())) {
                 break;
             }
+
+            // Discarding a segment doesn't involve the destination node, so it
+            // doesn't matter if we can send hints to it.
+            if (segment_discarding_in_progress()) {
+                if (should_discard_current_segment()) {
+                    discard_current_segment().get();
+                    continue;
+                } else {
+                    manager_logger.debug("hint_sender[{}]:send_hints_maybe: No more segments "
+                            "to discard. Clearing the flag", _ep_key);
+                    _discard_up_to_rp.reset();
+                }
+            }
+
+            if (!replay_allowed() || !can_send()) {
+                break;
+            }
+
             if (!send_one_file(*seg_name)) {
                 break;
             }
+
             pop_current_segment();
             ++replayed_segments_count;
 

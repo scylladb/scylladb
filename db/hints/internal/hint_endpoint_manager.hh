@@ -167,6 +167,11 @@ public:
         return _sender.wait_until_hints_are_replayed_up_to(as, up_to_rp);
     }
 
+    /// \brief Makes the hint sender discard segments containing hints at or below a given replay position.
+    void discard_segments_up_to(db::replay_position rp) {
+        _sender.discard_segments_up_to(rp);
+    }
+
     /// \brief Safely runs a given functor under the file_update_mutex of \ref this object.
     ///
     /// Runs a given functor under the file_update_mutex of this hint_endpoint_manager instance.
@@ -179,6 +184,12 @@ public:
     const fs::path& hints_dir() const noexcept {
         return _hints_dir;
     }
+
+    /// \brief Flushes all hints written so far to the disk.
+    ///  - Repopulates the _segments_to_replay list if needed.
+    ///
+    /// \return Ready future when the procedure above completes.
+    future<> flush_current_hints() noexcept;
 
 private:
     future<> do_store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state);
@@ -195,12 +206,6 @@ private:
     ///
     /// \return A new hints store object.
     future<commitlog> add_store() noexcept;
-
-    /// \brief Flushes all hints written so far to the disk.
-    ///  - Repopulates the _segments_to_replay list if needed.
-    ///
-    /// \return Ready future when the procedure above completes.
-    future<> flush_current_hints() noexcept;
 
     hint_stats& shard_stats();
 
