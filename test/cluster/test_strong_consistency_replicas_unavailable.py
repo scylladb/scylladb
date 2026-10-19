@@ -103,8 +103,8 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
     a QUORUM (linearizable) read and a CL=ONE (relaxed) read alike.
 
     The request timeouts are raised to 10s so that "fast" and "timed out" cannot be
-    confused, and the coordinator's error counters are checked to be untouched: the
-    refusal happens before the coordinator starts waiting for anything. Once the replicas
+    confused, and the coordinator's error counters are checked to count the refusal only
+    as unavailable: it happens before the coordinator starts waiting for anything. Once the replicas
     are back, the acknowledged write is still there and the refused one left nothing.
     """
     config = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 10000, 'read_request_timeout_in_ms': 10000}
@@ -119,7 +119,6 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
         # Going through the non-replica also fills its leader cache, so the refusal below
         # has to see past a cached leader that is dead by then.
         await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 1)", host=coordinator)
-        errors_before = [await get_metric(manager, non_replica, name) for name in (WRITE_ERRORS, READ_ERRORS)]
 
         async with down(manager, list(host_of), [leader] + followers):
             for query in (write, *reads):
@@ -127,8 +126,12 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
                 assert e.alive_replicas == 0 and "All replicas" in str(e), str(e)
                 assert elapsed < 5.0, f"{query} took {elapsed:.1f}s to be refused"
 
-            errors_after = [await get_metric(manager, non_replica, name) for name in (WRITE_ERRORS, READ_ERRORS)]
-            assert errors_after == errors_before, "the refusal was accounted as a coordinator error"
+            metrics = await manager.metrics.query(non_replica.ip_addr)
+            assert metrics.get(WRITE_ERRORS, {'reason': 'unavailable'}) == 1  # 1 write
+            assert metrics.get(READ_ERRORS, {'reason': 'unavailable'}) == 2   # 2 reads
+            # No refusal is counted under another reason.
+            assert metrics.get(WRITE_ERRORS) == 1
+            assert metrics.get(READ_ERRORS) == 2
 
         await wait_for_leader(manager, leader, group_id)
         assert [r.c for r in await cql.run_async(reads[0], host=coordinator)] == [1]

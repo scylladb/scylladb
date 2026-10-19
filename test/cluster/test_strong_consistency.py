@@ -12,7 +12,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, unique_name, wait_for, Host
 from test.cluster.util import ensure_raft_group_leader_on, get_topology_coordinator, new_test_keyspace, new_test_table
 from test.pylib.internal_types import HostID, ServerInfo
-from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
+from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import ServerError
@@ -1724,6 +1724,61 @@ async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterMa
             # The first write was acked by the stopped leader, the new leader has to serve it too.
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 1", host=non_replica_host)
             assert [(row.pk, row.c) for row in rows] == [(1, 1)]
+
+@pytest.mark.asyncio
+async def test_unavailable_errors_metrics(manager: ScyllaClusterManager):
+    """
+    Verify that requests failing with Unavailable, because no replica of the tablet
+    is alive, are counted in the coordinator's error metrics with reason "unavailable".
+
+    Setup: 2 nodes, RF=1, 1 tablet, so one node is the replica and the other one is
+    not. The replica is stopped, and the non-replica coordinates a write, a QUORUM
+    read and a CL=ONE read.
+    """
+    # The leader cache is per shard. With one shard, both writes below use the same one.
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE + ['--smp=1'], property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            [(replica_host_id, _)] = await get_tablet_replicas(manager, servers[0], ks, table.split('.')[-1], 0)
+            replica_idx = host_ids.index(str(replica_host_id))
+            non_replica_idx = 1 - replica_idx  # the other of the 2 nodes
+            replica, non_replica = servers[replica_idx], servers[non_replica_idx]
+            non_replica_host = hosts[non_replica_idx]
+
+            # The non-replica forwards this write to the replica and caches the replica
+            # as the leader. The write below then finds that cached leader down, evicts
+            # it, and fails with Unavailable.
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 0)", host=non_replica_host)
+
+            await manager.server_stop(replica.server_id, convict=True)
+            try:
+                await manager.server_not_sees_other_server(non_replica.ip_addr, replica.ip_addr)
+
+                # The driver retries a request refused with Unavailable one time by default.
+                # Without retries, each request is refused and counted once.
+                no_retry = FallthroughRetryPolicy()
+                with pytest.raises(Unavailable, match="All replicas of tablet 0 are down"):
+                    await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES (0, 1)",
+                                                        retry_policy=no_retry), host=non_replica_host)
+                for cl in (ConsistencyLevel.QUORUM, ConsistencyLevel.ONE):
+                    with pytest.raises(Unavailable, match="All replicas of tablet 0 are down"):
+                        await cql.run_async(SimpleStatement(f"SELECT * FROM {table} WHERE pk = 0", consistency_level=cl,
+                                                            retry_policy=no_retry), host=non_replica_host)
+
+                metrics = await manager.metrics.query(non_replica.ip_addr)
+                assert metrics.get('scylla_strong_consistency_coordinator_write_errors', {'reason': 'unavailable'}) == 1
+                assert metrics.get('scylla_strong_consistency_coordinator_read_errors', {'reason': 'unavailable'}) == 2  # QUORUM, ONE
+            finally:
+                # The replica may be the only group0 voter, and dropping the table needs a
+                # group0 quorum.
+                await manager.server_start(replica.server_id)
+                await manager.get_ready_cql(servers)
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")

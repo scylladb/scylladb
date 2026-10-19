@@ -81,6 +81,11 @@ void stats::register_stats() {
             {reason_label("status_unknown")})
             .set_skip_when_empty(),
 
+        sm::make_counter("write_errors", write_errors_unavailable,
+            sm::description("number of strong consistency write requests that failed"),
+            {reason_label("unavailable")})
+            .set_skip_when_empty(),
+
         sm::make_counter("write_errors", write_errors_other,
             sm::description("number of strong consistency write requests that failed"),
             {reason_label("other")})
@@ -115,6 +120,11 @@ void stats::register_stats() {
         sm::make_counter("read_errors", read_errors_timeout,
             sm::description("number of strong consistency read requests that failed"),
             {reason_label("timeout")})
+            .set_skip_when_empty(),
+
+        sm::make_counter("read_errors", read_errors_unavailable,
+            sm::description("number of strong consistency read requests that failed"),
+            {reason_label("unavailable")})
             .set_skip_when_empty(),
 
         sm::make_counter("read_errors", read_errors_other,
@@ -284,9 +294,9 @@ public:
     }
 
     // The live replica the request may be served by that is closest to this node,
-    // preferring the same rack. Throws unavailable_exception if none is alive: there is
-    // no node worth forwarding to.
-    locator::tablet_replica closest_replica(const gms::gossiper& gossiper) const {
+    // preferring the same rack. Nullopt if none is alive: there is no node worth
+    // forwarding to.
+    std::optional<locator::tablet_replica> closest_replica(const gms::gossiper& gossiper) const {
         // sort_by_proximity() works on hosts, so the replica is looked up again after it.
         host_id_vector_replica_set hosts;
         _serving.for_each([&] (const locator::tablet_replica& replica) {
@@ -296,8 +306,7 @@ public:
         });
 
         if (hosts.empty()) {
-            throw exceptions::unavailable_exception(format("All replicas of tablet {} are down", _tablet_id),
-                    db::consistency_level::ONE, 1, 0);
+            return std::nullopt;
         }
         const auto& topo = _erm->get_token_metadata().get_topology();
         topo.sort_by_proximity(topo.my_host_id(), hosts);
@@ -396,10 +405,15 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
                 // Cached leader is no longer a replica/alive, evict it.
                 _groups_manager.leader_cache().erase(group_id);
             }
-            return make_ready_future<value_or_redirect<operation_ctx>>(
-                redirect_to_leader(replicas.closest_replica(_gossiper), _groups_manager, group_id));
         }
-        return make_ready_future<value_or_redirect<operation_ctx>>(redirect_to_replica(replicas.closest_replica(_gossiper)));
+        const auto target = replicas.closest_replica(_gossiper);
+        if (!target) {
+            return make_exception_future<value_or_redirect<operation_ctx>>(exceptions::unavailable_exception(
+                    format("All replicas of tablet {} are down", replicas.tablet_id()), db::consistency_level::ONE, 1, 0));
+        }
+        return make_ready_future<value_or_redirect<operation_ctx>>(needs_leader
+                ? redirect_to_leader(*target, _groups_manager, group_id)
+                : redirect_to_replica(*target));
     }
 
     return utils::get_local_injector().inject(
@@ -486,6 +500,10 @@ auto coordinator::mutate(schema_ptr schema,
             return std::make_exception_ptr(exceptions::server_exception(
                 "The outcome of this statement is unknown. It may or may not have been applied. "
                 "Retrying the statement may be necessary."));
+        } else if (try_catch<exceptions::unavailable_exception>(ex)) {
+            logger.trace("mutate(): no live replica, table {}.{}, token {}", schema->ks_name(), schema->cf_name(), token);
+            ++_stats.write_errors_unavailable;
+            return ex;
         } else if (auto* too_big = try_catch<raft::command_is_too_big_error>(ex)) {
             logger.trace("mutate(): command of {} bytes exceeds the limit of {}, table {}.{}, token {}",
                 too_big->command_size, too_big->limit, schema->ks_name(), schema->cf_name(), token);
@@ -665,6 +683,10 @@ auto coordinator::query(schema_ptr schema,
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_timeout;
             return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name()));
+        } else if (try_catch<exceptions::unavailable_exception>(ex)) {
+            logger.trace("query(): no live replica, table {}.{}, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
+            ++_stats.read_errors_unavailable;
+            return ex;
         } else {
             logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
