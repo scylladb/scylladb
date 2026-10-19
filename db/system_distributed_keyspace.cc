@@ -1426,21 +1426,13 @@ db::snapshot_table_entry snapshot_table_helper::make_snapshot_table_entry(std::s
 }
 
 /**
- * Helper to write snapshot base metadata
+ * Helper to write a snapshot's keyspace and table schema rows
  */
-future<> snapshot_table_helper::insert_snapshot_info(std::string_view snapshot_name
-    , db_clock::time_point created, db_clock::time_point expiry
+future<> snapshot_table_helper::insert_snapshot_schema_rows(std::string_view snapshot_name
     , std::span<const lw_shared_ptr<replica::table>> tables_in
     , db::consistency_level cl
 )
 {
-    co_await insert_snapshot(db::snapshot_entry{
-        .name = std::string(snapshot_name),
-        .created_at = created,
-        .expires_at = expiry,
-        // TODO: namespace/manifest version?
-    }, cl);
-
     std::unordered_map<std::string, db::snapshot_keyspace_entry> keyspaces;
     std::vector<db::snapshot_table_entry> tables;
 

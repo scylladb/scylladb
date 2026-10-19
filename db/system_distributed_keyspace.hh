@@ -315,10 +315,9 @@ public:
     );
 
     /**
-     * Helper to write snapshot base metadata
+     * Helper to write a snapshot's keyspace and table schema rows.
      */
-    future<> insert_snapshot_info(std::string_view snapshot_name
-        , db_clock::time_point created, db_clock::time_point expiry
+    future<> insert_snapshot_schema_rows(std::string_view snapshot_name
         , std::span<const lw_shared_ptr<replica::table>> tables
         , db::consistency_level cl = db::consistency_level::LOCAL_QUORUM
     );
