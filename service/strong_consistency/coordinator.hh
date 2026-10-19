@@ -13,6 +13,7 @@
 #include "query/query-result.hh"
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>
+#include <seastar/core/scheduling_specific.hh>
 #include <seastar/util/noncopyable_function.hh>
 
 namespace gms {
@@ -76,7 +77,7 @@ private:
     groups_manager& _groups_manager;
     replica::database& _db;
     gms::gossiper& _gossiper;
-    stats _stats;
+    scheduling_group_key _stats_key;
 
     class replica_selector;
     struct operation_ctx;
@@ -91,9 +92,10 @@ private:
         abort_source& as,
         bool needs_leader);
 public:
-    coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper);
+    coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper,
+        scheduling_group_key stats_key);
 
-    stats& get_stats() { return _stats; }
+    stats& get_stats() { return scheduling_group_get_specific<stats>(_stats_key); }
 
     // What a request that ran on this node hands back. `routing_info` is set when the
     // request carried a tablet version block that doesn't match the tablet's current

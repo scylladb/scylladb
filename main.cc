@@ -1498,6 +1498,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             timeout_cfg.start(std::ref(*cfg)).get();
             auto stop_timeout_cfg = defer_verbose_shutdown("updateable timeout config", [] { timeout_cfg.stop().get(); });
 
+            scheduling_group_key_config sc_coordinator_stats_cfg =
+                    make_scheduling_group_key_config<service::strong_consistency::stats>();
+            sc_coordinator_stats_cfg.constructor = [plain_constructor = sc_coordinator_stats_cfg.constructor] (void* ptr) {
+                plain_constructor(ptr);
+                reinterpret_cast<service::strong_consistency::stats*>(ptr)->register_stats();
+            };
+            sc_coordinator_stats_cfg.rename = [] (void* ptr) {
+                reinterpret_cast<service::strong_consistency::stats*>(ptr)->register_stats();
+            };
+            auto sc_coordinator_stats_key = scheduling_group_key_create(sc_coordinator_stats_cfg).get();
+
             scheduling_group_key_config storage_proxy_stats_cfg =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
             storage_proxy_stats_cfg.constructor = [plain_constructor = storage_proxy_stats_cfg.constructor] (void* ptr) {
@@ -2094,7 +2105,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "initializing strongly consistent coordinator");
             sharded<service::strong_consistency::coordinator> sc_coordinator;
-            sc_coordinator.start(std::ref(groups_manager), std::ref(db), std::ref(gossiper)).get();
+            sc_coordinator.start(std::ref(groups_manager), std::ref(db), std::ref(gossiper), sc_coordinator_stats_key).get();
             auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [&] {
                 sc_coordinator.stop().get();
             });
