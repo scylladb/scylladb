@@ -295,6 +295,18 @@ def test_no_view_for_vector_search_index(cql, test_keyspace, scylla_only, skip_w
         result = cql.execute(f"SELECT * FROM system_schema.views WHERE keyspace_name = '{test_keyspace}' AND view_name = 'def_index'")
         assert len(result.current_rows) == 1, "Regular index should create a view in system_schema.views"
         
+def test_rename_filtering_column_of_vector_index_fails(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """A clustering column that a vector index filters on cannot be renamed.
+    It is the only kind of column that can be both renamed and filtered on."""
+    schema = 'p int, c int, v vector<float, 3>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(v, c) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match=f"Cannot rename column c because it has dependent secondary indexes \\({index_name}\\)"):
+            cql.execute(f"ALTER TABLE {table} RENAME c TO c2")
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        cql.execute(f"ALTER TABLE {table} RENAME c TO c2")
+
 def test_describe_custom_index(cql, test_keyspace, skip_on_scylla_vnodes):
     schema = 'p int primary key, v1 vector<float, 3>, v2 vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:
