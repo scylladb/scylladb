@@ -89,8 +89,10 @@ The datacenter, rack, or node named in the statement must exist in the cluster.
 
 Values are validated against the option's type before anything is stored: a boolean option accepts
 ``true`` and ``false`` (in any letter case), an integer option accepts a signed 64-bit integer, and
-so on, and a text option accepts at most 4096 bytes. An unknown option name, an option used at a
-scope it does not support, or a value of the wrong type is rejected and nothing changes.
+so on, and a text option accepts at most 4096 bytes. An option may introduce further restrictions
+(see ``auto_scrub_period_seconds`` in :ref:`Available options <cql-cluster-config-options>`). An unknown
+option name, an option used at a scope it does not support, or a value of the wrong type is
+rejected and nothing changes.
 
 Removing an option
 ------------------
@@ -172,3 +174,11 @@ Available options
        automatic repair. Default: ``86400``. Until the deprecated
        ``auto_repair_threshold_default_in_seconds`` option is removed, a node that sets it in
        ``scylla.yaml`` uses that value when no scope sets this option.
+   * - ``auto_scrub_period_seconds``
+     - integer
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - Schedule every sstable written or validated more than this many seconds ago for scrub.
+       Accepts ``0`` or ``3600`` to ``4294967295``. Default: ``0``. ``0`` disables automatic scrub
+       at that scope even if a broader scope enabled it, whereas ``NULL`` removes the value and
+       falls back to the broader scope. See
+       :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.

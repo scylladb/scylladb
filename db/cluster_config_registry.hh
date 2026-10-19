@@ -64,6 +64,7 @@ namespace option_name {
 
 inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
 inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
+inline constexpr std::string_view auto_scrub_period_seconds = "auto_scrub_period_seconds";
 
 }
 
