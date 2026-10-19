@@ -14,6 +14,7 @@
 #include <functional>
 #include <stdexcept>
 #include <map>
+#include <ranges>
 #include <span>
 #include <vector>
 #include <fmt/format.h>
@@ -2993,6 +2994,33 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_candidate_score_ranks_by_effici
     const compaction_candidate_score all_dead{.n_in = 2, .n_out = 0, .live_bytes = 0};
     BOOST_REQUIRE(cheap < all_dead);
     BOOST_REQUIRE(four_in < all_dead);
+}
+
+// Checks that top_compaction_candidates keeps the best candidates by score, and returns them worst
+// first. test/boost/largest_k_test.cc tests the ranking itself.
+SEASTAR_THREAD_TEST_CASE(test_logstor_top_compaction_candidates) {
+    struct candidate {
+        int id;
+        compaction_candidate_score score;
+    };
+
+    // Each candidate reclaims one segment, so a candidate that copies fewer live bytes has a better
+    // score.
+    auto make_candidate = [] (int id, uint64_t live_bytes) {
+        return candidate{.id = id, .score = {.n_in = 2, .n_out = 1, .live_bytes = live_bytes}};
+    };
+    auto ids = [] (const std::vector<candidate>& candidates) {
+        return candidates | std::views::transform(&candidate::id) | std::ranges::to<std::vector>();
+    };
+
+    // The best three of five are kept, in any order of arrival.
+    top_compaction_candidates<candidate> top(3);
+    top.push(make_candidate(3, 3000));
+    top.push(make_candidate(5, 5000));
+    top.push(make_candidate(1, 1000));
+    top.push(make_candidate(4, 4000));
+    top.push(make_candidate(2, 2000));
+    BOOST_REQUIRE(ids(std::move(top).take_sorted()) == (std::vector<int>{3, 2, 1}));
 }
 
 // The live bytes of a segment set are maintained as segments are linked, freed from and unlinked,

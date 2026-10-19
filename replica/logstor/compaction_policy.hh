@@ -7,9 +7,12 @@
  */
 #pragma once
 
+#include "utils/largest_k.hh"
 #include <algorithm>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -144,6 +147,22 @@ struct compaction_batch {
 // only for this batch, since a longer prefix would only add fuller segments.
 std::optional<compaction_batch> select_compaction_batch(const segment_set& segments,
         uint64_t segment_size, size_t batch_cap);
+
+// Gives the score of a compaction candidate, which top_compaction_candidates ranks it by.
+struct compaction_score_of {
+    template <typename Candidate>
+    requires std::same_as<decltype(Candidate::score), compaction_candidate_score>
+    const compaction_candidate_score& operator()(const Candidate& candidate) const noexcept {
+        return candidate.score;
+    }
+};
+
+// Keeps the best `capacity` compaction candidates by compaction_candidate_score. `Candidate` is any
+// type that has a `score` member of type compaction_candidate_score. take_sorted() returns the
+// candidates in worst-to-best order, so that a caller that takes them from the back gets the best
+// one first.
+template <typename Candidate>
+using top_compaction_candidates = utils::largest_k<Candidate, std::less<>, compaction_score_of>;
 
 // Where the free-segment target falls on the compaction_shares_pressure() ramp. It is a property of
 // the watermarks rather than a tunable: with the relative hysteresis of make_free_segment_watermarks()

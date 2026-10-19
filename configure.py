@@ -1769,6 +1769,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/json_cql_query_test.cc',
     'test/boost/large_data_guardrail_test.cc',
     'test/boost/large_paging_state_test.cc',
+    'test/boost/largest_k_test.cc',
     'test/boost/loading_cache_test.cc',
     'test/boost/memtable_test.cc',
     'test/boost/multishard_combining_reader_as_mutation_source_test.cc',

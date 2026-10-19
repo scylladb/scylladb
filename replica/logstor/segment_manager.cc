@@ -1705,12 +1705,7 @@ compaction_manager_impl::select_segments_for_compaction(logstor_group& cg) {
 
 future<std::vector<compaction_manager_impl::compaction_candidate>>
 compaction_manager_impl::find_top_compaction_candidates(size_t max_candidates) {
-    // min heap of top-k candidates
-    auto candidate_gt = [] (const compaction_candidate& lhs, const compaction_candidate& rhs) {
-        return rhs.score < lhs.score;
-    };
-    std::vector<compaction_candidate> best_candidates;
-    best_candidates.reserve(max_candidates);
+    top_compaction_candidates<compaction_candidate> best_candidates(max_candidates);
 
     std::vector<logstor_group*> group_snapshot;
     group_snapshot.reserve(_groups.size());
@@ -1733,19 +1728,11 @@ compaction_manager_impl::find_top_compaction_candidates(size_t max_candidates) {
 
         auto candidate = select_segments_for_compaction(*it->first);
         if (candidate) {
-            if (best_candidates.size() < max_candidates) {
-                best_candidates.push_back(std::move(*candidate));
-                std::ranges::push_heap(best_candidates, candidate_gt);
-            } else if (best_candidates.front().score < candidate->score) {
-                std::ranges::pop_heap(best_candidates, candidate_gt);
-                best_candidates.back() = std::move(*candidate);
-                std::ranges::push_heap(best_candidates, candidate_gt);
-            }
+            best_candidates.push(std::move(*candidate));
         }
     }
 
-    std::ranges::sort(best_candidates, std::less<>{}, &compaction_candidate::score);
-    co_return best_candidates;
+    co_return std::move(best_candidates).take_sorted();
 }
 
 bool compaction_manager_impl::should_run_auto_compaction() noexcept {
