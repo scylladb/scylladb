@@ -968,6 +968,59 @@ SEASTAR_TEST_CASE(test_pending_log_garbage_collection) {
     });
 }
 
+// Reproducer for SCYLLADB-5328: an sstable that survives an atomic deletion
+// must keep the pending-delete log, or a restart loads it alone.
+SEASTAR_TEST_CASE(test_atomic_deletion_keeps_log_when_unlink_fails) {
+    return sstables::test_env::do_with_sharded_async([] (auto& env) {
+        auto base = env.local().tempdir().path() / fmt::to_string(table_id::create_random_id());
+        recursive_touch_directory(base.native()).get();
+
+        auto new_sstable = [&] {
+            return env.local().make_sstable(test_table_schema(), base.native());
+        };
+        std::vector<shared_sstable> ssts;
+        for (int i = 0; i < 2; i++) {
+            ssts.emplace_back(make_sstable_for_this_shard(new_sstable));
+        }
+        auto survivor_toc = test(ssts[0]).filename(sstables::component_type::TOC).native();
+        auto deleted_toc = test(ssts[1]).filename(sstables::component_type::TOC).native();
+
+        // A directory where the TOC is renamed to makes that rename fail with
+        // EISDIR, before any component of the first sstable is removed.
+        auto blocker = test(ssts[0]).filename(sstables::component_type::TemporaryTOC).native();
+        touch_directory(blocker).get();
+
+        auto deletion = env.local().manager().make_atomic_deletion(ssts);
+        deletion.commit().get();
+        deletion.execute().get();
+
+        BOOST_REQUIRE(file_exists(survivor_toc).get());
+        BOOST_REQUIRE(!file_exists(deleted_toc).get());
+
+        auto pending_delete_dir = base / sstables::pending_delete_dir;
+        auto list_logs = [&] {
+            std::vector<sstring> logs;
+            lister::scan_dir(pending_delete_dir, lister::dir_entry_types::of<directory_entry_type::regular>(),
+                    [&logs] (fs::path, directory_entry de) {
+                logs.push_back(de.name);
+                return make_ready_future<>();
+            }).get();
+            return logs;
+        };
+        BOOST_REQUIRE_EQUAL(list_logs().size(), 1);
+
+        // With the failure gone, the replay on startup finishes the deletion.
+        remove_file(blocker).get();
+        ssts.clear();
+        with_sstable_directory(base, sstables::sstable_state::normal, env, [&] (sharded<sstables::sstable_directory>& sstdir) {
+            auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true, .garbage_collect = true });
+            BOOST_REQUIRE_NO_THROW(expect_ok.get());
+        });
+        BOOST_REQUIRE(!file_exists(survivor_toc).get());
+        BOOST_REQUIRE(list_logs().empty());
+    });
+}
+
 SEASTAR_TEST_CASE(sstable_directory_test_reshard_vnodes) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table cf (p text PRIMARY KEY, c int)").get();

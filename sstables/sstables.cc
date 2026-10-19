@@ -4089,9 +4089,10 @@ sstable::unlink(const atomic_deletion* deletion) noexcept {
         sstlog.warn("Failed to delete large data entry for {}: {:t}. Ignoring.", toc_filename(), std::current_exception());
     }
 
-    co_await std::move(remove_fut);
+    auto removed = co_await coroutine::as_future(std::move(remove_fut));
     _stats.on_delete();
     _manager.on_unlink(this);
+    co_await std::move(removed);
 }
 
 thread_local sstables_stats::stats sstables_stats::_shard_stats;

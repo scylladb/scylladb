@@ -539,6 +539,7 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
         return fmt::to_string(sst.toc_filename());
     }();
 
+    std::exception_ptr ex;
     try {
         auto new_toc_name = co_await make_toc_temporary(name, sync);
         if (!new_toc_name.empty()) {
@@ -582,6 +583,7 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
             co_await sst.sstable_write_io_check(remove_file, new_toc_name);
         }
     } catch (...) {
+        ex = std::current_exception();
         // Log and ignore the failure since there is nothing much we can do about it at this point.
         // a. Compaction will retry deleting the sstable in the next pass, and
         // b. in the future sstables_manager is planned to handle sstables deletion.
@@ -597,6 +599,12 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
         } catch (...) {
             sstlog.warn("Exception when deleting temporary sstable directory {}: {:t}", *_temp_dir, std::current_exception());
         }
+    }
+
+    // The sstable may survive while others in the batch are gone, so the
+    // atomic deletion must keep its pending-delete log for the replay.
+    if (ex && deletion) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
     }
 }
 
@@ -626,8 +634,6 @@ public:
         });
 
         // Once all sstables are deleted, the log file can be removed.
-        // Note: the log file will be removed also if unlink failed to remove
-        // any sstable and ignored the error.
         try {
             co_await remove_file(_pending_delete_log);
             sstlog.debug("{} removed.", _pending_delete_log);
