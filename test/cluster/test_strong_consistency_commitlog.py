@@ -316,10 +316,9 @@ async def test_crash_recovery_after_flush(manager: ScyllaClusterManager):
 async def test_segment_of_applied_entries_is_reclaimed(manager: ScyllaClusterManager, feature_config: FeatureConfig):
     """
     Verify that the commitlog reclaims a segment holding only applied raft
-    entries. state_machine::apply() must not take an applied entry whose replay
-    position handle the table didn't take over, as with logstor, for an
-    unapplied one. Otherwise, every segment written by such a table is kept,
-    and the commitlog runs out of space.
+    entries, also when the table does not take over the reference apply() hands
+    it, as with logstor. Otherwise, every segment written by such a table is
+    kept, and the commitlog runs out of space.
     """
     # A single shard has a single active segment, which holds all the writes below.
     server = await manager.server_add(config=feature_config.get_cluster_cfg(), cmdline=["--smp", "1"])
@@ -339,8 +338,8 @@ async def test_segment_of_applied_entries_is_reclaimed(manager: ScyllaClusterMan
     await cql.run_async(stmt, (0, 0))
 
     # Start a fresh segment so that the entries written below are not kept alive
-    # by the handles of the earlier entries of the group (e.g. its configuration),
-    # which share the current one.
+    # by the earlier entries of the group (e.g. its configuration), which share
+    # the current one.
     await manager.api.flush_all_keyspaces(server.ip_addr)
 
     await gather_safely(*[cql.run_async(stmt, (pk, pk)) for pk in range(1, 10)])
@@ -361,10 +360,9 @@ async def test_segment_of_applied_entries_is_reclaimed(manager: ScyllaClusterMan
 async def test_unapplied_entry_survives_aborted_apply(manager: ScyllaClusterManager):
     """
     Verify that a committed raft entry whose application is aborted is recovered
-    after a crash. state_machine::apply() acquires the replay position handles of
-    the entries before applying them. When it is aborted before the entries reach
-    a memtable, the entries are committed but not applied, so the commitlog has
-    to keep them for replay after a restart.
+    after a crash. When state_machine::apply() is aborted before the entry
+    reaches a memtable, the entry is committed but not applied, so the group's
+    record of its segment has to keep the segment for replay after a restart.
 
     Reproducer of SCYLLADB-5053.
     """
@@ -392,8 +390,8 @@ async def test_unapplied_entry_survives_aborted_apply(manager: ScyllaClusterMana
     await cql.run_async("INSERT INTO ks.tbl (pk, c) VALUES (0, 0)")
 
     # Start a fresh segment so that the entry written below is not kept alive by
-    # the handles of the earlier entries of the group (e.g. its configuration),
-    # which share the current one.
+    # the earlier entries of the group (e.g. its configuration), which share the
+    # current one.
     await manager.api.flush_all_keyspaces(server.ip_addr)
 
     log = await manager.server_open_log(server.server_id)
