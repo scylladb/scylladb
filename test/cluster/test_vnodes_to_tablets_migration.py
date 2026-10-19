@@ -1190,6 +1190,117 @@ async def test_migration_prepare_resumed_after_coordinator_change(manager: Scyll
         await assert_all_tables_have_tablet_map(manager, other[0], ks, tables)
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_prepare_with_replace_between_commands(manager: ScyllaClusterManager):
+    """Verify that a node replaced between two commands of a preparation is in every map.
+
+    A replace request goes before a queued prepare_migration request, so it can run
+    between two of its commands. The replace moves the tablet maps written before it off
+    the replaced node, and the commands after it build theirs from the ring it leaves,
+    which has the same tokens but the replacing node in place of the replaced one. Either
+    way every table has to end up with the replacing node as a replica, with no trace of
+    the replaced one and no tablet left in a transition.
+    """
+    num_nodes = 3
+    num_tables = 4
+    cmdline = ['--smp', '2']
+    cfg = {'num_tokens': 16}
+    property_file = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, num_nodes + 1)]
+    servers = await manager.servers_add(num_nodes, cmdline=cmdline, config=cfg, property_file=property_file)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    # Keep the coordinator, which pauses between the commands, and drive the request from
+    # the node which is neither it nor the one replaced.
+    coordinator = await get_coordinator_host(manager)
+    replaced, survivor = [s for s in servers if s.server_id != coordinator.server_id]
+    replaced_host_id = await manager.get_host_id(replaced.server_id)
+    logger.info(f"Topology coordinator is {coordinator.server_id}, replacing {replaced.server_id}")
+
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, 'prepare_migration_one_table_per_command',
+                                           one_shot=False)
+    await manager.api.enable_injection(coordinator.ip_addr, 'prepare_migration_after_part',
+                                       one_shot=True)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}") as ks:
+        tables = [f't{i}' for i in range(num_tables)]
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+
+        log = await manager.server_open_log(coordinator.server_id)
+        coordinator_host = cql.cluster.metadata.get_host(coordinator.ip_addr)
+
+        logger.info("Starting prepare, pausing after its first command")
+        prepare = asyncio.create_task(
+                manager.api.create_vnode_tablet_migration(survivor.ip_addr, ks))
+        replace = None
+        try:
+            await manager.api.wait_for_injection_enter(coordinator.ip_addr, 'prepare_migration_after_part')
+            mapped = await tables_with_tablet_map(manager, survivor, ks, tables)
+            assert len(mapped) == 1, f"expected exactly one table with a tablet map before the replace, got {mapped}"
+
+            logger.info(f"Killing node {replaced.server_id} and replacing it")
+            await manager.server_stop(replaced.server_id, convict=True)
+            replace_cfg = ReplaceConfig(replaced_id=replaced.server_id, reuse_ip_addr=False, use_host_id=True)
+            replace = asyncio.create_task(
+                    manager.server_add(replace_cfg, cmdline=cmdline, property_file=replaced.property_file(), config=cfg))
+
+            # The coordinator can't run the replace while it is parked in the injection, so
+            # let it go only once the replace is queued: it takes the replace before the
+            # next command of the preparation.
+            async def replace_queued():
+                rows = await cql.run_async("SELECT topology_request FROM system.topology WHERE key = 'topology'",
+                                           host=coordinator_host)
+                return True if any(row.topology_request == 'replace' for row in rows) else None
+            await wait_for(replace_queued, time.time() + 120)
+
+            mark = await log.mark()
+            await manager.api.message_injection(coordinator.ip_addr, 'prepare_migration_after_part')
+            new_server = await replace
+            await prepare
+        finally:
+            tasks = [task for task in (prepare, replace) if task is not None]
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Guard against the replace not having run between the commands, which would leave
+        # the test covering nothing it says it does: no command of the preparation may
+        # come after the pause and before the replace finishes, and the rest come after it.
+        # The first command was logged before the pause and the last completes the request
+        # rather than leaving it queued, so that leaves two.
+        replace_done, _ = await log.wait_for(r"updating topology state: replace: read fence completed", from_mark=mark)
+        parts = await log.grep(PREPARE_PART_LOG, from_mark=mark)
+        parts_after_replace = await log.grep(PREPARE_PART_LOG, from_mark=replace_done)
+        assert len(parts_after_replace) == len(parts) == num_tables - 2, \
+            f"expected all {num_tables - 2} remaining partial command(s) after the replace, found"\
+            f" {len(parts)} after the pause and {len(parts_after_replace)} of them after the replace"
+
+        await reconnect_driver(manager)
+        live_servers = [coordinator, survivor, new_server]
+        cql, _ = await manager.get_ready_cql(live_servers)
+        expected_hosts = {await manager.get_host_id(s.server_id) for s in live_servers}
+        assert replaced_host_id not in expected_hosts
+
+        # With RF equal to the number of nodes every tablet has every node as a replica.
+        await read_barrier(manager.api, survivor.ip_addr)
+        host = cql.cluster.metadata.get_host(survivor.ip_addr)
+        for t in tables:
+            table_id = await manager.get_table_or_view_id(ks, t)
+            rows = await cql.run_async(
+                    f"SELECT last_token, replicas, new_replicas, stage, transition FROM system.tablets WHERE table_id = {table_id}",
+                    host=host)
+            assert rows, f"table {ks}.{t} has no tablet map"
+            for row in rows:
+                replica_hosts = {str(host_id) for host_id, _ in row.replicas}
+                assert replica_hosts == expected_hosts, \
+                    f"tablet of {ks}.{t} at token {row.last_token}: expected replicas {expected_hosts}, got {replica_hosts}"
+                assert row.new_replicas is None and row.stage is None and row.transition is None, \
+                    f"tablet of {ks}.{t} at token {row.last_token} is still in a transition:"\
+                    f" new_replicas={row.new_replicas}, stage={row.stage}, transition={row.transition}"
+
+
 @pytest.mark.slow
 async def test_migration_tablet_maps_exceed_command_size(manager: ScyllaClusterManager):
     """Verify a keyspace whose tablet maps really exceed what one group0 command carries.
