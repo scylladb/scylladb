@@ -21,9 +21,6 @@ extern seastar::logger logstor_logger;
 
 namespace {
 
-// The smallest record frame: a record_frame_header and a record_header with an empty key.
-constexpr size_t min_frame_size = ondisk::record_frame_header_size + ondisk::record_header_fixed_size;
-
 // Reads a segment through its input stream, and keeps the position in the segment of what it
 // reads next.
 class segment_reader {
@@ -141,40 +138,6 @@ future<std::optional<chunk_body>> read_chunk_body(segment_reader& reader,
     co_return chunk_body{std::move(body), valid};
 }
 
-struct parsed_record {
-    record_header header;
-    log_record_bytes_view bytes; // views into the chunk body
-};
-
-// Reads the record frame at the start of records, without its padding. Returns nullopt if the
-// frame header is invalid or the record does not fit in what is left of records.
-std::optional<parsed_record> read_record(simple_memory_input_stream& records) {
-    // The sizes a record claims are checked against what is left of the chunk's records before
-    // they are trusted, as the CRC only says the bytes are the ones written, not that the writer
-    // was right.
-    const size_t bytes_left = records.size();
-    if (bytes_left < min_frame_size) {
-        return std::nullopt;
-    }
-    auto frame_header = ser::deserialize(records, std::type_identity<ondisk::record_frame_header>{});
-    if (!ondisk::validate_record_frame_header(frame_header) || size_t(frame_header.key_size) + frame_header.value_size > bytes_left - min_frame_size) {
-        return std::nullopt;
-    }
-    const size_t header_size = ondisk::record_header_size(frame_header.key_size);
-
-    auto header_stream = records.read_substream(header_size);
-    auto value_stream = records.read_substream(frame_header.value_size);
-    // Taken before read_record_header() consumes the stream.
-    const auto header_bytes = bytes_view(reinterpret_cast<const int8_t*>(header_stream.begin()), header_size);
-    return parsed_record{
-        .header = ondisk::read_record_header(header_stream, frame_header.key_size),
-        .bytes = {
-            .header = header_bytes,
-            .value = bytes_view(reinterpret_cast<const int8_t*>(value_stream.begin()), value_stream.size()),
-        },
-    };
-}
-
 // records_position is where the records start within the segment, which is what a record's
 // location is relative to. A record that does not parse ends the scan of the chunk.
 future<> scan_chunk_records(simple_memory_input_stream records,
@@ -185,7 +148,7 @@ future<> scan_chunk_records(simple_memory_input_stream records,
     const size_t records_size = records.size();
     while (records.size() > 0) {
         const size_t record_offset = records_position + (records_size - records.size());
-        auto record = read_record(records);
+        auto record = ondisk::try_read_record_frame(records);
         if (!record) {
             break;
         }
