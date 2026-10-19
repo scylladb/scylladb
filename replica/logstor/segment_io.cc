@@ -237,36 +237,6 @@ future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char
     co_return make_segment_info(*headers);
 }
 
-future<> scan_segment(seastar::input_stream<char>& in,
-        log_segment_id segment_id,
-        size_t segment_size,
-        segment_info_consumer on_segment_info,
-        record_header_consumer on_record_header,
-        log_record_bytes_consumer on_record) {
-    segment_scanner scanner(in, segment_id, segment_size);
-    while (auto* chunk = co_await scanner.next_chunk()) {
-        co_await on_segment_info(chunk->info());
-        for (const auto& record : chunk->records()) {
-            if (on_record_header(record.location, record.header) == want_data::yes) {
-                co_await on_record(record.location, record.header, record.bytes);
-            }
-        }
-    }
-}
-
-future<> scan_segment(seastar::input_stream<char>& in,
-        log_segment_id segment_id,
-        size_t segment_size,
-        segment_info_consumer on_segment_info,
-        record_header_consumer on_record_header,
-        log_record_consumer on_record) {
-    co_await scan_segment(in, segment_id, segment_size,
-            std::move(on_segment_info), std::move(on_record_header),
-            [on_record = std::move(on_record)] (record_location loc, const record_header& header, log_record_bytes_view record_view) {
-                return on_record(loc, log_record{header, record_value(record_view.value)});
-            });
-}
-
 streamed_segment_rewriter::streamed_segment_rewriter(log_segment_id target_segment, segment_sequence target_seq, streamed_buffer_consumer on_buffer)
     : _target_segment(target_segment)
     , _target_seq(target_seq)
