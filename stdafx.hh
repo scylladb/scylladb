@@ -53,7 +53,7 @@
 #include <boost/outcome/basic_result.hpp>
 #include <boost/outcome/config.hpp>
 #include <boost/outcome/policy/base.hpp>
-#include <boost/outcome/result.hpp>
+#include <boost/outcome/std_result.hpp>
 #include <boost/preprocessor/comparison/equal.hpp>
 #include <boost/preprocessor/control/iif.hpp>
 #include <boost/preprocessor/variadic/size.hpp>
@@ -67,6 +67,7 @@
 #include <boost/signals2/connection.hpp>
 #include <boost/signals2/dummy_mutex.hpp>
 #include <boost/signals2/signal_type.hpp>
+#include <boost/system/system_error.hpp>
 #include <boost/test/unit_test.hpp>
 #include <boost/thread/barrier.hpp>
 #include <boost/type.hpp>

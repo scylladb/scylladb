@@ -45,7 +45,6 @@
 #include "db/system_distributed_keyspace.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/intrusive/list.hpp>
-#include <boost/outcome/result.hpp>
 #include "utils/assert.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/latency.hh"
