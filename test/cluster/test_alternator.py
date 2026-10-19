@@ -279,7 +279,13 @@ async def test_localnodes_broadcast_rpc_address(manager: ScyllaClusterManager):
     config = alternator_config | {
         'broadcast_rpc_address': '127.0.0.0'
     }
-    servers = await manager.servers_add(2, config=config)
+    servers = await manager.servers_add(
+        2,
+        config=config,
+        # Normal pools target the intentionally unreachable advertised address;
+        # fallback lets the harness run its CQL setup over the control connection.
+        driver_connect_opts={"control_connection_fallback": True},
+    )
     for server in servers:
         # We expect /localnodes to return ["127.0.0.0", "127.0.0.0"]
         # (since we configured both nodes with the same broadcast_rpc_address).
