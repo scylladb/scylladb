@@ -1796,6 +1796,45 @@ SEASTAR_TEST_CASE(test_data_read) {
     });
 }
 
+// Checks that data_read() reports a corrupt chunk with an exception. The read
+// spans several read buffers, so read-aheads are in flight when data_read()
+// finds the corrupt first chunk. data_read() must close the stream before it
+// rethrows; destroying the stream with reads in flight aborts.
+SEASTAR_TEST_CASE(test_data_read_corrupt_chunk) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            simple_schema ss;
+            auto s = ss.schema();
+            mutation m(s, ss.make_pkey());
+            for (uint32_t i = 0; i < 40000; ++i) {
+                ss.add_row(m, ss.make_ckey(i), tests::random::get_sstring(50));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+            BOOST_REQUIRE(sst->has_component(component_type::CompressionInfo));
+            BOOST_REQUIRE_GT(sst->ondisk_data_size(), 4 * default_sstable_buffer_size);
+
+            // Flip a bit in the compressed data of the first chunk.
+            {
+                auto f = open_file_dma(test(sst).filename(component_type::Data).native(), open_flags::rw).get();
+                auto close_f = deferred_close(f);
+                const auto block_size = f.disk_write_dma_alignment();
+                auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), block_size);
+                BOOST_REQUIRE_EQUAL(f.dma_read(0, buf.get_write(), block_size).get(), block_size);
+                buf.get_write()[16] ^= 1;
+                BOOST_REQUIRE_EQUAL(f.dma_write(0, buf.get(), block_size).get(), block_size);
+            }
+
+            auto read = [&] {
+                if (sst->uses_physical_positions()) {
+                    return sst->data_read(sst->full_range(), sst->data_size(), env.make_reader_permit());
+                }
+                return sst->data_read(0, sst->data_size(), env.make_reader_permit());
+            };
+            BOOST_REQUIRE_THROW(read().get(), malformed_sstable_exception);
+        }
+    });
+}
+
 // Checks that for_each_compression_offset() and read_sampled_offsets() return
 // the offsets that CompressionInfo.db stores, for every format. For an sstable
 // that uses physical positions, these are a sample of the chunk offsets: checks
