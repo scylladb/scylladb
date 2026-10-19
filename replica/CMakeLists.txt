@@ -14,7 +14,7 @@ target_sources(replica
     logstor/segment_file.cc
     logstor/cache.cc
     logstor/single_row_partition.cc
-    logstor/compaction.cc
+    logstor/compaction_policy.cc
     logstor/segment_manager.cc
     logstor/logstor.cc
     logstor/readers.cc

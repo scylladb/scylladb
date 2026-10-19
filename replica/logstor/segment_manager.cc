@@ -16,6 +16,7 @@
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/types.hh"
 #include "replica/logstor/compaction.hh"
+#include "replica/logstor/compaction_policy.hh"
 #include <absl/container/flat_hash_map.h>
 #include <algorithm>
 #include <array>
