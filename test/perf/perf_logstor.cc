@@ -57,8 +57,8 @@
 //   --value-size                 bytes of the value of one column
 //   --select-columns             how many of the value columns a read asks for, the first ones of
 //                                the table; 0, the default, asks for all of them. The slice is
-//                                given to the whole reads - `read-cached`, `query-cached` and
-//                                `read-disk` - and to none of the single steps
+//                                given to the whole reads - `query-cached` and `query-disk` - and
+//                                to none of the single steps
 //   --concurrency                operations in flight per shard, for the tests that wait for the disk
 //   --duration                   one second iterations per test
 //   --operations-per-shard       a fixed number of operations per shard instead, for comparing builds
@@ -76,7 +76,7 @@
 //                                sizes of that matrix
 //
 // The dataset is written once and serves every test. Its index has the cache enabled, and
-// `read-disk` takes the segment by bypassing the cache per read rather than by disabling it, so
+// `query-disk` takes the segment by bypassing the cache per read rather than by disabling it, so
 // that both read paths are measured against the same data. The run prints what one record of the
 // dataset takes in a segment against the bytes of the row it carries, and warns when the dataset
 // does not leave the pool room for the dead records the overwrites of the write test will leave
@@ -117,7 +117,8 @@
 //   append           copy one record whose value is already encoded into the buffer of the writer
 //   serialize        what a write pays before its record reaches the buffer: `encode`,
 //                    `record-header` and `append`
-//   cache-lookup     look one cached mutation up and copy its partition out of the cache region.
+//   cache-lookup     look one cached partition up and copy it and its key out of the cache region,
+//                    as a point read takes it, without the reader that pushes it into a buffer.
 //                    Includes the lookup of the index entry the cached partition hangs off. Draws
 //                    only from the keys the cache still holds after the warming, and says how
 //                    many of the dataset those are: a dataset larger than the memory of the shard
@@ -128,14 +129,13 @@
 //                    the same entry, the one of the key the prepared partition belongs to
 //   raw-read         one DMA read of the size of a record, straight to the data file, with no
 //                    logstor in it
-//   read-cached      a whole read the cache serves, up to the mutation it returns. Draws from the
-//                    same keys as `cache-lookup`
 //   query-cached     a whole read the cache serves, as a query pays for it: the reader for the key
 //                    is made, its fragments are drained and it is closed. Draws from the same keys
-//                    as `cache-lookup`. What it costs beyond `read-cached` is the reader that turns
-//                    the mutation into fragments, which a query pays and `read-cached` does not
-//   read-disk        a whole read that goes to a segment: index lookup, DMA read, deserialization,
-//                    decoding
+//                    as `cache-lookup`. What it costs beyond `cache-lookup` is the reader, which
+//                    puts the partition into its buffer as fragments
+//   query-disk       a whole read that goes to a segment, as a query pays for it: index lookup,
+//                    DMA read, deserialization, decoding, and the reader that puts the partition
+//                    into its buffer. Bypasses the cache, so admitting the partition is not in it
 //   segment-read     the read of the record from its segment and its deserialization, without
 //                    decoding the mutation. Includes the lookup of the location, since a read
 //                    starts from a key
@@ -148,8 +148,8 @@
 // Everything above `raw-read` touches no disk - the two cache tests touch the cache, the rest touch
 // neither it nor the disk. They run `cpu_test_batch` operations per invocation of the measurement
 // loop, since one of them costs of the order of what the loop itself costs, and they run without
-// concurrency, since they never wait for anything. `read-cached` and `query-cached` touch no disk
-// either, but go through the read path's futures, so they run as the IO tests do.
+// concurrency, since they never wait for anything. `query-cached` touches no disk either, but goes
+// through the read path's futures, so it runs as the IO tests do.
 //
 //
 // Reading the numbers
@@ -160,9 +160,8 @@
 // and a read the cache serves costs a fraction of either, since it copies a partition that is
 // already in memory rather than deserializing one:
 //
-//   read-disk      ~  segment-read + decode
-//   read-cached    ~  cache-lookup
-//   query-cached   ~  read-cached + the reader that fragments the mutation
+//   query-disk     ~  segment-read + decode + the reader
+//   query-cached   ~  cache-lookup + the reader
 //   segment-read   ~  index-lookup + raw-read + deserialize + what the segment manager puts between
 //                     them
 //   serialize      ~  encode + record-header + append
@@ -180,7 +179,7 @@
 // so `segment-read` and `cache-lookup` each begin by looking the entry up, and it is already inside
 // them. `index-lookup` is there to be subtracted from a step that carries it, not added to one.
 //
-// If a change moves `read-disk` without moving any of the steps under it, either the change is in
+// If a change moves `query-disk` without moving any of the steps under it, either the change is in
 // the part of the read that none of the steps cover, or the measurement is not measuring what it
 // looks like. Check the per operation counters first.
 //
@@ -228,9 +227,10 @@
 //
 // - On a machine whose disk is shared, take the IO tests more than once and keep the clean ones. The
 //   same binary and configuration returned 190k operations per second at `polls/op` 0.03 on one run
-//   of `read-disk` and 47k at 1.5 on the next, which puts about 1800 instructions per poll onto the
-//   number. Run the two builds alternately at each row shape rather than one side after the other,
-//   and quote the median of the iterations whose `polls/op` was under 0.1.
+//   of the read that goes to a segment and 47k at 1.5 on the next, which puts about 1800
+//   instructions per poll onto the number. Run the two builds alternately at each row shape rather
+//   than one side after the other, and quote the median of the iterations whose `polls/op` was
+//   under 0.1.
 //
 // - Take the noise floor from separate processes, not from one. The `mad` a run reports is the
 //   spread between its own iterations, which is the smaller of the two. Three processes of the same
@@ -299,6 +299,7 @@
 #include "replica/logstor/record_value.hh"
 #include "replica/logstor/segment_io.hh"
 #include "replica/logstor/segment_manager.hh"
+#include "replica/logstor/single_row_partition.hh"
 #include "replica/logstor/write_buffer.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/logstor_test_utils.hh"
@@ -333,9 +334,8 @@ enum class test_kind {
     cache_lookup,
     cache_populate,
     raw_read,
-    read_cached,
     query_cached,
-    read_disk,
+    query_disk,
     segment_read,
     write,
     write_frozen,
@@ -354,9 +354,8 @@ const std::vector<std::pair<std::string_view, test_kind>> test_kinds = {
     {"cache-lookup", test_kind::cache_lookup},
     {"cache-populate", test_kind::cache_populate},
     {"raw-read", test_kind::raw_read},
-    {"read-cached", test_kind::read_cached},
     {"query-cached", test_kind::query_cached},
-    {"read-disk", test_kind::read_disk},
+    {"query-disk", test_kind::query_disk},
     {"segment-read", test_kind::segment_read},
     {"write", test_kind::write},
     {"write-frozen", test_kind::write_frozen},
@@ -541,8 +540,8 @@ class logstor_bench {
     std::unique_ptr<logstor> _logstor;
     std::unique_ptr<tests::logstor::test_logstor_group> _group;
     std::vector<dht::decorated_key> _keys;
-    // The keys of the dataset whose mutations are in the cache, which is what the cache-lookup and
-    // read-cached tests draw from: a dataset larger than the cache of the shard leaves only part of
+    // The keys of the dataset whose partitions are in the cache, which is what the cache-lookup and
+    // query-cached tests draw from: a dataset larger than the cache of the shard leaves only part of
     // itself in it, and a key the LRU dropped is not one a test of what a hit costs can use. Points
     // into _keys, which does not change once the dataset is written.
     std::vector<const dht::decorated_key*> _cached_keys;
@@ -562,6 +561,7 @@ class logstor_bench {
     std::unique_ptr<raw_write_buffer> _serialization_buffer;
     temporary_buffer<char> _serialized_record;
     std::optional<mutation> _mutation;
+    std::optional<single_row_partition> _partition;
     std::optional<log_record> _record;
     // A writer of that record, whose value is already encoded, for the append test, which is about
     // what the copy into the buffer costs and not about what encoding the value costs.
@@ -622,7 +622,7 @@ public:
             _data_file = seastar::file();
         }
         if (_group) {
-            // The index evicts what it has in the cache before it goes, since a cached mutation
+            // The index evicts what it has in the cache before it goes, since a cached partition
             // lives in the shared cache region and the index entry only points at it. This is what
             // a table does when it stops.
             co_await index().drain_cache();
@@ -662,27 +662,11 @@ public:
         }
     }
 
-    future<> do_read(const dht::decorated_key& key, const query::partition_slice& slice) {
-        auto mut = co_await _logstor->read(_schema, index(), key, slice);
-        if (!mut) [[unlikely]] {
-            on_internal_error(logstor_logger, "key of the dataset is missing from the index");
-        }
-    }
-
-    future<> do_read_cached() {
-        return do_read(random_cached_key(), _slice);
-    }
-
-    future<> do_read_bypassing_cache() {
-        return do_read(random_key(), _slice_bypassing_cache);
-    }
-
     // A whole read as a query pays for it: the reader a table hands the querier for one key is
     // made, drained to the end of its stream and closed. The fragments are counted and dropped,
     // which is the least a consumer of the reader does with them.
-    future<> do_query_cached() {
-        auto reader = _logstor->make_reader(_schema, index(), *_permit,
-                dht::partition_range::make_singular(random_cached_key()), _slice);
+    future<> do_query(const dht::decorated_key& key, const query::partition_slice& slice) {
+        auto reader = _logstor->make_reader(_schema, index(), *_permit, dht::partition_range::make_singular(key), slice);
         auto close_reader = deferred_close(reader);
         while (!reader.is_end_of_stream()) {
             co_await reader.fill_buffer();
@@ -691,12 +675,23 @@ public:
         }
     }
 
+    future<> do_query_cached() {
+        return do_query(random_cached_key(), _slice);
+    }
+
+    // The read of a key the cache does not serve. The cache is bypassed per read rather than
+    // disabled, so that the miss is measured against the same index and the same data as the hit;
+    // what the read leaves in the cache, a bypassed read does not pay for.
+    future<> do_query_disk() {
+        return do_query(random_key(), _slice_bypassing_cache);
+    }
+
     // The read of the record from its segment and its deserialization, without decoding the
     // mutation the read returns. The lookup of the location is in it: a read starts from a key, and
     // holding a location from before the measurement would not survive compaction moving its record.
     future<> do_segment_read() {
         const auto& key = random_key();
-        auto result = index().lookup_for_read(primary_index_key{key}, *_schema, false);
+        auto result = index().lookup_for_read(primary_index_key{key}, *_schema, use_cache::no);
         if (!result) [[unlikely]] {
             on_internal_error(logstor_logger, "key of the dataset is missing from the index");
         }
@@ -793,27 +788,28 @@ public:
         }
     }
 
-    // What a read that the cache serves pays: the entry of the key is looked up and the partition
-    // of the cached mutation is copied out of the cache region. Draws from the keys the cache holds,
-    // which warm_cache_and_find_cached_keys() collected, rather than from the whole dataset. A
-    // lookup that finds nothing is counted by the cache tracker, see cache_misses().
+    // What a read that the cache serves pays before its reader: the entry of the key is looked up
+    // and the cached partition and its key are copied out of the cache region. Draws from the keys
+    // the cache holds, which warm_cache_and_find_cached_keys() collected, rather than from the
+    // whole dataset. A lookup that finds nothing is counted by the cache tracker, see
+    // cache_misses().
     void do_cache_lookup(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
-            auto result = index().lookup_for_read(primary_index_key{random_cached_key()}, *_schema, true);
+            auto result = index().lookup_for_read(primary_index_key{random_cached_key()}, *_schema, use_cache::yes);
             if (!result) [[unlikely]] {
                 on_internal_error(logstor_logger, "key of the dataset is missing from the index");
             }
-            _sink += std::holds_alternative<mutation>(*result);
+            _sink += std::holds_alternative<keyed_single_row_partition>(*result);
         }
     }
 
-    // What a read that went to a segment pays to leave its mutation in the cache. The entry is
+    // What a read that went to a segment pays to leave its partition in the cache. The entry is
     // evicted first, since a populate of an entry that is already cached does nothing, and what is
     // measured is therefore the eviction of a cached partition together with the admission of one.
     // The index evicts one entry only when a write replaces it, so the eviction is an insert of the
     // entry with its own location and a newer timestamp, which is what index-insert measures.
     // What it admits is the partition prepared for the single step tests, so that the cost of
-    // building a mutation is not part of the measurement, and it is admitted into the entry of the
+    // decoding a record is not part of the measurement, and it is admitted into the entry of the
     // key that partition belongs to: a cached partition carries its key, and a read of another key
     // that finds it rejects it as a hash collision.
     void do_cache_populate(unsigned count) {
@@ -827,7 +823,7 @@ public:
                 .location = entry->location,
                 .timestamp = api::new_timestamp(),
             });
-            if (!index().populate_cache(key, entry->location, *_mutation)) [[unlikely]] {
+            if (!index().populate_cache(key, entry->location, _mutation->schema(), _mutation->key(), *_partition)) [[unlikely]] {
                 on_internal_error(logstor_logger, "the entry of the prepared partition was not populated");
             }
         }
@@ -842,21 +838,21 @@ public:
         }
     }
 
-    // And what it pays after that: the value is decoded into the mutation the read returns.
+    // And what it pays after that: the value is decoded into the partition the read returns.
     void do_decode(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
-            decode_record_value(_record->value, _schema, _record->header);
+            _sink += decode_record_value(_record->value, *_schema, _record->header).row.has_value();
         }
     }
 
     // Reads every key once, so that the reads that follow find them in the cache, and then keeps the
-    // keys the cache actually holds, for the cache-lookup and read-cached tests to draw from.
+    // keys the cache actually holds, for the cache-lookup and query-cached tests to draw from.
     // lookup_for_dump() is what asks without counting a lookup or touching the LRU, so the probing
     // does not change what the test that follows finds. Whether every key survived the warming is a property of the
     // dataset against the memory of the shard, which nothing here bounds.
     future<> warm_cache_and_find_cached_keys() {
         co_await max_concurrent_for_each(_keys, _cfg.concurrency, [this] (const dht::decorated_key& key) {
-            return _logstor->read(_schema, index(), key, _slice).discard_result();
+            return do_query(key, _slice);
         });
         _cached_keys.clear();
         _cached_keys.reserve(_keys.size());
@@ -883,10 +879,10 @@ public:
 
     size_t cached_key_count() const noexcept { return _resident_keys; }
 
-    // Lookups of the cache of the shard that found no cached mutation, whether a test looked the
+    // Lookups of the cache of the shard that found no cached partition, whether a test looked the
     // cache up itself or a read did. Once the cache was warmed, a miss of a key it held then is the
-    // LSA reclaiming under memory pressure, or a read-cached miss evicting another key to admit its
-    // own. Counted rather than treated as an error: a run that says its number is not a cache hit is
+    // LSA reclaiming under memory pressure, or a miss of a cached read evicting another key to admit
+    // its own. Counted rather than treated as an error: a run that says its number is not a cache hit is
     // more use than one that ends here.
     uint64_t cache_misses() const noexcept { return _cache.shared_tracker.get_stats().partition_misses; }
 
@@ -968,6 +964,7 @@ private:
 
     void prepare_single_step_inputs() {
         _mutation = make_mutation(_keys[0]);
+        _partition = tests::logstor::to_single_row_partition(mutation(*_mutation));
         _record.emplace(log_record{
             .header = make_record_header(_mutation->decorated_key()),
             .value = encode_record_value(*_mutation),
@@ -1011,7 +1008,7 @@ std::vector<perf_result_with_io> run_test(sharded<logstor_bench>& bench, test_ki
         auto results = run();
         const auto misses = count_misses() - misses_before;
         if (misses) {
-            fmt::print("WARNING: {} lookups found no cached mutation, so the number above is not what a hit"
+            fmt::print("WARNING: {} lookups found no cached partition, so the number above is not what a hit"
                     " costs. Either nothing of the dataset fit the cache, or the LSA reclaimed while the"
                     " test ran; give the run more memory or fewer partitions\n", misses);
         }
@@ -1043,12 +1040,10 @@ std::vector<perf_result_with_io> run_test(sharded<logstor_bench>& bench, test_ki
         return cpu_test(&logstor_bench::do_cache_populate);
     case test_kind::raw_read:
         return io_test(&logstor_bench::do_raw_read);
-    case test_kind::read_cached:
-        return cache_hit_test([&] { return io_test(&logstor_bench::do_read_cached); });
     case test_kind::query_cached:
         return cache_hit_test([&] { return io_test(&logstor_bench::do_query_cached); });
-    case test_kind::read_disk:
-        return io_test(&logstor_bench::do_read_bypassing_cache);
+    case test_kind::query_disk:
+        return io_test(&logstor_bench::do_query_disk);
     case test_kind::segment_read:
         return io_test(&logstor_bench::do_segment_read);
     case test_kind::write:

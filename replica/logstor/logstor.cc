@@ -10,7 +10,6 @@
 #include <seastar/util/log.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/metrics.hh>
-#include "query/query-request.hh"
 #include "keys/keys.hh"
 #include "mutation/frozen_mutation.hh"
 #include "replica/logstor/key_utils.hh"
@@ -19,7 +18,6 @@
 #include "replica/logstor/types.hh"
 #include "utils/managed_bytes.hh"
 #include <random>
-#include <variant>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Warray-bounds"
@@ -192,52 +190,6 @@ future<> logstor::do_write(const schema& s, dht::decorated_key dk, api::timestam
         .timestamp = ts,
     };
     index.insert(key, std::move(new_entry));
-}
-
-std::optional<logstor::point_lookup> logstor::lookup(const primary_index& index, const dht::decorated_key& dk, const schema& s,
-        const query::partition_slice& slice) {
-    primary_index_key key(dk);
-    const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
-    auto found = index.lookup_for_read(key, s, !bypass_cache);
-    if (!found) {
-        return std::nullopt;
-    }
-    if (auto* cached = std::get_if<mutation>(&*found); cached && cached->decorated_key().key() != dk.key()) [[unlikely]] {
-        throw key_mismatch_error(dk.key(), cached->decorated_key().key(), key_mismatch_error::cache_location{});
-    }
-    return point_lookup{.key = key, .result = std::move(*found)};
-}
-
-future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index& index, const dht::decorated_key& dk, const query::partition_slice& slice) {
-    auto found = lookup(index, dk, *s, slice);
-    if (!found) {
-        co_return std::nullopt;
-    }
-    if (auto* cached = std::get_if<mutation>(&found->result)) {
-        co_return std::move(*cached);
-    }
-    const auto populate = !slice.options.contains(query::partition_slice::option::bypass_cache);
-    co_return co_await read_from_segment(std::move(s), index, dk, found->key,
-            std::get<primary_index::guarded_location>(std::move(found->result)), populate);
-}
-
-future<mutation> logstor::read_from_segment(schema_ptr s, const primary_index& index, const dht::decorated_key& dk,
-        const primary_index_key& key, primary_index::guarded_location where, bool populate) {
-    auto gate_holder = _async_gate.hold();
-
-    auto record = co_await _segment_manager.read(where.guard, where.location);
-
-    if (record.header.key.key() != dk.key()) [[unlikely]] {
-        co_await coroutine::return_exception(key_mismatch_error(dk.key(), record.header.key.key(), where.location));
-    }
-
-    mutation m = decode_record_value(record.value, s, record.header);
-
-    if (populate) {
-        index.populate_cache(key, where.location, m);
-    }
-
-    co_return std::move(m);
 }
 
 }
