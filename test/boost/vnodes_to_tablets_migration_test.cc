@@ -1124,4 +1124,85 @@ SEASTAR_TEST_CASE(test_no_marking_or_finalizing_mid_preparation) {
     });
 }
 
+// Verify that preparation covers the materialized views of a keyspace: it maps a view as
+// well as its base table, and a preparation which fails halfway drops a view's map as
+// well as a base table's. The two are prepared in the order of their ids, so which one
+// gets its map before the failure is up to chance; the test holds either way.
+SEASTAR_TEST_CASE(test_preparation_covers_views) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection one_table_per_command("prepare_migration_one_table_per_command");
+        scoped_error_injection fail_on_resume("prepare_migration_fail_on_resume", true, {});
+        const sstring ks = "test_migration_ks";
+        auto tables = create_vnode_keyspace(e, ks, 1);
+        // Preparation refuses a view which isn't built. Subscribe before creating it:
+        // wait_until_built() only reports builds which finish after the call.
+        auto view_built = e.local_view_builder().wait_until_built(ks, "mv");
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT pk, c FROM {}.{} "
+                "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, pk)", ks, ks, tables[0])).get();
+        view_built.get();
+        tables.push_back("mv");
+        auto& ss = e.get_storage_service().local();
+
+        require_error([&] { ss.prepare_for_tablets_migration(ks).get(); }, "injected prepare_migration failure");
+        require_mapped(e, ks, tables, 0);
+        require_status(e, ks, migration_status::vnodes);
+
+        ss.prepare_for_tablets_migration(ks).get();
+        require_mapped(e, ks, tables, tables.size());
+        require_status(e, ks, migration_status::migrating_to_tablets);
+    });
+}
+
+// Verify that a view co-located with its base table gets its entry in the same command as
+// the base table's map, and that a preparation which fails halfway drops the entry along
+// with the map. Each of two tables has a co-located view and every map goes out in a command
+// of its own, so whichever table goes first, it and its view are prepared together, and the
+// other table and its view not at all.
+SEASTAR_TEST_CASE(test_preparation_covers_colocated_views) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection one_table_per_command("prepare_migration_one_table_per_command");
+        scoped_error_injection fail_on_resume("prepare_migration_fail_on_resume", true, {});
+        const sstring ks = "test_migration_ks";
+        auto tables = create_vnode_keyspace(e, ks, 2);
+        std::vector<sstring> views;
+        for (const auto& table : tables) {
+            auto view = table + "_view";
+            auto view_built = e.local_view_builder().wait_until_built(ks, view);
+            // The base table's partition key, so that the view is co-located with it.
+            e.execute_cql(format("CREATE MATERIALIZED VIEW {}.{} AS SELECT pk, c FROM {}.{} "
+                    "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)", ks, view, ks, table)).get();
+            view_built.get();
+            views.push_back(view);
+        }
+        auto all = tables;
+        all.insert(all.end(), views.begin(), views.end());
+        auto& ss = e.get_storage_service().local();
+        auto id_of = [&] (const sstring& table) { return e.local_db().find_schema(ks, table)->id(); };
+        auto has_map = [&] (const sstring& table) {
+            return e.local_token_metadata_ptr()->tablets().has_tablet_map(id_of(table));
+        };
+
+        require_error([&] { ss.prepare_for_tablets_migration(ks).get(); }, "injected prepare_migration failure");
+        require_mapped(e, ks, all, 0);
+
+        prepare_with_pause(e, ks, [&] {
+            require_mapped(e, ks, tables, 1);
+            for (size_t i = 0; i < tables.size(); ++i) {
+                BOOST_REQUIRE_EQUAL(has_map(views[i]), has_map(tables[i]));
+            }
+        });
+        require_mapped(e, ks, all, all.size());
+        const auto tmptr = e.local_token_metadata_ptr();
+        for (size_t i = 0; i < tables.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(tmptr->tablets().get_base_table(id_of(views[i])), id_of(tables[i]));
+        }
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
