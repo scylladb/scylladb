@@ -3119,7 +3119,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
         BOOST_REQUIRE_EQUAL(batch.score.live_bytes, live_bytes);
     };
 
-    auto batch = select_compaction_batch(segments, segment_size, min_segments_per_compaction);
+    auto batch = select_compaction_batch(segments, segment_size, compaction_batch_limits{.batch_cap = min_segments_per_compaction});
     BOOST_REQUIRE(batch);
     check_batch(*batch);
 
@@ -3131,7 +3131,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
     }
 
     // The cap bounds the candidate set, not only the prefix chosen out of it.
-    auto capped = select_compaction_batch(segments, segment_size, 2);
+    auto capped = select_compaction_batch(segments, segment_size, compaction_batch_limits{.batch_cap = 2});
     BOOST_REQUIRE(capped);
     check_batch(*capped);
     BOOST_REQUIRE_LE(capped->segments.size(), 2u);
@@ -3142,11 +3142,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
     for (size_t i = 0; i < min_segments_per_compaction; ++i) {
         add_segment(dense, dense_records);
     }
-    BOOST_REQUIRE(!select_compaction_batch(dense, segment_size, min_segments_per_compaction));
+    BOOST_REQUIRE(!select_compaction_batch(dense, segment_size, compaction_batch_limits{.batch_cap = min_segments_per_compaction}));
 
     // An empty group has nothing to compact.
     segment_set empty{segment_size};
-    BOOST_REQUIRE(!select_compaction_batch(empty, segment_size, min_segments_per_compaction));
+    BOOST_REQUIRE(!select_compaction_batch(empty, segment_size, compaction_batch_limits{.batch_cap = min_segments_per_compaction}));
 }
 
 // A segment set does not walk its segments to get its statistics. It updates them when it links or

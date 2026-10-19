@@ -41,9 +41,10 @@ constexpr size_t max_auto_compaction_parallelism = std::min<size_t>(4, max_compa
 // packed. It also anchors the free-segment target's absolute floor.
 constexpr size_t min_segments_per_compaction = 8;
 
-// How much reclamation efficiency a batch may give up in exchange for being larger. On its own the
-// efficiency score picks short batches, which is per-job overhead for no write-amplification
-// benefit; extending within this tolerance trades about 1% of efficiency for half as many jobs.
+// The fraction of the best reclamation efficiency that a longer batch must keep to be selected
+// instead. On its own the efficiency score picks short batches, which is per-job overhead for no
+// write-amplification benefit; extending within this tolerance trades about 1% of efficiency for
+// half as many jobs.
 constexpr double compaction_batch_extension_tolerance = 0.8;
 
 // Watermarks, in available segments, that drive automatic compaction. It starts once the number of
@@ -138,6 +139,15 @@ struct compaction_batch {
     compaction_candidate_score score;
 };
 
+// What bounds the batch select_compaction_batch() picks.
+struct compaction_batch_limits {
+    // Input segments one job may take.
+    size_t batch_cap;
+    // The fraction of the best efficiency that a longer batch must keep, see
+    // compaction_batch_extension_tolerance.
+    double extension_tolerance = compaction_batch_extension_tolerance;
+};
+
 // Picks the segments one compaction job should read, out of the ones a group owns.
 //
 // The set's free-space histogram is already ordered by ascending utilization, which is near-optimal
@@ -146,7 +156,7 @@ struct compaction_batch {
 // Returns nothing when no prefix reclaims a segment, which answers for the whole group rather than
 // only for this batch, since a longer prefix would only add fuller segments.
 std::optional<compaction_batch> select_compaction_batch(const segment_set& segments,
-        uint64_t segment_size, size_t batch_cap);
+        uint64_t segment_size, const compaction_batch_limits& limits);
 
 // Gives the score of a compaction candidate, which top_compaction_candidates ranks it by.
 struct compaction_score_of {

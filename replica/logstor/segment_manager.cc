@@ -1683,7 +1683,8 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
 std::optional<compaction_manager_impl::compaction_candidate>
 compaction_manager_impl::select_segments_for_compaction(logstor_group& cg) {
     const auto segment_size = _sm.get_segment_size();
-    auto batch = select_compaction_batch(cg.logstor_segments(), segment_size, _compaction_limits.batch_cap);
+    auto batch = select_compaction_batch(cg.logstor_segments(), segment_size,
+            compaction_batch_limits{.batch_cap = _compaction_limits.batch_cap});
     if (!batch) {
         return std::nullopt;
     }
