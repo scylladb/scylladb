@@ -393,15 +393,37 @@ void lz4_dstream::set_dict(std::span<const std::byte> dict) {
     reset();
 }
 
-rpc::snd_buf compress_impl(size_t head_space, const rpc::snd_buf& data, stream_compressor& compressor, bool end_of_frame, size_t chunk_size) try {
-    const auto size = data.size;
-
-    auto src = std::get_if<temporary_buffer<char>>(&data.bufs);
-    if (!src) {
-        src = std::get<std::vector<temporary_buffer<char>>>(data.bufs).data();
+snd_buf_cursor::snd_buf_cursor(const rpc::snd_buf& data) noexcept
+    : _remaining(data.size)
+{
+    _frag = std::get_if<temporary_buffer<char>>(&data.bufs);
+    if (!_frag) {
+        _frag = std::get<std::vector<temporary_buffer<char>>>(data.bufs).data();
     }
+}
 
-    size_t size_left = size;
+std::span<const char> snd_buf_cursor::next(size_t max_size) noexcept {
+    if (_remaining == 0) {
+        return {};
+    }
+    while (_pos == _frag->size()) {
+        ++_frag;
+        _pos = 0;
+    }
+    const size_t n = std::min({max_size, _frag->size() - _pos, _remaining});
+    auto piece = std::span<const char>(_frag->get() + _pos, n);
+    _pos += n;
+    _remaining -= n;
+    return piece;
+}
+
+rpc::snd_buf compress_impl(size_t head_space, const rpc::snd_buf& data, stream_compressor& compressor, bool end_of_frame, size_t chunk_size) {
+    auto in = snd_buf_cursor(data);
+    return compress_impl(head_space, in, compressor, end_of_frame, chunk_size, {});
+}
+
+rpc::snd_buf compress_impl(size_t head_space, snd_buf_cursor& in, stream_compressor& compressor, bool end_of_frame, size_t chunk_size,
+        bool (*should_end_frame)()) try {
     size_t size_compressed = 0;
 
     ZSTD_inBuffer inbuf = {};
@@ -424,14 +446,21 @@ rpc::snd_buf compress_impl(size_t head_space, const rpc::snd_buf& data, stream_c
     // To avoid that, we handle empty frames we special-case empty frames with the `if`
     // below, and we just return an empty buffer as the result,
     // without putting the empty message through the compressor.
-    if (size > 0) {
+    if (in.remaining() > 0) {
+        // Set when the fragment in `inbuf` is the last fragment of this frame.
+        //
+        // Note: we pass the end directive together with the last fragment, rather than after it.
+        // If the frame is a single fragment, this lets zstd know the size of the input,
+        // and size its tables accordingly. That matters, because with an unknown input size
+        // and a small dict, zstd can need more memory than the context's static workspace has.
+        bool last_fragment = false;
         while (true) {
-            if (size_left && inbuf.pos == inbuf.size) {
-                size_left -= src->size();
-                inbuf.src = src->get();
-                inbuf.size = src->size();
+            if (!last_fragment && inbuf.pos == inbuf.size) {
+                const auto fragment = in.next(std::numeric_limits<size_t>::max());
+                inbuf.src = fragment.data();
+                inbuf.size = fragment.size();
                 inbuf.pos = 0;
-                ++src;
+                last_fragment = in.remaining() == 0 || (should_end_frame && should_end_frame());
                 continue;
             }
             if (outbuf.pos == outbuf.size) {
@@ -442,10 +471,10 @@ rpc::snd_buf compress_impl(size_t head_space, const rpc::snd_buf& data, stream_c
                 outbuf.pos = 0;
                 continue;
             }
-            size_t ret = compressor.compress(&outbuf, &inbuf, size_left ? ZSTD_e_continue : (end_of_frame ? ZSTD_e_end : ZSTD_e_flush));
-            if (!size_left // No more input chunks.
-                && inbuf.pos == inbuf.size // No more data in the last chunk. 
-                && ret == 0 // No data remaining in compressor's internal buffers. 
+            size_t ret = compressor.compress(&outbuf, &inbuf, last_fragment ? (end_of_frame ? ZSTD_e_end : ZSTD_e_flush) : ZSTD_e_continue);
+            if (last_fragment // No more input fragments.
+                && inbuf.pos == inbuf.size // No more data in the last fragment.
+                && ret == 0 // No data remaining in compressor's internal buffers.
             ) {
                 break;
             }
@@ -497,6 +526,16 @@ uint32_t crc_impl(const rpc::snd_buf& data) noexcept {
 
 uint32_t crc_impl(const rpc::rcv_buf& data) noexcept {
     return crc_impl_generic(data);
+}
+
+uint32_t crc_impl(snd_buf_cursor from, size_t size) noexcept {
+    utils::crc32 crc;
+    while (size > 0) {
+        const auto piece = from.next(size);
+        crc.process(reinterpret_cast<const uint8_t*>(piece.data()), piece.size());
+        size -= piece.size();
+    }
+    return crc.get();
 }
 
 rpc::rcv_buf decompress_impl(const seastar::rpc::rcv_buf& data, stream_decompressor& decompressor, bool end_of_frame, size_t chunk_size) try {
