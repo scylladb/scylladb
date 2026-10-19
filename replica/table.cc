@@ -917,7 +917,7 @@ private:
     // Returns true if the sstable is currently being repaired. Checks the in-memory
     // being_repaired flag first, then falls back to a durable check: if the sstable's
     // repaired_at equals sstables_repaired_at+1 and the tablet is undergoing repair
-    // (i.e. tablet_transition_kind::repair), the sstable belongs to the current repair
+    // (i.e. in the repair or end_repair stage), the sstable belongs to the current repair
     // round but sstables_repaired_at+1 hasn't been committed to Raft yet (race window).
     bool is_being_repaired(const sstables::shared_sstable& sst, int64_t sstables_repaired_at) const noexcept {
         if (!sst->being_repaired.uuid().is_null()) {
@@ -929,7 +929,7 @@ private:
         }
         auto& cg = compaction_group_for_sstable(sst);
         auto trinfo = tablet_map().get_tablet_transition_info(locator::tablet_id(cg.group_id()));
-        return trinfo && trinfo->transition == locator::tablet_transition_kind::repair;
+        return trinfo && trinfo->is_repairing();
     }
 
     repair_classifier_func make_repair_sstable_classifier_func() const {
