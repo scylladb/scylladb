@@ -445,7 +445,7 @@ future<> cql_server::stop() {
     return server::stop();
 }
 
-cql_forwarding_service::cql_forwarding_service(sharded<cql3::query_processor>& qp, cql_processor& processor, auth::service& auth_service,
+cql_forwarding_service::cql_forwarding_service(sharded<cql3::query_processor>& qp, cql_processor& processor, sharded<auth::service>& auth_service,
         qos::service_level_controller& sl_controller, netw::messaging_service& ms, scheduling_group_key stats_key)
     : _query_processor(qp)
     , _processor(processor)
@@ -478,7 +478,7 @@ void cql_forwarding_service::init_messaging_service() {
             co_await utils::get_local_injector().inject("wait_before_handling_forwarded_request", utils::wait_for_message(60s));
 
             co_return co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_forwarding_service& shard_svc) mutable -> future<forward_cql_execute_response> {
-                service::client_state cs(shard_svc._auth_service,
+                service::client_state cs(shard_svc._auth_service.local(),
                     &shard_svc._sl_controller,
                     std::move(req.client_state),
                     &shard_svc._abort_source);
@@ -523,7 +523,7 @@ void cql_forwarding_service::init_messaging_service() {
             auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
             clogger.trace("Handling forward prepare request from {}", src_host);
 
-            service::client_state cs(_auth_service, &_sl_controller, std::move(req.client_state));
+            service::client_state cs(_auth_service.local(), &_sl_controller, std::move(req.client_state));
             tracing::trace_state_ptr trace_state_ptr;
             if (req.trace_info) {
                 trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*req.trace_info);

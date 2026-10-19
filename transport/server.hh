@@ -264,7 +264,7 @@ private:
 class cql_forwarding_service : public seastar::peering_sharded_service<cql_forwarding_service> {
     sharded<cql3::query_processor>& _query_processor;
     cql_processor& _processor;
-    auth::service& _auth_service;
+    sharded<auth::service>& _auth_service;
     qos::service_level_controller& _sl_controller;
     netw::messaging_service& _ms;
     scheduling_group_key _stats_key;
@@ -272,7 +272,7 @@ class cql_forwarding_service : public seastar::peering_sharded_service<cql_forwa
     seastar::abort_source _abort_source;
     bool _drained = false;
 public:
-    cql_forwarding_service(sharded<cql3::query_processor>& qp, cql_processor& processor, auth::service& auth_service,
+    cql_forwarding_service(sharded<cql3::query_processor>& qp, cql_processor& processor, sharded<auth::service>& auth_service,
             qos::service_level_controller& sl_controller, netw::messaging_service& ms, scheduling_group_key stats_key);
 
     // Unregisters the verbs and waits for the forwarded requests to finish.
