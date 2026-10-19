@@ -22,6 +22,7 @@
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/cql_assertions.hh"
 #include "cql3/query_processor.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
@@ -2245,6 +2246,103 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
         }, "raft_test_commitlog");
     }, std::move(db_cfg_ptr));
 #endif
+}
+
+// Test that the commitlog reclaims a segment holding only applied raft entries.
+//
+// Once the entries of a segment are applied and the memtables flushed, nothing
+// should hold the segment anymore. state_machine::apply() must not keep the
+// handle of an applied entry whose table didn't take it over, as logstor doesn't.
+// Otherwise, every segment written by such a table is kept, and the commitlog
+// runs out of space.
+static future<> segment_of_applied_entries_is_reclaimed_impl(const bool use_logstor) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    std::vector<enum_option<experimental_features_t>> features{db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES};
+    sstring table_opts = "";
+
+    if (use_logstor) {
+        features.push_back(db::experimental_features_t::feature::LOGSTOR);
+        db_cfg_ptr->logstor_disk_size_in_mb(20);
+        db_cfg_ptr->logstor_file_size_in_mb(1);
+        table_opts = "WITH storage_engine = 'logstor'";
+    }
+
+    db_cfg_ptr->experimental_features(std::move(features));
+
+    return do_with_cql_env([table_opts = std::move(table_opts)] (cql_test_env& env) -> future<> {
+        co_await env.get_storage_service().local().set_tablet_balancing_enabled(false);
+        co_await env.execute_cql(
+                "CREATE KEYSPACE test_ks "
+                "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                "AND tablets = {'initial': 1} "
+                "AND consistency = 'global'");
+        co_await env.execute_cql(seastar::format(
+                "CREATE TABLE test_ks.tbl (pk int PRIMARY KEY, c int) {}", table_opts));
+
+        const auto table = env.local_db().find_schema("test_ks", "tbl")->id();
+        const auto& replicas = env
+                .local_token_metadata_ptr()->tablets()
+                .get_tablet_map(table)
+                .get_tablet_info(locator::tablet_id(0))
+                .replicas;
+        BOOST_REQUIRE_EQUAL(replicas.size(), 1);
+
+        // The commitlog is per-shard, so we have to look at the one of the tablet's replica.
+        const auto shard = replicas.front().shard;
+        const auto get_active_segment_names = [&] {
+            return env.db().invoke_on(shard, [] (replica::database& db) {
+                return db.commitlog()->get_active_segment_names();
+            });
+        };
+        const auto flush = [&env, shard] {
+            return env.db().invoke_on(shard, [] (replica::database& db) {
+                return db.flush_all_tables();
+            });
+        };
+        const auto insert = [&env] (int pk) {
+            return env.execute_cql(seastar::format("INSERT INTO test_ks.tbl (pk, c) VALUES ({0}, {0})", pk),
+                    std::make_unique<cql3::query_options>(db::consistency_level::QUORUM, std::vector<cql3::raw_value>())).discard_result();
+        };
+
+        co_await insert(0);
+
+        // Start a fresh segment so that the entries written below are not kept alive
+        // by the handles of the earlier entries of the group (e.g. its configuration),
+        // which share the current one.
+        co_await flush();
+
+        co_await coroutine::parallel_for_each(std::views::iota(1, 10), insert);
+
+        // The active segment, i.e. the one with the highest id, holds the entries. Older
+        // segments may still be kept alive by the handles of the group's own entries,
+        // which don't concern us here.
+        const auto segments_before = co_await get_active_segment_names();
+        BOOST_REQUIRE(!segments_before.empty());
+        const auto segment = *std::ranges::max_element(segments_before, std::less<>{}, [] (const sstring& name) {
+            return commitlog::descriptor(name).id;
+        });
+
+        // Flushing closes the active segment and flushes every memtable, after
+        // which nothing holds the segment anymore.
+        co_await flush();
+        const auto segments_after = co_await get_active_segment_names();
+        BOOST_REQUIRE_MESSAGE(!std::ranges::contains(segments_after, segment),
+                "segment " << segment << " of applied entries was not reclaimed");
+
+        // Reclaiming the segment must not have lost the applied rows.
+        for (int pk = 0; pk < 10; ++pk) {
+            auto msg = co_await env.execute_cql(seastar::format("SELECT c FROM test_ks.tbl WHERE pk = {}", pk));
+            assert_that(msg).is_rows().with_rows({{int32_type->decompose(pk)}});
+        }
+    }, std::move(db_cfg_ptr));
+}
+
+SEASTAR_TEST_CASE(test_segment_of_applied_entries_is_reclaimed_strong_consistency) {
+    return segment_of_applied_entries_is_reclaimed_impl(false);
+}
+
+SEASTAR_TEST_CASE(test_segment_of_applied_entries_is_reclaimed_logstor_strong_consistency) {
+    return segment_of_applied_entries_is_reclaimed_impl(true);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
