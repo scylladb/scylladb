@@ -40,7 +40,6 @@ struct connection_service_level_params;
 class controller : public protocol_server {
     std::vector<socket_address> _listen_addresses;
     std::unique_ptr<sharded<cql_server>> _server;
-    std::unique_ptr<sharded<cql_processor>> _processor;
     semaphore _ops_sem; /* protects start/stop operations on _server */
     named_gate _bg_stops;
     bool _stopped = false;
@@ -50,6 +49,7 @@ class controller : public protocol_server {
     sharded<service::endpoint_lifecycle_notifier>& _lifecycle_notifier;
     sharded<gms::gossiper>& _gossiper;
     sharded<cql3::query_processor>& _qp;
+    sharded<cql_processor>& _processor;
     sharded<service::memory_limiter>& _mem_limiter;
     sharded<qos::service_level_controller>& _sl_controller;
     sharded<netw::messaging_service>& _messaging;
@@ -72,7 +72,7 @@ class controller : public protocol_server {
 
 public:
     controller(sharded<auth::service>&, sharded<service::migration_notifier>&, sharded<gms::gossiper>&,
-            sharded<cql3::query_processor>&, sharded<service::memory_limiter>&,
+            sharded<cql3::query_processor>&, sharded<cql_processor>&, sharded<service::memory_limiter>&,
             sharded<qos::service_level_controller>&, sharded<service::endpoint_lifecycle_notifier>&,
             sharded<netw::messaging_service>&, sharded<updateable_timeout_config>& timeout_config,
             const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket,
