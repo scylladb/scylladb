@@ -13,6 +13,7 @@ import pathlib
 import platform
 import random
 import shutil
+import signal
 import sys
 import time
 import urllib.parse
@@ -134,6 +135,11 @@ PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
 # entry at session finish marks a cluster the sweep in
 # recycle_leftover_clusters() still has to dispose of.
 CLUSTER_KEY = pytest.StashKey[ScyllaCluster | None]()
+
+# The clusters recycled since the last phase report, in the config's stash:
+# pytest_runtest_makereport copies a failed phase's server logs from them,
+# then deletes their files.
+RECYCLED_CLUSTERS_KEY = pytest.StashKey[list[ScyllaCluster]]()
 
 # Set by the `manager` fixture from after_test()'s result: this test's seastar
 # IO counter totals, keyed by metric name (SeastarIOMetricName).
@@ -373,6 +379,7 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
             testpy_logger.info("Test %s finished", test_name)
             await cluster.recycle()
             node.stash[CLUSTER_KEY] = None
+            node.config.stash.setdefault(RECYCLED_CLUSTERS_KEY, []).append(cluster)
 
     return cluster_for_test
 
@@ -397,6 +404,16 @@ async def scylla_cluster(request: pytest.FixtureRequest,
         await cluster.add_server()
         cluster.take_log_savepoint()
         yield cluster
+        processes = [(server, server.cmd) for server in cluster.running.values() if server.cmd]
+
+    # Nothing stops these servers before recycle() does, and it kills each one
+    # still running with SIGKILL and waits for it, so any other exit status
+    # means the server died, which would otherwise pass unnoticed.  0 follows
+    # a shutdown asked for from outside, e.g. a Ctrl-C that reaches the
+    # servers too.
+    if exits := [f"{server} exited with status code {process.returncode}" for server, process in processes
+                 if process.returncode not in (0, -signal.SIGKILL)]:
+        raise RuntimeError("; ".join(exits))
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
@@ -682,7 +699,8 @@ async def recycle_leftover_clusters(session: pytest.Session) -> int:
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Post-test hook to store test result in stash and optionally save logs.
+    """Post-test hook to store test result in stash, optionally save logs and
+    delete the files of the clusters recycled during the phase.
 
     Stores each phase's report in item.stash[PHASE_REPORT_KEY][phase] so
     fixtures and hooks can access the test outcome per phase.  `item.stash`
@@ -707,15 +725,21 @@ def pytest_runtest_makereport(item, call):
                 f.write(section[0] + "\n")
                 f.write(section[1] + "\n")
 
+    recycled = item.config.stash.get(RECYCLED_CLUSTERS_KEY, [])
     if report.failed:
+        # The item's cluster, if it still has one, and the clusters recycled
+        # during this phase, e.g. a module's cluster in its last teardown.
+        clusters = list(recycled)
         if cluster := get_cluster_from_pytest_node(item):
+            clusters.append(cluster)
+        if clusters:
             try:
                 failed_test_dir_path = make_failed_test_dir(item.config, item.stash[BUILD_MODE], item.name)
                 # For a call-phase failure the manager fixture's teardown
                 # copies the server logs again (and attaches them to allure);
                 # the copy here also covers the phases with no manager to
                 # gather them, e.g. a failure during fixture setup.
-                for server in cluster.servers.values():
+                for server in chain.from_iterable(cluster.servers.values() for cluster in clusters):
                     if server.log_filename.is_file():
                         shutil.copyfile(server.log_filename, failed_test_dir_path / server.log_filename.name)
                 record_failed_test_artifacts(
@@ -727,6 +751,19 @@ def pytest_runtest_makereport(item, call):
                 )
             except Exception:
                 logger.warning("Failed to collect logs for failed test %s", item.name, exc_info=True)
+
+    # Not before the logs above are copied, since the phase that recycled a
+    # cluster may be the one that failed, and not at exit either, so that a
+    # long run doesn't keep the directories of thousands of clusters on disk.
+    for cluster in recycled:
+        if not cluster.save_log_on_success:
+            for server in cluster.servers.values():
+                shutil.rmtree(server.workdir, ignore_errors=True)
+                try:
+                    server.log_filename.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Failed to delete %s", server.log_filename, exc_info=True)
+    recycled.clear()
 
 
 class TestSuiteConfig:

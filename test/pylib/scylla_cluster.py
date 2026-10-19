@@ -95,22 +95,14 @@ class ScyllaCluster:
 
     async def recycle(self) -> None:
         """Dispose of the cluster once it's no longer needed: stop it, close
-           the server log files and sockets, release the used IPs and, unless
-           --save-log-on-success asks to keep everything, delete the servers'
-           directories and log files.
+           the server log files and sockets and release the used IPs.  The
+           servers' directories and log files stay.
         """
         await self.stop()
-        if self.save_log_on_success:
-            for srv in self.servers.values():
-                if srv.log_file is not None:
-                    srv.log_file.close()
-                srv.maintenance_socket_dir.cleanup()
-        else:
-            # The cluster has served its purpose: a failed test's logs were
-            # copied to failed_test/ when it failed, and nothing here is read
-            # again.  Delete now rather than at exit, so that a long run
-            # doesn't keep the directories of thousands of clusters on disk.
-            await gather_safely(*(srv.uninstall() for srv in self.servers.values()))
+        for srv in self.servers.values():
+            if srv.log_file is not None:
+                srv.log_file.close()
+            srv.maintenance_socket_dir.cleanup()
 
         # Close API client to release connector resources
         if self.api is not None:
@@ -266,7 +258,8 @@ class ScyllaCluster:
                 # Cancelled mid-start, e.g. by the manager loop shutting down
                 # on an interrupted run, possibly after the cluster's stop()
                 # already ran: kill the process here, and keep the server in
-                # the cluster so recycle() uninstalls it and releases its IP.
+                # the cluster so recycle() releases its IP and its files are
+                # deleted with the cluster's.
                 if server.cmd is not None and server.cmd.returncode is None:
                     try:
                         server.cmd.kill()
