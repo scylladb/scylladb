@@ -380,6 +380,22 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
                         sm::description(
                             seastar::format("Holds the amount of available memory for admitting new requests (max is {}B)."
                                             "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _config.max_request_size))),
+    };
+
+    std::vector<sm::metric_definition> transport_metrics;
+    for (auto& m : ls) {
+        transport_metrics.emplace_back(std::move(m));
+    }
+
+    _metrics.add_group("transport", std::move(transport_metrics));
+
+    register_forwarding_and_error_metrics();
+}
+
+void cql_server::register_forwarding_and_error_metrics() {
+    namespace sm = seastar::metrics;
+
+    auto ls = {
         sm::make_counter("requests_forwarded_successfully", _stats.requests_forwarded_successfully,
                         sm::description("Counts the number of requests that were forwarded to another replica and executed successfully there.")).set_skip_when_empty(),
 

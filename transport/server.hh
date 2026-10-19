@@ -254,6 +254,8 @@ public:
             netw::messaging_service& ms);
     ~cql_server();
     future<> stop();
+private:
+    void register_forwarding_and_error_metrics();
 
 public:
     using response = cql_transport::response;
