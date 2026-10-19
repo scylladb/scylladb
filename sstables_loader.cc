@@ -989,6 +989,10 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     service::session_topology_guard session_guard(trinfo->session_id);
 
     sstring snapshot_name = trinfo->snapshot_name;
+    // The restore works under the staging name "<tag>/restore/<table id>", but
+    // the snapshot references in the bucket are named by the user tag: its
+    // first segment ('/' cannot appear in a tag).
+    sstring snapshot_tag = sstring(std::string_view(snapshot_name).substr(0, std::min(snapshot_name.find('/'), snapshot_name.size())));
 
     auto s = _db.local().find_schema(tid.table);
     auto tablet_range = tmap.get_token_range(tid.tablet);
@@ -1108,7 +1112,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         });
 
         auto downloaded_ssts = co_await container().map_reduce0(
-            [tid, &sstables_on_shards, &snapshot_name](auto& loader) -> future<std::vector<std::vector<minimal_sst_info>>> {
+            [tid, &sstables_on_shards, &snapshot_tag](auto& loader) -> future<std::vector<std::vector<minimal_sst_info>>> {
                 sstables_col sst_chunk;
                 for (auto& psst : sstables_on_shards[this_shard_id()]) {
                     for (auto&& sst : psst) {
@@ -1116,11 +1120,11 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                     }
                 }
                 std::vector<std::vector<minimal_sst_info>> local_min_infos(this_smp_shard_count());
-                co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos, &snapshot_name](const auto& sst) -> future<> {
+                co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos, &snapshot_tag](const auto& sst) -> future<> {
                     auto& table = loader._db.local().find_column_family(tid.table);
                     auto stream_guard = table.stream_in_progress();
                     auto min_info = table.get_storage_options().is_object_storage_type()
-                            ? co_await clone_backup_sstable(table, sst, snapshot_name, llog)
+                            ? co_await clone_backup_sstable(table, sst, snapshot_tag, llog)
                             : co_await download_sstable(loader._db.local(), table, sst, llog);
                     local_min_infos[min_info.shard].emplace_back(std::move(min_info));
                 });
@@ -1177,6 +1181,7 @@ future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_test
 
 static future<manifest_summary> process_manifest(input_stream<char>& is, sstring keyspace, sstring table,
                                  const sstring& expected_snapshot_name, const sstring& expected_datacenter,
+                                 const sstring& snapshot_staging_name,
                                  const sstring& manifest_prefix, db::system_distributed_keyspace& sys_dist_ks,
                                  db::consistency_level cl) {
     // Read the entire JSON content
@@ -1300,7 +1305,7 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
         if (tdc == expected_datacenter) {
             // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
             // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
-            co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, sstring(tdc), sstring(trc), id, first_token, last_token,
+            co_await sth.insert_snapshot_sstable(snapshot_staging_name, keyspace, table, sstring(tdc), sstring(trc), id, first_token, last_token,
                                                  toc_name, prefix, host, tablet_id, db::snapshot_state::remote,
                                                  repaired_at, data_size, index_size, cl);
         }
@@ -1325,7 +1330,7 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
                 }
 
                 llog.debug("Re-duplicating sstable {} to {}:{}", id, sn.datacenter, sn.rack);
-                co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, sn.datacenter, sn.rack, id, first_token, last_token,
+                co_await sth.insert_snapshot_sstable(snapshot_staging_name, keyspace, table, sn.datacenter, sn.rack, id, first_token, last_token,
                                                     toc_name, prefix, sn.node, tablet_id, db::snapshot_state::remote,
                                                     repaired_at, data_size, index_size, cl);
             }
@@ -1335,7 +1340,7 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
     co_return manifest_summary{tablet_count, sstables->Size()};
 }
 
-future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, sstring snapshot_staging_name, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
     if (manifest_prefixes.empty()) {
         throw std::invalid_argument("manifest prefixes list must not be empty");
     }
@@ -1353,7 +1358,7 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
         sstables::object_name name(bucket, join_path(prefix, manifest_prefix));
         auto source = client->make_download_source(name);
         return seastar::with_closeable(input_stream<char>(std::move(source)), [&] (input_stream<char>& is) {
-            return process_manifest(is, keyspace, table, expected_snapshot_name, expected_datacenter, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
+            return process_manifest(is, keyspace, table, expected_snapshot_name, expected_datacenter, snapshot_staging_name, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
                 size_t count = ms.tablet_count;
                 if (!tablet_count) {
                     tablet_count = count;
@@ -1528,11 +1533,22 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     check_datacenter_coverage(_db.local().find_column_family(tid), locations);
     check_endpoints(_db.local().find_column_family(tid), locations);
 
+    // Restoring a backup into the cluster that still holds its snapshot would
+    // collide with the live catalog rows. Both writers use the same primary keys,
+    // so populate's TTL'd inserts would corrupt the snapshot ones and then expire
+    // them from under the snapshot.
+    // Restore therefore stages its rows under a derived name.
+    // The table id keeps concurrent restores of
+    // different tables from sharing a snapshot_remote_locations row. The
+    // staged rows keep their TTL and restore keeps its GC mechanism for crashed
+    // operations.
+    auto staging_name = format("{}/restore/{}", snap_name, tid);
+
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
     manifest_summary summary = { .tablet_count = 0, .nr_sstables = 0 };
 
     for (auto& loc : locations) {
-        auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, loc.datacenter, std::move(loc.manifests));
+        auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, loc.datacenter, staging_name, std::move(loc.manifests));
         if (summary.tablet_count == 0) {
             summary.tablet_count = loc_summary.tablet_count;
         } else if (summary.tablet_count != loc_summary.tablet_count) {
@@ -1542,17 +1558,16 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
         summary.nr_sstables += loc_summary.nr_sstables;
 
         // TODO: update state when all restored...
-        co_await sth.insert_snapshot_remote_location(snap_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
+        co_await sth.insert_snapshot_remote_location(staging_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
     }
 
     // Persist the schema of the target table in system_distributed.snapshot_tables
     // before the restore task pins the tablet hints, so the original hints survive a
-    // crash of this node. If an entry for this snapshot and table already exists, this
-    // restore either resumes an earlier attempt that may have already pinned the
-    // hints, or restores into the same table the snapshot was taken from; in both
-    // cases the original hints are recovered from the persisted schema instead of
-    // the live one.
-    auto entries = co_await sth.get_snapshot_tables(snap_name, keyspace, table, db::consistency_level::QUORUM);
+    // crash of this node. If an entry for this staging name and table already exists,
+    // this restore resumes an earlier attempt that may have already pinned the hints,
+    // and the original hints are recovered from the persisted schema instead of the
+    // live one.
+    auto entries = co_await sth.get_snapshot_tables(staging_name, keyspace, table, db::consistency_level::QUORUM);
     auto t = _db.local().get_tables_metadata().get_table_if_exists(tid);
     if (!t) {
         throw replica::no_such_column_family(tid);
@@ -1560,7 +1575,7 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     schema_ptr original_schema;
     if (entries.empty()) {
         original_schema = t->schema();
-        auto entry = sth.make_snapshot_table_entry(snap_name, *t);
+        auto entry = sth.make_snapshot_table_entry(staging_name, *t);
         co_await sth.insert_snapshot_tables(std::span(&entry, 1));
     } else {
         const auto& entry = entries.front();
@@ -1580,7 +1595,7 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     }
     auto original_hints = original_schema->tablet_options();
 
-    auto progress = make_lw_shared<tablet_restore_progress>(_db.local(), _sys_dist_ks, tid, snap_name, summary.nr_sstables);
+    auto progress = make_lw_shared<tablet_restore_progress>(_db.local(), _sys_dist_ks, tid, staging_name, summary.nr_sstables);
     tasks::task_manager::task_builder task_builder{_task_manager_module, restore_tablets_task_type};
     task_builder.set_scope("node")
                 .set_keyspace(keyspace)
@@ -1600,9 +1615,9 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
                         llog.warn("Failed to abort restore for table {}: {}", tid, ex);
                     });
                 });
-    auto task = co_await std::move(task_builder).build([this, progress, tid, snap_name = std::move(snap_name), tablet_count = summary.tablet_count,
+    auto task = co_await std::move(task_builder).build([this, progress, tid, staging_name = std::move(staging_name), tablet_count = summary.tablet_count,
             original_min_tablet_count = original_hints.min_tablet_count, original_max_tablet_count = original_hints.max_tablet_count] (tasks::task_manager::task::impl&) {
-        return do_restore_tablets(*progress, tid, snap_name, tablet_count, original_min_tablet_count, original_max_tablet_count);
+        return do_restore_tablets(*progress, tid, staging_name, tablet_count, original_min_tablet_count, original_max_tablet_count);
     });
     co_return task->id();
 }
