@@ -29,7 +29,7 @@ namespace cql_transport {
 static logging::logger logger("cql_server_controller");
 
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
-        sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
+        sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<cql_processor>& processor, sharded<service::memory_limiter>& ml,
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
         sharded<netw::messaging_service>& ms, sharded<updateable_timeout_config>& timeout_config,
         const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket,
@@ -42,6 +42,7 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
     , _lifecycle_notifier(elc_notif)
     , _gossiper(gossiper)
     , _qp(qp)
+    , _processor(processor)
     , _mem_limiter(ml)
     , _sl_controller(sl_controller)
     , _messaging(ms)
@@ -239,12 +240,8 @@ future<> controller::do_start_server() {
     attr.sched_group = _sched_group;
     return seastar::async(std::move(attr), [this] {
         auto cserver = std::make_unique<sharded<cql_server>>();
-        auto processor = std::make_unique<sharded<cql_processor>>();
 
         auto& cfg = _config;
-        smp_service_group_config cql_server_smp_service_group_config;
-        cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
-        auto bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get();
         auto get_cql_server_config = sharded_parameter([&] {
             std::optional<uint16_t> shard_aware_transport_port;
             if (cfg.native_shard_aware_transport_port.is_set()) {
@@ -273,10 +270,7 @@ future<> controller::do_start_server() {
             };
         });
 
-        processor->start(std::ref(_qp), std::ref(_messaging), std::ref(_mem_limiter), bounce_request_smp_service_group, _used_by_maintenance_socket).get();
-        auto stop_processor_on_error = defer([&processor] noexcept { processor->stop().get(); });
-
-        cserver->start(std::ref(_qp), std::ref(*processor), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket, std::ref(_messaging)).get();
+        cserver->start(std::ref(_qp), std::ref(_processor), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket, std::ref(_messaging)).get();
         auto on_error = defer([&cserver] noexcept { cserver->stop().get(); });
 
         subscribe_server(*cserver).get();
@@ -297,9 +291,7 @@ future<> controller::do_start_server() {
 
         on_error.cancel();
         on_error_unsub.cancel();
-        stop_processor_on_error.cancel();
         _server = std::move(cserver);
-        _processor = std::move(processor);
     });
 }
 
@@ -331,7 +323,6 @@ future<> controller::do_stop_server() {
     if (!cserver) {
         co_return;
     }
-    auto processor = std::move(_processor);
 
     std::exception_ptr ex;
 
@@ -352,9 +343,7 @@ future<> controller::do_stop_server() {
         }
     }
 
-    (void)server.stop().finally([&processor = *processor] {
-        return processor.stop();
-    }).finally([s = std::move(cserver), p = std::move(processor), h = _bg_stops.hold()] {});
+    (void)server.stop().finally([s = std::move(cserver), h = _bg_stops.hold()] {});
 
     if (ex) {
         std::rethrow_exception(std::move(ex));
