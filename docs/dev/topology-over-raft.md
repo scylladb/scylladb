@@ -1238,9 +1238,14 @@ compaction with the other transitions of the tablet (invariant [INV-TABL-2]), so
 isn't migrated, repaired, or merged while it is being compacted.
 
 The topology coordinator processes a tablet in this stage by calling the
-`TABLET_COMPACTION` RPC on all tablet replicas in parallel, with the request's compaction type
-and options. For a major compaction, each replica flushes the tablet's memtables and compacts
-its compaction groups one at a time, first off-strategy then major, and fails unless the tablet was really compacted, e.g. when the compaction is stopped by
+`TABLET_COMPACTION` RPC on all tablet replicas in parallel, with the request's id, compaction
+type and options. Before compacting the first tablet of a request, each node flushes all of its
+tables on all shards, forcing new commitlog segments, once per request, like a node-wide major
+compaction does, so that the compaction can purge as many tombstones as possible: unless the
+request's `force_flush` option is `true`, only if `compaction_flush_all_tables_before_major_seconds`
+elapsed since all tables were last flushed. For a major compaction, each replica then flushes
+the tablet's memtables and compacts its compaction groups one at a time, first off-strategy then
+major, and fails unless the tablet was really compacted, e.g. when the compaction is stopped by
 the node's shutdown. The tablets of a co-location group are compacted one after the other. A
 replica which is down fails the tablet right away. The transition is cleared whether the
 compaction succeeded or failed: a failure isn't retried. The tablet's

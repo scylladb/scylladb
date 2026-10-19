@@ -3341,11 +3341,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     // The transition compacts the tablet with the compaction type and options of the
                     // request it was started for.
                     if (advance_in_background(gid, tablet_state.tablet_compaction, "tablet_compaction",
-                            [this, gid, gids, &tmap, compaction_type = req.compaction_type, options = req.options] () -> future<> {
+                            [this, gid, gids, &tmap, request_id = locator::cluster_compaction_id(req.id), compaction_type = req.compaction_type, options = req.options] () -> future<> {
                         auto replicas = tmap.get_tablet_info(gid.tablet).replicas;
                         rtlogger.info("Initiating {} compaction of tablet {} on {}", compaction_type, gid, replicas);
                         // Copied before suspending: the closure of this action doesn't outlive its first suspension.
-                        co_await coroutine::parallel_for_each(replicas, [this, gid, gids, compaction_type, options] (locator::tablet_replica r) -> future<> {
+                        co_await coroutine::parallel_for_each(replicas, [this, gid, gids, request_id, compaction_type, options] (locator::tablet_replica r) -> future<> {
                             auto dst = raft::server_id(r.host.uuid());
                             if (is_excluded(dst)) {
                                 co_return;
@@ -3359,7 +3359,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             // bound the space overhead to the size of one tablet.
                             for (auto& g : gids) {
                                 co_await ser::storage_service_rpc_verbs::send_tablet_compaction(&_messaging, r.host, _as, dst, g,
-                                        compaction_type, options);
+                                        request_id, compaction_type, options);
                             }
                             rtlogger.debug("Tablet {} compacted on {}", gid, r.host);
                         });

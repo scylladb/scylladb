@@ -6011,15 +6011,54 @@ void storage_service::validate_tablet_compaction(std::string_view compaction_typ
     if (compaction_type != major_tablet_compaction_type) {
         throw std::invalid_argument(fmt::format("Unsupported tablet compaction type '{}': only '{}' is supported", compaction_type, major_tablet_compaction_type));
     }
-    if (!options.empty()) {
-        throw std::invalid_argument(fmt::format("Unsupported option '{}' for {} compaction", options.begin()->first, compaction_type));
+    for (const auto& [name, value] : options) {
+        // An option of every compaction type.
+        if (name == tablet_compaction_force_flush_option) {
+            if (value != "true" && value != "false") {
+                throw std::invalid_argument(fmt::format("Invalid value '{}' of option {}: expected true or false", value, name));
+            }
+            continue;
+        }
+        throw std::invalid_argument(fmt::format("Unsupported option '{}' for {} compaction", name, compaction_type));
     }
 }
 
-future<> storage_service::compact_tablet(locator::global_tablet_id tablet, sstring compaction_type, std::unordered_map<sstring, sstring> options) {
+future<> storage_service::flush_before_cluster_compaction(locator::cluster_compaction_id request_id, bool force_flush) {
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [request_id, force_flush] (auto& ss) {
+            return ss.flush_before_cluster_compaction(request_id, force_flush);
+        });
+    }
+    // Forget the flushes of the requests which are no longer ongoing.
+    std::erase_if(_cluster_compaction_flushes, [this] (const auto& e) {
+        return !_topology_state_machine._topology.ongoing_cluster_compaction_requests.contains(e.first.uuid());
+    });
+    auto it = _cluster_compaction_flushes.find(request_id);
+    if (it == _cluster_compaction_flushes.end()) {
+        auto f = compaction::maybe_flush_commitlog(_db, force_flush).then([request_id] (bool flushed) {
+            if (flushed) {
+                slogger.info("Flushed all tables before cluster-wide compaction request {}", request_id);
+            } else {
+                slogger.info("Skipped flushing all tables before cluster-wide compaction request {}: flushed recently", request_id);
+            }
+        });
+        it = _cluster_compaction_flushes.emplace(request_id, shared_future<>(std::move(f))).first;
+    }
+    try {
+        co_await it->second.get_future();
+    } catch (...) {
+        // Let the next tablet compaction of the request try again.
+        _cluster_compaction_flushes.erase(request_id);
+        throw;
+    }
+}
+
+future<> storage_service::compact_tablet(locator::global_tablet_id tablet, locator::cluster_compaction_id request_id, sstring compaction_type, std::unordered_map<sstring, sstring> options) {
     // The coordinator may run a newer version, which supports more compaction types.
     validate_tablet_compaction(compaction_type, options);
-    co_await do_tablet_operation(tablet, fmt::format("{} compaction", compaction_type), [this, tablet] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
+    auto force_flush_it = options.find(sstring(tablet_compaction_force_flush_option));
+    const bool force_flush = force_flush_it != options.end() && force_flush_it->second == "true";
+    co_await do_tablet_operation(tablet, fmt::format("{} compaction", compaction_type), [this, tablet, request_id, force_flush] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
         shard_id shard;
         {
             auto tm = guard.get_token_metadata();
@@ -6038,6 +6077,9 @@ future<> storage_service::compact_tablet(locator::global_tablet_id tablet, sstri
             }
             shard = it->shard;
         }
+        // After do_tablet_operation()'s read barrier, so that this node knows that the request is
+        // ongoing, and doesn't take its flush for that of a finished request.
+        co_await flush_before_cluster_compaction(request_id, force_flush);
         co_await utils::get_local_injector().inject("tablet_compaction_wait", utils::wait_for_message(std::chrono::minutes(5)));
         utils::get_local_injector().inject("tablet_compaction_fail", [] {
             throw std::runtime_error("tablet_compaction_fail injection");
@@ -7525,9 +7567,9 @@ void storage_service::init_messaging_service() {
             return ss.cleanup_tablet(tablet);
         });
     });
-    ser::storage_service_rpc_verbs::register_tablet_compaction(&_messaging.local(), [this] (raft::server_id dst_id, locator::global_tablet_id tablet, sstring compaction_type, std::unordered_map<sstring, sstring> options) {
-        return handle_raft_rpc(dst_id, [tablet, compaction_type = std::move(compaction_type), options = std::move(options)] (auto& ss) mutable {
-            return ss.compact_tablet(tablet, std::move(compaction_type), std::move(options));
+    ser::storage_service_rpc_verbs::register_tablet_compaction(&_messaging.local(), [this] (raft::server_id dst_id, locator::global_tablet_id tablet, locator::cluster_compaction_id request_id, sstring compaction_type, std::unordered_map<sstring, sstring> options) {
+        return handle_raft_rpc(dst_id, [tablet, request_id, compaction_type = std::move(compaction_type), options = std::move(options)] (auto& ss) mutable {
+            return ss.compact_tablet(tablet, request_id, std::move(compaction_type), std::move(options));
         });
     });
     ser::storage_service_rpc_verbs::register_table_load_stats(&_messaging.local(), [this] (raft::server_id dst_id) {
