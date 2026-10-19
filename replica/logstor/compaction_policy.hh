@@ -20,7 +20,7 @@
 namespace replica::logstor {
 
 struct segment_descriptor;
-struct segment_set;
+class segment_set;
 
 // The number of compaction jobs that may run concurrently on a shard, counted in output buffers:
 // a normal compaction takes one, a split compaction takes two. It sizes the compaction buffer pool,

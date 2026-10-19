@@ -1503,7 +1503,7 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
     utils::chunked_vector<log_segment_id> segments;
     segments.reserve(segment_count);
     for (size_t i = 0; i < segment_count; ++i) {
-        auto& desc = *ss._segment_list[i];
+        auto& desc = ss.segment_at(i);
         auto seg_id = desc_to_segment_id(desc);
 
         // Belonging to the group is the only reference the segment may have left.
@@ -2010,11 +2010,11 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
     // the src and target groups both share the table index
     auto& index = src.logstor_index();
 
-    while (!src_segments._segments.empty() && !as.abort_requested()) {
+    while (!src_segments.empty() && !as.abort_requested()) {
         // Collect candidate IDs without yielding to avoid iterator invalidation.
         std::vector<log_segment_id> candidates;
         candidates.reserve(batch_size);
-        for (const auto& cand_desc : src_segments._segments) {
+        for (const auto& cand_desc : src_segments.by_free_space()) {
             candidates.push_back(_sm.desc_to_segment_id(cand_desc));
             if (candidates.size() == batch_size) {
                 break;
@@ -2436,7 +2436,7 @@ future<utils::chunked_vector<segment_snapshot>> segment_manager_impl::make_snaps
     utils::chunked_vector<segment_snapshot> snp;
     snp.reserve(segment_count);
     for (size_t i = 0; i < segment_count; ++i) {
-        auto seg_id = desc_to_segment_id(*segments._segment_list[i]);
+        auto seg_id = desc_to_segment_id(segments.segment_at(i));
         snp.push_back(segment_snapshot{
             .segment_id = seg_id,
             .seg_ref = make_segment_ref(seg_id),

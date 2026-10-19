@@ -37,7 +37,7 @@ extern seastar::logger logstor_logger;
 
 class primary_index;
 struct segment_descriptor;
-struct segment_set;
+class segment_set;
 struct separator_buffer;
 class segment_ref;
 class logstor_group;
@@ -109,12 +109,9 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
 
 using segment_descriptor_hist = log_heap<segment_descriptor, segment_descriptor_hist_options>;
 
-struct segment_set {
-    // Segments ordered by free space, used to pick the segments to compact.
-    segment_descriptor_hist _segments;
-    // The same segments, in no particular order. Used to iterate efficiently and safely over all segments.
-    utils::chunked_vector<segment_descriptor*> _segment_list;
-
+// The segments of one compaction group, and the statistics of their live record bytes.
+class segment_set {
+public:
     // `shard_stats` are the shard-wide statistics. All the sets of the shard add their changes to
     // them. Thus, the shard can read its utilization from one field, and it does not have to walk
     // over the groups. Use nullptr for a set that is not part of a shard, for example in a test.
@@ -212,6 +209,20 @@ struct segment_set {
         return _segment_list.empty();
     }
 
+    // The segments ordered approximately by free space, by histogram bucket, the most free first,
+    // which is the order compaction takes them in.
+    const segment_descriptor_hist& by_free_space() const noexcept {
+        return _segments;
+    }
+
+    // The segment at `index`, in [0, segment_count()), in no particular order. add_segment()
+    // appends a segment at the end, and remove_segment() moves the last segment into the position
+    // of the removed one. So, while no segment is removed, the positions below a segment_count()
+    // read before a walk do not change, and the walk can yield between calls.
+    const segment_descriptor& segment_at(size_t index) const noexcept {
+        return *_segment_list[index];
+    }
+
     const segment_stats& stats() const noexcept {
         return _stats;
     }
@@ -228,6 +239,10 @@ struct segment_set {
     }
 
 private:
+    // The segments ordered by free space.
+    segment_descriptor_hist _segments;
+    // The same segments, in no particular order, so that a walk over them can yield safely.
+    utils::chunked_vector<segment_descriptor*> _segment_list;
     // The size of a segment. The set uses it to calculate the live record bytes of a segment from
     // its free space, and the utilization of a segment from its live record bytes.
     size_t _segment_size;

@@ -117,7 +117,7 @@ std::optional<compaction_batch> select_compaction_batch(const segment_set& segme
 
     uint64_t accum_record_bytes = 0;
     uint64_t accum_record_count = 0;
-    for (const auto& desc : segments._segments) {
+    for (const auto& desc : segments.by_free_space()) {
         if (candidates.size() >= batch_cap) {
             break;
         }
