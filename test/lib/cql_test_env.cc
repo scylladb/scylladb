@@ -800,6 +800,8 @@ private:
             _timeout_config.start(std::ref(*cfg)).get();
             auto stop_timeout_config = defer_verbose_shutdown("updateable timeout config", [this] { _timeout_config.stop().get(); });
 
+            auto sc_coordinator_stats_key = scheduling_group_key_create(
+                    make_scheduling_group_key_config<service::strong_consistency::stats>()).get();
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
             _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory), std::ref(_timeout_config)).get();
@@ -1050,7 +1052,7 @@ private:
                 _groups_manager.stop().get();
             });
 
-            _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper)).get();
+            _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper), sc_coordinator_stats_key).get();
             auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [this] {
                 _sc_coordinator.stop().get();
             });

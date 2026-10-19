@@ -62,84 +62,88 @@ void stats::register_stats() {
     namespace sm = seastar::metrics;
     sm::label reason_label("reason");
     sm::label read_type_label("read_type");
+    const sm::label_instance sg_label("scheduling_group_name", current_scheduling_group().name());
 
-    _metrics.add_group("strong_consistency_coordinator", {
+    // Called again when the scheduling group is renamed.
+    auto new_metrics = sm::metric_groups();
+    new_metrics.add_group("strong_consistency_coordinator", {
         sm::make_summary("write_latency_summary", sm::description("Strong consistency write latency summary"),
-            [this] { return to_metrics_summary(write.summary()); }).set_skip_when_empty(),
+            [this] { return to_metrics_summary(write.summary()); })(sg_label).set_skip_when_empty(),
 
         sm::make_histogram("write_latency", sm::description("Strong consistency write latency histogram"),
-            {}, [this] { return to_metrics_histogram(write.histogram()); })
+            {sg_label}, [this] { return to_metrics_histogram(write.histogram()); })
             .aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
 
         sm::make_counter("write_errors", write_errors_timeout,
             sm::description("number of strong consistency write requests that failed"),
-            {reason_label("timeout")})
+            {reason_label("timeout"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("write_errors", write_errors_status_unknown,
             sm::description("number of strong consistency write requests that failed"),
-            {reason_label("status_unknown")})
+            {reason_label("status_unknown"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("write_errors", write_errors_unavailable,
             sm::description("number of strong consistency write requests that failed"),
-            {reason_label("unavailable")})
+            {reason_label("unavailable"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("write_errors", write_errors_other,
             sm::description("number of strong consistency write requests that failed"),
-            {reason_label("other")})
+            {reason_label("other"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("write_node_bounces", write_node_bounces,
-            sm::description("number of strong consistency write requests bounced to another node"))
+            sm::description("number of strong consistency write requests bounced to another node"), {sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("write_shard_bounces", write_shard_bounces,
-            sm::description("number of strong consistency write requests bounced to another shard"))
+            sm::description("number of strong consistency write requests bounced to another shard"), {sg_label})
             .set_skip_when_empty(),
 
         sm::make_summary("read_latency_summary", sm::description("Strong consistency read latency summary"),
-            [this] { return to_metrics_summary(linearizable_read.summary()); })(read_type_label("linearizable"))
+            [this] { return to_metrics_summary(linearizable_read.summary()); })(read_type_label("linearizable"))(sg_label)
             .set_skip_when_empty(),
 
         sm::make_histogram("read_latency", sm::description("Strong consistency read latency histogram"),
-            {}, [this] { return to_metrics_histogram(linearizable_read.histogram()); })
+            {sg_label}, [this] { return to_metrics_histogram(linearizable_read.histogram()); })
             .aggregate({seastar::metrics::shard_label})(read_type_label("linearizable"))
             .set_skip_when_empty(),
 
         sm::make_summary("read_latency_summary", sm::description("Strong consistency read latency summary"),
-            [this] { return to_metrics_summary(non_linearizable_read.summary()); })(read_type_label("non_linearizable"))
+            [this] { return to_metrics_summary(non_linearizable_read.summary()); })(read_type_label("non_linearizable"))(sg_label)
             .set_skip_when_empty(),
 
         sm::make_histogram("read_latency", sm::description("Strong consistency read latency histogram"),
-            {}, [this] { return to_metrics_histogram(non_linearizable_read.histogram()); })
+            {sg_label}, [this] { return to_metrics_histogram(non_linearizable_read.histogram()); })
             .aggregate({seastar::metrics::shard_label})(read_type_label("non_linearizable"))
             .set_skip_when_empty(),
 
         sm::make_counter("read_errors", read_errors_timeout,
             sm::description("number of strong consistency read requests that failed"),
-            {reason_label("timeout")})
+            {reason_label("timeout"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("read_errors", read_errors_unavailable,
             sm::description("number of strong consistency read requests that failed"),
-            {reason_label("unavailable")})
+            {reason_label("unavailable"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("read_errors", read_errors_other,
             sm::description("number of strong consistency read requests that failed"),
-            {reason_label("other")})
+            {reason_label("other"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("read_node_bounces", read_node_bounces,
-            sm::description("number of strong consistency read requests bounced to another node"))
+            sm::description("number of strong consistency read requests bounced to another node"), {sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("read_shard_bounces", read_shard_bounces,
-            sm::description("number of strong consistency read requests bounced to another shard"))
+            sm::description("number of strong consistency read requests bounced to another shard"), {sg_label})
             .set_skip_when_empty(),
     });
+    _metrics = std::exchange(new_metrics, {});
 }
 
 template <std::predicate<const locator::tablet_replica&> Pred>
@@ -428,12 +432,13 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     });
 }
 
-coordinator::coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper)
+coordinator::coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper,
+        scheduling_group_key stats_key)
     : _groups_manager(groups_manager)
     , _db(db)
     , _gossiper(gossiper)
+    , _stats_key(stats_key)
 {
-    _stats.register_stats();
 }
 
 auto coordinator::mutate(schema_ptr schema,
@@ -449,7 +454,7 @@ auto coordinator::mutate(schema_ptr schema,
 
     utils::latency_counter lc;
     lc.start();
-    auto mark_write_latency = defer([this, &lc] noexcept { _stats.write.mark(lc.stop().latency()); });
+    auto mark_write_latency = defer([this, &lc] noexcept { get_stats().write.mark(lc.stop().latency()); });
 
     // State of the request as it advances through its stages. Each pointer
     // is null until the corresponding stage has been reached, so log messages
@@ -489,29 +494,29 @@ auto coordinator::mutate(schema_ptr schema,
             }
             logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
-            ++_stats.write_errors_timeout;
+            ++get_stats().write_errors_timeout;
             return std::make_exception_ptr(write_timeout(schema->ks_name(), schema->cf_name()));
         } else if (try_catch<raft::commit_status_unknown>(ex)) {
             logger.debug("mutate(): add_entry, got commit_status_unknown {}, table {}.{}, {}",
                 ex, schema->ks_name(), schema->cf_name(), state_fmt);
 
-            ++_stats.write_errors_status_unknown;
+            ++get_stats().write_errors_status_unknown;
             // FIXME: use a dedicated ERROR_CODE instead of SERVER_ERROR
             return std::make_exception_ptr(exceptions::server_exception(
                 "The outcome of this statement is unknown. It may or may not have been applied. "
                 "Retrying the statement may be necessary."));
         } else if (try_catch<exceptions::unavailable_exception>(ex)) {
             logger.trace("mutate(): no live replica, table {}.{}, token {}", schema->ks_name(), schema->cf_name(), token);
-            ++_stats.write_errors_unavailable;
+            ++get_stats().write_errors_unavailable;
             return ex;
         } else if (auto* too_big = try_catch<raft::command_is_too_big_error>(ex)) {
             logger.trace("mutate(): command of {} bytes exceeds the limit of {}, table {}.{}, token {}",
                 too_big->command_size, too_big->limit, schema->ks_name(), schema->cf_name(), token);
-            ++_stats.write_errors_other;
+            ++get_stats().write_errors_other;
             return std::make_exception_ptr(exceptions::invalid_request_exception(fmt::format(
                 "Strongly consistent write of {} bytes exceeds the limit of {} bytes", too_big->command_size, too_big->limit)));
         } else {
-            ++_stats.write_errors_other;
+            ++get_stats().write_errors_other;
             logger.trace("mutate(): unknown exception {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
@@ -662,7 +667,7 @@ auto coordinator::query(schema_ptr schema,
     lc.start();
 
     auto& read_stats = (rtype == read_type::linearizable)
-        ? _stats.linearizable_read : _stats.non_linearizable_read;
+        ? get_stats().linearizable_read : get_stats().non_linearizable_read;
     auto mark_read_latency = defer([&read_stats, &lc] () mutable noexcept { read_stats.mark(lc.stop().latency()); });
 
     auto filter_error = [&] (std::exception_ptr ex) -> std::exception_ptr {
@@ -685,16 +690,16 @@ auto coordinator::query(schema_ptr schema,
             }
             logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
-            ++_stats.read_errors_timeout;
+            ++get_stats().read_errors_timeout;
             return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name()));
         } else if (try_catch<exceptions::unavailable_exception>(ex)) {
             logger.trace("query(): no live replica, table {}.{}, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
-            ++_stats.read_errors_unavailable;
+            ++get_stats().read_errors_unavailable;
             return ex;
         } else {
             logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
-            ++_stats.read_errors_other;
+            ++get_stats().read_errors_other;
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
             return ex;
         }
