@@ -1514,14 +1514,10 @@ public:
         // Consider load that is about to be scheduled.
         co_await consider_planned_load(nodes, mplan);
 
-        // Rebuild the load sketch for this DC so that get_least_loaded_shard()
-        // returns accurate results for nodes in this DC. Without this, the sketch
-        // may contain stale data from the last DC processed by make_plan(), causing
-        // shard 0 to always be selected for nodes in other DCs.
-        _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
-        _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
-        _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
-        co_await _load_sketch->populate_dc(dc);
+        locator::load_sketch load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
+        load_sketch.set_minimal_tablet_size(_minimal_tablet_size);
+        load_sketch.set_force_capacity_based_load(_force_capacity_based_balancing);
+        co_await load_sketch.populate_dc(dc);
 
         for (auto& [rack, colocation_sources] : racks) {
             auto dc_rack = locator::endpoint_dc_rack{dc, rack};
@@ -1566,7 +1562,7 @@ public:
 
                 lblogger.debug("target node: {}, avg_load={}", target, target_info.avg_load);
 
-                auto dst = global_shard_id {target, _load_sketch->get_least_loaded_shard(target)};
+                auto dst = global_shard_id {target, load_sketch.get_least_loaded_shard(target)};
 
                 lblogger.trace("target shard: {}, tablets={}, load={}", dst.shard,
                             target_info.shards[dst.shard].tablet_count,
@@ -1583,7 +1579,7 @@ public:
                 auto mig = get_migration_info(source_tablets, kind, src, dst);
                 auto& tmap = tmeta.get_tablet_map(source_tablets.table());
                 auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
-                pick(*_load_sketch, dst.host, dst.shard, source_tablets);
+                pick(load_sketch, dst.host, dst.shard, source_tablets);
                 if (can_accept_load(nodes, mig_streaming_info)) {
                     apply_load(nodes, mig_streaming_info);
                     lblogger.debug("Adding migration: {}", mig);
