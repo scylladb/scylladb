@@ -388,19 +388,25 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 }
 
 
-static future<> do_cluster_clear_snapshot(db::snapshot_ctl& snap_ctl, const std::string& snapshot_name, tasks::task_manager::task::progress& total_progress, abort_source& as) {
+static future<> do_cluster_clear_snapshot(db::snapshot_ctl& snap_ctl, const std::string& snapshot_name, bool force, tasks::task_manager::task::progress& total_progress, abort_source& as) {
     using namespace db::snapshot;
 
     snap_log.info("Begin clearing snapshot {}", snapshot_name);
 
     db::snapshot_table_helper sth(snap_ctl.qp().local());
     auto snapshot = co_await sth.get_snapshot(snapshot_name, db::consistency_level::QUORUM);
-    if (!snapshot) {
-        throw std::invalid_argument(fmt::format("No snapshot named {} in the snapshot catalog", snapshot_name));
+    if (!snapshot && !force) {
+        throw std::invalid_argument(fmt::format("No snapshot named {} in the snapshot catalog, use force to clear the leftovers of a failed attempt", snapshot_name));
     }
 
     auto tables = co_await sth.get_snapshot_tables(snapshot_name, {}, {}, db::consistency_level::QUORUM);
     auto nodes = co_await sth.get_snapshot_nodes(snapshot_name, {}, {}, db::consistency_level::QUORUM);
+    if (!snapshot) {
+        if (tables.empty() && nodes.empty()) {
+            throw std::invalid_argument(fmt::format("No snapshot named {} in the snapshot catalog", snapshot_name));
+        }
+        snap_log.info("Snapshot {} has no commit marker, force-clearing the leftovers of a failed attempt", snapshot_name);
+    }
     auto& db = snap_ctl.db().local();
 
     auto tmptr = snap_ctl.sp().local().shared_token_metadata().get();
@@ -513,7 +519,7 @@ static future<> mark_sstable_backed_up(db::snapshot_ctl& snap, const std::string
 }
 
 future<tasks::task_id>
-db::snapshot::start_cluster_clear_snapshot(db::snapshot_ctl& ctl, tasks::task_manager::module_ptr tm, std::string snapshot_name) {
+db::snapshot::start_cluster_clear_snapshot(db::snapshot_ctl& ctl, tasks::task_manager::module_ptr tm, std::string snapshot_name, bool force) {
     if (snapshot_name.empty()) {
         throw std::invalid_argument("You must supply a snapshot name.");
     }
@@ -527,9 +533,9 @@ db::snapshot::start_cluster_clear_snapshot(db::snapshot_ctl& ctl, tasks::task_ma
                 .set_progress_fn([progress] (const tasks::task_manager::task::impl&) {
                     return make_ready_future<tasks::task_manager::task::progress>(*progress);
                 });
-    auto task = co_await std::move(task_builder).build([&ctl, snapshot_name = std::move(snapshot_name), progress] (tasks::task_manager::task::impl& self) mutable {
-        return ctl.run_snapshot_gate_operation([&ctl, &snapshot_name, progress, &as = self.get_abort_source()] {
-            return do_cluster_clear_snapshot(ctl, snapshot_name, *progress, as);
+    auto task = co_await std::move(task_builder).build([&ctl, snapshot_name = std::move(snapshot_name), force, progress] (tasks::task_manager::task::impl& self) mutable {
+        return ctl.run_snapshot_gate_operation([&ctl, &snapshot_name, force, progress, &as = self.get_abort_source()] {
+            return do_cluster_clear_snapshot(ctl, snapshot_name, force, *progress, as);
         });
     });
     co_return task->id();

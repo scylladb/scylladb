@@ -12,3 +12,5 @@ Snapshots of tables on object storage exist as bucket references and snapshot ca
      nodetool cluster clearsnapshot -t <tag>
 
 The command starts a task and waits for its completion. With ``--nowait`` it prints the task id and returns immediately; use the ``task`` subcommands to manage the task.
+
+A snapshot that failed before completion leaves catalog entries and bucket references behind without a committed snapshot. Clearing such a tag is rejected by default; pass ``--force`` to clear the leftovers without retaking the snapshot. Do not force-clear a tag whose snapshot is still in progress.

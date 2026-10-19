@@ -3238,6 +3238,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"force",
+                     "description":"force clear the leftovers of a crashed snapshot that was never committed",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             }

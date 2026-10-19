@@ -141,7 +141,8 @@ public:
 
     // Clears a cluster snapshot. It releases every node's snapshot references
     // and deletes the catalogging rows accounting for that snapshot.
-    future<tasks::task_id> clear_cluster_snapshot(sstring tag);
+    // With force, also clears a crashed snapshot that has no commit marker
+    future<tasks::task_id> clear_cluster_snapshot(sstring tag, bool force);
 
     future<> disable_all_operations();
 

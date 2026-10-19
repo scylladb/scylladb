@@ -2050,8 +2050,9 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     ss::clear_cluster_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         apilog.info("clear_cluster_snapshot: {}", req->get_query_params());
         auto tag = req->get_query_param("tag");
+        bool force = get_query_param<bool>(*req, "force");
         try {
-            auto task_id = co_await snap_ctl.local().clear_cluster_snapshot(tag);
+            auto task_id = co_await snap_ctl.local().clear_cluster_snapshot(tag, force);
             co_return json::json_return_type(fmt::to_string(task_id));
         } catch (...) {
             apilog.error("clear_cluster_snapshot failed: {:t}", std::current_exception());

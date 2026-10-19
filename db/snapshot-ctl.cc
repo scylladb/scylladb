@@ -398,14 +398,14 @@ future<> snapshot_ctl::clear_sstables_handler(table_id tid, sstring tag) {
     co_return co_await db::snapshot::clear_sstables(*this, tid, std::string(tag));
 }
 
-future<tasks::task_id> snapshot_ctl::clear_cluster_snapshot(sstring tag) {
+future<tasks::task_id> snapshot_ctl::clear_cluster_snapshot(sstring tag, bool force) {
     if (this_shard_id() != 0) {
         co_return co_await container().invoke_on(0, [&] (auto& local) {
-            return local.clear_cluster_snapshot(tag);
+            return local.clear_cluster_snapshot(tag, force);
         });
     }
     co_await coroutine::switch_to(_config.backup_sched_group);
-    co_return co_await snapshot::start_cluster_clear_snapshot(*this, static_pointer_cast<tasks::task_manager::module>(_task_manager_module), std::string(tag));
+    co_return co_await snapshot::start_cluster_clear_snapshot(*this, static_pointer_cast<tasks::task_manager::module>(_task_manager_module), std::string(tag), force);
 }
 
 future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files) {

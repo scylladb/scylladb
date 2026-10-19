@@ -2615,6 +2615,9 @@ void cluster_clearsnapshot_operation(scylla_rest_client& client, const bpo::vari
     }
     auto tag = vm["tag"].as<sstring>();
     std::unordered_map<sstring, sstring> params{{"tag", tag}};
+    if (vm.contains("force")) {
+        params["force"] = "true";
+    }
 
     const auto clear_res = client.del("/storage_service/tablets/snapshots", std::move(params));
     const auto task_id = rjson::to_string_view(clear_res);
@@ -4311,6 +4314,7 @@ For more information, see: {}
                         {
                             typed_option<sstring>("tag,t", "The name of the snapshot to clear"),
                             typed_option<>("nowait", "Don't wait on the clear process"),
+                            typed_option<>("force", "Also clear a snapshot that was never committed: the leftovers of a failed attempt"),
                         },
                         {
                         },
