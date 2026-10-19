@@ -16,7 +16,7 @@
 #include "seastarx.hh"
 
 namespace sstables {
-class malformed_sstable_exception : public std::exception {
+class malformed_sstable_exception final : public std::exception {
     sstring _msg;
     // Whether the sstable is malformed because a component of it is not there
     // at all, as opposed to being there but unreadable. A running ScyllaDB
@@ -58,12 +58,6 @@ inline void parse_assert(bool condition, std::optional<component_name> filename 
     }
 }
 
-struct bufsize_mismatch_exception : malformed_sstable_exception {
-    bufsize_mismatch_exception(size_t size, size_t expected) :
-        malformed_sstable_exception(format("Buffer improperly sized to hold requested data. Got: {:d}. Expected: {:d}", size, expected))
-    {}
-};
-
 // Controls whether malformed sstable errors abort the process (generating a coredump) or throw an
 // exception. Aborting is useful when the malformed sstable error is caused by memory corruption
 // rather than actual sstable corruption, as it allows post-mortem analysis of the coredump.
@@ -72,9 +66,9 @@ struct bufsize_mismatch_exception : malformed_sstable_exception {
 bool set_abort_on_malformed_sstable_error(bool value) noexcept;
 bool abort_on_malformed_sstable_error() noexcept;
 
-// Use these helpers instead of directly throwing malformed_sstable_exception or
-// bufsize_mismatch_exception. They check the abort_on_malformed_sstable_error flag and either
-// abort the process (with logging) or throw the appropriate exception.
+// Use these helpers instead of directly throwing malformed_sstable_exception. They check the
+// abort_on_malformed_sstable_error flag and either abort the process (with logging) or throw
+// the exception.
 [[noreturn]] void throw_malformed_sstable_exception(sstring msg);
 [[noreturn]] void throw_malformed_sstable_exception(sstring msg, component_name filename);
 [[noreturn]] void throw_missing_sstable_component_exception(component_name filename);

@@ -1569,7 +1569,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
 #else
             false,
 #endif
-            "Abort the server and generate a coredump instead of throwing an exception when any sstable parse error is detected (malformed_sstable_exception, bufsize_mismatch_exception, parse_assert() failures, or BTI parse errors). Intended for debugging memory corruption that may manifest as sstable corruption. Defaults to true in debug and dev builds.")
+            "Abort the server and generate a coredump instead of throwing an exception when any sstable parse error is detected (malformed_sstable_exception, parse_assert() failures, or BTI parse errors). Intended for debugging memory corruption that may manifest as sstable corruption. Defaults to true in debug and dev builds.")
     , max_partition_key_restrictions_per_query(this, "max_partition_key_restrictions_per_query", liveness::LiveUpdate, value_status::Used, 100,
             "Maximum number of distinct partition keys restrictions per query. This limit places a bound on the size of IN tuples, "
             "especially when multiple partition key columns have IN restrictions. Increasing this value can result in server instability.")
