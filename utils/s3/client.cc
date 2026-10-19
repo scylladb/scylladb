@@ -805,6 +805,21 @@ future<> client::delete_object_tagging(sstring object_name, seastar::abort_sourc
     co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
 }
 
+// A ranged GET has to be answered by a 206 whose Content-Range names the range
+// asked for; only its end may fall short, where the object ends (SCYLLADB-4786).
+static void verify_reply_range(std::string_view object_name, const range& asked, const http::reply& rep) {
+    auto header = rep.get_header("Content-Range");
+    auto answered = rep._status == http::reply::status_type::partial_content ? utils::http::parse_content_range(header) : std::nullopt;
+    // An open-ended range asks for everything to the end of the object.
+    const auto asked_last = asked.length() == maximum_object_size ? std::numeric_limits<uint64_t>::max() : asked.offset() + asked.length() - 1;
+    if (!answered || answered->first != asked.offset()
+            || (answered->last != asked_last
+                && (answered->last > asked_last || answered->total != answered->last + 1))) {
+        throw storage_io_error(EIO, format("Read of object {} for {} was answered with {} and Content-Range \"{}\"",
+                object_name, asked.to_header_string(), int(rep._status), header));
+    }
+}
+
 future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, range download_range, seastar::abort_source* as) {
     auto req = http::request::make("GET", _host, object_name);
     expected_status expected = http::reply::status_type::ok;
@@ -821,7 +836,10 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
 
     size_t off = 0;
     std::optional<temporary_buffer<char>> ret;
-    co_await make_request(std::move(req), [&off, &ret, &object_name] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+    co_await make_request(std::move(req), [&off, &ret, &object_name, &download_range] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+        if (download_range != s3::full_range) {
+            verify_reply_range(object_name, download_range, rep);
+        }
         auto in = std::move(in_);
         ret = temporary_buffer<char>(rep.content_length);
         off = 0;
@@ -1806,8 +1824,11 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 }
                 co_await _client->make_request(
                     std::move(req),
-                    [this, &units, discover_size, pf_length = discover_size ? 0 : current_range.length()](
+                    [this, &units, discover_size, pf_length = discover_size ? 0 : current_range.length(), asked = current_range](
                         group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+                        if (!discover_size) {
+                            verify_reply_range(_object_name, asked, reply);
+                        }
                         gc.prefetch_bytes += pf_length;
                         if (discover_size) {
                             // A zero length here needs no special case: the read loop
@@ -1980,8 +2001,11 @@ auto client::download_source::request_body() -> future<external_body> {
     auto& p = *bp;
     future<external_body> f = p->get_future();
 
-    (void)_client->make_request(std::move(req), [this, &p] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+    (void)_client->make_request(std::move(req), [this, &p, asked = _range] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         s3l.trace("GET {} got the body ({} {} bytes)", _object_name, rep._status, rep.content_length);
+        if (asked != s3::full_range) {
+            verify_reply_range(_object_name, asked, rep);
+        }
         auto in = std::move(in_);
         external_body xb(in);
         auto f = xb.done.get_future();
