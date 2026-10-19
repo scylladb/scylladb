@@ -123,6 +123,20 @@ end: {end_time}
         assert res.stdout == expected_output
 
 
+def test_cluster_clearsnapshot_force(nodetool):
+    tag = "snapshot_name"
+    task_id = "2c4a3e5f"
+    expected_requests = [
+        expected_request(
+            "DELETE",
+            "/storage_service/tablets/snapshots",
+            params={"tag": tag, "force": "true"},
+            response=task_id)
+    ]
+    res = nodetool("cluster", "clearsnapshot", "-t", tag, "--force", "--nowait", expected_requests=expected_requests)
+    assert task_id in res.stdout
+
+
 def test_listsnapshots(nodetool, request):
     res = nodetool("listsnapshots", expected_requests=[
         expected_request("GET", "/storage_service/snapshots", response=[

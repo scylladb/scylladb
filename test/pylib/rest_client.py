@@ -510,10 +510,13 @@ class ScyllaRESTAPIClient:
             params['table'] = ','.join(tables)
         return await self.client.post_json("/storage_service/tablets/backup", host=node_ip, params=params, json=locations)
 
-    async def clear_cluster_snapshot(self, node_ip: str, tag: str) -> str:
+    async def clear_cluster_snapshot(self, node_ip: str, tag: str, force: bool = False) -> str:
         """Clear a cluster snapshot; returns the task id"""
+        params = {"tag": tag}
+        if force:
+            params["force"] = "true"
         return await self.client.delete("/storage_service/tablets/snapshots", response_type="json",
-                                        host=node_ip, params={"tag": tag})
+                                        host=node_ip, params=params)
 
     async def backup_cluster_snapshot(self, node_ip: str, ks: str, snapshot: str, datacenter: str, endpoint: str, bucket: str, prefix: str, tables: list[str] = None) -> str:
         """Backup cluster snapshot"""

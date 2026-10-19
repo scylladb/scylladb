@@ -3728,8 +3728,8 @@ def assert_snapshot_cleared(cql, object_storage, tag, ks, cf, servers):
     assert not snapshot_catalog_sstable_rows(cql, tag, ks, cf, servers), 'Catalog rows survived the clear'
 
 
-async def clear_cluster_snapshot(manager, server, tag, expect='done'):
-    tid = await manager.api.clear_cluster_snapshot(server.ip_addr, tag)
+async def clear_cluster_snapshot(manager, server, tag, expect='done', force=False):
+    tid = await manager.api.clear_cluster_snapshot(server.ip_addr, tag, force=force)
     status = await manager.api.wait_task(server.ip_addr, tid)
     assert status is not None and status.get('state') == expect, f'Clear of {tag}: expected {expect}, got {status}'
 
@@ -3839,5 +3839,39 @@ async def test_object_storage_clear_snapshot_failure_resume(manager: ScyllaClust
             assert len(snapshot_commit_rows(cql, tag)) == 1
 
             await clear_cluster_snapshot(manager, server, tag)
+            assert_snapshot_cleared(cql, object_storage, tag, ks, cf, servers)
+            assert len(list(cql.execute(f"SELECT key FROM {tbl}"))) == 50
+
+async def test_object_storage_clear_snapshot_force_uncommitted(manager: ScyllaClusterManager, object_storage):
+    """A snapshot that failed before writing its commit marker leaves catalog
+    rows and bucket references behind. Clearing such a tag is rejected without
+    force; with force the references are released and the rows deleted, so the
+    operator does not need a retake to get rid of the leftovers."""
+    topology = topo(rf=3, nodes=3, racks=3, dcs=1)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    server = servers[0]
+    tag = unique_name('snap_')
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage, rf=topology.rf) + " AND tablets = {'initial': 4}") as ks:
+        async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)") as tbl:
+            cf = tbl.split('.')[1]
+            await prepare_write_workload(cql, tbl, flush=False, n=50)
+            await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+            await manager.api.take_cluster_snapshot(server.ip_addr, ks, tag=tag, tables=[cf])
+            assert any(f'/refs/snapshot-{tag}/' in k for k in object_storage_keys(object_storage))
+
+            # Fabricate the residue of an attempt that failed right before the
+            # commit marker: delete only the marker of a complete snapshot.
+            cql.execute(SimpleStatement(f"DELETE FROM system_distributed.snapshots WHERE name = '{tag}'",
+                                        consistency_level=ConsistencyLevel.QUORUM))
+            assert not snapshot_commit_rows(cql, tag)
+
+            # Without force a markerless tag is rejected and nothing is touched.
+            await clear_cluster_snapshot(manager, server, tag, expect='failed')
+            assert any(f'/refs/snapshot-{tag}/' in k for k in object_storage_keys(object_storage))
+
+            await clear_cluster_snapshot(manager, server, tag, force=True)
             assert_snapshot_cleared(cql, object_storage, tag, ks, cf, servers)
             assert len(list(cql.execute(f"SELECT key FROM {tbl}"))) == 50
