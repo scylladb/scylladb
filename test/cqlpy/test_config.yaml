@@ -1,3 +1,8 @@
+dirties_cluster:
+  - test_native_transport
+  # Moves the server's clocks forward and back: the timeuuids now() generates
+  # stay ahead of the clock for a while.
+  - test_materialized_view_old
 extra_scylla_cmdline_options:
   - '--rf-rack-valid-keyspaces=1'
   - '--experimental-features=udf'
