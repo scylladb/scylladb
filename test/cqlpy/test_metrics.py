@@ -5,6 +5,8 @@
 import math
 
 import cassandra.concurrent
+import pytest
+from cassandra.query import BatchStatement
 
 from .util import new_test_table, ScyllaMetrics
 
@@ -34,6 +36,37 @@ def test_client_timestamp_drift_metric(cql, test_keyspace, scylla_only):
         after = count_after if count_after is not None else 0
         assert after >= before + 10, \
             f"Expected at least 10 new samples, got {after - before}"
+
+
+# The client picks the timestamp it sends, so even the lowest and highest ones
+# the protocol allows must neither overflow the drift computation nor wrap the
+# histogram's sum. Each such request should add the histogram's top bound,
+# 33554432 microseconds, to the sum.
+# Reproduces: https://scylladb.atlassian.net/browse/SCYLLADB-3882
+def test_client_timestamp_drift_metric_extreme_timestamps(cql, test_keyspace, scylla_only, monkeypatch):
+    histogram_max = 33554432
+    timestamps = [-2**63 + 1, 2**63 - 1]
+    schema = 'k int, v int, primary key (k)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        insert = cql.prepare(f"INSERT INTO {table} (k, v) VALUES (?, ?)")
+        batch = BatchStatement()
+        batch.add(insert, (1, 1))
+        def send_requests():
+            cql.execute(f"SELECT * FROM {table} WHERE k = 0")
+            cql.execute(insert, (0, 0))
+            cql.execute(batch)
+        sum_name = 'scylla_transport_cql_client_timestamp_drift_histogram_sum'
+        sum_before = ScyllaMetrics.query(cql).get(sum_name) or 0
+        send_requests()
+        sum_normal = ScyllaMetrics.query(cql).get(sum_name)
+        assert sum_normal - sum_before < histogram_max
+        with monkeypatch.context() as m:
+            for timestamp in timestamps:
+                # the driver packs the timestamp unsigned
+                m.setattr(cql.cluster, 'timestamp_generator', lambda: timestamp % 2**64)
+                send_requests()
+        sum_after = ScyllaMetrics.query(cql).get(sum_name)
+        assert sum_after - sum_normal == pytest.approx(3 * len(timestamps) * histogram_max, rel=0.1)
 
 
 # Run read_func() and check that the number of reads it reports is reflected in
