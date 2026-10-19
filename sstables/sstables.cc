@@ -3726,19 +3726,27 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, read
     temporary_buffer<char> result(want);
     size_t filled = 0;
     bool eof = false;
-    while (filled < want && !eof) {
-        co_await stream->consume_one(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
-            if (data.empty()) {
-                eof = true;
-            } else {
-                size_t take = std::min(data.size(), want - filled);
-                std::copy_n(data.get(), take, result.get_write() + filled);
-                filled += take;
-            }
-            return continue_consuming{};
-        });
+    // Close the stream even if the read fails, for example on a checksum
+    // mismatch. Destroying a stream with read-aheads in flight aborts.
+    std::exception_ptr ex;
+    try {
+        while (filled < want && !eof) {
+            co_await stream->consume_one(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+                if (data.empty()) {
+                    eof = true;
+                } else {
+                    size_t take = std::min(data.size(), want - filled);
+                    std::copy_n(data.get(), take, result.get_write() + filled);
+                    filled += take;
+                }
+                return continue_consuming{};
+            });
+        }
+    } catch (...) {
+        ex = std::current_exception();
     }
     co_await stream->close();
+    maybe_rethrow_exception(std::move(ex));
     result.trim(filled);
     co_return result;
 }
