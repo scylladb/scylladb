@@ -50,6 +50,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <exception>
 #include <limits>
@@ -1020,6 +1021,8 @@ static arn_parts parse_export_arn(std::string_view export_arn, std::string_view 
         throw api_error::validation(fmt::format("{}: Invalid Export ARN `{}` - no export id after `{}`",
                 arn_field_name, export_arn, export_infix));
     }
+    // FIXME: DynamoDB also answers an id of any shape but its own with ValidationException. Check
+    // that once SCYLLADB-1893 mints ids of that shape.
     return parts;
 }
 
@@ -1077,7 +1080,7 @@ static future<std::optional<export_row>> get_export(service::storage_proxy& prox
     // is corrupt.
     for (auto column : {"client_token", "request", "export_status", "table_id", "export_time", "accepted_at"}) {
         if (!row.get_data_value(column)) {
-            throw std::runtime_error(format("Export '{}' has no {} in {}.{}", export_arn, column, sdks::NAME, sdks::ALTERNATOR_EXPORT_TO_S3_EXPORTS));
+            throw std::runtime_error(fmt::format("Export '{}' has no {} in {}.{}", export_arn, column, sdks::NAME, sdks::ALTERNATOR_EXPORT_TO_S3_EXPORTS));
         }
     }
     co_return export_row {
