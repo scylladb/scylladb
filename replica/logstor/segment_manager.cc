@@ -411,7 +411,7 @@ public:
     future<> remove(logstor_group&) override;
     future<compaction_reenabler> disable_compaction(logstor_group&) override;
     compaction_reenabler disable_compaction_no_wait(logstor_group&) override;
-    future<> submit_normal_compaction(logstor_group&);
+    future<> submit_normal_compaction(logstor_group&, compaction_batch_limits limits);
     future<> submit_split_compaction(logstor_group&, mutation_writer::classify_by_token_group, split_target_group) override;
 
     void schedule_auto_compaction();
@@ -437,11 +437,27 @@ private:
     bool should_run_auto_compaction() noexcept;
     future<> run_auto_compaction();
 
-    std::optional<compaction_candidate> select_segments_for_compaction(logstor_group&);
+    std::optional<compaction_candidate> select_segments_for_compaction(logstor_group&, const compaction_batch_limits&);
+
+    // What automatic compaction may take.
+    compaction_batch_limits automatic_batch_limits() const noexcept {
+        return compaction_batch_limits{
+            .batch_cap = _compaction_limits.batch_cap,
+        };
+    }
+
+    // What a compaction that was asked for explicitly may take. It is separate from
+    // automatic_batch_limits(), so that a bound of the automatic policy does not apply to it.
+    compaction_batch_limits explicit_batch_limits() const noexcept {
+        return compaction_batch_limits{
+            .batch_cap = _compaction_limits.batch_cap,
+        };
+    }
+
     future<std::vector<compaction_candidate>> find_top_compaction_candidates(size_t);
 
     future<> submit_group_compaction(logstor_group&, std::function<future<>(group_compaction_state&)>, scheduling_group);
-    future<> do_compaction(logstor_group&, abort_source&);
+    future<> do_compaction(logstor_group&, compaction_batch_limits, abort_source&);
     future<> do_split_compaction(logstor_group&, mutation_writer::classify_by_token_group, split_target_group, abort_source&);
 
     group_compaction_state& get_group_state(logstor_group&);
@@ -1601,9 +1617,9 @@ future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std
     co_await coroutine::return_exception(std::runtime_error("logstor compaction submission is closed"));
 }
 
-future<> compaction_manager_impl::submit_normal_compaction(logstor_group& cg) {
-    co_await submit_group_compaction(cg, [this, &cg] (group_compaction_state& state) {
-        return do_compaction(cg, state.as);
+future<> compaction_manager_impl::submit_normal_compaction(logstor_group& cg, compaction_batch_limits limits) {
+    co_await submit_group_compaction(cg, [this, &cg, limits] (group_compaction_state& state) {
+        return do_compaction(cg, limits, state.as);
     }, _cfg.compaction_sg);
 }
 
@@ -1614,7 +1630,7 @@ future<> compaction_manager_impl::submit_split_compaction(logstor_group& src, mu
 }
 
 void compaction_manager_impl::submit(logstor_group& cg) {
-    (void)submit_normal_compaction(cg).handle_exception([table_id = cg.table_id()] (std::exception_ptr ep) {
+    (void)submit_normal_compaction(cg, explicit_batch_limits()).handle_exception([table_id = cg.table_id()] (std::exception_ptr ep) {
         logstor_logger.debug("logstor compaction for table {} failed: {}. Ignored", table_id, ep);
     });
 }
@@ -1681,10 +1697,9 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
 }
 
 std::optional<compaction_manager_impl::compaction_candidate>
-compaction_manager_impl::select_segments_for_compaction(logstor_group& cg) {
+compaction_manager_impl::select_segments_for_compaction(logstor_group& cg, const compaction_batch_limits& limits) {
     const auto segment_size = _sm.get_segment_size();
-    auto batch = select_compaction_batch(cg.logstor_segments(), segment_size,
-            compaction_batch_limits{.batch_cap = _compaction_limits.batch_cap});
+    auto batch = select_compaction_batch(cg.logstor_segments(), segment_size, limits);
     if (!batch) {
         return std::nullopt;
     }
@@ -1707,6 +1722,7 @@ compaction_manager_impl::select_segments_for_compaction(logstor_group& cg) {
 future<std::vector<compaction_manager_impl::compaction_candidate>>
 compaction_manager_impl::find_top_compaction_candidates(size_t max_candidates) {
     top_compaction_candidates<compaction_candidate> best_candidates(max_candidates);
+    const auto limits = automatic_batch_limits();
 
     std::vector<logstor_group*> group_snapshot;
     group_snapshot.reserve(_groups.size());
@@ -1727,7 +1743,7 @@ compaction_manager_impl::find_top_compaction_candidates(size_t max_candidates) {
             continue;
         }
 
-        auto candidate = select_segments_for_compaction(*it->first);
+        auto candidate = select_segments_for_compaction(*it->first, limits);
         if (candidate) {
             best_candidates.push(std::move(*candidate));
         }
@@ -1807,7 +1823,7 @@ future<> compaction_manager_impl::run_auto_compaction() {
 
         // The slot is released only once the job is done, which is what wakes this fiber up to
         // submit the next candidate.
-        (void)submit_normal_compaction(*candidate.group).handle_exception([] (std::exception_ptr ep) {
+        (void)submit_normal_compaction(*candidate.group, automatic_batch_limits()).handle_exception([] (std::exception_ptr ep) {
             logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
         }).finally([units = std::move(units)] {});
     }
@@ -1937,8 +1953,8 @@ struct split_buffer_pair {
     }
 };
 
-future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source& as) {
-    auto candidate = select_segments_for_compaction(cg);
+future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_batch_limits limits, abort_source& as) {
+    auto candidate = select_segments_for_compaction(cg, limits);
     if (!candidate) {
         co_return;
     }
