@@ -39,6 +39,12 @@ enum class flush_mode {
     all_tables          // Flush all tables in the database prior to compaction
 };
 
+// Flushes all tables on all shards, forcing new commitlog segments, before a major compaction, so
+// that it can purge as many tombstones as possible. Unless force_flush is true, it does so only
+// if the compaction_flush_all_tables_before_major_seconds interval elapsed since all tables were
+// last flushed, and never if it is 0. Returns whether it flushed.
+future<bool> maybe_flush_commitlog(sharded<replica::database>& db, bool force_flush);
+
 inline constexpr auto major_compaction_task_type = "major compaction";
 
 inline constexpr auto cleanup_compaction_task_type = "cleanup compaction";
