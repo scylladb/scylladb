@@ -310,3 +310,30 @@ def test_uda_initcond_udt_case_sensitive_field(cql, test_keyspace, cassandra_bug
                     cql.execute(f'DROP AGGREGATE {test_keyspace}.{agg}')
                     cql.execute(desc)
                     assert [tuple(r[0]) for r in cql.execute(select)] == [(15,)]
+
+# Test that CREATE AGGREGATE refuses a state function declared RETURNS NULL
+# ON NULL INPUT when there is no INITCOND (or INITCOND is null): The state
+# starts as null, so such a state function would never be called, and the
+# aggregate would always return null. With an INITCOND, or with a state
+# function declared CALLED ON NULL INPUT, the aggregate can be created.
+# Reproduces SCYLLADB-5158.
+def test_create_aggregate_null_state_with_returns_null_sfunc(cql, test_keyspace):
+    def sfunc(on_null):
+        if is_scylla(cql):
+            return f"(s int, a int) {on_null} ON NULL INPUT RETURNS int LANGUAGE lua AS 'return a'"
+        return f"(s int, a int) {on_null} ON NULL INPUT RETURNS int LANGUAGE java AS 'return a;'"
+    with new_function(cql, test_keyspace, sfunc('RETURNS NULL')) as sf:
+        agg = f'{test_keyspace}.{unique_name()}'
+        try:
+            for initcond in ['', ' INITCOND null']:
+                with pytest.raises(InvalidRequest, match=f'without INITCOND because state function {test_keyspace}.{sf} does not accept'):
+                    cql.execute(f'CREATE AGGREGATE {agg}(int) SFUNC {sf} STYPE int{initcond}')
+        finally:
+            # If CREATE AGGREGATE wrongly succeeded, drop the aggregate so
+            # the function can be dropped.
+            cql.execute(f'DROP AGGREGATE IF EXISTS {agg}')
+        with new_aggregate(cql, test_keyspace, f'(int) SFUNC {sf} STYPE int INITCOND 0'):
+            pass
+    with new_function(cql, test_keyspace, sfunc('CALLED')) as sf:
+        with new_aggregate(cql, test_keyspace, f'(int) SFUNC {sf} STYPE int'):
+            pass
