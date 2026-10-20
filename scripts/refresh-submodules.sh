@@ -1,8 +1,13 @@
 #!/bin/bash
 #
 # Refresh git submodules by fast-forward merging them to the tip of the
-# master branch of their respective repositories and committing the
-# update with a default commit message of "git submodule summary".
+# respective branch of their repositories and committing the update with
+# a default commit message of "git submodule summary".
+#
+# The branch is derived from the current superproject branch: next-X and
+# branch-X map to branch-X, anything else maps to master. If the submodule
+# origin doesn't have the branch-X, master is used. The branch can also be
+# set explicitly per submodule as "submodule:branch".
 #
 # Copyright (C) 2020-present ScyllaDB
 #
@@ -22,13 +27,29 @@ submodules=(
     tools/python3
 )
 
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+case "${current_branch}" in
+    next-*)   default_branch=branch-${current_branch#next-} ;;
+    branch-*) default_branch=${current_branch} ;;
+    *)        default_branch=master ;;
+esac
+
 for ent in "${@:-${submodules[@]}}"; do
     submodule=${ent%%:*}
-    [ ${submodule} == ${ent} ] && branch="master" || branch=${ent#*:}
-    bump_to=origin/${branch}
 
     pushd .
     cd $submodule
+    # explicit branch, or the default one if origin has it (not every
+    # submodule has release branches), or master
+    if [ "${submodule}" != "${ent}" ]; then
+        branch=${ent#*:}
+    elif git ls-remote --exit-code origin refs/heads/${default_branch} > /dev/null; then
+        branch=${default_branch}
+    else
+        echo "No ${default_branch} branch in ${submodule} origin, falling back to master"
+        branch=master
+    fi
+    bump_to=origin/${branch}
     git fetch origin ${branch}
     if ! git merge-base --is-ancestor HEAD ${bump_to}; then
         echo "Non fast-forward changes detected! Fire three red flares from your flare pistol."
