@@ -971,10 +971,10 @@ class load_balancer {
         std::optional<sstring> rack; // Set when plan making is limited to a single rack.
         sstring location; // Name of the current scope of plan making. DC or DC+rack.
         lw_shared_ptr<load_balancer_dc_stats> stats; // Stats for current scope of plan making.
-        size_t total_capacity_shards; // Total number of non-drained shards in the balanced node set.
-        size_t total_capacity_nodes; // Total number of non-drained nodes in the balanced node set.
-        uint64_t total_capacity_storage; // Total storage of non-drained nodes in the balanced node set.
-        size_t migrating_candidates; // Number of candidate replicas skipped because tablet is migrating.
+        size_t total_capacity_shards = 0; // Total number of non-drained shards in the balanced node set.
+        size_t total_capacity_nodes = 0; // Total number of non-drained nodes in the balanced node set.
+        uint64_t total_capacity_storage = 0; // Total storage of non-drained nodes in the balanced node set.
+        size_t migrating_candidates = 0; // Number of candidate replicas skipped because tablet is migrating.
     };
     dc_rack_plan_state _state;
     locator::load_stats_ptr _table_load_stats;
@@ -4427,12 +4427,17 @@ public:
             co_return std::move(plan);
         }
 
-        _state.dc = dc;
-        _state.rack = rack;
-        _state.location = fmt::format("{}{}", dc, rack ? fmt::format("/{}", *rack) : "");
-        _state.stats = _stats.for_dc(dc);
+        _state = dc_rack_plan_state{
+            .dc = dc,
+            .rack = rack,
+            .location = fmt::format("{}{}", dc, rack ? fmt::format("/{}", *rack) : ""),
+            .stats = _stats.for_dc(dc),
+        };
+        _state.load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
+        _state.load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
+        _state.load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
+        co_await _state.load_sketch->populate_dc(dc);
         auto _ = seastar::defer([&] noexcept { _state.stats = nullptr; });
-        _state.migrating_candidates = 0;
 
         auto node_filter = [&] (const locator::node& node) {
             return node.dc_rack().dc == dc && (!rack || node.dc_rack().rack == *rack);
@@ -4550,11 +4555,6 @@ public:
             }
         }
 
-        _state.load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
-        _state.load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
-        _state.load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
-        co_await _state.load_sketch->populate_dc(dc);
-
         // If we don't have nodes to drain, remove nodes which don't have complete tablet sizes
         if (nodes_to_drain.empty()) {
             std::optional<host_id> incomplete_host;
@@ -4625,9 +4625,6 @@ public:
         // FIXME: To handle the above, we should rebalance the target node before migrating tablets from other nodes.
 
         // Compute per-shard load and candidate tablets.
-
-        _state.tablet_count_per_table.clear();
-        _state.disk_used_per_table.clear();
 
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             if (is_migrating_table(table)) {
@@ -4732,9 +4729,6 @@ public:
 
         // Compute load imbalance.
 
-        _state.total_capacity_shards = 0;
-        _state.total_capacity_nodes = 0;
-        _state.total_capacity_storage = 0;
         load_type max_load = 0;
         load_type min_load = 0;
         std::optional<host_id> min_load_node = std::nullopt;
