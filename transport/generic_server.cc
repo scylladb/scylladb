@@ -323,6 +323,16 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
     if (builder && !_credentials) {
         if (!get_shard_instance || this_shard_id() == 0) {
             _credentials = co_await builder->build_reloadable_server_credentials([this, get_shard_instance = std::move(get_shard_instance)](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
+                // A reload can fire while the server is being shut down, and
+                // there is nothing left to reload into then. Holding the gate
+                // keeps this server and its peers on the other shards alive for
+                // the duration of the reload - sharded<> destroys the instances
+                // only once stop() completed on all of them, and stop() waits
+                // for the gate.
+                if (_gate.is_closed()) {
+                    co_return;
+                }
+                seastar::gate::holder holder(_gate);
                 if (ep) {
                     _logger.warn("Exception loading {}: {}", files, ep);
                 } else {
