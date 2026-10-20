@@ -303,7 +303,242 @@ private:
     }
 };
 
-class compaction_manager_impl : public compaction_manager {
+// Runs automatic compaction on one shard: decides when a job starts, on which group, and with
+// which batch limits. compaction_manager_impl owns it and implements its host. It runs from
+// start() until stop(), for the lifetime of the segment manager.
+class compaction_driver {
+public:
+    // A batch that one group offers, from a ranking.
+    struct candidate {
+        logstor_group* group;
+        std::vector<log_segment_id> segments;
+        compaction_candidate_score score;
+    };
+
+    struct ranking {
+        // Worst first, as top_compaction_candidates::take_sorted() returns them.
+        std::vector<candidate> candidates;
+    };
+
+    // What the driver reads from the shard.
+    struct shard_sample {
+        uint64_t available_segments;
+    };
+
+    // What the driver needs from the compaction manager.
+    class host {
+    public:
+        virtual ~host() = default;
+        // Whether compaction is enabled and admission is open.
+        virtual bool can_submit_compaction() const noexcept = 0;
+        // The best `max_candidates` groups by the batch each would run under `limits`.
+        virtual future<ranking> find_top_compaction_candidates(const compaction_batch_limits& limits, size_t max_candidates) = 0;
+        // Whether the group of a candidate is still registered, idle and enabled. `group` is
+        // compared only, because the group can be gone.
+        virtual bool can_start(const logstor_group* group) const noexcept = 0;
+        virtual future<> submit_normal_compaction(logstor_group&, compaction_batch_limits) = 0;
+        virtual shard_sample sample() const noexcept = 0;
+    };
+
+    struct config {
+        // Upper bound on the batch cap; the cap actually used is derived from the free-segment
+        // target by make_compaction_limits().
+        size_t max_segments_per_compaction;
+        utils::updateable_value<double> trigger_threshold;
+    };
+
+    // The segment count is known only after segment_manager_impl is constructed, so it comes
+    // with start().
+    struct disk_geometry {
+        uint64_t segment_count;
+    };
+
+    compaction_driver(host&, config);
+
+    void start(disk_geometry);
+    // Starts no more runs. stop() waits for the run in flight.
+    void request_stop() noexcept;
+    // The caller must call request_stop() first.
+    future<> stop();
+
+    // Starts a run if the free segments are below the target and no run is active.
+    void schedule();
+
+    // What automatic compaction may take.
+    compaction_batch_limits automatic_batch_limits() const noexcept;
+    // What a compaction that was asked for explicitly may take. It is separate from
+    // automatic_batch_limits(), so that a bound of the automatic policy does not apply to it.
+    compaction_batch_limits explicit_batch_limits() const noexcept;
+
+    double shares_demand() const noexcept;
+
+private:
+    host& _host;
+    config _cfg;
+    disk_geometry _geometry{};
+    bool _stopping{false};
+    // Registered in start(), because the watermarks need the segment count.
+    std::optional<utils::observer<double>> _trigger_threshold_observer;
+
+    // Cached result of make_free_segment_watermarks(). should_run() calls it on every segment
+    // allocation, so the cache avoids the same computation on each allocation.
+    free_segment_watermarks _free_segment_watermarks{};
+    compaction_limits _limits{};
+
+    shared_future<> _completion{make_ready_future<>()};
+    // Sized for the static maximum; a run holds back the difference between it and the current
+    // limit for its duration, see run().
+    seastar::semaphore _sem{max_auto_compaction_parallelism};
+
+    bool active() const noexcept {
+        return !_completion.available();
+    }
+
+    // Refreshes the cached free segment watermarks and the compaction limits derived from them.
+    // Called from start() and whenever the trigger threshold changes; the segment count and the
+    // configured batch bound are fixed for the lifetime of the segment manager, so the threshold
+    // is the only other input.
+    void refresh_free_segment_watermarks() noexcept;
+    bool should_run() noexcept;
+    future<> run();
+    // Submits the job of `c`, which holds `units` of the driver's semaphore until it finishes.
+    void start_job(candidate c, semaphore_units<> units);
+};
+
+compaction_driver::compaction_driver(host& h, config cfg)
+    : _host(h)
+    , _cfg(std::move(cfg))
+{}
+
+void compaction_driver::start(disk_geometry geometry) {
+    _geometry = geometry;
+    refresh_free_segment_watermarks();
+    _trigger_threshold_observer.emplace(_cfg.trigger_threshold.observe([this] (double new_threshold) {
+        logstor_logger.debug("Compaction trigger threshold changed to {}", new_threshold);
+        refresh_free_segment_watermarks();
+        schedule();
+    }));
+}
+
+void compaction_driver::request_stop() noexcept {
+    _stopping = true;
+}
+
+future<> compaction_driver::stop() {
+    auto f = co_await coroutine::as_future(_completion.get_future());
+    f.ignore_ready_future();
+}
+
+compaction_batch_limits compaction_driver::automatic_batch_limits() const noexcept {
+    return compaction_batch_limits{
+        .batch_cap = _limits.batch_cap,
+    };
+}
+
+compaction_batch_limits compaction_driver::explicit_batch_limits() const noexcept {
+    return compaction_batch_limits{
+        .batch_cap = _limits.batch_cap,
+    };
+}
+
+double compaction_driver::shares_demand() const noexcept {
+    return compaction_shares_pressure(_host.sample().available_segments, _free_segment_watermarks);
+}
+
+void compaction_driver::refresh_free_segment_watermarks() noexcept {
+    _free_segment_watermarks = make_free_segment_watermarks(_geometry.segment_count, _cfg.trigger_threshold());
+    _limits = make_compaction_limits(_free_segment_watermarks, _cfg.max_segments_per_compaction);
+
+    logstor_logger.debug("Free segment target {} (stop at {}), compaction parallelism {}, up to {} segments per compaction",
+            _free_segment_watermarks.low, _free_segment_watermarks.high,
+            _limits.auto_parallelism, _limits.batch_cap);
+}
+
+bool compaction_driver::should_run() noexcept {
+    const auto running = active();
+
+    if (_stopping) {
+        if (running) {
+            logstor_logger.debug("Stopping auto compaction: admission closed");
+        }
+        return false;
+    }
+
+    const auto available_segments = _host.sample().available_segments;
+    const auto watermarks = _free_segment_watermarks;
+
+    if (!auto_compaction_wanted(running, available_segments, watermarks)) {
+        if (running) {
+            logstor_logger.debug("Stopping auto compaction: available segments {} is above high watermark {}",
+                    available_segments, watermarks.high);
+        }
+        return false;
+    }
+
+    if (!running) {
+        logstor_logger.debug("Starting auto compaction: available segments {} is below the free segment target {}",
+                available_segments, watermarks.low);
+    }
+    return true;
+}
+
+void compaction_driver::schedule() {
+    if (_host.can_submit_compaction() && should_run() && !active()) {
+        _completion = shared_future(run().handle_exception([] (std::exception_ptr ep) {
+            logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
+        }));
+    }
+}
+
+future<> compaction_driver::run() {
+    // The parallelism is snapshotted for the whole run. It only changes with the free-segment
+    // target, which is a rarely moved live-updatable setting, and holding back the difference to
+    // the semaphore's static size for the duration of the run is what lets the drain below wait
+    // for exactly the jobs this run submitted.
+    const auto parallelism = _limits.auto_parallelism;
+    auto held_back = co_await get_units(_sem, max_auto_compaction_parallelism - parallelism);
+
+    std::vector<candidate> pending;
+
+    while (_host.can_submit_compaction() && should_run()) {
+        auto units = co_await get_units(_sem, 1);
+
+        if (!_host.can_submit_compaction() || !should_run()) {
+            break;
+        }
+
+        if (pending.empty()) {
+            auto ranked = co_await _host.find_top_compaction_candidates(automatic_batch_limits(), parallelism);
+            pending = std::move(ranked.candidates);
+            if (pending.empty()) {
+                co_await seastar::sleep(std::chrono::milliseconds(100));
+                continue;
+            }
+        }
+
+        auto c = std::move(pending.back());
+        pending.pop_back();
+
+        if (!_host.can_start(c.group)) {
+            continue;
+        }
+
+        start_job(std::move(c), std::move(units));
+    }
+
+    // Wait for submitted jobs to complete.
+    co_await get_units(_sem, parallelism);
+}
+
+void compaction_driver::start_job(candidate c, semaphore_units<> units) {
+    // The slot is released only once the job is done, which is what wakes this fiber up to
+    // submit the next candidate.
+    (void)_host.submit_normal_compaction(*c.group, automatic_batch_limits()).handle_exception([] (std::exception_ptr ep) {
+        logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
+    }).finally([units = std::move(units)] {});
+}
+
+class compaction_manager_impl : public compaction_manager, private compaction_driver::host {
 public:
 
     struct compaction_config {
@@ -311,6 +546,7 @@ public:
         // Upper bound on the batch cap; the cap actually used is derived from the free-segment
         // target by make_compaction_limits().
         size_t max_segments_per_compaction;
+        utils::updateable_value<double> trigger_compaction_threshold;
         seastar::scheduling_group compaction_sg;
         utils::updateable_value<float> compaction_static_shares;
         utils::updateable_value<float> compaction_max_shares;
@@ -324,7 +560,7 @@ private:
 
     bool _admission_closed{false};
 
-    bool can_submit_compaction() const noexcept {
+    bool can_submit_compaction() const noexcept override {
         return !_admission_closed && _cfg.compaction_enabled;
     }
 
@@ -354,23 +590,10 @@ private:
         }
     };
 
-    struct compaction_candidate {
-        logstor_group* group;
-        std::vector<log_segment_id> segments;
-        compaction_candidate_score score;
-    };
-
     using group_compaction_state_map = absl::flat_hash_map<logstor_group*, std::unique_ptr<group_compaction_state>>;
     group_compaction_state_map _groups;
 
-    shared_future<> _auto_compaction_completion{make_ready_future<>()};
-    // Sized for the static maximum; a run holds back the difference between it and the current
-    // limit for its duration, see run_auto_compaction().
-    seastar::semaphore _auto_compaction_sem{max_auto_compaction_parallelism};
-
-    bool auto_compaction_active() const noexcept {
-        return !_auto_compaction_completion.available();
-    }
+    compaction_driver _driver;
 
 public:
     compaction_manager_impl(segment_manager_impl& sm, compaction_config cfg)
@@ -382,7 +605,7 @@ public:
                 _cfg.compaction_max_shares.get(),
                 std::chrono::milliseconds(250),
                 [this] {
-                    return compaction_pressure();
+                    return float(_driver.shares_demand());
                 }
             )
         , _compaction_static_shares_observer(_cfg.compaction_static_shares.observe([this] (float new_shares) {
@@ -392,13 +615,16 @@ public:
             logstor_logger.info("Updating logstor compaction max shares to {}", new_max_shares);
             _shares_controller.set_max_shares(new_max_shares);
         }))
+        , _driver(*this, compaction_driver::config{
+                .max_segments_per_compaction = _cfg.max_segments_per_compaction,
+                .trigger_threshold = _cfg.trigger_compaction_threshold,
+            })
     {}
 
     future<> start();
     future<> stop();
 
     const stats& get_stats() const noexcept { return _stats; }
-    float compaction_pressure() const noexcept;
 
     future<> flush_separator_buffer(separator_buffer&, logstor_group&) override;
     future<owned_write_buffer> allocate_separator_buffer() override;
@@ -411,50 +637,18 @@ public:
     future<> remove(logstor_group&) override;
     future<compaction_reenabler> disable_compaction(logstor_group&) override;
     compaction_reenabler disable_compaction_no_wait(logstor_group&) override;
-    future<> submit_normal_compaction(logstor_group&, compaction_batch_limits limits);
+    future<> submit_normal_compaction(logstor_group&, compaction_batch_limits limits) override;
     future<> submit_split_compaction(logstor_group&, mutation_writer::classify_by_token_group, split_target_group) override;
 
-    void schedule_auto_compaction();
-
-    // Refreshes the cached free segment watermarks and the compaction limits derived from them.
-    // Called from start() and whenever trigger_compaction_threshold changes; the segment count and
-    // the configured batch bound are fixed for the lifetime of the segment manager, so the
-    // threshold is the only other input.
-    void refresh_free_segment_watermarks() noexcept;
+    void schedule_auto_compaction() { _driver.schedule(); }
 
 private:
+    // compaction_driver::host
+    future<compaction_driver::ranking> find_top_compaction_candidates(const compaction_batch_limits&, size_t max_candidates) override;
+    bool can_start(const logstor_group*) const noexcept override;
+    compaction_driver::shard_sample sample() const noexcept override;
 
-    // Cached result of make_free_segment_watermarks(). should_run_auto_compaction() calls
-    // get_free_segment_watermarks() on every segment allocation, so the cache avoids the same
-    // computation on each allocation.
-    free_segment_watermarks _free_segment_watermarks{};
-    compaction_limits _compaction_limits{};
-
-    const free_segment_watermarks& get_free_segment_watermarks() const noexcept {
-        return _free_segment_watermarks;
-    }
-
-    bool should_run_auto_compaction() noexcept;
-    future<> run_auto_compaction();
-
-    std::optional<compaction_candidate> select_segments_for_compaction(logstor_group&, const compaction_batch_limits&);
-
-    // What automatic compaction may take.
-    compaction_batch_limits automatic_batch_limits() const noexcept {
-        return compaction_batch_limits{
-            .batch_cap = _compaction_limits.batch_cap,
-        };
-    }
-
-    // What a compaction that was asked for explicitly may take. It is separate from
-    // automatic_batch_limits(), so that a bound of the automatic policy does not apply to it.
-    compaction_batch_limits explicit_batch_limits() const noexcept {
-        return compaction_batch_limits{
-            .batch_cap = _compaction_limits.batch_cap,
-        };
-    }
-
-    future<std::vector<compaction_candidate>> find_top_compaction_candidates(size_t);
+    std::optional<compaction_driver::candidate> select_segments_for_compaction(logstor_group&, const compaction_batch_limits&);
 
     future<> submit_group_compaction(logstor_group&, std::function<future<>(group_compaction_state&)>, scheduling_group);
     future<> do_compaction(logstor_group&, compaction_batch_limits, abort_source&);
@@ -465,16 +659,12 @@ private:
 
 };
 
-future<> compaction_manager_impl::start() {
-    refresh_free_segment_watermarks();
-    co_return;
-}
-
 future<> compaction_manager_impl::stop() {
     if (_admission_closed) {
         co_return;
     }
     _admission_closed = true;
+    _driver.request_stop();
 
     for (auto& [cg, state] : _groups) {
         state->as.request_abort();
@@ -483,8 +673,7 @@ future<> compaction_manager_impl::stop() {
         return entry.second->completion.get_future().handle_exception([] (std::exception_ptr) {});
     });
 
-    auto f = co_await coroutine::as_future(_auto_compaction_completion.get_future());
-    f.ignore_ready_future();
+    co_await _driver.stop();
 
     co_await _shares_controller.shutdown();
 
@@ -666,7 +855,6 @@ class segment_manager_impl {
 
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
 
-    utils::observer<double> _trigger_threshold_observer;
 
 public:
     static constexpr size_t block_alignment = ondisk::block_alignment;
@@ -899,17 +1087,17 @@ private:
     friend class segment_stream_sink_impl;
 };
 
-float compaction_manager_impl::compaction_pressure() const noexcept {
-    return compaction_shares_pressure(_sm.available_segment_count(write_source::normal_write), get_free_segment_watermarks());
+future<> compaction_manager_impl::start() {
+    _driver.start({
+        .segment_count = _sm._configured_max_segments,
+    });
+    co_return;
 }
 
-void compaction_manager_impl::refresh_free_segment_watermarks() noexcept {
-    _free_segment_watermarks = make_free_segment_watermarks(_sm._configured_max_segments, _sm._cfg.trigger_compaction_threshold());
-    _compaction_limits = make_compaction_limits(_free_segment_watermarks, _cfg.max_segments_per_compaction);
-
-    logstor_logger.debug("Free segment target {} (stop at {}), compaction parallelism {}, up to {} segments per compaction",
-            _free_segment_watermarks.low, _free_segment_watermarks.high,
-            _compaction_limits.auto_parallelism, _compaction_limits.batch_cap);
+compaction_driver::shard_sample compaction_manager_impl::sample() const noexcept {
+    return compaction_driver::shard_sample{
+        .available_segments = _sm.available_segment_count(write_source::normal_write),
+    };
 }
 
 compaction_manager_impl::group_compaction_state& compaction_manager_impl::get_group_state(logstor_group& cg) {
@@ -968,6 +1156,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     , _compaction_mgr(*this, compaction_manager_impl::compaction_config{
             .compaction_enabled = config.compaction_enabled,
             .max_segments_per_compaction = config.max_segments_per_compaction,
+            .trigger_compaction_threshold = config.trigger_compaction_threshold,
             .compaction_sg = config.compaction_sg,
             .compaction_static_shares = config.compaction_static_shares,
             .compaction_max_shares = config.compaction_max_shares,
@@ -1002,11 +1191,6 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
             .max_cached = separator_flush_reserve,
       })
     , _separator_task_queue(separator_queue_depth)
-    , _trigger_threshold_observer(_cfg.trigger_compaction_threshold.observe([this] (double new_threshold) {
-            logstor_logger.debug("Compaction trigger threshold changed to {}", new_threshold);
-            _compaction_mgr.refresh_free_segment_watermarks();
-            _compaction_mgr.schedule_auto_compaction();
-      }))
     {
 
     if (_segments_per_file == 0) {
@@ -1630,7 +1814,7 @@ future<> compaction_manager_impl::submit_split_compaction(logstor_group& src, mu
 }
 
 void compaction_manager_impl::submit(logstor_group& cg) {
-    (void)submit_normal_compaction(cg, explicit_batch_limits()).handle_exception([table_id = cg.table_id()] (std::exception_ptr ep) {
+    (void)submit_normal_compaction(cg, _driver.explicit_batch_limits()).handle_exception([table_id = cg.table_id()] (std::exception_ptr ep) {
         logstor_logger.debug("logstor compaction for table {} failed: {}. Ignored", table_id, ep);
     });
 }
@@ -1696,7 +1880,7 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
     });
 }
 
-std::optional<compaction_manager_impl::compaction_candidate>
+std::optional<compaction_driver::candidate>
 compaction_manager_impl::select_segments_for_compaction(logstor_group& cg, const compaction_batch_limits& limits) {
     const auto segment_size = _sm.get_segment_size();
     auto batch = select_compaction_batch(cg.logstor_segments(), segment_size, limits);
@@ -1704,7 +1888,7 @@ compaction_manager_impl::select_segments_for_compaction(logstor_group& cg, const
         return std::nullopt;
     }
 
-    auto candidate = compaction_candidate{
+    auto candidate = compaction_driver::candidate{
         .group = &cg,
         .segments = batch->segments
             | std::views::transform([this] (const segment_descriptor* desc) { return _sm.desc_to_segment_id(*desc); })
@@ -1719,10 +1903,9 @@ compaction_manager_impl::select_segments_for_compaction(logstor_group& cg, const
     return candidate;
 }
 
-future<std::vector<compaction_manager_impl::compaction_candidate>>
-compaction_manager_impl::find_top_compaction_candidates(size_t max_candidates) {
-    top_compaction_candidates<compaction_candidate> best_candidates(max_candidates);
-    const auto limits = automatic_batch_limits();
+future<compaction_driver::ranking>
+compaction_manager_impl::find_top_compaction_candidates(const compaction_batch_limits& limits, size_t max_candidates) {
+    top_compaction_candidates<compaction_driver::candidate> best_candidates(max_candidates);
 
     std::vector<logstor_group*> group_snapshot;
     group_snapshot.reserve(_groups.size());
@@ -1749,87 +1932,14 @@ compaction_manager_impl::find_top_compaction_candidates(size_t max_candidates) {
         }
     }
 
-    co_return std::move(best_candidates).take_sorted();
+    co_return compaction_driver::ranking{
+        .candidates = std::move(best_candidates).take_sorted(),
+    };
 }
 
-bool compaction_manager_impl::should_run_auto_compaction() noexcept {
-    const auto running = auto_compaction_active();
-
-    if (_admission_closed) {
-        if (running) {
-            logstor_logger.debug("Stopping auto compaction: admission closed");
-        }
-        return false;
-    }
-
-    const auto available_segments = _sm.available_segment_count(write_source::normal_write);
-    const auto watermarks = get_free_segment_watermarks();
-
-    if (!auto_compaction_wanted(running, available_segments, watermarks)) {
-        if (running) {
-            logstor_logger.debug("Stopping auto compaction: available segments {} is above high watermark {}",
-                    available_segments, watermarks.high);
-        }
-        return false;
-    }
-
-    if (!running) {
-        logstor_logger.debug("Starting auto compaction: available segments {} is below the free segment target {}",
-                available_segments, watermarks.low);
-    }
-    return true;
-}
-
-void compaction_manager_impl::schedule_auto_compaction() {
-    if (can_submit_compaction() && should_run_auto_compaction() && !auto_compaction_active()) {
-        _auto_compaction_completion = shared_future(run_auto_compaction().handle_exception([] (std::exception_ptr ep) {
-            logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
-        }));
-    }
-}
-
-future<> compaction_manager_impl::run_auto_compaction() {
-    // The parallelism is snapshotted for the whole run. It only changes with the free-segment
-    // target, which is a rarely moved live-updatable setting, and holding back the difference to
-    // the semaphore's static size for the duration of the run is what lets the drain below wait
-    // for exactly the jobs this run submitted.
-    const auto parallelism = _compaction_limits.auto_parallelism;
-    auto held_back = co_await get_units(_auto_compaction_sem, max_auto_compaction_parallelism - parallelism);
-
-    std::vector<compaction_candidate> pending;
-
-    while (can_submit_compaction() && should_run_auto_compaction()) {
-        auto units = co_await get_units(_auto_compaction_sem, 1);
-
-        if (!can_submit_compaction() || !should_run_auto_compaction()) {
-            break;
-        }
-
-        if (pending.empty()) {
-            pending = co_await find_top_compaction_candidates(parallelism);
-            if (pending.empty()) {
-                co_await seastar::sleep(std::chrono::milliseconds(100));
-                continue;
-            }
-        }
-
-        auto candidate = std::move(pending.back());
-        pending.pop_back();
-
-        auto it = _groups.find(candidate.group);
-        if (it == _groups.end() || it->second->running() || it->second->compaction_disabled_counter > 0) {
-            continue;
-        }
-
-        // The slot is released only once the job is done, which is what wakes this fiber up to
-        // submit the next candidate.
-        (void)submit_normal_compaction(*candidate.group, automatic_batch_limits()).handle_exception([] (std::exception_ptr ep) {
-            logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
-        }).finally([units = std::move(units)] {});
-    }
-
-    // Wait for submitted jobs to complete.
-    co_await get_units(_auto_compaction_sem, parallelism);
+bool compaction_manager_impl::can_start(const logstor_group* cg) const noexcept {
+    auto it = _groups.find(cg);
+    return it != _groups.end() && !it->second->running() && it->second->compaction_disabled_counter == 0;
 }
 
 // A single buffer used by compaction for rewriting records into new segments in a single compaction group.
