@@ -535,18 +535,21 @@ future<>  service_level_controller::notify_service_level_added(sstring name, ser
                 sl_logger.error("notify_service_level_added: exception occurred in one of the observers callbacks {:t}", std::current_exception());
             }
         });
-        auto result= _service_levels_db.emplace(name, sl_data);
-        if (result.second) {
-            auto& slot = _sl_lookup[sl_data.sg];
-            slot.first = &(result.first->first);
-            slot.second = &(result.first->second);
-            if (name == driver_service_level_name) {
-                _driver_scheduling_group = sl_data.sg;
-            }
-            register_metrics();
-        }
     });
 
+}
+
+void service_level_controller::make_service_level_available(sstring name, service_level sl_data) {
+    auto result= _service_levels_db.emplace(name, sl_data);
+    if (result.second) {
+        auto& slot = _sl_lookup[sl_data.sg];
+        slot.first = &(result.first->first);
+        slot.second = &(result.first->second);
+        if (name == driver_service_level_name) {
+            _driver_scheduling_group = sl_data.sg;
+        }
+        register_metrics();
+    }
 }
 
 future<> service_level_controller::notify_service_level_updated(sstring name, service_level_options slo) {
@@ -808,6 +811,9 @@ future<> service_level_controller::do_add_service_level(sstring name, service_le
                 }
             }).then([this, &sl, &name] () {
                 return container().invoke_on_all(&service_level_controller::notify_service_level_added, name, sl);
+            }).then([this, &sl, &name] () {
+                // A shard must not hand out the new scheduling group before every shard's subscribers are ready for it.
+                return container().invoke_on_all(&service_level_controller::make_service_level_available, name, sl);
             });
         });
     }
