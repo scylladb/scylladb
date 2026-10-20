@@ -8,11 +8,13 @@ from collections import defaultdict
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.rest_client import read_barrier
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 class TabletReplicas(NamedTuple):
     last_token: int
     replicas: list[tuple[HostID, int]]
+    # The tablet's raft group of a strongly consistent table, None for any other table.
+    raft_group_id: Optional[str] = None
 
 async def get_base_table(manager: ScyllaClusterManager, table_id):
     rows = await manager.get_cql().run_async(f"SELECT base_table FROM system.tablets where table_id = {table_id}")
@@ -36,11 +38,17 @@ async def get_all_tablet_replicas(manager: ScyllaClusterManager, server: ServerI
 
     table_id = await manager.get_table_or_view_id(keyspace_name, table_name)
     table_id = await get_base_table(manager, table_id)
-    rows = await manager.get_cql().run_async(f"SELECT last_token, replicas FROM system.tablets where "
+    # system.tablets has the raft_group_id column only with strongly consistent tables enabled,
+    # so it can't be named in the query.
+    rows = await manager.get_cql().run_async(f"SELECT * FROM system.tablets where "
                                        f"table_id = {table_id}", host=host)
+    def raft_group_id(row):
+        group_id = getattr(row, "raft_group_id", None)
+        return str(group_id) if group_id is not None else None
     return [TabletReplicas(
         last_token=x.last_token,
-        replicas=[(HostID(str(host)), shard) for (host, shard) in x.replicas]
+        replicas=[(HostID(str(host)), shard) for (host, shard) in x.replicas],
+        raft_group_id=raft_group_id(x),
     ) for x in rows]
 
 async def get_replica_count_by_host(manager: ScyllaClusterManager, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False) -> dict[HostID, int]:
