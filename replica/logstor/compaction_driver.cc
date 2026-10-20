@@ -61,7 +61,10 @@ double compaction_driver::shares_demand() const noexcept {
 
 void compaction_driver::refresh_free_segment_watermarks() noexcept {
     _free_segment_watermarks = make_free_segment_watermarks(_geometry.segment_count, _cfg.trigger_threshold());
-    _limits = make_compaction_limits(_free_segment_watermarks, _cfg.max_segments_per_compaction);
+    // The free-segment target is the space floor of this policy. With the trigger disabled it is 0,
+    // and make_compaction_limits() falls back to the smallest batch, which compaction submitted
+    // explicitly still needs.
+    _limits = make_compaction_limits(_free_segment_watermarks.low, _cfg.max_segments_per_compaction);
 
     logstor_logger.debug("Free segment target {} (stop at {}), compaction parallelism {}, up to {} segments per compaction",
             _free_segment_watermarks.low, _free_segment_watermarks.high,
