@@ -3411,6 +3411,47 @@ def test_describe_uda_with_frozen_collection(cql, test_keyspace, scylla_only):
                 cql.execute(adesc)
                 assert list(cql.execute(f'SELECT {test_keyspace}.{agg}(x) FROM {table}')) == [([5],)]
 
+# DESCRIBE FUNCTION usually prints the function's body as a dollar-quoted
+# literal, $$...$$. Such a literal has no escapes, so it can't hold a body
+# which contains "$$" or ends with "$". Check that the output of DESCRIBE
+# re-creates the same function also for such bodies. Printing them in $$...$$
+# produced a statement which failed to parse - or worse, ended the literal
+# early and executed the rest of the body as CQL. The first body also has
+# single quotes, which a single-quoted literal must escape.
+# Cassandra also prints these bodies in $$...$$, so this test fails there
+# (CASSANDRA-21783).
+# Reproduces #31982.
+@pytest.mark.parametrize('lua_body,java_body', [
+    ("return x .. '$$'", 'return x + "$$";'),
+    ('return x --$', 'return x; // $'),
+], ids=['contains_two_dollars', 'ends_with_dollar'])
+def test_describe_function_body_with_dollars(cql, test_keyspace, cassandra_bug, lua_body, java_body):
+    if is_scylla(cql):
+        body = 'LANGUAGE lua AS ' + "'" + lua_body.replace("'", "''") + "'"
+    else:
+        body = f"LANGUAGE java AS '{java_body}'"
+    with new_function(cql, test_keyspace, f'(x text) RETURNS NULL ON NULL INPUT RETURNS text {body}') as f:
+        result = list(cql.execute(f"SELECT {test_keyspace}.{f}('a') FROM system.local"))
+        desc = cql.execute(f'DESCRIBE FUNCTION {test_keyspace}.{f}').one().create_statement
+        cql.execute(f'DROP FUNCTION {test_keyspace}.{f}')
+        cql.execute(desc)
+        assert cql.execute(f'DESCRIBE FUNCTION {test_keyspace}.{f}').one().create_statement == desc
+        assert list(cql.execute(f"SELECT {test_keyspace}.{f}('a') FROM system.local")) == result
+
+# DESCRIBE FUNCTION must quote the function's argument names when needed -
+# here because one has an uppercase letter, and the other is a reserved word.
+# Otherwise, the output of DESCRIBE either fails to parse, or re-creates the
+# function with a different argument name.
+# Reproduces #31982.
+def test_describe_function_argument_names_quoting(cql, test_keyspace):
+    body = "LANGUAGE lua AS 'return Val + order'" if is_scylla(cql) else "LANGUAGE java AS 'return Val + order;'"
+    with new_function(cql, test_keyspace, f'("Val" int, "order" int) RETURNS NULL ON NULL INPUT RETURNS int {body}') as f:
+        desc = cql.execute(f'DESCRIBE FUNCTION {test_keyspace}.{f}').one().create_statement
+        cql.execute(f'DROP FUNCTION {test_keyspace}.{f}')
+        cql.execute(desc)
+        assert cql.execute(f'DESCRIBE FUNCTION {test_keyspace}.{f}').one().create_statement == desc
+        assert list(cql.execute(f'SELECT {test_keyspace}.{f}(1, 2) FROM system.local')) == [(3,)]
+
 # Test that the Scylla-only "tombstone_gc" option appears in the output of
 # "desc table". Reproduces issue #14390.
 # The test is marked scylla_only because Cassandra doesn't have this
