@@ -48,7 +48,10 @@ compaction_driver::compaction_driver(host& h, config cfg)
 void compaction_driver::start(disk_geometry geometry) {
     _geometry = geometry;
     refresh_free_segment_watermarks();
-    _limits = make_compaction_limits(_free_segment_watermarks);
+    // The free-segment target is the space floor of this policy. With the trigger disabled it is 0,
+    // and make_compaction_limits() falls back to the smallest batch, which compaction submitted
+    // explicitly still needs.
+    _limits = make_compaction_limits(_free_segment_watermarks.low);
 
     _held_back.adopt(consume_units(_job_slots, max_auto_compaction_parallelism - _limits.auto_parallelism));
 
