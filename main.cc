@@ -52,6 +52,7 @@
 #include "api/api_init.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
+#include "ent/encryption/encryption.hh"
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
 #include "service/tablet_allocator.hh"
@@ -798,6 +799,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     init("build-id", bpo::bool_switch(), "print build-id and exit");
     init("build-mode", bpo::bool_switch(), "print build mode and exit");
     init("list-tools", bpo::bool_switch(), "list included tools and exit");
+    init("list-key-providers", bpo::bool_switch(), "list encryption key providers built into this binary and exit");
 
     bpo::options_description deprecated_options("Deprecated options - ignored");
     auto deprecated_options_easy_init = deprecated_options.add_options();
@@ -3076,7 +3078,8 @@ int main(int ac, char** av) {
         ("version", bpo::bool_switch(), "print version number and exit")
         ("build-id", bpo::bool_switch(), "print build-id and exit")
         ("build-mode", bpo::bool_switch(), "print build mode and exit")
-        ("list-tools", bpo::bool_switch(), "list included tools and exit");
+        ("list-tools", bpo::bool_switch(), "list included tools and exit")
+        ("list-key-providers", bpo::bool_switch(), "list encryption key providers built into this binary and exit");
     auto preinit_parsed_opts = bpo::command_line_parser(ac, av).options(preinit_description).allow_unregistered().run();
     bpo::store(preinit_parsed_opts, preinit_vm);
     if (preinit_vm["version"].as<bool>()) {
@@ -3094,6 +3097,12 @@ int main(int ac, char** av) {
     if (preinit_vm["list-tools"].as<bool>()) {
         for (auto& tool : tools) {
             fmt::print("{} - {}\n", tool.name, tool.desc);
+        }
+        return 0;
+    }
+    if (preinit_vm["list-key-providers"].as<bool>()) {
+        for (const auto& p : encryption::available_key_providers()) {
+            fmt::print("{}\n", p);
         }
         return 0;
     }
