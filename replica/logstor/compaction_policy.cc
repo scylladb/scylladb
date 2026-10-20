@@ -14,33 +14,6 @@
 
 namespace replica::logstor {
 
-free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, double target_fraction) noexcept {
-    // target_fraction is a live-updatable config value with no range check at the config layer, so
-    // it may arrive negative, NaN or above 1.0; treat anything outside (0, 1] as disabling the trigger.
-    if (!std::isfinite(target_fraction) || target_fraction <= 0) {
-        return {0, 0};
-    }
-
-    const auto fraction = std::min(target_fraction, 1.0);
-    const auto by_fraction = static_cast<uint64_t>(std::ceil(segment_count * fraction));
-    // The target has to cover what compaction holds while it works: a job takes up to a batch of
-    // segments before it gives any back (see make_compaction_limits()), and the segment pool holds
-    // back segments that normal writes cannot take, so a target of less than two batches leaves the
-    // write path nothing to make progress with. The floor is itself capped, so that it cannot claim
-    // an unreasonable share of a small disk.
-    const auto min_target = std::min<uint64_t>(2 * min_segments_per_compaction, std::max<uint64_t>(1, segment_count / 8));
-    const auto low = std::min(segment_count, std::max(by_fraction, min_target));
-    // Relative hysteresis, so that the band does not grow out of proportion as the target shrinks.
-    // Capped at segment_count so a high fraction can't push `high` out of reach of available_segments,
-    // which would leave should_run_auto_compaction() unable to ever stop.
-    const auto high = std::min(segment_count, low + std::max<uint64_t>(1, low / 4));
-    return {low, high};
-}
-
-bool auto_compaction_wanted(bool running, uint64_t available_segments, free_segment_watermarks watermarks) noexcept {
-    return available_segments < (running ? watermarks.high : watermarks.low);
-}
-
 uint64_t compaction_space_floor(uint64_t segment_count) noexcept {
     // At least two batches, so that a job can hold one batch while the write path has the other.
     // The minimum has its own limit, so that the space floor is not most of a small disk.
@@ -245,21 +218,6 @@ std::optional<compaction_batch> select_compaction_batch(const segment_set& segme
         .segments = std::move(candidates),
         .score = prefix_scores[selected_count - 1],
     };
-}
-
-float compaction_shares_pressure(uint64_t available_segments, free_segment_watermarks watermarks) noexcept {
-    // Also covers the trigger being disabled, where both watermarks are zero: with no free-segment
-    // target there is no space-driven demand for shares.
-    if (available_segments >= watermarks.high) {
-        return 0.0f;
-    }
-    // Reaching the maximum shares while half the target is still in hand keeps the equilibrium of a
-    // saturated controller away from the point where normal writes stall.
-    const auto saturation_point = watermarks.low / 2;
-    if (available_segments <= saturation_point) {
-        return 1.0f;
-    }
-    return float(watermarks.high - available_segments) / float(watermarks.high - saturation_point);
 }
 
 } // namespace replica::logstor
