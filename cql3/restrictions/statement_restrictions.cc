@@ -3143,6 +3143,23 @@ void where_clause_analysis::validate_primary_key(const query_options& options) c
     validate_primary_key_restrictions(options, clustering_prefix_restrictions | std::views::transform(&predicate::filter));
 }
 
+std::optional<size_t> where_clause_analysis::find_unset_bind_variable(const query_options& options) const {
+    // Unset values are rare, so check for one before searching the expressions.
+    auto n = options.get_values_count();
+    if (std::ranges::none_of(std::views::iota(size_t(0), n), [&] (size_t i) { return options.is_unset(i); })) {
+        return std::nullopt;
+    }
+    for (const auto& factor : where_factors) {
+        auto bv = find_in_expression<bind_variable>(factor, [&] (const bind_variable& bv) {
+            return options.is_unset(bv.bind_index);
+        });
+        if (bv) {
+            return bv->bind_index;
+        }
+    }
+    return std::nullopt;
+}
+
 
 shared_ptr<const select_restrictions>
 analyze_select_restrictions(

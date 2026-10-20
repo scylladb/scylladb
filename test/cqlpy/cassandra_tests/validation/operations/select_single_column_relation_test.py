@@ -701,7 +701,6 @@ def testWithUnsetValues(cql, test_keyspace):
 # older Cassandra and on Scylla.
 # Reproduces SCYLLADB-5213 (UNSET_VALUE not detected when no row reaches the
 # filter - here the table is empty)
-@pytest.mark.xfail(reason="SCYLLADB-5213")
 def testWithUnsetValuesWithNotIn(cql, test_keyspace, new_to_cassandra_6):
     with create_table(cql, test_keyspace, "(k int, i int, j int, s text, PRIMARY KEY (k,i,j))") as table:
         execute(cql, table, "CREATE INDEX ON %s (s)")
@@ -721,7 +720,6 @@ def testWithUnsetValuesWithNotIn(cql, test_keyspace, new_to_cassandra_6):
 # a value to exclude, and can't be used to route the request.
 # Reproduces SCYLLADB-5213 (UNSET_VALUE not detected when no row reaches the
 # filter - here the table is empty)
-@pytest.mark.xfail(reason="SCYLLADB-5213")
 def testWithUnsetValuesWithNotInPartitionKey(cql, test_keyspace, new_to_cassandra_6, cassandra_bug):
     with create_table(cql, test_keyspace, "(k int, i int, j int, s text, PRIMARY KEY (k,i,j))") as table:
         execute(cql, table, "CREATE INDEX ON %s (s)")

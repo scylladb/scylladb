@@ -1689,7 +1689,6 @@ def testAllowFilteringOnPartitionAndClusteringKey(cql, test_keyspace):
                                     [21, 12, 26, 34, 35])
 
 # Reproduces SCYLLADB-5213 (UNSET_VALUE not detected when no row reaches the filter)
-@pytest.mark.xfail(reason="SCYLLADB-5213")
 def testAllowFilteringOnPartitionKeyWithoutIndicesWithCollections(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c list<int>, d set<int>, e map<int, int>, PRIMARY KEY ((a, b)))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, [1, 6], {2, 12}, {1: 6})")
@@ -1767,8 +1766,8 @@ def testAllowFilteringOnPartitionKeyWithoutIndicesWithCollections(cql, test_keys
         #                     "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e[1] = null ALLOW FILTERING")
 
         # Checks filtering with unset
-        # Reproduces SCYLLADB-5213: "b < 1" matches no row, so Scylla doesn't
-        # notice the UNSET_VALUE in the filter.
+        # Reproduces SCYLLADB-5213: "b < 1" matches no row, so no row reaches
+        # the filter with the UNSET_VALUE.
         assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND c CONTAINS ? ALLOW FILTERING",
                              UNSET_VALUE)
@@ -1795,7 +1794,7 @@ def testAllowFilteringOnPartitionKeyWithoutIndicesWithCollections(cql, test_keys
 # running on older Cassandra and on Scylla.
 # Reproduces #12911 (NOT CONTAINS, NOT CONTAINS KEY, map element !=)
 # and SCYLLADB-5213 (UNSET_VALUE not detected when no row reaches the filter)
-@pytest.mark.xfail(reason="#12911, SCYLLADB-5213")
+@pytest.mark.xfail(reason="#12911")
 def testAllowFilteringOnPartitionKeyWithoutIndicesWithCollectionsWithNot(cql, test_keyspace, new_to_cassandra_6):
     with create_table(cql, test_keyspace, "(a int, b int, c list<int>, d set<int>, e map<int, int>, PRIMARY KEY ((a, b)))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, [1, 6], {2, 12}, {1: 6})")
