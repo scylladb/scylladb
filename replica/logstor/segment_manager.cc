@@ -391,6 +391,7 @@ public:
     future<> stop();
 
     const stats& get_stats() const noexcept { return _stats; }
+    const compaction_driver& driver() const noexcept { return _driver; }
 
     future<> flush_separator_buffer(separator_buffer&, logstor_group&) override;
     future<owned_write_buffer> allocate_separator_buffer() override;
@@ -856,6 +857,7 @@ private:
 future<> compaction_manager_impl::start() {
     _driver.start({
         .segment_count = _sm._configured_max_segments,
+        .segment_size = _sm.get_segment_size(),
     });
     co_return;
 }
@@ -1042,6 +1044,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                         sm::description("Counts number of bytes read by compaction.")),
         sm::make_counter("compaction_failures", _compaction_mgr.get_stats().failures,
                        sm::description("Counts number of logstor compaction failures.")),
+        sm::make_counter("compaction_batches_refused", _compaction_mgr.driver().get_stats().batches_refused,
+                       sm::description("Counts the compaction batches that the marginal admission gate refused, because they reclaim much less per byte copied than the best batch of the shard.")),
         sm::make_counter("separator_bytes_written", _stats.bytes_written[static_cast<size_t>(write_source::separator)],
                        sm::description("Counts number of bytes written to the separator.")),
         sm::make_counter("separator_data_bytes_written", _stats.data_bytes_written[static_cast<size_t>(write_source::separator)],

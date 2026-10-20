@@ -12,6 +12,7 @@
 #include "utils/updateable_value.hh"
 #include <cstddef>
 #include <cstdint>
+#include <list>
 #include <optional>
 #include <vector>
 #include <seastar/core/future.hh>
@@ -70,6 +71,11 @@ public:
     // with start().
     struct disk_geometry {
         uint64_t segment_count;
+        uint64_t segment_size;
+    };
+
+    struct stats {
+        uint64_t batches_refused{0};
     };
 
     compaction_driver(host&, config);
@@ -90,12 +96,14 @@ public:
     compaction_batch_limits explicit_batch_limits() const noexcept;
 
     double shares_demand() const noexcept;
+    const stats& get_stats() const noexcept { return _stats; }
 
 private:
     host& _host;
     config _cfg;
     disk_geometry _geometry{};
     bool _stopping{false};
+    stats _stats;
     // Registered in start(), because the watermarks need the segment count.
     std::optional<utils::observer<double>> _trigger_threshold_observer;
 
@@ -108,6 +116,8 @@ private:
     // Sized for the static maximum; a run holds back the difference between it and the current
     // limit for its duration, see run().
     seastar::semaphore _sem{max_auto_compaction_parallelism};
+    // The scores of the automatic jobs in flight, for the marginal admission gate.
+    std::list<compaction_candidate_score> _jobs_in_flight;
 
     bool active() const noexcept {
         return !_completion.available();
@@ -120,6 +130,9 @@ private:
     void refresh_free_segment_watermarks() noexcept;
     bool should_run() noexcept;
     future<> run();
+    // Whether the marginal admission gate refuses `c`, a batch that would run next to the jobs in
+    // flight, against the best batch of its ranking. Counts and logs a refusal.
+    bool refuse_marginal(const candidate& c, const compaction_candidate_score& admission_bar);
     // Submits the job of `c`, which holds `units` of the driver's semaphore until it finishes.
     void start_job(candidate c, semaphore_units<> units);
 };

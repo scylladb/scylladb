@@ -6,8 +6,10 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #include "replica/logstor/compaction_driver.hh"
+#include "replica/logstor/compaction.hh"
 #include <chrono>
 #include <exception>
+#include <optional>
 #include <utility>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -111,6 +113,9 @@ future<> compaction_driver::run() {
     auto held_back = co_await get_units(_sem, max_auto_compaction_parallelism - parallelism);
 
     std::vector<candidate> pending;
+    // What the marginal-admission gate below measures a candidate against: the best batch of the
+    // ranking that produced `pending` that copies data.
+    std::optional<compaction_candidate_score> admission_bar;
 
     while (_host.can_submit_compaction() && should_run()) {
         auto units = co_await get_units(_sem, 1);
@@ -126,13 +131,40 @@ future<> compaction_driver::run() {
                 co_await seastar::sleep(std::chrono::milliseconds(100));
                 continue;
             }
+            admission_bar.reset();
         }
 
         auto c = std::move(pending.back());
         pending.pop_back();
 
+        // The candidates come best first, so the first one that copies data is the best batch that
+        // copies data. A batch of dead segments has an infinite efficiency, so it does not set the
+        // bar: no batch that copies data can reach a fraction of it.
+        if (!admission_bar && c.score.live_bytes != 0) {
+            admission_bar = c.score;
+        }
+
         if (!_host.can_start(c.group)) {
             continue;
+        }
+
+        if (!_jobs_in_flight.empty()) {
+            // A job in flight that reclaims better than this ranking's best also sets the bar. The
+            // ranking skips a group that is compacting, so without it, a ranking made while the
+            // best group compacts would admit the next best group however poor it is.
+            auto bar = admission_bar;
+            for (const auto& job : _jobs_in_flight) {
+                if (job.live_bytes != 0 && (!bar || *bar < job)) {
+                    bar = job;
+                }
+            }
+            if (bar && refuse_marginal(c, *bar)) {
+                // The ranking is best first, so no later candidate passes either, and the bar does
+                // not change until a job ends. Wait for one job to end, and then rank again.
+                pending.clear();
+                auto job_ended = co_await get_units(_sem, _sem.available_units() + 1);
+                continue;
+            }
         }
 
         start_job(std::move(c), std::move(units));
@@ -142,12 +174,26 @@ future<> compaction_driver::run() {
     co_await get_units(_sem, parallelism);
 }
 
+bool compaction_driver::refuse_marginal(const candidate& c, const compaction_candidate_score& admission_bar) {
+    // A parallel job can take only a group that is not compacting. When one tablet holds the
+    // garbage of the shard, the other jobs rewrite groups with almost no garbage, so a parallel job
+    // must reclaim almost as well as the best batch.
+    if (c.score.efficiency_at_least(admission_bar, compaction_marginal_admission_ratio)) {
+        return false;
+    }
+    ++_stats.batches_refused;
+    return true;
+}
+
 void compaction_driver::start_job(candidate c, semaphore_units<> units) {
+    auto job = _jobs_in_flight.insert(_jobs_in_flight.end(), c.score);
     // The slot is released only once the job is done, which is what wakes this fiber up to
     // submit the next candidate.
     (void)_host.submit_normal_compaction(*c.group, automatic_batch_limits()).handle_exception([] (std::exception_ptr ep) {
         logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
-    }).finally([units = std::move(units)] {});
+    }).finally([this, job, units = std::move(units)] {
+        _jobs_in_flight.erase(job);
+    });
 }
 
 } // namespace replica::logstor
