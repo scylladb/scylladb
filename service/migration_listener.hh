@@ -148,6 +148,8 @@ public:
     future<> update_column_family(schema_ptr cfm, bool columns_changed);
     future<> update_user_type(user_type type);
     future<> update_view(view_ptr view, bool columns_changed);
+    future<> update_function(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types);
+    future<> update_aggregate(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types);
     future<> drop_keyspace(const sstring& ks_name);
     future<> drop_column_family(schema_ptr cfm);
     future<> drop_user_type(user_type type);

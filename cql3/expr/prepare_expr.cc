@@ -1463,6 +1463,7 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
         return std::nullopt;
     }
     auto fun = std::move(*fun_opt);
+    functions::used_functions_recorder::record_used_function(*fun);
 
     // Functions.get() will complain if no function "name" type check with the provided arguments.
     // Still validate the return type: accepted if value-compatible with the receiver or

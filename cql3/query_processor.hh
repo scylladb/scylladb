@@ -668,6 +668,7 @@ public:
 
 private:
     void remove_invalid_prepared_statements(sstring ks_name, std::optional<sstring> cf_name);
+    void remove_prepared_statements_using_function(const sstring& ks_name, const sstring& signature);
 
     bool should_invalidate(
             sstring ks_name,

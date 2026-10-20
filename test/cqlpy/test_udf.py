@@ -196,7 +196,6 @@ def test_udf_returning_udt_after_alter_type(cql, test_keyspace, has_java_udf):
 # Test that a prepared statement calling a function uses the new version of
 # the function after CREATE OR REPLACE FUNCTION replaced it.
 # Reproduces SCYLLADB-5272 (the prepared statement kept using the old version).
-@pytest.mark.xfail(reason='SCYLLADB-5272')
 def test_udf_prepared_after_replace(cql, test_keyspace, has_java_udf):
     def body(n):
         return f"LANGUAGE java AS 'return {n};'" if has_java_udf else f"LANGUAGE lua AS 'return {n}'"
@@ -212,7 +211,6 @@ def test_udf_prepared_after_replace(cql, test_keyspace, has_java_udf):
 # was dropped.
 # Reproduces SCYLLADB-5272 (the prepared statement kept using the dropped
 # function).
-@pytest.mark.xfail(reason='SCYLLADB-5272')
 def test_udf_prepared_after_drop(cql, test_keyspace, has_java_udf):
     body = "LANGUAGE java AS 'return 10;'" if has_java_udf else "LANGUAGE lua AS 'return 10'"
     with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
@@ -234,7 +232,6 @@ def test_udf_prepared_after_drop(cql, test_keyspace, has_java_udf):
 # type doesn't invalidate the statement because of the table.
 # Reproduces SCYLLADB-5272 (the prepared statement kept using the old
 # version of the function, with the old version of the type).
-@pytest.mark.xfail(reason='SCYLLADB-5272')
 def test_udf_prepared_after_alter_type(cql, test_keyspace, has_java_udf):
     if has_java_udf:
         body = "LANGUAGE java AS 'UDTValue v = udfContext.newReturnUDTValue(); v.setInt(0, x); return v;'"
