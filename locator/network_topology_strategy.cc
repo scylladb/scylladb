@@ -636,6 +636,12 @@ const network_topology_strategy& as_network_topology_strategy(const effective_re
 
 sstring network_topology_strategy::sanity_check_read_replicas(const effective_replication_map& erm,
                                                               const host_id_vector_replica_set& read_replicas) const {
+    // A tablet can have more replicas in a datacenter than the schema lists while an RF change
+    // migrates it, as in a numeric decrease, which switches the schema first. The tablet's own
+    // replica set is the only per-tablet bound, so there is nothing to check.
+    if (uses_tablets()) {
+        return {};
+    }
     const auto& topology = erm.get_topology();
 
     struct rf_node_count {
