@@ -934,6 +934,10 @@ struct separator_task {
     utils::phased_barrier::operation write_op;
 };
 
+// The largest read buffer of a segment scan. It is the largest segment size today
+// (segment_descriptor_hist_options), so a scan reads a segment in one buffer.
+static constexpr size_t max_scan_buffer_size = 128 * 1024;
+
 class segment_manager_impl {
 
     struct stats {
@@ -1920,7 +1924,7 @@ template <typename Func>
     requires std::same_as<std::invoke_result_t<Func&, segment_scanner&>, future<>>
 future<> segment_manager_impl::scan_segment(log_segment_id segment_id, Func fn) {
     auto in = co_await create_segment_input_stream(segment_id, seastar::file_input_stream_options {
-        .buffer_size = std::max<size_t>(_cfg.segment_size, 128 * 1024),
+        .buffer_size = std::min<size_t>(_cfg.segment_size, max_scan_buffer_size),
         .read_ahead = 0,
     });
     segment_scanner scanner(in, segment_id, _cfg.segment_size);
