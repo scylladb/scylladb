@@ -31,7 +31,7 @@ The `segment_manager` handles the allocation and management of fixed-size segmen
 
 The data in the segments consists of records of type `log_record`. Each record contains the value for some key as an encoded partition (`record_value`) and additional metadata. On disk a record is stored as a **record frame**, described under [Record Frames](#record-frames) below, which is also the unit the index points at.
 
-The `segment_manager` receives new writes via a `write_buffer`, and appends each buffer to the active segment as a 4k-block-aligned chunk (see [Segments](#segments)).
+The `segment_manager` receives new writes via a `write_buffer`, and appends each buffer to the active segment as a 4k-block-aligned chunk (see [Chunks](#chunks)).
 
 #### Write Buffer
 
@@ -188,84 +188,70 @@ what a run has to get right are in the comment at the top of
 
 ## On-Disk Format
 
+This section describes the parts of the format and the purpose of each part. See these files for
+the exact layout, the field types and the encodings:
+
+- [replica/logstor/ondisk.hh](../../replica/logstor/ondisk.hh) for the headers and the record
+  frame.
+- the `raw_write_buffer` comment in
+  [replica/logstor/write_buffer.hh](../../replica/logstor/write_buffer.hh) for the layout of a
+  chunk.
+
 ### Files
 
-Segments are stored in large pre-allocated files on disk. Each file holds a fixed number of segments determined by the `file_size / segment_size` ratio. File names follow the pattern:
-
-```
-ls_{shard_id}-{file_id}-Data.db
-```
-
-Files are pre-formatted (zero-filled) before use.
+Each shard keeps its segments in large files (default 32MB), named
+`ls_{shard_id}-{file_id}-Data.db`. A file holds a fixed number of segments, and logstor
+pre-formats the file (fills it with zeros) before use.
 
 ### Segments
 
-Each segment is a contiguous fixed-size region within a file (default 128KB). A segment is identified by a `log_segment_id` (a 32-bit integer index), which maps to a file and offset within that file.
+A segment is a fixed-size region of a file (default 128KB), and it is the unit of space that
+logstor allocates, compacts and frees. A `log_segment_id` identifies a segment, and the id is an
+index that maps to a file and to an offset in that file. A segment holds one or more chunks, and it
+has one of two kinds:
 
-A segment contains one or more **chunks** written sequentially. A chunk is the unit written to a segment: it starts at a 4KB block boundary and is padded to a multiple of 4KB. A chunk is built in memory by a write buffer (see [Write Buffer](#write-buffer)); "buffer" always refers to that memory, and "chunk" to what it writes to disk. A segment has one of two kinds:
+- A **mixed** segment holds the records of user writes, from any table and compaction group. Each
+  flushed write buffer appends one chunk to the segment.
+- A **full** segment holds the records that compaction or the separator writes, from one table and
+  token range, in a single chunk.
 
-- **mixed**: written by normal user writes; may contain records from multiple tables and compaction groups. Contains one or more chunks, appended one at a time.
-- **full**: written by compaction or the separator; contains records from a single table and token range. Contains exactly one chunk.
+### Chunks
 
-### Chunk Layout
+A chunk is the unit that logstor writes to a segment. A write buffer builds the chunk in memory,
+and the chunk starts at a 4KB block boundary and is padded to a multiple of 4KB. A chunk holds
+these parts, in this order:
 
-A chunk within a segment has the following layout:
+- the **chunk header**, which identifies a valid chunk of a given format version, gives the segment
+  kind and the sequence number of the segment, and holds the sizes and the CRCs of the parts that
+  follow. Recovery uses the sequence number to order segments.
+- the **segment header**, in a full segment only, which gives the table and the token range of the
+  records.
+- the **record frames**, one after the other.
+- zero padding to the block boundary.
 
-```
-chunk_header
-(segment_header)?       -- present only when kind == full
-record_frame_1
-record_frame_2
-...
-record_frame_n
-zero_padding            -- to align the entire chunk to block_alignment (4096 bytes)
-```
+The record frames are the body of the chunk. The body CRC lets a reader find a chunk whose header
+is durable but whose body was only partly written.
 
-chunk_header, segment_header, and record frames are aligned by `record_alignment` (8 bytes).
+### Record Frames
 
-All integer fields in the structures below are serialized little-endian, including the two
-64-bit halves of a UUID.
+A record frame holds one record and has these parts, in this order:
 
-#### Chunk Header
+- the **frame header**, which gives the sizes of the parts that follow.
+- the **record header**, which holds the token, the timestamp, the table and the partition key.
+- the **record value**, which is the encoded partition. The value also holds the schema version
+  that the record was written under and the column mapping of that version, so that logstor can
+  decode the record after an `ALTER TABLE`.
+- zero padding to a multiple of `ondisk::record_alignment`.
 
-A serialized form of `ondisk::chunk_header`.
+The value of a record is encoded and decoded by `encode_record_value()` and `decode_record_value()`
+in [replica/logstor/record_value.hh](../../replica/logstor/record_value.hh). All other code copies
+the value as bytes, for example compaction, the separator and segment streaming.
 
-| Offset | Size | Field       | Description |
-|--------|------|-------------|-------------|
-| 0      | 4    | `magic`     | `0x4C475342`. Used to detect valid chunks during recovery. |
-| 4      | 1    | `kind`      | Segment kind: `0` = mixed, `1` = full. |
-| 5      | 1    | `version`   | Version of the chunk format. |
-| 6      | 2    | `reserved`  | Reserved for future use. Currently written as zero and included in the CRC. |
-| 8      | 8    | `segment_seq` | Monotonic segment sequence number used during recovery and segment ordering checks. |
-| 16     | 4    | `records_size` | Size in bytes of the record frames following the header(s), their padding included. |
-| 20     | 4    | `body_crc`  | CRC32 of the chunk's body: the record frames that follow the headers, `records_size` bytes. |
-| 24     | 4    | `reserved2` | Reserved for future use. Currently written as zero and included in the CRC. |
-| 28     | 4    | `crc`       | CRC32 of all preceding chunk header fields and, in a full segment, of the segment header that follows. Used for validating the headers. |
-
-The chunk header is 32 bytes long, which keeps it aligned to `record_alignment` (8 bytes).
-
-#### Segment Header (full segments only)
-
-Immediately follows the chunk header when `kind == full`. The chunk header's `crc` covers it.
-
-A serialized form of `ondisk::segment_header`.
-
-| Offset | Size | Field         | Description |
-|--------|------|---------------|-------------|
-| 32     | 16   | `table`       | UUID of the table this segment belongs to. |
-| 48     | 8    | `first_token` | Minimum token of all records in the segment (raw token number). |
-| 56     | 8    | `last_token`  | Maximum token of all records in the segment (raw token number). |
-
-#### Record Frames
-
-Each record within the chunk is stored as a record frame:
-
-```
-record_frame_header  (8 bytes)
-record_header        (32 + key_size bytes)
-record_value         (value_size bytes)
-zero_padding         -- to align to record_alignment (8 bytes)
-```
+For each record, the index holds a `record_location`, which points at the start of the record frame
+and gives the frame size, so one read at that location returns the whole record. The position of a
+chunk is a `segment_position`, which holds the segment and the offset but no size. To get the
+location of a record, logstor adds the offset of the record frame in the chunk to the
+`segment_position` of the chunk.
 
 The sizes of the parts of a frame are named consistently throughout the code, since several of
 them are otherwise easy to confuse:
@@ -278,44 +264,3 @@ them are otherwise easy to confuse:
 | `frame_size`   | `record_frame_header_size + record_size`, the frame without its padding. This is what `record_location::size` holds. |
 | `records_size` | All the frames of one chunk, their padding included. Stored in the chunk header. |
 | `record_bytes` | The frame sizes of a set of records summed, their padding excluded. What a `segment_descriptor` and the `live_record_bytes` metric count. |
-
-**Record Frame Header** (`ondisk::record_frame_header`):
-
-| Offset | Size | Field       | Description |
-|--------|------|-------------|-------------|
-| 0      | 4    | `key_size`  | Size in bytes of the partition key at the end of the `record_header` that follows. |
-| 4      | 4    | `value_size` | Size in bytes of the `record_value` that follows the `record_header`. |
-
-**Record Header** (`record_header`):
-
-Written by `ondisk::write_record_header()`. The fixed fields come first, at constant offsets, as `ondisk::record_header_fixed`, and the partition key is the only variable part.
-
-| Offset | Size       | Field       | Description |
-|--------|------------|-------------|-------------|
-| 0      | 8          | `token`     | Raw token number of the partition key. |
-| 8      | 8          | `timestamp` | `api::timestamp_type` — timestamp used for conflict resolution. |
-| 16     | 16         | `table`     | `table_id` (UUID) — the table this record belongs to, written as its most significant and then its least significant 64-bit half. |
-| 32     | `key_size` | `key`       | The partition key in its internal representation (`partition_key::representation()`). |
-
-**Record Value** (`record_value`):
-
-The `value_size` bytes immediately following the record header are the encoded partition. They are opaque to everything but `encode_record_value()` and `decode_record_value()` in `replica/logstor/record_value.hh`: compaction, the separator and segment streaming copy a value as it is.
-
-The encoding is written and read in `replica/logstor/record_value.cc`, behind `encode_record_value()` and `decode_record_value()`. It is a `canonical_mutation` stripped of what the record header already carries, the table id and the partition key, with the remaining parts each written by the serializer `canonical_mutation` uses for it:
-
-| Offset | Size       | Field                | Description |
-|--------|------------|----------------------|-------------|
-| 0      | 16         | `schema_version`     | The version of the schema the record was written under, as its most significant and then its least significant 64-bit half. |
-| 16     | variable   | `column_mapping`     | The columns of that schema version, IDL-serialized. A read under the same schema version steps over it; a read under another version uses it to map the record's columns onto the schema's, so a record stays readable after an `ALTER TABLE`. It is stored in the record because the schema history in the system tables keeps superseded versions only for a while. |
-|        | variable   | `mutation_partition` | The partition, IDL-serialized as `mutation_partition_serializer` writes it. |
-
-The value has no frame or size of its own: `value_size` gives its size.
-
-**Record Location** (`record_location`):
-
-The `record_location` stored in the index for each record points to the start of the `record_frame_header`:
-- `segment`: the `log_segment_id` holding the frame.
-- `offset`: byte offset from the start of the segment to the `record_frame_header`.
-- `size`: the `frame_size`, that is `record_frame_header` + `record_header` + `record_value`, without the padding that follows the frame. Reading exactly these bytes at this offset yields the whole record, which is what `segment_manager::read()` does.
-
-Where a chunk itself landed is a `segment_position` instead: the segment and the offset, with no size. Each record location is derived from it by adding the record's frame offset within the chunk. The two are separate types so that a chunk position cannot be read as a record location.
