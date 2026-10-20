@@ -524,6 +524,12 @@ std::optional<service_level_options> service_level_controller::find_cached_effec
 
 future<>  service_level_controller::notify_service_level_added(sstring name, service_level sl_data) {
     return seastar::async( [this, name, sl_data] {
+        utils::get_local_injector().inject("service_level_controller_pause_service_level_add", [&name] (auto& handler) -> future<> {
+            if (handler.get("service_level") == name && handler.template get<unsigned>("shard") == this_shard_id()) {
+                sl_logger.info("notify_service_level_added: pausing for service level {}", name);
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5));
+            }
+        }).get();
         service_level_info sl_info = {
             .name = name,
             .sg = sl_data.sg,
