@@ -160,3 +160,29 @@ SEASTAR_TEST_CASE(test_decay) {
     BOOST_REQUIRE_EQUAL(buffer.reallocs(), 3);
     BOOST_REQUIRE_EQUAL(buffer.size(), 0);
 }
+
+// A buffer built with held_across_preemption::yes can be held across
+// preemption points, as a parse that yields does (SCYLLADB-219). Decay must
+// leave the buffer and its content alone meanwhile, and shrink it once the
+// guard is gone.
+SEASTAR_TEST_CASE(test_decay_while_held) {
+    using namespace std::chrono_literals;
+    utils::reusable_buffer<manual_clock> buffer(1s, utils::held_across_preemption::yes);
+    auto advance_clock = [] (manual_clock::duration d) {
+        manual_clock::advance(d);
+        return yield();
+    };
+    {
+        auto bufguard = utils::reusable_buffer_guard(buffer);
+        auto view = bufguard.get_temporary_buffer(1'000'000);
+        std::ranges::fill(view, 42);
+        co_await advance_clock(1000ms);
+        co_await advance_clock(1000ms);
+        BOOST_REQUIRE_EQUAL(buffer.reallocs(), 1);
+        BOOST_REQUIRE(std::ranges::all_of(view, [] (auto b) { return b == 42; }));
+    }
+    co_await advance_clock(1000ms);
+    co_await advance_clock(1000ms);
+    BOOST_REQUIRE_EQUAL(buffer.reallocs(), 2);
+    BOOST_REQUIRE_EQUAL(buffer.size(), 0);
+}
