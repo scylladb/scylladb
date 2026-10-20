@@ -170,18 +170,37 @@ static size_t select_compaction_prefix(std::span<const compaction_candidate_scor
 
 std::optional<compaction_batch> select_compaction_batch(const segment_set& segments, uint64_t segment_size,
         const compaction_batch_limits& limits) {
-    const auto batch_cap = limits.batch_cap;
     std::vector<const segment_descriptor*> candidates;
     // prefix_scores[i] scores the batch made of candidates[0..i].
     std::vector<compaction_candidate_score> prefix_scores;
-    candidates.reserve(batch_cap);
-    prefix_scores.reserve(batch_cap);
+    candidates.reserve(limits.batch_cap);
+    prefix_scores.reserve(limits.batch_cap);
+
+    // A segment is a candidate when its utilization is at most the threshold, that is when it has
+    // at least `min_free_space` free. The histogram is ordered only by bucket, so a segment over
+    // the threshold stops the selection only after the buckets pass the threshold. In the bucket
+    // that the threshold cuts, each segment is checked.
+    const auto max_record_bytes = static_cast<uint64_t>(std::floor(std::clamp(limits.max_utilization, 0.0, 1.0) * double(segment_size)));
+    auto min_free_space = segment_size - max_record_bytes;
+    // The lowest bucket holds every segment with less than `min_size` free, in no order, so a
+    // threshold inside it would check each nearly full segment of the group. Such a threshold
+    // applies only near the space floor, where the curve is about to reach 1, so it applies as 1.
+    if (min_free_space < segment_descriptor_hist_options.min_size) {
+        min_free_space = 0;
+    }
+    const auto threshold_bucket = min_free_space > 0 ? segment_descriptor_hist_options.bucket_of(min_free_space) : 0;
 
     uint64_t accum_record_bytes = 0;
     uint64_t accum_record_count = 0;
     for (const auto& desc : segments.by_free_space()) {
-        if (candidates.size() >= batch_cap) {
+        if (candidates.size() >= limits.batch_cap) {
             break;
+        }
+        if (min_free_space > 0 && desc.free_space < min_free_space) {
+            if (segment_descriptor_hist_options.bucket_of(desc.free_space) < threshold_bucket) {
+                break;
+            }
+            continue;
         }
         candidates.push_back(&desc);
 
@@ -194,6 +213,23 @@ std::optional<compaction_batch> select_compaction_batch(const segment_set& segme
             .live_bytes = accum_record_bytes,
         };
         prefix_scores.push_back(score);
+    }
+
+    // Too few candidates for a job. This is the answer for the whole group, because the group has
+    // no other segment under the threshold. Dead segments do not wait for more candidates, because
+    // a job reads and writes nothing for them.
+    if (candidates.size() < limits.min_batch) {
+        std::erase_if(candidates, [segment_size] (const segment_descriptor* desc) {
+            return desc->record_bytes(segment_size) != 0;
+        });
+        if (candidates.empty()) {
+            return std::nullopt;
+        }
+        const auto score = compaction_candidate_score{.n_in = candidates.size(), .n_out = 0, .live_bytes = 0};
+        return compaction_batch{
+            .segments = std::move(candidates),
+            .score = score,
+        };
     }
 
     const auto selected_count = select_compaction_prefix(prefix_scores, limits.extension_tolerance);

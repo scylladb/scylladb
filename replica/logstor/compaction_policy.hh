@@ -211,6 +211,13 @@ struct compaction_batch {
 struct compaction_batch_limits {
     // Input segments one job may take.
     size_t batch_cap;
+    // The fewest candidate segments that a group must have for a batch, unless the batch is dead
+    // segments only. A job has fixed costs: a scan, a barrier on the reads in flight, and an output
+    // segment that is sealed part full. See effective_min_batch().
+    size_t min_batch = 1;
+    // Only a segment whose utilization is at most this is a candidate, see
+    // effective_utilization_threshold(). 1 makes every segment a candidate.
+    double max_utilization = 1;
     // The fraction of the best efficiency that a longer batch must keep, see
     // compaction_batch_extension_tolerance.
     double extension_tolerance = compaction_batch_extension_tolerance;
@@ -220,9 +227,11 @@ struct compaction_batch_limits {
 //
 // The set's free-space histogram is already ordered by ascending utilization, which is near-optimal
 // for victim ordering, so the only decision left is where to stop: the candidate set is the
-// histogram's first `batch_cap` segments, and select_compaction_prefix() picks a prefix of it.
-// Returns nothing when no prefix reclaims a segment, which answers for the whole group rather than
-// only for this batch, since a longer prefix would only add fuller segments.
+// histogram's prefix of segments under the utilization threshold, at most `batch_cap` of them, and
+// select_compaction_prefix() picks a prefix of that. With fewer candidates than `min_batch`, the
+// batch is the dead candidates. Returns nothing when there is no such batch or no prefix reclaims a
+// segment, which answers for the whole group rather than only for this batch, since a longer prefix
+// would only add fuller segments.
 std::optional<compaction_batch> select_compaction_batch(const segment_set& segments,
         uint64_t segment_size, const compaction_batch_limits& limits);
 
