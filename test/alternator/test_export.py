@@ -1025,7 +1025,7 @@ def unknown_export_id():
 # Test that DescribeExport rejects with ValidationException an ARN which carries no export id: an
 # absent or empty one, the ARN of a table, whether the table exists or not, and a table ARN which
 # stops at `/export/`.
-def test_describe_export_nonexistent(test_table_s):
+def test_describe_export_no_export_id(test_table_s):
     client = test_table_s.meta.client
     table_arn = get_table_arn(test_table_s)
     with pytest.raises(ClientError, match='ValidationException.*Export ?(ARN|Arn)'):
@@ -1124,7 +1124,6 @@ def test_describe_export_invalid_table_name(test_table_s):
 
 # Test that ListExports returns an ExportSummaries list. In our case it must be empty
 # as we use it on a freshly created table.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
 def test_list_exports_empty(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
@@ -1136,6 +1135,17 @@ def test_list_exports_empty(dynamodb):
         assert 'ExportSummaries' in response
         # The list should be empty for a freshly-created table
         assert len(response['ExportSummaries']) == 0
+
+
+# Test that ListExports with the TableArn of a table that does not exist returns an empty body,
+# without an ExportSummaries list. On Alternator, a table outside Alternator counts as one that does
+# not exist.
+def test_list_exports_nonexistent_table(dynamodb, test_table_s):
+    client = dynamodb.meta.client
+    response = client.list_exports(TableArn=get_table_arn(test_table_s) + '_nonexistent')
+    assert 'ExportSummaries' not in response
+    if not is_aws(dynamodb):
+        assert 'ExportSummaries' not in client.list_exports(TableArn='arn:aws:dynamodb:us-east-1:000000000000:table/system@peers')
 
 
 def iterate_over_exports(client, table_arn = None, max_results = None):
@@ -1159,20 +1169,101 @@ def iterate_over_exports(client, table_arn = None, max_results = None):
         kwargs['NextToken'] = response['NextToken']
 
 
-# Test that sending an invalid NextToken to ListExports results in an error.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
-def test_list_exports_invalid_next_token(dynamodb):
-    with pytest.raises(ClientError, match='ValidationException.*ListExports'):
-        try:
-            dynamodb.meta.client.list_exports(NextToken='0123456789abcdef' * 16)
-        except ClientError as e:
-            response = e.response
-            assert response['ResponseMetadata']['HTTPStatusCode'] == 400
-            raise
+# Test that ListExports reports ValidationException for: a MaxResults outside 1 to 25; a NextToken
+# that is not an export ARN (a hex string, a table ARN, a table ARN that ends with `/export/`), or
+# one of an export of another table than TableArn names; a TableArn that is not a table ARN (empty,
+# too long, without the `arn:` prefix, with too few parts, with another resource type, or an export
+# ARN).
+def test_list_exports_invalid_parameter(test_table_s):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    export_arn = unknown_export_arn(test_table_s)
+    exported_table_arn = export_arn.rsplit('/export/', 1)[0]
+    with pytest.raises(ClientError, match='ValidationException.*[Mm]axResults'):
+        client.list_exports(MaxResults=0)
+    with pytest.raises(ClientError, match='ValidationException.*[Mm]axResults'):
+        client.list_exports(MaxResults=26)
+    with pytest.raises(ClientError, match='ValidationException.*[Nn]extToken') as error:
+        client.list_exports(NextToken='0123456789abcdef' * 16)
+    assert error.value.response['ResponseMetadata']['HTTPStatusCode'] == 400
+    with pytest.raises(ClientError, match='ValidationException.*[Nn]extToken'):
+        client.list_exports(NextToken=table_arn)
+    with pytest.raises(ClientError, match='ValidationException.*[Nn]extToken'):
+        client.list_exports(NextToken=table_arn + '/export/')
+    with pytest.raises(ClientError, match='ValidationException.*[Nn]extToken'):
+        client.list_exports(TableArn=exported_table_arn, NextToken=export_arn.replace(test_table_s.name, test_table_s.name + '_other'))
+    with pytest.raises(ClientError, match='ValidationException.*[Tt]ableArn'):
+        client.list_exports(TableArn='')
+    with pytest.raises(ClientError, match='ValidationException.*[Tt]ableArn'):
+        client.list_exports(TableArn='a' * 1025)
+    with pytest.raises(ClientError, match='ValidationException.*[Tt]ableArn'):
+        client.list_exports(TableArn=arn_with_part(exported_table_arn, 0, 'qwerty'))  # arn -> qwerty
+    with pytest.raises(ClientError, match='ValidationException.*[Tt]ableArn'):
+        client.list_exports(TableArn=arn_with_part(exported_table_arn, 4, None))  # account dropped
+    with pytest.raises(ClientError, match='ValidationException.*[Tt]ableArn'):
+        client.list_exports(TableArn=exported_table_arn.replace(':table/', ':qwerty/', 1))
+    with pytest.raises(ClientError, match='ValidationException.*[Tt]ableArn'):
+        client.list_exports(TableArn=export_arn)
 
 
-# Test that after starting an export, ListExports includes it.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
+# Test that ListExports reports SerializationException for a MaxResults that is not a number and for
+# a NextToken that is not a string. botocore cannot send a TableArn that is not a string.
+def test_list_exports_wrong_type(test_table_s):
+    client = test_table_s.meta.client
+    with pytest.raises(ClientError, match='SerializationException.*[Ii]nteger'):
+        client.list_exports(MaxResults='5')
+    with pytest.raises(ClientError, match='SerializationException.*[Ss]tring'):
+        client.list_exports(NextToken=5)
+
+
+# Test that ListExports truncates a fractional MaxResults and ignores a null parameter, as DynamoDB
+# does: 25.9 is accepted as 25, 0.9 is rejected as 0.
+def test_list_exports_fraction_and_null(test_table_s):
+    client = test_table_s.meta.client
+    client.list_exports(MaxResults=25.9)
+    with pytest.raises(ClientError, match='ValidationException.*[Mm]axResults'):
+        client.list_exports(MaxResults=0.9)
+    client.list_exports(MaxResults=None, TableArn=None, NextToken=None)
+
+
+# Test that ListExports reports as ValidationException a TableArn naming another partition, service
+# or region, and as AccessDeniedException one naming another account.
+@pytest.mark.xfail(reason='Alternator does not check the partition, service, region or account of an ARN')
+def test_list_exports_incorrect_table_arn_parts(test_table_s):
+    client = test_table_s.meta.client
+    table_arn = unknown_export_arn(test_table_s).rsplit('/export/', 1)[0]
+    with pytest.raises(ClientError, match='ValidationException.*Table ARN'):
+        client.list_exports(TableArn=arn_with_part(table_arn, 1, 'qwerty'))  # partition -> qwerty
+    with pytest.raises(ClientError, match='ValidationException.*Table ARN'):
+        client.list_exports(TableArn=arn_with_part(table_arn, 2, 'qwerty'))  # service -> qwerty
+    with pytest.raises(ClientError, match='ValidationException.*Table ARN'):
+        client.list_exports(TableArn=arn_with_part(table_arn, 3, 'qwerty'))  # region -> qwerty
+    with pytest.raises(ClientError, match='AccessDeniedException'):
+        client.list_exports(TableArn=arn_with_part(table_arn, 4, '123456789012'))  # account -> 123456789012
+
+
+# Test that ListExports reports as ValidationException a TableArn that names a table which no table
+# can be. A table name is not valid if it has fewer than 3 characters, more than 255 characters, or
+# a character other than a-z, A-Z, 0-9, `_`, `-` and `.`. The test also uses a TableArn with `@`
+# before the table name. For Alternator, the keyspace name in that ARN is empty. For DynamoDB, `@`
+# is a character that a table name cannot have. A valid name of a table that does not exist gives
+# an empty body. The test does not use the lengths from 193 to 255, because Alternator does not
+# accept them as table names (issue #4480).
+def test_list_exports_invalid_table_name(test_table_s):
+    client = test_table_s.meta.client
+    table_arn = unknown_export_arn(test_table_s).rsplit('/export/', 1)[0]
+    for name in ['ab', 'a' * 256, 'a b']:
+        with pytest.raises(ClientError, match='ValidationException.*Invalid Table ARN'):
+            client.list_exports(TableArn=table_arn.replace(test_table_s.name, name))
+    with pytest.raises(ClientError, match='ValidationException.*Invalid Table ARN'):
+        client.list_exports(TableArn=table_arn[:table_arn.index(':table/') + len(':table/')] + '@abc')
+    for name in ['abc', 'a' * 192]:
+        assert 'ExportSummaries' not in client.list_exports(TableArn=table_arn.replace(test_table_s.name, name))
+
+
+# Test that after starting an export, ListExports includes it, both filtered by its table and
+# not filtered at all.
+@pytest.mark.xfail(reason="ExportTableToPointInTime does not persist an export yet, and MinIO is not started")
 def test_list_exports_contains_export(dynamodb, test_table_s):
     table = test_table_s
     client = enable_pitr(table)
@@ -1186,38 +1277,16 @@ def test_list_exports_contains_export(dynamodb, test_table_s):
         )
         export_arn = response['ExportDescription']['ExportArn']
 
-        for e in iterate_over_exports(client, table_arn):
-            if e['ExportArn'] == export_arn:
-                break
-        else:
-            pytest.fail(f"Export {export_arn} not found in ListExports for table {table_arn}")
-
-
-# Test that ListExports without a TableArn filter returns results.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
-def test_list_exports_no_table_filter(dynamodb, test_table_s):
-    table = test_table_s
-    client = enable_pitr(table)
-    table_arn = get_table_arn(table)
-    s3 = make_s3_client(dynamodb)
-
-    with new_s3_bucket(s3) as bucket:
-        response = client.export_table_to_point_in_time(
-            TableArn=table_arn,
-            S3Bucket=bucket,
-        )
-        export_arn = response['ExportDescription']['ExportArn']
-
-        # ListExports without TableArn should still include our export
-        for e in iterate_over_exports(client):
-            if e['ExportArn'] == export_arn:
-                break
-        else:
-            pytest.fail(f"Export {export_arn} not found in ListExports without TableArn filter")
+        for filter_table_arn in [table_arn, None]:
+            for e in iterate_over_exports(client, filter_table_arn):
+                if e['ExportArn'] == export_arn:
+                    break
+            else:
+                pytest.fail(f"Export {export_arn} not found in ListExports with TableArn={filter_table_arn}")
 
 
 # Test that ListExports pagination via MaxResults and NextToken works.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
+@pytest.mark.xfail(reason="ExportTableToPointInTime does not persist an export yet")
 def test_list_exports_pagination(dynamodb):
     max_tables = 5
     exports_per_table = 2
@@ -1270,9 +1339,65 @@ def test_list_exports_pagination(dynamodb):
         assert set(export_arns).issubset(set(all_arns))
 
 
+# Puts two exports of `table` in the export history that ListExports reads, and returns their
+# ARNs. DynamoDB gets real exports, into a bucket that does not exist, so they fail quickly but
+# stay listed. Alternator gets their rows over CQL, as nothing writes them before SCYLLADB-1893.
+@contextmanager
+def two_listed_exports(request, table):
+    client = table.meta.client
+    table_arn = get_table_arn(table)
+    if is_aws(client):
+        yield [client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket=unique_bucket_name(),
+                   ClientToken=str(uuid.uuid4()))['ExportDescription']['ExportArn'] for _ in range(2)]
+        return
+    cql = request.getfixturevalue('cql')
+    arns = [unstarted_export_arn(client, table_arn) for _ in range(2)]
+    with ExitStack() as seeded:
+        for export_arn in arns:
+            seeded.enter_context(export_metadata(cql, export_arn, accepted_export_row(table_arn)))
+        yield arns
+
+
+# DynamoDB ties a NextToken to the TableArn filter of the listing that handed it out, and answers a
+# request with another filter with ValidationException. Alternator serves such a request. The tests
+# below record this difference and make sure that Alternator survives such requests: the xfail
+# covers only a request that succeeds, so any other error, such as a crashed node, fails them.
+next_token_tied_to_filter = pytest.mark.xfail(raises=pytest.fail.Exception,
+    reason='Alternator does not tie NextToken to the TableArn filter of its listing')
+
+
+# Test that a NextToken of a listing filtered by TableArn is rejected without the filter.
+@next_token_tied_to_filter
+def test_list_exports_filtered_next_token_without_filter(request, test_table_s_for_export_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = get_table_arn(test_table_s_for_export_only)
+    with two_listed_exports(request, test_table_s_for_export_only):
+        next_token = client.list_exports(TableArn=table_arn, MaxResults=1)['NextToken']
+        with pytest.raises(ClientError, match='ValidationException.*[Nn]ext[Tt]oken'):
+            client.list_exports(MaxResults=1, NextToken=next_token)
+
+
+# Test that a NextToken of an unfiltered listing is rejected with a TableArn filter, even one naming
+# the table of the export the token ends on.
+@next_token_tied_to_filter
+def test_list_exports_unfiltered_next_token_with_filter(request, test_table_s_for_export_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = get_table_arn(test_table_s_for_export_only)
+    with two_listed_exports(request, test_table_s_for_export_only) as arns:
+        # Page the unfiltered listing until a page ends on one of this table's exports.
+        kwargs = {'MaxResults': 1}
+        while True:
+            response = client.list_exports(**kwargs)
+            kwargs['NextToken'] = response['NextToken']
+            if response['ExportSummaries'][0]['ExportArn'] in arns:
+                break
+        with pytest.raises(ClientError, match='ValidationException.*[Nn]ext[Tt]oken'):
+            client.list_exports(TableArn=table_arn, MaxResults=1, NextToken=kwargs['NextToken'])
+
+
 # Test that ExportSummary from ListExports contains the expected
 # fields: ExportArn, ExportStatus, ExportType.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
+@pytest.mark.xfail(reason="ExportTableToPointInTime does not persist an export yet, and MinIO is not started")
 def test_list_exports_summary_fields(dynamodb, test_table_s):
     table = test_table_s
     client = enable_pitr(table)
@@ -1457,13 +1582,13 @@ def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only
 
 
 # ---------------------------------------------------------------------------
-# DescribeExport tests driven from the export metadata table
+# DescribeExport and ListExports tests driven from the export metadata table
 # ---------------------------------------------------------------------------
 # FIXME: Nothing writes system_distributed.alternator_export_to_s3_exports until export
-# orchestration lands (SCYLLADB-1893), so the tests below put the row there over CQL and let
-# DescribeExport render it, which is how SCYLLADB-1891 asks for DescribeExport to be tested until
-# then. Once it lands, replace them with tests that start real exports. They only run against
-# Scylla, since they reach into Alternator's own tables.
+# orchestration lands (SCYLLADB-1893), so the tests below put the rows there over CQL and let
+# DescribeExport and ListExports render them, which is how SCYLLADB-1891 and SCYLLADB-1892 ask for
+# them to be tested until then. Once it lands, replace them with tests that start real exports. They
+# only run against Scylla, since they reach into Alternator's own tables.
 
 # An export ARN in the shape ExportTableToPointInTime hands out, for an export nobody started.
 def unstarted_export_arn(client, table_arn):
@@ -1611,3 +1736,105 @@ def test_describe_export_table_deleted(dynamodb, cql):
     assert desc['ExportArn'] == export_arn
     assert desc['TableArn'] == table_arn
     assert desc['TableId'] == str(row['table_id'])
+
+
+# Test that ListExports with a TableArn lists only the exports of that table, in ExportArn
+# descending order. Each ExportSummary has the ExportArn, the ExportStatus (IN_PROGRESS for a stored
+# status that DynamoDB does not have), and the ExportType of the request (FULL_EXPORT if the request
+# has no ExportType). Without TableArn, ListExports also lists the export of the other table, and
+# paging one export at a time keeps the ExportArn descending order across the two tables.
+# The request with INCREMENTAL_EXPORT, which Alternator does not accept, shows that ListExports
+# copies ExportType from the request instead of reporting the default.
+def test_list_exports_summaries(test_table_s_for_export_only, test_table_s, cql):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = get_table_arn(test_table_s_for_export_only)
+    other_table_arn = get_table_arn(test_table_s)
+    # export ARN -> (the stored row, the fields of the expected ExportSummary)
+    rows = {
+        unstarted_export_arn(client, table_arn): (accepted_export_row(table_arn, ExportType='INCREMENTAL_EXPORT') | {'export_status': 'COMPLETED'},
+                                                  {'ExportStatus': 'COMPLETED', 'ExportType': 'INCREMENTAL_EXPORT'}),
+        unstarted_export_arn(client, table_arn): (accepted_export_row(table_arn) | {'export_status': 'FAILED'},
+                                                  {'ExportStatus': 'FAILED', 'ExportType': 'FULL_EXPORT'}),
+        unstarted_export_arn(client, table_arn): (accepted_export_row(table_arn),
+                                                  {'ExportStatus': 'IN_PROGRESS', 'ExportType': 'FULL_EXPORT'}),
+        unstarted_export_arn(client, table_arn): (accepted_export_row(table_arn) | {'export_status': 'NOT_STARTED'},
+                                                  {'ExportStatus': 'IN_PROGRESS', 'ExportType': 'FULL_EXPORT'}),
+    }
+    other_arn = unstarted_export_arn(client, other_table_arn)
+    # ensure all export_metadata - originated objects are deleted afterwards, with what their finally: provides
+    with ExitStack() as seeded:
+        for export_arn, (row, _) in rows.items():
+            seeded.enter_context(export_metadata(cql, export_arn, row))
+        seeded.enter_context(export_metadata(cql, other_arn, accepted_export_row(other_table_arn)))
+        summaries = client.list_exports(TableArn=table_arn)['ExportSummaries']
+        unfiltered = [summary['ExportArn'] for summary in iterate_over_exports(client, max_results=1)]
+    # The filtered listing has exactly this table's exports, in ExportArn descending order, each with its expected fields.
+    assert summaries == [{'ExportArn': export_arn} | rows[export_arn][1] for export_arn in sorted(rows, reverse=True)]
+    # The unfiltered listing has all five exports, the other table's too, possibly among other exports.
+    assert set(rows) | {other_arn} <= set(unfiltered)
+    assert unfiltered == sorted(set(unfiltered), reverse=True)
+
+
+# Test that ListExports pages through a table's exports MaxResults at a time, handing out a
+# NextToken with every page but the last, and no NextToken when the exports fit the page exactly.
+def test_list_exports_paging(test_table_s_for_export_only, cql):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = get_table_arn(test_table_s_for_export_only)
+    arns = sorted((unstarted_export_arn(client, table_arn) for _ in range(5)), reverse=True)
+    # ensure all export_metadata - originated objects are deleted afterwards, with what their finally: provides
+    with ExitStack() as seeded:
+        for export_arn in arns:
+            seeded.enter_context(export_metadata(cql, export_arn, accepted_export_row(table_arn)))
+        pages = []
+        kwargs = {'TableArn': table_arn, 'MaxResults': 2}
+        # Request pages until a response has no NextToken, but at most len(arns) pages: more pages
+        # than exports means that the paging does not end.
+        for _ in range(len(arns)):
+            response = client.list_exports(**kwargs)
+            pages.append([summary['ExportArn'] for summary in response['ExportSummaries']])
+            if 'NextToken' not in response:
+                break
+            kwargs['NextToken'] = response['NextToken']
+        else:  # len(arns) pages, and the last one still had a NextToken
+            pytest.fail(f'ListExports keeps handing out a NextToken: {pages}')
+        exact_fit = client.list_exports(TableArn=table_arn, MaxResults=len(arns))
+    assert pages == [arns[0:2], arns[2:4], arns[4:]]
+    assert [summary['ExportArn'] for summary in exact_fit['ExportSummaries']] == arns
+    assert 'NextToken' not in exact_fit
+
+
+# Test that ListExports filtered by a table which has been deleted reports no ExportSummaries at
+# all, as DynamoDB does (test_export_start_and_delete_table), while the export the table left
+# behind is still listed without the filter.
+def test_list_exports_table_deleted(dynamodb, cql):
+    # ensure all export_metadata - originated objects are deleted afterwards, with what their finally: provides
+    with ExitStack() as seeded:
+        with new_test_table(dynamodb,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+            client = table.meta.client
+            table_arn = get_table_arn(table)
+            export_arn = unstarted_export_arn(client, table_arn)
+            seeded.enter_context(export_metadata(cql, export_arn, accepted_export_row(table_arn)))
+            # Sanity check: the export is listed while its table exists.
+            assert [summary['ExportArn'] for summary in client.list_exports(TableArn=table_arn)['ExportSummaries']] == [export_arn]
+        assert 'ExportSummaries' not in client.list_exports(TableArn=table_arn)
+        assert export_arn in [summary['ExportArn'] for summary in iterate_over_exports(client)]
+
+
+# Test that ListExports leaves out a corrupt export row - one missing a column every export has, or
+# one whose ARN or request cannot be read back - and still lists the table's other exports.
+@pytest.mark.parametrize('make_arn, columns', [
+    pytest.param(lambda arn: arn, {'request': None}, id='missing_column'),
+    pytest.param(lambda arn: arn, {'request': 'not json'}, id='request_not_json'),
+    pytest.param(lambda arn: arn.rsplit('/', 1)[0] + '/', {}, id='arn_without_export_id'),
+])
+def test_list_exports_corrupt_row(test_table_s_for_export_only, cql, make_arn, columns):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = get_table_arn(test_table_s_for_export_only)
+    export_arn = unstarted_export_arn(client, table_arn)
+    corrupt_arn = make_arn(unstarted_export_arn(client, table_arn))
+    with export_metadata(cql, export_arn, accepted_export_row(table_arn)), \
+         export_metadata(cql, corrupt_arn, accepted_export_row(table_arn) | columns):
+        summaries = client.list_exports(TableArn=table_arn)['ExportSummaries']
+    assert [summary['ExportArn'] for summary in summaries] == [export_arn]
