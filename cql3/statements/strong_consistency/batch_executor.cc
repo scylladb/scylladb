@@ -92,6 +92,10 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
 
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
 
+    // The batch targets a single partition, so whatever token the driver computed
+    // the tablet version block for, it's the token of that partition.
+    const auto tablet_block = tablet_version_block_for(qs, options, batch.may_use_token_aware_routing());
+
     auto mutate_result = co_await coordinator.get().mutate(batch_schema,
         batch_key->token(),
         [&](api::timestamp_type ts) {
@@ -109,10 +113,7 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
                 on_internal_error(logger, "batch produced no mutations");
             }
             return std::move(*merged);
-        }, timeout, qs.get_client_state().get_abort_source(),
-        // Only EXECUTE requests carry a tablet version block; a BATCH doesn't, so there
-        // is no routing information to hand back.
-        std::nullopt);
+        }, timeout, qs.get_client_state().get_abort_source(), tablet_block);
 
     using namespace service::strong_consistency;
     if (auto* redirect = get_if<need_redirect>(&mutate_result)) {
@@ -120,7 +121,11 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
         co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats(), std::move(redirect->on_forwarding_finished));
     }
 
-    co_return seastar::make_shared<result_message::void_message>();
+    auto result = seastar::make_shared<result_message::void_message>();
+    if (auto& routing_info = get<coordinator::mutate_result>(mutate_result).routing_info) {
+        result->add_tablet_info_v2(std::move(*routing_info));
+    }
+    co_return std::move(result);
 }
 
 const batch_executor& batch_executor::instance() {

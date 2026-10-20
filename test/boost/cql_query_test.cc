@@ -1698,6 +1698,118 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_only_for_prepared_statements) {
     }, std::move(cfg));
 }
 
+// A prepared batch is sent as an EXECUTE request, which carries a tablet
+// version block like for any other prepared statement. The driver computes the
+// token from the partition key bind indices of the batch, so a strongly
+// consistent batch must get routing information exactly when it has them.
+// Eventually consistent batches never get routing information.
+SEASTAR_TEST_CASE(test_tablets_routing_v2_prepared_batches) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        struct keyspace_case {
+            sstring name;
+            bool strongly_consistent;
+        };
+        const std::array<keyspace_case, 2> keyspaces = {{
+            {"ks_ec", false},
+            {"ks_sc", true}
+        }};
+        struct batch_case {
+            // The statements of the batch. {} stands for the table.
+            std::vector<std::string_view> statements;
+            bool composite_pk;
+            // Whether the batch has partition key bind indices.
+            bool routing_information;
+        };
+        // Every literal and every bound value is 1, so all statements of a batch
+        // target the same partition, as a strongly consistent batch must.
+        const std::vector<batch_case> batch_cases = {{
+            {{"INSERT INTO {} (pk, ck, v) VALUES (?, 1, ?)",
+              "UPDATE {} SET v = ? WHERE pk = 1 AND ck = 2"}, false, true},
+            {{"INSERT INTO {} (pk, ck, v) VALUES (1, 1, ?)",
+              "INSERT INTO {} (pk, ck, v) VALUES (1, 2, ?)"}, false, false},
+            {{"UPDATE {} SET v = 1 WHERE pk = ? AND ck = 1",
+              "DELETE FROM {} WHERE pk = ? AND ck = 2"}, false, true},
+            // The partition key is bound across statements.
+            {{"INSERT INTO {} (pk1, pk2, v) VALUES (?, 1, ?)",
+              "INSERT INTO {} (pk1, pk2, v) VALUES (1, ?, 1)"}, true, true},
+            // No statement binds pk2.
+            {{"INSERT INTO {} (pk1, pk2, v) VALUES (?, 1, ?)",
+              "INSERT INTO {} (pk1, pk2, v) VALUES (?, 1, 1)"}, true, false},
+            {{"INSERT INTO {} (pk1, pk2, v) VALUES (1, 1, ?)"}, true, false},
+        }};
+
+        for (const auto& ks : keyspaces) {
+            e.execute_cql(seastar::format(
+                "CREATE KEYSPACE {} WITH replication = "
+                "{{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'initial': 1}} "
+                "{}",
+                ks.name,
+                ks.strongly_consistent ? "AND consistency = 'global'" : "")).get();
+            e.execute_cql(seastar::format("CREATE TABLE {}.tbl (pk int, ck int, v int, "
+                    "PRIMARY KEY (pk, ck))", ks.name)).get();
+            e.execute_cql(seastar::format("CREATE TABLE {}.tbl_composite (pk1 int, pk2 int, "
+                    "v int, PRIMARY KEY ((pk1, pk2)))", ks.name)).get();
+        }
+
+        for (const auto& [ks, bcase] : std::views::cartesian_product(keyspaces, batch_cases)) {
+            const sstring table_name = bcase.composite_pk ? "tbl_composite" : "tbl";
+            const sstring table = seastar::format("{}.{}", ks.name, table_name);
+            const auto schema = e.local_db().find_schema(ks.name, table_name);
+            const auto one = int32_type->decompose(int32_t{1});
+            const auto pk = bcase.composite_pk
+                    ? partition_key::from_exploded(*schema, {one, one})
+                    : partition_key::from_singular(*schema, int32_t{1});
+            // The table has a single tablet, so this is the shard hosting its replica.
+            const auto shard = schema->table().shard_for_reads(dht::get_token(*schema, pk.view()));
+
+            const std::string statements = bcase.statements
+                    | std::views::transform([&table] (const auto& statement) {
+                        return fmt::format(fmt::runtime(statement), table);
+                    })
+                    | std::views::transform([] (const auto& statement) {
+                        return fmt::format("{}; ", statement);
+                    })
+                    | std::views::join_with('\n')
+                    | std::ranges::to<std::string>();
+
+            const sstring batch = seastar::format("BEGIN BATCH {} APPLY BATCH", statements);
+            const bool expected = ks.strongly_consistent && bcase.routing_information;
+
+            smp::submit_to(shard, [&e, batch, expected] {
+                return seastar::async([&e, batch, expected] {
+                    cql_transport::cql_protocol_extension_enum_set exts = e.local_client_state().get_protocol_extensions();
+                    exts.remove(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1);
+                    exts.set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL);
+                    e.local_client_state().set_protocol_extensions(std::move(exts));
+
+                    const auto id = e.prepare(batch).get();
+                    const size_t marker_count = std::ranges::count(batch, '?');
+                    const cql3::raw_value value = cql3::raw_value::make_value(int32_type->decompose(int32_t{1}));
+                    const auto values = std::vector<cql3::raw_value>(marker_count, value);
+
+                    // The two blocks differ only in their value nibble. They can't both match
+                    // the tablet's version, so if the version is checked, at least one of the
+                    // responses carries routing information.
+                    bool routing_information = false;
+                    for (const auto block : {locator::tablet_version_block{0x00}, locator::tablet_version_block{0x01}}) {
+                        auto options = std::make_unique<cql3::query_options>(
+                            db::consistency_level::QUORUM,
+                            cql3::raw_value_vector_with_unset(values),
+                            cql3::query_options::specific_options::DEFAULT);
+                        options->set_tablet_version_block(block);
+                        const auto result = e.execute_prepared_with_qo(id, std::move(options)).get();
+                        routing_information |= has_tablets_routing_v2(result);
+                    }
+                    const auto message = seastar::format("{}: tablets-routing-v2 payload was{}expected",
+                            batch, expected ? " " : " not ");
+                    BOOST_REQUIRE_MESSAGE(routing_information == expected, message);
+                });
+            }).get();
+        }
+    }, tablet_v2_cql_test_config());
+}
+
 // The parser counts markers for one statement at a time, but used to hand
 // every statement of a multi-statement parse all the markers it had seen so
 // far, so a later statement inherited the markers of the ones before it.
