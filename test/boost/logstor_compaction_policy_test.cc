@@ -299,3 +299,19 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
     segment_set empty{segment_size};
     BOOST_REQUIRE(!select_compaction_batch(empty, segment_size, compaction_batch_limits{.batch_cap = min_segments_per_compaction}));
 }
+
+// A job next to a job in flight starts only if its batch reclaims nearly as well as the best batch.
+// The best batch passes its own bar. A batch of dead segments passes any bar, but does not set one.
+SEASTAR_THREAD_TEST_CASE(test_logstor_marginal_compaction_admission) {
+    constexpr uint64_t segment_size = 128 * 1024;
+    const compaction_candidate_score rich{.n_in = 8, .n_out = 4, .live_bytes = 4 * segment_size};
+    const compaction_candidate_score near{.n_in = 9, .n_out = 5, .live_bytes = 5 * segment_size};
+    const compaction_candidate_score marginal{.n_in = 8, .n_out = 7, .live_bytes = 7 * segment_size};
+    const compaction_candidate_score all_dead{.n_in = 2, .n_out = 0, .live_bytes = 0};
+
+    BOOST_REQUIRE(rich.efficiency_at_least(rich, compaction_marginal_admission_ratio));
+    BOOST_REQUIRE(near.efficiency_at_least(rich, compaction_marginal_admission_ratio));
+    BOOST_REQUIRE(!marginal.efficiency_at_least(rich, compaction_marginal_admission_ratio));
+    BOOST_REQUIRE(all_dead.efficiency_at_least(rich, compaction_marginal_admission_ratio));
+    BOOST_REQUIRE(!rich.efficiency_at_least(all_dead, compaction_marginal_admission_ratio));
+}
