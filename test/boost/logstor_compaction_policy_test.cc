@@ -21,6 +21,7 @@
 
 #include "replica/logstor/compaction.hh"
 #include "replica/logstor/compaction_policy.hh"
+#include "replica/logstor/compaction_rate_controller.hh"
 
 using namespace replica::logstor;
 
@@ -506,4 +507,35 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch_threshold) {
     for (const auto* desc : dead->segments) {
         BOOST_REQUIRE_EQUAL(desc->record_bytes(segment_size), 0u);
     }
+}
+
+// The backlog counts the segments under the threshold. What compacting them would free is at most
+// their number, and neither count decreases as the threshold increases.
+SEASTAR_THREAD_TEST_CASE(test_logstor_reclaimable_backlog) {
+    utilization_histogram utilization{};
+    // Ten dead segments, four in the bucket just under a half, two just over it, one full.
+    utilization[0] = 10;
+    utilization[utilization_bucket_count / 2 - 1] = 4;
+    utilization[utilization_bucket_count / 2] = 2;
+    utilization[utilization_bucket_count - 1] = 1;
+
+    // At the edge of a bucket the count is exact. A threshold of 0 still counts the dead segments.
+    BOOST_REQUIRE_CLOSE(reclaimable_backlog(utilization, 0.0).candidate_segments, 10.0, 1e-9);
+    BOOST_REQUIRE_CLOSE(reclaimable_backlog(utilization, 0.5).candidate_segments, 14.0, 1e-9);
+    BOOST_REQUIRE_CLOSE(reclaimable_backlog(utilization, 1.0).candidate_segments, 17.0, 1e-9);
+    BOOST_REQUIRE_GT(reclaimable_backlog(utilization, 0.0).reclaimable_segments, 9.5);
+
+    compaction_backlog previous{};
+    for (int i = 0; i <= 100; ++i) {
+        const double threshold = i / 100.0;
+        const auto backlog = reclaimable_backlog(utilization, threshold);
+        BOOST_TEST_CONTEXT("threshold=" << threshold) {
+            BOOST_REQUIRE_GE(backlog.candidate_segments, previous.candidate_segments);
+            BOOST_REQUIRE_GE(backlog.reclaimable_segments, previous.reclaimable_segments);
+            BOOST_REQUIRE_LE(backlog.reclaimable_segments, backlog.candidate_segments);
+        }
+        previous = backlog;
+    }
+
+    BOOST_REQUIRE_EQUAL(reclaimable_backlog(utilization_histogram{}, 0.5).candidate_segments, 0.0);
 }
