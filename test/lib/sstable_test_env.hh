@@ -92,6 +92,8 @@ public:
     void propagate_replacement(compaction::table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
 
     future<> perform_compaction(shared_ptr<compaction::compaction_task_executor> task);
+
+    bool is_compaction_state_gate_closed(compaction::table_state& table_s);
 };
 
 struct test_env_config {

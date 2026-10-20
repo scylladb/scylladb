@@ -168,6 +168,13 @@ private:
     // Return nullopt if compaction cannot be started
     std::optional<gate::holder> start_compaction(table_state& t);
 
+    // Holds the gate of a table's compaction state.
+    // Throws abort_requested_exception if the manager is stopped.
+    gate::holder hold_compaction_state_gate(compaction_state& cs);
+
+    // Closes the gate of a table's compaction state, if not closed yet, and waits for its holders to leave.
+    future<> close_compaction_state_gate(compaction_state& cs);
+
     template<typename TaskExecutor, typename... Args>
     requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
             std::is_base_of_v<compaction_task_impl, TaskExecutor> &&
@@ -371,7 +378,9 @@ public:
     class compaction_reenabler {
         compaction_manager& _cm;
         compaction::table_state* _table;
-        compaction::compaction_state& _compaction_state;
+        // Null if compaction was not disabled, because the manager is stopped (see the constructor),
+        // or if moved from.
+        compaction::compaction_state* _compaction_state = nullptr;
         gate::holder _holder;
 
     public:
@@ -382,10 +391,6 @@ public:
 
         compaction::table_state* compacting_table() const noexcept {
             return _table;
-        }
-
-        const compaction::compaction_state& compaction_state() const noexcept {
-            return _compaction_state;
         }
     };
 
@@ -541,6 +546,10 @@ protected:
     // and the compaction manager allows proceeding.
     inline bool can_proceed(throw_if_stopping do_throw_if_stopping = throw_if_stopping::no) const;
     void setup_new_compaction(sstables::run_id output_run_id = sstables::run_id::create_null_id());
+
+    gate::holder hold_compaction_state_gate() {
+        return _cm.hold_compaction_state_gate(_compaction_state);
+    }
     void finish_compaction(state finish_state = state::done) noexcept;
 
     // Compaction manager stop itself if it finds an storage I/O error which results in

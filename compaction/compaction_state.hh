@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/gate.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/condition-variable.hh>
 #include "seastarx.hh"
@@ -17,12 +18,27 @@
 #include "compaction/compaction_backlog_manager.hh"
 #include "gc_clock.hh"
 
+class compaction_manager;
+namespace sstables { class test_env_compaction_manager; }
+
 namespace compaction {
 
 struct compaction_state {
+private:
     // Used both by compaction tasks that refer to the compaction_state
     // and by any function running under run_with_compaction_disabled().
+    // It is held through compaction_manager::hold_compaction_state_gate(),
+    // which fails with an abort once the manager is stopped.
     seastar::gate gate;
+    // The result of closing the gate, which both stopping the manager and removing
+    // the table wait for, see compaction_manager::close_compaction_state_gate().
+    std::optional<seastar::shared_future<>> gate_closed;
+
+    // Nested classes of ::compaction_manager, like compaction_reenabler, have its access too.
+    friend class ::compaction_manager;
+    friend class sstables::test_env_compaction_manager;
+
+public:
 
     // Prevents table from running major and minor compaction at the same time.
     seastar::rwlock lock;

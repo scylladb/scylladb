@@ -277,11 +277,8 @@ void test_env::maybe_start_compaction_manager(bool enable) {
 
 future<> test_env::stop() {
     if (_impl->cmgr) {
-        if (_impl->cmgr->get_compaction_manager().is_running()) {
-            co_await _impl->cmgr->get_compaction_manager().stop();
-        } else {
-            co_await _impl->cmgr->get_compaction_manager().get_task_manager_module().stop();
-        }
+        // Handles a manager which was never enabled, or which the test already stopped, too.
+        co_await _impl->cmgr->get_compaction_manager().stop();
     }
     co_await _impl->mgr.close();
     co_await _impl->semaphore.stop();
@@ -567,6 +564,10 @@ future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::
         task->switch_state(compaction_task_executor::state::none);
     });
     co_await task->run_compaction();
+}
+
+bool test_env_compaction_manager::is_compaction_state_gate_closed(compaction::table_state& table_s) {
+    return _cm.get_compaction_state(&table_s).gate.is_closed();
 }
 
 }
