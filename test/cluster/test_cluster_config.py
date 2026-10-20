@@ -511,3 +511,99 @@ async def test_describe_schema_internals_round_trips_stored_config(manager: Scyl
     assert len(t3_rows) == 1
     assert "\n    -- AND auto_repair_enabled = false  -- from cluster (table=NULL, keyspace=NULL, cluster=false)" in t3_rows[0].create_statement
     assert "\n    AND auto_repair_enabled" not in t3_rows[0].create_statement
+
+
+async def get_config_entry(cql, server, name: str) -> tuple[str, str]:
+    """The (source, value) system.config reports for option `name` on `server`."""
+    host = next(h for h in cql.cluster.metadata.all_hosts() if h.address == server.rpc_address)
+    rows = await cql.run_async("SELECT source, value FROM system.config WHERE name = %s", [name], host=host)
+    return rows[0].source, rows[0].value
+
+
+async def wait_for_config_entry(cql, expected: dict, name: str) -> None:
+    """Wait until system.config on each server reports the expected (source, value) for `name`."""
+    async def entries_match():
+        actual = {srv.server_id: await get_config_entry(cql, srv, name) for srv in expected}
+        if actual == {srv.server_id: value for srv, value in expected.items()}:
+            return True
+        logger.info("Observed %s: %s, expected %s", name, actual, {srv.server_id: v for srv, v in expected.items()})
+        return None
+
+    await wait_for(entries_match, deadline=time.time() + 120)
+
+
+@pytest.mark.asyncio
+async def test_db_config_option_applies_cluster_wide_and_restores_yaml_value(manager: ScyllaClusterManager) -> None:
+    """tablets_per_shard_goal is a db::config option managed through cluster config at the CLUSTER scope.
+
+    Checks that an override is applied to db::config on every node with source cluster_config,
+    as system.config reports it; that the node-oriented ALTER forms and out-of-range values are
+    rejected; that a node-local UPDATE system.config is refused while the override is in effect;
+    and that removing the override returns each node to its own scylla.yaml value and source.
+    """
+    servers = [
+        await manager.server_add(property_file={"dc": "dc1", "rack": "rack1"}),
+        await manager.server_add(property_file={"dc": "dc1", "rack": "rack2"},
+                                 config={"tablets_per_shard_goal": 50}),
+        await manager.server_add(property_file={"dc": "dc2", "rack": "rack1"}),
+    ]
+    s1, s2, s3 = servers
+    await manager.driver_connect()
+    cql, _ = await manager.get_ready_cql(servers)
+    name = "tablets_per_shard_goal"
+
+    await wait_for_config_entry(cql, {s1: ("default", "100"), s2: ("config", "50"), s3: ("default", "100")}, name)
+
+    await cql.run_async("ALTER CLUSTER WITH tablets_per_shard_goal = 200")
+    await wait_for_config_entry(cql, {s1: ("cluster_config", "200"), s2: ("cluster_config", "200"), s3: ("cluster_config", "200")}, name)
+
+    host_id1 = await manager.get_host_id(s1.server_id)
+    for stmt in ("ALTER DATACENTER dc1 WITH tablets_per_shard_goal = 300",
+                 "ALTER RACK dc1 rack1 WITH tablets_per_shard_goal = 300",
+                 f"ALTER NODE {host_id1} WITH tablets_per_shard_goal = 300",
+                 "ALTER CLUSTER WITH tablets_per_shard_goal = 0",
+                 "ALTER CLUSTER WITH tablets_per_shard_goal = -1",
+                 f"ALTER CLUSTER WITH tablets_per_shard_goal = {2**32}"):
+        with pytest.raises(InvalidRequest):
+            await cql.run_async(stmt)
+
+    # A node-local write is refused while the override owns the value.
+    host2 = next(h for h in cql.cluster.metadata.all_hosts() if h.address == s2.rpc_address)
+    with pytest.raises(Exception, match="managed by cluster config"):
+        await cql.run_async("UPDATE system.config SET value = '7' WHERE name = 'tablets_per_shard_goal'", host=host2)
+    await wait_for_config_entry(cql, {s2: ("cluster_config", "200")}, name)
+
+    # Removing the override returns each node to its own scylla.yaml value and source.
+    await cql.run_async("ALTER CLUSTER WITH tablets_per_shard_goal = null")
+    await wait_for_config_entry(cql, {s1: ("default", "100"), s2: ("config", "50"), s3: ("default", "100")}, name)
+
+    # The node-local write works again once the override is gone.
+    await cql.run_async("UPDATE system.config SET value = '7' WHERE name = 'tablets_per_shard_goal'", host=host2)
+    await wait_for_config_entry(cql, {s2: ("cql", "7")}, name)
+
+
+@pytest.mark.asyncio
+async def test_db_config_option_survives_restart_and_reaches_joining_node(manager: ScyllaClusterManager) -> None:
+    """A stored override is re-applied after a node restarts and applied by a node that joins
+    after it was set; removing it returns each node to its scylla.yaml value."""
+    servers = [await manager.server_add(property_file={"dc": "dc1", "rack": "rack1"},
+                                        config={"tablets_per_shard_goal": 50})]
+    await manager.driver_connect()
+    cql, _ = await manager.get_ready_cql(servers)
+    name = "tablets_per_shard_goal"
+
+    await cql.run_async("ALTER CLUSTER WITH tablets_per_shard_goal = 200")
+    await wait_for_config_entry(cql, {servers[0]: ("cluster_config", "200")}, name)
+
+    await manager.server_restart(servers[0].server_id)
+    await manager.driver_connect()
+    cql, _ = await manager.get_ready_cql(servers)
+    await wait_for_config_entry(cql, {servers[0]: ("cluster_config", "200")}, name)
+
+    new_server = await manager.server_add(property_file={"dc": "dc1", "rack": "rack2"},
+                                          config={"tablets_per_shard_goal": 60})
+    cql, _ = await manager.get_ready_cql(servers + [new_server])
+    await wait_for_config_entry(cql, {servers[0]: ("cluster_config", "200"), new_server: ("cluster_config", "200")}, name)
+
+    await cql.run_async("ALTER CLUSTER WITH tablets_per_shard_goal = null")
+    await wait_for_config_entry(cql, {servers[0]: ("config", "50"), new_server: ("config", "60")}, name)
