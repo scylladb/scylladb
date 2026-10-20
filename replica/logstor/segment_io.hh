@@ -37,9 +37,9 @@ struct segment_info {
     std::variant<mixed, full> v;
 };
 
-// The segment info of the segment's first chunk, or nothing if its headers are not valid. The
-// chunk's body is not read, so a torn chunk is told apart only by a segment_scanner.
-future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in);
+// The segment info of the chunk at the start of `in`, or nothing if its headers are not valid.
+// The chunk's body is not read, so a torn chunk is told apart only by a segment_scanner.
+future<std::optional<segment_info>> read_chunk_info(seastar::input_stream<char>& in);
 
 // Reads a segment through its input stream, and keeps the position in the segment of what it
 // reads next.

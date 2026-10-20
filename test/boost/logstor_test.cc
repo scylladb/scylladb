@@ -138,11 +138,11 @@ void flip_byte(temporary_buffer<char>& buf, size_t offset) {
     buf.get_write()[offset] ^= char(0x1);
 }
 
-std::optional<segment_info> read_segment_info_from_bytes(const temporary_buffer<char>& buf) {
+std::optional<segment_info> read_chunk_info_from_bytes(const temporary_buffer<char>& buf) {
     temporary_buffer<char> copy(buf.size());
     std::copy_n(buf.get(), buf.size(), copy.get_write());
     auto in = seastar::util::as_input_stream(std::move(copy));
-    auto header = read_segment_info(in).get();
+    auto header = read_chunk_info(in).get();
     in.close().get();
     return header;
 }
@@ -1583,7 +1583,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_chunks_report_readable_
     assert_that(to_mutation(read_record_at_location(segment_copy, seen_locations[2]), schema)).is_equal_to(expected2);
     assert_that(to_mutation(read_record_at_location(segment_copy, seen_locations[3]), schema)).is_equal_to(expected3);
 
-    auto maybe_header = read_segment_info_from_bytes(segment_copy);
+    auto maybe_header = read_chunk_info_from_bytes(segment_copy);
     BOOST_REQUIRE(maybe_header);
     BOOST_REQUIRE(maybe_header->kind == segment_kind::mixed);
     BOOST_REQUIRE_EQUAL(maybe_header->segment_seq.value, 23u);
@@ -1652,7 +1652,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_chunk_records_with
     wb.seal(segment_sequence{41}, schema->id(), ondisk::block_alignment);
 
     auto serialized = copy_chunk(wb.chunk());
-    auto maybe_header = read_segment_info_from_bytes(serialized);
+    auto maybe_header = read_chunk_info_from_bytes(serialized);
     auto in = seastar::util::as_input_stream(std::move(serialized));
 
     std::vector<segment_info> seen_segment_infos;
@@ -1811,11 +1811,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_segment_heade
     wb.seal(segment_sequence{121}, schema->id(), ondisk::block_alignment);
 
     auto serialized = copy_chunk(wb.chunk());
-    BOOST_REQUIRE(read_segment_info_from_bytes(serialized));
+    BOOST_REQUIRE(read_chunk_info_from_bytes(serialized));
     // A byte of last_token, the last field of the segment header.
     flip_byte(serialized, ondisk::chunk_header_size + ondisk::segment_header_size - 1);
 
-    BOOST_REQUIRE(!read_segment_info_from_bytes(serialized));
+    BOOST_REQUIRE(!read_chunk_info_from_bytes(serialized));
     BOOST_REQUIRE_THROW(rewrite_streamed_segment(log_segment_id{13}, segment_sequence{131}, std::span(&serialized, 1)), std::runtime_error);
 
     const auto segment_size = serialized.size();

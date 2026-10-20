@@ -227,14 +227,10 @@ void segment_scanner::report_failed_chunks() const {
     }
 }
 
-future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in) {
+future<std::optional<segment_info>> read_chunk_info(seastar::input_stream<char>& in) {
     segment_reader reader(in);
     auto headers = co_await read_chunk_headers(reader);
-    if (!headers) {
-        co_return std::nullopt;
-    }
-
-    co_return make_segment_info(*headers);
+    co_return headers.transform(make_segment_info);
 }
 
 streamed_segment_rewriter::streamed_segment_rewriter(log_segment_id target_segment, segment_sequence target_seq, streamed_buffer_consumer on_buffer)

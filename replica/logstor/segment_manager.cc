@@ -1914,7 +1914,7 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
 
 future<std::optional<segment_info>> segment_manager_impl::read_segment_info(log_segment_id segment_id) {
     return with_segment_input_stream(segment_id, block_alignment, [] (seastar::input_stream<char>& in) {
-        return ::replica::logstor::read_segment_info(in);
+        return read_chunk_info(in);
     });
 }
 
