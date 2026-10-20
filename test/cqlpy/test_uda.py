@@ -256,7 +256,7 @@ def test_drop_keyspace_with_uda(scylla_only, cql):
 
 # Test that replacing the state function, reduce function or the final function successfully changes the function used by the aggregate.
 # When the state or final function is replaced, the new function should be used in following calls to the aggregate. Cassandra keeps using
-# the old function, which we consider a cassandra bug.
+# the old function, which we consider a cassandra bug (CASSANDRA-21786).
 def test_replace_sfunc_ffunc(cql, test_keyspace, cassandra_bug):
     schema = "id bigint primary key"
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -273,10 +273,10 @@ def test_replace_sfunc_ffunc(cql, test_keyspace, cassandra_bug):
                 pass
         except:
             # We're in Cassandra, use java instead
-            sum_partial_body = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state + val'"
-            sum_partial_body2 = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state + 2 * val'"
-            sum_final_body = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state'"
-            sum_final_body2 = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 3 * state'"
+            sum_partial_body = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state + val;'"
+            sum_partial_body2 = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state + 2 * val;'"
+            sum_final_body = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state;'"
+            sum_final_body2 = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 3 * state;'"
 
         with new_function(cql, test_keyspace, sum_partial_body) as sum_partial, new_function(cql, test_keyspace, sum_final_body) as sum_final:
             custom_sum_body = f"(bigint) SFUNC {sum_partial} STYPE bigint FINALFUNC {sum_final} INITCOND 0"
