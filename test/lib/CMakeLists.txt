@@ -26,6 +26,7 @@ target_sources(test-lib
     gcs_fixture.cc
     aws_kms_fixture.cc
     azure_kms_fixture.cc
+    gcp_kms_fixture.cc
     )
 target_include_directories(test-lib
   PUBLIC
