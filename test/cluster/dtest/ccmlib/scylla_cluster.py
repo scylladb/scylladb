@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,19 +15,32 @@ from cassandra.auth import PlainTextAuthProvider
 
 from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.util import Blocking
 from test.cluster.dtest.ccmlib.common import logger
 from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
 
 if TYPE_CHECKING:
     from typing import Any
 
+    from test.pylib.rest_client import ScyllaRESTAPIClient
+
 
 SCYLLA_VERSION_FILE = Path(__file__).parent.parent.parent.parent / "build" / "SCYLLA-VERSION-FILE"
 
 
+class BlockingManager(Blocking[ScyllaClusterManager]):
+    """Blocking view of the cluster manager, with its REST client blocking as well."""
+
+    @cached_property
+    def api(self) -> Blocking[ScyllaRESTAPIClient]:
+        """Blocking view of the cluster manager's REST client."""
+
+        return Blocking(self.__wrapped__.api)
+
+
 class ScyllaCluster:
     def __init__(self, manager: ScyllaClusterManager, scylla_mode: str, force_wait_for_cluster_start: bool = False):
-        self.manager = manager
+        self.manager = BlockingManager(manager)
         self.scylla_mode = scylla_mode
         self._config_options = {}
         # Cached ScyllaNode instances. Nodes are appended by _add_nodes()

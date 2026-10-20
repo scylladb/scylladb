@@ -21,6 +21,7 @@ from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
 from test.cluster.dtest.tools.misc import retry_till_success
 from test.pylib.internal_types import IPAddress
 from test.pylib.rest_client import read_barrier as read_barrier_via_api
+from test.pylib.util import run_sync
 
 
 logger = logging.getLogger(__name__)
@@ -193,7 +194,7 @@ def _(session_or_node: Session) -> None:
 def _(session_or_node: ScyllaNode) -> None:
     """Issue a read barrier on the specific host using REST API."""
 
-    read_barrier_via_api(api=session_or_node.cluster.manager.api, node_ip=IPAddress(session_or_node.address()))
+    run_sync(read_barrier_via_api(api=session_or_node.cluster.manager.api, node_ip=IPAddress(session_or_node.address())))
 
 
 def get_auth_provider(user, password):

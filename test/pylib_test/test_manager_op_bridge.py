@@ -23,6 +23,7 @@ import pytest
 
 from test.pylib.internal_types import ServerNum
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.util import Blocking
 
 
 SERVER_ID = ServerNum(1)
@@ -103,17 +104,16 @@ def test_operation_from_a_worker_thread(manager) -> None:
     """A synchronous caller on a worker thread reaches loop-bound state.
 
     This is the dtest pattern -- `executor.submit(node.stop, ...)` -- and the
-    reason manager_op cannot simply await the entry point: universalasync
-    creates a fresh event loop per thread, and the manager's state does not
-    belong to it.
+    reason manager_op cannot simply await the entry point: Blocking runs
+    the call on a fresh event loop, and the manager's state does not belong
+    to it.
     """
     mgr, cluster, _ = manager
     errors: list[BaseException] = []
 
     def worker() -> None:
         try:
-            # No running loop here, so universalasync drives the call itself.
-            mgr.server_stop(SERVER_ID, convict=False)
+            Blocking(mgr).server_stop(SERVER_ID, convict=False)
         except BaseException as exc:  # pylint: disable=broad-except
             errors.append(exc)
 

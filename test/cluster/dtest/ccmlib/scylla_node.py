@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from test import DEBUG_MODES
 from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for, BIN_DIR
 from test.pylib.internal_types import ServerUpState
+from test.pylib.util import Blocking
 
 if TYPE_CHECKING:
     from test.pylib.internal_types import ServerInfo
@@ -177,8 +178,8 @@ class ScyllaNode:
     is_live = is_running
 
     @cached_property
-    def scylla_log_file(self) -> ScyllaLogFile:
-        return self.cluster.manager.server_open_log(server_id=self.server_id)
+    def scylla_log_file(self) -> Blocking[ScyllaLogFile]:
+        return Blocking(self.cluster.manager.server_open_log(server_id=self.server_id))
 
     def grep_log(self,
                  expr: str,

@@ -14,18 +14,18 @@ import time
 import asyncio
 import concurrent.futures
 import fcntl
+import inspect
 import logging
 import os
 import random
 import string
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager
-from functools import cache, partial
+from functools import cache, partial, wraps
 from pathlib import Path
-from typing import Optional, TypeVar, Any, cast
+from typing import Optional, TypeVar, Any
 
 import colorama
-import universalasync
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
@@ -587,8 +587,36 @@ def execute_with_tracing(cql : Session, statement : str | Statement, log : bool 
     return ret
 
 
-def universalasync_typed_wrap(cls: T) -> T:
-    return cast(T, universalasync.wrap(cls))
+def run_sync[R](coro: Coroutine[Any, Any, R]) -> R:
+    """Run a coroutine to completion from synchronous code, on a fresh event loop."""
+
+    return asyncio.run(coro, loop_factory=asyncio.new_event_loop)
+
+
+class Blocking[T]:
+    """Synchronous view of an async object: calls that return a coroutine run it with run_sync()."""
+
+    def __init__(self, obj: T) -> None:
+        object.__setattr__(self, "__wrapped__", obj)
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self.__wrapped__, name)
+        if not callable(attr):
+            return attr
+
+        @wraps(attr)
+        def call(*args: Any, **kwargs: Any) -> Any:
+            result = attr(*args, **kwargs)
+            if inspect.iscoroutine(result):
+                return run_sync(result)
+            if inspect.isawaitable(result):
+                raise TypeError(f"{name}() returned {result!r}, which Blocking cannot run")
+            return result
+
+        return call
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self.__wrapped__, name, value)
 
 
 output_is_a_tty = sys.stdout.isatty()
