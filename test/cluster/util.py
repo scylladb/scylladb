@@ -125,12 +125,19 @@ class FeatureConfigurations(Enum):
         cluster_cfg={"experimental_features": ["logstor", "strongly-consistent-tables"],  "logstor_disk_size_in_mb":20, "logstor_file_size_in_mb":1},
     )
 
+    def with_marks(self, *marks):
+        """Return this configuration as a pytest.param with the given marks, e.g. to skip
+        only this configuration of a test while a bug is open. The enum name becomes the test id.
+        """
+        return pytest.param(self.value, id=self.name.lower(), marks=marks)
 
-def feature_configs(*configs: FeatureConfigurations):
+
+def feature_configs(*configs):
     """Build pytest.mark.parametrize arguments for the named configurations.
-    The enum name becomes the test id.
+    The enum name becomes the test id. Each argument is a FeatureConfigurations
+    member, or the result of with_marks() to give one configuration marks.
     """
-    return [pytest.param(config.value, id=config.name.lower()) for config in configs]
+    return [config.with_marks() if isinstance(config, FeatureConfigurations) else config for config in configs]
 
 
 async def count_rows(cql, feature_config: FeatureConfig, query_template: str, ks: str, table: str, keys, partition_key: str):
