@@ -944,6 +944,8 @@ future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, c
     // taken in the same continuation as the lookup: `table` is unpinned, and a
     // suspension between the two reopens the race.
     auto stream_guard = table.stream_in_progress();
+    // After the guard on purpose: the test needs the DROP to meet a guarded attach.
+    co_await utils::get_local_injector().inject("pause_attach_sstable", utils::wait_for_message(60s));
     llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}", min_info.generation, table.schema()->ks_name(), table.schema()->cf_name(), this_shard_id());
     auto& sst_manager = table.get_sstables_manager();
     auto sst = sst_manager.make_sstable(
