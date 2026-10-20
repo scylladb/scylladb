@@ -118,6 +118,5 @@ public:
     void accept_ordered(const schema& schema, mutation_partition_view_virtual_visitor& mpvvv) const;
     future<> accept_gently_ordered(const schema&, mutation_partition_view_virtual_visitor& mpvvv) const;
 
-    std::optional<clustering_key> first_row_key() const;
     std::optional<clustering_key> last_row_key() const;
 };
