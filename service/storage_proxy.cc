@@ -5092,6 +5092,8 @@ private:
     api::timestamp_type _last_modified = api::missing_timestamp;
     size_t _target_count_for_cl; // _target_count_for_cl < _targets_count if CL=LOCAL and RRD.GLOBAL
     exceptions::replica_failure_map _failed_replicas; // replicas counted in _failed
+    // All failed targets; _failed counts only those the CL waits for.
+    size_t _failed_targets = 0;
     noncopyable_function<void()> _on_disconnect;
 
     void on_timeout() override {
@@ -5103,7 +5105,10 @@ private:
         }
         // we will not need them any more
         _data_result = foreign_ptr<lw_shared_ptr<query::result>>();
-        _digest_results.clear();
+        // Once CL is reported, the has_cl() continuation still reads the digests' positions.
+        if (!_cl_reported) {
+            _digest_results.clear();
+        }
         _on_disconnect = {};
     }
 public:
@@ -5177,6 +5182,16 @@ private:
             _timeout.cancel();
             _on_disconnect = {};
             _done_promise.set_value(bo::success());
+        } else {
+            finish_if_unanswerable();
+        }
+    }
+    // Once CL is reached, done() only gates the background repair check, and a timeout skips that
+    // check. A failed target never answers, so once every target has answered or failed, end the
+    // check now instead of keeping the request, and its effective_replication_map, until the timeout.
+    void finish_if_unanswerable() {
+        if (_cl_reported && !_request_failed && response_count() + _failed_targets == _targets_count) {
+            fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result));
         }
     }
     void on_error(locator::host_id ep, error_kind kind, exceptions::request_failure_reason reason) override {
@@ -5184,6 +5199,7 @@ private:
             _failed++;
             _failed_replicas.add(ep, reason);
         }
+        _failed_targets++;
         if (kind == error_kind::DISCONNECT && _on_disconnect) {
             _on_disconnect();
         }
@@ -5208,6 +5224,7 @@ private:
                 break;
             }
         }
+        finish_if_unanswerable();
     }
 
 public:
