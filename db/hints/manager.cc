@@ -403,7 +403,7 @@ void manager::discard_segments_up_to(const sync_point::shard_rps& rps) {
 
 future<> manager::flush_hints() {
     co_await coroutine::parallel_for_each(_ep_managers | std::views::values, [] (hint_endpoint_manager& ep_man) {
-        return ep_man.flush_current_hints();
+        return ep_man.flush_current_hints_unless_stopping();
     });
 }
 
