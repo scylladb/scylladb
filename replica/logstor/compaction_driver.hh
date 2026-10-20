@@ -97,9 +97,9 @@ public:
 
     // Returns the limits of automatic compaction.
     compaction_batch_limits automatic_batch_limits() const noexcept;
-    // Returns the limits of a compaction that was asked for explicitly. They are separate from
-    // automatic_batch_limits(), so that a bound of the automatic policy does not apply to such a
-    // compaction.
+    // Returns the limits of a compaction that was asked for explicitly, which takes any batch with a
+    // net gain. They are separate from automatic_batch_limits(), so that a bound of the automatic
+    // policy does not apply to such a compaction.
     compaction_batch_limits explicit_batch_limits() const noexcept;
 
     // Tells a driver that waits for candidates that a group can be ranked again: its compaction

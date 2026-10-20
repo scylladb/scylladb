@@ -171,20 +171,66 @@ static size_t select_compaction_prefix(std::span<const compaction_candidate_scor
     return best;
 }
 
+// Returns the free space that a segment must have to be under `utilization_threshold`, or 0 when
+// every segment is a candidate. The lowest bucket of the histogram holds every segment with less
+// than `min_size` free, in no order, so a threshold inside it would check each nearly full segment
+// of the group. Such a threshold applies only near the space floor, where the curve is about to
+// reach 1, so it applies as 1.
+static uint64_t min_free_space_of(double utilization_threshold, uint64_t segment_size) noexcept {
+    const auto max_record_bytes = static_cast<uint64_t>(std::floor(std::clamp(utilization_threshold, 0.0, 1.0) * double(segment_size)));
+    const auto min_free_space = segment_size - max_record_bytes;
+    return min_free_space < segment_descriptor_hist_options.min_size ? 0 : min_free_space;
+}
+
+// Returns a batch of the dead segments in `candidates`, or nothing when no candidate is dead.
+static std::optional<compaction_batch> dead_segment_batch(std::vector<const segment_descriptor*> candidates,
+        uint64_t segment_size) {
+    std::erase_if(candidates, [segment_size] (const segment_descriptor* desc) {
+        return desc->record_bytes(segment_size) != 0;
+    });
+    if (candidates.empty()) {
+        return std::nullopt;
+    }
+    const auto score = compaction_candidate_score{.n_in = candidates.size(), .n_out = 0, .live_bytes = 0};
+    return compaction_batch{
+        .segments = std::move(candidates),
+        .score = score,
+    };
+}
+
 std::optional<compaction_batch> select_compaction_batch(const segment_set& segments, uint64_t segment_size,
         const compaction_batch_limits& limits) {
-    const auto batch_cap = limits.batch_cap;
     std::vector<const segment_descriptor*> candidates;
     // prefix_scores[i] scores the batch made of candidates[0..i].
     std::vector<compaction_candidate_score> prefix_scores;
-    candidates.reserve(batch_cap);
-    prefix_scores.reserve(batch_cap);
+    candidates.reserve(limits.batch_cap);
+    prefix_scores.reserve(limits.batch_cap);
+
+    // A segment is a candidate when its utilization is at most the threshold, that is when it has
+    // at least `min_free_space` free. The histogram is ordered only by bucket, so a segment over
+    // the threshold stops the selection only after the buckets pass the threshold. In the bucket
+    // that the threshold cuts, each segment is checked, and the scan skips at most `batch_cap`
+    // segments over the threshold there.
+    //
+    // So a scan reads at most twice `batch_cap` segments, however many segments the bucket holds.
+    // A candidate behind more skipped segments waits until more of its records die and it moves
+    // to a lower bucket, or until the threshold increases.
+    const auto min_free_space = min_free_space_of(limits.utilization_threshold, segment_size);
+    const auto threshold_bucket = min_free_space > 0 ? segment_descriptor_hist_options.bucket_of(min_free_space) : 0;
 
     uint64_t accum_record_bytes = 0;
     uint64_t accum_record_count = 0;
+    size_t skipped = 0;
     for (const auto& desc : segments.by_free_space()) {
-        if (candidates.size() >= batch_cap) {
+        if (candidates.size() >= limits.batch_cap) {
             break;
+        }
+        if (min_free_space > 0 && desc.free_space < min_free_space) {
+            if (segment_descriptor_hist_options.bucket_of(desc.free_space) < threshold_bucket
+                    || ++skipped >= limits.batch_cap) {
+                break;
+            }
+            continue;
         }
         candidates.push_back(&desc);
 
@@ -197,6 +243,12 @@ std::optional<compaction_batch> select_compaction_batch(const segment_set& segme
             .live_bytes = accum_record_bytes,
         };
         prefix_scores.push_back(score);
+    }
+
+    // The group has too few candidates for a job. Dead segments do not wait for more candidates,
+    // because a job reads and writes nothing for them.
+    if (candidates.size() < limits.min_batch) {
+        return dead_segment_batch(std::move(candidates), segment_size);
     }
 
     const auto selected_count = select_compaction_prefix(prefix_scores, limits.extension_tolerance);

@@ -82,12 +82,16 @@ future<> compaction_driver::stop() {
 compaction_batch_limits compaction_driver::automatic_batch_limits() const noexcept {
     return compaction_batch_limits{
         .batch_cap = _limits.batch_cap,
+        .min_batch = 1,
+        .utilization_threshold = 1,
     };
 }
 
 compaction_batch_limits compaction_driver::explicit_batch_limits() const noexcept {
     return compaction_batch_limits{
         .batch_cap = _limits.batch_cap,
+        .min_batch = 1,
+        .utilization_threshold = 1,
     };
 }
 

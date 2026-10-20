@@ -13,6 +13,7 @@
 #include <cmath>
 #include <deque>
 #include <limits>
+#include <random>
 #include <ranges>
 #include <utility>
 #include <vector>
@@ -25,6 +26,20 @@
 #include "replica/logstor/compaction_policy.hh"
 
 using namespace replica::logstor;
+
+namespace {
+
+// Returns the limits of a compaction that takes any batch with a net gain, as an explicit compaction
+// does.
+compaction_batch_limits any_batch(size_t batch_cap) {
+    return compaction_batch_limits{
+        .batch_cap = batch_cap,
+        .min_batch = 1,
+        .utilization_threshold = 1,
+    };
+}
+
+} // namespace
 
 BOOST_AUTO_TEST_SUITE(logstor_compaction_policy_test)
 
@@ -267,7 +282,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
         BOOST_REQUIRE_EQUAL(batch.score.live_bytes, live_bytes);
     };
 
-    auto batch = select_compaction_batch(segments, segment_size, compaction_batch_limits{.batch_cap = min_segments_per_compaction});
+    auto batch = select_compaction_batch(segments, segment_size, any_batch(min_segments_per_compaction));
     BOOST_REQUIRE(batch);
     check_batch(*batch);
 
@@ -279,7 +294,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
     }
 
     // The cap bounds the candidate set, not only the prefix chosen out of it.
-    auto capped = select_compaction_batch(segments, segment_size, compaction_batch_limits{.batch_cap = 2});
+    auto capped = select_compaction_batch(segments, segment_size, any_batch(2));
     BOOST_REQUIRE(capped);
     check_batch(*capped);
     BOOST_REQUIRE_LE(capped->segments.size(), 2u);
@@ -290,11 +305,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
     for (size_t i = 0; i < min_segments_per_compaction; ++i) {
         add_segment(dense, dense_records);
     }
-    BOOST_REQUIRE(!select_compaction_batch(dense, segment_size, compaction_batch_limits{.batch_cap = min_segments_per_compaction}));
+    BOOST_REQUIRE(!select_compaction_batch(dense, segment_size, any_batch(min_segments_per_compaction)));
 
     // An empty group has nothing to compact.
     segment_set empty{segment_size};
-    BOOST_REQUIRE(!select_compaction_batch(empty, segment_size, compaction_batch_limits{.batch_cap = min_segments_per_compaction}));
+    BOOST_REQUIRE(!select_compaction_batch(empty, segment_size, any_batch(min_segments_per_compaction)));
 }
 
 // A job next to a job in flight starts only if its batch reclaims nearly as well as the best batch.
@@ -432,6 +447,105 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_utilization_threshold_curve) {
     const auto flat = make_utilization_threshold_curve(200, 6, 0.5, 0.1, 0.3, 0.5);
     for (uint64_t available = flat.anchor; available <= 200; ++available) {
         BOOST_REQUIRE_EQUAL(effective_utilization_threshold(available, flat), 0.5);
+    }
+}
+
+// A batch under a utilization threshold holds only segments under it, also where the threshold cuts
+// a bucket of the histogram. A group with fewer candidates than the minimum batch has no batch,
+// unless it has dead segments.
+SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch_threshold) {
+    constexpr uint64_t segment_size = 128 * 1024;
+    constexpr size_t record_size = 1024;
+    constexpr size_t records_per_segment = segment_size / record_size;
+
+    std::deque<segment_descriptor> descs;
+    auto add_segment = [&] (segment_set& set, size_t live_records) {
+        auto& desc = descs.emplace_back();
+        desc.reset(segment_size);
+        desc.on_write(live_records * record_size, live_records);
+        set.add_segment(desc);
+    };
+    auto limits = [] (size_t min_batch, double threshold) {
+        return compaction_batch_limits{
+            .batch_cap = min_segments_per_compaction,
+            .min_batch = min_batch,
+            .utilization_threshold = threshold,
+        };
+    };
+
+    // A threshold inside the lowest bucket applies as 1, so the thresholds stay under it.
+    std::mt19937 rng(1);
+    for (int i = 0; i < 200; ++i) {
+        segment_set segments{segment_size};
+        const auto segment_count = 1 + rng() % 24;
+        for (size_t j = 0; j < segment_count; ++j) {
+            add_segment(segments, rng() % (records_per_segment + 1));
+        }
+        const double threshold = 0.05 + 0.9 * (rng() % 1000) / 1000.0;
+        BOOST_TEST_CONTEXT("i=" << i << " threshold=" << threshold) {
+            auto batch = select_compaction_batch(segments, segment_size, limits(1, threshold));
+            if (batch) {
+                for (const auto* desc : batch->segments) {
+                    BOOST_REQUIRE_LE(desc->record_bytes(segment_size), threshold * segment_size);
+                }
+            }
+        }
+    }
+
+    // Segments just under and just over a threshold of a quarter share a bucket of the histogram. A
+    // segment over the threshold does not keep the segments under the threshold out of the batch,
+    // whatever their order.
+    segment_set straddling{segment_size};
+    for (size_t live_records : {31, 30, 33, 34, 35}) {
+        add_segment(straddling, live_records);
+    }
+    auto under = select_compaction_batch(straddling, segment_size, limits(2, 0.25));
+    BOOST_REQUIRE(under);
+    BOOST_REQUIRE_EQUAL(under->segments.size(), 2u);
+
+    // In that bucket the scan skips at most `batch_cap` segments over the threshold. The bucket is a
+    // list that adds a segment at its front, so the segments added last are read first.
+    for (size_t over_count : {min_segments_per_compaction - 1, min_segments_per_compaction}) {
+        segment_set capped{segment_size};
+        for (size_t live_records : {31, 30}) {
+            add_segment(capped, live_records);
+        }
+        for (size_t i = 0; i < over_count; ++i) {
+            add_segment(capped, 33);
+        }
+        BOOST_TEST_CONTEXT("over_count=" << over_count) {
+            auto batch = select_compaction_batch(capped, segment_size, limits(2, 0.25));
+            BOOST_REQUIRE_EQUAL(bool(batch), over_count < min_segments_per_compaction);
+        }
+    }
+
+    // Three segments a tenth full, and five segments six tenths full.
+    segment_set mixed{segment_size};
+    for (size_t i = 0; i < 3; ++i) {
+        add_segment(mixed, records_per_segment / 10);
+    }
+    for (size_t i = 0; i < 5; ++i) {
+        add_segment(mixed, records_per_segment * 6 / 10);
+    }
+    BOOST_REQUIRE(!select_compaction_batch(mixed, segment_size, limits(4, 0.5)));
+    auto three = select_compaction_batch(mixed, segment_size, limits(3, 0.5));
+    BOOST_REQUIRE(three);
+    BOOST_REQUIRE_EQUAL(three->segments.size(), 3u);
+    BOOST_REQUIRE(!select_compaction_batch(mixed, segment_size, limits(1, 0.05)));
+
+    // Dead segments do not wait for the minimum batch.
+    segment_set with_dead{segment_size};
+    for (size_t i = 0; i < 3; ++i) {
+        add_segment(with_dead, 0);
+    }
+    for (size_t i = 0; i < 2; ++i) {
+        add_segment(with_dead, records_per_segment / 2);
+    }
+    auto dead = select_compaction_batch(with_dead, segment_size, limits(min_segments_per_compaction, 0.6));
+    BOOST_REQUIRE(dead);
+    BOOST_REQUIRE_EQUAL(dead->segments.size(), 3u);
+    for (const auto* desc : dead->segments) {
+        BOOST_REQUIRE_EQUAL(desc->record_bytes(segment_size), 0u);
     }
 }
 
