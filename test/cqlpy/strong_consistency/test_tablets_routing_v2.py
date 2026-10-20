@@ -28,7 +28,7 @@ from .. import cql_frames
 from ..rest_api import message_injection, scylla_inject_error, wait_for_injection_enter
 from ..util import ScyllaMetrics, new_test_keyspace, new_test_table, unique_name
 
-EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL"
+EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL_V2"
 PAYLOAD_KEY = "tablets-routing-v2"
 NO_ROUTING_STATEMENT = 0xFFFF
 

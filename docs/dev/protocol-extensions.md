@@ -360,11 +360,12 @@ This extension tells the database that the driver understands the
 `tablet_version_block` on EXECUTE requests, a routing hint on BATCH requests,
 and can interpret the `tablets-routing-v2` `custom_payload`.
 
-The feature is identified by the `TABLETS_ROUTING_V2_EXPERIMENTAL` key, which is
-meant to be sent in the SUPPORTED message.
+The feature is identified by the `TABLETS_ROUTING_V2_EXPERIMENTAL_V2` key, which is
+meant to be sent in the SUPPORTED message. It replaced `TABLETS_ROUTING_V2_EXPERIMENTAL`,
+under which BATCH requests carried no routing hint.
 
 Unlike `TABLETS_ROUTING_V1`, the server advertises
-`TABLETS_ROUTING_V2_EXPERIMENTAL` only when the `strongly-consistent-tables`
+`TABLETS_ROUTING_V2_EXPERIMENTAL_V2` only when the `strongly-consistent-tables`
 experimental feature is enabled. The `_EXPERIMENTAL` suffix indicates the
 feature is still under development and its format may change.
 
