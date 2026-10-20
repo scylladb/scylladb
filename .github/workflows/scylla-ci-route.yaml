@@ -396,8 +396,9 @@ jobs:
               [ -z "$FILE" ] && continue
               # Check for files that DON'T need Sphinx build
               # (.github/*, docs/dev/*, README.md, docs/*.py, top-level *.md,
-              # .coderabbit.yaml - review config, must live at the repo root)
-              if echo "$FILE" | grep -qE '^docs/dev/|(/)?README\.md$|^docs/.*\.py$|^\.github|^[a-zA-Z0-9]+\.md$|^\.coderabbit\.yaml$'; then
+              # .coderabbit.yaml - review config, must live at the repo root,
+              # .agents/* - AI agent instructions and review rules)
+              if echo "$FILE" | grep -qE '^docs/dev/|(/)?README\.md$|^docs/.*\.py$|^\.github|^[a-zA-Z0-9]+\.md$|^\.coderabbit\.yaml$|^\.agents/'; then
                 HAS_DOC_FILES=true
               # Check for docs files that DO need Sphinx build
               elif echo "$FILE" | grep -qE '^docs/'; then
@@ -721,9 +722,9 @@ jobs:
           done <<< "$ALL_FILES"
 
           # Files that cannot affect dtest or unit-test results:
-          # docs/, .github/, *.md at any depth, root repo-metadata dotfiles,
-          # licenses/, NOTICE.txt and ORIGIN.
-          NON_CODE='docs/|\.github/|(.*/)?[^/]+\.md$|\.(clang-format|coderabbit\.yaml|dockerignore|gitattributes|gitignore|gitorderfile|mailmap)$|licenses/|NOTICE\.txt$|ORIGIN$'
+          # docs/, .github/, .agents/, *.md at any depth, root repo-metadata
+          # dotfiles, licenses/, NOTICE.txt and ORIGIN.
+          NON_CODE='docs/|\.github/|\.agents/|(.*/)?[^/]+\.md$|\.(clang-format|coderabbit\.yaml|dockerignore|gitattributes|gitignore|gitorderfile|mailmap)$|licenses/|NOTICE\.txt$|ORIGIN$'
 
           # dtest: required if any file does NOT match test*, dist/docker/*, dist/common/scripts/*, NON_CODE
           DTEST_REQUIRED=false
