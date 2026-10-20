@@ -242,7 +242,7 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
 #endif
 
     const auto cl = options.get_consistency();
-    const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl);
+    const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl, query_state.get_client_state());
     if (guardrail_state == query_processor::write_consistency_guardrail_state::FAIL) {
         return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(
                 exceptions::invalid_request_exception(
