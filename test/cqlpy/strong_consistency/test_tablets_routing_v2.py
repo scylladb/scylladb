@@ -28,7 +28,7 @@ from ..rest_api import tablet_balancing_disabled
 from ..util import new_test_table, paging_plan_rederivations
 
 
-EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL"
+EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL_V2"
 PAYLOAD_KEY = "tablets-routing-v2"
 
 PROTOCOL_ERROR = 0x000A
