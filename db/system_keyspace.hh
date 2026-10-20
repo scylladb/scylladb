@@ -23,6 +23,8 @@
 #include "mutation_query.hh"
 #include "system_keyspace_view_types.hh"
 #include "sstables/sstables_registry.hh"
+#include <seastar/core/gate.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/sharded.hh>
 #include "cdc/generation_id.hh"
 #include "cdc/generation.hh"
@@ -124,6 +126,8 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     virtual_tables_registry _virtual_tables_registry;
     bool _peers_table_read_fixup_done = false;
     bool _shutdown = false;
+    seastar::gate _async_gate;
+    std::optional<seastar::shared_future<>> _async_gate_closed;
 
     static schema_ptr raft_snapshot_config();
     static schema_ptr truncated();
@@ -720,10 +724,12 @@ public:
 
     system_keyspace(cql3::query_processor& qp, replica::database& db) noexcept;
     ~system_keyspace();
+    future<> drain();
     future<> shutdown();
     future<> stop();
 
     virtual_tables_registry& get_virtual_tables_registry() { return _virtual_tables_registry; }
+    seastar::gate& async_gate() noexcept { return _async_gate; }
 private:
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const query_data_params& values);
     template <typename... Args>
