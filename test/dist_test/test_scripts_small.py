@@ -139,7 +139,6 @@ def test_ntp_setup_timesyncd_inactive(scripts, monkeypatch):
 
 
 @pytest.mark.parametrize('kind', ['pool', 'server'])
-@pytest.mark.xfail(strict=True, reason="Path.open() is still given the file name: NameError: confpath")
 def test_ntp_setup_chrony_subdomain(scripts, monkeypatch, kind):
     """--subdomain rewrites chrony's pool.ntp.org servers, as `pool` or (CentOS 7 style) `server` lines."""
     monkeypatch.setattr('shutil.which', lambda x: x == 'chronyd')
@@ -157,7 +156,6 @@ def test_ntp_setup_chrony_no_conf(scripts, monkeypatch):
 
 
 @pytest.mark.parametrize('subdomain', [[], ['--subdomain', 'centos']], ids=['default-servers', 'subdomain'])
-@pytest.mark.xfail(strict=True, reason="calls get_ntpd_unit(), which was renamed to get_ntp_unit()")
 def test_ntp_setup_ntpd(scripts, monkeypatch, subdomain):
     """With ntpd, the clock is stepped with ntpdate against the (optionally rewritten) first server, then ntpd restarts."""
     monkeypatch.setattr('shutil.which', lambda x: x == 'ntpd')
