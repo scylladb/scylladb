@@ -96,6 +96,18 @@ constexpr std::array registry_options = {
         .custom_parser = parse_auto_scrub_period_seconds,
         .custom_expected_description = "0 or an integer from 3600 to 4294967295",
     },
+    // Migrated from the db::config option of the same name. The tablet load balancer reads
+    // it on the group0 leader and applies it to the whole cluster, so only the CLUSTER scope
+    // makes sense. The range matches the unsigned entry; 0 would scale every table's tablet
+    // count down to nothing.
+    option{
+        .name = "tablets_per_shard_goal",
+        .description = "The goal for the maximum number of tablet replicas per shard that the tablet load balancer tries to keep",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t(100),
+        .kind = option_kind::db_config,
+        .valid_range = integer_range{.min = 1, .max = std::numeric_limits<uint32_t>::max()},
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {

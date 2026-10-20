@@ -59,6 +59,7 @@
 #include "service/view_update_backlog_broker.hh"
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
+#include "db/cluster_config_db_config_bridge.hh"
 #include "db/cluster_config_manager.hh"
 #include "db/cluster_config_registry.hh"
 #include "db/system_keyspace.hh"
@@ -2022,6 +2023,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             cluster_config_manager.start(std::ref(cluster_config_manager), std::ref(db), std::ref(qp)).get();
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
                 cluster_config_manager.stop().get();
+            });
+            // Stopped before the manager, which unregisters its callbacks.
+            static sharded<db::cluster_config_db_config_bridge> cluster_config_db_config_bridge;
+            cluster_config_db_config_bridge.start(std::ref(cluster_config_manager), std::ref(*cfg)).get();
+            auto stop_cluster_config_db_config_bridge = defer_verbose_shutdown("cluster config db::config bridge", [] {
+                cluster_config_db_config_bridge.stop().get();
             });
 
             static sharded<std::optional<db::cluster_config_manager::config_callback_registration>> scrub_period_registrations;

@@ -50,6 +50,7 @@
 #include "auth/common.hh"
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
+#include "db/cluster_config_db_config_bridge.hh"
 #include "db/cluster_config_manager.hh"
 #include "schema/schema_builder.hh"
 #include "schema/compression_initializer.hh"
@@ -174,6 +175,7 @@ private:
     sharded<service::migration_manager> _mm;
     sharded<db::batchlog_manager> _batchlog_manager;
     sharded<db::cluster_config_manager> _cluster_config_manager;
+    sharded<db::cluster_config_db_config_bridge> _cluster_config_db_config_bridge;
     sharded<gms::gossiper> _gossiper;
     sharded<service::raft_group_registry> _group0_registry;
     sharded<db::system_keyspace> _sys_ks;
@@ -831,6 +833,10 @@ private:
             _cluster_config_manager.start(std::ref(_cluster_config_manager), std::ref(_db), std::ref(_qp)).get();
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [this] {
                 _cluster_config_manager.stop().get();
+            });
+            _cluster_config_db_config_bridge.start(std::ref(_cluster_config_manager), std::ref(*cfg)).get();
+            auto stop_cluster_config_db_config_bridge = defer_verbose_shutdown("cluster config db::config bridge", [this] {
+                _cluster_config_db_config_bridge.stop().get();
             });
 
             _elc_notif.start().get();

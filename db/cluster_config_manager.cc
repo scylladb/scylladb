@@ -525,6 +525,21 @@ std::optional<sstring> cluster_config_manager::resolve_config(std::string_view c
     return get_cluster_config(config_name);
 }
 
+namespace {
+
+// A db_config option's effective value lives in db::config, and its fallback when no scope
+// stores an override is the node's own db::config value rather than the registry default,
+// so the typed accessors would hand a consumer the wrong value for it.
+void check_not_db_config(const cluster_config_registry::option& opt) {
+    if (opt.kind == cluster_config_registry::option_kind::db_config) {
+        utils::on_internal_error(format(
+                "cluster config '{}' is backed by db::config; read it through db::config, not the manager",
+                opt.name));
+    }
+}
+
+}
+
 std::optional<cluster_config_manager::lookup_context> cluster_config_manager::table_lookup_context(table_id table) const {
     auto t = _db.get_tables_metadata().get_table_if_exists(table);
     if (!t) {
@@ -551,6 +566,7 @@ static const cluster_config_registry::option& find_registered_option(std::string
 
 std::optional<bool> cluster_config_manager::resolve_boolean_config_no_default(std::string_view config_name, table_id table) const {
     const auto& opt = find_registered_option(config_name);
+    check_not_db_config(opt);
     auto ctx = table_lookup_context(table);
     if (!ctx) {
         return std::nullopt;
@@ -564,6 +580,7 @@ std::optional<bool> cluster_config_manager::resolve_boolean_config_no_default(st
 
 std::optional<int64_t> cluster_config_manager::resolve_integer_config_no_default(std::string_view config_name, table_id table) const {
     const auto& opt = find_registered_option(config_name);
+    check_not_db_config(opt);
     auto ctx = table_lookup_context(table);
     if (!ctx) {
         return std::nullopt;
@@ -580,18 +597,22 @@ std::optional<int64_t> cluster_config_manager::resolve_integer_config_no_default
 // rejects the option), so resolution yields absence and these return the default, which is
 // the value the node should be using anyway.
 bool cluster_config_manager::resolve_boolean_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
+    check_not_db_config(opt);
     return cluster_config_registry::to_boolean(opt, resolve_config(opt.name, ctx));
 }
 
 int64_t cluster_config_manager::resolve_integer_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
+    check_not_db_config(opt);
     return cluster_config_registry::to_integer(opt, resolve_config(opt.name, ctx));
 }
 
 double cluster_config_manager::resolve_floating_point_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
+    check_not_db_config(opt);
     return cluster_config_registry::to_floating_point(opt, resolve_config(opt.name, ctx));
 }
 
 sstring cluster_config_manager::resolve_text_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
+    check_not_db_config(opt);
     return cluster_config_registry::to_text(opt, resolve_config(opt.name, ctx));
 }
 
