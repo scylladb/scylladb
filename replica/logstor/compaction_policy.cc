@@ -9,6 +9,7 @@
 #include "replica/logstor/compaction.hh"
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <span>
 
 namespace replica::logstor {
@@ -40,15 +41,21 @@ bool auto_compaction_wanted(bool running, uint64_t available_segments, free_segm
     return available_segments < (running ? watermarks.high : watermarks.low);
 }
 
-compaction_limits make_compaction_limits(free_segment_watermarks watermarks, size_t max_batch_cap) noexcept {
-    // With the trigger disabled there is no target to protect, and automatic compaction never runs;
-    // the limits still have to be sane for compaction submitted explicitly, so fall back to the
-    // smallest batch rather than to zero.
-    const auto budget = std::max<uint64_t>(watermarks.low, min_segments_per_compaction);
+uint64_t compaction_space_floor(uint64_t segment_count) noexcept {
+    // At least two batches, so that a job can hold one batch while the write path has the other.
+    // The minimum has its own limit, so that the space floor is not most of a small disk.
+    const auto minimum = std::min<uint64_t>(2 * min_segments_per_compaction, std::max<uint64_t>(1, segment_count / 8));
+    return std::max<uint64_t>(segment_count / 32, minimum);
+}
+
+compaction_limits make_compaction_limits(uint64_t space_floor, size_t max_batch_cap) noexcept {
+    // Below one batch the relation cannot hold. Use the smallest batch that can reclaim, and not
+    // nothing.
+    const auto budget = std::max<uint64_t>(space_floor, min_segments_per_compaction);
     // Spend the budget on concurrency first, up to the number of jobs the buffer pool can carry,
     // then give what is left to the batch. Both directions of the clamp matter: a batch below
     // min_segments_per_compaction cannot reclaim, and one above max_batch_cap makes a single job
-    // hold too much of the target.
+    // hold too much of the space floor.
     const auto parallelism = std::clamp<uint64_t>(budget / min_segments_per_compaction, 1, max_auto_compaction_parallelism);
     const auto batch_cap = std::clamp<uint64_t>(budget / parallelism, min_segments_per_compaction, std::max<uint64_t>(max_batch_cap, min_segments_per_compaction));
 
@@ -56,6 +63,59 @@ compaction_limits make_compaction_limits(free_segment_watermarks watermarks, siz
         .auto_parallelism = static_cast<size_t>(parallelism),
         .batch_cap = static_cast<size_t>(batch_cap)
     };
+}
+
+utilization_threshold_curve make_utilization_threshold_curve(uint64_t segment_count, uint64_t space_floor,
+        double threshold, double anchor_fraction, double ceiling_fraction, double min_threshold) noexcept {
+    // A fraction of the disk, rounded to whole segments; anything that is not a usable fraction
+    // means "not configured".
+    auto segments_of = [segment_count] (double fraction) -> std::optional<uint64_t> {
+        if (!std::isfinite(fraction) || fraction <= 0) {
+            return std::nullopt;
+        }
+        return static_cast<uint64_t>(std::llround(std::min(fraction, 1.0) * double(segment_count)));
+    };
+    // The pressure band and the decrease of the threshold must have a width. A configuration
+    // without one gets the smallest width, and not a division by zero.
+    const auto anchor = std::max<uint64_t>(segments_of(anchor_fraction).value_or(2 * space_floor), space_floor + 1);
+    const auto ceiling = std::max<uint64_t>(segments_of(ceiling_fraction).value_or(0), anchor + 1);
+    const auto max_min_threshold = std::isfinite(threshold) ? std::clamp(threshold, 0.0, 1.0) : 0.0;
+    return utilization_threshold_curve{
+        .space_floor = space_floor,
+        .anchor = anchor,
+        .ceiling = ceiling,
+        .threshold = threshold,
+        .min_threshold = std::isfinite(min_threshold) ? std::clamp(min_threshold, 0.0, max_min_threshold) : 0.0,
+    };
+}
+
+double compaction_space_pressure(uint64_t available_segments, const utilization_threshold_curve& curve) noexcept {
+    if (curve.anchor <= curve.space_floor) {
+        return available_segments <= curve.space_floor ? 1 : 0;
+    }
+    if (available_segments >= curve.anchor) {
+        return 0;
+    }
+    if (available_segments <= curve.space_floor) {
+        return 1;
+    }
+    return double(curve.anchor - available_segments) / double(curve.anchor - curve.space_floor);
+}
+
+double effective_utilization_threshold(uint64_t available_segments, const utilization_threshold_curve& curve) noexcept {
+    if (available_segments < curve.anchor) {
+        return curve.threshold + (1 - curve.threshold) * compaction_space_pressure(available_segments, curve);
+    }
+    if (available_segments >= curve.ceiling) {
+        return curve.min_threshold;
+    }
+    const auto rise = double(available_segments - curve.anchor) / double(curve.ceiling - curve.anchor);
+    return curve.min_threshold + (curve.threshold - curve.min_threshold) * (1 - rise);
+}
+
+size_t effective_min_batch(double pressure) noexcept {
+    const auto scaled = std::llround(double(min_segments_per_compaction) * (1 - std::clamp(pressure, 0.0, 1.0)));
+    return std::max<size_t>(1, static_cast<size_t>(scaled));
 }
 
 bool compaction_candidate_score::operator<(const compaction_candidate_score& other) const noexcept {

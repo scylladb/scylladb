@@ -38,7 +38,7 @@ constexpr size_t max_auto_compaction_parallelism = std::min<size_t>(4, max_compa
 
 // The smallest batch worth compacting. A batch reclaims only when its mean utilization is below
 // `1 - 1/n_in`, so a smaller batch could not reclaim anything from a disk that is even moderately
-// packed. It also anchors the free-segment target's absolute floor.
+// packed. It also anchors the minimum of the space floor.
 constexpr size_t min_segments_per_compaction = 8;
 
 // The fraction of the best reclamation efficiency that a longer batch must keep to be selected
@@ -79,9 +79,16 @@ free_segment_watermarks make_free_segment_watermarks(uint64_t segment_count, dou
 // This is only the space half of the decision; whether compaction may run at all is the caller's.
 bool auto_compaction_wanted(bool running, uint64_t available_segments, free_segment_watermarks watermarks) noexcept;
 
-// How much automatic compaction may take on at once, derived from the free-segment target.
-// The defaults are the most conservative limits make_compaction_limits() can return, so that a
-// value that has not been refreshed yet still admits compaction rather than blocking it.
+// The space floor: the free segments that compaction keeps for itself. The jobs in flight can hold
+// this many segments, and at this free level the space pressure is 1, see
+// compaction_space_pressure(). It is 1/32 of the disk, with a minimum of two batches for a small
+// disk. It has no upper limit, because on a large disk it is the room that the write path has for a
+// burst while compaction catches up.
+uint64_t compaction_space_floor(uint64_t segment_count) noexcept;
+
+// How much automatic compaction can take at the same time, derived from the space floor. The
+// defaults are the smallest limits that make_compaction_limits() returns, so that limits that are
+// not computed yet still let compaction run.
 struct compaction_limits {
     // Automatic compaction jobs kept in flight.
     size_t auto_parallelism = 1;
@@ -89,17 +96,69 @@ struct compaction_limits {
     size_t batch_cap = min_segments_per_compaction;
 };
 
-// A compaction job allocates its output segments as it goes but frees its inputs only when it is
-// done, so every job in flight can hold up to `batch_cap` segments of the free-segment target at
-// once. Deriving both limits from `low` is what keeps `auto_parallelism * batch_cap <= low`: without
-// it, concurrent jobs can consume the whole target and then wait for a segment that only one of them
-// could free. `max_batch_cap` is segment_manager_config::max_segments_per_compaction, the upper bound
-// the derived cap is clamped to.
+// A job allocates its output segments while it runs and frees its inputs only when it ends, so each
+// job in flight can hold up to `batch_cap` segments. Both limits come from the space floor, so that
+// `auto_parallelism * batch_cap <= space_floor`. Otherwise the jobs can use all of the space floor
+// and then wait for a segment that only one of them can free. `max_batch_cap` is
+// segment_manager_config::max_segments_per_compaction, the upper limit of the batch cap.
 //
-// The invariant cannot hold on a disk so small that the target is below one batch; there the floor
-// of make_free_segment_watermarks() has already been capped by the disk size and a batch of
-// `min_segments_per_compaction` is the least that can reclaim anything.
-compaction_limits make_compaction_limits(free_segment_watermarks watermarks, size_t max_batch_cap) noexcept;
+// When the space floor is less than one batch the relation cannot hold, and the limits are one job
+// of `min_segments_per_compaction` segments, the smallest batch that can reclaim.
+compaction_limits make_compaction_limits(uint64_t space_floor, size_t max_batch_cap) noexcept;
+
+// The utilization threshold as a function of the free level, in available segments: a
+// piecewise-linear curve through three points.
+//
+//     available <= space floor          -> 1         any batch with a net gain
+//     space floor < available < anchor  -> 1 .. u    space pressure increases the threshold
+//     available == anchor               -> u         the configured threshold
+//     anchor < available < ceiling      -> u .. m    more free space decreases it
+//     available >= ceiling              -> m         the minimum threshold
+//
+// The slope above the anchor sets the policy. With `m = u` the threshold is constant, and the free
+// level changes with the data on the disk. With the ceiling one segment above the anchor, the free
+// level stays near the anchor. The part below the anchor lets a disk that is too full for `u` run:
+// when the disk holds so much live data that too few segments are under `u`, compaction cannot free
+// enough segments and the free level falls. Then the threshold increases, and compaction takes
+// fuller segments. The minimum threshold `m` makes sure that a segment with a few long-lived records
+// is compacted at any free level. This limits the space that such segments hold, at a write
+// amplification of about `m / (1 - m)`.
+struct utilization_threshold_curve {
+    uint64_t space_floor;
+    uint64_t anchor;
+    // Above the anchor: the free level where the threshold reaches `min_threshold`.
+    uint64_t ceiling;
+    // The configured threshold, logstor_compaction_utilization_threshold. Anything outside [0, 1)
+    // disables automatic compaction.
+    double threshold;
+    // The threshold at the ceiling and above, logstor_compaction_min_utilization_threshold, in
+    // [0, threshold].
+    double min_threshold;
+
+    bool operator==(const utilization_threshold_curve&) const noexcept = default;
+};
+
+// The curve for a disk of `segment_count` segments and the space floor `space_floor`, from the
+// configuration. `anchor_fraction` and `ceiling_fraction` are fractions of the disk. An anchor of 0
+// is twice the space floor, and a ceiling of 0 is one segment above the anchor. The anchor is kept
+// above the space floor, the ceiling above the anchor, and the minimum threshold in
+// [0, threshold], whatever the configuration is.
+utilization_threshold_curve make_utilization_threshold_curve(uint64_t segment_count, uint64_t space_floor,
+        double threshold, double anchor_fraction, double ceiling_fraction, double min_threshold) noexcept;
+
+// How short of segments the write path is, in [0, 1]: 0 at the anchor or above, 1 at the space
+// floor or below, and linear between them.
+double compaction_space_pressure(uint64_t available_segments, const utilization_threshold_curve&) noexcept;
+
+// The fewest candidate segments that a job runs on: min_segments_per_compaction when there is no
+// space pressure, and less as the pressure increases, down to 1 at the space floor. Under a
+// threshold the candidates of a group arrive one at a time, and without a minimum a job had less
+// than three segments on average. The decrease is gradual, because a disk that is too full for the
+// threshold stays in the pressure band, and a step would make jobs of one segment normal there.
+size_t effective_min_batch(double pressure) noexcept;
+
+// The utilization threshold at this free level.
+double effective_utilization_threshold(uint64_t available_segments, const utilization_threshold_curve&) noexcept;
 
 // The cost of one candidate compaction batch: `n_in` segments are read and rewritten into `n_out`
 // segments, copying `live_bytes` of live data.
