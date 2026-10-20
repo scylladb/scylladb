@@ -107,6 +107,8 @@ The `tablet_version_block` is associated with the target table of the prepared s
 
 For requests that are not single-partition (e.g. range scans), the driver sends an arbitrary `tablet_version_block`. It will be ignored and no routing information will be returned (cf. section [“Server-side changes”](#server-side-changes) below).
 
+Batches, including the `BATCH` request, are covered in [tablets-routing-v2-batches.md](tablets-routing-v2-batches.md).
+
 ### Response payload
 
 The routing information is carried as a custom payload in the `RESULT` frame under the key `"tablets-routing-v2"`. The frame’s custom_payload flag (bit 2, 0x04) is set in the frame header.
