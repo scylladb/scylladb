@@ -227,7 +227,7 @@ modification_executor::commit(const modification_statement& stmt, query_processo
     stmt.inc_cql_stats(qs.get_client_state().is_internal());
 
     const auto cl = options.get_consistency();
-    const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl);
+    const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl, qs.get_client_state());
     if (guardrail_state == query_processor::write_consistency_guardrail_state::FAIL) {
         co_return coroutine::exception(
                 std::make_exception_ptr(exceptions::invalid_request_exception(
