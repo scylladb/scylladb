@@ -1003,7 +1003,12 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(locator::host_id ep, p
     while (true) {
         _abort_source.check();
         static constexpr auto duration = std::chrono::minutes{1};
-        abort_on_expiry aoe(lowres_clock::now() + duration);
+        lowres_clock::duration wait = duration;
+        // Tests shorten the wait to reach the timeout path quickly.
+        if (auto ms = utils::get_local_injector().inject_parameter<uint32_t>("gossiper_lock_endpoint_wait_ms")) {
+            wait = std::chrono::milliseconds(*ms);
+        }
+        abort_on_expiry aoe(lowres_clock::now() + wait);
         auto sub = _abort_source.subscribe([&aoe] () noexcept {
             aoe.abort_source().request_abort();
         });
