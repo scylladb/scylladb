@@ -1011,12 +1011,12 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(locator::host_id ep, p
         try {
             eptr->units = co_await get_units(eptr->sem, 1, aoe.abort_source());
             break;
-        } catch (const abort_requested_exception&) {
-            if (_abort_source.abort_requested()) {
+        } catch (...) {
+            // The `abort_on_expiry` timer aborts the wait with timed_out_error, shutdown with semaphore_aborted.
+            // Rethrow on shutdown and on any error other than the timer; on the timer, log and wait again.
+            if (_abort_source.abort_requested() || !aoe.abort_source().abort_requested()) {
                 throw;
             }
-
-            // If we didn't rethrow above, the abort had to come from `abort_on_expiry`'s timer.
 
             static constexpr auto fmt_loc = [] (const std::source_location& l) {
                 return fmt::format("{}({}:{}) `{}`", l.file_name(), l.line(), l.column(), l.function_name());
