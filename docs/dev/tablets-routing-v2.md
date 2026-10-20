@@ -87,7 +87,7 @@ During connection setup, the driver and server negotiate `TABLETS_ROUTING_V2` su
 
 The extension is gated behind the experimental feature `strongly-consistent-tables`.
 
-**Note:** We temporarily use a different name for the protocol extension: `TABLETS_ROUTING_V2_EXPERIMENTAL`.
+**Note:** We temporarily use a different name for the protocol extension: `TABLETS_ROUTING_V2_EXPERIMENTAL_V2`.
 The name explicitly conveys that the feature is still experimental and may be modified.
 
 ### EXECUTE request extension

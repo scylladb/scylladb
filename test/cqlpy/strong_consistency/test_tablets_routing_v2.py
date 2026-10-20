@@ -29,7 +29,7 @@ from ..rest_api import message_injection, scylla_inject_error, tablet_balancing_
 from ..util import new_test_keyspace, new_test_table, paging_plan_rederivations
 
 
-EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL"
+EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL_V2"
 PAYLOAD_KEY = "tablets-routing-v2"
 NO_ROUTING_STATEMENT = 0xFFFF
 
