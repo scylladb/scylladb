@@ -1037,7 +1037,9 @@ public:
     template <typename Func>
         requires std::same_as<std::invoke_result_t<Func&, const scanned_chunk&>, future<>>
     future<> for_each_chunk(log_segment_id segment_id, Func fn) {
-        co_await scan_segment(segment_id, [&fn] (segment_scanner& scanner) -> future<> {
+        const auto buffer_size = std::min<size_t>(_cfg.segment_size, max_scan_buffer_size);
+        co_await with_segment_input_stream(segment_id, buffer_size, [&] (seastar::input_stream<char>& in) -> future<> {
+            segment_scanner scanner(in, segment_id, _cfg.segment_size);
             while (auto* chunk = co_await scanner.next_chunk()) {
                 co_await fn(*chunk);
             }
@@ -1173,12 +1175,15 @@ private:
 
     future<> write_to_separator(std::vector<write_buffer::record_in_buffer>&, segment_position chunk_position, segment_ref, segment_sequence);
 
+    // The segment info of the first chunk of the segment, or nothing if its headers are not valid.
     future<std::optional<segment_info>> read_segment_info(log_segment_id);
 
-    // Opens the segment, calls `fn` with a scanner of it, and closes the stream on every way out.
+    // Opens the segment with a read buffer of `buffer_size`, calls `fn` with the stream, and closes
+    // the stream on every way out.
     template <typename Func>
-        requires std::same_as<std::invoke_result_t<Func&, segment_scanner&>, future<>>
-    future<> scan_segment(log_segment_id segment_id, Func fn);
+        requires std::invocable<Func&, seastar::input_stream<char>&>
+    futurize_t<std::invoke_result_t<Func&, seastar::input_stream<char>&>>
+    with_segment_input_stream(log_segment_id segment_id, size_t buffer_size, Func fn);
 
     segment_ref make_segment_ref(log_segment_id seg_id) {
         auto& desc = get_segment_descriptor(seg_id);
@@ -1908,31 +1913,22 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
 }
 
 future<std::optional<segment_info>> segment_manager_impl::read_segment_info(log_segment_id segment_id) {
-    auto in = co_await create_segment_input_stream(segment_id, file_input_stream_options {
-        .buffer_size = block_alignment,
-        .read_ahead = 0,
+    return with_segment_input_stream(segment_id, block_alignment, [] (seastar::input_stream<char>& in) {
+        return ::replica::logstor::read_segment_info(in);
     });
-    auto result = co_await coroutine::as_future(::replica::logstor::read_segment_info(in));
-    co_await in.close();
-    if (result.failed()) {
-        co_return coroutine::exception(result.get_exception());
-    }
-    co_return result.get();
 }
 
 template <typename Func>
-    requires std::same_as<std::invoke_result_t<Func&, segment_scanner&>, future<>>
-future<> segment_manager_impl::scan_segment(log_segment_id segment_id, Func fn) {
+    requires std::invocable<Func&, seastar::input_stream<char>&>
+futurize_t<std::invoke_result_t<Func&, seastar::input_stream<char>&>>
+segment_manager_impl::with_segment_input_stream(log_segment_id segment_id, size_t buffer_size, Func fn) {
     auto in = co_await create_segment_input_stream(segment_id, seastar::file_input_stream_options {
-        .buffer_size = std::min<size_t>(_cfg.segment_size, max_scan_buffer_size),
+        .buffer_size = buffer_size,
         .read_ahead = 0,
     });
-    segment_scanner scanner(in, segment_id, _cfg.segment_size);
-    auto scan_result = co_await coroutine::as_future(futurize_invoke(fn, scanner));
-    co_await in.close();
-    if (scan_result.failed()) {
-        co_await coroutine::return_exception_ptr(scan_result.get_exception());
-    }
+    co_return co_await futurize_invoke(fn, in).finally([&in] {
+        return in.close();
+    });
 }
 
 future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std::function<future<>(group_compaction_state&)> op, scheduling_group sg) {
