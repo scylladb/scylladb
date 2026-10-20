@@ -546,3 +546,232 @@ For `CREATE KEYSPACE` on S3/GS storage, Scylla tracks object-storage SSTables in
 
 > **NOTE:**
 > It’s obvious to say that re-uploading a scrubbed SSTable means re-uploading all its components as it’s likely most of them were changed.
+
+# Relationship between references and the catalog tables in cluster snapshots/backups
+
+This section describes how `refs/` and various catalog tables interact with each other
+in order to provide consistent and crash safe cluster snapshotting/backups for remote
+object-storage tables.
+  
+The `system_distributed.*` snapshot tables and the `refs/` objects in the bucket are
+complementary halves of one mechanism, the references pin data (and are the core of
+providing zero-copy cluster snapshots) and the catalog tables rows provide the accounting
+to make sure snapshots/backups are crash-safe, consistent in high-concurrency cluster operations
+and safe on retake.
+
+A snapshot reference is an empty object at `{prefix}/{sid}/refs/snapshot-{tag}/{gen}`
+which says that the `{tag}` snapshot has a claim too on this SSTable.
+The nodes themselves (data) also have a claim on an SSTable via the refs at
+`refs/nodes/{host_id}/{generation}` (only a single copy exists on object storage).
+The union of these two refs sets is what governs the lifetime of the SSTable.
+No references at all, the SSTable gets destroyed. No nodes refs, but at least a snapshot ref,
+the SSTable is kept alive with its `status` state machine transitioned to `snapshot_owned`
+in the sstables registry. 
+
+The catalog tables rows are the only way to find those references again (well, you can also
+list and try to figure it out, and sometimes we do in nasty corner cases) each
+`snapshot_sstables` row records the sstable id, the owning node and the `toc_name` from
+which the exact reference name is derived, while `snapshot_nodes`, `snapshot_tablets`,
+`snapshot_keyspaces` and `snapshot_tables` record who participated and what the schema
+looked like. The `snapshots` row is the commit marker for a cluster snapshot.
+
+There is a particular ordering we keep consistent all over the implementation to be able
+to provide crash safety and recovering capabilities.
+A snapshot writes catalog rows first, then creates the references
+and the coordinator writes the commit marker last, so a committed tag's
+rows are guaranteed to name every reference. Cleanup runs in the opposite order, each
+node derives its reference names from its rows and deletes the references first
+(falling back to listing `{sid}/refs/` in edge cases when a row cannot name its reference),
+then deletes the rows and the commit marker from `snapshots` goes last.
+
+### Write order
+
+The coordinator writes the schema rows (`snapshot_keyspaces`, `snapshot_tables`) before fanning out the per-node RPCs,
+this is what makes a crashed attempt even enumerable from the catalog.
+Each node cleans up any residue of a previous failed attempt under the tag,
+inserts its `snapshot_sstables`/`snapshot_nodes`/`snapshot_tablets` rows, and only then
+it creates its snapshot `refs/`.
+The coordinator writes the snapshots marker last, after all nodes succeeded.
+
+### `sstables` registry coupling
+
+When a snapshotted sstable is later compacted away, the node deletes its `nodes/` reference.
+If snapshot references remain, the components are kept and the sstable's registry entry is retained
+as snapshot_owned instead of being deleted.
+The boot GC we have inplace re-evaluates `snapshot_owned` entries. Once the refs listing is empty,
+it deletes the components and the entry.
+So the catalog tables do the refs accounting, the refs pin the SSTables components and the local registry remembers
+which pinned SSTables this node must keep re-checking.
+
+### Inplace restores
+
+In order to accomodate restoring into the same cluster where the snapshot still lives, there is a trick involved
+so that restores TTL-based GC doesnt end up destroying the original snapshots/backups.
+Restore never touches the snapshot tag's rows, it stages its working rows under `{tag}/restore/{table_id}` (TTL'd so that crashed restores and currently even succesful restores cleanup their rows automatically in 3 days) and relies on the snapshot's references to keep components alive while cloning.
+
+### Crashing behavior
+
+Crash recovery leans mainly on the write order, we try hard to never end up with refs in the bucket
+that cannot be index from a catalog table row somewhere. In some edge cases though it can happen and that's
+why we will need to implement a background healing operation to scan the bucket and collect garbage from past crashes.
+
+A snapshot writes its catalog rows before creating any ref and the commit marker only at the very end,
+so whatever a crash leaves behind is always discoverable. A tag that has rows but no marker is
+by definition a failed attempt, and the rows are enough to find and release its refs. Each row's toc_name
+points to the exact ref object (in corner cases where we lost that, we list sstable's refs/ directory to recover them).
+
+We currently have around 4 codeplaces doing garbage cleanup of crashed attempts, each doing it at the moment when most
+information is available so we avoid doing lots of object storage requests or QUORUM reads to figure out what needs to get deleted.
+a) Immediate rollback done inside the failing attempt itself, it releases the refs best-effort potentially leaving only rows
+which will be cleaned up by one of the other mechanisms below.
+b) Cleanup on re-take, it happens in 2 stages: per node (which cleans whatever is node-owned: refs, snapshot_sstables, components and registry entry) and via coordinator (for the schema and tablet catalog rows).
+c) Boot GC, it's node local, it re-evaluates `snapshot_owned` entries from the registry and potentially deletes, refs, components and the entry itself if conditions are met.
+d) (future work) `clearsnapshot --force` it's operator driven which is able to delete garbage if no re-take happens for a previously crashed tag.
+e) (future work) background healing operation as a last resort process: cleaning refs whose rows are gone, also covers some edge cases like
+departed nodes or tables dropped in a particular bad moment. It'll also do automatic expiration of snapshots.
+
+### Layout examples for local and remote tables
+
+Assuming keyspace `ks`, table `t`, table_id `f0d1c0de`, one sstable with id `3gqe…tor` and generation `3gqe_1lnj_4sbpc2ezoscu9hhtor`,
+node `n1`, host_id `aaaa0001` in `dc1`, `rack1`, snapshot tag `tagalong`. The restore target table has id `b00bcafe`.
+Backups sit at `endpoint/backups` bucket, prefix `bk`.
+Remote table to be snapshotted/backed-up/restored lives in `scylla-bucket/sstables/..`
+
+#### Local tables
+
+a) Snapshot
+Each node hardlinks the sstable components into the usual per-table snapshot directory, <data_dir>/ks/t-<uuid>/snapshots/tag/.
+Nothing is written to any bucket. The catalog accounts the snapshot: the coordinator writes the schema rows (`snapshot_keyspaces`, `snapshot_tables`), every node inserts its `snapshot_nodes`, `snapshot_tablets` and `snapshot_sstables` rows (one per sstable, state=local, with the toc_name naming the on-disk sstable), and the coordinator writes the `snapshots` commit marker last.
+
+~~~
+disk (each node):
+  <data_dir>/ks/t-f0d1c0de/snapshots/tagalong/me-3gqe_..._tor-big-Data.db   (hardlink)
+  <data_dir>/ks/t-f0d1c0de/snapshots/tagalong/me-3gqe_..._tor-big-*.db     (all components)
+bucket: nothing
+
+catalog (in this order):
+  snapshot_keyspaces  ('tagalong','ks')               -> keyspace CREATE statement       [coordinator, pre-RPC]
+  snapshot_tables     ('tagalong','ks','t')           -> f0d1c0de, CREATE TABLE,
+                                                         tablet_layout                   [coordinator, pre-RPC]
+  snapshot_nodes      ('tagalong','dc1','rack1',aaaa0001)                              [node n1]
+  snapshot_sstables   ('tagalong','ks','t','dc1','rack1', first_token, 3gqe…tor)
+                      -> toc_name='me-3gqe_..._tor-big-TOC.txt', node=aaaa0001,
+                         tablet=0, state=local, prefix=''                                [node n1]
+  snapshot_tablets    ('tagalong','ks','t','dc1', first_token)
+                      -> tablet_id=0, last_token, repaired_at                            [node n1]
+  snapshots           ('tagalong')                    -> created_at, expires_at          [coordinator, LAST:
+                                                                                          the commit marker]
+~~~
+
+b) Backup
+The coordinator marks the destination in `snapshot_remote_locations` (state=being_backed_up) and fans out per-node upload requests.
+Each node uploads its snapshotted components into the refs-based layout under the destination prefix `bucket/bk/sstables/3gqe…tor/<component>`
+and creates a snapshot reference `bucket/bk/sstables/3gqe…tor/refs/snapshot-<tag>/<gen>` before uploading, so the uploaded sstable is pinned exactly like a native object-storage one. As uploads complete, the node's `snapshot_sstables` rows flip to state=remote_and_local (or remote, when the local snapshot files are removed after upload).
+Finally one manifest per destination is written at `bucket/bk/snapshots/ks/t/tagalong/manifest.json` and `snapshot_remote_locations` flips to the final state.
+The snapshot ref is the uploaded SSTable's only claim; if multiple snapshots reference the SSTable, it is destroyed on object storage when the last ref goes.
+This mechanism doesn't touch `system.sstables` registry, that is only used for remote object storage tables. 
+On local disk nothing new appears; with --move-files the snapshot directory contents are removed.
+
+~~~
+bucket (per sstable, the reference goes first):
+  backups/bk/sstables/3gqe…tor/refs/snapshot-tagalong/3gqe_1lnj_4sbpc2ezoscu9hhtor
+      (empty object; the uploaded sstable's only claim, no node refs are created)
+  backups/bk/sstables/3gqe…tor/me-3gqe_..._tor-big-Data.db
+  backups/bk/sstables/3gqe…tor/me-3gqe_..._tor-big-*.db                     (all components)
+bucket (per destination, last):
+  backups/bk/snapshots/ks/t/tagalong/manifest.json
+
+catalog:
+  snapshot_remote_locations ('tagalong','dc1') -> endpoint, 'backups', 'bk',
+                            state: being_backed_up -> remote_and_local
+                            (remote with --move-files)
+  snapshot_sstables         row of 3gqe…tor rewritten with state=remote_and_local,
+                            everything else unchanged
+
+disk: unchanged (--move-files removes the snapshot directory contents)
+~~~
+
+c) Restore
+Restore is driven by the manifests, not by the catalog tables. `restore_tablets` takes the manifest paths, parses them, and populates its working rows into `snapshot_sstables`/`snapshot_remote_locations` catalogs under a staging name derived from the tag and the target table id, `tag/restore/<table_id>`.
+Restore pushes these catalog rows with a TTL so a crashed restore's rows expire. The live tag's rows are never read or modified.
+The nodes download the components tablet by tablet from `bucket/bk/sstables/<sid>/` into the target table's live data directory as freshly named sstables, and set the `downloaded` flag on the corresponding staging row, which makes the restore resumable.
+The bucket is only read, the snapshot's references and the live catalog rows are untouched.
+
+~~~
+catalog:
+  snapshot_remote_locations ('tagalong/restore/b00bcafe','dc1')
+                            -> endpoint, 'backups', 'bk', state=remote
+  snapshot_tables           ('tagalong/restore/b00bcafe','ks','t')
+                            -> the target table's pre-restore CREATE statement
+                               (recovers the original tablet hints after a crash)
+  snapshot_sstables         ('tagalong/restore/b00bcafe','ks','t','dc1','rack1',
+                             first_token, 3gqe…tor)
+                            -> state=remote, prefix='bk/sstables/3gqe…tor',
+                               downloaded=false
+  per downloaded sstable:   UPDATE downloaded=true
+                            (the resume point for a retried restore)
+
+disk:
+  <data_dir>/ks/t-b00bcafe/me-<fresh generation>-big-*.db   (downloaded components,
+                                                             new generations)
+
+bucket: read-only. The live tag's rows and references: untouched.
+~~~
+
+#### Remote tables
+
+a) Snapshot
+No data moves at all. The components already live at `bucket/sstables/3gqe…tor/`.
+Each node creates one empty reference object per sstable, `bucket/sstables/3gqe…tor/refs/snapshot-<tag>/<gen>`,
+which pins the components for as long as it exists (components are deleted only when the sstable's whole refs/ listing is empty, both node refs and snapshot refs).
+The catalog records the same rows as in the local case, with `toc_name`/`prefix` pointing into the bucket, and the `snapshots` marker commits the tag.
+
+~~~
+bucket:
+  scylla-bucket/sstables/3gqe…tor/refs/snapshot-tagalong/3gqe_1lnj_...
+      (one empty object per sstable; no data is copied)
+disk: nothing (object-storage tables have no local snapshot directories)
+
+catalog: the same six writes as the local snapshot, same order, marker last;
+         the sstable row's toc_name/prefix point into the bucket
+~~~
+
+b) Backup
+This is mostly an in-place promotion.
+The components are already in the table's own bucket and pinned by the snapshot references since snapshot time,
+so nothing is uploaded and no new references are created.
+The `snapshot_remote_locations` catalog rows flip state to `remote`.
+For the `snapshot_sstables` catalog, the per-node handler rewrites each uploaded sstable's row with the state promoted.
+The only new created object on remote is the manifest at `scylla-bucket/sstables/snapshots/ks/t/<tag>/manifest.json`.
+
+~~~
+bucket:
+  scylla-bucket/sstables/snapshots/ks/t/tagalong/manifest.json
+      (the only new object; the components are already in place, pinned by the
+       snapshot references since snapshot time)
+
+catalog:
+  snapshot_remote_locations ('tagalong','dc1') -> endpoint, 'scylla-bucket',
+                            'sstables', state=remote
+  snapshot_sstables         rows rewritten with state=remote
+~~~
+
+c) Restore
+Manifest-driven and staged exactly like the local case.
+The difference lies in how the data lands. When the backup lives in the same bucket under the unified layout,
+the target table's sstables are cloned by reference sharing, each node creates its own `refs/nodes/<host>/<gen>` reference and `system.sstables` registry entry for the shared components.
+
+~~~
+bucket:
+  scylla-bucket/sstables/3gqe…tor/refs/nodes/aaaa0001/<clone generation>
+      (the clone's node ref, created after verifying that
+       refs/snapshot-tagalong/... still exists; the clone is undone if the
+       snapshot vanished mid-restore)
+  no components are copied; a backup elsewhere on the same endpoint is
+  byte-copied under a fresh sstable id; a backup on another endpoint is rejected
+
+node-local:
+  system.sstables gains the clone's registry entry
+
+catalog: the same staging rows as the local restore
+~~~
