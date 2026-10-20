@@ -157,11 +157,11 @@ def _gen_certs(tmp_path):
     client4.crt  trusted, CN=certuser - a role that exists and may log in.
     client5.crt  trusted, CN=certghost - a role that is never created.
     """
-    system(f'openssl genrsa 2048 > "{tmp_path}/ca.key" 2>/dev/null')
+    system(f'openssl ecparam -name prime256v1 -genkey -noout > "{tmp_path}/ca.key" 2>/dev/null')
     system(f'openssl req -new -x509 -nodes -sha256 -days 365 '
            f'-subj "/CN=TestCA" -key "{tmp_path}/ca.key" '
            f'-out "{tmp_path}/ca.crt" 2>/dev/null')
-    system(f'openssl genrsa 2048 > "{tmp_path}/client.key" 2>/dev/null')
+    system(f'openssl ecparam -name prime256v1 -genkey -noout > "{tmp_path}/client.key" 2>/dev/null')
     system(f'openssl req -new -sha256 -subj "/CN=cassandra" '
            f'-key "{tmp_path}/client.key" -out "{tmp_path}/client.csr" 2>/dev/null')
     system(f'openssl x509 -req -sha256 -days 365 '
@@ -170,11 +170,11 @@ def _gen_certs(tmp_path):
            f'-out "{tmp_path}/client.crt" 2>/dev/null')
 
     # Second (untrusted) CA and a client cert signed by it.
-    system(f'openssl genrsa 2048 > "{tmp_path}/ca2.key" 2>/dev/null')
+    system(f'openssl ecparam -name prime256v1 -genkey -noout > "{tmp_path}/ca2.key" 2>/dev/null')
     system(f'openssl req -new -x509 -nodes -sha256 -days 365 '
            f'-subj "/CN=UntrustedCA" -key "{tmp_path}/ca2.key" '
            f'-out "{tmp_path}/ca2.crt" 2>/dev/null')
-    system(f'openssl genrsa 2048 > "{tmp_path}/client2.key" 2>/dev/null')
+    system(f'openssl ecparam -name prime256v1 -genkey -noout > "{tmp_path}/client2.key" 2>/dev/null')
     system(f'openssl req -new -sha256 -subj "/CN=cassandra" '
            f'-key "{tmp_path}/client2.key" -out "{tmp_path}/client2.csr" 2>/dev/null')
     system(f'openssl x509 -req -sha256 -days 365 '
@@ -184,7 +184,7 @@ def _gen_certs(tmp_path):
 
     # Third client cert: trusted (signed by ca.crt), but subject has no CN field.
     # The auth_certificate_role_queries rule "CN=([^,]+)" will not match it.
-    system(f'openssl genrsa 2048 > "{tmp_path}/client3.key" 2>/dev/null')
+    system(f'openssl ecparam -name prime256v1 -genkey -noout > "{tmp_path}/client3.key" 2>/dev/null')
     system(f'openssl req -new -sha256 -subj "/O=TestOrg" '
            f'-key "{tmp_path}/client3.key" -out "{tmp_path}/client3.csr" 2>/dev/null')
     system(f'openssl x509 -req -sha256 -days 365 '
@@ -192,7 +192,7 @@ def _gen_certs(tmp_path):
            f'-CA "{tmp_path}/ca.crt" -CAkey "{tmp_path}/ca.key" -CAcreateserial '
            f'-out "{tmp_path}/client3.crt" 2>/dev/null')
 
-    system(f'openssl genrsa 2048 > "{tmp_path}/client4.key" 2>/dev/null')
+    system(f'openssl ecparam -name prime256v1 -genkey -noout > "{tmp_path}/client4.key" 2>/dev/null')
     system(f'openssl req -new -sha256 -subj "/CN=certuser" '
            f'-key "{tmp_path}/client4.key" -out "{tmp_path}/client4.csr" 2>/dev/null')
     system(f'openssl x509 -req -sha256 -days 365 '
@@ -200,7 +200,7 @@ def _gen_certs(tmp_path):
            f'-CA "{tmp_path}/ca.crt" -CAkey "{tmp_path}/ca.key" -CAcreateserial '
            f'-out "{tmp_path}/client4.crt" 2>/dev/null')
 
-    system(f'openssl genrsa 2048 > "{tmp_path}/client5.key" 2>/dev/null')
+    system(f'openssl ecparam -name prime256v1 -genkey -noout > "{tmp_path}/client5.key" 2>/dev/null')
     system(f'openssl req -new -sha256 -subj "/CN=certghost" '
            f'-key "{tmp_path}/client5.key" -out "{tmp_path}/client5.csr" 2>/dev/null')
     system(f'openssl x509 -req -sha256 -days 365 '
