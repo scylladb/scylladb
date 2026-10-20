@@ -16,7 +16,7 @@ from cassandra.cluster import ConsistencyLevel, Session  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from cassandra.pool import Host  # type: ignore
 
-from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, execute_with_tracing
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
@@ -392,3 +392,209 @@ async def test_no_digest_mismatch_on_expired_data(manager: ScyllaClusterManager)
 
         tracing = execute_with_tracing(cql, SimpleStatement(f"SELECT * FROM {ks}.t WHERE pk = 1", consistency_level=ConsistencyLevel.ALL), log=True)
         assert not any(event.description == "digest mismatch, starting read repair" for page in tracing for event in page)
+
+
+async def replica_clustering_rows(cql: Session, host: Host, ks: str) -> tuple[set[int], set[int]]:
+    """Returns the clustering keys the replica on host has in pk = 0, and those of them which have a row tombstone
+
+    MUTATION_FRAGMENTS() reads the local replica of the node it is sent to.
+    """
+    res = await cql.run_async(f"SELECT ck, metadata FROM MUTATION_FRAGMENTS({ks}.t) WHERE pk = 0 AND partition_region = 2 ALLOW FILTERING", host=host)
+    cks = {row.ck for row in res}
+    tombstoned_cks = {row.ck for row in res if row.metadata and '"tombstone":{"timestamp"' in row.metadata}
+    return cks, tombstoned_cks
+
+
+async def write_dropped_by(manager: ScyllaClusterManager, cql: Session, node: ServerInfo, ks: str, stmt, params) -> None:
+    """Executes a CL=ONE write to ks.t while node drops the writes to this table
+
+    The write succeeds once the other replica has applied it, which can be before it reached
+    node. So wait until node has failed the write too, before letting it apply writes again.
+    """
+    async def failed_writes() -> int:
+        metrics = await manager.metrics.query(node.ip_addr)
+        return int(metrics.get("scylla_database_total_writes_failed") or 0)
+
+    failed_writes_before = await failed_writes()
+
+    async def node_failed_the_write() -> bool | None:
+        return await failed_writes() > failed_writes_before or None
+
+    await manager.api.enable_injection(node.ip_addr, "database_apply", one_shot=False,
+                                       parameters={"ks_name": ks, "cf_name": "t", "what": "throw"})
+    try:
+        await cql.run_async(stmt, params)
+        await wait_for(node_failed_the_write, time.time() + 60)
+    finally:
+        await manager.api.disable_injection(node.ip_addr, "database_apply")
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("reversed_query", [True, False], ids=["reversed", "forward"])
+@pytest.mark.parametrize("paged", [False, True], ids=["unpaged", "paged"])
+@pytest.mark.parametrize("per_partition_limit", [False, True], ids=["limit", "per_partition_limit"])
+async def test_read_repair_replica_missing_first_row(manager: ScyllaClusterManager, reversed_query: bool, paged: bool, per_partition_limit: bool):
+    """Read repair, when one replica misses the first row in query order
+
+    One replica misses the newest row (reversed query) or the oldest row
+    (forward query). A CL=ALL read hits a digest mismatch and reconciles.
+    The reconciled result must contain the missing row, the reconciliation
+    must succeed without retries, and the replica must be repaired. LIMIT
+    and PER PARTITION LIMIT are checked separately by the reconciliation,
+    so both are covered.
+
+    Reproduces a bug where read repair of reversed queries applied the
+    legacy reverse-order logic to mutations that are already in query order:
+    unpaged reads retried the same read until they timed out, without ever
+    repairing the replica, and paged reads returned stale rows.
+    """
+    cmdline = ["--hinted-handoff-enabled", "0", "--cache-hit-rate-read-balancing", "0"]
+    config = {"read_request_timeout_in_ms": 10000}
+    nodes = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+    node1, node2 = nodes
+
+    cql = manager.get_cql()
+    host1, host2 = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 60)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH speculative_retry = 'NONE'")
+
+        # Written at CL=ALL, so that both replicas have them before node1 starts dropping writes.
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.t (pk, ck, v) VALUES (?, ?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+
+        common_cks = list(range(1, 10))
+        for ck in common_cks:
+            await cql.run_async(insert_stmt, (0, ck, ck))
+
+        # The row node1 misses is the first one in query order. It is written at CL=ONE while
+        # node1 drops writes, so the write succeeds once node2 has applied it.
+        missing_ck = 10 if reversed_query else 0
+        insert_stmt.consistency_level = ConsistencyLevel.ONE
+        await write_dropped_by(manager, cql, node1, ks, insert_stmt, (0, missing_ck, missing_ck))
+
+        # The replicas have diverged: node2 has the row, node1 does not.
+        assert missing_ck not in (await replica_clustering_rows(cql, host1, ks))[0]
+        assert missing_ck in (await replica_clustering_rows(cql, host2, ks))[0]
+
+        # A limit of 1 is never paged on the server side, a limit of 2 with a larger page size is.
+        limit = 2 if paged else 1
+        order = "DESC" if reversed_query else "ASC"
+        limit_clause = f"PER PARTITION LIMIT {limit}" if per_partition_limit else f"LIMIT {limit}"
+        select = f"SELECT ck FROM {ks}.t WHERE pk = 0 ORDER BY ck {order} {limit_clause}"
+
+        async def sum_metric(name: str) -> int:
+            total = 0
+            for node in nodes:
+                metrics = await manager.metrics.query(node.ip_addr)
+                total += metrics.get(name) or 0
+            return int(total)
+
+        retries_before = await sum_metric("scylla_storage_proxy_coordinator_read_retries")
+        read_repairs_before = await sum_metric("scylla_storage_proxy_coordinator_foreground_read_repairs")
+
+        res = cql.execute(SimpleStatement(select, consistency_level=ConsistencyLevel.ALL, fetch_size=100 if paged else None), host=host1)
+        actual_cks = [row.ck for row in res]
+
+        retries_after = await sum_metric("scylla_storage_proxy_coordinator_read_retries")
+        read_repairs_after = await sum_metric("scylla_storage_proxy_coordinator_foreground_read_repairs")
+
+        expected_cks = sorted(common_cks + [missing_ck], reverse=reversed_query)[:limit]
+        assert actual_cks == expected_cks
+        assert read_repairs_after > read_repairs_before
+        assert retries_after == retries_before
+
+        # node1 got the row it missed.
+        assert missing_ck in (await replica_clustering_rows(cql, host1, ks))[0]
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("reversed_query", [True, False], ids=["reversed", "forward"])
+async def test_read_repair_replica_missing_first_tombstones(manager: ScyllaClusterManager, reversed_query: bool):
+    """Paged read repair, when one replica misses the deletes of the first rows in query order
+
+    node1 misses the deletion of the first two rows in query order, so its
+    page starts with two rows node2 only has tombstones for. Once reconciled,
+    the result's last row lies beyond the last row of node1's page, so the
+    coordinator cannot know whether node1 has more rows before it: the page
+    has to be trimmed to node1's last row, a short read, and the client
+    fetches the rest with the next page. node1 does have such a row, the
+    first live one in query order, which node2 misses: a page trimmed at the
+    wrong end skips it and returns the rows after it instead. Checks that the
+    paged result is exactly the live rows, that the reconciliation needs no
+    retry, and that both replicas get what they missed.
+
+    Reproduces the paged half of the bug: read repair of reversed queries
+    trimmed the wrong end of the reconciled result, returning stale rows.
+    """
+    cmdline = ["--hinted-handoff-enabled", "0", "--cache-hit-rate-read-balancing", "0"]
+    config = {"read_request_timeout_in_ms": 10000}
+    nodes = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+    node1, node2 = nodes
+
+    cql = manager.get_cql()
+    host1, host2 = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 60)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH speculative_retry = 'NONE'")
+
+        # The writes both replicas get are written at CL=ALL, the ones a replica drops at CL=ONE.
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.t (pk, ck, v) VALUES (?, ?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        dropped_insert_stmt = cql.prepare(f"INSERT INTO {ks}.t (pk, ck, v) VALUES (?, ?, ?)")
+        dropped_insert_stmt.consistency_level = ConsistencyLevel.ONE
+        dropped_delete_stmt = cql.prepare(f"DELETE FROM {ks}.t WHERE pk = ? AND ck = ?")
+        dropped_delete_stmt.consistency_level = ConsistencyLevel.ONE
+
+        # The first two rows in query order get deleted, which node1 misses; the third one, the
+        # first live row in query order, is missed by node2.
+        cks = list(range(1, 10))
+        deleted_cks = [9, 8] if reversed_query else [1, 2]
+        skipped_ck = 7 if reversed_query else 3
+        for ck in cks:
+            if ck == skipped_ck:
+                await write_dropped_by(manager, cql, node2, ks, dropped_insert_stmt, (0, ck, ck))
+            else:
+                await cql.run_async(insert_stmt, (0, ck, ck))
+        for ck in deleted_cks:
+            await write_dropped_by(manager, cql, node1, ks, dropped_delete_stmt, (0, ck))
+
+        # The replicas have diverged: node1 has the skipped row and no tombstones, node2 has
+        # the tombstones and not the skipped row.
+        node1_cks, node1_tombstoned_cks = await replica_clustering_rows(cql, host1, ks)
+        node2_cks, node2_tombstoned_cks = await replica_clustering_rows(cql, host2, ks)
+        assert skipped_ck in node1_cks and not node1_tombstoned_cks
+        assert skipped_ck not in node2_cks and node2_tombstoned_cks == set(deleted_cks)
+
+        # A limit of 2 with a larger page size is paged on the server side, so short reads are
+        # allowed: node1's page ends at its second row, before the reconciled result's last row.
+        order = "DESC" if reversed_query else "ASC"
+        select = f"SELECT ck FROM {ks}.t WHERE pk = 0 ORDER BY ck {order} LIMIT 2"
+
+        async def sum_metric(name: str) -> int:
+            total = 0
+            for node in nodes:
+                metrics = await manager.metrics.query(node.ip_addr)
+                total += metrics.get(name) or 0
+            return int(total)
+
+        retries_before = await sum_metric("scylla_storage_proxy_coordinator_read_retries")
+        read_repairs_before = await sum_metric("scylla_storage_proxy_coordinator_foreground_read_repairs")
+
+        res = cql.execute(SimpleStatement(select, consistency_level=ConsistencyLevel.ALL, fetch_size=100), host=host1)
+        actual_cks = [row.ck for row in res]
+
+        retries_after = await sum_metric("scylla_storage_proxy_coordinator_read_retries")
+        read_repairs_after = await sum_metric("scylla_storage_proxy_coordinator_foreground_read_repairs")
+
+        expected_cks = sorted(set(cks) - set(deleted_cks), reverse=reversed_query)[:2]
+        assert expected_cks[0] == skipped_ck
+        assert actual_cks == expected_cks
+        assert read_repairs_after > read_repairs_before
+        assert retries_after == retries_before
+
+        # node1 must have the tombstones now, and node2 the row it missed.
+        _, node1_tombstoned_cks = await replica_clustering_rows(cql, host1, ks)
+        assert set(deleted_cks) <= node1_tombstoned_cks, f"deleted={deleted_cks} tombstoned on node1={node1_tombstoned_cks}"
+        node2_cks, _ = await replica_clustering_rows(cql, host2, ks)
+        assert skipped_ck in node2_cks

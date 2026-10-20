@@ -429,17 +429,6 @@ future<> mutation_partition_view::accept_gently_ordered(const schema& s, mutatio
     } while (!res.stop);
 }
 
-std::optional<clustering_key> mutation_partition_view::first_row_key() const
-{
-    auto in = _in;
-    auto mpv = ser::deserialize(in, std::type_identity<ser::mutation_partition_view>());
-    auto rows = mpv.rows();
-    if (rows.empty()) {
-        return { };
-    }
-    return (*rows.begin()).key();
-}
-
 std::optional<clustering_key> mutation_partition_view::last_row_key() const
 {
     auto in = _in;
