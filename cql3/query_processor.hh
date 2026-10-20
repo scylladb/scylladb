@@ -571,7 +571,11 @@ public:
             service::node_local_only node_local_only = service::node_local_only::no) const;
 
     enum class write_consistency_guardrail_state { NONE, WARN, FAIL };
-    inline write_consistency_guardrail_state check_write_consistency_levels_guardrail(db::consistency_level cl) {
+    inline write_consistency_guardrail_state check_write_consistency_levels_guardrail(db::consistency_level cl, const service::client_state& client_state) {
+        // Internal writes, such as Raft persisting its log at ONE, must never be rejected.
+        if (client_state.is_internal()) {
+            return write_consistency_guardrail_state::NONE;
+        }
         _cql_stats.writes_per_consistency_level[size_t(cl)]++;
 
         if (_write_consistency_levels_disallowed.contains(cl)) [[unlikely]] {
