@@ -11,7 +11,14 @@ be downloaded from object storage and restored locally.
 Entries are also created when generating cluster wide snapshots to provide metadata
 on snapshot contents.
 
-Rows are inserted with a TTL so that stale restore metadata is automatically cleaned up.
+Restore inserts its rows with a TTL so that the metadata of a crashed restore is
+automatically cleaned up. Cluster snapshots and backups insert durable rows: the
+catalog is their source of truth, and the rows live until cluster clearsnapshot
+deletes them.
+
+A cluster snapshot writes its rows under the name of the attempt that took it,
+`{tag}/{attempt}`, not under the plain tag. `system_distributed.snapshot_attempts`
+([snapshot_attempts.md](snapshot_attempts.md)) maps the tag to its attempts and names the committed one.
 
 ## Schema
 
