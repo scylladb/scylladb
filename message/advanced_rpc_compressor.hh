@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/preempt.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <utility>
 #include "utils/refcounted.hh"
@@ -220,10 +221,16 @@ private:
     struct incoming_message;
     outgoing_message start_outgoing_message(size_t msgsize);
     // Compresses one segment of a message. Moves `in` past the compressed data.
-    rpc::snd_buf compress_segment(size_t head_space, snd_buf_cursor& in, outgoing_message& msg);
+    // The segment can end before the end of the message.
+    rpc::snd_buf compress_segment(size_t head_space, snd_buf_cursor& in, outgoing_message& msg, bool first);
     // Decompresses one segment of a message from the front of `in`.
     // Returns the decompressed data and whether more segments follow.
     std::pair<rpc::rcv_buf, bool> decompress_segment(rcv_buf_reader& in, incoming_message& msg, bool first);
+    // The slow paths of compress_async() and decompress_async(), for messages split into
+    // several segments. They continue after the first segment, yielding between segments.
+    // `consumed` is the number of bytes of `data` already compressed into `first_segment`.
+    future<rpc::snd_buf> compress_remaining_segments(rpc::snd_buf data, size_t consumed, outgoing_message msg, rpc::snd_buf first_segment);
+    future<rpc::rcv_buf> decompress_remaining_segments(rcv_buf_reader in, incoming_message msg, rpc::rcv_buf first_segment);
 
     // Starts a worker fiber responsible for sending _control's messages.
     future<> start_progress_fiber();
@@ -235,8 +242,13 @@ public:
     ~advanced_rpc_compressor();
 
     // The public interface of rpc::compressor.
+    //
+    // compress() and compress_async() split large messages into segments in the same way.
+    // Only compress_async() yields between segments.
     rpc::snd_buf compress(size_t head_space, rpc::snd_buf data) override;
     rpc::rcv_buf decompress(rpc::rcv_buf data) override;
+    future<rpc::snd_buf> compress_async(size_t head_space, rpc::snd_buf data) override;
+    future<rpc::rcv_buf> decompress_async(rpc::rcv_buf data) override;
     sstring name() const override;
     future<> close() noexcept override;
 };
@@ -276,6 +288,12 @@ public:
         utils::updateable_value<algo_config> algo_config{{compression_algorithm::type::ZSTD, compression_algorithm::type::LZ4}};
         bool register_metrics = false;
         utils::updateable_value<bool> checksumming{true};
+        // compress_async() ends a segment at the first fragment boundary of the message
+        // at which need_preempt() is true. So each segment has at least one fragment.
+        // It yields between segments if need_preempt() is true.
+        //
+        // Can be replaced in tests, to make the splitting deterministic.
+        bool (*need_preempt)() = seastar::need_preempt;
     };
 private:
     friend advanced_rpc_compressor;
