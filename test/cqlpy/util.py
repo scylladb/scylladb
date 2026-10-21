@@ -217,6 +217,12 @@ def cql_session(host, port, is_ssl, username, password, request_timeout=120, pro
         request_timeout=request_timeout)
     if is_ssl:
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        # PROTOCOL_TLS_CLIENT verifies the server's certificate and host name
+        # by default, but the tests run Scylla with a self-signed certificate
+        # (see setup_ssl_certificate() in run.py), so we must disable these
+        # checks.
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
     else:
         ssl_context = None
     cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},

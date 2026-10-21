@@ -84,16 +84,21 @@ def test_system_clients_stores_tls_info(cql):
             # and some connections may already be past the TLS init phase, while others not, when we query system.clients,
             # so we need to retry until all connections are initialized and have their TLS info recorded in system.clients,
             # otherwise we'd end up with some connections e.g. having their ssl_enabled=True but other fields still None.
+            # system.clients also lists the connections of the test's main
+            # "cql" session, which doesn't pin the TLS version and may
+            # negotiate TLS 1.3. So every connection should have its TLS info
+            # recorded with TLS 1.2 or 1.3, and at least one of them (our
+            # session's) should be TLS 1.2.
             expected_ciphers = [normalize_cipher(cipher['name']) for cipher in ssl.create_default_context().get_ciphers()]
             deadline = time.time() + 10  # 10 seconds timeout
             while time.time() < deadline:
-                rows = session.execute(f"SELECT * FROM system.clients")
+                rows = list(session.execute(f"SELECT * FROM system.clients"))
                 if rows and all(
                     row.ssl_enabled
-                    and row.ssl_protocol == 'TLS1.2'
+                    and row.ssl_protocol in ('TLS1.2', 'TLS1.3')
                     and normalize_cipher(row.ssl_cipher_suite) in expected_ciphers
                     for row in rows
-                ):
+                ) and any(row.ssl_protocol == 'TLS1.2' for row in rows):
                     return
                 time.sleep(0.01)
             pytest.fail(f"Not all connections have TLS data set correctly in system.clients after 10 seconds")
