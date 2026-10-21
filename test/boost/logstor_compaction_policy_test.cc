@@ -425,6 +425,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_utilization_threshold_curve) {
     for (uint64_t available = flat.anchor; available <= 200; ++available) {
         BOOST_REQUIRE_EQUAL(effective_utilization_threshold(available, flat), 0.5);
     }
+
+    // The anchor leaves at least half of the disk for data, also when it is configured higher or the
+    // space floor is large.
+    BOOST_REQUIRE_LE(make_utilization_threshold_curve(200, 6, 0.5, 0.9, 0, 0).anchor, 100u);
+    BOOST_REQUIRE_LE(make_utilization_threshold_curve(200, 60, 0.5, 0, 0, 0).anchor, 100u);
 }
 
 // A batch under a utilization threshold holds only segments under it, also where the threshold cuts

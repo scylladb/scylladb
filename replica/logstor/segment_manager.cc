@@ -295,6 +295,12 @@ public:
         // A segment is a candidate for automatic compaction while its utilization is under this,
         // see compaction_rate_controller. Anything outside [0, 1) disables it.
         utils::updateable_value<double> compaction_utilization_threshold;
+        // The free levels, as fractions of the disk, at which the configured threshold applies and
+        // at which the threshold reaches its minimum; 0 for the defaults. See
+        // utilization_threshold_curve.
+        utils::updateable_value<double> compaction_threshold_anchor;
+        utils::updateable_value<double> compaction_threshold_ceiling;
+        utils::updateable_value<double> compaction_min_utilization_threshold;
         seastar::scheduling_group compaction_sg;
         utils::updateable_value<float> compaction_static_shares;
         utils::updateable_value<float> compaction_min_shares;
@@ -373,6 +379,9 @@ public:
         , _driver(*this, compaction_driver::config{
                 .max_segments_per_compaction = _cfg.max_segments_per_compaction,
                 .utilization_threshold = _cfg.compaction_utilization_threshold,
+                .threshold_anchor = _cfg.compaction_threshold_anchor,
+                .threshold_ceiling = _cfg.compaction_threshold_ceiling,
+                .min_utilization_threshold = _cfg.compaction_min_utilization_threshold,
                 .sg = _cfg.compaction_sg,
             })
     {}
@@ -919,6 +928,9 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
             .compaction_enabled = config.compaction_enabled,
             .max_segments_per_compaction = config.max_segments_per_compaction,
             .compaction_utilization_threshold = config.compaction_utilization_threshold,
+            .compaction_threshold_anchor = config.compaction_threshold_anchor,
+            .compaction_threshold_ceiling = config.compaction_threshold_ceiling,
+            .compaction_min_utilization_threshold = config.compaction_min_utilization_threshold,
             .compaction_sg = config.compaction_sg,
             .compaction_static_shares = config.compaction_static_shares,
             .compaction_min_shares = config.compaction_min_shares,

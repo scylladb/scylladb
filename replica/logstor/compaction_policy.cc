@@ -75,9 +75,11 @@ utilization_threshold_curve make_utilization_threshold_curve(uint64_t segment_co
         }
         return static_cast<uint64_t>(std::llround(std::min(fraction, 1.0) * double(segment_count)));
     };
-    // The pressure band and the decrease of the threshold must have a width. A configuration
-    // without one gets the smallest width, and not a division by zero.
-    const auto anchor = std::max<uint64_t>(segments_of(anchor_fraction).value_or(2 * space_floor), space_floor + 1);
+    // An anchor above half of the disk is out of reach once the disk holds data, and the space
+    // pressure never falls to 0. The pressure band and the decrease of the threshold must have a
+    // width. A configuration without one gets the smallest width, and not a division by zero.
+    const auto anchor = std::max<uint64_t>(std::min(segments_of(anchor_fraction).value_or(2 * space_floor), segment_count / 2),
+            space_floor + 1);
     const auto ceiling = std::max<uint64_t>(segments_of(ceiling_fraction).value_or(0), anchor + 1);
     const auto max_min_threshold = std::isfinite(threshold) ? std::clamp(threshold, 0.0, 1.0) : 0.0;
     return utilization_threshold_curve{
