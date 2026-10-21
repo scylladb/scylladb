@@ -24,6 +24,7 @@ class zstd_cstream;
 class zstd_dstream;
 class stream_compressor;
 class stream_decompressor;
+class snd_buf_cursor;
 class dict_sampler;
 using dict_ptr = lw_shared_ptr<foreign_ptr<lw_shared_ptr<shared_dict>>>;
 class control_protocol_frame;
@@ -291,12 +292,9 @@ private:
     lz4_dstream& get_global_lz4_dstream();
     lz4_cstream& get_global_lz4_cstream();
 
-    void ingest(const rpc::snd_buf& data);
+    // Ingests the `size` bytes which follow `from`.
+    void ingest(snd_buf_cursor from, size_t size);
     void ingest(const rpc::rcv_buf& data);
-
-    template <typename T>
-    requires std::same_as<T, rpc::rcv_buf> || std::same_as<T, rpc::snd_buf>
-    void ingest_generic(const T& data);
 
     size_t register_compressor(advanced_rpc_compressor*);
     void unregister_compressor(size_t);
