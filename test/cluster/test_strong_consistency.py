@@ -1871,6 +1871,94 @@ async def test_stale_leader_retries_metrics(manager: ScyllaClusterManager, scale
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
+    """
+    Verify that a write and a read failing because their table was dropped while they
+    ran are counted in the coordinator's error metrics with reason "table_dropped".
+    Case 1 drops the table before the requests get their raft server, case 2 while
+    they hold it.
+    """
+    [server] = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+    log = await manager.server_open_log(server.server_id)
+
+    def start_write_and_read(table: str) -> tuple[asyncio.Future, asyncio.Future]:
+        # By default the driver retries a server error on the next host. Without
+        # retries, the requests fail with the error this node returned.
+        no_retry = FallthroughRetryPolicy()
+        write = SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 1)", retry_policy=no_retry)
+        read = SimpleStatement(f"SELECT * FROM {table} WHERE pk = 0", retry_policy=no_retry)
+        return asyncio.ensure_future(cql.run_async(write)), asyncio.ensure_future(cql.run_async(read))
+
+    async def drop_table_and_release(table: str, injections: list[str]) -> None:
+        mark = await log.mark()
+        await cql.run_async(f"DROP TABLE {table}")
+        await log.wait_for("schedule_raft_group_deletion.*server aborted", from_mark=mark, timeout=30)
+        for injection in injections:
+            await manager.api.message_injection(server.ip_addr, injection)
+            await manager.api.disable_injection(server.ip_addr, injection)
+
+    async def write_errors() -> float:
+        metrics = await manager.metrics.query(server.ip_addr)
+        return metrics.get('scylla_strong_consistency_coordinator_write_errors', {'reason': 'table_dropped'}) or 0
+
+    async def read_errors() -> float:
+        metrics = await manager.metrics.query(server.ip_addr)
+        return metrics.get('scylla_strong_consistency_coordinator_read_errors', {'reason': 'table_dropped'}) or 0
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        # Case 1: the table is gone before the requests get their raft server.
+        await cql.run_async(f"CREATE TABLE {ks}.tbl1 (pk int PRIMARY KEY, v int)")
+        await cql.run_async(f"INSERT INTO {ks}.tbl1 (pk, v) VALUES (0, 0)")
+        table_id = await manager.get_table_id(ks, "tbl1")
+        write_errors_before = await write_errors()
+        read_errors_before = await read_errors()
+
+        # Pause both requests at the same injection, before they get their raft server.
+        injection = "sc_coordinator_wait_before_acquire_server"
+        await manager.api.enable_injection(server.ip_addr, injection, one_shot=False)
+        write, read = start_write_and_read(f"{ks}.tbl1")
+        await manager.api.wait_for_injection_enter(server.ip_addr, injection, threshold=2)
+
+        # Drop the table and wait until its raft server is stopped, then release the requests.
+        await drop_table_and_release(f"{ks}.tbl1", [injection])
+
+        # Both fail, and each is counted once as table_dropped.
+        with pytest.raises(ServerError, match=f"Can't find a column family with UUID {table_id}"):
+            await write
+        with pytest.raises(ServerError, match=f"Can't find a column family with UUID {table_id}"):
+            await read
+        assert await write_errors() - write_errors_before == 1
+        assert await read_errors() - read_errors_before == 1
+
+        # Case 2: the requests hold their raft server, and the drop stops it under them.
+        await cql.run_async(f"CREATE TABLE {ks}.tbl2 (pk int PRIMARY KEY, v int)")
+        await cql.run_async(f"INSERT INTO {ks}.tbl2 (pk, v) VALUES (0, 0)")
+        write_errors_before = await write_errors()
+        read_errors_before = await read_errors()
+
+        # Pause the write and the read, each at its own injection after it got its raft server.
+        write_injection = "sc_coordinator_wait_before_begin_mutate"
+        read_injection = "sc_coordinator_wait_before_query_read_barrier"
+        await manager.api.enable_injection(server.ip_addr, write_injection, one_shot=False)
+        await manager.api.enable_injection(server.ip_addr, read_injection, one_shot=False)
+        write, read = start_write_and_read(f"{ks}.tbl2")
+        await manager.api.wait_for_injection_enter(server.ip_addr, write_injection)
+        await manager.api.wait_for_injection_enter(server.ip_addr, read_injection)
+
+        # Drop the table and wait until its raft server is stopped, then release the requests.
+        await drop_table_and_release(f"{ks}.tbl2", [write_injection, read_injection])
+
+        # Both fail, and each is counted once as table_dropped.
+        with pytest.raises(ServerError, match=f"Can't find a column family tbl2 in keyspace {ks}"):
+            await write
+        with pytest.raises(ServerError, match=f"Can't find a column family tbl2 in keyspace {ks}"):
+            await read
+        assert await write_errors() - write_errors_before == 1
+        assert await read_errors() - read_errors_before == 1
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_stepdown_on_graceful_shutdown(manager: ScyllaClusterManager):
     """
     Verify that a node which is being shut down gracefully hands the leadership
