@@ -2140,7 +2140,9 @@ void sstable::build_delayed_filter(uint64_t num_partitions) {
         .buffer_size = sstable_buffer_size,
         .read_ahead = 1,
     };
-    auto in = make_file_input_stream(hashes_file, 0, num_partitions * murmur_hash_size_bytes, options);
+    // On object storage a file stream costs a HEAD plus a GET per buffer; the storage's source streams the object.
+    auto in = input_stream<char>(_storage->make_source(*this, component_type::TemporaryHashes, hashes_file, 0,
+            num_partitions * murmur_hash_size_bytes, options).get());
     auto in_closer = deferred_close(in);
 
     constexpr uint64_t batch_size_bytes = 4096;

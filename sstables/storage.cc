@@ -790,7 +790,8 @@ public:
     }
 
     future<size_t> num_references(sstable_id sid) const;
-    future<> delete_components(sstable_version_types version, sstable_id sid, bool log_errors) const;
+    // components excludes the TOC, which is deleted last.
+    future<> delete_components(std::vector<sstring> components, sstable_id sid, bool log_errors) const;
     future<> create_reference(sstable_id sid, generation_type gen, locator::host_id node_owner) const;
 
     bool is_object_storage() const override { return true; }
@@ -893,7 +894,7 @@ future<size_t> object_storage_base::num_references(const sstable& sst) const {
     return num_references(get_sstable_identifier(sst));
 }
 
-future<> object_storage_base::delete_components(sstable_version_types version, sstable_id sid, bool log_errors) const {
+future<> object_storage_base::delete_components(std::vector<sstring> components, sstable_id sid, bool log_errors) const {
     auto prefix = this->prefix();
     auto delete_component = [this, &prefix, &sid, log_errors] (std::string_view component) -> future<> {
         try {
@@ -906,14 +907,21 @@ future<> object_storage_base::delete_components(sstable_version_types version, s
         }
     };
 
-    auto& component_map = sstable_version_constants::get_component_map(version);
-    co_await coroutine::parallel_for_each(component_map, [&delete_component] (const auto& entry) -> future<> {
-        if (entry.first == component_type::TOC) {
-            co_return;
-        }
-        co_await delete_component(entry.second);
+    co_await coroutine::parallel_for_each(components, [&delete_component] (const sstring& component) -> future<> {
+        co_await delete_component(component);
     });
     co_await delete_component(sstable_version_constants::TOC_SUFFIX);
+}
+
+// For when the sstable's TOC is not at hand: every non-TOC component its version can have.
+static std::vector<sstring> all_possible_components(sstable_version_types version) {
+    std::vector<sstring> components;
+    for (const auto& [type, name] : sstable_version_constants::get_component_map(version)) {
+        if (type != component_type::TOC) {
+            components.push_back(name);
+        }
+    }
+    return components;
 }
 
 void object_storage_base::open(sstable& sst) {
@@ -1099,7 +1107,18 @@ future<> object_storage_base::destroy(const sstable& sst) {
         // destroy() is called fire-and-forget from the shared_ptr deleter.
         // Any objects that could not be deleted here will be retried on the
         // next startup via garbage_collect() which handles "removing" entries.
-        co_await delete_components(sst.get_version(), sid, true);
+        std::vector<sstring> components;
+        for (const auto& [type, name] : sst.all_components()) {
+            if (type != component_type::TOC) {
+                components.push_back(name);
+            }
+        }
+        // Not in the TOC, and left behind by a write that failed before build_delayed_filter() removed it.
+        auto& component_map = sstable_version_constants::get_component_map(sst.get_version());
+        if (auto it = component_map.find(component_type::TemporaryHashes); it != component_map.end()) {
+            components.push_back(it->second);
+        }
+        co_await delete_components(std::move(components), sid, true);
     }
 
     // Remove the registry entry only after S3 objects are cleaned up.
@@ -1183,7 +1202,7 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, lo
         co_return;
     }
 
-    co_await delete_components(desc.version, sid, false);
+    co_await delete_components(all_possible_components(desc.version), sid, false);
     sstlog.debug("Deleted reference {}: remaining_refs={}", ref_name.str(), remaining_refs);
 }
 
