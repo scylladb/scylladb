@@ -587,7 +587,13 @@ rpc::rcv_buf decompress_impl(const seastar::rpc::rcv_buf& data, stream_decompres
     }
 
     size_decompressed += outbuf.pos;
-    if (!dst_buffers.empty()) {
+    if (outbuf.pos == 0) {
+        // The last chunk received no output. (This happens when the output
+        // is an exact multiple of chunk_size, or empty.) Drop it rather than return
+        // an empty fragment: RPC reads the decompressed message through an input_stream,
+        // which treats an empty fragment as the end of the stream.
+        dst_buffers.pop_back();
+    } else {
         dst_buffers.back().trim(outbuf.pos);
         // In this routine, we always allocate fragments of size chunk_size, even
         // if the message is tiny.
@@ -602,6 +608,9 @@ rpc::rcv_buf decompress_impl(const seastar::rpc::rcv_buf& data, stream_decompres
         // allocate exactly the right buffer.
         // But I don't know if it's worth the 2 bytes.
         dst_buffers.back() = dst_buffers.back().clone();
+    }
+    if (dst_buffers.empty()) {
+        return rpc::rcv_buf();
     }
     if (dst_buffers.size() == 1) {
         return rpc::rcv_buf(std::move(dst_buffers.front()));

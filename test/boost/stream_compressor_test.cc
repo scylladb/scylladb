@@ -111,6 +111,13 @@ void test_compressor_pair_basic_correctness(netw::stream_compressor& compressor,
         auto compressed = netw::compress_impl(0, input, compressor, end_of_frame, chunk_size);
         auto rcv_buf = convert_rpc_buf<rpc::rcv_buf>(std::move(compressed));
         auto decompressed = netw::decompress_impl(rcv_buf, decompressor, end_of_frame, chunk_size);
+        // RPC reads the decompressed message through an input_stream,
+        // which treats an empty fragment as the end of the stream.
+        if (auto* frags = std::get_if<std::vector<temporary_buffer<char>>>(&decompressed.bufs)) {
+            for (const auto& frag : *frags) {
+                BOOST_REQUIRE(!frag.empty());
+            }
+        }
         BOOST_REQUIRE_EQUAL(message, rpc_buf_to_bytes(std::move(decompressed)));
     }
 }
