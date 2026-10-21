@@ -2432,7 +2432,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     maintenance_cql_processor.stop().get();
                 });
 
-                cql_maintenance_server_ctl.emplace(maintenance_auth_service, mm_notifier, gossiper, qp, maintenance_cql_processor, service_memory_limiter, sl_controller, lifecycle_notifier, messaging, timeout_cfg, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
+                cql_maintenance_server_ctl.emplace(maintenance_auth_service, mm_notifier, gossiper, qp, maintenance_cql_processor, service_memory_limiter, sl_controller, lifecycle_notifier, timeout_cfg, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
 
                 start_auth_service(maintenance_auth_service, stop_maintenance_auth_service, "maintenance auth service");
             }
@@ -2721,6 +2721,19 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // startup also when creating a new cluster.
             start_auth_service(auth_service, stop_auth_service, "auth service");
 
+            // Forwarded requests use auth_service, so the service starts after
+            // auth_service and stops before it.
+            sharded<cql_transport::cql_forwarding_service> cql_forwarding_service;
+            cql_forwarding_service.start(std::ref(qp), std::ref(cql_processor), std::ref(auth_service), std::ref(sl_controller),
+                    std::ref(messaging), cql_sg_stats_key).get();
+            ss.local().set_forwarded_cql_requests_drain([&cql_forwarding_service] {
+                return cql_forwarding_service.invoke_on_all(&cql_transport::cql_forwarding_service::drain);
+            });
+            auto stop_cql_forwarding_service = defer_verbose_shutdown("CQL forwarding service", [&ss, &cql_forwarding_service] {
+                ss.local().set_forwarded_cql_requests_drain({});
+                cql_forwarding_service.stop().get();
+            });
+
             utils::get_local_injector().inject("stop_after_starting_auth_service",
                 [] { std::raise(SIGSTOP); });
 
@@ -2864,7 +2877,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // after drain stops them in stop_transport()
             // Register controllers after drain_on_shutdown() below, so that even on start
             // failure drain is called and stops controllers
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, cql_processor, service_memory_limiter, sl_controller, lifecycle_notifier, messaging, timeout_cfg, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, cql_processor, service_memory_limiter, sl_controller, lifecycle_notifier, timeout_cfg, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
 
             api::set_server_service_levels(ctx, cql_server_ctl, qp).get();
 
