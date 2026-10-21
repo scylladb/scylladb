@@ -44,9 +44,12 @@ class log {
     // the log is truncated while there is an uncommitted change
     //
     // Seastar Raft uses a joint consensus approach to
-    // configuration changes, when each change is represented as
-    // two log entries: one for C_old + C_new and another for
-    // C_new. This index is therefore updated twice per change.
+    // configuration changes, when a change of the voter set is
+    // represented as two log entries: one for C_old + C_new and
+    // another for C_new. A change that leaves the voter set
+    // unchanged (e.g. adds or removes a non-voter) is a single
+    // C_new entry. This index is therefore updated twice or once
+    // per change.
     // It's used to track when the log entry for C_old + C_new is
     // committed (_commit_idx >= _last_conf_idx &&
     // _configuration.is_joint()) and automatically append a new

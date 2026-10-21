@@ -1333,7 +1333,7 @@ future<> raft_cluster<Clock>::change_configuration(set_config sc) {
         co_await free_election();
     }
 
-    // Now we know joint configuration was applied
+    // Now we know the configuration change was applied
     // Add a dummy entry to confirm new configuration was committed
     try {
         co_await _servers[_leader].server->add_entry(create_command(dummy_command),

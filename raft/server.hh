@@ -160,9 +160,10 @@ public:
     // Cannot be called until previous set_configuration() completes
     // otherwise throws conf_change_in_progress exception.
     //
-    // Waits until configuration completes, i.e. the server left the joint
-    // configuration. The server will apply a dummy entry to
-    // make sure this happens.
+    // Waits until configuration completes, i.e. the non-joint C_new is
+    // committed. A change that leaves the voter set unchanged is that single
+    // entry; any other is two, a joint C_old + C_new entry and then C_new.
+    // The server will apply a dummy entry to make sure this happens.
     //
     // Note: committing a dummy entry extends the opportunity for
     // uncertainty, thus commit_status_unknown exception may be
@@ -197,7 +198,8 @@ public:
     // adverse effects to the configuration.
     //
     // If forwarding is enabled and this is a follower, and the returned future resolves without exception,
-    // this means that a dummy entry appended after non-joint configuration entry was committed by the leader.
+    // this means that a dummy entry appended after the non-joint configuration entry (the only entry
+    // of a change that leaves the voter set unchanged) was committed by the leader.
     // The local commit index is not necessarily up-to-date yet and the state of the local state machine
     // replica may still come from before the configuration entry.
     // (exception: if no server was actually added or removed, then nothing gets committed and the leader responds immediately).
