@@ -173,6 +173,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     static constexpr std::chrono::seconds cdc_streams_gc_refresh_interval = std::chrono::seconds(60);
 
+    // Replica split-readiness is only learned by pulling load stats, so poll at this
+    // cadence while a split is pending instead of waiting for the periodic interval.
+    static constexpr std::chrono::seconds split_pending_load_stats_refresh_interval = std::chrono::seconds(2);
+
     std::chrono::milliseconds _ring_delay;
 
     gate::holder _group0_holder;
@@ -5244,6 +5248,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     future<tablet_load_stats_collect_result> collect_tablet_load_stats(require_live_nodes require);
     future<> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
+    bool has_pending_split() const;
 
     future<> await_event() {
         _as.check();
@@ -5609,6 +5614,13 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
     rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");
 }
 
+bool topology_coordinator::has_pending_split() const {
+    const auto& tmd = get_token_metadata_ptr()->tablets();
+    return std::ranges::any_of(tmd.all_table_groups(), [&] (const auto& group) {
+        return tmd.get_tablet_map(group.first).resize_decision().is_split();
+    });
+}
+
 future<> topology_coordinator::start_tablet_load_stats_refresher() {
     auto can_proceed = [this] { return !_async_gate.is_closed() && !_as.abort_requested(); };
     while (can_proceed()) {
@@ -5624,12 +5636,18 @@ future<> topology_coordinator::start_tablet_load_stats_refresher() {
         } catch (...) {
             rtlogger.warn("Found error while refreshing load stats for tablets: {:t}, retrying...", std::current_exception());
         }
-        auto refresh_interval = std::chrono::seconds(_tablet_load_stats_refresh_interval_in_seconds.get());
-        if (sleep && can_proceed()) {
+        auto deadline = seastar::lowres_clock::now() + std::chrono::seconds(_tablet_load_stats_refresh_interval_in_seconds.get());
+        // Sleep in short slices so a split decided mid-interval is noticed promptly.
+        while (sleep && can_proceed()) {
             try {
-                co_await seastar::sleep_abortable(refresh_interval, _as);
+                co_await seastar::sleep_abortable(std::min<seastar::lowres_clock::duration>(
+                        split_pending_load_stats_refresh_interval, deadline - seastar::lowres_clock::now()), _as);
             } catch (...) {
                 rtlogger.debug("raft topology: Tablet load stats refresher: sleep failed: {:t}", std::current_exception());
+                break;
+            }
+            if (seastar::lowres_clock::now() >= deadline || has_pending_split()) {
+                break;
             }
         }
     }
