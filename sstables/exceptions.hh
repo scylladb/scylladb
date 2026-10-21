@@ -10,13 +10,17 @@
 #pragma once
 
 #include <concepts>
+#include <exception>
+#include <optional>
+#include <string_view>
 #include <seastar/core/format.hh>
 
 #include "sstables/component_type.hh"
+#include "sstables/generation_type.hh"
 #include "seastarx.hh"
 
 namespace sstables {
-class malformed_sstable_exception : public std::exception {
+class malformed_sstable_exception final : public std::exception {
     sstring _msg;
     // Whether the sstable is malformed because a component of it is not there
     // at all, as opposed to being there but unreadable. A running ScyllaDB
@@ -26,6 +30,8 @@ class malformed_sstable_exception : public std::exception {
     // rather than a type of its own, so that what a node logs for a missing
     // component is what it always was.
     bool _components_are_missing = false;
+    // If set, carries the identity of the sstable which caused this exception to be thrown.
+    generation_type _generation;
 public:
     malformed_sstable_exception(sstring msg, component_name filename)
         : malformed_sstable_exception{format("{} in sstable {}", msg, filename)}
@@ -39,8 +45,21 @@ public:
     bool components_are_missing() const noexcept {
         return _components_are_missing;
     }
+    generation_type generation() const noexcept {
+        return _generation;
+    }
     const char *what() const noexcept {
         return _msg.c_str();
+    }
+    // Returns a copy of this exception attributed to the sstable with the given generation, with
+    // "<context> due to <message>" as its message if context is set, and the same message otherwise.
+    [[nodiscard]] malformed_sstable_exception attributed(generation_type generation, std::optional<std::string_view> context) const {
+        auto copy = *this;
+        copy._generation = generation;
+        if (context) {
+            copy._msg = format("{} due to {}", *context, what());
+        }
+        return copy;
     }
 };
 
@@ -58,11 +77,9 @@ inline void parse_assert(bool condition, std::optional<component_name> filename 
     }
 }
 
-struct bufsize_mismatch_exception : malformed_sstable_exception {
-    bufsize_mismatch_exception(size_t size, size_t expected) :
-        malformed_sstable_exception(format("Buffer improperly sized to hold requested data. Got: {:d}. Expected: {:d}", size, expected))
-    {}
-};
+// If ex holds a malformed_sstable_exception, returns a copy of it attributed to the given
+// generation, see malformed_sstable_exception::attributed(). Other exceptions are returned unchanged.
+std::exception_ptr maybe_attribute_malformed_sstable_exception(std::exception_ptr ex, generation_type generation, std::optional<std::string_view> context = std::nullopt);
 
 // Controls whether malformed sstable errors abort the process (generating a coredump) or throw an
 // exception. Aborting is useful when the malformed sstable error is caused by memory corruption
@@ -72,9 +89,9 @@ struct bufsize_mismatch_exception : malformed_sstable_exception {
 bool set_abort_on_malformed_sstable_error(bool value) noexcept;
 bool abort_on_malformed_sstable_error() noexcept;
 
-// Use these helpers instead of directly throwing malformed_sstable_exception or
-// bufsize_mismatch_exception. They check the abort_on_malformed_sstable_error flag and either
-// abort the process (with logging) or throw the appropriate exception.
+// Use these helpers instead of directly throwing malformed_sstable_exception. They check the
+// abort_on_malformed_sstable_error flag and either abort the process (with logging) or throw
+// the exception.
 [[noreturn]] void throw_malformed_sstable_exception(sstring msg);
 [[noreturn]] void throw_malformed_sstable_exception(sstring msg, component_name filename);
 [[noreturn]] void throw_missing_sstable_component_exception(component_name filename);
