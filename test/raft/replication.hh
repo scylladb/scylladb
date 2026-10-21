@@ -863,8 +863,9 @@ public:
     }
 
     void on_configuration_change(raft::server_address_set add, raft::server_address_set del) override {
-        _known_peers.merge(add);
+        // Count before merge(), which moves the new peers out of `add`.
         _servers_added += add.size();
+        _known_peers.merge(add);
         for (const auto& addr: del) {
             _known_peers.erase(addr);
         }
