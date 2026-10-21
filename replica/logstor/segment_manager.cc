@@ -246,57 +246,39 @@ future<> writeable_segment::do_write(segment_position pos, bytes_view data) {
 
 using seg_ptr = lw_shared_ptr<writeable_segment>;
 
-// Maps the shares demand of the compaction driver, the space pressure in [0, 1], to CPU shares. The
-// pressure is 0 at or above the threshold anchor and 1 at the space floor, see
-// compaction_space_pressure(). The maximum output is logstor_compaction_max_shares.
-//
-// Each control point sits on an anchor of the pressure ramp:
-//
-//   - pressure 0, at or above the threshold anchor: compaction runs at the same floor the sstable
-//     controller uses;
-//   - pressure compaction_shares_pressure_at_target, a third of the way from the anchor to the space
-//     floor;
-//   - pressure 1, at the space floor: compaction is losing against the write rate and gets the
-//     maximum.
-//
-// The loop settles at whatever shares match the write rate.
+// Maps the shares demand of the rate controller, in [0, 1], to CPU shares:
+// logstor_compaction_min_shares at 0, at or above the threshold anchor, and
+// logstor_compaction_max_shares at 1, at the space floor. The map is linear, because the demand
+// already has the shape, see compaction_rate_controller.
 class compaction_shares_controller : public backlog_controller {
 public:
-    static constexpr float idle_shares = 50.0f;
-    static constexpr float target_shares = 200.0f;
-    // Below this the scheduling group's shares stop being meaningful, so a cap this low is treated
+    // Below this the scheduling group's shares stop being meaningful, so a floor this low is treated
     // as a misconfiguration rather than as a choice to honour.
-    static constexpr float min_max_shares = 1.0f;
+    static constexpr float min_shares_floor = 1.0f;
 
-    compaction_shares_controller(scheduling_group sg, float static_shares, float max_shares,
+    compaction_shares_controller(scheduling_group sg, float static_shares, float min_shares, float max_shares,
             std::chrono::milliseconds interval, std::function<float()> current_backlog)
-        : backlog_controller(std::move(sg), interval, make_control_points(max_shares),
+        : backlog_controller(std::move(sg), interval, make_control_points(min_shares, max_shares),
                 std::move(current_backlog), static_shares) {
     }
 
-    void set_max_shares(float max_shares) {
-        _control_points = make_control_points(max_shares);
+    void set_shares_range(float min_shares, float max_shares) {
+        _control_points = make_control_points(min_shares, max_shares);
     }
 
 private:
-    // The ramp for a given cap, which is the only input: the ramp has no default of its own, so a
-    // controller always follows logstor_compaction_max_shares.
-    //
-    // The lower two points keep their constants, since the cap is meant to bound the peak rather
-    // than move the steady-state operating point. They only follow the cap down when keeping them
-    // would make the ramp non-monotone: scaling them is better than raising the configured cap back
-    // up, because the ramp then still responds to pressure instead of flattening into a fixed share
-    // count. The fractions are chosen to reproduce the constants exactly at any cap of 300 shares or
-    // more, so the coupling is invisible above the point where it is needed.
-    static std::vector<control_point> make_control_points(float max_shares) {
-        if (max_shares < min_max_shares) {
-            logstor_logger.warn("logstor_compaction_max_shares of {} is too low, using {}", max_shares, min_max_shares);
-            max_shares = min_max_shares;
+    static std::vector<control_point> make_control_points(float min_shares, float max_shares) {
+        if (min_shares < min_shares_floor) {
+            logstor_logger.warn("logstor_compaction_min_shares of {} is too low, using {}", min_shares, min_shares_floor);
+            min_shares = min_shares_floor;
         }
-        const float target = std::min(target_shares, max_shares * 2.0f / 3.0f);
+        if (max_shares < min_shares) {
+            logstor_logger.warn("logstor_compaction_max_shares of {} is below logstor_compaction_min_shares of {}, using the minimum",
+                    max_shares, min_shares);
+            max_shares = min_shares;
+        }
         return {
-                {0.0f, std::min(idle_shares, target / 4.0f)},
-                {compaction_shares_pressure_at_target, target},
+                {0.0f, min_shares},
                 {1.0f, max_shares},
         };
     }
@@ -315,6 +297,7 @@ public:
         utils::updateable_value<double> compaction_utilization_threshold;
         seastar::scheduling_group compaction_sg;
         utils::updateable_value<float> compaction_static_shares;
+        utils::updateable_value<float> compaction_min_shares;
         utils::updateable_value<float> compaction_max_shares;
         seastar::scheduling_group separator_sg;
         seastar::scheduling_group split_compaction_sg;
@@ -344,6 +327,7 @@ private:
 
     compaction_shares_controller _shares_controller;
     utils::observer<float> _compaction_static_shares_observer;
+    utils::observer<float> _compaction_min_shares_observer;
     utils::observer<float> _compaction_max_shares_observer;
 
     struct group_compaction_state {
@@ -368,6 +352,7 @@ public:
         , _shares_controller(
                 _cfg.compaction_sg,
                 _cfg.compaction_static_shares.get(),
+                _cfg.compaction_min_shares.get(),
                 _cfg.compaction_max_shares.get(),
                 compaction_rate_control_period,
                 [this] {
@@ -377,9 +362,13 @@ public:
         , _compaction_static_shares_observer(_cfg.compaction_static_shares.observe([this] (float new_shares) {
             return _shares_controller.update_static_shares(new_shares);
         }))
+        , _compaction_min_shares_observer(_cfg.compaction_min_shares.observe([this] (float new_min_shares) {
+            logstor_logger.info("Updating logstor compaction min shares to {}", new_min_shares);
+            _shares_controller.set_shares_range(new_min_shares, _cfg.compaction_max_shares.get());
+        }))
         , _compaction_max_shares_observer(_cfg.compaction_max_shares.observe([this] (float new_max_shares) {
             logstor_logger.info("Updating logstor compaction max shares to {}", new_max_shares);
-            _shares_controller.set_max_shares(new_max_shares);
+            _shares_controller.set_shares_range(_cfg.compaction_min_shares.get(), new_max_shares);
         }))
         , _driver(*this, compaction_driver::config{
                 .max_segments_per_compaction = _cfg.max_segments_per_compaction,
@@ -932,6 +921,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
             .compaction_utilization_threshold = config.compaction_utilization_threshold,
             .compaction_sg = config.compaction_sg,
             .compaction_static_shares = config.compaction_static_shares,
+            .compaction_min_shares = config.compaction_min_shares,
             .compaction_max_shares = config.compaction_max_shares,
             .separator_sg = config.separator_sg,
             .split_compaction_sg = config.split_compaction_sg

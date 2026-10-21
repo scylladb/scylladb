@@ -1012,8 +1012,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "A logstor segment is compacted when the fraction of it that holds live data is below this value, while about 6% of the segments are free. "
         "Compaction runs while a compaction group has a batch of candidates with a net gain. Below that free level the threshold increases towards 1. A higher value frees space sooner, at a higher write amplification. "
         "A value of 0 compacts only segments with no live data. A value of 1 or more disables automatic compaction.")
+    , logstor_compaction_min_shares(this, "logstor_compaction_min_shares", liveness::LiveUpdate, value_status::Used, 50,
+        "CPU shares of the logstor compaction scheduling group while about 6% or more of the segments are free.")
     , logstor_compaction_max_shares(this, "logstor_compaction_max_shares", liveness::LiveUpdate, value_status::Used, 2000,
-        "Maximum CPU shares the logstor compaction controller gives the logstor compaction scheduling group, reached at full space pressure. ")
+        "Maximum CPU shares of the logstor compaction scheduling group, reached at the space floor, where the disk is out of free segments for compaction. Between the anchor and the space floor the shares increase linearly.")
     , file_cache_size_in_mb(this, "file_cache_size_in_mb", value_status::Unused, 512,
         "Total memory to use for SSTable-reading buffers.")
     , memtable_flush_queue_size(this, "memtable_flush_queue_size", value_status::Unused, 4,

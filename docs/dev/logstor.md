@@ -73,7 +73,7 @@ Only step 4 writes to the disk - all other steps only update in-memory metadata.
 1. A segment is a candidate when its utilization (live record bytes / segment size) is under the utilization threshold, `logstor_compaction_utilization_threshold` (default 0.5).
 2. The threshold is a function of the number of free segments on the shard. It is 1 at the space floor (1/32 of the disk, at least two batches), and the configured value at an anchor (twice the space floor) and above. Between these points it is linear. So a full disk compacts fuller segments.
 3. One driver per shard runs while a compaction group has a batch of candidates with a net gain. Nothing throttles it: the threshold decides what it compacts, and the CPU shares decide how fast.
-4. The CPU shares of the compaction scheduling group are at their minimum while the free segments are at or above the anchor, and increase to `logstor_compaction_max_shares` at the space floor. So when compaction does not keep up with the writes, the free segments decrease below the anchor and compaction gets more CPU.
+4. The CPU shares of the compaction scheduling group are `logstor_compaction_min_shares` while the free segments are at or above the anchor, and increase linearly to `logstor_compaction_max_shares` at the space floor. So when compaction does not keep up with the writes, the free segments decrease below the anchor and compaction gets more CPU.
 5. A job that runs next to another job starts only if its batch reclaims at least 75% of what the best batch of the shard reclaims per byte copied.
 
 ## Usage
