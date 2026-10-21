@@ -606,6 +606,8 @@ public:
             // is not a read of a disk, and a write into one pays for the extent it allocates.
             .sparse_files = false,
             .compaction_enabled = cfg.compaction,
+            // A perf test uses the curve of a node, because its disk is large enough for the curve.
+            .compaction_min_utilization_threshold = default_compaction_min_utilization_threshold,
         });
         // The same share of memory a node gives the writes it has taken but not yet flushed, which
         // is what bounds how far ahead of the disk the write path may run.

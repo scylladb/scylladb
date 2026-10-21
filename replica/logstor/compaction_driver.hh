@@ -76,6 +76,9 @@ public:
         size_t max_segments_per_compaction;
         // See utilization_threshold_curve.
         utils::updateable_value<double> utilization_threshold;
+        utils::updateable_value<double> threshold_anchor;
+        utils::updateable_value<double> threshold_ceiling;
+        utils::updateable_value<double> min_utilization_threshold;
         seastar::scheduling_group sg;
     };
 

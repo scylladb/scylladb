@@ -129,7 +129,7 @@ compaction_limits make_compaction_limits(uint64_t space_floor, size_t max_batch_
 struct utilization_threshold_curve {
     uint64_t space_floor;
     uint64_t anchor;
-    // Above the anchor: the free level where the threshold reaches `min_threshold`.
+    // The free level above the anchor where the threshold reaches `min_threshold`.
     uint64_t ceiling;
     // The configured threshold, logstor_compaction_utilization_threshold. Anything outside [0, 1)
     // disables automatic compaction.
@@ -143,9 +143,9 @@ struct utilization_threshold_curve {
 
 // Returns the curve for a disk of `segment_count` segments and the space floor `space_floor`, from
 // the configuration. `anchor_fraction` and `ceiling_fraction` are fractions of the disk. An anchor
-// of 0 is twice the space floor, and a ceiling of 0 is one segment above the anchor. The anchor is
-// kept above the space floor, the ceiling above the anchor, and the minimum threshold in [0,
-// threshold], whatever the configuration is.
+// of 0 is twice the space floor, and a ceiling of 0 is one segment above the anchor. Whatever the
+// configuration is, the function keeps the anchor above the space floor and at most half of the
+// disk, the ceiling above the anchor, and the minimum threshold in [0, threshold].
 utilization_threshold_curve make_utilization_threshold_curve(uint64_t segment_count, uint64_t space_floor,
         double threshold, double anchor_fraction, double ceiling_fraction, double min_threshold) noexcept;
 

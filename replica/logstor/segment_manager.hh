@@ -39,6 +39,7 @@ class index_read_guard;
 
 static constexpr uint64_t default_segment_size = 128 * 1024;
 static constexpr uint64_t default_file_size = 32 * 1024 * 1024;
+static constexpr double default_compaction_min_utilization_threshold = 0.1;
 
 /// Configuration for the segment manager
 struct segment_manager_config {
@@ -56,6 +57,16 @@ struct segment_manager_config {
     // A segment is a candidate for automatic compaction while its utilization is under this.
     // Anything outside [0, 1) disables automatic compaction.
     utils::updateable_value<double> compaction_utilization_threshold{0.5};
+    // The anchor and the ceiling, as fractions of the disk. The anchor is the free level at which
+    // the configured threshold applies, and the ceiling is the free level at which the threshold
+    // reaches compaction_min_utilization_threshold. A 0 selects the default: twice the space floor
+    // for the anchor, and one segment above the anchor for the ceiling. They are not node options,
+    // so a node uses the defaults. See utilization_threshold_curve.
+    utils::updateable_value<double> compaction_threshold_anchor{0};
+    utils::updateable_value<double> compaction_threshold_ceiling{0};
+    // The threshold at the ceiling and above. At or above compaction_utilization_threshold the
+    // threshold is constant above the anchor.
+    utils::updateable_value<double> compaction_min_utilization_threshold{default_compaction_min_utilization_threshold};
     seastar::scheduling_group compaction_sg;
     utils::updateable_value<float> compaction_static_shares;
     // The shares of the compaction scheduling group at or above the threshold anchor, and at the
