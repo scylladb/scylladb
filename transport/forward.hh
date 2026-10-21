@@ -49,6 +49,12 @@ struct forward_cql_prepare_request {
     service::forwarded_client_state client_state;
     std::optional<tracing::trace_info> trace_info;
     cql3::dialect dialect;
+    std::optional<uint8_t> cql_version;
+};
+
+struct forward_cql_prepare_error {
+    bytes_ostream response_body;
+    uint8_t response_flags;
 };
 
 }

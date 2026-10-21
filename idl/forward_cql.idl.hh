@@ -70,11 +70,20 @@ struct forward_cql_prepare_request {
     service::forwarded_client_state client_state;
     std::optional<tracing::trace_info> trace_info;
     cql3::dialect dialect;
+    // Protocol version to encode a failed preparation as a CQL ERROR response.
+    // Without it, the target node reports the failure as an RPC error.
+    std::optional<uint8_t> cql_version [[version 2026.4]];
+};
+
+// CQL ERROR response for a statement that failed to prepare on the target node
+struct forward_cql_prepare_error {
+    bytes response_body;
+    uint8_t response_flags;
 };
 
 verb [[with_client_info, with_timeout]] forward_cql_execute (unsigned shard, cql_transport::forward_cql_execute_request req [[ref]]) -> cql_transport::forward_cql_execute_response;
 
 // Prepare a CQL statement on a remote node
-verb [[with_client_info, with_timeout]] forward_cql_prepare (cql_transport::forward_cql_prepare_request req [[ref]]) -> bytes;
+verb [[with_client_info, with_timeout]] forward_cql_prepare (cql_transport::forward_cql_prepare_request req [[ref]]) -> bytes, std::optional<cql_transport::forward_cql_prepare_error> [[version 2026.4]];
 
 }
