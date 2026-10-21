@@ -391,7 +391,6 @@ async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
-            table_id = await manager.get_table_id(ks, table_name)
 
             # Write some rows to trigger raft table updates
             for pk in range(10):
@@ -415,10 +414,11 @@ async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
 
             # Prepare the list of (shard, group_id) pairs for all tablets of the table.
             raft_partition_keys = []
-            for row in await cql.run_async(f"SELECT raft_group_id, replicas FROM system.tablets where table_id = {table_id}"):
-                assert len(row.replicas) == 1, "Expected RF=1 for the test table"
-                (_, shard) = row.replicas[0]
-                raft_partition_keys.append((shard, row.raft_group_id))
+            for tablet in tablets:
+                assert len(tablet.replicas) == 1, "Expected RF=1 for the test table"
+                (_, shard) = tablet.replicas[0]
+                # A UUID, as system.raft_groups returns it: rows read from there are looked up by it.
+                raft_partition_keys.append((shard, uuid.UUID(tablet.raft_group_id)))
             assert len(raft_partition_keys) == 8, f"Expected 8 tablets, got {len(raft_partition_keys)}"
 
             # system.raft_groups has a collection column, and a Row holding a list
@@ -1833,12 +1833,10 @@ async def test_tablet_migration(manager: ScyllaClusterManager):
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
 
-            logger.info("Select raft group id for the tablet")
-            group_id = await get_table_raft_group_id(manager, ks, table_name)
-
             tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
             assert len(tablets) == 1
             tablet = tablets[0]
+            group_id = tablet.raft_group_id
             tablet_token = tablet.last_token
             original_replicas = tablet.replicas
             assert len(original_replicas) == 3, f"Expected 3 replicas, got {len(original_replicas)}"
@@ -1938,12 +1936,10 @@ async def test_tablet_migration_rf1(manager: ScyllaClusterManager):
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
 
-            logger.info("Select raft group id for the tablet")
-            group_id = await get_table_raft_group_id(manager, ks, table_name)
-
             tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
             assert len(tablets) == 1
             tablet = tablets[0]
+            group_id = tablet.raft_group_id
             tablet_token = tablet.last_token
             assert len(tablet.replicas) == 1, f"Expected 1 replica, got {len(tablet.replicas)}"
 
@@ -2050,12 +2046,10 @@ async def test_tablet_migration_rollback(manager: ScyllaClusterManager):
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
 
-            logger.info("Select raft group id for the tablet")
-            group_id = await get_table_raft_group_id(manager, ks, table_name)
-
             tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
             assert len(tablets) == 1
             tablet = tablets[0]
+            group_id = tablet.raft_group_id
             tablet_token = tablet.last_token
             original_replicas = tablet.replicas
             assert len(original_replicas) == 3, f"Expected 3 replicas, got {len(original_replicas)}"
@@ -2163,8 +2157,6 @@ async def test_rf_increase(manager: ScyllaClusterManager):
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
 
-            group_id = await get_table_raft_group_id(manager, ks, table_name)
-
             logger.info("Writing initial data")
             for i in range(10):
                 await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({i}, {i})")
@@ -2172,6 +2164,7 @@ async def test_rf_increase(manager: ScyllaClusterManager):
             logger.info("Checking initial RF=2 allocation")
             tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
             assert len(tablets) == 1
+            group_id = tablets[0].raft_group_id
             assert len(tablets[0].replicas) == 2, f"Expected 2 replicas, got {len(tablets[0].replicas)}"
 
             logger.info("Increasing RF from 2 to 3")
@@ -2233,7 +2226,8 @@ async def test_rf_decrease(manager: ScyllaClusterManager, leader_on_dropped: boo
                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
-            group_id = await get_table_raft_group_id(manager, ks, table_name)
+            [tablet] = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            group_id = tablet.raft_group_id
 
             async def insert_rows(pks, host: Host):
                 for pk in pks:
@@ -2408,10 +2402,9 @@ async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClu
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
 
-            group_id = await get_table_raft_group_id(manager, ks, table_name)
-
             tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
             assert len(tablets) == 1
+            group_id = tablets[0].raft_group_id
             tablet_token = tablets[0].last_token
             original_replicas = tablets[0].replicas
             assert len(original_replicas) == 3, f"Expected 3 replicas, got {len(original_replicas)}"
@@ -2965,10 +2958,9 @@ async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaCluster
                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
-            group_id = await get_table_raft_group_id(manager, ks, table_name)
-
             tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
             assert len(tablets) == 1
+            group_id = tablets[0].raft_group_id
             tablet_token = tablets[0].last_token
 
             for i in range(10):
@@ -3035,10 +3027,9 @@ async def test_late_raft_apply_after_tablet_cleanup(manager: ScyllaClusterManage
                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
-            group_id = await get_table_raft_group_id(manager, ks, table_name)
-
             tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
             assert len(tablets) == 1
+            group_id = tablets[0].raft_group_id
             tablet_token = tablets[0].last_token
 
             for i in range(10):
@@ -3151,10 +3142,9 @@ async def test_no_raft_replay_into_a_tablet_that_moved_away(manager: ScyllaClust
                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             table_name = table.split('.')[-1]
-            group_id = await get_table_raft_group_id(manager, ks, table_name)
-
             tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
             assert len(tablets) == 1
+            group_id = tablets[0].raft_group_id
             tablet_token = tablets[0].last_token
             original_replicas = tablets[0].replicas
 
@@ -3424,9 +3414,9 @@ async def test_sc_raft_metrics_per_shard(manager: ScyllaClusterManager):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
-        table_id = await manager.get_table_id(ks, 'test')
-        rows = await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")
-        group_ids = [str(row.raft_group_id) for row in rows]
+        # Balancing is disabled, so the replicas stay where they are for the rest of the test.
+        tablets = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        group_ids = [tablet.raft_group_id for tablet in tablets]
         assert len(group_ids) == 4
 
         leaders_per_host = {host_id: 0 for host_id in host_ids}
@@ -3438,7 +3428,6 @@ async def test_sc_raft_metrics_per_shard(manager: ScyllaClusterManager):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})")
 
         labels = {'ks': ks, 'cf': 'test'}
-        tablets = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
         for server, host_id in zip(servers, host_ids):
             logger.info(f"Checking the metrics of {server}, which leads {leaders_per_host[host_id]} groups")
             metrics = await manager.metrics.query(server.ip_addr)
@@ -3480,8 +3469,8 @@ async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterMa
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
-        group_id = await get_table_raft_group_id(manager, ks, 'test')
         tablet = (await get_all_tablet_replicas(manager, servers[0], ks, 'test'))[0]
+        group_id = tablet.raft_group_id
         src_host_id, src_shard = tablet.replicas[0]
         src_host_id = str(src_host_id)
         src = servers[host_ids.index(src_host_id)]
