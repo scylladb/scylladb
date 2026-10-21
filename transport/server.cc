@@ -457,16 +457,37 @@ cql_forwarding_service::cql_forwarding_service(sharded<cql3::query_processor>& q
     init_messaging_service();
 }
 
+void cql_forwarding_service::set_auth_started() noexcept {
+    _auth_started.set_value();
+}
+
 future<> cql_forwarding_service::drain() {
     if (std::exchange(_drained, true)) {
         co_return;
     }
     _abort_source.request_abort();
+    if (!_auth_started.available()) {
+        _auth_started.set_exception(abort_requested_exception());
+    }
     co_await uninit_messaging_service();
 }
 
 future<> cql_forwarding_service::stop() {
     return drain();
+}
+
+// We stop waiting for auth::service only after the coordinator has timed out the request,
+// so that the client gets a timeout error rather than our failure. Our deadline can precede
+// the coordinator's by a few milliseconds, because RPC rounds the remaining time down to
+// milliseconds and lowres_clock ticks every 10ms. A second is far more than that, and
+// keeps a request which has timed out only briefly.
+static constexpr auto auth_wait_grace = std::chrono::seconds(1);
+
+future<> cql_forwarding_service::wait_for_auth(std::optional<lowres_clock::time_point> timeout) {
+    if (!_auth_started.available()) {
+        clogger.debug("Forwarded CQL request waits for auth service to start");
+    }
+    return _auth_started.get_shared_future(timeout ? *timeout + auth_wait_grace : lowres_clock::time_point::max());
 }
 
 void cql_forwarding_service::init_messaging_service() {
@@ -477,7 +498,8 @@ void cql_forwarding_service::init_messaging_service() {
 
             co_await utils::get_local_injector().inject("wait_before_handling_forwarded_request", utils::wait_for_message(60s));
 
-            co_return co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_forwarding_service& shard_svc) mutable -> future<forward_cql_execute_response> {
+            co_return co_await container().invoke_on(shard, [src_host, timeout, req = std::move(req)] (cql_forwarding_service& shard_svc) mutable -> future<forward_cql_execute_response> {
+                co_await shard_svc.wait_for_auth(timeout);
                 service::client_state cs(shard_svc._auth_service.local(),
                     &shard_svc._sl_controller,
                     std::move(req.client_state),
@@ -523,6 +545,7 @@ void cql_forwarding_service::init_messaging_service() {
             auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
             clogger.trace("Handling forward prepare request from {}", src_host);
 
+            co_await wait_for_auth(timeout);
             service::client_state cs(_auth_service.local(), &_sl_controller, std::move(req.client_state));
             tracing::trace_state_ptr trace_state_ptr;
             if (req.trace_info) {
