@@ -301,9 +301,15 @@ public:
     future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
 
     // Prepares a vnode-based keyspace for migration to tablets.
-    // Builds tablet maps from vnode token boundaries for all tables and
-    // persists them to group0.
-    future<> prepare_for_tablets_migration(const sstring& ks_name);
+    // Builds tablet maps from vnode token boundaries and persists them to group0.
+    //
+    // When table_name is engaged only that table is prepared, which bounds the
+    // amount of data each node reshards on its next restart. The keyspace stays
+    // vnode-based until every one of its tables has been prepared and
+    // finalize_tablets_migration() flips it; until then the keyspace is in a
+    // transient mixed state where some tables use tablets and some use vnodes.
+    // Otherwise every table in the keyspace is prepared at once.
+    future<> prepare_for_tablets_migration(const sstring& ks_name, std::optional<sstring> table_name = std::nullopt);
 
     struct node_migration_status {
         locator::host_id host_id;
@@ -330,7 +336,12 @@ public:
     migration_status get_tablets_migration_status(const sstring& ks_name);
     future<keyspace_migration_status> get_tablets_migration_status_with_node_details(const sstring& ks_name);
     future<> set_node_intended_storage_mode(storage_mode mode);
-    future<> finalize_tablets_migration(const sstring& ks_name);
+    // Finalizes the migration of one table, or of the whole keyspace, which
+    // when going forward requires every one of its tables to be prepared.
+    // Rolling back concerns only the tables that were prepared. A finalized table runs on tablets
+    // for good: it is balanced, converges to its pow2 layout, and cannot be
+    // rolled back. The keyspace itself flips once its last table is finalized.
+    future<> finalize_tablets_migration(const sstring& ks_name, std::optional<sstring> table_name = std::nullopt);
 
     struct table_pow2_convergence_info {
         sstring table_name;

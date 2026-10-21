@@ -179,7 +179,7 @@ public:
     topology_request_tracking_mutation_builder& set_truncate_table_data(const table_id& table_id);
     topology_request_tracking_mutation_builder& set_new_keyspace_rf_change_data(const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc);
     topology_request_tracking_mutation_builder& set_snapshot_tables_data(const std::unordered_set<table_id>&, const sstring& tag, bool);
-    topology_request_tracking_mutation_builder& set_finalize_migration_data(const sstring& ks_name);
+    topology_request_tracking_mutation_builder& set_finalize_migration_data(const sstring& ks_name, const std::optional<sstring>& table_name = std::nullopt);
     topology_request_tracking_mutation_builder& set_restore_tablets_data(const table_id& tid, const sstring& snapshot_name);
 
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }

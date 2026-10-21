@@ -4369,7 +4369,7 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
     co_return table_sizes;
 }
 
-future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) {
+future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name, std::optional<sstring> table_name) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
 
@@ -4408,6 +4408,9 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         std::vector<std::pair<table_id, sstring>> tables_to_migrate;
 
         for (const auto& [name, schema] : cf_meta_data) {
+            if (table_name && name != *table_name) {
+                continue;
+            }
             auto tid = schema->id();
             auto& cf = db.find_column_family(tid);
 
@@ -4551,7 +4554,8 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
 
         topology_change change{co_await updates.collect()};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-            fmt::format("migrate keyspace {} to tablets", ks_name));
+            table_name ? fmt::format("migrate table {}.{} to tablets", ks_name, *table_name)
+                       : fmt::format("migrate keyspace {} to tablets", ks_name));
 
         try {
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as);
@@ -4802,7 +4806,7 @@ storage_service::get_tablets_pow2_convergence_status(const sstring& ks_name) con
     return status;
 }
 
-future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
+future<> storage_service::finalize_tablets_migration(const sstring& ks_name, std::optional<sstring> table_name) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
 
@@ -4828,16 +4832,30 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
             throw std::runtime_error(fmt::format("Keyspace '{}' has no tables", ks_name));
         }
 
-        for (const auto& schema : tables) {
-            if (!tablet_metadata.has_tablet_map(schema->id())) {
+        // A table being finalized must have been prepared. Naming the keyspace
+        // needs one prepared table rather than all of them, because the direction
+        // is the topology coordinator's to decide and a rollback concerns only the
+        // tables that were prepared. Going forward it is the coordinator that
+        // requires every table, since that is where the keyspace is flipped.
+        if (table_name) {
+            auto& cf = db.find_column_family(ks_name, *table_name);
+            if (!tablet_metadata.has_tablet_map(cf.schema()->id())) {
+                throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
+                    "it must be prepared for migration before finalizing", ks_name, *table_name));
+            }
+            slogger.info("Submitting finalization request for table {}.{}", ks_name, *table_name);
+        } else {
+            auto prepared = std::ranges::count_if(tables, [&] (const auto& schema) {
+                return tablet_metadata.has_tablet_map(schema->id());
+            });
+            if (prepared == 0) {
                 throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
                     "all tables in keyspace '{}' must be prepared for migration before finalizing",
-                    ks_name, schema->cf_name(), ks_name));
+                    ks_name, tables.front()->cf_name(), ks_name));
             }
+            slogger.info("{} of {} table(s) in keyspace '{}' have tablet maps, submitting finalization request",
+                         prepared, tables.size(), ks_name);
         }
-
-        slogger.info("All {} table(s) in keyspace '{}' have tablet maps, submitting finalization request",
-                     tables.size(), ks_name);
 
         request_id = guard.new_group0_state_id();
 
@@ -4848,11 +4866,12 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
         rtbuilder.set("done", false)
                  .set("start_time", db_clock::now())
                  .set("request_type", global_topology_request::finalize_migration)
-                 .set_finalize_migration_data(ks_name);
+                 .set_finalize_migration_data(ks_name, table_name);
 
         topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-            fmt::format("finalize vnodes-to-tablets migration for keyspace '{}'", ks_name));
+            table_name ? fmt::format("finalize vnodes-to-tablets migration for table '{}.{}'", ks_name, *table_name)
+                       : fmt::format("finalize vnodes-to-tablets migration for keyspace '{}'", ks_name));
 
         try {
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
