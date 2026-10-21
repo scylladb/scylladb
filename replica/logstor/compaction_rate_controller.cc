@@ -32,4 +32,10 @@ compaction_backlog reclaimable_backlog(const utilization_histogram& utilization,
     return backlog;
 }
 
+void compaction_rate_controller::tick(const sample& s) noexcept {
+    _pressure = compaction_space_pressure(s.available_segments, s.curve);
+    _threshold = effective_utilization_threshold(s.available_segments, s.curve);
+    _backlog = reclaimable_backlog(s.utilization, _threshold);
+}
+
 } // namespace replica::logstor

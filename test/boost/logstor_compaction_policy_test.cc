@@ -578,4 +578,29 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_reclaimable_backlog) {
     BOOST_REQUIRE_EQUAL(reclaimable_backlog(utilization_histogram{}, 0.5).candidate_segments, 0.0);
 }
 
+// The controller applies the curve and the minimum batch at the free level of each sample, and counts
+// the backlog under the threshold it applies. So space pressure adds fuller segments to the backlog.
+SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_rate_controller_space_pressure) {
+    const auto curve = make_utilization_threshold_curve(20000, 200, 0.5, 0, 0, 0.5);
+    utilization_histogram utilization{};
+    // Dead segments, and segments about 0.65 and 0.9 full.
+    utilization[0] = 8;
+    utilization[utilization_bucket_count * 5 / 8] = 5;
+    utilization[utilization_bucket_count * 7 / 8] = 2;
+    compaction_rate_controller controller;
+
+    double previous_candidates = 0;
+    for (uint64_t available : {600u, 300u, 200u}) {
+        controller.tick({.available_segments = available, .curve = curve, .utilization = utilization});
+        BOOST_TEST_CONTEXT("available=" << available) {
+            const auto pressure = compaction_space_pressure(available, curve);
+            BOOST_REQUIRE_EQUAL(controller.space_pressure(), pressure);
+            BOOST_REQUIRE_EQUAL(controller.utilization_threshold(), effective_utilization_threshold(available, curve));
+            BOOST_REQUIRE_EQUAL(controller.min_batch(), effective_min_batch(pressure));
+            BOOST_REQUIRE_GT(controller.backlog().candidate_segments, previous_candidates);
+        }
+        previous_candidates = controller.backlog().candidate_segments;
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
