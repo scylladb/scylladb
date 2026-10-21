@@ -18,6 +18,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "schema/schema_fwd.hh"
 #include "service/client_routes.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/task_manager_module.hh"

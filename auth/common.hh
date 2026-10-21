@@ -16,7 +16,8 @@
 #include <seastar/core/sstring.hh>
 
 #include "types/types.hh"
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
+#include "service/raft/raft_timeout.hh"
 #include "timeout_config.hh"
 
 using namespace std::chrono_literals;

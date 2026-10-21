@@ -13,6 +13,7 @@
 #include "utils/overloaded_functor.hh"
 #include "service/client_state.hh"
 #include "service/query_state.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace cql3 {
 

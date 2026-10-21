@@ -67,6 +67,7 @@ class client_state;
 class migration_manager;
 class raft_group0_client;
 class raft_group_registry;
+struct topology_state_machine;
 
 namespace paxos {
 class paxos_store;

@@ -31,7 +31,7 @@
 #include "utils/assert.hh"
 #include "utils/observable.hh"
 #include "utils/rolling_max_tracker.hh"
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
 #include "types/types.hh"
 #include "db/consistency_level_type.hh"
 #include "db/consistency_level_restriction.hh"

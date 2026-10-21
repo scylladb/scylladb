@@ -22,8 +22,7 @@
 #include "service/storage_service.hh"
 #include "utils/pluggable.hh"
 #include "utils/serialized_action.hh"
-#include "service/raft/raft_group_registry.hh"
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
 #include "db/timeout_clock.hh"
 
 #include <vector>

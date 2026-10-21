@@ -41,6 +41,8 @@
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/to_string.hh"
+#include "service/raft/raft_group0_client.hh"
+#include "mutation/canonical_mutation.hh"
 
 using namespace std::string_literals;
 

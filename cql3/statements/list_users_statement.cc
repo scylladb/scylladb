@@ -15,6 +15,7 @@
 #include "auth/common.hh"
 #include "db/system_keyspace.hh"
 #include "transport/messages/result_message.hh"
+#include "service/raft/raft_group0_client.hh"
 
 shared_ptr<const cql3::metadata> cql3::statements::list_users_statement::get_result_metadata() const {
     return ::make_shared<cql3::metadata>(
