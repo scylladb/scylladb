@@ -92,6 +92,13 @@ The current migration procedure has the following limitations:
   on the migrating keyspace until the keyspace itself has switched to tablets.
   A keyspace that is only partly migrated - some tables finalized, the rest
   still on vnodes - rejects the request.
+* **No SSTable upgrades** during the migration. Do not run
+  ``nodetool upgradesstables`` on the migrating keyspace until the keyspace
+  itself has switched to tablets: a table whose migration has been finalized
+  runs on tablets, but the command asks for the ranges to keep per keyspace
+  and gets the keyspace's vnode ranges, so the rewrite can discard rows the
+  node owns. Naming no keyspace covers every keyspace, the migrating one
+  included.
 * **No backup and restore** for migrating tables during the migration.
   Do not take snapshots, run backups, or restore into the migrating keyspace
   while the migration is in progress.
