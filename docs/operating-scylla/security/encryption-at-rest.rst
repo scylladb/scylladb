@@ -531,8 +531,8 @@ to encrypt tables or system information, add the KMIP server information to the
    * ``username`` - The KMIP server user name.
    * ``password`` - The KMIP server password.
    * ``max_command_retries`` - The number of attempts to connect to the KMIP server before trying the next host in the list.
-   * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from server. Default is 30s.
-   * ``key_cache_refresh`` - Key cache refresh period - the frequency at which cache is checked for expired entries. Default is 100s.
+   * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from server. Default is 100s.
+   * ``key_cache_refresh`` - Key cache refresh period - the period after which a cached key is reloaded in the background; should be smaller than ``key_cache_expiry``. Default is 30s.
 
    Example:
 
@@ -621,8 +621,8 @@ Before configuring AWS KMS integration, ensure you have:
    * ``keyfile`` - The name of the key for the certificate. It is generated together with the certificate.
    * ``truststore`` - The location and key for the truststore to present to the KMS server.
    * ``priority_string`` - The KMS TLS priority string.
-   * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from server. Default is 600s.
-   * ``key_cache_refresh`` - Key cache refresh period - the frequency at which cache is checked for expired entries. Default is 1200s.
+   * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from server. Default is 1200s.
+   * ``key_cache_refresh`` - Key cache refresh period - the period after which a cached key is reloaded in the background; should be smaller than ``key_cache_expiry``. Default is 600s.
 
    Examples:
 
@@ -764,8 +764,8 @@ Before configuring GCP KMS integration, ensure you have:
    * ``keyfile`` - The name of the key for the certificate. It is generated together with the certificate.
    * ``truststore`` - The location and key for the truststore to present to the KMS server.
    * ``priority_string`` - The KMS TLS priority string.
-   * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from server. Default is 600s.
-   * ``key_cache_refresh`` - Key cache refresh period - the frequency at which cache is checked for expired entries. Default is 1200s.
+   * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from server. Default is 1200s.
+   * ``key_cache_refresh`` - Key cache refresh period - the period after which a cached key is reloaded in the background; should be smaller than ``key_cache_expiry``. Default is 600s.
 
    Examples:
 
@@ -895,8 +895,8 @@ Before configuring Azure Key Vault integration, ensure you have:
    * ``master_key`` - The <vaultname>/<keyname> of your key. This parameter is required.
    * ``truststore`` - Path to a PEM file with CA certificates to validate the server's TLS certificate.
    * ``priority_string`` - The TLS priority string for TLS handshakes.
-   * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from Azure Key Vault. Default is 600s.
-   * ``key_cache_refresh`` - Key cache refresh period - the frequency at which the cache is checked for expired entries. Default is 1200s.
+   * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from Azure Key Vault. Default is 1200s.
+   * ``key_cache_refresh`` - Key cache refresh period - the period after which a cached key is reloaded in the background; should be smaller than ``key_cache_expiry``. Default is 600s.
 
    Example:
 
@@ -2163,7 +2163,7 @@ varies depending on the key provider you are using.
       #. Clear the old key from the key cache:
 
          * You can choose to wait for the KMIP host's ``key_cache_expiry``
-           interval (default is 30 seconds), after which ScyllaDB will
+           interval (default is 100 seconds), after which ScyllaDB will
            automatically clear the key cache, or
 
          * You can clear the key cache of each node manually by draining the node
@@ -2205,7 +2205,7 @@ varies depending on the key provider you are using.
       key version. Additionally, for a few minutes after the rotation, ScyllaDB
       may be generating new system artifacts and SSTables with the old key
       version, due to cached data encryption keys created before the rotation
-      (keys are cached for 10 minutes by default, depending on the
+      (keys are cached for 20 minutes by default, depending on the
       ``key_cache_expiry`` option). Eventually, the cached data encryption keys
       will be evicted and the old SSTables will be re-encrypted with the new key
       version when they are naturally compacted. If you prefer not to wait for
@@ -2244,7 +2244,7 @@ varies depending on the key provider you are using.
       key version. Additionally, for a few minutes after the rotation, ScyllaDB
       may be generating new system artifacts and SSTables with the old key
       version, due to cached data encryption keys created before the rotation
-      (keys are cached for 10 minutes by default, depending on the
+      (keys are cached for 20 minutes by default, depending on the
       ``key_cache_expiry`` option). Eventually, the cached data encryption keys
       will be evicted and the old SSTables will be re-encrypted with the new key
       version when they are naturally compacted. If you prefer not to wait for
@@ -2285,7 +2285,7 @@ varies depending on the key provider you are using.
       key version. Additionally, for a few minutes after the rotation, ScyllaDB
       may be generating new system artifacts and SSTables with the old key
       version, due to cached data encryption keys created before the rotation
-      (keys are cached for 10 minutes by default, depending on the
+      (keys are cached for 20 minutes by default, depending on the
       ``key_cache_expiry`` option). Eventually, the cached data encryption keys
       will be evicted and the old SSTables will be re-encrypted with the new key
       version when they are naturally compacted. If you prefer not to wait for
