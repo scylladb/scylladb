@@ -187,11 +187,21 @@ const log_entry& fsm::add_entry(T command) {
         // configuration for joint consensus (C_old,new) as a log
         // entry and replicates that entry using the normal Raft
         // mechanism.
-        configuration tmp(_log.get_configuration());
-        tmp.enter_joint(command.current);
-        command = std::move(tmp);
+        //
+        // A change that leaves the voters as they are, adding or
+        // removing learners only, needs no joint configuration: every
+        // quorum (commit, election, check-quorum, read barrier) counts
+        // voters only, so every majority of C_old is a majority of
+        // C_new, and C_new can take effect directly (4.1).
+        if (configuration::same_voters(_log.get_configuration().current, command.current)) {
+            logger.trace("[{}] appending non-joint config entry at {} (voter set unchanged): {}", _tag, _log.next_idx(), command);
+        } else {
+            configuration tmp(_log.get_configuration());
+            tmp.enter_joint(command.current);
+            command = std::move(tmp);
 
-        logger.trace("[{}] appending joint config entry at {}: {}", _tag, _log.next_idx(), command);
+            logger.trace("[{}] appending joint config entry at {}: {}", _tag, _log.next_idx(), command);
+        }
     }
 
     utils::get_local_injector().inject("fsm::add_entry/test-failure",
