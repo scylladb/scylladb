@@ -1548,12 +1548,12 @@ public:
         return tablet_group_size;
     }
 
-    future<migration_plan> make_rack_list_colocation_plan_for_dc(
+    migration_generator make_rack_list_colocation_plan_for_dc(
+            migration_plan& plan,
             const sstring& dc,
             const std::map<sstring, colocation_source_set>& racks,
             const std::unordered_map<sstring, std::unordered_set<utils::UUID>>& requests_for_dc,
             const migration_plan& mplan) {
-        migration_plan plan;
         const locator::topology& topo = _tm->get_topology();
 
         node_load_map nodes;
@@ -1635,18 +1635,18 @@ public:
                 auto& tmap = tmeta.get_tablet_map(source_tablets.table());
                 auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
                 pick(load_sketch, dst.host, dst.shard, source_tablets);
-                if (can_accept_load(nodes, mig_streaming_info)) {
+                bool accepted = can_accept_load(nodes, mig_streaming_info);
+                if (accepted) {
                     apply_load(nodes, mig_streaming_info);
                     lblogger.debug("Adding migration: {}", mig);
                     mark_as_scheduled(mig);
-                    for (auto& m : mig) {
-                        plan.add(std::move(m));
-                    }
                 }
                 update_node_load_on_migration(nodes, src, dst, source_tablets);
+                if (accepted) {
+                    co_yield std::move(mig);
+                }
             }
         }
-        co_return plan;
     }
 
     future<migration_plan> make_rack_list_colocation_plan(const migration_plan& mplan) {
@@ -1660,9 +1660,17 @@ public:
         auto colocation_state = co_await find_required_rack_list_colocations(_db, _tm, _sys_ks,
             _topology->paused_rf_change_requests, _scheduled_tablets);
 
+        const std::unordered_map<sstring, std::unordered_set<utils::UUID>> no_requests;
+        plan_makers makers;
         for (auto& [dc, racks] : colocation_state.dst_dc_rack_to_tablets) {
             auto requests_it = colocation_state.dst_to_requests.find(dc);
-            plan.merge(co_await make_rack_list_colocation_plan_for_dc(dc, racks, requests_it != colocation_state.dst_to_requests.end() ? requests_it->second : std::unordered_map<sstring, std::unordered_set<utils::UUID>>{}, mplan));
+            auto& requests_for_dc = requests_it != colocation_state.dst_to_requests.end() ? requests_it->second : no_requests;
+            auto& pm = makers.emplace_back(plan_maker{.location = dc});
+            pm.generator = make_rack_list_colocation_plan_for_dc(pm.plan, dc, racks, requests_for_dc, mplan);
+        }
+        co_await plan_in_turns(makers);
+        for (auto& pm : makers) {
+            plan.merge(std::move(pm.plan));
         }
 
         if (colocation_state.request_to_resume) {
