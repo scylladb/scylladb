@@ -15,7 +15,7 @@
 # this test file we'll check some of these surprising conversions, and
 # verify that they are the same in Scylla and Cassandra and don't regress.
 #
-# See also cql_cast_test.py in dtest.
+# See also test_cast_all_types.py.
 ###############################################################################
 
 import pytest
