@@ -1442,7 +1442,7 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
                     partially_prepared_args
                             | std::views::transform(&partially_prepared_arg::testable)
                             | std::ranges::to<std::vector>(),
-                    keyspace, cf_name, receiver.get());
+                    keyspace, cf_name, receiver.get(), schema_opt);
             // try_get yields the function (null if the name isn't declared) or the resolution
             // error. When this call is an argument being probed for inference (allow_unresolved),
             // an unresolved call is an expected hole; otherwise (a direct/top-level prepare) it is
