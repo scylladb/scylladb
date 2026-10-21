@@ -222,7 +222,8 @@ private:
     // Compresses one segment of a message. Moves `in` past the compressed data.
     rpc::snd_buf compress_segment(size_t head_space, snd_buf_cursor& in, outgoing_message& msg);
     // Decompresses one segment of a message from the front of `in`.
-    rpc::rcv_buf decompress_segment(rcv_buf_reader& in, incoming_message& msg);
+    // Returns the decompressed data and whether more segments follow.
+    std::pair<rpc::rcv_buf, bool> decompress_segment(rcv_buf_reader& in, incoming_message& msg, bool first);
 
     // Starts a worker fiber responsible for sending _control's messages.
     future<> start_progress_fiber();
