@@ -40,9 +40,14 @@ class scoped_error_injection {
     std::string_view _name;
 public:
     // Add other overloads as needed
-    explicit scoped_error_injection(std::string_view name, utils::error_injection_parameters params = {}) : _name(name) {
-        smp::invoke_on_all([this, &params] {
-            utils::get_local_injector().enable(_name, false, params);
+    explicit scoped_error_injection(std::string_view name, utils::error_injection_parameters params = {})
+            : scoped_error_injection(name, false, std::move(params)) {
+    }
+
+    // A one-shot injection disables itself once it is entered.
+    scoped_error_injection(std::string_view name, bool one_shot, utils::error_injection_parameters params = {}) : _name(name) {
+        smp::invoke_on_all([this, one_shot, &params] {
+            utils::get_local_injector().enable(_name, one_shot, params);
         }).get();
     }
 
