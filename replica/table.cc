@@ -6186,6 +6186,15 @@ future<> table::truncate_tablet_locally(database& db, locator::tablet_id tid) {
         flush_permits.reset();
         rebuild_statistics();
 
+        // A logstor table keeps its data in the logstor index and segments, not in the
+        // memtables and sstables dropped above. Same pair as in compaction_group::cleanup().
+        if (uses_logstor()) {
+            co_await logstor_index().erase(sg.token_range());
+            co_await coroutine::parallel_for_each(cgs, [] (const compaction_group_ptr& cg) {
+                return cg->discard_logstor_segments();
+            });
+        }
+
         // A querier created before the swap reads sources that are gone, and a paged read
         // saves it for its next page. Once every read started before the retiring is over,
         // each such querier is either closed or saved, and the eviction drops the saved
