@@ -64,6 +64,8 @@ class index {
     index_metadata _im;
     cql3::statements::index_target::target_type _target_type;
     sstring _target_column;
+    // All columns the index depends on.
+    std::vector<sstring> _columns;
 public:
     index(const sstring& target_column, const index_metadata& im);
     bool depends_on(const column_definition& cdef) const;

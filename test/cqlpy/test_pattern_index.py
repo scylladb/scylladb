@@ -200,6 +200,20 @@ def test_drop_pattern_index(cql, test_keyspace):
         cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': false}}")
 
 
+def test_drop_column_with_pattern_index_fails(cql, test_keyspace):
+    """A column with a pattern index cannot be dropped until the index is
+    dropped. Reproduces SCYLLADB-4875."""
+    schema = 'p int primary key, title text, other text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(title) USING 'pattern_index'")
+        with pytest.raises(InvalidRequest, match=f"Cannot drop column title from base table {table} because it has dependent indexes \\({index_name}\\)"):
+            cql.execute(f"ALTER TABLE {table} DROP title")
+        cql.execute(f"ALTER TABLE {table} DROP other")
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        cql.execute(f"ALTER TABLE {table} DROP title")
+
+
 ###############################################################################
 # Prepare-time validation of LIKE queries on a pattern-indexed column. Nothing
 # below reaches the Vector Store: the queries are prepared, not executed, or are

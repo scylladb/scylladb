@@ -295,6 +295,52 @@ def test_no_view_for_vector_search_index(cql, test_keyspace, scylla_only, skip_w
         result = cql.execute(f"SELECT * FROM system_schema.views WHERE keyspace_name = '{test_keyspace}' AND view_name = 'def_index'")
         assert len(result.current_rows) == 1, "Regular index should create a view in system_schema.views"
         
+@pytest.mark.parametrize("targets, columns", [
+    ("v", ["v"]),
+    ("v, f1", ["v", "f1"]),
+    # The partition key column p is not checked: a primary key column cannot be dropped, with or without an index.
+    ("(p, f1), v, f2", ["f1", "v", "f2"]),
+])
+def test_drop_column_used_by_vector_index_fails(cql, test_keyspace, scylla_only, skip_without_tablets, targets, columns):
+    """A column that a vector index uses, as its vector column, a filtering column
+    or a column of the partition of a local index, cannot be dropped until the
+    index is dropped. Reproduces SCYLLADB-4875."""
+    schema = 'p int, c int, v vector<float, 3>, f1 int, f2 int, other int, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}({targets}) USING 'vector_index'")
+        for column in columns:
+            with pytest.raises(InvalidRequest, match=f"Cannot drop column {column} from base table {table} because it has dependent indexes \\({index_name}\\)"):
+                cql.execute(f"ALTER TABLE {table} DROP {column}")
+        cql.execute(f"ALTER TABLE {table} DROP other")
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        for column in columns:
+            cql.execute(f"ALTER TABLE {table} DROP {column}")
+
+def test_drop_column_with_two_vector_indexes_names_both(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """The error names every index that uses the column. Reproduces SCYLLADB-4875."""
+    schema = 'p int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_names = [unique_name(), unique_name()]
+        for index_name in index_names:
+            cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(v) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match="because it has dependent indexes") as e:
+            cql.execute(f"ALTER TABLE {table} DROP v")
+        for index_name in index_names:
+            assert index_name in str(e.value)
+
+def test_rename_filtering_column_of_vector_index_fails(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """A clustering column that a vector index filters on cannot be renamed.
+    It is the only kind of column that can be both renamed and filtered on."""
+    schema = 'p int, c int, v vector<float, 3>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(v, c) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match=f"Cannot rename column c because it has dependent secondary indexes \\({index_name}\\)"):
+            cql.execute(f"ALTER TABLE {table} RENAME c TO c2")
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        cql.execute(f"ALTER TABLE {table} RENAME c TO c2")
+
 def test_describe_custom_index(cql, test_keyspace, skip_on_scylla_vnodes):
     schema = 'p int primary key, v1 vector<float, 3>, v2 vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:

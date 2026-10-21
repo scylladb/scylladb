@@ -292,6 +292,20 @@ void alter_table_statement::drop_column(const query_options& options, const sche
             }
         }
 
+        // An index without a backing view, like a vector index, is not
+        // covered by the check above.
+        if (!schema.indices().empty()) {
+            auto dependent_indices = cf.get_index_manager().get_dependent_indices(*def);
+            if (!dependent_indices.empty()) {
+                throw exceptions::invalid_request_exception(
+                        fmt::format("Cannot drop column {} from base table {}.{} because it has dependent indexes ({})",
+                                        column_name, keyspace(), column_family(),
+                                        fmt::join(dependent_indices | std::views::transform([](const index_metadata& im) {
+                                            return im.name();
+                                        }), ", ")));
+            }
+        }
+
         std::optional<api::timestamp_type> drop_timestamp;
         if (_attrs->is_timestamp_set()) {
             auto now = std::chrono::duration_cast<std::chrono::microseconds>(db_clock::now().time_since_epoch()).count();

@@ -39,6 +39,8 @@ public:
 
     static sstring serialize_targets(const std::vector<::shared_ptr<cql3::statements::index_target>>& targets);
     static sstring get_target_column(const sstring& targets);
+    // The vector column, the columns of the partition of a local index and the filtering columns.
+    static std::vector<sstring> get_all_target_columns(const sstring& targets);
 
     static bool is_rescoring_enabled(const index_options_map& properties);
     static float get_oversampling(const index_options_map& properties);
