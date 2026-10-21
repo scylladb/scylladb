@@ -2100,10 +2100,7 @@ public:
         co_return all_colocated;
     }
 
-    future<migration_plan> make_merge_colocation_plan(dc_rack_plan_state& state, node_load_map& nodes) {
-        migration_plan plan;
-        table_resize_plan resize_plan;
-
+    migration_generator make_merge_colocation_plan(dc_rack_plan_state& state, node_load_map& nodes) {
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             if (is_migrating_table(table)) {
                 continue;
@@ -2202,32 +2199,38 @@ public:
                 return tablet_migration_info{kind, gid, src, dst};
             };
 
-            co_await tmap.for_each_sibling_tablets([&] (tablet_desc t1, std::optional<tablet_desc> t2_opt) -> future<> {
+            auto desc = [&tmap] (tablet_id tid) {
+                return tablet_desc{tid, &tmap.get_tablet_info(tid), tmap.get_tablet_transition_info(tid)};
+            };
+            for (std::optional<tablet_id> tid = tmap.first_tablet(); tid; tid = tmap.next_tablet(*tid)) {
+                co_await coroutine::maybe_yield();
                 // Be optimistic about migrating tablets, as if they succeeded.
                 // Merge finalization will have to recheck that all sibling tablets are co-located.
 
-                if (!t2_opt) {
-                    return make_ready_future<>(); // Tablet doesn't have a sibling, it's already colocated.
+                auto [t1_tid, t2_tid] = tmap.sibling_tablets(*tid);
+                if (t1_tid != *tid || !t2_tid) {
+                    continue; // The pair was visited with its left tablet, or the tablet has no sibling and is already colocated.
                 }
-                auto t2 = *t2_opt;
+                auto t1 = desc(t1_tid);
+                auto t2 = desc(*t2_tid);
 
                 auto r1 = get_replicas(t1);
                 auto r2 = get_replicas(t2);
                 if (r1 == r2) {
-                    return make_ready_future<>();
+                    continue;
                 }
                 auto t1_id = global_tablet_id{table, t1.tid};
                 auto t2_id = global_tablet_id{table, t2.tid};
 
                 if (migrating(t1) || migrating(t2)) {
-                    return make_ready_future<>();
+                    continue;
                 }
                 // During RF change, tablets may have incrementally replicas allocated / deallocated to them.
                 // Let's temporarily delay their co-location until their replica sets have the same size.
                 if (r1.size() != r2.size()) {
                     lblogger.warn("Replica sets of tablets to be co-located differ in size: ({}: {}), ({}, {})",
                                   t1_id, r1, t2_id, r2);
-                    return make_ready_future<>();
+                    continue;
                 }
 
                 // Returns true if moving candidate into dst will violate replication constraint.
@@ -2276,7 +2279,7 @@ public:
                 if (nodes.at(dst.host).drained || nodes.at(src.host).drained) {
                     lblogger.debug("Co-locating migration ({}, {}) -> ({}, {}) involves draining nodes, postponing",
                         t2_id, src, t1_id, dst);
-                    return make_ready_future<>();
+                    continue;
                 }
 
                 // If migration will violate replication constraint, skip to next pair of replicas of sibling tablets.
@@ -2284,7 +2287,7 @@ public:
                 if (skip) {
                     lblogger.debug("Replication constraint check failed, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
                         t2_id, src, t1_id, dst);
-                    return make_ready_future<>();
+                    continue;
                 }
 
                 auto mig = create_migration_info(t2_id, src, dst);
@@ -2293,19 +2296,15 @@ public:
                     // FIXME: we can try another pair of non-colocated replicas of same sibling tablets.
                     lblogger.debug("Load limit reached, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
                         t2_id, src, t1_id, dst);
-                    return make_ready_future<>();
+                    continue;
                 }
                 apply_load(nodes, mig_streaming_info);
 
                 lblogger.info("Created migration for replica ({}, {}) to co-habit same shard as ({}, {})", t2_id, src, t1_id, dst);
                 mark_as_scheduled(mig);
-                plan.add(std::move(mig));
-                return make_ready_future<>();
-            });
+                co_yield as_group(std::move(mig));
+            }
         }
-        plan.merge_resize_plan(std::move(resize_plan));
-
-        co_return std::move(plan);
     }
 
     // Returns the schema and tablet-aware replication strategy for a given table.
@@ -4869,10 +4868,14 @@ public:
 
         // The migrations yielded so far are in plan too, added by the caller.
         if (_tm->tablets().balancing_enabled() && plan.empty() && !ongoing_rack_list_colocation()) {
-            auto dc_merge_plan = co_await make_merge_colocation_plan(state, nodes);
-            auto level = dc_merge_plan.tablet_migration_count() > 0 ? seastar::log_level::info : seastar::log_level::debug;
-            lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in {}", dc_merge_plan.tablet_migration_count(), state.location);
-            plan.merge(std::move(dc_merge_plan));
+            auto stage = make_merge_colocation_plan(state, nodes);
+            size_t colocations = 0;
+            while (auto group = co_await stage()) {
+                colocations += group->get().size();
+                co_yield std::move(group->get());
+            }
+            auto level = colocations > 0 ? seastar::log_level::info : seastar::log_level::debug;
+            lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in {}", colocations, state.location);
         }
 
         co_await utils::clear_gently(nodes);
