@@ -21,6 +21,7 @@
 #include "cql3/sets.hh"
 #include "cql3/user_types.hh"
 #include "types/json_utils.hh"
+#include "marshal_exception.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
@@ -57,7 +58,19 @@ static std::unordered_map<sstring, rjson::value> handle_case_sensitivity(rjson::
 std::unordered_map<sstring, bytes_opt>
 parse(const sstring& json_string, const schema::columns_type& expected_receivers) {
     std::unordered_map<sstring, bytes_opt> json_map;
-    auto prepared_map = handle_case_sensitivity(rjson::parse(json_string));
+    rjson::value parsed;
+    try {
+        parsed = rjson::parse(json_string);
+    } catch (const rjson::error& e) {
+        throw exceptions::invalid_request_exception(fmt::format("Could not decode JSON string as a map: {}", e.what()));
+    }
+    if (parsed.IsNull()) {
+        throw exceptions::invalid_request_exception("Got null for INSERT JSON values");
+    }
+    if (!parsed.IsObject()) {
+        throw exceptions::invalid_request_exception("Could not decode JSON string as a map: not a JSON object");
+    }
+    auto prepared_map = handle_case_sensitivity(std::move(parsed));
     for (const auto& def : expected_receivers) {
         sstring cql_name = def.name_as_text();
         auto value_it = prepared_map.find(cql_name);
@@ -67,7 +80,13 @@ parse(const sstring& json_string, const schema::columns_type& expected_receivers
             json_map.emplace(std::move(cql_name), bytes_opt{});
             prepared_map.erase(value_it);
         } else {
-            json_map.emplace(std::move(cql_name), from_json_object(*def.type, std::move(value_it->second)));
+            bytes value;
+            try {
+                value = from_json_object(*def.type, std::move(value_it->second));
+            } catch (const marshal_exception& e) {
+                throw exceptions::invalid_request_exception(fmt::format("Error decoding JSON value for {}: {}", cql_name, e.what()));
+            }
+            json_map.emplace(std::move(cql_name), std::move(value));
             prepared_map.erase(value_it);
         }
     }
@@ -217,6 +236,9 @@ utils::chunked_vector<mutation> insert_statement::apply_updates(
 
 modification_statement::json_cache_opt insert_prepared_json_statement::maybe_prepare_json_cache(const query_options& options) const {
     cql3::raw_value c = expr::evaluate(_value, options);
+    if (c.is_null()) {
+        throw exceptions::invalid_request_exception("Got null for INSERT JSON values");
+    }
     sstring json_string = utf8_type->to_string(to_bytes(c.view()));
     return json_helpers::parse(std::move(json_string), s->all_columns());
 }
