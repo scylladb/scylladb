@@ -472,7 +472,7 @@ void cql_server::init_messaging_service() {
         });
 
     ser::forward_cql_rpc_verbs::register_forward_cql_prepare(&_ms,
-        [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, forward_cql_prepare_request req) -> future<bytes> {
+        [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, forward_cql_prepare_request req) -> future<rpc::tuple<bytes, std::optional<forward_cql_prepare_error>>> {
             auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
             clogger.trace("Handling forward prepare request from {}", src_host);
 
@@ -490,7 +490,7 @@ void cql_server::init_messaging_service() {
                 });
             auto prepare_id = _query_processor.local().compute_id(req.query_string, qs.get_client_state().get_raw_keyspace(), req.dialect).key();
             clogger.trace("Successfully prepared statement {} from forward request", prepare_id);
-            co_return prepare_id;
+            co_return rpc::tuple(std::move(prepare_id), std::optional<forward_cql_prepare_error>());
         });
 }
 
@@ -648,7 +648,7 @@ cql_server::forward_cql(
                 .dialect = req.dialect,
             };
 
-            auto prepared_id = co_await ser::forward_cql_rpc_verbs::send_forward_cql_prepare(&_ms, current_host, timeout, prepare_req);
+            auto [prepared_id, prepare_error] = co_await ser::forward_cql_rpc_verbs::send_forward_cql_prepare(&_ms, current_host, timeout, prepare_req);
 
             if (prepared_id != cache_key.key()) {
                 on_internal_error(clogger, format("Prepared ID returned from target node does not match local prepared ID for the same query. Local ID: {}, Target ID: {}", cache_key.key(), prepared_id));
