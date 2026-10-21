@@ -74,6 +74,10 @@ void stats::register_stats() {
             {sg_label}, [this] { return to_metrics_histogram(write.histogram()); })
             .aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
 
+        sm::make_queue_length("foreground_writes", foreground_writes,
+            sm::description("number of strong consistency write requests being executed on this shard, "
+                "a request forwarded to another node is counted there"), {sg_label}),
+
         sm::make_counter("write_errors", write_errors_timeout,
             sm::description("number of strong consistency write requests that failed"),
             {reason_label("timeout"), sg_label})
@@ -144,6 +148,10 @@ void stats::register_stats() {
             {sg_label}, [this] { return to_metrics_histogram(non_linearizable_read.histogram()); })
             .aggregate({seastar::metrics::shard_label})(read_type_label("non_linearizable"))
             .set_skip_when_empty(),
+
+        sm::make_queue_length("foreground_reads", foreground_reads,
+            sm::description("number of strong consistency read requests being executed on this shard, "
+                "a request forwarded to another node is counted there"), {sg_label}),
 
         sm::make_counter("read_errors", read_errors_timeout,
             sm::description("number of strong consistency read requests that failed"),
@@ -500,6 +508,8 @@ auto coordinator::mutate(schema_ptr schema,
     utils::latency_counter lc;
     lc.start();
     auto mark_write_latency = defer([this, &lc] noexcept { get_stats().write.mark(lc.stop().latency()); });
+    ++get_stats().foreground_writes;
+    auto end_foreground_write = defer([this] noexcept { --get_stats().foreground_writes; });
 
     // State of the request as it advances through its stages. Each pointer
     // is null until the corresponding stage has been reached, so log messages
@@ -726,6 +736,8 @@ auto coordinator::query(schema_ptr schema,
     auto& read_stats = (rtype == read_type::linearizable)
         ? get_stats().linearizable_read : get_stats().non_linearizable_read;
     auto mark_read_latency = defer([&read_stats, &lc] () mutable noexcept { read_stats.mark(lc.stop().latency()); });
+    ++get_stats().foreground_reads;
+    auto end_foreground_read = defer([this] noexcept { --get_stats().foreground_reads; });
 
     auto filter_error = [&] (std::exception_ptr ex) -> std::exception_ptr {
         // Unfortunately, timeouts can materialize in different forms depending

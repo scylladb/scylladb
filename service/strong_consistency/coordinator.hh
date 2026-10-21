@@ -49,6 +49,7 @@ using value_or_redirect = std::variant<T, need_redirect>;
 
 struct stats {
     utils::timed_rate_moving_average_summary_and_histogram write;
+    uint64_t foreground_writes = 0;
     uint64_t write_errors_timeout = 0;
     uint64_t write_errors_status_unknown = 0;
     uint64_t write_errors_unavailable = 0;
@@ -63,6 +64,7 @@ struct stats {
 
     utils::timed_rate_moving_average_summary_and_histogram linearizable_read;
     utils::timed_rate_moving_average_summary_and_histogram non_linearizable_read;
+    uint64_t foreground_reads = 0;
     uint64_t read_errors_timeout = 0;
     uint64_t read_errors_unavailable = 0;
     uint64_t read_errors_table_dropped = 0;

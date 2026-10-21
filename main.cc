@@ -1503,13 +1503,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             scheduling_group_key_config sc_coordinator_stats_cfg =
                     make_scheduling_group_key_config<service::strong_consistency::stats>();
-            sc_coordinator_stats_cfg.constructor = [plain_constructor = sc_coordinator_stats_cfg.constructor] (void* ptr) {
-                plain_constructor(ptr);
-                reinterpret_cast<service::strong_consistency::stats*>(ptr)->register_stats();
-            };
-            sc_coordinator_stats_cfg.rename = [] (void* ptr) {
-                reinterpret_cast<service::strong_consistency::stats*>(ptr)->register_stats();
-            };
+            // The in-flight gauges are exported even at zero, so register the
+            // metrics only where strongly consistent tables are enabled.
+            if (cfg->check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+                sc_coordinator_stats_cfg.constructor = [plain_constructor = sc_coordinator_stats_cfg.constructor] (void* ptr) {
+                    plain_constructor(ptr);
+                    reinterpret_cast<service::strong_consistency::stats*>(ptr)->register_stats();
+                };
+                sc_coordinator_stats_cfg.rename = [] (void* ptr) {
+                    reinterpret_cast<service::strong_consistency::stats*>(ptr)->register_stats();
+                };
+            }
             auto sc_coordinator_stats_key = scheduling_group_key_create(sc_coordinator_stats_cfg).get();
 
             scheduling_group_key_config storage_proxy_stats_cfg =
