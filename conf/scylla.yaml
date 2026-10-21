@@ -841,7 +841,7 @@ maintenance_socket: workdir
 #       password: <password> (optional)
 #       max_command_retries: <int> (optional; default 3)
 #       key_cache_expiry: <key cache expiry period>
-#       key_cache_refresh: <key cache refresh/prune period>
+#       key_cache_refresh: <key cache refresh period>
 #   <name>:
 #       ...
 #
@@ -878,7 +878,7 @@ maintenance_socket: workdir
 #       truststore: <truststore for SSL connection> (optional)
 #       priority_string: <kmip tls priority string> (optional)
 #       key_cache_expiry: <key cache expiry period>
-#       key_cache_refresh: <key cache refresh/prune period>
+#       key_cache_refresh: <key cache refresh period>
 #   <name>:
 #       ...
 #
@@ -888,7 +888,7 @@ maintenance_socket: workdir
 #
 # The unique name of azure host/account config that can be referenced in table schema.
 #
-# host.yourdomain.com={ azure_tenant_id=<the tenant hosting your service principal>, azure_client_id=<ID of your service principal>, azure_client_secret=<secret of the service principal>, azure_client_certificate_path=<path to PEM-encoded certificate and private key of the service principal>, master_key=<vault name>/<keyname>, truststore=/path/to/truststore.pem, priority_string=<tls priority string>, key_cache_expiry=<cache expiry in ms>, key_cache_refersh=<cache refresh in ms>}:...
+# host.yourdomain.com={ azure_tenant_id=<the tenant hosting your service principal>, azure_client_id=<ID of your service principal>, azure_client_secret=<secret of the service principal>, azure_client_certificate_path=<path to PEM-encoded certificate and private key of the service principal>, master_key=<vault name>/<keyname>, truststore=/path/to/truststore.pem, priority_string=<tls priority string>, key_cache_expiry=<cache expiry, seconds or ms/s/h/d suffix>, key_cache_refresh=<cache refresh, seconds or ms/s/h/d suffix>}:...
 #
 # Authentication can be explicit with Service Principal credentials. Either secret or certificate can be provided.
 # If both are provided, the secret will be used. If no credentials are provided, the provider will try to detect them
@@ -906,8 +906,8 @@ maintenance_socket: workdir
 #       master_key: <vault name>/<keyname> - named Vault key for key wrapping (optional)
 #       truststore: <PEM file with CA certificates for TLS connection> (optional)
 #       priority_string: <GnuTLS priority string for TLS handshake> (optional)
-#       key_cache_expiry: <key cache expiry period (ms)> (optional)
-#       key_cache_refresh: <key cache refresh/prune period (ms)> (optional)
+#       key_cache_expiry: <key cache expiry period (seconds; or ms/s/h/d suffix)> (optional)
+#       key_cache_refresh: <key cache refresh period (seconds; or ms/s/h/d suffix)> (optional)
 #   <name>:
 #       ...
 #
