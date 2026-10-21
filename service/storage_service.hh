@@ -327,10 +327,27 @@ public:
         tablets,
     };
 
+    struct table_migration_status {
+        sstring table_name;
+        // Whether the table has a tablet map, i.e. prepare_for_tablets_migration()
+        // has been called for it. Tables without one still use vnodes.
+        bool prepared;
+        // Whether its migration has been finalized. Such a table runs on tablets
+        // for good, even while its keyspace still replicates by vnodes.
+        bool finalized;
+    };
+
     struct keyspace_migration_status {
         sstring keyspace;
         migration_status status;
+        // Which way the migration is going: "tablets", "vnodes", or empty when
+        // no node has been marked. Marking is explicit, so a node that was never
+        // marked is told apart from one downgraded back to vnodes, which is what
+        // makes the direction readable while a rolling upgrade or downgrade is
+        // only part way through.
+        sstring direction;
         std::vector<node_migration_status> nodes;
+        std::vector<table_migration_status> tables;
     };
 
     migration_status get_tablets_migration_status(const sstring& ks_name);
