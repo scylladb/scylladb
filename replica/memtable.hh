@@ -23,6 +23,7 @@
 #include "readers/empty.hh"
 #include "readers/mutation_source.hh"
 #include "db/large_data_handler.hh"
+#include "tombstone_gc.hh"
 
 class frozen_mutation;
 class row_cache;
