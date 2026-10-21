@@ -59,6 +59,7 @@ public:
     logstor(const logstor&) = delete;
     logstor& operator=(const logstor&) = delete;
 
+    // The catalog must live until start() returns, see segment_manager::do_recovery().
     future<recovery_summary> do_recovery(recovery_catalog&);
 
     future<> start();

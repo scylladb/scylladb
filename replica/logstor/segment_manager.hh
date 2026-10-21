@@ -73,7 +73,7 @@ struct recovery_summary {
     uint64_t free_segments{0};
     // The records of a tablet that is not on this shard, which recovery drops.
     uint64_t dropped_records{0};
-    // The full segments that fit no single compaction group of this shard. Recovery separates their
+    // The full segments that fit no single compaction group of this shard. start() separates their
     // records one by one.
     uint64_t separated_segments{0};
     // The sequence of the first segment that is allocated after recovery.
@@ -131,6 +131,8 @@ public:
     segment_manager(const segment_manager&) = delete;
     segment_manager& operator=(const segment_manager&) = delete;
 
+    // The catalog must live until start() returns: start() separates through it the records of
+    // the segments that recovery could not give whole to a compaction group.
     future<recovery_summary> do_recovery(recovery_catalog&);
 
     // The index a record found on disk goes into, or nullptr to drop the record.

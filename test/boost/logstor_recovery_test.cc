@@ -399,6 +399,69 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_separates_a_full_segment_that_fit
     }
 }
 
+// The records of the full segments that fit no group are more than the two separator buffers of a
+// group hold, so the separator must flush buffers. A flush takes a segment from the pool, which only
+// start() fills, so recovery leaves the separation to start().
+SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_separates_many_full_segments_that_fit_no_group) {
+    auto schema = make_kv_schema("cf");
+    constexpr size_t segment_count = 8;
+    constexpr size_t keys_per_side = 3;
+    const auto keys = make_token_ordered_keys(schema, 2 * segment_count * keys_per_side);
+    const auto boundary = token_of(*schema, keys[segment_count * keys_per_side - 1]);
+    const sstring value(18 * 1024, 'x');
+    // Each segment holds keys on both sides of the boundary.
+    std::vector<std::vector<mutation>> segments(segment_count);
+    for (size_t s = 0; s < segment_count; ++s) {
+        for (size_t i = 0; i < keys_per_side; ++i) {
+            segments[s].push_back(make_kv_mutation(schema, keys[s * keys_per_side + i], value, 1));
+            segments[s].push_back(make_kv_mutation(schema, keys[(segment_count + s) * keys_per_side + i], value, 1));
+        }
+    }
+    tmpdir dir;
+
+    {
+        test_store store(dir);
+        auto& ls = store.ls();
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
+        ls.start().get();
+        auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+        test_logstor_group group(schema, ls);
+        auto compaction_guard = ls.get_compaction_manager().disable_compaction(group).get();
+        for (const auto& records : segments) {
+            write_to_full_segment(ls, group, records);
+        }
+        BOOST_REQUIRE_EQUAL(group.logstor_segments().segment_count(), segment_count);
+    }
+
+    test_store store(dir);
+    auto& ls = store.ls();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+    test_logstor_group left(schema, ls);
+    test_logstor_group right(schema, ls, left.logstor_index());
+    test_recovery_catalog catalog;
+    catalog.add(left, left_of(boundary));
+    catalog.add(right, right_of(boundary));
+
+    const auto summary = ls.do_recovery(catalog).get();
+    BOOST_REQUIRE_EQUAL(summary.used_segments, segment_count);
+    BOOST_REQUIRE_EQUAL(summary.separated_segments, segment_count);
+    BOOST_REQUIRE_EQUAL(summary.dropped_records, 0u);
+    BOOST_REQUIRE_EQUAL(left.logstor_segments().segment_count(), 0u);
+    BOOST_REQUIRE_EQUAL(right.logstor_segments().segment_count(), 0u);
+
+    ls.start().get();
+    left.flush_separator().get();
+    right.flush_separator().get();
+    BOOST_REQUIRE_GE(left.logstor_segments().segment_count(), 2u);
+    BOOST_REQUIRE_GE(right.logstor_segments().segment_count(), 2u);
+    for (const auto& records : segments) {
+        for (const auto& m : records) {
+            require_value(ls, left.logstor_index(), m);
+        }
+    }
+}
+
 // The segment sequence goes on from the highest one on disk, so a record written after a restart is
 // newer than every record before it: of two records with the same timestamp, the later one wins
 // after the next restart too.
