@@ -38,6 +38,7 @@ CUSTOM_PAYLOAD_FLAG = 0x04
 WARNING_FLAG = 0x08
 
 # Consistency levels.
+ONE = 0x0001
 QUORUM = 0x0004
 
 # Flags of the query parameters.
