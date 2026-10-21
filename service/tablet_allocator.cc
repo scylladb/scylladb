@@ -41,6 +41,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <fmt/format.h>
 #include <fmt/chrono.h>
+#include "service/topology_state_machine.hh"
 
 using namespace locator;
 using namespace replica;

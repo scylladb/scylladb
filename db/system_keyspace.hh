@@ -34,6 +34,7 @@
 #include "virtual_tables.hh"
 #include "auth_version.hh"
 #include "db/view/view_building_state.hh"
+#include "service/topology_state_machine_fwd.hh"
 
 namespace netw {
     class shared_dict;

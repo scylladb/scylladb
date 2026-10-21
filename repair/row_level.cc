@@ -71,6 +71,8 @@
 #include "locator/tablets.hh"
 #include "gms/feature_service.hh"
 
+using namespace std::chrono_literals;
+
 extern logging::logger rlogger;
 
 static bool inject_rpc_stream_error = false;

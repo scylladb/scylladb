@@ -30,6 +30,7 @@ using namespace seastar;
 class row_level_repair_gossip_helper;
 
 namespace service {
+struct topology_state_machine;
 class migration_manager;
 class storage_proxy;
 }

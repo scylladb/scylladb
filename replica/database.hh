@@ -81,6 +81,7 @@
 #include "utils/disk_space_monitor.hh"
 #include "utils/file_size_stats.hh"
 #include "db/large_data_handler.hh"
+#include "service/topology_state_machine_fwd.hh"
 
 class cell_locker;
 class cell_locker_stats;

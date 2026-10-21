@@ -24,6 +24,7 @@
 #include "replica/database_fwd.hh"
 #include "locator/host_id.hh"
 #include "gms/feature_service.hh"
+#include "service/topology_state_machine_fwd.hh"
 
 namespace db {
     class system_keyspace;
@@ -44,18 +45,6 @@ enum class node_state: uint16_t {
     rebuilding,          // the node is being rebuild and is streaming data from other replicas
     normal,              // the node does not do any streaming and serves the slice of the ring that belongs to it
     left,                // the node left the cluster and group0
-};
-
-// The order of the requests is a priority
-// order in which requests are executes in case
-// there are multiple requests in the queue.
-// The order tries to minimize the amount of cleanups.
-enum class topology_request: uint16_t {
-    replace,
-    join,
-    remove,
-    leave,
-    rebuild
 };
 
 enum class cleanup_status : uint16_t {
@@ -79,36 +68,8 @@ struct replace_param {
 
 using request_param = std::variant<join_param, rebuild_param, replace_param>;
 
-enum class global_topology_request: uint16_t {
-    new_cdc_generation,
-    cleanup,
-    keyspace_rf_change,
-    truncate_table,
-
-    // High priority no-operation request.
-    // Used to synchronize API calls with topology coordinator.
-    // Ensures that all later requests and tablet scheduler will see prior updates to group0.
-    noop_request,
-    snapshot_tables,
-    finalize_migration,
-    quiesce,
-    restore_tablets,
-};
-
 struct ring_slice {
     std::unordered_set<dht::token> tokens;
-};
-
-// The storage mode of a node during vnodes-to-tablets migration.
-//
-// When migrating a table from vnodes to tablets, each node needs to reshard
-// its local SSTables on vnode boundaries. Conversely, SSTables need to be
-// resharded in the opposite direction (i.e., with the static sharder) when the
-// operation is rolled back. A node reshards on restart, in the direction given
-// by replica_state::intended_storage_mode.
-enum class storage_mode : uint16_t {
-    vnodes,
-    tablets,
 };
 
 struct replica_state {
@@ -162,7 +123,7 @@ struct topology {
 
     std::optional<transition_state> tstate;
 
-    using version_t = int64_t;
+    using version_t = topology_version_t;
     static constexpr version_t initial_version = 1;
     version_t version = initial_version;
     version_t fence_version = initial_version;

@@ -37,6 +37,10 @@
 
 #include "gms/loaded_endpoint_state.hh"
 
+namespace service {
+struct topology_state_machine;
+}
+
 namespace gms {
 
 class gossip_digest_syn;
