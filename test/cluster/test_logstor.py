@@ -832,9 +832,6 @@ async def test_automatic_compaction_skips_a_table_with_autocompaction_disabled(m
         'logstor_disk_size_in_mb': 8,
         'logstor_file_size_in_mb': 1,
         'enable_keyspace_column_family_metrics': True,
-        # Automatic compaction starts only below the free-segment target. A target of 90% of the
-        # disk makes it run at the free level of this test.
-        'logstor_compaction_trigger_threshold': 0.9,
     }
     server = await manager.server_add(cmdline=cmdline, config=cfg)
     cql = manager.get_cql()

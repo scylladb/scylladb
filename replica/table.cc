@@ -5569,7 +5569,7 @@ table::enable_auto_compaction() {
     trigger_compaction();
 
     if (uses_logstor()) {
-        trigger_logstor_compaction();
+        get_logstor_compaction_manager().on_automatic_compaction_enabled();
     }
 }
 

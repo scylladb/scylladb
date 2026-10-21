@@ -52,7 +52,9 @@ struct segment_manager_config {
     // fragmentation and of not reserving space up front.
     bool sparse_files = false;
     bool compaction_enabled = true;
-    utils::updateable_value<double> trigger_compaction_threshold{0.05};
+    // A segment is a candidate for automatic compaction while its utilization is at most this.
+    // A value outside [0, 1] applies as the nearest bound.
+    utils::updateable_value<double> compaction_utilization_threshold{0.5};
     seastar::scheduling_group compaction_sg;
     utils::updateable_value<float> compaction_static_shares;
     utils::updateable_value<float> compaction_max_shares;

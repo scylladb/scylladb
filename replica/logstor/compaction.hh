@@ -443,6 +443,7 @@ public:
     virtual future<> remove(logstor_group&) = 0;
 
     virtual void submit(logstor_group&) = 0;
+    virtual void on_automatic_compaction_enabled() noexcept = 0;
 
     virtual future<> submit_split_compaction(logstor_group& src, mutation_writer::classify_by_token_group, split_target_group) = 0;
 

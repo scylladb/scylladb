@@ -43,26 +43,21 @@ static std::optional<compaction_candidate_score> best_copying_score(Scores&& sco
 compaction_driver::compaction_driver(host& h, config cfg)
     : _host(h)
     , _cfg(std::move(cfg))
+    , _rate_timer([this] { tick_rate_controller(); })
 {}
 
 void compaction_driver::start(disk_geometry geometry) {
     _geometry = geometry;
-    refresh_free_segment_watermarks();
-    // The free-segment target is the space floor of this policy. With the trigger disabled it is 0,
-    // and make_compaction_limits() falls back to the smallest batch, which compaction submitted
-    // explicitly still needs.
-    _limits = make_compaction_limits(_free_segment_watermarks.low);
+    _space_floor = compaction_space_floor(_geometry.segment_count);
+    _limits = make_compaction_limits(_space_floor);
 
     _held_back.adopt(consume_units(_job_slots, max_auto_compaction_parallelism - _limits.auto_parallelism));
 
-    logstor_logger.debug("Compaction parallelism {}, up to {} segments per compaction",
-            _limits.auto_parallelism, _limits.batch_cap);
+    logstor_logger.debug("Compaction space floor {} segments, compaction parallelism {}, up to {} segments per compaction",
+            _space_floor, _limits.auto_parallelism, _limits.batch_cap);
 
-    _trigger_threshold_observer.emplace(_cfg.trigger_threshold.observe([this] (double new_threshold) {
-        logstor_logger.debug("Compaction trigger threshold changed to {}", new_threshold);
-        refresh_free_segment_watermarks();
-        schedule();
-    }));
+    tick_rate_controller();
+    _rate_timer.arm_periodic(compaction_rate_control_period);
     _completion = shared_future(with_scheduling_group(_cfg.sg, [this] {
         return run();
     }).handle_exception([] (std::exception_ptr ep) {
@@ -72,6 +67,7 @@ void compaction_driver::start(disk_geometry geometry) {
 
 void compaction_driver::request_stop() noexcept {
     _stopping = true;
+    _rate_timer.cancel();
     _work_wanted.broken();
 }
 
@@ -82,8 +78,8 @@ future<> compaction_driver::stop() {
 compaction_batch_limits compaction_driver::automatic_batch_limits() const noexcept {
     return compaction_batch_limits{
         .batch_cap = _limits.batch_cap,
-        .min_batch = 1,
-        .utilization_threshold = 1,
+        .min_batch = _rate_controller.min_batch(),
+        .utilization_threshold = _rate_controller.utilization_threshold(),
     };
 }
 
@@ -95,42 +91,36 @@ compaction_batch_limits compaction_driver::explicit_batch_limits() const noexcep
     };
 }
 
-double compaction_driver::shares_demand() const noexcept {
-    return compaction_shares_pressure(_host.sample().available_segments, _free_segment_watermarks);
+utilization_threshold_curve compaction_driver::threshold_curve() const noexcept {
+    return make_utilization_threshold_curve(_geometry.segment_count, _space_floor, _cfg.utilization_threshold(),
+            threshold_curve_anchor, threshold_curve_ceiling, min_utilization_threshold);
 }
 
-void compaction_driver::refresh_free_segment_watermarks() noexcept {
-    _free_segment_watermarks = make_free_segment_watermarks(_geometry.segment_count, _cfg.trigger_threshold());
+void compaction_driver::tick_rate_controller() noexcept {
+    const auto shard = _host.sample();
 
-    logstor_logger.debug("Free segment target {} (stop at {})",
-            _free_segment_watermarks.low, _free_segment_watermarks.high);
-}
+    _rate_controller.tick({
+        .available_segments = shard.available_segments,
+        .curve = threshold_curve(),
+        .utilization = shard.utilization,
+    });
+    _ranking_inputs = ranking_inputs{
+        .under_threshold = _rate_controller.backlog().candidate_segments,
+        .dead = shard.dead_segments,
+        .min_batch = _rate_controller.min_batch(),
+        .batch_cap = _limits.batch_cap,
+    };
 
-bool compaction_driver::should_run() noexcept {
-    const auto available_segments = _host.sample().available_segments;
-    const auto watermarks = _free_segment_watermarks;
-    const auto wanted = auto_compaction_wanted(_running, available_segments, watermarks);
-
-    if (_running && !wanted) {
-        logstor_logger.debug("Stopping auto compaction: available segments {} is above high watermark {}",
-                available_segments, watermarks.high);
-    } else if (!_running && wanted) {
-        logstor_logger.debug("Starting auto compaction: available segments {} is below the free segment target {}",
-                available_segments, watermarks.low);
+    // A driver that found nothing to compact wakes up when the inputs of the selection differ from
+    // the inputs of the ranking that found nothing.
+    if (_wait == wait_reason::candidates && (!_empty_ranking_start || _ranking_inputs != _empty_ranking_start->inputs)) {
+        _work_wanted.signal();
     }
-    _running = wanted;
-    return wanted;
 }
 
 void compaction_driver::notify_group_idle() noexcept {
     ++_idle_notifications;
     if (_wait == wait_reason::candidates) {
-        _work_wanted.signal();
-    }
-}
-
-void compaction_driver::schedule() {
-    if (_wait == wait_reason::trigger && should_run()) {
         _work_wanted.signal();
     }
 }
@@ -167,17 +157,17 @@ future<> compaction_driver::run() {
 }
 
 future<> compaction_driver::run_step(ranking_state& ranking) {
-    if (!_host.can_submit_compaction() || !should_run()) {
-        // Compaction is disabled on the shard, or the free segments are above the target. The
-        // driver waits until a segment allocation finds them below the target.
+    if (!_host.can_submit_compaction()) {
+        // Compaction is disabled on the shard. The driver treats this like a shard with nothing to
+        // reclaim.
         ranking = {};
         _empty_ranking_start.reset();
-        co_await wait_for_work(wait_reason::trigger);
+        co_await wait_for_work(wait_reason::candidates);
         co_return;
     }
 
     auto slot = co_await get_units(_job_slots, 1);
-    if (_stopping || !should_run()) {
+    if (_stopping) {
         co_return;
     }
 
@@ -203,23 +193,27 @@ future<> compaction_driver::run_step(ranking_state& ranking) {
         co_return;
     }
 
-    start_job(std::move(c), std::move(slot));
+    start_job(std::move(c), ranking.limits, std::move(slot));
 }
 
 future<bool> compaction_driver::rank(ranking_state& ranking) {
-    // The driver reads the count before the ranking, because the ranking can yield, so that a group
-    // that becomes idle during the ranking wakes the driver.
+    // The policy is read once per ranking, so that every group is ranked by the same rule.
+    const auto limits = automatic_batch_limits();
+    // The driver reads these inputs before the ranking, because the ranking can yield, so that a
+    // change that a tick sees during the ranking, or a group that becomes idle during the ranking,
+    // wakes the driver.
     const auto before = ranking_start{
+        .inputs = _ranking_inputs,
         .idle_notifications = _idle_notifications,
     };
-    auto ranked = co_await _host.find_top_compaction_candidates(automatic_batch_limits(), _limits.auto_parallelism,
+    auto ranked = co_await _host.find_top_compaction_candidates(limits, _limits.auto_parallelism,
             automatic_compaction_allowed);
     if (_stopping) {
         co_return false;
     }
     if (ranked.candidates.empty()) {
-        // No group has a batch with a net gain, or each such group is compacting, as on a shard
-        // with one compaction group while its job runs.
+        // No group has a batch under the threshold with a net gain, or each such group is
+        // compacting, as on a shard with one compaction group while its job runs.
         _empty_ranking_start = before;
         co_return false;
     }
@@ -228,6 +222,7 @@ future<bool> compaction_driver::rank(ranking_state& ranking) {
     auto bar = best_copying_score(ranked.candidates | std::views::transform(&candidate::score));
     ranking = {
         .candidates = std::move(ranked.candidates),
+        .limits = limits,
         .bar = bar,
     };
     co_return true;
@@ -238,7 +233,7 @@ future<> compaction_driver::wait_for_candidates() {
     if (_empty_ranking_start && _idle_notifications != _empty_ranking_start->idle_notifications) {
         co_return;
     }
-    co_await wait_for_work(wait_reason::candidates, empty_ranking_delay);
+    co_await wait_for_work(wait_reason::candidates);
 }
 
 std::optional<compaction_candidate_score> compaction_driver::admission_bar(const ranking_state& ranking) const {
@@ -267,9 +262,9 @@ bool compaction_driver::refuse_marginal(const candidate& c, const compaction_can
     return true;
 }
 
-void compaction_driver::start_job(candidate c, semaphore_units<> units) {
+void compaction_driver::start_job(candidate c, compaction_batch_limits limits, semaphore_units<> units) {
     auto job = _jobs_in_flight.insert(_jobs_in_flight.end(), c.score);
-    (void)_host.submit_normal_compaction(*c.group, automatic_batch_limits()).handle_exception([] (std::exception_ptr ep) {
+    (void)_host.submit_normal_compaction(*c.group, limits).handle_exception([] (std::exception_ptr ep) {
         logstor_logger.debug("An automatic compaction job failed: {}. Ignored", ep);
     }).finally([this, job, units = std::move(units)] {
         on_job_end(job);
