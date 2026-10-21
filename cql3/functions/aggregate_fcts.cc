@@ -18,6 +18,7 @@
 #include "utils/big_decimal.hh"
 #include "aggregate_fcts.hh"
 #include "user_aggregate.hh"
+#include "user_function.hh"
 #include "functions.hh"
 #include "first_function.hh"
 #include "exceptions/exceptions.hh"
@@ -374,12 +375,12 @@ description user_aggregate::describe(with_create_statement with_stmt) const {
             if (i > 0) {
                 os << ", ";
             }
-            os << a[i]->cql3_type_name();
+            os << signature_type_name(a[i]);
         }
         os << ")\n";
 
         os << "SFUNC " << cql3::util::maybe_quote(_agg.aggregation_function->name().name) << "\n"
-           << "STYPE " << _agg.aggregation_function->return_type()->cql3_type_name();
+           << "STYPE " << signature_type_name(_agg.aggregation_function->return_type());
         if (is_reducible()) {
             os << "\n" << "REDUCEFUNC " << cql3::util::maybe_quote(_agg.state_reduction_function->name().name);
         }

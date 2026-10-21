@@ -116,3 +116,19 @@ def test_udf_with_udt_keyspace_isolation(cql, test_keyspace, has_java_udf):
                     f"CREATE FUNCTION {other_ks}.testfun(v text) "
                     f"CALLED ON NULL INPUT RETURNS {test_keyspace}.{udt_name} {lang_ret}")
 
+
+# The name of the result column of a function call with a constant argument
+# includes the argument, printed as a CQL literal. For a UDT value, a field
+# name which needs quoting (e.g., a case-sensitive name) must be quoted, as in
+# any CQL literal printed by Scylla. This test is scylla_only because
+# Cassandra prints the literal differently, as {A: 1, b: 2}.
+# Tests the fix of SCYLLADB-5270 (printing UDT values as CQL literals didn't
+# quote field names).
+def test_udf_udt_literal_argument_column_name(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, '("A" int, b int)') as udt:
+        with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+            cql.execute(f'INSERT INTO {table} (p) VALUES (1)')
+            with new_function(cql, test_keyspace, f"(x {udt}) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 7'") as f:
+                rs = cql.execute(f'SELECT {test_keyspace}.{f}({{"A": 1, b: 2}}) FROM {table}')
+                assert rs.column_names == [f'{test_keyspace}.{f}({{"A":1, b:2}})']
+                assert list(rs) == [(7,)]
