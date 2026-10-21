@@ -225,6 +225,17 @@ public:
     // Return the currently known configuration
     virtual raft::configuration get_configuration() const = 0;
 
+    // Whether the entry that produced the configuration get_configuration()
+    // returns is known committed on this server. A configuration loaded from a
+    // snapshot counts as committed. Synchronous, so it is consistent with
+    // get_configuration() called in the same continuation.
+    //
+    // After a restart it can stay false until the first leader heartbeat: the
+    // commit index starts from the snapshot index or the persisted commit
+    // index, whichever is higher, and persisting the latter is optional, so a
+    // configuration entry in the log tail reads as uncommitted until then.
+    virtual bool is_configuration_committed() const = 0;
+
     // Load persisted state and start background work that needs
     // to run for this Raft server to function; The object cannot
     // be used until the returned future is resolved.

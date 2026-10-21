@@ -1112,6 +1112,59 @@ SEASTAR_THREAD_TEST_CASE(test_conf_change_completed_by_a_snapshot) {
 #endif
 }
 
+// is_configuration_committed() says whether the entry that produced the
+// configuration get_configuration() returns is known committed here. The
+// shape of the configuration is not evidence of that: once the joint entry
+// commits, the leader appends C_new and reports a non-joint configuration
+// while C_new is still uncommitted.
+SEASTAR_THREAD_TEST_CASE(test_is_configuration_committed) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+    return;
+#else
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        test_case { .nodes = 3 },
+        ::apply_changes,
+        0,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& leader = cluster.get_server(0);
+    cluster.get_server(1).wait_for_leader(nullptr).get();
+    BOOST_REQUIRE(!leader.get_configuration().is_joint());
+    BOOST_REQUIRE(leader.is_configuration_committed());
+
+    // Holds node 0's io fiber on the batch that appends C_new, after the
+    // joint entry has committed and before C_new is sent anywhere.
+    constexpr auto block_io_fiber = "block_raft_io_fiber_at_non_joint_conf";
+    scoped_error_injection blocked_io{block_io_fiber};
+
+    auto change = leader.modify_config({}, {to_raft_id(2)}, nullptr);
+    wait_for_injection_enter(block_io_fiber).get();
+
+    BOOST_REQUIRE(!leader.get_configuration().is_joint());
+    BOOST_REQUIRE(!leader.is_configuration_committed());
+
+    utils::get_local_injector().receive_message(block_io_fiber);
+    seastar::with_timeout(std::chrono::steady_clock::now() + tick_delay * 200, std::move(change)).get();
+    BOOST_REQUIRE(!leader.get_configuration().is_joint());
+    BOOST_REQUIRE(leader.is_configuration_committed());
+
+    // A follower learns the commit from the leader's next message.
+    auto& follower = cluster.get_server(1);
+    const auto deadline = std::chrono::steady_clock::now() + tick_delay * 200;
+    while (!follower.is_configuration_committed()) {
+        BOOST_REQUIRE_MESSAGE(std::chrono::steady_clock::now() < deadline,
+                fmt::format("node 1 did not learn that {} is committed", follower.get_configuration()));
+        seastar::sleep(tick_delay).get();
+    }
+    BOOST_REQUIRE(!follower.get_configuration().is_joint());
+#endif
+}
+
 // A committed entry that a snapshot replaces in the raft log before the
 // applier fiber gets to apply it still has its effect in the state machine
 // once that snapshot is loaded, so a waiter for it must be resolved

@@ -256,6 +256,7 @@ public:
     future<> add_entry(command command, wait_type type, seastar::abort_source* as) override;
     future<> set_configuration(config_member_set c_new, seastar::abort_source* as) override;
     raft::configuration get_configuration() const override;
+    bool is_configuration_committed() const override;
     future<> start() override;
     future<> abort(sstring reason) override;
     bool is_alive() const override;
@@ -2340,6 +2341,10 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
 raft::configuration
 server_impl::get_configuration() const {
     return _fsm->get_configuration();
+}
+
+bool server_impl::is_configuration_committed() const {
+    return _fsm->log_last_conf_idx() <= _fsm->commit_idx();
 }
 
 server_status server_impl::get_status() const {
