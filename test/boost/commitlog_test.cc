@@ -1893,18 +1893,25 @@ SEASTAR_TEST_CASE(test_wait_for_delete) {
 // SCYLLADB-4094: min_position() must not pass a segment whose file is still on disk.
 // S1 is released and disposed. S2 stays dirty through a live handle, so _segments
 // never goes empty (an empty _segments returns _ids, which would hide the bug).
-// With `fail` the disposal of S1 throws and the file stays.
-static future<> do_test_min_position_covers_pending_deletes(bool recycle, bool fail) {
+enum class disposal_fault {
+    none,       // before_delete() parks the disposal of S1 until the test releases it
+    fail,       // before_delete() throws for S1 until the test allows the retry
+    vanish,     // before_delete() removes S1's file, so the disposal finds it gone
+};
+
+static future<> do_test_min_position_covers_pending_deletes(bool recycle, disposal_fault fault) {
     struct parking_extension : public db::commitlog_file_extension {
         std::string prefix;
-        bool fail;
+        disposal_fault fault;
         // Set once the segment under test is known; any other file passes through.
         std::optional<segment_id_type> want;
+        // fail: set by the test to let the next disposal of S1 through.
+        bool allow_retry = false;
         sstring parked;
         promise<> entered;
         promise<> release;
 
-        parking_extension(std::string p, bool f) : prefix(std::move(p)), fail(f) {}
+        parking_extension(std::string p, disposal_fault f) : prefix(std::move(p)), fault(f) {}
         seastar::future<seastar::file> wrap_file(const seastar::sstring&, seastar::file f, seastar::open_flags) override {
             co_return f;
         }
@@ -1920,10 +1927,19 @@ static future<> do_test_min_position_covers_pending_deletes(bool recycle, bool f
             } catch (std::domain_error&) {
                 co_return; // not a segment name we know
             }
-            want.reset();
             parked = filename;
-            if (fail) {
-                throw std::runtime_error("injected disposal failure");
+            if (fault == disposal_fault::fail) {
+                // Every pass fails until the test allows the retry, so a pass the
+                // test did not trigger cannot take the retry early.
+                if (!allow_retry) {
+                    throw std::runtime_error("injected disposal failure");
+                }
+                co_return;
+            }
+            want.reset();
+            if (fault == disposal_fault::vanish) {
+                co_await seastar::remove_file(filename);
+                co_return;
             }
             entered.set_value();
             co_await release.get_future();
@@ -1941,7 +1957,7 @@ static future<> do_test_min_position_covers_pending_deletes(bool recycle, bool f
     tmpdir tmp;
     cfg.commit_log_location = tmp.path().string();
 
-    auto ep = std::make_unique<parking_extension>(cfg.fname_prefix, fail);
+    auto ep = std::make_unique<parking_extension>(cfg.fname_prefix, fault);
     auto& ex = *ep;
     db::extensions exts;
     exts.add_commitlog_file_extension("park", std::move(ep));
@@ -1950,7 +1966,7 @@ static future<> do_test_min_position_covers_pending_deletes(bool recycle, bool f
     auto log = co_await commitlog::create_commitlog(cfg);
     bool released = false;
     auto unpark = [&] {
-        if (!fail && !std::exchange(released, true)) {
+        if (fault == disposal_fault::none && !std::exchange(released, true)) {
             ex.release.set_value();
         }
     };
@@ -1987,11 +2003,25 @@ static future<> do_test_min_position_covers_pending_deletes(bool recycle, bool f
 
         // Closing S2 triggers a sweep, which runs do_pending_deletes() on S1's file.
         co_await log.force_new_active_segment();
-        if (fail) {
+        if (fault == disposal_fault::fail) {
             co_await log.wait_for_pending_deletes();
             BOOST_REQUIRE(!ex.parked.empty());
             BOOST_REQUIRE(co_await file_exists(ex.parked));
             BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+            // Closing S3 runs the next pass, which retries S1's file.
+            ex.allow_retry = true;
+            rp_handle h3 = co_await write();        // S3
+            co_await log.force_new_active_segment();
+            co_await log.wait_for_pending_deletes();
+            BOOST_REQUIRE(!co_await file_exists(ex.parked));
+            BOOST_REQUIRE_EQUAL(log.min_position().id, s2);
+            co_return;
+        }
+        if (fault == disposal_fault::vanish) {
+            co_await log.wait_for_pending_deletes();
+            BOOST_REQUIRE(!ex.parked.empty());
+            BOOST_REQUIRE(!co_await file_exists(ex.parked));
+            BOOST_REQUIRE_EQUAL(log.min_position().id, s2);
             co_return;
         }
         co_await ex.entered.get_future();
@@ -2021,15 +2051,23 @@ static future<> do_test_min_position_covers_pending_deletes(bool recycle, bool f
 }
 
 SEASTAR_TEST_CASE(test_min_position_covers_pending_deletes_recycle) {
-    return do_test_min_position_covers_pending_deletes(true, false);
+    return do_test_min_position_covers_pending_deletes(true, disposal_fault::none);
 }
 
 SEASTAR_TEST_CASE(test_min_position_covers_pending_deletes_delete) {
-    return do_test_min_position_covers_pending_deletes(false, false);
+    return do_test_min_position_covers_pending_deletes(false, disposal_fault::none);
 }
 
-SEASTAR_TEST_CASE(test_min_position_holds_when_delete_fails) {
-    return do_test_min_position_covers_pending_deletes(false, true);
+SEASTAR_TEST_CASE(test_min_position_holds_until_failed_delete_is_retried) {
+    return do_test_min_position_covers_pending_deletes(false, disposal_fault::fail);
+}
+
+SEASTAR_TEST_CASE(test_min_position_advances_when_file_vanishes_recycle) {
+    return do_test_min_position_covers_pending_deletes(true, disposal_fault::vanish);
+}
+
+SEASTAR_TEST_CASE(test_min_position_advances_when_file_vanishes_delete) {
+    return do_test_min_position_covers_pending_deletes(false, disposal_fault::vanish);
 }
 
 // release() orphans the segments without deleting a dirty one's file, which is

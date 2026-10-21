@@ -541,8 +541,8 @@ private:
     segment_id_type _ids = 0, _low_id = 0;
     // Ids of segments that left _segments while their file is still on disk under
     // a replayable name. Erased in do_pending_deletes() once the file is gone, so
-    // a file kept for replay or one whose removal failed keeps its id for good.
-    // Unordered: the oldest id is searched for, never read off the front.
+    // a file kept for replay keeps its id for good, and a failed removal keeps it
+    // until a retry succeeds. Unordered: the oldest id is searched for.
     std::vector<segment_id_type> _pending_disposal;
     std::vector<sseg_ptr> _segments;
     queue<sseg_ptr> _reserve_segments;
@@ -2970,6 +2970,7 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
         // `f.remove_file()` resets known_size to 0, so remember the size here,
         // in order to subtract it from total_size_on_disk accurately.
         auto size = f.known_size();
+        bool removed = false;
         try {
             if (f) {
                 co_await f.close();
@@ -3015,19 +3016,35 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
 
             clogger.debug("Deleting segment file {}", f.name());
             // last resort.
-            co_await f.remove_file();
+            try {
+                co_await f.remove_file();
+            } catch (const std::system_error& e) {
+                // A file that is already gone counts as removed, or the retry would fail forever.
+                if (e.code() != std::errc::no_such_file_or_directory) {
+                    throw;
+                }
+                clogger.warn("Segment file {} is already gone", f.name());
+            }
+            removed = true;
             if (id) {
                 std::erase(_pending_disposal, *id);
             }
         } catch (...) {
             clogger.error("Could not delete segment {}: {:t}", f.name(), std::current_exception());
+            // A kept file gets here only if close() threw, and stays for replay.
+            if (!removed && mode != dispose_mode::Keep) {
+                // The file stays on disk and keeps its id pinned, so retry it in the next
+                // pass. Its size leaves the footprint below, so the retry gets an unopened
+                // file of size 0 and deletes it rather than recycling it without a size.
+                try {
+                    _files_to_dispose.emplace_back(named_file(f.name()), dispose_mode::ForceDelete, id);
+                } catch (...) {
+                    clogger.error("Could not queue segment {} for another disposal: {:t}", f.name(), std::current_exception());
+                }
+            }
         }
-        // if we get here, we either successfully deleted the file,
-        // or had such an exception that we consider the file dead
-        // anyway. In either case we _remove_ the file size from
-        // footprint, because it is no longer our problem.
-        // A file that is still on disk keeps its id in _pending_disposal,
-        // so min_position() does not advance past it.
+        // The file is gone, or its disposal failed and any retry gets an unopened
+        // file of size 0, so the size leaves the footprint either way.
         totals.total_size_on_disk -= size;
     }
 
