@@ -16,6 +16,115 @@ from utils import get_templates_or_fallback, maybe_add_filters
 
 logger = logging.getLogger(__name__)
 
+# A C++ braced initializer, such as { { "a", "b" }, { "c", "d" } }, with up
+# to four levels of nested braces. String literals in it may contain braces
+# and commas.
+def _braced_pattern(depth):
+    item = r'[^{}"]|"(?:[^"\\]|\\.)*"'
+    pattern = r'\{(?:' + item + r')*\}'
+    for _ in range(depth - 1):
+        pattern = r'\{(?:' + item + '|' + pattern + r')*\}'
+    return pattern
+
+BRACED = _braced_pattern(4)
+
+
+def _tokenize_braced(text):
+    """Splits a C++ braced initializer into braces, commas, string literals
+    and other atoms. Returns None if it contains anything else, such as an
+    expression or a nested type name."""
+    tokens = []
+    pos = 0
+    token_re = re.compile(r'\s*(?:([{},])|("(?:[^"\\]|\\.)*")|(-?[0-9][0-9.]*|true|false))')
+    while pos < len(text):
+        if text[pos:].strip() == '':
+            break
+        m = token_re.match(text, pos)
+        if not m:
+            return None
+        if m.group(1):
+            tokens.append(m.group(1))
+        elif m.group(2):
+            tokens.append(('str', re.sub(r'\\(.)', r'\1', m.group(2)[1:-1])))
+        else:
+            tokens.append(('atom', m.group(3)))
+        pos = m.end()
+    return tokens
+
+
+def _parse_braced(tokens):
+    """Parses the tokens of a braced initializer into nested lists of
+    ('str', s) and ('atom', a) leaves. Returns None if they are malformed."""
+    def parse(i):
+        if tokens[i] != '{':
+            return tokens[i], i + 1
+        elems = []
+        i += 1
+        while tokens[i] != '}':
+            elem, i = parse(i)
+            elems.append(elem)
+            if tokens[i] == ',':
+                i += 1
+            elif tokens[i] != '}':
+                raise ValueError
+        return elems, i + 1
+    try:
+        value, end = parse(0)
+    except (IndexError, ValueError):
+        return None
+    return value if end == len(tokens) else None
+
+
+def _yaml_scalar(leaf):
+    kind, value = leaf
+    if kind == 'atom' or re.fullmatch(r'[A-Za-z0-9_./-]+', value):
+        return value
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _is_map(value):
+    return isinstance(value, list) and all(
+        isinstance(e, list) and len(e) == 2 and isinstance(e[0], tuple) and e[0][0] == 'str' for e in value)
+
+
+def _yaml_value(value, cpp_type):
+    """Renders a parsed braced initializer as a YAML (flow style) value, using
+    the option's C++ type to tell whether braces initialize a list, a map, or
+    are the arguments of a constructor of some other class."""
+    if isinstance(value, tuple):
+        return _yaml_scalar(value)
+    cpp_type = (cpp_type or '').strip()
+    if cpp_type.startswith('std::vector<') or cpp_type.endswith('_list'):
+        elem_type = cpp_type[len('std::vector<'):-1] if cpp_type.startswith('std::vector<') else None
+        return '[' + ', '.join(_yaml_value(e, elem_type) for e in value) + ']'
+    if 'map' in cpp_type or (not cpp_type and _is_map(value)):
+        if not _is_map(value):
+            raise ValueError
+        return '{' + ', '.join(_yaml_scalar(k) + ': ' + _yaml_value(v, None) for k, v in value) + '}'
+    if cpp_type and len(value) == 1:
+        # The braces hold the single argument of the class's constructor.
+        return _yaml_value(value[0], None)
+    if not cpp_type:
+        return '[' + ', '.join(_yaml_value(e, None) for e in value) + ']'
+    raise ValueError
+
+
+def readable_default(default, cpp_type):
+    """If a default value is a C++ braced initializer of string and number
+    literals, returns it as the YAML value which a user would write in
+    scylla.yaml. Otherwise, returns the default unchanged."""
+    if not default.startswith('{'):
+        return default
+    tokens = _tokenize_braced(default)
+    value = _parse_braced(tokens) if tokens else None
+    if not value:
+        return default
+    try:
+        return _yaml_value(value, cpp_type)
+    except ValueError:
+        return default
+
+
 class DBConfigParser:
 
     """
@@ -37,7 +146,7 @@ class DBConfigParser:
         r'(?:\s*"([^"]+)",)?'  # 2. Property alias (optional)
         r'\s*(?:liveness::(\w+),\s*)?'  # 3. Liveness (optional)
         r'(?:value_status::)?(\w+),\s*'  # 4. Value status
-        r'(\{[^{}]*\}|"[^"]*"|[^,]+)?,'  # 5. Default value
+        r'(' + BRACED + r'|"[^"]*"|[^,]+)?,'  # 5. Default value
         r'\s*"(.*?)"'  # 6. Description text, divided in multiple lines.
         r'(?:,\s*(.+?))?'  # 7. Available values (optional)
         r'\s*\)'
@@ -141,6 +250,10 @@ class DBConfigParser:
             groups.append(current_group)
 
         self._add_type_information(groups)
+
+        for group in groups:
+            for property_data in group["properties"]:
+                property_data["default"] = readable_default(property_data["default"], property_data.get("type"))
 
         return groups
 
