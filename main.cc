@@ -2754,6 +2754,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 }
             });
 
+            utils::get_local_injector().inject("pause_before_starting_auth_service", utils::wait_for_message(5min)).get();
+
             checkpoint(stop_signal, "starting auth service");
             auth_service.start(std::ref(qp), std::ref(group0_client),
                     auth::make_authorizer_factory(cfg->authorizer(), qp),
