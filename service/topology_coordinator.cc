@@ -468,7 +468,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             return false;
         }
         const auto& ks = _db.find_keyspace(t->schema()->ks_name());
-        return !ks.get_replication_strategy().uses_tablets();
+        if (ks.get_replication_strategy().uses_tablets()) {
+            return false;
+        }
+        // A table whose migration has been finalized is not migrating any more,
+        // even though its keyspace still replicates by vnodes. Every node runs it
+        // on tablets and the load balancer owns it, so the vnode replace flow must
+        // leave its tablet map alone.
+        return !get_token_metadata_ptr()->tablets().get_tablet_map(table).migration_finalized();
     }
 
     bool has_migrating_tablet_replicas_on_replaced_node(locator::host_id host) const {
