@@ -452,7 +452,10 @@ def check_cql(ip, ssl_context=None):
         raise NotYetUp
     # Any other exception may indicate a problem, and is passed to the caller.
 def check_ssl_cql(ip):
+    # Scylla is started with a self-signed certificate.
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
     check_cql(ip, ssl_context)
 
 # Test that the Scylla REST API is serving.
