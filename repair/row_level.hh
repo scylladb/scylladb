@@ -179,10 +179,10 @@ private:
         gc_clock::time_point flush_time;
     };
     // Flushes hints and batchlog on all nodes if one of the tables uses
-    // repair-mode tombstone gc.
+    // repair-mode tombstone gc, or if force is set.
     future<flush_hints_result> flush_hints(repair_uniq_id id,
             sstring keyspace, std::vector<sstring> cfs,
-            std::unordered_set<locator::host_id> ignore_nodes);
+            std::unordered_set<locator::host_id> ignore_nodes, bool force);
 
     config _config;
     static config default_config() { return {}; }
