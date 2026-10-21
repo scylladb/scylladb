@@ -79,6 +79,7 @@ public:
         utils::updateable_value<double> space_floor;
         // See utilization_threshold_curve.
         utils::updateable_value<double> utilization_threshold;
+        utils::updateable_value<double> min_utilization_threshold;
         seastar::scheduling_group sg;
     };
 
@@ -199,9 +200,6 @@ private:
     // anchor.
     static constexpr double threshold_curve_anchor = 0;
     static constexpr double threshold_curve_ceiling = 0;
-    // The minimum threshold of the curve. The curve limits it to the configured threshold, so the
-    // threshold is constant above the anchor.
-    static constexpr double min_utilization_threshold = 1;
 
     compaction_rate_controller _rate_controller;
     timer<lowres_clock> _rate_timer;

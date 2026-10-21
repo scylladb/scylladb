@@ -114,7 +114,7 @@ compaction_batch_limits compaction_driver::explicit_batch_limits() const noexcep
 
 utilization_threshold_curve compaction_driver::threshold_curve() const noexcept {
     return make_utilization_threshold_curve(_geometry.segment_count, _space_floor, _cfg.utilization_threshold(),
-            threshold_curve_anchor, threshold_curve_ceiling, min_utilization_threshold);
+            threshold_curve_anchor, threshold_curve_ceiling, _cfg.min_utilization_threshold());
 }
 
 void compaction_driver::tick_rate_controller() noexcept {

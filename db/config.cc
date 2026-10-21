@@ -1019,8 +1019,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "It is at least two compaction batches and at most 0.25.")
     , logstor_compaction_utilization_threshold(this, "logstor_compaction_utilization_threshold", liveness::LiveUpdate, value_status::Used, 0.5,
         "A logstor segment is compacted when the fraction of it that holds live data is at most this value, while twice logstor_compaction_space_floor of the disk is free. "
-        "Compaction runs while a compaction group has a batch of candidates with a net gain. Below that free level the threshold increases towards 1. A higher value frees space sooner, at a higher write amplification. "
-        "A value of 0 compacts only segments with no live data, and a value of 1 compacts any segment from which compaction can reclaim space.")
+        "When less of the disk is free, compaction also takes fuller segments. When more is free, it takes only segments under logstor_compaction_min_utilization_threshold. "
+        "A higher value frees space sooner, at a higher write amplification. 0 compacts only segments with no live data, and 1 compacts any segment from which compaction can reclaim space.")
+    , logstor_compaction_min_utilization_threshold(this, "logstor_compaction_min_utilization_threshold", liveness::LiveUpdate, value_status::Used, 0.1,
+        "The utilization threshold of logstor compaction while more than twice logstor_compaction_space_floor of the disk is free. It limits the space that segments with a few long-lived records hold, "
+        "at a lower write amplification than logstor_compaction_utilization_threshold. A value at or above logstor_compaction_utilization_threshold keeps that threshold also when more of the disk is free.")
     , logstor_compaction_max_shares(this, "logstor_compaction_max_shares", liveness::LiveUpdate, value_status::Used, 2000,
         "Maximum CPU shares of the logstor compaction scheduling group, reached at logstor_compaction_space_floor. As the free space falls from twice the space floor to the space floor, the shares increase linearly from 50.")
     , file_cache_size_in_mb(this, "file_cache_size_in_mb", value_status::Unused, 512,

@@ -294,6 +294,9 @@ public:
         // A segment is a candidate for automatic compaction while its utilization is at most
         // this, see compaction_rate_controller.
         utils::updateable_value<double> compaction_utilization_threshold;
+        // The threshold at the ceiling of the threshold curve and above, see
+        // utilization_threshold_curve.
+        utils::updateable_value<double> compaction_min_utilization_threshold;
         seastar::scheduling_group compaction_sg;
         utils::updateable_value<float> compaction_static_shares;
         utils::updateable_value<float> compaction_max_shares;
@@ -365,6 +368,7 @@ public:
         , _driver(*this, compaction_driver::config{
                 .space_floor = _cfg.compaction_space_floor,
                 .utilization_threshold = _cfg.compaction_utilization_threshold,
+                .min_utilization_threshold = _cfg.compaction_min_utilization_threshold,
                 .sg = _cfg.compaction_sg,
             })
     {}
@@ -988,6 +992,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
             .compaction_enabled = config.compaction_enabled,
             .compaction_space_floor = config.compaction_space_floor,
             .compaction_utilization_threshold = config.compaction_utilization_threshold,
+            .compaction_min_utilization_threshold = config.compaction_min_utilization_threshold,
             .compaction_sg = config.compaction_sg,
             .compaction_static_shares = config.compaction_static_shares,
             .compaction_max_shares = config.compaction_max_shares,

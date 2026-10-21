@@ -1039,6 +1039,7 @@ database::init_logstor() {
             .sparse_files = _cfg.logstor_sparse_files(),
             .compaction_space_floor = _cfg.logstor_compaction_space_floor,
             .compaction_utilization_threshold = _cfg.logstor_compaction_utilization_threshold,
+            .compaction_min_utilization_threshold = _cfg.logstor_compaction_min_utilization_threshold,
             .compaction_sg = _dbcfg.logstor_compaction_scheduling_group,
             .compaction_static_shares = _cfg.compaction_static_shares,
             .compaction_max_shares = _cfg.logstor_compaction_max_shares,
