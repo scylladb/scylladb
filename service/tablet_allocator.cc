@@ -4561,7 +4561,14 @@ public:
         _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
         _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
         _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
-        co_await _load_sketch->populate_dc(dc);
+        // A migrating table's sizes are not reported by a node that has not been
+        // upgraded yet, and the balancer does not move such a table anyway. Letting
+        // its missing sizes mark the node as incompletely measured would stop the
+        // balancer planning anything at all - including draining a finalized table
+        // off a replaced node, which only the balancer can do.
+        co_await _load_sketch->populate_dc(dc, [this] (table_id table) {
+            return is_migrating_table(table);
+        });
 
         // If we don't have nodes to drain, remove nodes which don't have complete tablet sizes
         if (nodes_to_drain.empty()) {
