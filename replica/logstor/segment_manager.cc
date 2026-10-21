@@ -249,27 +249,15 @@ future<> writeable_segment::do_write(segment_position pos, bytes_view data) {
 
 using seg_ptr = lw_shared_ptr<writeable_segment>;
 
-// Maps the shares demand of the compaction driver, the space pressure in [0, 1], to CPU shares. The
-// pressure is 0 at or above the threshold anchor and 1 at the space floor, see
-// compaction_space_pressure(). The maximum output is logstor_compaction_max_shares.
-//
-// Each control point sits on an anchor of the pressure ramp:
-//
-//   - pressure 0, at or above the threshold anchor: compaction runs at the same floor the sstable
-//     controller uses;
-//   - pressure compaction_shares_pressure_at_target, a third of the way from the anchor to the space
-//     floor;
-//   - pressure 1, at the space floor: compaction is losing against the write rate and gets the
-//     maximum.
-//
-// The loop settles at whatever shares match the write rate.
+// Maps the shares demand of the rate controller, in [0, 1], to CPU shares: min_shares at 0, at or
+// above the threshold anchor, and logstor_compaction_max_shares at 1, at the space floor. The
+// function is linear, because the demand already has the shape of the shares ramp, see
+// compaction_rate_controller.
 class compaction_shares_controller : public backlog_controller {
 public:
-    static constexpr float idle_shares = 50.0f;
-    static constexpr float target_shares = 200.0f;
-    // Below this the scheduling group's shares stop being meaningful, so a cap this low is treated
-    // as a misconfiguration rather than as a choice to honour.
-    static constexpr float min_max_shares = 1.0f;
+    // The shares at or above the threshold anchor. It is the floor that the sstable compaction
+    // controller uses.
+    static constexpr float min_shares = 50.0f;
 
     compaction_shares_controller(scheduling_group sg, float static_shares, float max_shares,
             std::chrono::milliseconds interval, std::function<float()> current_backlog)
@@ -282,24 +270,15 @@ public:
     }
 
 private:
-    // The ramp for a given cap, which is the only input: the ramp has no default of its own, so a
-    // controller always follows logstor_compaction_max_shares.
-    //
-    // The lower two points keep their constants, since the cap is meant to bound the peak rather
-    // than move the steady-state operating point. They only follow the cap down when keeping them
-    // would make the ramp non-monotone: scaling them is better than raising the configured cap back
-    // up, because the ramp then still responds to pressure instead of flattening into a fixed share
-    // count. The fractions are chosen to reproduce the constants exactly at any cap of 300 shares or
-    // more, so the coupling is invisible above the point where it is needed.
     static std::vector<control_point> make_control_points(float max_shares) {
-        if (max_shares < min_max_shares) {
-            logstor_logger.warn("logstor_compaction_max_shares of {} is too low, using {}", max_shares, min_max_shares);
-            max_shares = min_max_shares;
+        // The negated comparison also replaces a NaN.
+        if (!(max_shares >= min_shares)) {
+            logstor_logger.warn("logstor_compaction_max_shares {} is below the minimum of {}. The minimum is used",
+                    max_shares, min_shares);
+            max_shares = min_shares;
         }
-        const float target = std::min(target_shares, max_shares * 2.0f / 3.0f);
         return {
-                {0.0f, std::min(idle_shares, target / 4.0f)},
-                {compaction_shares_pressure_at_target, target},
+                {0.0f, min_shares},
                 {1.0f, max_shares},
         };
     }

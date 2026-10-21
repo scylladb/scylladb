@@ -252,9 +252,4 @@ struct compaction_score_of {
 template <typename Candidate>
 using top_compaction_candidates = utils::largest_k<Candidate, std::less<>, compaction_score_of>;
 
-// The space pressure of the middle control point of the compaction shares, a third of the way from
-// the anchor to the space floor. It was the place of the free-segment target on the shares ramp of
-// the old policy.
-constexpr float compaction_shares_pressure_at_target = 1.0f / 3.0f;
-
 } // namespace replica::logstor

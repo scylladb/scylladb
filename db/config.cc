@@ -1022,7 +1022,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Compaction runs while a compaction group has a batch of candidates with a net gain. Below that free level the threshold increases towards 1. A higher value frees space sooner, at a higher write amplification. "
         "A value of 0 compacts only segments with no live data, and a value of 1 compacts any segment from which compaction can reclaim space.")
     , logstor_compaction_max_shares(this, "logstor_compaction_max_shares", liveness::LiveUpdate, value_status::Used, 2000,
-        "Maximum CPU shares the logstor compaction controller gives the logstor compaction scheduling group, reached at full space pressure. ")
+        "Maximum CPU shares of the logstor compaction scheduling group, reached at logstor_compaction_space_floor. As the free space falls from twice the space floor to the space floor, the shares increase linearly from 50.")
     , file_cache_size_in_mb(this, "file_cache_size_in_mb", value_status::Unused, 512,
         "Total memory to use for SSTable-reading buffers.")
     , memtable_flush_queue_size(this, "memtable_flush_queue_size", value_status::Unused, 4,
