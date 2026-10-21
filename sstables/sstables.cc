@@ -94,6 +94,7 @@
 #include "utils/io-wrappers.hh"
 
 #include <boost/lexical_cast.hpp>
+#include "db/system_keyspace.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
