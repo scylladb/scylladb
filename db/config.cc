@@ -1520,8 +1520,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_sstables_md_format(this, "enable_sstables_md_format", value_status::Unused, true, "Enable SSTables 'md' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , sstable_format(this, "sstable_format", liveness::LiveUpdate, value_status::Used, "me", "Default sstable file format", {"md", "me", "ms", "mt"})
     , sstable_compression_user_table_options(this, "sstable_compression_user_table_options", value_status::Used, compression_parameters{compression_parameters::algorithm::lz4_with_dicts},
-        "Server-global user table compression options. If enabled, all user tables"
-        "will be compressed using the provided options, unless overridden"
+        "Server-global user table compression options. If enabled, all user tables "
+        "will be compressed using the provided options, unless overridden "
         "by compression options in the table schema. User tables are all tables in non-system keyspaces. The available options are:\n"
         "* sstable_compression: The compression algorithm to use. Supported values: LZ4Compressor, LZ4WithDictsCompressor (default), SnappyCompressor, DeflateCompressor, ZstdCompressor, ZstdWithDictsCompressor, '' (empty string; disables compression).\n"
         "* chunk_length_in_kb: (Default: 4) The size of chunks to compress in kilobytes. Allowed values are powers of two between 1 and 128.\n"
