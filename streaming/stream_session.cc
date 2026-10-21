@@ -541,14 +541,30 @@ std::vector<replica::column_family*> stream_session::get_column_family_stores(co
     std::vector<replica::column_family*> stores;
     auto& db = manager().db();
     if (column_families.empty()) {
+        auto tmptr = db.get_token_metadata_ptr();
+        const auto& tmeta = tmptr->tablets();
         db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> tp) {
             replica::column_family& cf = *tp;
             auto cf_name = cf.schema()->cf_name();
             auto ks_name = cf.schema()->ks_name();
-            if (ks_name == keyspace) {
-                sslog.debug("Find ks={} cf={}", ks_name, cf_name);
-                stores.push_back(&cf);
+            if (ks_name != keyspace) {
+                return;
             }
+            // A table whose vnodes-to-tablets migration has been finalized runs on
+            // tablets on every node, while its keyspace still replicates by vnodes.
+            // It is rebuilt onto a joining node by the tablet machinery, so it must
+            // not be streamed here by vnode token ranges: the receiver has no shard
+            // for a token outside the tablets it owns.
+            //
+            // Decide from the tablet map in group0, which both ends agree on, not
+            // from this node's own erm flavour.
+            auto id = cf.schema()->id();
+            if (tmeta.has_tablet_map(id) && tmeta.get_tablet_map(id).migration_finalized()) {
+                sslog.debug("Skip ks={} cf={}: migration finalized, rebuilt as tablets", ks_name, cf_name);
+                return;
+            }
+            sslog.debug("Find ks={} cf={}", ks_name, cf_name);
+            stores.push_back(&cf);
         });
     } else {
         // TODO: We can move this to database class and use shared_ptr<column_family> instead
