@@ -25,6 +25,7 @@ class zstd_dstream;
 class stream_compressor;
 class stream_decompressor;
 class snd_buf_cursor;
+class rcv_buf_reader;
 class dict_sampler;
 using dict_ptr = lw_shared_ptr<foreign_ptr<lw_shared_ptr<shared_dict>>>;
 class control_protocol_frame;
@@ -169,6 +170,9 @@ public:
     compression_algorithm sender_current_algorithm() const noexcept;
     const shared_dict& sender_current_dict() const noexcept;
     const shared_dict& receiver_current_dict() const noexcept;
+    // These keep the dict alive, so that a message can use it across preemption points.
+    dict_ptr sender_current_dict_ptr() const noexcept;
+    dict_ptr receiver_current_dict_ptr() const noexcept;
 };
 
 class advanced_rpc_compressor final : public rpc::compressor {
@@ -206,9 +210,19 @@ private:
     // Calls the appropriate get_*_dstream() function.
     stream_decompressor& get_decompressor(compression_algorithm, const shared_dict&);
 
-    // Decides the algorithm used for the next message, based
-    // on the state of the negotiation and the size of the message.
-    compression_algorithm get_algo_for_next_msg(size_t msgsize);
+    // Decides the algorithm used for the next segment, based on the
+    // algorithm negotiated for the message and on the size of the message.
+    compression_algorithm get_algo_for_next_segment(compression_algorithm negotiated, size_t msgsize);
+
+    // The parts of the state of the compressor and of the negotiation which are
+    // fixed for the duration of a message.
+    struct outgoing_message;
+    struct incoming_message;
+    outgoing_message start_outgoing_message(size_t msgsize);
+    // Compresses one segment of a message. Moves `in` past the compressed data.
+    rpc::snd_buf compress_segment(size_t head_space, snd_buf_cursor& in, outgoing_message& msg);
+    // Decompresses one segment of a message from the front of `in`.
+    rpc::rcv_buf decompress_segment(rcv_buf_reader& in, incoming_message& msg);
 
     // Starts a worker fiber responsible for sending _control's messages.
     future<> start_progress_fiber();

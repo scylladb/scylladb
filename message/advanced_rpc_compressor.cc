@@ -41,6 +41,18 @@ const shared_dict& control_protocol::receiver_current_dict() const noexcept {
     return _receiver_current_dict ? **_receiver_current_dict : null_dict;
 }
 
+dict_ptr control_protocol::sender_current_dict_ptr() const noexcept {
+    return _sender_current_dict;
+}
+
+dict_ptr control_protocol::receiver_current_dict_ptr() const noexcept {
+    return _receiver_current_dict;
+}
+
+static const shared_dict& deref_dict(const dict_ptr& d) noexcept {
+    return d ? **d : null_dict;
+}
+
 static shared_dict::dict_id get_dict_id(dict_ptr d) {
     return d ? (**d).id : null_dict.id;
 }
@@ -214,8 +226,8 @@ advanced_rpc_compressor::~advanced_rpc_compressor() {
 //
 const static sstring COMPRESSOR_NAME = "SCYLLA_V3";
 
-compression_algorithm advanced_rpc_compressor::get_algo_for_next_msg(size_t msgsize) {
-    auto algo = _control.sender_current_algorithm();
+compression_algorithm advanced_rpc_compressor::get_algo_for_next_segment(compression_algorithm negotiated, size_t msgsize) {
+    auto algo = negotiated;
     if (algo == compression_algorithm::type::ZSTD
         && (_tracker->cpu_limit_exceeded()
             || msgsize < _tracker->_cfg.zstd_min_msg_size.get()
@@ -355,58 +367,100 @@ stream_decompressor& advanced_rpc_compressor::get_decompressor(compression_algor
     }
 }
 
-rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf data) {
-    const size_t checksum_size = _tracker->_cfg.checksumming.get() ? sizeof(uint32_t) : 0;
-    const uint32_t crc = checksum_size ? crc_impl(data) : -1;
+// The layout of the first byte of a segment.
+// See docs/dev/advanced_rpc_compression.md, section `Wire protocol details`.
+constexpr uint8_t segment_algo_mask = 0x3f;
+constexpr uint8_t segment_flag_checksum = 0x40;
+constexpr uint8_t segment_flag_control_frame = 0x80;
+static_assert(compression_algorithm::count() <= segment_algo_mask + 1);
+
+struct advanced_rpc_compressor::outgoing_message {
+    size_t size;
+    // The control protocol only changes the sender's current algorithm and dict
+    // in produce_control_header(), which is called once per message, before the first segment.
+    // So all segments use the same values. (Except that the algorithm can be weakened
+    // for some segments by get_algo_for_next_segment()).
+    compression_algorithm negotiated_algo;
+    dict_ptr dict;
+    std::optional<control_protocol_frame> control_frame;
+    bool checksumming;
+};
+
+struct advanced_rpc_compressor::incoming_message {
+    // Set after the control frame (if any) of the first segment is consumed.
+    dict_ptr dict;
+};
+
+advanced_rpc_compressor::outgoing_message advanced_rpc_compressor::start_outgoing_message(size_t msgsize) {
+    // produce_control_header() can switch the sender to the newly committed dict and algorithm,
+    // so they must be read after it.
+    auto control_frame = _control.produce_control_header();
+    return outgoing_message{
+        .size = msgsize,
+        .negotiated_algo = _control.sender_current_algorithm(),
+        .dict = _control.sender_current_dict_ptr(),
+        .control_frame = std::move(control_frame),
+        .checksumming = _tracker->_cfg.checksumming.get(),
+    };
+}
+
+rpc::snd_buf advanced_rpc_compressor::compress_segment(size_t head_space, snd_buf_cursor& in, outgoing_message& msg) {
+    const size_t checksum_size = msg.checksumming ? sizeof(uint32_t) : 0;
+    const bool has_control_frame = msg.control_frame.has_value();
+    const size_t control_frame_size = has_control_frame ? control_protocol_frame::serialized_size : 0;
+    const size_t header_size = 1 + checksum_size + control_frame_size;
 
     auto now = _tracker->get_steady_nanos();
     _tracker->maybe_refresh_zstd_quota(now);
 
-    auto algo = get_algo_for_next_msg(data.size);
-
+    const auto algo = get_algo_for_next_segment(msg.negotiated_algo, msg.size);
     auto& stats = _tracker->_stats[algo.idx()];
-    auto update_time_stats = defer([&, nanos_before = now] noexcept {
-        stats.compression_cpu_nanos += _tracker->get_steady_nanos() - nanos_before;
-    });
 
-    _tracker->ingest(snd_buf_cursor(data), data.size);
-
-    auto protocol_header = _control.produce_control_header();
-    const size_t protocol_header_size = protocol_header ? control_protocol_frame::serialized_size : 0;
-
-    auto uncompressed_size = data.size;
-    auto compressed = std::invoke([&] {
+    const auto segment_start = in;
+    rpc::snd_buf compressed;
+    {
+        auto update_time_stats = defer([&, nanos_before = now] noexcept {
+            stats.compression_cpu_nanos += _tracker->get_steady_nanos() - nanos_before;
+        });
         try {
-            return compress_impl(head_space + 1 + checksum_size + protocol_header_size, std::move(data), get_compressor(algo, _control.sender_current_dict()), true, rpc::snd_buf::chunk_size);
+            compressed = compress_impl(head_space + header_size, in, get_compressor(algo, deref_dict(msg.dict)), true, rpc::snd_buf::chunk_size, {});
         } catch (...) {
             arc_logger.error("Error during compression with algorithm {}: {:t}. ", algo.name(), std::current_exception());
             throw;
         }
-    });
+        _tracker->ingest(segment_start, segment_start.remaining() - in.remaining());
+    }
+    const size_t segment_size = segment_start.remaining() - in.remaining();
 
-    // Write the algorithm type to the first byte after the external head_space.
-    // Note: compress_impl guarantees that the head space (including our byte, as we passed head_space + 1) is in the first fragment,
+    // compress_impl guarantees that the head space (including our header) is in the first fragment,
     // so what we are doing below is legal.
-    auto dst = std::get_if<temporary_buffer<char>>(&compressed.bufs);
-    if (!dst) {
-        dst = std::get<std::vector<temporary_buffer<char>>>(compressed.bufs).data();
-    }
-    static_assert(compression_algorithm::count() <= 0x3f); // We have 6 bits for algorithm ID, 2 bits for flags.
-    dst->get_write()[head_space] = (algo.idx() & 0x3f) | (protocol_header ? 0x80 : 0x00) | (checksum_size ? 0x40 : 0x00);
+    auto& front = compressed.front();
+
+    // Write the header right after the external head_space.
+    char* out = front.get_write() + head_space;
+    *out++ = (algo.idx() & segment_algo_mask)
+        | (checksum_size ? segment_flag_checksum : 0x00)
+        | (has_control_frame ? segment_flag_control_frame : 0x00);
     if (checksum_size) {
-        write_le<uint32_t>(&dst->get_write()[head_space + 1], crc);
+        write_le<uint32_t>(out, crc_impl(segment_start, segment_size));
+        out += sizeof(uint32_t);
     }
-    if (protocol_header) {
-        auto out_data = reinterpret_cast<std::byte*>(dst->get_write() + head_space + 1 + checksum_size);
+    if (has_control_frame) {
         constexpr size_t out_size = control_protocol_frame::serialized_size;
-        auto out = std::span<std::byte, out_size>(out_data, out_size);
-        protocol_header->serialize(out);
+        msg.control_frame->serialize(std::span<std::byte, out_size>(reinterpret_cast<std::byte*>(out), out_size));
+        out += out_size;
     }
 
-    stats.bytes_sent += uncompressed_size;
+    stats.bytes_sent += segment_size;
     stats.compressed_bytes_sent += compressed.size - head_space;
     stats.messages_sent += 1;
     return compressed;
+}
+
+rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf data) {
+    auto msg = start_outgoing_message(data.size);
+    auto in = snd_buf_cursor(data);
+    return compress_segment(head_space, in, msg);
 }
 
 // Reads an rcv_buf from the front. Doesn't copy the payload.
@@ -510,11 +564,10 @@ static std::string format_control_protocol(const control_protocol& cp) {
         cp._sender_current_algo.name(), cp._sender_committed_algo.name(), cp._algos.value());
 }
 
-rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
-    auto in = rcv_buf_reader(std::move(data));
+rpc::rcv_buf advanced_rpc_compressor::decompress_segment(rcv_buf_reader& in, incoming_message& msg) {
     const uint8_t header_byte = in.read<uint8_t>();
-    const bool has_checksum = header_byte & 0x40;
-    const bool has_control_frame = header_byte & 0x80;
+    const bool has_checksum = header_byte & segment_flag_checksum;
+    const bool has_control_frame = header_byte & segment_flag_control_frame;
 
     uint32_t expected_crc = -1;
     if (has_checksum) {
@@ -525,12 +578,14 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
         auto control_protocol_frame_bytes = in.read<std::array<std::byte, control_protocol_frame::serialized_size>>();
         _control.consume_control_header(control_protocol_frame::deserialize(control_protocol_frame_bytes));
     }
+    // consume_control_header() can switch the receiver to a new dict, so this must happen after it.
+    msg.dict = _control.receiver_current_dict_ptr();
 
     const size_t compressed_size = in.remaining();
     const auto compressed = in.read_buf(compressed_size);
 
     // Will throw if the enum value is unknown.
-    auto algo = compression_algorithm(header_byte & 0x3f);
+    auto algo = compression_algorithm(header_byte & segment_algo_mask);
 
     auto& stats = _tracker->_stats[algo.idx()];
     auto update_time_stats = defer([&, nanos_before = _tracker->get_steady_nanos()] noexcept {
@@ -538,7 +593,7 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     });
     auto decompressed = std::invoke([&] {
         try {
-            return decompress_impl(compressed, get_decompressor(algo, _control.receiver_current_dict()), true, rpc::snd_buf::chunk_size);
+            return decompress_impl(compressed, get_decompressor(algo, deref_dict(msg.dict)), true, rpc::snd_buf::chunk_size);
          } catch (...) {
             arc_logger.error("Error during decompression with algorithm {}: {:t}. ", algo.name(), std::current_exception());
             throw;
@@ -565,6 +620,12 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     stats.bytes_received += decompressed.size;
     stats.messages_received += 1;
     return decompressed;
+}
+
+rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
+    auto in = rcv_buf_reader(std::move(data));
+    auto msg = incoming_message();
+    return decompress_segment(in, msg);
 }
 
 zstd_dstream& advanced_rpc_compressor::get_global_zstd_dstream(const shared_dict& dict) {
