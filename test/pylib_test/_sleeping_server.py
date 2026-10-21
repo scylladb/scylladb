@@ -16,12 +16,15 @@ import os
 import pathlib
 import signal
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 
 import psutil
 
 from test.pylib.internal_types import ServerNum
+from test.pylib.scylla_cluster import ScyllaCluster
 from test.pylib.scylla_server import ScyllaServer
+from test.pylib_test._cluster import make_cluster
 
 
 def make_server(tmp_path: pathlib.Path) -> ScyllaServer:
@@ -70,3 +73,20 @@ async def wait_until_stopped(server: ScyllaServer) -> None:
 
 async def wait_until_not_stopped(server: ScyllaServer) -> None:
     await wait_until(lambda: server.process_status() != psutil.STATUS_STOPPED)
+
+
+@asynccontextmanager
+async def cluster_running(server: ScyllaServer, vardir: pathlib.Path) -> AsyncIterator[ScyllaCluster]:
+    """Run a ScyllaCluster on its own thread, with the server as its only running server."""
+
+    cluster = make_cluster(vardir)
+    cluster.running[server.server_id] = server
+    try:
+        async with cluster.run_in_thread():
+            try:
+                yield cluster
+            finally:
+                # The server is not the cluster's to stop or recycle: its test kills its process.
+                del cluster.running[server.server_id]
+    finally:
+        await cluster.recycle()

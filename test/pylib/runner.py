@@ -18,7 +18,7 @@ import sys
 import time
 from argparse import BooleanOptionalAction
 from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from itertools import chain, count
 from functools import cache, cached_property
 from random import randint
@@ -58,8 +58,6 @@ if TYPE_CHECKING:
     import _pytest.nodes
     import _pytest.scope
     from _pytest.terminal import TerminalReporter
-
-    from test.pylib.scylla_cluster import ClusterFactory
 
 
 TEST_CONFIG_FILENAME = "test_config.yaml"
@@ -303,6 +301,11 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     return scale_timeout_inner
 
 
+# Returns a context manager leasing a cluster to one test: entering it creates
+# the cluster and stashes it on the given node, exiting recycles it.
+type ClusterFactory = Callable[[_pytest.nodes.Node, str], AbstractAsyncContextManager[ScyllaCluster]]
+
+
 @pytest.fixture(scope="module")
 def testpy_cluster_factory(request: pytest.FixtureRequest,
                            build_mode: str,
@@ -327,6 +330,7 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
     @asynccontextmanager
     async def cluster_for_test(node: _pytest.nodes.Node, test_name: str) -> AsyncGenerator[ScyllaCluster]:
         node.stash[CLUSTER_KEY] = cluster = ScyllaCluster(
+            test_name=test_name,
             logger=testpy_logger,
             vardir=suite_log_dir,
             mode=build_mode,
