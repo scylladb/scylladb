@@ -5,6 +5,7 @@
 #
 
 import re
+from collections import Counter
 from datetime import datetime
 from typing import Tuple
 
@@ -1753,6 +1754,63 @@ async def test_stale_leader_retries_metrics(manager: ScyllaClusterManager, scale
                     'scylla_strong_consistency_coordinator_read_retries', 'stale_leader', scale_timeout)
             finally:
                 await manager.api.disable_injection(server.ip_addr, "sc_report_stale_leader")
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
+    """
+    Verify that a write and a read failing because their table was dropped while they
+    ran are counted in the coordinator's error metrics with reason "table_dropped".
+    """
+    [server] = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+    log = await manager.server_open_log(server.server_id)
+
+    async def table_dropped_errors() -> tuple[float, float]:
+        metrics = await manager.metrics.query(server.ip_addr)
+        return (metrics.get('scylla_strong_consistency_coordinator_write_errors', {'reason': 'table_dropped'}) or 0,
+                metrics.get('scylla_strong_consistency_coordinator_read_errors', {'reason': 'table_dropped'}) or 0)
+
+    cases = [
+        # The table is gone before the requests get their raft server.
+        ("sc_coordinator_wait_before_acquire_server", "sc_coordinator_wait_before_acquire_server"),
+        # The requests hold their raft server, and the drop stops it under them.
+        ("sc_coordinator_wait_before_begin_mutate", "sc_coordinator_wait_before_query_read_barrier"),
+    ]
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        for i, (pause_write, pause_read) in enumerate(cases):
+            logger.info(f"Dropping a table while its write waits at {pause_write} and its read at {pause_read}")
+            table = f"{ks}.tbl{i}"
+            await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
+            write_errors_before, read_errors_before = await table_dropped_errors()
+            mark = await log.mark()
+
+            # In the first case both requests wait on the same injection.
+            paused = Counter([pause_write, pause_read])
+            for injection in paused:
+                await manager.api.enable_injection(server.ip_addr, injection, one_shot=False)
+            write_fut = asyncio.ensure_future(cql.run_async(SimpleStatement(
+                f"INSERT INTO {table} (pk, v) VALUES (1, 1)", retry_policy=FallthroughRetryPolicy())))
+            read_fut = asyncio.ensure_future(cql.run_async(SimpleStatement(
+                f"SELECT * FROM {table} WHERE pk = 0", retry_policy=FallthroughRetryPolicy())))
+            for injection, count in paused.items():
+                await manager.api.wait_for_injection_enter(server.ip_addr, injection, threshold=count)
+
+            await cql.run_async(f"DROP TABLE {table}")
+            await log.wait_for("schedule_raft_group_deletion.*server aborted", from_mark=mark, timeout=30)
+            for injection in paused:
+                await manager.api.message_injection(server.ip_addr, injection)
+                await manager.api.disable_injection(server.ip_addr, injection)
+
+            missing_table_error = r"[Uu]nconfigured table|[Cc]an't find a column family|[Nn]o such column family"
+            with pytest.raises((InvalidRequest, ServerError), match=missing_table_error):
+                await write_fut
+            with pytest.raises((InvalidRequest, ServerError), match=missing_table_error):
+                await read_fut
+
+            write_errors, read_errors = await table_dropped_errors()
+            assert (write_errors - write_errors_before, read_errors - read_errors_before) == (1, 1)
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")

@@ -52,6 +52,7 @@ struct stats {
     uint64_t write_errors_timeout = 0;
     uint64_t write_errors_status_unknown = 0;
     uint64_t write_errors_unavailable = 0;
+    uint64_t write_errors_table_dropped = 0;
     uint64_t write_errors_other = 0;
     uint64_t write_retries_wait_for_leader = 0;
     uint64_t write_retries_stale_leader = 0;
@@ -64,6 +65,7 @@ struct stats {
     utils::timed_rate_moving_average_summary_and_histogram non_linearizable_read;
     uint64_t read_errors_timeout = 0;
     uint64_t read_errors_unavailable = 0;
+    uint64_t read_errors_table_dropped = 0;
     uint64_t read_errors_other = 0;
     uint64_t read_retries_wait_for_leader = 0;
     uint64_t read_retries_stale_leader = 0;

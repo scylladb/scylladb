@@ -89,6 +89,11 @@ void stats::register_stats() {
             {reason_label("unavailable"), sg_label})
             .set_skip_when_empty(),
 
+        sm::make_counter("write_errors", write_errors_table_dropped,
+            sm::description("number of strong consistency write requests that failed"),
+            {reason_label("table_dropped"), sg_label})
+            .set_skip_when_empty(),
+
         sm::make_counter("write_errors", write_errors_other,
             sm::description("number of strong consistency write requests that failed"),
             {reason_label("other"), sg_label})
@@ -148,6 +153,11 @@ void stats::register_stats() {
         sm::make_counter("read_errors", read_errors_unavailable,
             sm::description("number of strong consistency read requests that failed"),
             {reason_label("unavailable"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("read_errors", read_errors_table_dropped,
+            sm::description("number of strong consistency read requests that failed"),
+            {reason_label("table_dropped"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("read_errors", read_errors_other,
@@ -520,6 +530,7 @@ auto coordinator::mutate(schema_ptr schema,
                 || try_catch<seastar::timed_out_error>(ex)
                 || try_catch<raft::stopped_error>(ex)) {
             if (!_db.column_family_exists(schema->id())) {
+                ++get_stats().write_errors_table_dropped;
                 return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
             }
             logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
@@ -538,6 +549,10 @@ auto coordinator::mutate(schema_ptr schema,
         } else if (try_catch<exceptions::unavailable_exception>(ex)) {
             logger.trace("mutate(): no live replica, table {}.{}, token {}", schema->ks_name(), schema->cf_name(), token);
             ++get_stats().write_errors_unavailable;
+            return ex;
+        } else if (try_catch<replica::no_such_column_family>(ex)) {
+            logger.trace("mutate(): table {}.{} was dropped, token {}", schema->ks_name(), schema->cf_name(), token);
+            ++get_stats().write_errors_table_dropped;
             return ex;
         } else if (auto* too_big = try_catch<raft::command_is_too_big_error>(ex)) {
             logger.trace("mutate(): command of {} bytes exceeds the limit of {}, table {}.{}, token {}",
@@ -718,6 +733,7 @@ auto coordinator::query(schema_ptr schema,
                 || try_catch<timed_out_error>(ex)
                 || try_catch<raft::stopped_error>(ex)) {
             if (!_db.column_family_exists(schema->id())) {
+                ++get_stats().read_errors_table_dropped;
                 return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
             }
             logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
@@ -727,6 +743,10 @@ auto coordinator::query(schema_ptr schema,
         } else if (try_catch<exceptions::unavailable_exception>(ex)) {
             logger.trace("query(): no live replica, table {}.{}, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
             ++get_stats().read_errors_unavailable;
+            return ex;
+        } else if (try_catch<replica::no_such_column_family>(ex)) {
+            logger.trace("query(): table {}.{} was dropped, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
+            ++get_stats().read_errors_table_dropped;
             return ex;
         } else {
             logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
