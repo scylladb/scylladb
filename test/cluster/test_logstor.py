@@ -631,6 +631,9 @@ async def test_table_disk_space_metrics(manager: ScyllaClusterManager):
     cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
     cfg = {
         'enable_keyspace_column_family_metrics': True,
+        # Automatic compaction can free the segments that the overwrites kill before the test counts
+        # them, so it is off. The test runs compaction through the API.
+        'logstor_compaction_utilization_threshold': 1,
         'experimental_features': ['logstor']
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
@@ -775,7 +778,8 @@ async def test_compaction(manager: ScyllaClusterManager):
     Test log compaction by creating dead data and verifying space reclamation.
     """
     cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
-    cfg = {'experimental_features': ['logstor']}
+    # Automatic compaction is off, so that the compaction that the test runs takes the dead segments.
+    cfg = {'experimental_features': ['logstor'], 'logstor_compaction_utilization_threshold': 1}
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
 
@@ -892,6 +896,9 @@ async def test_table_removal_during_logstor_compaction(manager: ScyllaClusterMan
         'experimental_features': ['logstor'],
         'logstor_disk_size_in_mb': 8,
         'logstor_file_size_in_mb': 8,
+        # Automatic compaction is off, so that it does not take the dead segments before the
+        # compaction that the test pauses.
+        'logstor_compaction_utilization_threshold': 1,
     }
     server = await manager.server_add(cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
@@ -1188,7 +1195,9 @@ async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
     8. Verifies all data is correct on the destination after migration
     """
     cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'stream_blob=trace', '--smp=2']
-    cfg = {'experimental_features': ['logstor']}
+    # Automatic compaction is off, so that the dead segments are still there for the compaction that
+    # runs while the streaming is paused.
+    cfg = {'experimental_features': ['logstor'], 'logstor_compaction_utilization_threshold': 1}
     s1 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
     servers = [s1]
     cql, _ = await manager.get_ready_cql(servers)
