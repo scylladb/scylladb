@@ -1224,6 +1224,16 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
+bool database::table_runs_on_tablets(const locator::token_metadata& tm, table_id id,
+                                     std::optional<service::storage_mode> boot_mode) const {
+    const auto& tmeta = tm.tablets();
+    if (!tmeta.has_tablet_map(id)) {
+        return false;
+    }
+    return tmeta.get_tablet_map(id).migration_finalized()
+            || boot_mode == service::storage_mode::tablets;
+}
+
 void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata, std::optional<service::storage_mode> storage_mode) {
     schema = local_schema_registry().learn(schema);
     auto&& rs = ks.get_replication_strategy();
