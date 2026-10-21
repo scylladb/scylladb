@@ -529,6 +529,8 @@ auto coordinator::mutate(schema_ptr schema,
     auto op_result = std::move(op_result_future).get();
 
     if (auto* redirect = get_if<need_redirect>(&op_result)) {
+        // A redirected request is timed where it is executed.
+        mark_write_latency.cancel();
         co_return std::move(*redirect);
     }
     op = &get<operation_ctx>(op_result);
@@ -579,6 +581,8 @@ auto coordinator::mutate(schema_ptr schema,
                 }
                 continue;
             }
+            // A redirected request is timed where it is executed.
+            mark_write_latency.cancel();
             co_return redirect_to_leader(*target, _groups_manager, op->replicas.group_id());
         }
         if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
@@ -709,6 +713,8 @@ auto coordinator::query(schema_ptr schema,
     auto op_result = std::move(op_result_future).get();
 
     if (auto* redirect = get_if<need_redirect>(&op_result)) {
+        // A redirected request is timed where it is executed.
+        mark_read_latency.cancel();
         co_return std::move(*redirect);
     }
     auto& op = get<operation_ctx>(op_result);
@@ -741,6 +747,8 @@ auto coordinator::query(schema_ptr schema,
                     }
                     continue;
                 }
+                // A redirected request is timed where it is executed.
+                mark_read_latency.cancel();
                 co_return redirect_to_leader(*target, _groups_manager, op.replicas.group_id());
             }
             if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {

@@ -239,7 +239,7 @@ async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
             non_leader_metrics_query = await manager.metrics.query(non_leader_replica_host.address)
             non_leader_metrics = {
                 'scylla_strong_consistency_coordinator_write_node_bounces': non_leader_metrics_query.get('scylla_strong_consistency_coordinator_write_node_bounces') or 0,
-                'scylla_strong_consistency_coordinator_read_latency_count': non_leader_metrics_query.get('scylla_strong_consistency_coordinator_read_latency_count', {'read_type': 'linearizable'}) or 0,
+                'scylla_strong_consistency_coordinator_read_node_bounces': non_leader_metrics_query.get('scylla_strong_consistency_coordinator_read_node_bounces') or 0,
             }
             non_replica_metrics_query = await manager.metrics.query(non_replica_host.address)
             non_replica_metrics = {
@@ -1779,6 +1779,45 @@ async def test_unavailable_errors_metrics(manager: ScyllaClusterManager):
                 # group0 quorum.
                 await manager.server_start(replica.server_id)
                 await manager.get_ready_cql(servers)
+
+@pytest.mark.asyncio
+async def test_redirected_requests_latency_metrics(manager: ScyllaClusterManager):
+    """
+    Verify that the latency of a request is recorded only on the node that executes it,
+    not on the node that redirects it there, which counts it as a bounce instead.
+
+    Setup: 2 nodes, RF=1, 1 tablet. Every write and read sent to the non-replica is
+    redirected to the replica.
+    """
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            [(replica_host_id, _)] = await get_tablet_replicas(manager, servers[0], ks, table.split('.')[-1], 0)
+            replica_idx = host_ids.index(str(replica_host_id))
+            non_replica_idx = 1 - replica_idx  # the other of the 2 nodes
+            replica, non_replica = servers[replica_idx], servers[non_replica_idx]
+            non_replica_host = hosts[non_replica_idx]
+
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (1, 1)", host=non_replica_host)
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (2, 2)", host=non_replica_host)
+            await cql.run_async(f"SELECT * FROM {table} WHERE pk = 1", host=non_replica_host)
+
+            on_non_replica = await manager.metrics.query(non_replica.ip_addr)
+            assert on_non_replica.get('scylla_strong_consistency_coordinator_write_node_bounces') == 2
+            assert on_non_replica.get('scylla_strong_consistency_coordinator_read_node_bounces') == 1
+            # Not exported: nothing was timed on this node.
+            assert on_non_replica.get('scylla_strong_consistency_coordinator_write_latency_count') is None
+            assert on_non_replica.get('scylla_strong_consistency_coordinator_read_latency_count') is None
+
+            on_replica = await manager.metrics.query(replica.ip_addr)
+            assert on_replica.get('scylla_strong_consistency_coordinator_write_latency_count') == 2
+            assert on_replica.get('scylla_strong_consistency_coordinator_read_latency_count') == 1
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
