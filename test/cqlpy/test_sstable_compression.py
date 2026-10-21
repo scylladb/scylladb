@@ -135,3 +135,32 @@ def test_aux_tables_compression_parity(cql, test_keyspace):
                 assert view_compression == cdc_compression
             assert base_compression == view_compression
 
+
+# chunk_length_in_kb above 128 is rejected by CREATE and ALTER TABLE, for
+# each compressor; 128 and 64 are accepted and show up in the table's
+# schema as read by the driver. Ported from scylla-dtest
+# compression_test.py, in a keyspace with vnodes like the dtest's.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("compressor", ["DeflateCompressor", "LZ4Compressor", "SnappyCompressor"])
+def test_chunk_length_limit_create_and_alter(cql, test_keyspace_vnodes, compressor):
+    table = f"{test_keyspace_vnodes}.compression_opts_table"
+    def compression(chunk):
+        return f"compression = {{ 'sstable_compression': '{compressor}', 'chunk_length_in_kb': {chunk} }}"
+    def table_compression():
+        cql.cluster.refresh_schema_metadata()
+        return cql.cluster.metadata.keyspaces[test_keyspace_vnodes].tables["compression_opts_table"].options["compression"]
+    with pytest.raises(ConfigurationException):
+        cql.execute(f"create table {table} (id uuid PRIMARY KEY ) WITH {compression(256)}")
+    cql.execute(f"create table {table} (id uuid PRIMARY KEY ) WITH {compression(128)}")
+    try:
+        opts = table_compression()
+        assert opts["sstable_compression"] == f"org.apache.cassandra.io.compress.{compressor}"
+        assert opts["chunk_length_in_kb"] == "128"
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"alter table {table} WITH {compression(256)}")
+        cql.execute(f"alter table {table} WITH {compression(64)}")
+        opts = table_compression()
+        assert opts["sstable_compression"] == f"org.apache.cassandra.io.compress.{compressor}"
+        assert opts["chunk_length_in_kb"] == "64"
+    finally:
+        cql.execute(f"DROP TABLE {table}")
