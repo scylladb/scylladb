@@ -45,6 +45,7 @@ class chunked_string;
 
 namespace lang { class manager; }
 namespace service {
+class storage_service;
 class migration_manager;
 class query_state;
 class mapreduce_service;

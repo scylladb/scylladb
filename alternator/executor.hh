@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/future.hh>
+#include "dht/i_partitioner_fwd.hh"
 #include "audit/audit.hh"
 #include "seastarx.hh"
 #include <seastar/core/future.hh>

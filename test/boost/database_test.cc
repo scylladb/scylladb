@@ -63,6 +63,8 @@
 #include "test/lib/random_schema.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/reactor.hh>
+#include <seastar/core/with_scheduling_group.hh>
+#include "service/qos/service_level_controller.hh"
 
 using namespace std::chrono_literals;
 using namespace sstables;
