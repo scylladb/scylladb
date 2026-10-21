@@ -25,8 +25,8 @@ import pytest
 from test.pylib.skip_types import skip_env
 
 from .. import cql_frames
-from ..rest_api import tablet_balancing_disabled
-from ..util import new_test_table, paging_plan_rederivations
+from ..rest_api import message_injection, scylla_inject_error, tablet_balancing_disabled, wait_for_injection_enter
+from ..util import new_test_keyspace, new_test_table, paging_plan_rederivations
 
 
 EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL_V2"
@@ -165,9 +165,35 @@ def batch(sock: socket.socket, statements: list[bytes], cl: int, hint: tuple[int
     return cql_frames.read_frame(sock)
 
 
+# The two blocks differ only in their value nibble, so they can't both match the
+# tablet's version. Sends the batch with each of them. Returns the routing
+# information of each response, None for none.
+def batch_with_both_blocks(sock: socket.socket, statements: list[bytes], cl: int,
+                           routing_statement_index: int) -> list[RoutingInformation | None]:
+    infos: list[RoutingInformation | None] = []
+    for block in (0x00, 0x01):
+        response = batch(sock, statements, cl, (routing_statement_index, block))
+        infos.append(routing_information_of(response))
+    return infos
+
+
 def assert_protocol_error(response: cql_frames.Response) -> None:
     assert response.opcode == cql_frames.ERROR
     assert response.body.read_int() == PROTOCOL_ERROR
+
+
+# Statements of the batches of test_routing_information, with their values. {}
+# stands for the table. The first statement of every batch binds the partition
+# key, the second one gives it as a literal.
+INSERT_BOUND_PK = ("INSERT INTO {} (pk, ck, v) VALUES (?, 1, ?)", [1, 1])
+INSERT_LITERAL_PK = ("INSERT INTO {} (pk, ck, v) VALUES (1, 2, ?)", [1])
+INSERT_OTHER_PARTITION = ("INSERT INTO {} (pk, ck, v) VALUES (2, 2, ?)", [1])
+INSERT_BOUND_PK_IF = ("INSERT INTO {} (pk, ck, v) VALUES (?, 1, ?) IF NOT EXISTS", [1, 1])
+UPDATE_LITERAL_PK_IF = ("UPDATE {} SET v = ? WHERE pk = 1 AND ck = 2 IF EXISTS", [1])
+UPDATE_IN_DISTINCT_PKS = ("UPDATE {} SET v = ? WHERE pk IN (?, ?) AND ck = 1", [1, 1, 2])
+UPDATE_IN_EQUAL_PKS = ("UPDATE {} SET v = ? WHERE pk IN (?, ?) AND ck = 1", [1, 1, 1])
+UPDATE_EQ_IN_PKS = ("UPDATE {} SET v = ? WHERE pk = ? AND pk IN (?, ?) AND ck = 1", [1, 1, 1, 2])
+UPDATE_EQ_NOT_IN_PKS = ("UPDATE {} SET v = ? WHERE pk = ? AND pk IN (?, ?) AND ck = 1", [1, 3, 1, 2])
 
 
 # Without the extension, an EXECUTE request carries no tablet version block, and
@@ -311,3 +337,150 @@ def test_routing_hint_without_token(cql, connect, test_keyspace):
         ]
         for index in range(len(statements)):
             assert batch(sock, statements, cql_frames.ONE, (index, 0)).opcode == cql_frames.RESULT
+
+
+# A BATCH request gets routing information if and only if it names a routing
+# statement the driver could compute the token from, whatever the consistency of
+# the table. `consistency` is "ec" or "sc", and `prepared` tells, for each
+# statement, whether it's sent as the ID of a prepared statement rather than as
+# query text.
+@pytest.mark.parametrize("consistency,statements,routing_statement_index,routing_information,prepared", [
+    pytest.param("sc", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 0, True, (True, True), id="sc"),
+    pytest.param("sc", [INSERT_BOUND_PK, INSERT_LITERAL_PK], NO_ROUTING_STATEMENT, False, (True, True), id="sc-unrouted"),
+    pytest.param("ec", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 0, True, (True, True), id="ec"),
+    pytest.param("ec", [INSERT_BOUND_PK, INSERT_LITERAL_PK], NO_ROUTING_STATEMENT, False, (True, True), id="ec-unrouted"),
+    # A batch may mix prepared statements and query text.
+    pytest.param("sc", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 0, True, (True, False), id="sc-mixed"),
+    pytest.param("ec", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 0, True, (True, False), id="ec-mixed"),
+    # An eventually consistent batch may span multiple partitions.
+    pytest.param("ec", [INSERT_BOUND_PK, INSERT_OTHER_PARTITION], 0, True, (True, True), id="ec-multi-partition"),
+    pytest.param("ec", [INSERT_BOUND_PK, INSERT_OTHER_PARTITION], NO_ROUTING_STATEMENT, False, (True, True), id="ec-multi-partition-unrouted"),
+    # An eventually consistent batch may be conditional.
+    pytest.param("ec", [INSERT_BOUND_PK_IF, UPDATE_LITERAL_PK_IF], 0, True, (True, True), id="ec-conditional"),
+    pytest.param("ec", [INSERT_BOUND_PK_IF, UPDATE_LITERAL_PK_IF], NO_ROUTING_STATEMENT, False, (True, True), id="ec-conditional-unrouted"),
+    pytest.param("ec", [INSERT_BOUND_PK_IF, UPDATE_LITERAL_PK_IF], 0, True, (True, False), id="ec-conditional-mixed"),
+    pytest.param("ec", [INSERT_BOUND_PK_IF, UPDATE_LITERAL_PK_IF], NO_ROUTING_STATEMENT, False, (False, False), id="ec-conditional-text"),
+    # The driver can't compute the token from a literal partition key or from
+    # query text, so the server ignores a hint naming such a statement.
+    pytest.param("sc", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 1, False, (True, True), id="sc-literal-pk"),
+    pytest.param("sc", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 0, False, (False, True), id="sc-text"),
+    pytest.param("ec", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 1, False, (True, True), id="ec-literal-pk"),
+    pytest.param("ec", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 0, False, (False, True), id="ec-text"),
+    pytest.param("ec", [INSERT_BOUND_PK_IF, UPDATE_LITERAL_PK_IF], 1, False, (True, True), id="ec-conditional-literal-pk"),
+    pytest.param("ec", [INSERT_BOUND_PK_IF, UPDATE_LITERAL_PK_IF], 0, False, (False, True), id="ec-conditional-text-routed"),
+    # The driver can't compute the token from the values of IN either, whether
+    # they're distinct or equal. With distinct values, the routing statement writes
+    # more than one partition, which a strongly consistent batch can't do.
+    pytest.param("ec", [UPDATE_IN_DISTINCT_PKS, INSERT_LITERAL_PK], 0, False, (True, True), id="ec-in-distinct-pks"),
+    pytest.param("ec", [UPDATE_IN_EQUAL_PKS, INSERT_LITERAL_PK], 0, False, (True, True), id="ec-in-equal-pks"),
+    pytest.param("sc", [UPDATE_IN_EQUAL_PKS, INSERT_LITERAL_PK], 0, False, (True, True), id="sc-in-equal-pks"),
+    # With both = and IN on the partition key, the driver computes the token from
+    # the value of =. The routing statement writes that partition if the value is
+    # among the values of IN, and no partition otherwise.
+    pytest.param("ec", [UPDATE_EQ_IN_PKS, INSERT_LITERAL_PK], 0, True, (True, True), id="ec-eq-in-pks"),
+    pytest.param("ec", [UPDATE_EQ_NOT_IN_PKS, INSERT_LITERAL_PK], 0, False, (True, True), id="ec-eq-not-in-pks"),
+])
+def test_routing_information(cql, connect, test_keyspace, sc_keyspace, consistency, statements, routing_statement_index,
+                             routing_information, prepared):
+    keyspace = sc_keyspace if consistency == "sc" else test_keyspace
+    with new_test_table(cql, keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table, connect() as sock:
+        batch_statements = []
+        for (query, values), send_prepared in zip(statements, prepared):
+            query = query.format(table)
+            batch_statements.append(batch_statement(cql.prepare(query).query_id if send_prepared else query, values))
+        infos = batch_with_both_blocks(sock, batch_statements, cql_frames.QUORUM, routing_statement_index)
+    assert any(info is not None for info in infos) == routing_information
+
+
+# The routing statement of a BATCH request may be any statement of the batch,
+# and the routing information is about the tablet of the partition it writes.
+def test_routing_information_of_routing_statement(cql, connect, has_tablets):
+    if not has_tablets:
+        skip_env("Routing information is about tablets")
+    keyspace_options = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                        "AND tablets = {'initial': 4}")
+    with new_test_keyspace(cql, keyspace_options) as keyspace, \
+            new_test_table(cql, keyspace, "pk int PRIMARY KEY, v int") as table, \
+            connect() as sock:
+        last_tokens = tablet_last_tokens(cql, table)
+
+        # A tablet is identified by its last token.
+        def tablet_of(pk):
+            # token() needs the partition to exist.
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES ({pk}, 0)")
+            token = cql.execute(f"SELECT token(pk) FROM {table} WHERE pk = {pk}").one()[0]
+            return min(last_token for last_token in last_tokens if last_token >= token)
+
+        # The last statement is the routing statement. The others write a partition
+        # of another tablet, so the routing information tells which statement the
+        # batch was routed by.
+        routing_pk = 0
+        routing_tablet = tablet_of(routing_pk)
+        attempts = 50
+        other_pk = next((pk for pk in range(1, attempts + 1) if tablet_of(pk) != routing_tablet), None)
+        assert other_pk is not None, f"None of {attempts} partitions is in a tablet other than that of partition {routing_pk}"
+
+        insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)").query_id
+        statements = [batch_statement(insert, [other_pk, 1]) for _ in range(3)]
+        statements.append(batch_statement(insert, [routing_pk, 1]))
+        infos = [info for info in batch_with_both_blocks(sock, statements, cql_frames.ONE, 3) if info is not None]
+        assert infos
+        for info in infos:
+            assert info.last_token == tablet_of(routing_pk)
+
+
+# A BATCH request gets routing information once the batch has succeeded. If the
+# table has been dropped by then, it gets none.
+@pytest.mark.parametrize("conditional", [False, True], ids=["regular", "conditional"])
+def test_routing_information_of_dropped_table(cql, connect, conditional):
+    injection = "batch_statement_before_routing_info"
+    keyspace_options = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+    # The test drops the table, so it's in a keyspace of its own, whose drop
+    # cleans up whatever is left.
+    with new_test_keyspace(cql, keyspace_options) as keyspace, \
+            connect() as first, connect() as second, scylla_inject_error(cql, injection):
+        table = f"{keyspace}.t"
+        cql.execute(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+        insert = f"INSERT INTO {table} (pk, v) VALUES (?, ?)" + (" IF NOT EXISTS" if conditional else "")
+        statements = [batch_statement(cql.prepare(insert).query_id, [1, 1])]
+
+        # Each batch gets one of the blocks, so if the table still existed, at
+        # least one of them would get routing information.
+        for sock, block in zip((first, second), (0x00, 0x01)):
+            send_batch(sock, statements, cql_frames.QUORUM, (0, block))
+
+        # Both batches have been written and wait to compute their routing information.
+        wait_for_injection_enter(cql, injection, count=2)
+        cql.execute(f"DROP TABLE {table}")
+        message_injection(cql, injection)
+
+        for sock in (first, second):
+            assert routing_information_of(cql_frames.read_frame(sock)) is None
+
+
+# The ID of a prepared statement doesn't depend on the schema, so after its table
+# is recreated with another primary key, the driver may hold stale metadata of
+# the statement. A BATCH request naming a routing statement the token can no
+# longer be computed from gets no routing information, but it isn't rejected.
+@pytest.mark.parametrize("consistency", ["ec", "sc"])
+def test_routing_hint_of_recreated_table(cql, connect, test_keyspace, sc_keyspace, consistency):
+    keyspace = sc_keyspace if consistency == "sc" else test_keyspace
+    table = f"{keyspace}.tbl"
+    with connect() as sock:
+        try:
+            cql.execute(f"CREATE TABLE {table} (pk int PRIMARY KEY, ck int, v int)")
+            insert = f"INSERT INTO {table} (pk, ck, v) VALUES (?, 1, ?)"
+            statement_id = cql.prepare(insert).query_id
+            statements = [batch_statement(statement_id, [1, 1])]
+            infos = batch_with_both_blocks(sock, statements, cql_frames.QUORUM, 0)
+            assert any(info is not None for info in infos)
+
+            # ck becomes a partition key column, and the statement gives it as a literal.
+            cql.execute(f"DROP TABLE {table}")
+            cql.execute(f"CREATE TABLE {table} (pk int, ck int, v int, PRIMARY KEY ((pk, ck)))")
+            assert cql.prepare(insert).query_id == statement_id
+
+            infos = batch_with_both_blocks(sock, statements, cql_frames.QUORUM, 0)
+            assert all(info is None for info in infos)
+        finally:
+            cql.execute(f"DROP TABLE IF EXISTS {table}")

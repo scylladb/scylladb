@@ -124,6 +124,16 @@ const std::vector<batch_statement::single_statement>& batch_statement::get_state
     return _statements;
 }
 
+std::optional<size_t> batch_statement::routing_statement_index(const query_options& options) const {
+    const std::optional<size_t> index = options.routing_statement_index();
+    // The driver can only compute the token from the partition key bind indices
+    // it got in the PREPARED metadata of the statement.
+    if (!index || !_statements.at(*index).statement->may_use_token_aware_routing()) {
+        return std::nullopt;
+    }
+    return index;
+}
+
 void batch_statement::verify_batch_size(query_processor& qp, const utils::chunked_vector<mutation>& mutations) const {
     if (mutations.size() <= 1) {
         return;     // We only warn for batch spanning multiple mutations
