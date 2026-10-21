@@ -7,6 +7,7 @@
  */
 #include "replica/logstor/compaction_rate_controller.hh"
 #include <algorithm>
+#include <cmath>
 
 namespace replica::logstor {
 
@@ -33,6 +34,22 @@ compaction_backlog reclaimable_backlog(const utilization_histogram& utilization,
         backlog.reclaimable_segments += counted * (1 - mean_utilization);
     }
     return backlog;
+}
+
+void compaction_rate_controller::tick(const sample& s) noexcept {
+    // The threshold is a live-updatable config value with no range check at the config layer, so it
+    // may arrive negative, NaN or 1 and above; anything outside [0, 1) disables automatic compaction.
+    _enabled = std::isfinite(s.curve.threshold) && s.curve.threshold >= 0 && s.curve.threshold < 1;
+    if (!_enabled) {
+        _backlog = {};
+        _pressure = 0;
+        _threshold = 1;
+        return;
+    }
+
+    _pressure = compaction_space_pressure(s.available_segments, s.curve);
+    _threshold = effective_utilization_threshold(s.available_segments, s.curve);
+    _backlog = reclaimable_backlog(s.utilization, _threshold);
 }
 
 } // namespace replica::logstor
