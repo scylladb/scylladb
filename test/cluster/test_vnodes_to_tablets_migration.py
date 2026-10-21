@@ -282,7 +282,13 @@ async def tablet_routing_published(cql, server: ServerInfo, ks: str, table: str,
     """
     host = cql.cluster.metadata.get_host(server.ip_addr)
     assert host is not None, f"{server.ip_addr} is not in the driver's metadata"
-    assert cql.cluster.control_connection._tablets_routing_v1, \
+    control_connection = cql.cluster.control_connection
+    # Older drivers keep the negotiated feature on the control connection.
+    if hasattr(control_connection, '_tablets_routing_v1'):
+        tablets_routing_v1 = control_connection._tablets_routing_v1
+    else:
+        tablets_routing_v1 = control_connection._connection.features.tablets_routing_v1
+    assert tablets_routing_v1, \
         "Driver did not negotiate the TABLETS_ROUTING_V1 protocol extension"
 
     # The partition key must be a bind variable; see _may_use_token_aware_routing.
