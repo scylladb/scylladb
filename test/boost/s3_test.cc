@@ -922,6 +922,43 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE_EQUAL(creds.session_token, "");
 }
 
+namespace {
+
+// Always fails, and counts how many times it was invoked.
+class always_failing_provider final : public aws::aws_credentials_provider {
+    unsigned& _calls;
+
+public:
+    explicit always_failing_provider(unsigned& calls)
+        : _calls(calls) {
+    }
+    const char* get_name() const override {
+        return "always_failing_provider";
+    }
+
+protected:
+    future<> reload() override {
+        ++_calls;
+        throw std::runtime_error("simulated total credential-provider failure");
+    }
+};
+
+} // anonymous namespace
+
+// s3::client tells a failed refresh from new credentials by their truthiness,
+// so total failure must come back falsy, not as an exception.
+SEASTAR_THREAD_TEST_CASE(test_credentials_chain_returns_falsy_on_total_failure) {
+    unsigned calls = 0;
+    aws::aws_credentials_provider_chain provider_chain;
+    provider_chain.add_credentials_provider(std::make_unique<always_failing_provider>(calls));
+
+    constexpr unsigned attempts = 5;
+    for (unsigned i = 0; i < attempts; i++) {
+        BOOST_REQUIRE(!provider_chain.get_aws_credentials().get());
+    }
+    BOOST_REQUIRE_EQUAL(calls, attempts);
+}
+
 BOOST_AUTO_TEST_CASE(s3_fqn_manipulation) {
     std::string bucket_name, object_name;
     // Empty input
