@@ -17,7 +17,10 @@
 #include "cql3/statements/eventual_consistency/modification_executor.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "db/large_data_handler.hh"
+#include "replica/database.hh"
 #include "service/storage_proxy.hh"
+#include "transport/cql_protocol_extension.hh"
+#include "utils/error_injection.hh"
 #include "utils/result.hh"
 #include "utils/unique_view.hh"
 
@@ -32,7 +35,53 @@ namespace cql3::statements::eventual_consistency {
 
 namespace {
 
-future<utils::chunked_vector<mutation>> get_mutations(const batch_statement& batch,
+// The token of the partition the routing statement of a BATCH request writes,
+// given the spec of that statement. The driver computed the token from the
+// routing statement alone, so a batch spanning multiple partitions only gets
+// routing information for that one partition, and none if the routing
+// statement writes several partitions.
+std::optional<dht::token> routing_token_for(const modification_spec& spec) {
+    if (spec.keys.size() != 1) {
+        return std::nullopt;
+    }
+    return spec.keys.front().start()->value().token();
+}
+
+// Routing information for the tablet that owns the routing token, computed
+// once the batch has succeeded, so that it reflects the tablet map after the
+// write. The tablet version block belongs to the batch, so `options` must be
+// those of the batch, not those of the statement.
+std::optional<locator::tablet_routing_info_v2> routing_info_for(
+        const batch_statement& batch,
+        std::optional<dht::token> routing_token,
+        const service::query_state& qs,
+        const query_options& options) {
+    const bool eligible = routing_token
+            && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)
+            && options.get_tablet_version_block();
+    if (!eligible) {
+        return std::nullopt;
+    }
+
+    const auto index = options.routing_statement_index();
+    const schema& schema = *batch.get_statements()[index].statement->s;
+
+    // The table may have been dropped since the batch was written.
+    const replica::table* table = schema.maybe_table();
+    if (!table) {
+        return std::nullopt;
+    }
+
+    return table->tablet_routing_info_v2_for(*routing_token, *options.get_tablet_version_block());
+}
+
+// The mutations of a batch, and the token of its routing statement.
+struct batch_mutations {
+    utils::chunked_vector<mutation> mutations;
+    std::optional<dht::token> routing_token;
+};
+
+future<batch_mutations> get_mutations(const batch_statement& batch,
         query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout,
         bool local, api::timestamp_type now, service::query_state& query_state) {
     const auto& statements = batch.get_statements();
@@ -40,12 +89,16 @@ future<utils::chunked_vector<mutation>> get_mutations(const batch_statement& bat
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
     mutation_set_type result;
     result.reserve(statements.size());
+    std::optional<dht::token> routing_token;
     for (size_t i = 0; i != statements.size(); ++i) {
         auto&& statement = statements[i].statement;
         statement->inc_cql_stats(query_state.get_client_state().is_internal());
         auto&& statement_options = options.for_statement(i);
         auto timestamp = batch.get_timestamp(now, statement_options);
         modification_spec spec(*statement, statement_options);
+        if (i == options.routing_statement_index()) {
+            routing_token = routing_token_for(spec);
+        }
         auto more = co_await eventual_consistency::get_mutations(*statement, qp, statement_options, timeout, local, timestamp, query_state, std::move(spec));
 
         for (auto&& m : more) {
@@ -65,7 +118,7 @@ future<utils::chunked_vector<mutation>> get_mutations(const batch_statement& bat
     for (auto&& m : result) {
         vresult.push_back(std::move(m));
     }
-    co_return vresult;
+    co_return batch_mutations{std::move(vresult), routing_token};
 }
 
 future<coordinator_result<>> execute_without_conditions(const batch_statement& batch,
@@ -126,6 +179,7 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
     auto read_timeout = now + cfg.read_timeout;   // Query timeout.
 
     computed_function_values cached_fn_calls;
+    std::optional<dht::token> routing_token;
 
     const auto& statements = batch.get_statements();
     for (size_t i = 0; i < statements.size(); ++i) {
@@ -146,6 +200,9 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
             throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple partitions");
         }
         cached_fn_calls.merge(std::move(const_cast<cql3::query_options&>(statement_options).take_cached_pk_function_calls()));
+        if (i == options.routing_statement_index()) {
+            routing_token = routing_token_for(spec);
+        }
 
         request->add_row_update(statement, std::move(spec), statement_options);
     }
@@ -166,6 +223,13 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
     // detected during the LWT to the client as a CQL warning.
     if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
         result->add_warning(std::move(warning));
+    }
+
+    if (routing_token) {
+        co_await utils::get_local_injector().inject("batch_statement_before_routing_info", utils::wait_for_message(std::chrono::minutes(5)));
+    }
+    if (auto routing_info = routing_info_for(batch, routing_token, qs, options)) {
+        result->add_tablet_info_v2(std::move(*routing_info));
     }
     co_return result;
 }
@@ -272,8 +336,8 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
     auto timeout = db::timeout_clock::now() + batch.get_timeout(query_state.get_client_state(), options);
     db::large_data_violation_type violations = db::large_data_violation_type::none;
 
-    utils::chunked_vector<mutation> ms = co_await get_mutations(batch, qp, options, timeout, local, now, query_state);
-    coordinator_result<> res = co_await execute_without_conditions(batch, qp, std::move(ms), cl, timeout, query_state.get_trace_state(), query_state.get_permit(), &violations);
+    batch_mutations ms = co_await get_mutations(batch, qp, options, timeout, local, now, query_state);
+    coordinator_result<> res = co_await execute_without_conditions(batch, qp, std::move(ms.mutations), cl, timeout, query_state.get_trace_state(), query_state.get_permit(), &violations);
     if (!res) {
         co_return seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error());
     }
@@ -284,6 +348,13 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
     }
     if (auto warning = db::large_data_soft_violation_warning(violations); !warning.empty()) [[unlikely]] {
         result->add_warning(std::move(warning));
+    }
+
+    if (ms.routing_token) {
+        co_await utils::get_local_injector().inject("batch_statement_before_routing_info", utils::wait_for_message(std::chrono::minutes(5)));
+    }
+    if (auto routing_info = routing_info_for(batch, ms.routing_token, query_state, options)) {
+        result->add_tablet_info_v2(std::move(*routing_info));
     }
     co_return result;
 }

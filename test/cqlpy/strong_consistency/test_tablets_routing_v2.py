@@ -25,7 +25,8 @@ import pytest
 from test.pylib.skip_types import skip_env
 
 from .. import cql_frames
-from ..util import ScyllaMetrics, new_test_table
+from ..rest_api import message_injection, scylla_inject_error, wait_for_injection_enter
+from ..util import ScyllaMetrics, new_test_keyspace, new_test_table, unique_name
 
 EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL"
 PAYLOAD_KEY = "tablets-routing-v2"
@@ -41,6 +42,11 @@ ROWS = 0x0002
 HAS_MORE_PAGES_FLAG = 0x0002
 
 PROTOCOL_ERROR = 0x000A
+
+# The two blocks differ only in their value nibble, so they can't both match the
+# tablet's version: if the server checks the version, at least one of the
+# responses carries routing information.
+BLOCKS = (0x00, 0x01)
 
 # Opens a connection to the server. It negotiates the protocol extension unless
 # told otherwise.
@@ -129,15 +135,13 @@ def paging_state_of(response: cql_frames.Response) -> bytes | None:
     return response.body.read_bytes() if flags & HAS_MORE_PAGES_FLAG else None
 
 
-# The two blocks differ only in their value nibble, so they can't both match the
-# tablet's version: if the server checks the version, at least one of the
-# responses carries routing information. Returns the routing information of
+# Executes the statement with each of BLOCKS. Returns the routing information of
 # each response, None for none. The paging arguments are as in execute().
 def execute_with_both_blocks(sock: socket.socket, statement_id: bytes, values: list[int],
                              page_size: int | None = None,
                              paging_state: bytes | None = None) -> list[RoutingInformation | None]:
     infos: list[RoutingInformation | None] = []
-    for block in (0x00, 0x01):
+    for block in BLOCKS:
         response = execute(sock, statement_id, values, block, page_size, paging_state)
         infos.append(routing_information_of(response))
     return infos
@@ -205,9 +209,57 @@ def batch(sock: socket.socket, statements: list[bytes], cl: int, hint: tuple[int
     return cql_frames.read_frame(sock)
 
 
+# Sends the batch with each of BLOCKS. Returns the routing information of each
+# response, None for none.
+def batch_with_both_blocks(sock: socket.socket, statements: list[bytes], cl: int,
+                           routing_statement_index: int) -> list[RoutingInformation | None]:
+    infos: list[RoutingInformation | None] = []
+    for block in BLOCKS:
+        response = batch(sock, statements, cl, (routing_statement_index, block))
+        infos.append(routing_information_of(response))
+    return infos
+
+
 def assert_protocol_error(response: cql_frames.Response) -> None:
     assert response.opcode == cql_frames.ERROR
     assert response.body.read_int() == PROTOCOL_ERROR
+
+
+# Statements of the batches of test_routing_information, with their values. {}
+# stands for the table. The first statement of every batch binds the partition
+# key, the second one gives it as a literal.
+INSERT_BOUND_PK = ("INSERT INTO {} (pk, ck, v) VALUES (?, 1, ?)", [1, 1])
+INSERT_LITERAL_PK = ("INSERT INTO {} (pk, ck, v) VALUES (1, 2, ?)", [1])
+INSERT_OTHER_PARTITION = ("INSERT INTO {} (pk, ck, v) VALUES (2, 2, ?)", [1])
+INSERT_BOUND_PK_IF = ("INSERT INTO {} (pk, ck, v) VALUES (?, 1, ?) IF NOT EXISTS", [1, 1])
+UPDATE_LITERAL_PK_IF = ("UPDATE {} SET v = ? WHERE pk = 1 AND ck = 2 IF EXISTS", [1])
+
+
+# A case of test_routing_information. `consistency` is "ec" or "sc", and
+# `prepared` tells, for each statement, whether it's sent as the ID of a
+# prepared statement rather than as query text.
+def routing_case(case_id: str, consistency: str, statements: list[tuple[str, list[int]]], routing_statement_index: int,
+                 routing_information: bool, prepared: tuple[bool, bool] = (True, True)):
+    return pytest.param(consistency, statements, routing_statement_index, routing_information, prepared, id=case_id)
+
+
+ROUTING_CASES = [
+    routing_case("sc", "sc", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 0, True),
+    routing_case("sc-unrouted", "sc", [INSERT_BOUND_PK, INSERT_LITERAL_PK], NO_ROUTING_STATEMENT, False),
+    routing_case("ec", "ec", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 0, True),
+    routing_case("ec-unrouted", "ec", [INSERT_BOUND_PK, INSERT_LITERAL_PK], NO_ROUTING_STATEMENT, False),
+    # A batch may mix prepared statements and query text.
+    routing_case("sc-mixed", "sc", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 0, True, (True, False)),
+    routing_case("ec-mixed", "ec", [INSERT_BOUND_PK, INSERT_LITERAL_PK], 0, True, (True, False)),
+    # An eventually consistent batch may span multiple partitions.
+    routing_case("ec-multi-partition", "ec", [INSERT_BOUND_PK, INSERT_OTHER_PARTITION], 0, True),
+    routing_case("ec-multi-partition-unrouted", "ec", [INSERT_BOUND_PK, INSERT_OTHER_PARTITION], NO_ROUTING_STATEMENT, False),
+    # An eventually consistent batch may be conditional.
+    routing_case("ec-conditional", "ec", [INSERT_BOUND_PK_IF, UPDATE_LITERAL_PK_IF], 0, True),
+    routing_case("ec-conditional-unrouted", "ec", [INSERT_BOUND_PK_IF, UPDATE_LITERAL_PK_IF], NO_ROUTING_STATEMENT, False),
+    routing_case("ec-conditional-mixed", "ec", [INSERT_BOUND_PK_IF, UPDATE_LITERAL_PK_IF], 0, True, (True, False)),
+    routing_case("ec-conditional-text", "ec", [INSERT_BOUND_PK_IF, UPDATE_LITERAL_PK_IF], NO_ROUTING_STATEMENT, False, (False, False)),
+]
 
 
 # Without the extension, an EXECUTE request carries no tablet version block, and
@@ -342,3 +394,83 @@ def test_invalid_routing_hint(cql, connect, test_keyspace):
         for hint in [(0, 0), (NO_ROUTING_STATEMENT, 0)]:
             assert batch(sock, statements, CL_ONE, hint).opcode == cql_frames.RESULT
         assert batch(sock, [], CL_ONE, (NO_ROUTING_STATEMENT, 0)).opcode == cql_frames.RESULT
+
+
+# A BATCH request gets routing information if and only if it names a routing
+# statement, whatever the consistency of the table.
+@pytest.mark.parametrize("consistency,statements,routing_statement_index,routing_information,prepared", ROUTING_CASES)
+def test_routing_information(cql, connect, test_keyspace, sc_keyspace, consistency, statements, routing_statement_index,
+                             routing_information, prepared):
+    keyspace = sc_keyspace if consistency == "sc" else test_keyspace
+    with new_test_table(cql, keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table, connect() as sock:
+        batch_statements = []
+        for (query, values), send_prepared in zip(statements, prepared):
+            query = query.format(table)
+            batch_statements.append(batch_statement(cql.prepare(query).query_id if send_prepared else query, values))
+        infos = batch_with_both_blocks(sock, batch_statements, CL_QUORUM, routing_statement_index)
+    assert any(info is not None for info in infos) == routing_information
+
+
+# The routing statement of a BATCH request may be any statement of the batch,
+# and the routing information is about the tablet of the partition it writes.
+def test_routing_information_of_routing_statement(cql, connect, has_tablets):
+    if not has_tablets:
+        skip_env("Routing information is about tablets")
+    keyspace_options = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                        "AND tablets = {'initial': 4}")
+    # The tablets of an empty table could be merged while the test runs.
+    table_options = " WITH tablets = {'min_tablet_count': '4'}"
+    with new_test_keyspace(cql, keyspace_options) as keyspace, \
+            new_test_table(cql, keyspace, "pk int PRIMARY KEY, v int", table_options) as table, \
+            connect() as sock:
+        last_tokens = tablet_last_tokens(cql, table)
+
+        # A tablet is identified by its last token.
+        def tablet_of(pk):
+            # token() needs the partition to exist.
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES ({pk}, 0)")
+            token = cql.execute(f"SELECT token(pk) FROM {table} WHERE pk = {pk}").one()[0]
+            return min(last_token for last_token in last_tokens if last_token >= token)
+
+        # The last statement is the routing statement. The others write a partition
+        # of another tablet, so the routing information tells which statement the
+        # batch was routed by.
+        routing_pk = 0
+        other_pk = 1
+        while tablet_of(other_pk) == tablet_of(routing_pk):
+            other_pk += 1
+
+        insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)").query_id
+        statements = [batch_statement(insert, [other_pk, 1]) for _ in range(3)]
+        statements.append(batch_statement(insert, [routing_pk, 1]))
+        infos = [info for info in batch_with_both_blocks(sock, statements, CL_ONE, 3) if info is not None]
+        assert infos
+        for info in infos:
+            assert info.last_token == tablet_of(routing_pk)
+
+
+# A BATCH request gets routing information once the batch has succeeded. If the
+# table has been dropped by then, it gets none.
+@pytest.mark.parametrize("conditional", [False, True], ids=["regular", "conditional"])
+def test_routing_information_of_dropped_table(cql, connect, test_keyspace, conditional):
+    injection = "batch_statement_before_routing_info"
+    table = f"{test_keyspace}.{unique_name()}"
+    cql.execute(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+    try:
+        insert = f"INSERT INTO {table} (pk, v) VALUES (?, ?)" + (" IF NOT EXISTS" if conditional else "")
+        statements = [batch_statement(cql.prepare(insert).query_id, [1, 1])]
+        with connect() as first, connect() as second, scylla_inject_error(cql, injection):
+            # Each batch gets one of BLOCKS, so if the table still existed, at
+            # least one of them would get routing information.
+            for sock, block in zip((first, second), BLOCKS):
+                send_batch(sock, statements, CL_QUORUM, (0, block))
+
+            # Both batches have been written and wait to compute their routing information.
+            wait_for_injection_enter(cql, injection, count=2)
+            cql.execute(f"DROP TABLE {table}")
+            message_injection(cql, injection)
+
+            for sock in (first, second):
+                assert routing_information_of(cql_frames.read_frame(sock)) is None
+    finally:
+        cql.execute(f"DROP TABLE IF EXISTS {table}")

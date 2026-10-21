@@ -92,9 +92,14 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
 
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
 
+    // A prepared batch is routed by its partition key bind indices. A BATCH request
+    // is routed by the statement it names, which has been validated to have them.
+    const bool may_use_token_aware_routing = batch.may_use_token_aware_routing()
+            || options.routing_statement_index() != query_options::no_routing_statement;
+
     // The batch targets a single partition, so whatever token the driver computed
     // the tablet version block for, it's the token of that partition.
-    const auto tablet_block = tablet_version_block_for(qs, options, batch.may_use_token_aware_routing());
+    const auto tablet_block = tablet_version_block_for(qs, options, may_use_token_aware_routing);
 
     auto mutate_result = co_await coordinator.get().mutate(batch_schema,
         batch_key->token(),
