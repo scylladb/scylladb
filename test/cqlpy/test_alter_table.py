@@ -78,14 +78,24 @@ def test_valid_percentile_speculative_retry_values(cql, test_keyspace):
     documentation (https://enterprise.docs.scylladb.com/stable/cql/ddl.html#speculative-retry-options),
     the valid range for PERCENTILE is between 0.0 and 100.0.
 
-    This test ensures that the system correctly accepts boundary values such as 0 and 100,
-    including variations with a "+" sign, which are less common but still valid.
+    This test checks values strictly between 0 and 100, which both Scylla and Cassandra
+    accept. The boundary values 0 and 100, and variations with a "+" sign, are checked
+    in the Scylla-only test test_valid_percentile_speculative_retry_values_boundaries.
 
     See issue #26369.
     """
 
     with new_test_table(cql, test_keyspace, "id UUID PRIMARY KEY, value TEXT") as table:
-        for percentile in ["-0", "0", "+0", "0.1", "0.01", "0.001", "99", "99.9", "99.999", "100", "+100"]:
+        for percentile in ["0.1", "0.01", "0.001", "99", "99.9", "99.999"]:
+            cql.execute(f"ALTER TABLE {table} WITH speculative_retry = '{percentile}PERCENTILE'")
+
+# Scylla also accepts the boundary values 0 and 100 (docs/cql/ddl.rst says
+# "X must be between 0 and 100, including those values"), and an explicit
+# sign. Cassandra only accepts values strictly between 0 and 100, and doesn't
+# allow a sign, so this test is Scylla-only.
+def test_valid_percentile_speculative_retry_values_boundaries(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "id UUID PRIMARY KEY, value TEXT") as table:
+        for percentile in ["-0", "0", "+0", "100", "+100"]:
             cql.execute(f"ALTER TABLE {table} WITH speculative_retry = '{percentile}PERCENTILE'")
 
 def test_invalid_percentile_speculative_retry_values(cql, test_keyspace):

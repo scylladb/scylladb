@@ -57,15 +57,18 @@ def waitAndGetCompleteCompactionHistory(rest_api, table):
     # to the table.
     SCYLLA_SMP_COUNT = 2
     ks, cf = table.split('.')
+    # If the expected compactions don't happen, fail instead of hanging forever.
+    deadline = time.time() + 60
     while True:
         response = rest_api.send("GET", "compaction_manager/compaction_history")
         assert response.status_code == requests.codes.ok
 
-        table_entry_count = sum(1 for data in response.json() if data["ks"] == ks and data["cf"] == cf)
-        if table_entry_count == SCYLLA_SMP_COUNT:
+        table_entries = [data for data in response.json() if data["ks"] == ks and data["cf"] == cf]
+        if len(table_entries) == SCYLLA_SMP_COUNT:
             return response
 
-        assert table_entry_count < SCYLLA_SMP_COUNT
+        assert len(table_entries) < SCYLLA_SMP_COUNT
+        assert time.time() < deadline, f"Timed out waiting for {SCYLLA_SMP_COUNT} compaction history entries of {table}, got: {table_entries}"
         time.sleep(0.2)
 
 

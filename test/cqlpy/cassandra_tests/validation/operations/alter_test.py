@@ -23,7 +23,9 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
+from ....util import is_scylla, is_cassandra_older_than
 from cassandra.protocol import ConfigurationException
+from test.pylib.skip_types import skip_env
 
 def testDropColumnAsPreparedStatement(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(key int PRIMARY KEY, value int)") as table:
@@ -211,7 +213,14 @@ def testCreateAlterKeyspaces(cql, test_keyspace, this_dc):
 # Test {@link ConfigurationException} thrown on alter keyspace to no DC
 # option in replication configuration.
 # Reproduces CASSANDRA-12681 and Scylla #10036
+# Cassandra 4.1 changed this behavior: it added a default_keyspace_rf
+# configuration option, used when the replication factor isn't specified,
+# and replaced this test by testDefaultRF (CASSANDRA-14557). So we skip this
+# test on Cassandra 4.1 and above. See also Scylla issue #16028, which added
+# a default replication factor only to CREATE KEYSPACE.
 def testAlterKeyspaceWithNoOptionThrowsConfigurationException(cql, test_keyspace, this_dc, has_tablets):
+    if not is_scylla(cql) and not is_cassandra_older_than(cql, (4, 1)):
+        skip_env("Cassandra 4.1 allows a missing replication factor (CASSANDRA-14557)")
     if has_tablets:
         extra_opts = " AND TABLETS = {'enabled': false}"
     else:
@@ -347,15 +356,20 @@ def testAlterOnlyColumnBehaviorWithFlush(cql, test_keyspace):
 # in the error message all the tables which need the UDT, but Scylla doesn't
 # so we need a more direct test that doesn't rely on the error message.
 # Reproduces CASSANDRA-15933
+# We also added to this test a check that ALTER TYPE RENAME *is* allowed
+# on a UDT used in a partition key, because unlike adding a field, renaming
+# one doesn't change how keys are serialized. Cassandra allows it, but
+# Scylla doesn't - issue #9633 (also reproduced by the smaller test
+# test_udt.py::test_rename_field_of_udt_in_partition_key).
+@pytest.mark.xfail(reason="issue #9633")
 def testAlterTypeUsedInPartitionKey(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(v1 int)") as type1:
         with create_type(cql, test_keyspace, f"(v1 frozen<{type1}>, v2 frozen<{type1}>)") as type2:
             # frozen UDT used directly in a partition key
             with create_table(cql, test_keyspace, f"(pk frozen<{type1}>, val int, PRIMARY KEY(pk))") as table1:
                 assert_invalid_message(cql, type1, table1, "ALTER TYPE %s ADD v2 int;")
-                # Covers dtest cql_types_test.py::test_udt_change_in_partition_key
-                # ALTER TYPE RENAME must also be rejected on PK UDTs
-                assert_invalid_message(cql, type1, table1, "ALTER TYPE %s RENAME v1 TO v1_renamed;")
+                # ALTER TYPE RENAME is allowed on PK UDTs (see above)
+                execute(cql, type1, "ALTER TYPE %s RENAME v1 TO v1_renamed;")
             # frozen UDT used in a frozen UDT used in a partition key
             with create_table(cql, test_keyspace, f"(pk frozen<{type2}>, val int, PRIMARY KEY(pk))") as table2:
                 assert_invalid_message(cql, type1, table2, "ALTER TYPE %s ADD v2 int;")

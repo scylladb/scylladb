@@ -127,11 +127,11 @@ static locator::replication_strategy_config_options prepare_options(
         locator::replication_strategy_config_options options,
         const locator::replication_strategy_config_options& old_options,
         bool rack_list_enabled,
-        bool uses_tablets) {
+        bool uses_tablets,
+        bool is_alter) {
     options.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
 
     auto is_nts = locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) == "org.apache.cassandra.locator.NetworkTopologyStrategy";
-    auto is_alter = !old_options.empty();
     const auto& all_dcs = tm.get_datacenter_racks_token_owners();
     auto auto_expand_racks = uses_tablets && rack_list_enabled && (rf_rack_valid_keyspaces || enforce_rack_list);
 
@@ -464,7 +464,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
     bool uses_tablets = initial_tablets.has_value();
     bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat.rack_list_rf;
-    auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), {}, rack_list_enabled, uses_tablets);
+    auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), {}, rack_list_enabled, uses_tablets, false);
     auto config_options = apply_config_updates({}, *this, feat);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, std::nullopt, std::move(config_options));
@@ -482,7 +482,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
     auto sc = get_replication_strategy_class();
     bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat.rack_list_rf;
     if (sc) {
-        options = prepare_options(*sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), old_options, rack_list_enabled, uses_tablets);
+        options = prepare_options(*sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), old_options, rack_list_enabled, uses_tablets, true);
     } else {
         sc = old->strategy_name();
         options = old_options;

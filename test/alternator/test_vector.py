@@ -45,6 +45,21 @@ def need_vector_search_in_botocore(dynamodb):
 def all_tests_need_vector_search_in_botocore(need_vector_search_in_botocore):
     pass
 
+# Alternator's vector search requires Scylla to use tablets, not vnodes (see
+# docs/alternator/vector-search.md), so vector search tests are skipped when
+# running on Scylla without tablets.
+@pytest.fixture(scope='module')
+def need_tablets_for_vector_search(dynamodb, has_tablets):
+    if not is_aws(dynamodb) and not has_tablets:
+        skip_env("Vector search requires tablets")
+
+# A few tests in this file don't create a vector index and would pass without
+# tablets, but vector search as a whole is not supported without tablets, so
+# it's not worth marking each test separately.
+@pytest.fixture(scope='module', autouse=True)
+def all_tests_need_tablets_for_vector_search(need_tablets_for_vector_search):
+    pass
+
 # Monkey-patch the boto3 library to stop doing its own error-checking on
 # numbers. This works around a bug https://github.com/boto/boto3/issues/2500
 # of incorrect checking of responses, and we also need to get boto3 to not do
@@ -111,7 +126,7 @@ def needs_vector_store(table_vs):
 # active before yielding the table, so tests that use this fixture can
 # read from it immediately.
 @pytest.fixture(scope="module")
-def table_vs(dynamodb, need_vector_search_in_botocore):
+def table_vs(dynamodb, need_vector_search_in_botocore, need_tablets_for_vector_search):
     with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
