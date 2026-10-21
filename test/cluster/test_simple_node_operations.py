@@ -104,6 +104,53 @@ async def test_boot_create_keyspace_table_insert_shutdown_commitlog_replay_selec
 
 
 ############################################################################
+# Ported from simple_driver_test.py: each test on a node with one and with
+# two shards, as the dtests' SMP fixture.
+
+SMP = pytest.mark.parametrize("smp", ["1", "2"], ids=["SMP=1", "SMP=2"])
+
+
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@SMP
+async def test_simple_composite_partition_key_create_insert_select(manager: ScyllaClusterManager, smp):
+    await manager.server_add(config=CONFIG, cmdline=["--smp", smp])
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE ks {ks_opts(1)}")
+    await cql.run_async("CREATE TABLE ks.test1 (k1 int, k2 int, c int, PRIMARY KEY ((k1,k2)))")
+    await cql.run_async("insert into ks.test1 (k1,k2,c) values (1,1,3);")
+    await cql.run_async("insert into ks.test1 (k1,k2,c) values (1,2,4);")
+    for k1, k2, n in [(1, 1, 1), (1, 2, 1), (2, 1, 0), (1, 3, 0)]:
+        res = list(await cql.run_async(f"SELECT * FROM ks.test1 WHERE k1={k1} and k2={k2}"))
+        assert len(res) == n, res
+
+
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@SMP
+async def test_simple_compound_primary_key_create_insert_select(manager: ScyllaClusterManager, smp):
+    await manager.server_add(config=CONFIG, cmdline=["--smp", smp])
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE ks {ks_opts(1)}")
+    await cql.run_async("CREATE TABLE ks.test1 (k1 int, c1 int, c2 int, c3 int, PRIMARY KEY (k1,c1,c2))")
+    await cql.run_async("insert into ks.test1 (k1,c1,c2,c3) values (1,1,1,1);")
+    await cql.run_async("insert into ks.test1 (k1,c1,c2,c3) values (1,1,2,2);")
+    assert len(list(await cql.run_async("SELECT * FROM ks.test1 WHERE k1=1"))) == 2
+    assert len(list(await cql.run_async("SELECT * FROM ks.test1 WHERE k1=1 and c1=1 and c2=1"))) == 1
+    await cql.run_async("SELECT * FROM ks.test1 WHERE k1=1 and c1=2")
+    assert len(list(await cql.run_async("SELECT * FROM ks.test1 WHERE k1=1 and c1=1 and c2=3"))) == 0
+
+
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@SMP
+async def test_simple_create_insert_select(manager: ScyllaClusterManager, smp):
+    await manager.server_add(config=CONFIG, cmdline=["--smp", smp])
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE ks {ks_opts(1)}")
+    await cql.run_async("CREATE TABLE ks.test1 (k int PRIMARY KEY, c int)")
+    await cql.run_async("insert into ks.test1  (k,c) values (1,2);")
+    await check_k1_and_not_k2(cql)
+
+
+############################################################################
 # Ported from simple_cluster_driver_test.py.
 
 # Three nodes (one per rack), RF=3: a table created through the second node
