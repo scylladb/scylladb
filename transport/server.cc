@@ -378,12 +378,10 @@ void cql_processor::register_forwarding_and_error_metrics() {
 cql_server::cql_server(sharded<cql3::query_processor>& qp, cql_processor& processor, auth::service& auth_service,
         service::memory_limiter& ml, cql_server_config config,
         qos::service_level_controller& sl_controller, gms::gossiper& g, scheduling_group_key stats_key,
-        maintenance_socket_enabled used_by_maintenance_socket,
-        netw::messaging_service& ms)
+        maintenance_socket_enabled used_by_maintenance_socket)
     : server("CQLServer", clogger, generic_server::config{std::move(config.uninitialized_connections_semaphore_cpu_concurrency), config.request_timeout_on_shutdown_in_seconds})
     , _query_processor(qp)
     , _processor(processor)
-    , _ms(ms)
     , _config(std::move(config))
     , _memory_available(ml.get_semaphore())
     , _total_memory(ml.total_memory())
@@ -399,8 +397,6 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, cql_processor& proces
     if (used_by_maintenance_socket) {
         return;
     }
-
-    init_messaging_service();
 
     auto ls = {
         sm::make_counter("cql-connections", _stats.connects,
@@ -462,10 +458,34 @@ static db::timeout_clock::time_point from_wall_clock(db_clock::time_point deadli
 }
 
 future<> cql_server::stop() {
-    co_await when_all_succeed(uninit_messaging_service(), server::stop()).discard_result();
+    return server::stop();
 }
 
-void cql_server::init_messaging_service() {
+cql_forwarding_service::cql_forwarding_service(sharded<cql3::query_processor>& qp, cql_processor& processor, auth::service& auth_service,
+        qos::service_level_controller& sl_controller, netw::messaging_service& ms, scheduling_group_key stats_key)
+    : _query_processor(qp)
+    , _processor(processor)
+    , _auth_service(auth_service)
+    , _sl_controller(sl_controller)
+    , _ms(ms)
+    , _stats_key(stats_key)
+{
+    init_messaging_service();
+}
+
+future<> cql_forwarding_service::drain() {
+    if (!_drained) {
+        _abort_source.request_abort();
+        _drained = uninit_messaging_service();
+    }
+    return _drained->get_future();
+}
+
+future<> cql_forwarding_service::stop() {
+    return drain();
+}
+
+void cql_forwarding_service::init_messaging_service() {
     ser::forward_cql_rpc_verbs::register_forward_cql_execute(&_ms,
         [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, unsigned shard, forward_cql_execute_request req) -> future<forward_cql_execute_response> {
             auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
@@ -480,7 +500,7 @@ void cql_server::init_messaging_service() {
                 const auto wall_clock_deadline = from_wall_clock(*req.deadline);
                 deadline = deadline ? std::min(*deadline, wall_clock_deadline) : wall_clock_deadline;
             }
-            co_return co_await container().invoke_on(shard, [src_host, req = std::move(req), deadline] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
+            co_return co_await container().invoke_on(shard, [src_host, req = std::move(req), deadline] (cql_forwarding_service& shard_svc) mutable -> future<forward_cql_execute_response> {
                 service::client_state cs(shard_svc._auth_service,
                     &shard_svc._sl_controller,
                     std::move(req.client_state),
@@ -555,11 +575,11 @@ void cql_server::init_messaging_service() {
         });
 }
 
-future<> cql_server::uninit_messaging_service() {
+future<> cql_forwarding_service::uninit_messaging_service() {
     co_await ser::forward_cql_rpc_verbs::unregister(&_ms);
 }
 
-future<forward_cql_execute_response> cql_server::handle_forward_execute(
+future<forward_cql_execute_response> cql_forwarding_service::handle_forward_execute(
     service::query_state& qs, forward_cql_execute_request& req, std::optional<db::timeout_clock::time_point> deadline)
 {
     auto opcode = static_cast<cql_binary_opcode>(req.opcode);
@@ -579,7 +599,10 @@ future<forward_cql_execute_response> cql_server::handle_forward_execute(
     bytes_ostream temp_linearization_buffer;
     request_reader in(std::move(is), temp_linearization_buffer);
 
-    auto result = co_await coroutine::try_future(process(
+    auto get_abort_source = [&service = container()] () -> seastar::abort_source& {
+        return service.local()._abort_source;
+    };
+    auto result = co_await coroutine::try_future(_processor.process(
         0, // stream is only used when writing the response to the client and we handle it on the forwarding node. Here we only prepare the response body
         in,
         qs.get_client_state(),
@@ -589,11 +612,13 @@ future<forward_cql_execute_response> cql_server::handle_forward_execute(
         req.cql_version,
         req.dialect,
         api::missing_timestamp,
+        _stats_key,
+        std::move(get_abort_source),
         std::move(req.cached_fn_calls),
         deadline,
-        handling_node_bounce::yes));
+        cql_processor::handling_node_bounce::yes));
 
-    if (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&result)) {
+    if (auto* bounce_msg = std::get_if<cql_processor::result_with_bounce>(&result)) {
         auto host = (*bounce_msg)->target_host();
         auto shard = (*bounce_msg)->target_shard();
         co_return forward_cql_execute_response{
@@ -603,7 +628,7 @@ future<forward_cql_execute_response> cql_server::handle_forward_execute(
         };
     }
 
-    auto& final_result = std::get<cql_server::result_with_foreign_response_ptr>(result);
+    auto& final_result = std::get<cql_processor::result_with_foreign_response_ptr>(result);
 
     if (!final_result) {
         co_return co_await coroutine::try_future(final_result.assume_error().as_exception_future<forward_cql_execute_response>());
@@ -2246,14 +2271,13 @@ static bytes_ostream copy_istream(fragmented_temporary_buffer::istream is) {
 future<cql_server::process_fn_return_type>
 cql_server::process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit,
         tracing::trace_state_ptr trace_state, cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect,
-        api::timestamp_type request_start_timestamp, cql3::computed_function_values cached_fn_calls, std::optional<db::timeout_clock::time_point> deadline,
-        handling_node_bounce bounced)
+        api::timestamp_type request_start_timestamp)
 {
     auto get_abort_source = [&server = container()] () -> seastar::abort_source& {
         return server.local()._abort_source;
     };
     return _processor.process(stream, std::move(in), client_state, std::move(permit), std::move(trace_state), opcode, version, dialect,
-            request_start_timestamp, _stats_key, std::move(get_abort_source), std::move(cached_fn_calls), deadline, bounced);
+            request_start_timestamp, _stats_key, std::move(get_abort_source));
 }
 
 future<cql_processor::process_fn_return_type>
