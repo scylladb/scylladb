@@ -74,7 +74,7 @@
 #include "locator/tablet_types.hh"
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_fwd.hh"
-#include "compaction_group.hh"
+#include "replica/compaction_group_fwd.hh"
 #include "service/qos/qos_configuration_change_subscriber.hh"
 #include "replica/tables_metadata_lock.hh"
 #include "service/topology_guard.hh"

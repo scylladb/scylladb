@@ -11,6 +11,7 @@
 #include <seastar/core/rwlock.hh>
 
 #include "database_fwd.hh"
+#include "replica/compaction_group_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "compaction/compaction_backlog_manager.hh"
 #include "compaction/compaction_strategy_state.hh"
@@ -338,8 +339,6 @@ public:
     friend class storage_group;
 };
 
-using compaction_group_ptr = lw_shared_ptr<compaction_group>;
-using const_compaction_group_ptr = lw_shared_ptr<const compaction_group>;
 
 // The two ranges `range` will be split into, or nullopt if it cannot be split:
 // either an end of it is unbounded, so there is nothing to take a midpoint between,
@@ -452,8 +451,6 @@ public:
     void clear_logstor_segments();
 };
 
-using storage_group_ptr = lw_shared_ptr<storage_group>;
-using storage_group_map = absl::flat_hash_map<size_t, storage_group_ptr, absl::Hash<size_t>>;
 
 class storage_group_manager {
 protected:

@@ -27,6 +27,7 @@
 #include "mutation/async_utils.hh"
 #include "compaction/compaction_manager.hh"
 #include "dht/fixed_shard.hh"
+#include "replica/compaction_group.hh"
 
 namespace replica {
 
