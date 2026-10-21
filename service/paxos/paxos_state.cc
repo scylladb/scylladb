@@ -467,6 +467,21 @@ std::optional<std::string_view> paxos_store::try_get_base_table(std::string_view
     return cf_name.substr(0, cf_name.size() - paxos_state_table_suffix.size());
 }
 
+namespace {
+    // A replica must not acknowledge a paxos promise or accept before it is
+    // durable, otherwise it can forget it after a crash and let a competing
+    // proposer get a different value chosen.
+    // wait_for_sync_to_commitlog is not stored in the schema tables, so it is
+    // set here rather than in create_paxos_state_schema(): initializers run
+    // for every schema built for these tables, including the ones loaded
+    // from disk or received from other nodes.
+    const auto set_wait_for_sync_to_commitlog = schema_builder::register_schema_initializer([](schema_builder& builder) {
+        if (paxos_store::try_get_base_table(builder.cf_name())) {
+            builder.set_wait_for_sync_to_commitlog(true);
+        }
+    });
+}
+
 static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
         db::timeout_clock::time_point timeout,
         std::vector<data_value_or_unset> values,
