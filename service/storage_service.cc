@@ -1377,7 +1377,8 @@ future<bool> storage_service::ongoing_rf_change(const group0_guard& guard, sstri
     co_return false;
 }
 
-future<std::optional<utils::UUID>> storage_service::ongoing_prepare_migration(const group0_guard& guard, std::optional<sstring> ks) const {
+future<std::optional<storage_service::ongoing_prepare_migration_request>>
+storage_service::ongoing_prepare_migration(const group0_guard& guard, std::optional<sstring> ks) const {
     auto ongoing_ks_prepare = [&] (utils::UUID request_id) -> future<bool> {
         auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
         co_return std::holds_alternative<global_topology_request>(req_entry.request_type) &&
@@ -1388,7 +1389,8 @@ future<std::optional<utils::UUID>> storage_service::ongoing_prepare_migration(co
     // global_request_id.
     for (auto request_id : _topology_state_machine._topology.global_requests_queue) {
         if (co_await ongoing_ks_prepare(request_id)) {
-            co_return request_id;
+            auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
+            co_return ongoing_prepare_migration_request{request_id, req_entry.prepare_migration_table_name};
         }
     }
     co_return std::nullopt;
@@ -4287,7 +4289,47 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
     co_return table_sizes;
 }
 
-future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) {
+// The names a per-table migration command acts on: the base table named, and
+// every table that belongs to it. Leaving one behind would have it replicate
+// by vnodes while its base runs on tablets.
+//
+// get_base_table_for_tablet_colocation() is the rule that decides what rides on
+// a base table's map - co-located views, CDC log tables, paxos state tables -
+// so asking it here keeps selection and map construction in agreement. Views
+// that are not co-located have maps of their own, but still migrate with the
+// base, so they are matched on base_id instead.
+static std::unordered_set<sstring> migration_unit_for(replica::database& db,
+        const replica::keyspace& ks, const sstring& ks_name, const sstring& table_name) {
+    auto schema = db.find_column_family(ks_name, table_name).schema();
+    auto belongs_to = [&] (const ::schema& s) -> std::optional<table_id> {
+        if (s.is_view()) {
+            return s.view_info()->base_id();
+        }
+        return db.get_base_table_for_tablet_colocation(s);
+    };
+
+    // Naming a dependent table is refused rather than redirected to its base:
+    // the unit is the base table, and an operator who names one has the wrong
+    // model of what a round covers.
+    if (auto base_id = belongs_to(*schema)) {
+        const auto& base = db.find_column_family(*base_id).schema()->cf_name();
+        throw std::runtime_error(fmt::format(
+                "Cannot migrate {}.{} on its own. Name its base table {}.{} instead,"
+                " which migrates the tables defined on it along with it",
+                ks_name, table_name, ks_name, base));
+    }
+
+    const auto base_id = schema->id();
+    std::unordered_set<sstring> unit{table_name};
+    for (const auto& [name, s] : ks.metadata()->cf_meta_data()) {
+        if (s->id() != base_id && belongs_to(*s) == base_id) {
+            unit.insert(name);
+        }
+    }
+    return unit;
+}
+
+future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name, std::optional<sstring> table_name) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
 
@@ -4296,7 +4338,9 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                 " PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION cluster feature");
     }
 
-    slogger.info("Preparing vnodes-to-tablets migration for keyspace '{}'", ks_name);
+    const auto what = table_name ? fmt::format("table '{}.{}'", ks_name, *table_name)
+                                 : fmt::format("keyspace '{}'", ks_name);
+    slogger.info("Preparing vnodes-to-tablets migration for {}", what);
 
     utils::UUID request_id;
 
@@ -4308,12 +4352,21 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         auto& ks = db.find_keyspace(ks_name);
         const auto& cf_meta_data = ks.metadata()->cf_meta_data();
 
-        // Preparing a keyspace means only one thing, so if a preparation of it is already
+        // A preparation of the same thing means only one thing, so if one is already
         // queued or running, wait for that one and report how it ends rather than queue
-        // another one behind it.
+        // another one behind it. A preparation of something else in the same keyspace is
+        // a different round: queuing behind it would report success for tables it never
+        // prepares, so refuse instead.
         if (auto ongoing = co_await ongoing_prepare_migration(guard, ks_name)) {
-            slogger.info("A preparation of keyspace '{}' is already in progress, waiting for it", ks_name);
-            request_id = *ongoing;
+            if (ongoing->table_name != table_name) {
+                const auto other = ongoing->table_name
+                        ? fmt::format("table '{}.{}'", ks_name, *ongoing->table_name)
+                        : fmt::format("keyspace '{}'", ks_name);
+                throw std::runtime_error(fmt::format("Cannot prepare the migration of {}: a preparation of {}"
+                        " is already in progress. Please wait for it to finish and retry.", what, other));
+            }
+            slogger.info("A preparation of {} is already in progress, waiting for it", what);
+            request_id = ongoing->request_id;
             break;
         }
 
@@ -4324,13 +4377,26 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         }
         co_await validate_keyspace_views_for_tablets_migration(db, get_system_keyspace(), _topology_state_machine._topology, ks_name);
 
+        // A named table migrates together with the tables that belong to it;
+        // see migration_unit_for().
+        std::optional<std::unordered_set<sstring>> unit;
+        if (table_name) {
+            unit = migration_unit_for(db, ks, ks_name, *table_name);
+        }
+
         // A keyspace whose tables all have a map has nothing left to prepare, so don't
-        // queue a request which would do nothing.
+        // queue a request which would do nothing. With a table named, only the tables
+        // of its migration unit count.
         const auto& tablet_metadata = get_token_metadata().tablets();
         if (std::ranges::all_of(cf_meta_data, [&] (const auto& e) {
-                return tablet_metadata.has_tablet_map(e.second->id());
+                return (unit && !unit->contains(e.first)) || tablet_metadata.has_tablet_map(e.second->id());
             })) {
-            slogger.info("All tables of keyspace '{}' already have a tablet map, nothing to do", ks_name);
+            if (table_name) {
+                slogger.info("Table {}.{} and the tables that belong to it already have a tablet map, nothing to do",
+                        ks_name, *table_name);
+            } else {
+                slogger.info("All tables of keyspace '{}' already have a tablet map, nothing to do", ks_name);
+            }
             co_return;
         }
 
@@ -4341,6 +4407,9 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // base table. They share its tablet map, so they are sized together with it.
         std::unordered_map<table_id, std::vector<table_id>> tables_to_colocate;
         for (const auto& [name, schema] : cf_meta_data) {
+            if (unit && !unit->contains(name)) {
+                continue;
+            }
             if (tablet_metadata.has_tablet_map(schema->id())) {
                 continue;
             }
@@ -4388,11 +4457,11 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         rtbuilder.set("done", false)
                  .set("start_time", db_clock::now())
                  .set("request_type", global_topology_request::prepare_migration)
-                 .set_prepare_migration_data(ks_name, tables);
+                 .set_prepare_migration_data(ks_name, tables, table_name);
 
         topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-            fmt::format("prepare vnodes-to-tablets migration for keyspace '{}'", ks_name));
+            fmt::format("prepare vnodes-to-tablets migration for {}", what));
 
         try {
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
@@ -4405,10 +4474,10 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
 
     auto error = co_await wait_for_topology_request_completion(request_id);
     if (!error.empty()) {
-        throw std::runtime_error(fmt::format("Migration preparation failed for keyspace '{}': {}", ks_name, error));
+        throw std::runtime_error(fmt::format("Migration preparation failed for {}: {}", what, error));
     }
 
-    slogger.info("Successfully prepared vnodes-to-tablets migration for keyspace '{}'", ks_name);
+    slogger.info("Successfully prepared vnodes-to-tablets migration for {}", what);
 }
 
 future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
@@ -4650,11 +4719,13 @@ storage_service::get_tablets_pow2_convergence_status(const sstring& ks_name) con
     return status;
 }
 
-future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
+future<> storage_service::finalize_tablets_migration(const sstring& ks_name, std::optional<sstring> table_name) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
 
-    slogger.info("Finalizing vnodes-to-tablets migration for keyspace '{}'", ks_name);
+    const auto what = table_name ? fmt::format("table '{}.{}'", ks_name, *table_name)
+                                 : fmt::format("keyspace '{}'", ks_name);
+    slogger.info("Finalizing vnodes-to-tablets migration for {}", what);
 
     utils::UUID request_id;
 
@@ -4677,23 +4748,45 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
         }
 
         // A finalization queued behind a preparation of the keyspace would, as a rollback,
-        // drop its maps right after it reports success. The check below that every table
-        // has a map stops that too, but with an error which doesn't say why.
+        // drop its maps right after it reports success. The prepared-table check below
+        // stops that too, but with an error which doesn't say why.
         if (co_await ongoing_prepare_migration(guard, ks_name)) {
             throw std::runtime_error(fmt::format("Cannot finalize the migration of keyspace '{}': it is still being prepared."
                     " Please wait for the preparation to finish and retry.", ks_name));
         }
 
-        for (const auto& schema : tables | std::views::values) {
-            if (!tablet_metadata.has_tablet_map(schema->id())) {
-                throw std::runtime_error(fmt::format("{} {}.{} does not have a tablet map; "
-                    "all tables and views in keyspace '{}' must be prepared for migration before finalizing",
-                    schema->is_view() ? "View" : "Table", ks_name, schema->cf_name(), ks_name));
+        // A table being finalized must have been prepared. Naming the keyspace
+        // needs one prepared table rather than all of them, because the direction
+        // is the topology coordinator's to decide and a rollback concerns only the
+        // tables that were prepared. Going forward it is the coordinator that
+        // requires every table, since that is where the keyspace is flipped.
+        if (table_name) {
+            // Refuses a dependent table's name, and counts what the coordinator
+            // finalizes along with the base table.
+            const auto unit = migration_unit_for(db, ks, ks_name, *table_name);
+            auto& cf = db.find_column_family(ks_name, *table_name);
+            if (!tablet_metadata.has_tablet_map(cf.schema()->id())) {
+                throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
+                    "it must be prepared for migration before finalizing", ks_name, *table_name));
             }
+            slogger.info("Submitting finalization request for table {}.{} and the {} table(s) that belong to it",
+                         ks_name, *table_name, unit.size() - 1);
+        } else {
+            auto prepared = std::ranges::count_if(tables | std::views::values, [&] (const auto& schema) {
+                return tablet_metadata.has_tablet_map(schema->id());
+            });
+            if (prepared == 0) {
+                // Name one of them, as the whole-keyspace check used to: an
+                // operator who has prepared nothing needs a table to look at.
+                const auto& missing = *std::ranges::find_if(tables | std::views::values,
+                        [&] (const auto& schema) { return !tablet_metadata.has_tablet_map(schema->id()); });
+                throw std::runtime_error(fmt::format("{} {}.{} does not have a tablet map; at least one "
+                    "table or view in keyspace '{}' must be prepared for migration before finalizing",
+                    missing->is_view() ? "View" : "Table", ks_name, missing->cf_name(), ks_name));
+            }
+            slogger.info("{} of {} table(s) and view(s) in keyspace '{}' have tablet maps, "
+                         "submitting finalization request", prepared, tables.size(), ks_name);
         }
-
-        slogger.info("All {} table(s) and view(s) in keyspace '{}' have tablet maps, submitting finalization request",
-                     tables.size(), ks_name);
 
         request_id = guard.new_group0_state_id();
 
@@ -4704,11 +4797,12 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
         rtbuilder.set("done", false)
                  .set("start_time", db_clock::now())
                  .set("request_type", global_topology_request::finalize_migration)
-                 .set_finalize_migration_data(ks_name);
+                 .set_finalize_migration_data(ks_name, table_name);
 
         topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-            fmt::format("finalize vnodes-to-tablets migration for keyspace '{}'", ks_name));
+            table_name ? fmt::format("finalize vnodes-to-tablets migration for table '{}.{}'", ks_name, *table_name)
+                       : fmt::format("finalize vnodes-to-tablets migration for keyspace '{}'", ks_name));
 
         try {
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
@@ -4721,10 +4815,10 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
 
     auto error = co_await wait_for_topology_request_completion(request_id);
     if (!error.empty()) {
-        throw std::runtime_error(fmt::format("Migration finalization failed for keyspace '{}': {}", ks_name, error));
+        throw std::runtime_error(fmt::format("Migration finalization failed for {}: {}", what, error));
     }
 
-    slogger.info("Successfully finalized vnodes-to-tablets migration for keyspace '{}'", ks_name);
+    slogger.info("Successfully finalized vnodes-to-tablets migration for {}", what);
 }
 
 future<> storage_service::process_tablet_split_candidate(table_id table) noexcept {

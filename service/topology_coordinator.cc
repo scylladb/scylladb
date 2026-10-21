@@ -48,6 +48,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "db/schema_tables.hh"
 #include "db/view/view_builder.hh"
+#include "view_info.hh"
 #include "schema/schema_builder.hh"
 #include "tombstone_gc.hh"
 #include "tombstone_gc_extension.hh"
@@ -1727,6 +1728,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             auto ks_name = *req_entry.finalize_migration_ks_name;
             utils::chunked_vector<canonical_mutation> updates;
             sstring error;
+            // What this command changes, which the metadata read below predates.
+            std::unordered_set<table_id> tables_acted_on;
+            bool flip_keyspace = false;
 
             if (_db.has_keyspace(ks_name)) {
                 try {
@@ -1737,18 +1741,71 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     auto tmptr = get_token_metadata_ptr();
                     const auto& tablet_metadata = tmptr->tablets();
-                    auto tables = ks.metadata()->cf_meta_data()
+                    auto all_tables = ks.metadata()->cf_meta_data()
                         | std::views::values
                         | std::ranges::to<std::vector<schema_ptr>>();
                     auto kind = [] (const schema& s) { return s.is_view() ? "view" : "table"; };
 
-                    // Verify all tables and views have tablet maps.
-                    for (const auto& schema : tables) {
-                        if (!tablet_metadata.has_tablet_map(schema->id())) {
+                    // The tables this command acts on: the one named, or every
+                    // table prepared for migration and not finalized yet. With
+                    // table-level granularity only a subset of the keyspace may
+                    // be prepared, and an earlier round may already have
+                    // finalized some of what is prepared. Views are in the list
+                    // too: one that is not co-located with its base table has a
+                    // tablet map of its own to finalize.
+                    const auto& table_name = req_entry.finalize_migration_table_name;
+
+                    // A named table is finalized together with the tables that belong
+                    // to it. A co-located one shares the base's tablet map and so needs
+                    // no mutation of its own, but one that is not co-located has a map
+                    // that must be finalized at the same time, or it would keep
+                    // replicating by vnodes while its base runs on tablets.
+                    // storage_service has already refused a dependent table's name, so
+                    // this resolves a base table. The rule is the one migration_unit_for()
+                    // applies when the tables are prepared, so a round finalizes exactly
+                    // what it prepared.
+                    std::optional<std::unordered_set<table_id>> unit;
+                    if (table_name) {
+                        const auto& by_name = ks.metadata()->cf_meta_data();
+                        auto it = by_name.find(*table_name);
+                        if (it == by_name.end()) {
                             throw std::runtime_error(fmt::format(
-                                "{} {}.{} does not have a tablet map",
-                                schema->is_view() ? "View" : "Table", ks_name, schema->cf_name()));
+                                    "Table {}.{} does not exist", ks_name, *table_name));
                         }
+                        const auto base_id = it->second->id();
+                        unit.emplace(std::initializer_list<table_id>{base_id});
+                        for (const auto& schema : by_name | std::views::values) {
+                            if (schema->id() == base_id) {
+                                continue;
+                            }
+                            const auto belongs_to = schema->is_view()
+                                    ? std::optional<table_id>(schema->view_info()->base_id())
+                                    : _db.get_base_table_for_tablet_colocation(*schema);
+                            if (belongs_to == base_id) {
+                                unit->insert(schema->id());
+                            }
+                        }
+                    }
+
+                    std::vector<schema_ptr> tables;
+                    for (const auto& schema : all_tables) {
+                        if (!tablet_metadata.has_tablet_map(schema->id())) {
+                            continue;
+                        }
+                        if (tablet_metadata.get_tablet_map(schema->id()).migration_finalized()) {
+                            continue;
+                        }
+                        if (unit && !unit->contains(schema->id())) {
+                            continue;
+                        }
+                        tables.push_back(schema);
+                    }
+                    if (tables.empty()) {
+                        throw std::runtime_error(table_name
+                            ? fmt::format("Table {}.{} has no tablet map, or its migration is already finalized",
+                                          ks_name, *table_name)
+                            : fmt::format("No table in keyspace '{}' has a tablet map that is not already finalized",
+                                          ks_name));
                     }
 
                     // Find the migration direction (tablets or rollback to vnodes).
@@ -1770,8 +1827,38 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                     bool rollback = *global_intended_mode == storage_mode::vnodes;
 
-                    rtlogger.info("Finalizing migration for keyspace '{}': direction={}",
-                        ks_name, rollback ? "rollback to vnodes" : "forward to tablets");
+                    // Flipping the keyspace is what makes every one of its tables
+                    // tablet-based, so it may only happen once every table has been
+                    // finalized - by an earlier command or by this one. A table left
+                    // on vnodes would get a tablet-based ERM with no tablet map.
+                    flip_keyspace = !rollback
+                            && std::ranges::all_of(all_tables, [&] (const auto& schema) {
+                        if (!tablet_metadata.has_tablet_map(schema->id())) {
+                            return false;
+                        }
+                        if (tablet_metadata.get_tablet_map(schema->id()).migration_finalized()) {
+                            return true;
+                        }
+                        return std::ranges::find(tables, schema) != tables.end();
+                    });
+
+                    if (!rollback && !table_name && !flip_keyspace) {
+                        // Finalizing the keyspace forward requires every table to be
+                        // prepared, as it always has. The check lives here because
+                        // only the coordinator knows the direction.
+                        for (const auto& schema : all_tables) {
+                            if (!tablet_metadata.has_tablet_map(schema->id())) {
+                                throw std::runtime_error(fmt::format(
+                                    "Table {}.{} does not have a tablet map; all tables in keyspace '{}'"
+                                    " must be prepared for migration before finalizing",
+                                    ks_name, schema->cf_name(), ks_name));
+                            }
+                        }
+                    }
+
+                    rtlogger.info("Finalizing migration for keyspace '{}': direction={}, {} of {} table(s) prepared",
+                        ks_name, rollback ? "rollback to vnodes" : "forward to tablets",
+                        tables.size(), all_tables.size());
 
                     co_await _tablet_load_stats_refresh.trigger();
 
@@ -1825,7 +1912,30 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
                     }
 
+                    for (const auto& schema : tables) {
+                        tables_acted_on.insert(schema->id());
+                    }
+
                     if (!rollback) {
+                        // Every node runs these tables on tablets now. Record it on
+                        // each tablet map: from here they are balanced and converge
+                        // to their pow2 layout, and they cannot be rolled back.
+                        for (const auto& schema : tables) {
+                            // A co-located table has no tablet map of its own: it shares
+                            // the base table's, which is where the flag lives and where
+                            // it is read from. Its own row says only which table it is
+                            // co-located with, and the tablet metadata reader builds no
+                            // map for such a row, so a static column on it would be read
+                            // into nothing.
+                            if (!tablet_metadata.is_base_table(schema->id())) {
+                                continue;
+                            }
+                            updates.emplace_back(replica::make_tablet_migration_finalized_mutation(
+                                    schema->id(), guard.write_timestamp()));
+                        }
+                    }
+
+                    if (flip_keyspace) {
                         // Remove the build status entries of views that no longer
                         // exist.
                         //
@@ -1910,8 +2020,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         for (auto& m : schema_muts) {
                             updates.emplace_back(m);
                         }
-                    } else {
-                        // Rollback: delete tablet maps for all tables in the keyspace.
+                    } else if (rollback) {
+                        // Rollback: delete the tablet maps of the tables being rolled
+                        // back. Tables finalized earlier are not among them.
                         for (const auto& schema : tables) {
                             updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
                         }
@@ -1932,28 +2043,33 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id);
 
             if (error.empty()) {
-                // Only clear the storage mode columns if no other keyspace is still under
-                // migration.
+                // Clear the storage mode columns once nothing is left mid-migration
+                // anywhere: a table still counts while it has a tablet map, its
+                // keyspace replicates by vnodes, and its migration has not been
+                // finalized. The metadata here predates this command, so what it
+                // finalizes, drops or flips is discounted.
                 auto tmptr = get_token_metadata_ptr();
                 const auto& tmd = tmptr->tablets();
-                bool has_other_migrating_ks = false;
+                bool migration_in_progress = false;
                 for (const auto& other_ks_name : _db.get_non_system_keyspaces()) {
-                    if (other_ks_name == ks_name) {
-                        continue;
-                    }
                     auto& other_ks = _db.find_keyspace(other_ks_name);
                     if (other_ks.uses_tablets()) {
                         continue;
                     }
-                    bool other_ks_has_tablet_map = std::ranges::any_of(other_ks.metadata()->tables(), [&](const auto& s) {
-                        return tmd.has_tablet_map(s->id());
+                    if (other_ks_name == ks_name && flip_keyspace) {
+                        continue;
+                    }
+                    migration_in_progress = std::ranges::any_of(other_ks.metadata()->tables(), [&](const auto& s) {
+                        if (!tmd.has_tablet_map(s->id()) || tables_acted_on.contains(s->id())) {
+                            return false;
+                        }
+                        return !tmd.get_tablet_map(s->id()).migration_finalized();
                     });
-                    if (other_ks_has_tablet_map) {
-                        has_other_migrating_ks = true;
+                    if (migration_in_progress) {
                         break;
                     }
                 }
-                if (!has_other_migrating_ks) {
+                if (!migration_in_progress) {
                     for (const auto& [node_id, _] : _topo_sm._topology.normal_nodes) {
                         // current_storage_mode goes with it: the mode is meaningful only
                         // while a migration is in progress, and a value left behind would
@@ -3880,7 +3996,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // with their base table. Each only needs an entry saying so, written
         // in the same command as the base table's map.
         std::unordered_map<table_id, std::vector<std::pair<table_id, sstring>>> tables_to_colocate;
+        // A request naming a table lists exactly that table and the tables belonging to
+        // it, so it is the request that says what this round covers, and progress is
+        // counted over those alone. A request naming only the keyspace lists every table
+        // which had no map when it was made, and the loop below still picks up one
+        // created since.
+        const auto& targets = *req.prepare_migration_tables;
+        const bool only_requested_tables = bool(req.prepare_migration_table_name);
         for (const auto& [name, schema] : ks.metadata()->cf_meta_data()) {
+            if (only_requested_tables && !targets.contains(schema->id())) {
+                continue;
+            }
             ++all_tables;
             if (tmptr->tablets().has_tablet_map(schema->id())) {
                 continue;
@@ -3893,7 +4019,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
         }
         if (remaining_tables == 0) {
-            rtlogger.info("All tables of keyspace '{}' already have a tablet map", ks_name);
+            rtlogger.info("All tables of {} already have a tablet map",
+                          req.prepare_migration_table_name
+                                  ? fmt::format("the migration unit of '{}.{}'", ks_name, *req.prepare_migration_table_name)
+                                  : fmt::format("keyspace '{}'", ks_name));
             co_return prepare_progress{all_tables, all_tables};
         }
         if (remaining_tables < all_tables) {
@@ -3904,7 +4033,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             });
         }
 
-        const auto& targets = *req.prepare_migration_tables;
         for (auto& table : tables_to_build_maps) {
             // A table created after the request was made has no target and gets the
             // plain vnode-derived layout, which the load balancer splits later.

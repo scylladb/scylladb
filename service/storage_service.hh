@@ -303,9 +303,15 @@ public:
     future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
 
     // Prepares a vnode-based keyspace for migration to tablets.
-    // Builds tablet maps from vnode token boundaries for all tables and
-    // persists them to group0.
-    future<> prepare_for_tablets_migration(const sstring& ks_name);
+    // Builds tablet maps from vnode token boundaries and persists them to group0.
+    //
+    // When table_name is engaged only that table is prepared, which bounds the
+    // amount of data each node reshards on its next restart. The keyspace stays
+    // vnode-based until every one of its tables has been prepared and
+    // finalize_tablets_migration() flips it; until then the keyspace is in a
+    // transient mixed state where some tables use tablets and some use vnodes.
+    // Otherwise every table in the keyspace is prepared at once.
+    future<> prepare_for_tablets_migration(const sstring& ks_name, std::optional<sstring> table_name = std::nullopt);
 
     struct node_migration_status {
         locator::host_id host_id;
@@ -332,7 +338,12 @@ public:
     migration_status get_tablets_migration_status(const sstring& ks_name);
     future<keyspace_migration_status> get_tablets_migration_status_with_node_details(const sstring& ks_name);
     future<> set_node_intended_storage_mode(storage_mode mode);
-    future<> finalize_tablets_migration(const sstring& ks_name);
+    // Finalizes the migration of one table, or of the whole keyspace, which
+    // when going forward requires every one of its tables to be prepared.
+    // Rolling back concerns only the tables that were prepared. A finalized table runs on tablets
+    // for good: it is balanced, converges to its pow2 layout, and cannot be
+    // rolled back. The keyspace itself flips once its last table is finalized.
+    future<> finalize_tablets_migration(const sstring& ks_name, std::optional<sstring> table_name = std::nullopt);
 
     struct table_pow2_convergence_info {
         sstring table_name;
@@ -885,9 +896,15 @@ private:
 public:
     bool topology_global_queue_empty() const;
     future<bool> ongoing_rf_change(const group0_guard& guard, sstring ks) const;
+    struct ongoing_prepare_migration_request {
+        utils::UUID request_id;
+        // The table the request names, if it covers one table rather than the keyspace.
+        std::optional<sstring> table_name;
+    };
     // The prepare_migration request which is queued or executing, for `ks` or, without it,
     // for any keyspace, if there is one.
-    future<std::optional<utils::UUID>> ongoing_prepare_migration(const group0_guard& guard, std::optional<sstring> ks) const;
+    future<std::optional<ongoing_prepare_migration_request>> ongoing_prepare_migration(
+            const group0_guard& guard, std::optional<sstring> ks) const;
     future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> initialize_done_topology_upgrade_state();
     // Does the local part of global_token_metadata_barrier(), without a raft group0 barrier.
