@@ -1961,14 +1961,14 @@ future<> get_snapshot_details(std::unordered_map<sstring, db::snapshot_ctl::db_s
             if (!first) {
                 co_await out.write(", ");
             }
-            std::vector<ss::snapshot> snapshot;
+            json::json_chunked_list<ss::snapshot> snapshot;
             for (auto& cf : details) {
                 ss::snapshot snp;
                 snp.ks = cf.ks;
                 snp.cf = cf.cf;
                 snp.live = cf.details.live;
                 snp.total = cf.details.total;
-                snapshot.push_back(std::move(snp));
+                snapshot.push(std::move(snp));
             }
             ss::snapshots all_snapshots;
             all_snapshots.key = name;

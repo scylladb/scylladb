@@ -17,17 +17,9 @@
 
 namespace ss = httpd::storage_service_json;
 
-#ifndef SEASTAR_DEFAULT_ALLOCATOR
-// FIXME: remove once SCYLLADB-5320 is fixed
-constexpr unsigned get_snapshot_details_expected_failures = 1;
-#else
-constexpr unsigned get_snapshot_details_expected_failures = 0;
-#endif
-
 // Reproduces SCYLLADB-5320: listing the snapshots (GET /storage_service/snapshots)
 // must not build a contiguous array with one entry per table of the snapshot.
-SEASTAR_TEST_CASE(test_get_snapshot_details_no_large_allocation,
-        *boost::unit_test::expected_failures(get_snapshot_details_expected_failures)) {
+SEASTAR_TEST_CASE(test_get_snapshot_details_no_large_allocation) {
     constexpr size_t large_allocation_threshold = 128 * 1024;
     // The lowest number of tables for which a contiguous array of
     // response entries exceeds the threshold.
