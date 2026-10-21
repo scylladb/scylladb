@@ -336,19 +336,19 @@ std::span<const per_algorithm_stats, compression_algorithm::count()> advanced_rp
     return _stats;
 }
 
-stream_compressor& advanced_rpc_compressor::get_compressor(compression_algorithm algo) {
+stream_compressor& advanced_rpc_compressor::get_compressor(compression_algorithm algo, const shared_dict& dict) {
     switch (algo.get()) {
-    case compression_algorithm::type::LZ4: return get_global_lz4_cstream();
-    case compression_algorithm::type::ZSTD: return get_global_zstd_cstream();
+    case compression_algorithm::type::LZ4: return get_global_lz4_cstream(dict);
+    case compression_algorithm::type::ZSTD: return get_global_zstd_cstream(dict);
     case compression_algorithm::type::RAW: return the_raw_stream;
     default: __builtin_unreachable();
     }
 }
 
-stream_decompressor& advanced_rpc_compressor::get_decompressor(compression_algorithm algo) {
+stream_decompressor& advanced_rpc_compressor::get_decompressor(compression_algorithm algo, const shared_dict& dict) {
     switch (algo.get()) {
-    case compression_algorithm::type::LZ4: return get_global_lz4_dstream();
-    case compression_algorithm::type::ZSTD: return get_global_zstd_dstream();
+    case compression_algorithm::type::LZ4: return get_global_lz4_dstream(dict);
+    case compression_algorithm::type::ZSTD: return get_global_zstd_dstream(dict);
     case compression_algorithm::type::RAW: return the_raw_stream;
     default: __builtin_unreachable();
     }
@@ -376,7 +376,7 @@ rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf d
     auto uncompressed_size = data.size;
     auto compressed = std::invoke([&] {
         try {
-            return compress_impl(head_space + 1 + checksum_size + protocol_header_size, std::move(data), get_compressor(algo), true, rpc::snd_buf::chunk_size);
+            return compress_impl(head_space + 1 + checksum_size + protocol_header_size, std::move(data), get_compressor(algo, _control.sender_current_dict()), true, rpc::snd_buf::chunk_size);
         } catch (...) {
             arc_logger.error("Error during compression with algorithm {}: {:t}. ", algo.name(), std::current_exception());
             throw;
@@ -487,7 +487,7 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     auto compressed_size = data.size;
     auto decompressed = std::invoke([&] {
         try {
-            return decompress_impl(data, get_decompressor(algo), true, rpc::snd_buf::chunk_size);
+            return decompress_impl(data, get_decompressor(algo, _control.receiver_current_dict()), true, rpc::snd_buf::chunk_size);
          } catch (...) {
             arc_logger.error("Error during decompression with algorithm {}: {:t}. ", algo.name(), std::current_exception());
             throw;
@@ -516,27 +516,27 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     return decompressed;
 }
 
-zstd_dstream& advanced_rpc_compressor::get_global_zstd_dstream() {
+zstd_dstream& advanced_rpc_compressor::get_global_zstd_dstream(const shared_dict& dict) {
     auto& dstream = _tracker->get_global_zstd_dstream();
-    dstream.set_dict(_control.receiver_current_dict().zstd_ddict.get());
-    return _tracker->get_global_zstd_dstream();
-}
-
-zstd_cstream& advanced_rpc_compressor::get_global_zstd_cstream() {
-    auto& cstream = _tracker->get_global_zstd_cstream();
-    cstream.set_dict(_control.sender_current_dict().zstd_cdict.get());
-    return _tracker->get_global_zstd_cstream();
-}
-
-lz4_dstream& advanced_rpc_compressor::get_global_lz4_dstream() {
-    auto& dstream = _tracker->get_global_lz4_dstream();
-    dstream.set_dict(_control.receiver_current_dict().lz4_ddict);
+    dstream.set_dict(dict.zstd_ddict.get());
     return dstream;
 }
 
-lz4_cstream& advanced_rpc_compressor::get_global_lz4_cstream() {
+zstd_cstream& advanced_rpc_compressor::get_global_zstd_cstream(const shared_dict& dict) {
+    auto& cstream = _tracker->get_global_zstd_cstream();
+    cstream.set_dict(dict.zstd_cdict.get());
+    return cstream;
+}
+
+lz4_dstream& advanced_rpc_compressor::get_global_lz4_dstream(const shared_dict& dict) {
+    auto& dstream = _tracker->get_global_lz4_dstream();
+    dstream.set_dict(dict.lz4_ddict);
+    return dstream;
+}
+
+lz4_cstream& advanced_rpc_compressor::get_global_lz4_cstream(const shared_dict& dict) {
     auto& cstream = _tracker->get_global_lz4_cstream();
-    cstream.set_dict(_control.sender_current_dict().lz4_cdict.get());
+    cstream.set_dict(dict.lz4_cdict.get());
     return cstream;
 }
 
