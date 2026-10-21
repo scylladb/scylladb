@@ -15,7 +15,8 @@ from cassandra.policies import FallthroughRetryPolicy
 from cassandra.pool import Host
 from cassandra.query import SimpleStatement
 
-from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, get_table_raft_group_id, wait_for_leader
+from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, expect_retry_before_timeout, \
+    get_table_raft_group_id, wait_for_leader
 from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -28,6 +29,8 @@ NO_QUORUM_CONFIG = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 3000, 'read_
 WRITE_ERRORS = 'scylla_strong_consistency_coordinator_write_errors'
 READ_ERRORS = 'scylla_strong_consistency_coordinator_read_errors'
 READ_COUNT = 'scylla_strong_consistency_coordinator_read_latency_count'
+WRITE_RETRIES = 'scylla_strong_consistency_coordinator_write_retries'
+READ_RETRIES = 'scylla_strong_consistency_coordinator_read_retries'
 
 
 async def get_roles(manager: ScyllaClusterManager, servers: list[ServerInfo], ks: str, table_name: str) \
@@ -211,6 +214,30 @@ async def test_no_quorum_times_out_and_relaxed_read_answers(manager: ScyllaClust
 
         await wait_for_leader(manager, alive, group_id)
         assert [r.c for r in await cql.run_async(quorum_read, host=host_of[alive])] == [1]
+
+
+@pytest.mark.asyncio
+async def test_no_quorum_counts_leader_waits(manager: ScyllaClusterManager, scale_timeout):
+    """
+    Verify that a write and a QUORUM read on the only live replica of three are counted
+    as retries with reason "wait_for_leader": without a quorum no leader is elected, so
+    each request waits for one until its timeout.
+    """
+    async with sc_table(manager) as (cql, host_of, table, (group_id, leader, followers, non_replica)):
+        alive = followers[0]
+        write = f"INSERT INTO {table} (pk, c) VALUES (0, 1)"
+        read = f"SELECT c FROM {table} WHERE pk = 0"
+
+        # The leader dies last, so that the two followers never have a quorum to elect one of them.
+        async with down(manager, list(host_of), [followers[1], leader]):
+            async def no_leader() -> bool | None:
+                return await manager.api.get_raft_leader(alive.ip_addr, group_id) is None or None
+            await wait_for(no_leader, time.time() + 60, label=f"{alive} to report no leader of group {group_id}")
+
+            await expect_retry_before_timeout(manager, alive, write, WriteTimeout, WRITE_RETRIES, 'wait_for_leader',
+                                              scale_timeout, host=host_of[alive])
+            await expect_retry_before_timeout(manager, alive, read, ReadTimeout, READ_RETRIES, 'wait_for_leader',
+                                              scale_timeout, host=host_of[alive], consistency_level=ConsistencyLevel.QUORUM)
 
 
 @pytest.mark.asyncio

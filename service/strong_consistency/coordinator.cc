@@ -94,6 +94,26 @@ void stats::register_stats() {
             {reason_label("other"), sg_label})
             .set_skip_when_empty(),
 
+        sm::make_counter("write_retries", write_retries_wait_for_leader,
+            sm::description("number of times strong consistency write requests were retried"),
+            {reason_label("wait_for_leader"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("write_retries", write_retries_stale_leader,
+            sm::description("number of times strong consistency write requests were retried"),
+            {reason_label("stale_leader"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("write_retries", write_retries_not_a_leader,
+            sm::description("number of times strong consistency write requests were retried"),
+            {reason_label("not_a_leader"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("write_retries", write_retries_dropped_entry,
+            sm::description("number of times strong consistency write requests were retried"),
+            {reason_label("dropped_entry"), sg_label})
+            .set_skip_when_empty(),
+
         sm::make_counter("write_node_bounces", write_node_bounces,
             sm::description("number of strong consistency write requests bounced to another node"), {sg_label})
             .set_skip_when_empty(),
@@ -133,6 +153,16 @@ void stats::register_stats() {
         sm::make_counter("read_errors", read_errors_other,
             sm::description("number of strong consistency read requests that failed"),
             {reason_label("other"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("read_retries", read_retries_wait_for_leader,
+            sm::description("number of times strong consistency read requests were retried"),
+            {reason_label("wait_for_leader"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("read_retries", read_retries_stale_leader,
+            sm::description("number of times strong consistency read requests were retried"),
+            {reason_label("stale_leader"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("read_node_bounces", read_node_bounces,
@@ -579,6 +609,7 @@ auto coordinator::mutate(schema_ptr schema,
                     schema->ks_name(), schema->cf_name(), op->replicas.tablet_id(), leader_host_id,
                     op->replicas.transition_stage());
 
+                ++get_stats().write_retries_stale_leader;
                 auto f = co_await coroutine::as_future(
                         op->raft_server.server().wait_for_leader(&aoe.abort_source(), true));
                 if (f.failed()) {
@@ -591,6 +622,7 @@ auto coordinator::mutate(schema_ptr schema,
             co_return redirect_to_leader(*target, _groups_manager, op->replicas.group_id());
         }
         if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+            ++get_stats().write_retries_wait_for_leader;
             auto f = co_await coroutine::as_future(std::move(wait_for_leader->future));
             if (f.failed()) {
                 co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
@@ -643,6 +675,11 @@ auto coordinator::mutate(schema_ptr schema,
             logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, {}",
                 ex, schema->ks_name(), schema->cf_name(), state_fmt);
 
+            if (try_catch<raft::not_a_leader>(ex)) {
+                ++get_stats().write_retries_not_a_leader;
+            } else {
+                ++get_stats().write_retries_dropped_entry;
+            }
             continue;
         }
 
@@ -745,6 +782,7 @@ auto coordinator::query(schema_ptr schema,
                         schema->ks_name(), schema->cf_name(), op.replicas.tablet_id(), leader_host_id,
                         op.replicas.transition_stage());
 
+                    ++get_stats().read_retries_stale_leader;
                     future<> f = co_await coroutine::as_future(
                             op.raft_server.server().wait_for_leader(&aoe.abort_source(), true));
                     if (f.failed()) {
@@ -757,6 +795,7 @@ auto coordinator::query(schema_ptr schema,
                 co_return redirect_to_leader(*target, _groups_manager, op.replicas.group_id());
             }
             if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+                ++get_stats().read_retries_wait_for_leader;
                 future<> f = co_await coroutine::as_future(std::move(wait_for_leader->future));
                 if (f.failed()) {
                     co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
