@@ -988,7 +988,7 @@ database::init_logstor() {
             .disk_size = _cfg.logstor_disk_size_in_mb() * 1024ull * 1024ull,
             .format_on_startup = _cfg.logstor_format_on_startup(),
             .sparse_files = _cfg.logstor_sparse_files(),
-            .trigger_compaction_threshold = _cfg.logstor_compaction_trigger_threshold,
+            .compaction_utilization_threshold = _cfg.logstor_compaction_utilization_threshold,
             .compaction_sg = _dbcfg.logstor_compaction_scheduling_group,
             .compaction_static_shares = _cfg.compaction_static_shares,
             .compaction_max_shares = _cfg.logstor_compaction_max_shares,

@@ -246,22 +246,20 @@ future<> writeable_segment::do_write(segment_position pos, bytes_view data) {
 
 using seg_ptr = lw_shared_ptr<writeable_segment>;
 
-// Maps compaction_shares_pressure() to CPU shares. The backlog is the pressure itself, so control
-// point inputs are in [0, 1]. The maximum output is logstor_compaction_max_shares.
+// Maps the shares demand of the compaction driver, the space pressure in [0, 1], to CPU shares. The
+// pressure is 0 at or above the threshold anchor and 1 at the space floor, see
+// compaction_space_pressure(). The maximum output is logstor_compaction_max_shares.
 //
 // Each control point sits on an anchor of the pressure ramp:
 //
-//   - pressure 0, at or above automatic compaction's stop watermark: nothing to reclaim, so only
-//     explicitly submitted compaction runs, at the same floor the sstable controller uses;
-//   - pressure compaction_shares_pressure_at_target, at the free-segment target: the intended
-//     steady-state operating point;
-//   - pressure 1, once half the target has been consumed: compaction is losing against the write
-//     rate and gets the maximum.
+//   - pressure 0, at or above the threshold anchor: compaction runs at the same floor the sstable
+//     controller uses;
+//   - pressure compaction_shares_pressure_at_target, a third of the way from the anchor to the space
+//     floor;
+//   - pressure 1, at the space floor: compaction is losing against the write rate and gets the
+//     maximum.
 //
-// Shares therefore grow gently across the trigger's hysteresis band, where the target has already
-// been met, and six times faster below the target. The exact output at the target is not critical:
-// the loop settles at whatever shares match the write rate, and this constant only decides how far
-// below the target it settles.
+// The loop settles at whatever shares match the write rate.
 class compaction_shares_controller : public backlog_controller {
 public:
     static constexpr float idle_shares = 50.0f;
@@ -309,10 +307,12 @@ public:
 
     struct compaction_config {
         bool compaction_enabled;
-        // Upper bound on the batch cap; the cap actually used is derived from the free-segment
-        // target by make_compaction_limits().
+        // Upper bound on the batch cap; the cap actually used is derived from the compaction
+        // space floor by make_compaction_limits().
         size_t max_segments_per_compaction;
-        utils::updateable_value<double> trigger_compaction_threshold;
+        // A segment is a candidate for automatic compaction while its utilization is under this,
+        // see compaction_rate_controller. Anything outside [0, 1) disables it.
+        utils::updateable_value<double> compaction_utilization_threshold;
         seastar::scheduling_group compaction_sg;
         utils::updateable_value<float> compaction_static_shares;
         utils::updateable_value<float> compaction_max_shares;
@@ -369,7 +369,7 @@ public:
                 _cfg.compaction_sg,
                 _cfg.compaction_static_shares.get(),
                 _cfg.compaction_max_shares.get(),
-                std::chrono::milliseconds(250),
+                compaction_rate_control_period,
                 [this] {
                     return float(_driver.shares_demand());
                 }
@@ -383,7 +383,8 @@ public:
         }))
         , _driver(*this, compaction_driver::config{
                 .max_segments_per_compaction = _cfg.max_segments_per_compaction,
-                .trigger_threshold = _cfg.trigger_compaction_threshold,
+                .utilization_threshold = _cfg.compaction_utilization_threshold,
+                .sg = _cfg.compaction_sg,
             })
     {}
 
@@ -404,10 +405,10 @@ public:
     future<> remove(logstor_group&) override;
     future<compaction_reenabler> disable_compaction(logstor_group&) override;
     compaction_reenabler disable_compaction_no_wait(logstor_group&) override;
+    // `limits` bound the batch the job picks: the automatic policy's, or anything with a net gain for
+    // a compaction that was asked for explicitly.
     future<> submit_normal_compaction(logstor_group&, compaction_batch_limits limits) override;
     future<> submit_split_compaction(logstor_group&, mutation_writer::classify_by_token_group, split_target_group) override;
-
-    void schedule_auto_compaction() { _driver.schedule(); }
 
 private:
     // compaction_driver::host
@@ -416,6 +417,8 @@ private:
     compaction_driver::shard_sample sample() const noexcept override;
 
     std::optional<compaction_driver::candidate> select_segments_for_compaction(logstor_group&, const compaction_batch_limits&);
+    // Undoes one disable_compaction() of the group.
+    void enable_compaction(logstor_group&) noexcept;
 
     future<> submit_group_compaction(logstor_group&, std::function<future<>(group_compaction_state&)>, scheduling_group);
     future<> do_compaction(logstor_group&, compaction_batch_limits, abort_source&);
@@ -865,6 +868,8 @@ future<> compaction_manager_impl::start() {
 compaction_driver::shard_sample compaction_manager_impl::sample() const noexcept {
     return compaction_driver::shard_sample{
         .available_segments = _sm.available_segment_count(write_source::normal_write),
+        .utilization = _sm._segment_stats.utilization,
+        .dead_segments = _sm._segment_stats.dead_segments,
     };
 }
 
@@ -924,7 +929,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     , _compaction_mgr(*this, compaction_manager_impl::compaction_config{
             .compaction_enabled = config.compaction_enabled,
             .max_segments_per_compaction = config.max_segments_per_compaction,
-            .trigger_compaction_threshold = config.trigger_compaction_threshold,
+            .compaction_utilization_threshold = config.compaction_utilization_threshold,
             .compaction_sg = config.compaction_sg,
             .compaction_static_shares = config.compaction_static_shares,
             .compaction_max_shares = config.compaction_max_shares,
@@ -1410,8 +1415,6 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
             co_return co_await make_segment(seg_id);
         }
 
-        _compaction_mgr.schedule_auto_compaction();
-
         // reuse freed segments
         if (!_free_segments.empty()) {
             auto seg_id = _free_segments.front();
@@ -1419,9 +1422,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
             co_return co_await make_segment(seg_id);
         }
 
-        // no free segments - wait for a segment to be freed.
-        // compaction might fail to free segments now, but can succeed later as data is freed.
-        // for now let's solve it by waiting with a timeout to re-trigger compaction periodically.
+        // No free segment. Compaction can free segments later, so wait and try again.
         try {
             co_await _segment_freed_cv.wait(std::chrono::seconds(5));
         } catch (seastar::broken_condition_variable&) {
@@ -1565,7 +1566,9 @@ future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std
             logstor_logger.warn("logstor compaction failed: {}", ep);
             return make_exception_future<>(std::move(ep));
         }));
-        co_return co_await state->completion.get_future();
+        auto f = co_await coroutine::as_future(state->completion.get_future());
+        _driver.notify_group_idle();
+        co_return co_await std::move(f);
     }
 
     co_await coroutine::return_exception(std::runtime_error("logstor compaction submission is closed"));
@@ -1630,11 +1633,15 @@ future<compaction_reenabler> compaction_manager_impl::disable_compaction(logstor
     f.ignore_ready_future();
 
     co_return compaction_reenabler([this, &cg] {
-        auto it = _groups.find(&cg);
-        if (it != _groups.end()) {
-            --it->second->compaction_disabled_counter;
-        }
+        enable_compaction(cg);
     });
+}
+
+void compaction_manager_impl::enable_compaction(logstor_group& cg) noexcept {
+    auto it = _groups.find(&cg);
+    if (it != _groups.end() && --it->second->compaction_disabled_counter == 0) {
+        _driver.notify_group_idle();
+    }
 }
 
 compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor_group& cg) {
@@ -1643,10 +1650,7 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
     ++state.compaction_disabled_counter;
 
     return compaction_reenabler([this, &cg] {
-        auto it = _groups.find(&cg);
-        if (it != _groups.end()) {
-            --it->second->compaction_disabled_counter;
-        }
+        enable_compaction(cg);
     });
 }
 
