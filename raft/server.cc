@@ -50,11 +50,13 @@ struct awaited_index {
 };
 
 struct awaited_conf_change {
-    // Index of the joint configuration entry whose non-joint successor is
-    // being waited for. Every committed configuration above it is either that
-    // joint one or something newer, which is what lets a snapshot's own
-    // configuration say whether the change went through.
-    index_t joint_idx;
+    // Index of the configuration entry this change appended: the joint
+    // C_old,new, whose non-joint successor is being waited for, or, when the
+    // voter set is unchanged, the simple C_new itself. Every committed
+    // configuration at or above it is that entry, its successor or something
+    // newer, which is what lets a snapshot's own configuration say whether
+    // the change went through.
+    index_t conf_idx;
     seastar::promise<> promise;
     optimized_optional<abort_source::subscription> abort;
 };
@@ -1515,37 +1517,43 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
             // notify_commit_waiters() asserts.
             drop_commit_waiters(&snp);
             if (_non_joint_conf_commit_promise && !snp.config.is_joint() &&
-                    snp.idx >= _non_joint_conf_commit_promise->joint_idx) {
+                    snp.idx >= _non_joint_conf_commit_promise->conf_idx) {
                 // A configuration change is in progress here, and the
                 // snapshot says it has gone through. snp.config is the
-                // configuration committed as of snp.idx, and the joint entry
-                // this change appended is below that, so its own fate was
+                // configuration committed as of snp.idx, and the entry this
+                // change appended -- joint, or simple when the voter set is
+                // unchanged -- is at or below that, so its own fate was
                 // decided by the drop above. Either it committed here, and
-                // then a non-joint configuration committed above it can only
-                // be the C_new entry the fsm appends when a joint
-                // configuration commits; or it was replaced, and
-                // set_configuration() is about to throw out of its first wait
-                // and discard the value set here.
+                // then a non-joint configuration committed at or above it is
+                // the change's C_new: the simple entry itself, or the one the
+                // fsm appends when a joint configuration commits; or it was
+                // replaced, and set_configuration() is about to throw out of
+                // its first wait and discard the value set here.
                 //
-                // And this is the only sign of it we will get. That entry is
-                // gone with the log this snapshot replaced, so no committed
+                // And this is the only sign of it we will get. The C_new entry
+                // is gone with the log this snapshot replaced, so no committed
                 // batch will ever carry it (see fsm::get_output(), which
                 // reports from above the snapshot index), and set_configuration()
                 // would wait on its promise until the server was aborted.
                 //
                 // The index has to be compared: the promise is engaged before
-                // the joint entry is known committed, so a snapshot that does
+                // the change's entry is known committed, so a snapshot that does
                 // not reach it can arrive while the change is pending. The
                 // configuration committed at such a snapshot is the one the
                 // change is replacing, and says nothing about the change --
-                // whose joint entry went with the log the snapshot replaced,
+                // whose entry went with the log the snapshot replaced,
                 // leaving its commit waiter to be failed once the index is
-                // committed by whoever took over. It is `>=`: a single-entry change's
-                // own entry is C_new, so a snapshot at it completes the change; a
-                // snapshot at a joint entry is joint and is excluded above.
+                // committed by whoever took over. It is `>=`: a single-entry
+                // change's own entry is C_new, so a snapshot at it completes
+                // the change; a snapshot at a joint entry is joint and is
+                // excluded above.
+                //
+                // For how a single-entry change gets here, see
+                // test_non_voter_conf_change_completed_by_a_snapshot_aux() in
+                // test/raft/raft_server_test.cc.
                 logger.trace("[{}] io_fiber: snapshot {} at idx {} carries a non-joint configuration,"
                         " completing the configuration change at idx {}",
-                        _tag, snp.id, snp.idx, _non_joint_conf_commit_promise->joint_idx);
+                        _tag, snp.id, snp.idx, _non_joint_conf_commit_promise->conf_idx);
                 std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_value();
             }
             // Settle here, while the snapshot's term is at hand, which apply
@@ -1594,7 +1602,8 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         // (the messages go out below), so it can never commit on this server,
         // and neither can any successor of it -- which is the only way to reach
         // the window where a snapshot is what carries the change through.
-        if (_non_joint_conf_commit_promise && last_stable > _non_joint_conf_commit_promise->joint_idx) {
+        // Meant for joint changes only; see set_configuration().
+        if (_non_joint_conf_commit_promise && last_stable > _non_joint_conf_commit_promise->conf_idx) {
             co_await utils::get_local_injector().inject("block_raft_io_fiber_at_non_joint_conf",
                     utils::wait_for_message(std::chrono::minutes(5)));
         }
@@ -2401,15 +2410,17 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
 
     const auto& e = _fsm->add_entry(raft::configuration{std::move(c_new)});
 
-    // We've just submitted a joint configuration to be committed.
+    // We've just submitted a configuration to be committed: joint or,
+    // when the voter set is unchanged, simple (see fsm::add_entry()).
     // Once the FSM discovers a committed joint configuration,
-    // it appends a corresponding non-joint entry.
-    // By waiting for the joint configuration first we ensure
+    // it appends a corresponding non-joint entry; a simple one is
+    // that non-joint entry itself.
+    // By waiting for the submitted entry first we ensure
     // that the next non-joint configuration we get from fsm in io_fiber
-    // would be the one corresponding to our joint configuration,
+    // would be the one corresponding to our change,
     // no matter if the leader changed in the meantime.
 
-    auto f = _non_joint_conf_commit_promise.emplace(awaited_conf_change{.joint_idx = e.idx}).promise.get_future();
+    auto f = _non_joint_conf_commit_promise.emplace(awaited_conf_change{.conf_idx = e.idx}).promise.get_future();
     if (as) {
         _non_joint_conf_commit_promise->abort = as->subscribe([this, idx = e.idx, term = e.term] noexcept {
             // If we're inside this callback, the subscription wasn't destroyed yet.
@@ -2437,7 +2448,10 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
     // Lets a test hold the caller here: the joint configuration is committed
     // and the non-joint one is still pending, which is the window in which a
     // snapshot can be the only thing that carries the change through (see
-    // process_fsm_output()).
+    // process_fsm_output()). The hook is meant for joint changes: a
+    // single-entry change's own entry is C_new, so it is complete once that
+    // entry is committed, yet it reaches this point too, so a test of a
+    // single-entry change must not enable the hook.
     co_await utils::get_local_injector().inject("block_raft_set_configuration_before_non_joint",
             utils::wait_for_message(std::chrono::minutes(5)));
 
