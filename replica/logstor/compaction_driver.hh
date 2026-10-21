@@ -177,8 +177,9 @@ private:
     // Returns true when the marginal admission gate refuses `c`, a batch that would run next to the
     // jobs in flight, against the best batch of its ranking. It counts and logs a refusal.
     bool refuse_marginal(const candidate& c, const compaction_candidate_score& admission_bar);
-    // Submits the job of `c`, which holds `units` of the driver's semaphore until it finishes.
-    void start_job(candidate c, semaphore_units<> units);
+    // Submits the job of `c` under `limits`. The job holds `units` of the driver's semaphore until
+    // the job finishes.
+    void start_job(candidate c, compaction_batch_limits limits, semaphore_units<> units);
 };
 
 } // namespace replica::logstor
