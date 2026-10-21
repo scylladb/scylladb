@@ -268,6 +268,10 @@ private:
 
 // Executes the CQL requests which other nodes forward to this node with the
 // FORWARD_CQL_EXECUTE and FORWARD_CQL_PREPARE verbs.
+//
+// The verbs are registered from before messaging_service starts listening until
+// after it shuts down. Forwarded requests need auth::service, so a request which
+// arrives before auth::service starts waits for it until the request times out.
 class cql_forwarding_service : public seastar::peering_sharded_service<cql_forwarding_service> {
     sharded<cql3::query_processor>& _query_processor;
     cql_processor& _processor;
@@ -277,20 +281,29 @@ class cql_forwarding_service : public seastar::peering_sharded_service<cql_forwa
     scheduling_group_key _stats_key;
     // Aborts the forwarded requests running on this shard when the service is drained.
     seastar::abort_source _abort_source;
+    // Resolved by set_auth_started(). Broken by drain() if auth::service did not start.
+    shared_promise<with_clock<lowres_clock>> _auth_started;
     // Resolved when the drain started by the first drain() call finishes.
     std::optional<shared_future<>> _drained;
 public:
     cql_forwarding_service(sharded<cql3::query_processor>& qp, cql_processor& processor, sharded<auth::service>& auth_service,
             qos::service_level_controller& sl_controller, netw::messaging_service& ms, scheduling_group_key stats_key);
 
+    // Lets the forwarded requests on this shard use auth::service.
+    // Must be called only after auth::service has started on all shards.
+    // Has no effect if drain() was called first.
+    void set_auth_started() noexcept;
     // Unregisters the verbs and waits for the forwarded requests to finish.
-    // Must be called before the commitlog shuts down. Can be called more than once,
-    // and every call waits for the drain to finish.
+    // Must be called before the commitlog shuts down and before auth::service stops.
+    // Can be called more than once, and every call waits for the drain to finish.
     future<> drain();
     future<> stop();
 private:
     void init_messaging_service();
     future<> uninit_messaging_service();
+    // Waits until set_auth_started() is called.
+    // Fails if the coordinator times out the request first, or if the service is drained.
+    future<> wait_for_auth(std::optional<lowres_clock::time_point> timeout);
     future<forward_cql_execute_response> handle_forward_execute(service::query_state& qs, forward_cql_execute_request& req);
 };
 
