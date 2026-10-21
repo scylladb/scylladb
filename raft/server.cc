@@ -262,11 +262,13 @@ public:
     future<> add_entry(command command, wait_type type, seastar::abort_source* as) override;
     future<> set_configuration(config_member_set c_new, seastar::abort_source* as) override;
     raft::configuration get_configuration() const override;
+    bool is_configuration_committed() const override;
     future<> start() override;
     future<> abort(sstring reason) override;
     bool is_alive() const override;
     term_t get_current_term() const override;
     future<> read_barrier(seastar::abort_source* as) override;
+    future<> commit_barrier(seastar::abort_source* as) override;
     void wait_until_candidate() override;
     future<> wait_election_done() override;
     future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) override;
@@ -305,6 +307,8 @@ private:
     index_t _snapshot_desc_idx;
     std::list<active_read> _reads;
     std::multimap<index_t, awaited_index> _awaited_indexes;
+    // Like _awaited_indexes, for the commit index.
+    std::multimap<index_t, awaited_index> _awaited_commit_indexes;
 
     // Set to abort reason when abort() is called
     std::optional<sstring> _aborted;
@@ -418,6 +422,8 @@ private:
     // Wake up all waiter that wait for entries with idx smaller of equal to the one provided
     // to be applied.
     void signal_applied();
+    // The same for waiters on the commit index.
+    void signal_committed();
 
     // Processes FSM output by doing the following steps in order:
     //  - persist the current term and vote
@@ -504,6 +510,14 @@ private:
     // is typically already committed, so we don't worry about the
     // term.
     future<> wait_for_apply(index_t idx, abort_source*);
+    // Wait for the local commit index to reach idx, however far behind the
+    // state machine is.
+    future<> wait_for_commit(index_t idx, abort_source*);
+    // The read index of a read barrier: the leader's commit index, once the
+    // leader confirmed it is still the leader. Waits for the local applier
+    // while the leader isn't ready to answer, or for the local commit index
+    // if commit_only is set.
+    future<index_t> get_read_barrier_idx(seastar::abort_source* as, bool commit_only);
 
     void check_not_aborted();
     void handle_background_error(const char* fiber_name);
@@ -1370,6 +1384,18 @@ void server_impl::signal_applied() {
     }
 }
 
+void server_impl::signal_committed() {
+    auto it = _awaited_commit_indexes.begin();
+
+    while (it != _awaited_commit_indexes.end()) {
+        if (it->first > _fsm->commit_idx()) {
+            break;
+        }
+        it->second.promise.set_value();
+        it = _awaited_commit_indexes.erase(it);
+    }
+}
+
 template <typename Message>
 void server_impl::send_message(server_id id, Message m) {
     std::visit([this, id] (auto&& m) {
@@ -1607,6 +1633,10 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         }
         _rpc->on_configuration_change({}, rpc_diff.leaving);
     }
+
+    // Before the committed entries are persisted, and also when only a
+    // snapshot moved the commit index.
+    signal_committed();
 
     // Process committed entries.
     if (!batch.committed.ids.empty()) {
@@ -2066,6 +2096,31 @@ future<> server_impl::wait_for_apply(index_t idx, abort_source* as) {
     }
 }
 
+future<> server_impl::wait_for_commit(index_t idx, abort_source* as) {
+    if (as && as->abort_requested()) {
+        throw request_aborted(format(
+                "Aborted before waiting for committing entry: {}, last committed entry: {}, last applied entry: {}",
+                idx, _fsm->commit_idx(), _applied_idx));
+    }
+
+    check_not_aborted();
+
+    if (idx > _fsm->commit_idx()) {
+        auto it = _awaited_commit_indexes.emplace(idx, awaited_index{{}, {}});
+        if (as) {
+            it->second.abort = as->subscribe([this, it] noexcept {
+                it->second.promise.set_exception(
+                    request_aborted(format(
+                            "Aborted while waiting to commit entry: {}, last committed entry: {}, last applied entry: {}",
+                            it->first, _fsm->commit_idx(), _applied_idx)));
+                _awaited_commit_indexes.erase(it);
+            });
+            SCYLLA_ASSERT(it->second.abort);
+        }
+        co_await it->second.promise.get_future();
+    }
+}
+
 future<read_barrier_reply> server_impl::execute_read_barrier(server_id from, seastar::abort_source* as) {
     check_not_aborted();
 
@@ -2108,12 +2163,12 @@ future<read_barrier_reply> server_impl::get_read_idx(server_id leader, seastar::
     }
 }
 
-future<> server_impl::read_barrier(seastar::abort_source* as) {
-    logger.trace("[{}] read_barrier start", _tag);
+future<index_t> server_impl::get_read_barrier_idx(seastar::abort_source* as, bool commit_only) {
     index_t read_idx;
 
     co_await do_on_leader_with_retries(as, [&](const server_id& leader) -> future<do_on_leader_result> {
         auto applied = _applied_idx;
+        auto committed = _fsm->commit_idx();
         read_barrier_reply res;
         try {
             res = co_await get_read_idx(leader, as);
@@ -2126,7 +2181,11 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
             // committed any entries yet, so wait for any entry to be
             // committed (if non were since start of the attempt) and retry.
             logger.trace("[{}] read_barrier leader not ready", _tag);
-            co_await wait_for_apply(++applied, as);
+            if (commit_only) {
+                co_await wait_for_commit(++committed, as);
+            } else {
+                co_await wait_for_apply(++applied, as);
+            }
             co_return retry_now{};
         }
         if (std::holds_alternative<raft::not_a_leader>(res)) {
@@ -2135,9 +2194,21 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
         read_idx = std::get<index_t>(res);
         co_return done{};
     });
+    co_return read_idx;
+}
 
+future<> server_impl::read_barrier(seastar::abort_source* as) {
+    logger.trace("[{}] read_barrier start", _tag);
+    const auto read_idx = co_await get_read_barrier_idx(as, false);
     logger.trace("[{}] read_barrier read index {}, applied index {}", _tag, read_idx, _applied_idx);
     co_return co_await wait_for_apply(read_idx, as);
+}
+
+future<> server_impl::commit_barrier(seastar::abort_source* as) {
+    logger.trace("[{}] commit_barrier start", _tag);
+    const auto read_idx = co_await get_read_barrier_idx(as, true);
+    logger.trace("[{}] commit_barrier read index {}, commit index {}", _tag, read_idx, _fsm->commit_idx());
+    co_return co_await wait_for_commit(read_idx, as);
 }
 
 void server_impl::abort_snapshot_transfer(server_id id) {
@@ -2258,6 +2329,10 @@ future<> server_impl::abort(sstring reason) {
         i.second.promise.set_exception(stopped_error(*_aborted));
     }
     _awaited_indexes.clear();
+    for (auto& i : _awaited_commit_indexes) {
+        i.second.promise.set_exception(stopped_error(*_aborted));
+    }
+    _awaited_commit_indexes.clear();
 
     co_await maybe_note_error(
         seastar::when_all_succeed(
@@ -2372,6 +2447,10 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
 raft::configuration
 server_impl::get_configuration() const {
     return _fsm->get_configuration();
+}
+
+bool server_impl::is_configuration_committed() const {
+    return _fsm->log_last_conf_idx() <= _fsm->commit_idx();
 }
 
 server_status server_impl::get_status() const {
