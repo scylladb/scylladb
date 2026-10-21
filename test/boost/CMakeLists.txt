@@ -182,6 +182,8 @@ add_scylla_test(logstor_test
   KIND SEASTAR)
 add_scylla_test(logstor_compaction_policy_test
   KIND SEASTAR)
+add_scylla_test(logstor_compaction_driver_test
+  KIND SEASTAR)
 add_scylla_test(logstor_cache_test
   KIND SEASTAR)
 add_scylla_test(logstor_file_test
