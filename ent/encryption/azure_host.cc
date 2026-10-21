@@ -79,8 +79,10 @@ private:
 
 class azure_host::impl {
 public:
-    static inline constexpr std::chrono::milliseconds default_expiry = 600s;
-    static inline constexpr std::chrono::milliseconds default_refresh = 1200s;
+    static inline constexpr std::chrono::milliseconds default_expiry = 1200s;
+    static inline constexpr std::chrono::milliseconds default_refresh = 300s;
+    // The timer ticks every refresh, so an entry can age 2*refresh before reload; expiry must exceed that.
+    static_assert(2 * default_refresh < default_expiry);
 
     impl(encryption_context*, const std::string& name, const host_options& options);
     future<> init();
