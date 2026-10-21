@@ -15,6 +15,10 @@
 #include "db/commitlog/replay_position.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
 
+namespace cql3 {
+class query_processor;
+}
+
 namespace db {
 class system_keyspace;
 namespace raft_buffer_detail {

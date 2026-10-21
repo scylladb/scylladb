@@ -14,6 +14,10 @@
 #include "mutation/mutation.hh"
 #include "service/raft/group0_fwd.hh"
 
+namespace cql3 {
+class query_processor;
+}
+
 namespace gms {
 class feature_service;
 }

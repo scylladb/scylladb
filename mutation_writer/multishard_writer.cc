@@ -17,6 +17,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/smp.hh>
+#include "tracing/trace_state.hh"
 
 namespace mutation_writer {
 
