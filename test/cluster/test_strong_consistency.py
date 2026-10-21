@@ -1814,6 +1814,42 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_foreground_requests_metrics(manager: ScyllaClusterManager):
+    """
+    Verify that a write and a read are counted in foreground_writes and foreground_reads
+    while the coordinator executes them, and no longer once they are done.
+    """
+    [server] = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+
+    async def foreground() -> tuple[float, float]:
+        metrics = await manager.metrics.query(server.ip_addr)
+        return (metrics.get('scylla_strong_consistency_coordinator_foreground_writes') or 0,
+                metrics.get('scylla_strong_consistency_coordinator_foreground_reads') or 0)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
+
+            paused = ["sc_coordinator_wait_before_begin_mutate", "sc_coordinator_wait_before_query_read_barrier"]
+            for injection in paused:
+                await manager.api.enable_injection(server.ip_addr, injection, one_shot=True)
+            write_fut = cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (10, 10)")
+            read_fut = cql.run_async(f"SELECT * FROM {table} WHERE pk = 0")
+            for injection in paused:
+                await manager.api.wait_for_injection_enter(server.ip_addr, injection)
+
+            assert await foreground() == (1, 1)
+
+            for injection in paused:
+                await manager.api.message_injection(server.ip_addr, injection)
+            await write_fut
+            await read_fut
+
+            assert await foreground() == (0, 0)
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_stepdown_on_graceful_shutdown(manager: ScyllaClusterManager):
     """
     Verify that a node which is being shut down gracefully hands the leadership
