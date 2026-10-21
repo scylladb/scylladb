@@ -27,6 +27,7 @@ from cassandra.query import SimpleStatement
 
 from test.cluster.dtest_helpers import create_ks as dtest_create_ks
 from test.cluster.dtest_helpers import topology
+from test.cluster.util import new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
@@ -450,6 +451,7 @@ async def test_alter_inner_udt_by_another_udt(manager: ScyllaClusterManager):
     assert_row_count(session, "entity", rows_num, consistency_level=ConsistencyLevel.QUORUM)
     assert_row_count(session, "entity_by_type", rows_num, consistency_level=ConsistencyLevel.QUORUM)
 
+
 # Ported from scylla-dtest user_types_test.py::TestUserTypes::test_case_sensitive_type_name.
 # A quoted type name is case sensitive: "PHone" and phone are two types, each
 # usable as a non-frozen column, a frozen column and in a frozen list;
@@ -499,3 +501,36 @@ async def test_case_sensitive_type_name(manager: ScyllaClusterManager):
     session.execute('DROP TYPE "PHone"')
     rows = list(session.execute("SELECT pn FROM new_cf3 WHERE pk=0"))
     assert listify(rows[0]) == [[["86", 123], ["88", 789]]]
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_udt_encoding(manager: ScyllaClusterManager):
+    """User type literals inside a map, which the driver cannot tell from
+    maps, are checked by the server: unknown fields and wrongly typed fields
+    are rejected. A type used in a partition key cannot have its fields
+    renamed, while a type in a regular column can get new fields. Ported
+    from dtest udtencoding_test.py; like the dtest, the session USEs the
+    keyspace and the statements name types and tables without it."""
+    servers = await manager.servers_add(3, auto_rack_dc="dc1", config={"tablets_mode_for_new_keyspaces": "disabled"})
+    async with new_test_keyspace(manager, RF3) as ks:
+        cql = await manager.get_cql_exclusive(servers[0])
+        cql.set_keyspace(ks)
+        cql.execute("CREATE TYPE address (city text, zip int)")
+        cql.execute("CREATE TABLE user_profiles (login text PRIMARY KEY, addresses map<text, frozen<address>>)")
+        cql.execute("INSERT INTO user_profiles (login, addresses) VALUES ('tsmith', {'home': {city: 'San Fransisco', zip: 94110}})")
+        with pytest.raises(InvalidRequest, match="Unknown field 'street' in value of user defined type address"):
+            cql.execute("INSERT INTO user_profiles (login, addresses) VALUES ('jsmith', {'home': {street: 'El Camino Real', city: 'San Fransisco', zip: 94110}})")
+        with pytest.raises(InvalidRequest, match="Unknown field 'cityname' in value of user defined type address"):
+            cql.execute("INSERT INTO user_profiles (login, addresses) VALUES ('fsmith', {'home': {cityname: 'San Fransisco', zip: 94110}})")
+        with pytest.raises(InvalidRequest, match="Invalid map literal for addresses"):
+            cql.execute("INSERT INTO user_profiles (login, addresses) VALUES ('fsmith', {'home': {city: 'San Fransisco', zip: '94110'}})")
+
+    async with new_test_keyspace(manager, RF3) as ks:
+        cql.set_keyspace(ks)
+        cql.execute("CREATE TYPE full_name (first_name text, last_name text)")
+        cql.execute("CREATE TYPE address (city text, zip int)")
+        cql.execute("CREATE TABLE user_profile (name frozen<full_name>, username text, residential_address address, PRIMARY KEY (name, username))")
+        cql.execute("INSERT INTO user_profile (name, username, residential_address) VALUES "
+                    "({first_name: 'John', last_name: 'Smith'}, 'jsmith', {city: 'San Francisco', zip: 93210})")
+        with pytest.raises(InvalidRequest):
+            cql.execute("ALTER TYPE full_name RENAME last_name TO surname")
+        cql.execute("ALTER TYPE address ADD country text")
