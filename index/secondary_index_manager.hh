@@ -14,13 +14,16 @@
 
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/statements/index_target.hh"
-#include "cql3/statements/index_prop_defs.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "utils/estimated_histogram.hh"
 
 #include <string_view>
 #include <vector>
+
+namespace cql3::statements {
+class index_specific_prop_defs;
+}
 
 namespace cql3::expr {
 
