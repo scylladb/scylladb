@@ -20,6 +20,7 @@
 #include <absl/container/btree_set.h>
 #include <seastar/util/defer.hh>
 
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -152,7 +153,14 @@ private:
         return tablet_size_opt;
     }
 
-    future<> populate_table(table_id table, const tablet_map& tmap, std::optional<host_id> host, std::optional<sstring> only_dc) {
+    using table_predicate = std::function<bool(table_id)>;
+
+    // ignore_missing_sizes names the tables whose missing tablet sizes must not
+    // make a node count as incompletely measured. Empty means every table's
+    // sizes count, which is what every caller but the load balancer wants.
+    future<> populate_table(table_id table, const tablet_map& tmap, std::optional<host_id> host, std::optional<sstring> only_dc,
+                            const table_predicate& ignore_missing_sizes = {}) {
+        const bool ignore_sizes = ignore_missing_sizes && ignore_missing_sizes(table);
         const topology& topo = _tm->get_topology();
         co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
             auto trinfo = tmap.get_tablet_transition_info(tid);
@@ -175,7 +183,7 @@ private:
                 if (replica.shard < n._shards.size()) {
                     const range_based_tablet_id rb_tid {table, tmap.get_token_range(tid)};
                     auto tablet_size_opt = get_tablet_size(replica.host, rb_tid, ti, trinfo);
-                    if (!tablet_size_opt && _load_stats) {
+                    if (!tablet_size_opt && _load_stats && !ignore_sizes) {
                         n._has_all_tablet_sizes = false;
                     }
                     const uint64_t tablet_size = std::max(tablet_size_opt.value_or(_default_tablet_size), _minimal_tablet_size);
@@ -208,7 +216,8 @@ public:
 
     future<> populate(std::optional<host_id> host = std::nullopt,
                       std::optional<table_id> only_table = std::nullopt,
-                      std::optional<sstring> only_dc = std::nullopt) {
+                      std::optional<sstring> only_dc = std::nullopt,
+                      const table_predicate& ignore_missing_sizes = {}) {
         if (host) {
             ensure_node(*host);
         } else {
@@ -222,11 +231,11 @@ public:
         if (only_table) {
             if (_tm->tablets().has_tablet_map(*only_table)) {
                 auto& tmap = _tm->tablets().get_tablet_map(*only_table);
-                co_await populate_table(*only_table, tmap, host, only_dc);
+                co_await populate_table(*only_table, tmap, host, only_dc, ignore_missing_sizes);
             }
         } else {
             for (const auto& [table, tmap] : _tm->tablets().all_tables_ungrouped()) {
-                co_await populate_table(table, *tmap, host, only_dc);
+                co_await populate_table(table, *tmap, host, only_dc, ignore_missing_sizes);
             }
         }
 
@@ -235,8 +244,8 @@ public:
         }
     }
 
-    future<> populate_dc(const sstring& dc) {
-        return populate(std::nullopt, std::nullopt, dc);
+    future<> populate_dc(const sstring& dc, const table_predicate& ignore_missing_sizes = {}) {
+        return populate(std::nullopt, std::nullopt, dc, ignore_missing_sizes);
     }
 
 
