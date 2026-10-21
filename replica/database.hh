@@ -75,6 +75,7 @@
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_fwd.hh"
 #include "replica/compaction_group_fwd.hh"
+#include "replica/database_config.hh"
 #include "service/qos/qos_configuration_change_subscriber.hh"
 #include "replica/tables_metadata_lock.hh"
 #include "service/topology_guard.hh"
@@ -1659,25 +1660,6 @@ public:
 
 using no_such_keyspace = data_dictionary::no_such_keyspace;
 using no_such_column_family = data_dictionary::no_such_column_family;
-
-struct database_config {
-    seastar::scheduling_group memtable_scheduling_group;
-    seastar::scheduling_group memtable_to_cache_scheduling_group; // FIXME: merge with memtable_scheduling_group
-    seastar::scheduling_group compaction_scheduling_group;
-    seastar::scheduling_group maintenance_compaction_scheduling_group;
-    seastar::scheduling_group memory_compaction_scheduling_group;
-    seastar::scheduling_group logstor_compaction_scheduling_group;
-    seastar::scheduling_group statement_scheduling_group;
-    seastar::scheduling_group streaming_scheduling_group;
-    seastar::scheduling_group maintenance_scheduling_group;
-    seastar::scheduling_group gossip_scheduling_group;
-    seastar::scheduling_group commitlog_scheduling_group;
-    seastar::scheduling_group schema_commitlog_scheduling_group;
-    seastar::scheduling_group backup_scheduling_group;
-    // Shared by the Alternator export to S3 and import from S3 jobs.
-    seastar::scheduling_group export_import_scheduling_group;
-    size_t available_memory;
-};
 
 struct string_pair_eq {
     using is_transparent = void;

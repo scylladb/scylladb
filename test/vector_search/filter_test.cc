@@ -19,6 +19,9 @@
 #include "utils/big_decimal.hh"
 #include "utils/rjson.hh"
 #include "cql3/statements/external_search/filter.hh"
+#include "replica/database.hh"
+#include "types/tuple.hh"
+#include "types/list.hh"
 
 BOOST_AUTO_TEST_SUITE(filter_test)
 

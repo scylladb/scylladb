@@ -68,6 +68,7 @@
 #include "readers/filtering.hh"
 #include "readers/evictable.hh"
 #include "readers/queue.hh"
+#include "locator/tablets.hh"
 
 BOOST_AUTO_TEST_SUITE(mutation_reader_test)
 

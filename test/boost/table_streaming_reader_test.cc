@@ -22,6 +22,7 @@
 #include "locator/tablets.hh"
 #include "readers/mutation_reader.hh"
 #include "mutation/mutation.hh"
+#include "db/commitlog/commitlog.hh"
 
 BOOST_AUTO_TEST_SUITE(table_streaming_reader_test)
 

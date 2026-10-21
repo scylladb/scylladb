@@ -21,6 +21,7 @@
 
 #include "transport/messages/result_message.hh"
 #include "utils/error_injection.hh"
+#include "db/config.hh"
 
 BOOST_AUTO_TEST_SUITE(test_audit)
 

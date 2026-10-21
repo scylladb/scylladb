@@ -28,6 +28,7 @@
 #include "utils/chunked_vector.hh"
 #include "repair/incremental.hh"
 #include "sstables/exceptions.hh"
+#include "db/config.hh"
 
 BOOST_AUTO_TEST_SUITE(repair_test)
 

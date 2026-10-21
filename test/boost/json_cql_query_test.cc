@@ -26,6 +26,7 @@
 #include "types/user.hh"
 #include "types/list.hh"
 #include "utils/rjson.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(json_cql_query_test)
 

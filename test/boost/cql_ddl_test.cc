@@ -13,6 +13,7 @@
 #include <seastar/testing/test_case.hh>
 
 #include "test/lib/cql_test_env.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(cql_ddl_test)
 

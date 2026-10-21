@@ -33,6 +33,7 @@
 
 #include "db/config.hh"
 #include "utils/chunked_string.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(auth_test)
 

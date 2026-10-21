@@ -30,6 +30,7 @@
 #include "types/set.hh"
 #include "schema/schema_builder.hh"
 #include "cql3/functions/vector_similarity_fcts.hh"
+#include "types/tuple.hh"
 
 BOOST_AUTO_TEST_SUITE(cql_functions_test)
 
