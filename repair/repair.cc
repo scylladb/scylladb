@@ -457,7 +457,7 @@ static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
 
 future<repair_service::flush_hints_result> repair_service::flush_hints(repair_uniq_id id,
         sstring keyspace, std::vector<sstring> cfs,
-        std::unordered_set<locator::host_id> ignore_nodes) {
+        std::unordered_set<locator::host_id> ignore_nodes, bool force) {
     auto& db = get_db().local();
     auto uuid = id.uuid();
     flush_hints_result res;
@@ -473,7 +473,7 @@ future<repair_service::flush_hints_result> repair_service::flush_hints(repair_un
         }
     }
 
-    if (res.needed) {
+    if (res.needed || force) {
         auto waiting_nodes = db.get_token_metadata().get_topology().get_all_host_ids();
         std::erase_if(waiting_nodes, [&] (const auto& addr) {
             return ignore_nodes.contains(addr);
@@ -1557,7 +1557,7 @@ future<> repair_service::run_user_requested_repair(
         } else {
             participants = get_hosts_participating_in_repair(_gossiper.local(), germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
-        auto flush = flush_hints(id, keyspace, cfs, ignore_nodes).get();
+        auto flush = flush_hints(id, keyspace, cfs, ignore_nodes, false).get();
         auto hints_batchlog_flushed = flush.flushed;
         auto flush_time = flush.flush_time;
 
@@ -2740,7 +2740,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                     co_await seastar::sleep(std::chrono::milliseconds(*delay));
                 }
                 if (!skip_flush) {
-                    auto flush = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
+                    auto flush = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes, true);
                     needs_flush_before_repair = flush.needed;
                     hints_batchlog_flushed = flush.flushed;
                     flush_time = flush.flush_time;
@@ -2749,7 +2749,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
 
                 auto rstate = make_lw_shared<shard_repair_state>(rs,
                         m.keyspace_name, nullptr, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
-                        std::move(ignore_nodes), std::move(neighbors), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, topo_guard, sched_info);
+                        std::move(ignore_nodes), std::move(neighbors), reason, needs_flush_before_repair, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, topo_guard, sched_info);
                 auto task = co_await rs._repair_module->start_shard_repair_task(parent_data, std::move(rstate), flush_time);
                 auto res = co_await coroutine::as_future(task->done());
                 if (res.failed()) {
