@@ -40,9 +40,6 @@ extern logging::logger rslogger;
 using inet_address = gms::inet_address;
 using token = dht::token;
 
-using replication_strategy_config_option = std::variant<sstring, rack_list>;
-using replication_strategy_config_options = std::map<sstring, replication_strategy_config_option>;
-
 // Returns the number of replicas inferred by the option.
 // Throws configuration_exception when option is not a valid replication factor specifier.
 size_t get_replication_factor(const replication_strategy_config_option&);
@@ -350,9 +347,6 @@ public:
 
     virtual bool is_leaving(locator::host_id host, const dht::token& token) const = 0;
 };
-
-using effective_replication_map_ptr = seastar::shared_ptr<const effective_replication_map>;
-using mutable_effective_replication_map_ptr = seastar::shared_ptr<effective_replication_map>;
 
 /// Replication strategies which support per-table replication extend this trait.
 ///

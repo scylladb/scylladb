@@ -17,6 +17,7 @@
 // FIXME: un-nest compaction_reenabler, so we can forward declare it and remove this include.
 #include "compaction/compaction_manager.hh"
 #include "locator/tablet_types.hh"
+#include "locator/abstract_replication_strategy_fwd.hh"
 #include "replica/logstor/logstor_fwd.hh"
 #include "replica/logstor/segment_types.hh"
 #include "sstables/sstable_set.hh"
@@ -28,11 +29,6 @@
 
 namespace compaction {
 class compaction_manager;
-}
-
-namespace locator {
-class effective_replication_map;
-using effective_replication_map_ptr = seastar::shared_ptr<const effective_replication_map>;
 }
 
 namespace replica {
