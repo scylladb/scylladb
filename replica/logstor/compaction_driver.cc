@@ -121,6 +121,9 @@ future<> compaction_driver::run() {
     auto held_back = co_await get_units(_sem, max_auto_compaction_parallelism - parallelism);
 
     std::vector<candidate> pending;
+    // The limits that ranked `pending`. Its jobs select their batches by these limits and not by
+    // the limits of a later tick, so that a job selects by the rule its candidate was ranked by.
+    compaction_batch_limits pending_limits{};
     // What the marginal-admission gate below measures a candidate against: the best batch of the
     // ranking that produced `pending` that copies data.
     std::optional<compaction_candidate_score> admission_bar;
@@ -165,6 +168,7 @@ future<> compaction_driver::run() {
                 }
                 continue;
             }
+            pending_limits = limits;
             admission_bar.reset();
         }
 
@@ -208,7 +212,7 @@ future<> compaction_driver::run() {
             continue;
         }
 
-        start_job(std::move(c), std::move(units));
+        start_job(std::move(c), pending_limits, std::move(units));
     }
 
     // Wait for the jobs still in flight, which is what makes this future the driver's completion.
@@ -227,11 +231,11 @@ bool compaction_driver::refuse_marginal(const candidate& c, const compaction_can
     return true;
 }
 
-void compaction_driver::start_job(candidate c, semaphore_units<> units) {
+void compaction_driver::start_job(candidate c, compaction_batch_limits limits, semaphore_units<> units) {
     auto job = _jobs_in_flight.insert(_jobs_in_flight.end(), c.score);
     // The slot is released only once the job is done, which is what wakes the driver up to submit
     // the next candidate.
-    (void)_host.submit_normal_compaction(*c.group, automatic_batch_limits()).handle_exception([] (std::exception_ptr ep) {
+    (void)_host.submit_normal_compaction(*c.group, limits).handle_exception([] (std::exception_ptr ep) {
         logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
     }).finally([this, job, units = std::move(units)] {
         _jobs_in_flight.erase(job);
