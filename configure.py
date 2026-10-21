@@ -607,6 +607,7 @@ scylla_tests = set([
     'test/boost/logalloc_test',
     'test/boost/logstor_test',
     'test/boost/logstor_compaction_policy_test',
+    'test/boost/logstor_compaction_driver_test',
     'test/boost/logstor_cache_test',
     'test/boost/logstor_file_test',
     'test/boost/lru_string_map_test',
