@@ -1184,3 +1184,62 @@ async def test_column_mapping_migrated_with_tablet(manager: ManagerClient):
         # V2 (from n2->n3 streaming fetch), and V3 (from bootstrap).
         assert len(versions_on_n3) >= 3, \
             f"Expected at least 3 schema versions on n3 (V + V2 + V3), got {len(versions_on_n3)}: {versions_on_n3}"
+
+
+@pytest.mark.parametrize("tablets", [True, False], ids=["tablets", "vnodes"])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_paxos_state_survives_crash(manager: ManagerClient, tablets: bool):
+    # A replica must not acknowledge a paxos promise or accept before it is
+    # durable in the commitlog: a replica that forgets them after a crash can
+    # let a competing proposer get a different value chosen. system.paxos
+    # (vnodes) is synced on every write; check that the per-table paxos state
+    # tables used with tablets give the same guarantee.
+    #
+    # The commitlog sync period is made long enough that only a forced sync
+    # can put the paxos state on disk before the server is killed.
+    # Only a superuser may read a paxos state table.
+    config = {
+        'commitlog_sync_period_in_ms': 3600000,
+        'authenticator': 'PasswordAuthenticator',
+        'authorizer': 'CassandraAuthorizer',
+    }
+    manager.auth_provider = PlainTextAuthProvider(username="cassandra", password="cassandra")
+    server = await manager.server_add(config=config, cmdline=['--logger-log-level', 'paxos=trace'])
+    cql, _ = await manager.get_ready_cql([server])
+
+    tablets_opts = "{'initial': 1}" if tablets else "{'enabled': false}"
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                                          f"AND tablets = {tablets_opts}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        # Creates the paxos state table in the tablets case.
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
+
+        rows = await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'")
+        table_id = rows[0].id
+
+        async def get_proposal_ballot():
+            if tablets:
+                rows = await cql.run_async(f'SELECT proposal_ballot FROM {ks}."test$paxos"')
+            else:
+                rows = [r for r in await cql.run_async("SELECT cf_id, proposal_ballot FROM system.paxos") if r.cf_id == table_id]
+            assert len(rows) == 1
+            return rows[0].proposal_ballot
+
+        # Stop the LWT after its proposal is accepted, so that nothing (learn
+        # forces a sync) puts the promise and the proposal on disk but their own
+        # writes.
+        await inject_error_on(manager, 'paxos_error_before_learn', [server])
+        try:
+            await cql.run_async(f"UPDATE {ks}.test SET c = 2 WHERE pk = 1 IF c = 1")
+        except Exception as e:
+            logger.info(f"LWT failed as expected: {e}")
+        accepted_ballot = await get_proposal_ballot()
+        assert accepted_ballot is not None
+
+        logger.info("Kill and restart the server")
+        await manager.server_stop(server.server_id)
+        await manager.server_start(server.server_id)
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+
+        assert await get_proposal_ballot() == accepted_ballot
