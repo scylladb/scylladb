@@ -45,6 +45,8 @@
 #include "utils/estimated_histogram.hh"
 #include "transport/forward.hh"
 #include "service/qos/service_level_controller.hh"
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/shared_future.hh>
 
 namespace cql3 {
 
@@ -264,6 +266,34 @@ private:
             const locator::host_id_or_exception_callback& on_forwarding_finished = {});
 };
 
+// Executes the CQL requests which other nodes forward to this node with the
+// FORWARD_CQL_EXECUTE and FORWARD_CQL_PREPARE verbs.
+class cql_forwarding_service : public seastar::peering_sharded_service<cql_forwarding_service> {
+    sharded<cql3::query_processor>& _query_processor;
+    cql_processor& _processor;
+    auth::service& _auth_service;
+    qos::service_level_controller& _sl_controller;
+    netw::messaging_service& _ms;
+    scheduling_group_key _stats_key;
+    // Aborts the forwarded requests running on this shard when the service is drained.
+    seastar::abort_source _abort_source;
+    // Resolved when the drain started by the first drain() call finishes.
+    std::optional<shared_future<>> _drained;
+public:
+    cql_forwarding_service(sharded<cql3::query_processor>& qp, cql_processor& processor, auth::service& auth_service,
+            qos::service_level_controller& sl_controller, netw::messaging_service& ms, scheduling_group_key stats_key);
+
+    // Unregisters the verbs and waits for the forwarded requests to finish.
+    // Must be called before the commitlog shuts down. Can be called more than once,
+    // and every call waits for the drain to finish.
+    future<> drain();
+    future<> stop();
+private:
+    void init_messaging_service();
+    future<> uninit_messaging_service();
+    future<forward_cql_execute_response> handle_forward_execute(service::query_state& qs, forward_cql_execute_request& req);
+};
+
 class cql_server : public seastar::peering_sharded_service<cql_server>, public generic_server::server {
 private:
     struct transport_stats {
@@ -282,7 +312,6 @@ private:
 
     sharded<cql3::query_processor>& _query_processor;
     cql_processor& _processor;
-    netw::messaging_service& _ms;
     cql_server_config _config;
     semaphore& _memory_available;
     const uint32_t _total_memory;
@@ -303,8 +332,7 @@ public:
             qos::service_level_controller& sl_controller,
             gms::gossiper& g,
             scheduling_group_key stats_key,
-            maintenance_socket_enabled used_by_maintenance_socket,
-            netw::messaging_service& ms);
+            maintenance_socket_enabled used_by_maintenance_socket);
     ~cql_server();
     future<> stop();
 
@@ -424,10 +452,6 @@ private:
     friend class type_codec;
 
 private:
-    void init_messaging_service();
-    future<> uninit_messaging_service();
-    future<forward_cql_execute_response> handle_forward_execute(service::query_state& qs, forward_cql_execute_request& req);
-
     virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override;
     scheduling_group get_scheduling_group_for_new_connection() const override {
         if (auto sg = _sl_controller.get_driver_scheduling_group(); sg) {
