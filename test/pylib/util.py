@@ -230,12 +230,16 @@ class KeyGenerator:
             return self.pk
 
 async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int = 3, ignore_errors=False,
-                       key_count: Optional[int] = None):
+                       key_count: Optional[int] = None,
+                       retried_write_errors: tuple[type[Exception], ...] = ()):
     """Write to the table until the returned finish() is called, and read each write back.
 
     Each write goes to a new key, unless `key_count` is given: then the writes reuse the keys
     0..key_count-1 in turn, which keeps the data size bounded however long the writes run.
     finish() returns the number of keys written.
+
+    A write that fails with one of `retried_write_errors` is sent again rather than failing
+    the writer, and so is any failure with `ignore_errors`.
     """
     logger.info(f"Starting to asynchronously write, concurrency = {concurrency}, key_count = {key_count}")
 
@@ -284,10 +288,14 @@ async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int
             while True:
                 start_time = time.time()
                 try:
-                    if key_count is None:
-                        await cql.run_async(stmt, [pk, seq])
-                    else:
-                        await cql.run_async(stmt, [pk, seq, base_timestamp + seq])
+                    try:
+                        if key_count is None:
+                            await cql.run_async(stmt, [pk, seq])
+                        else:
+                            await cql.run_async(stmt, [pk, seq, base_timestamp + seq])
+                    except retried_write_errors as e:
+                        logger.info(f"Retrying the write of pk={pk} started {time.time() - start_time}s ago: {e}")
+                        continue
                     # Check read-your-writes
                     rows = await run_retry_async(cql, rd_stmt, [pk])
                     assert(len(rows) == 1)
