@@ -9,6 +9,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/util/defer.hh>
 #include <numeric>
+#include "utils/small_vector.hh"
 #include "utils/log.hh"
 #include "bytes.hh"
 #include "advanced_rpc_compressor.hh"
@@ -408,31 +409,78 @@ rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf d
     return compressed;
 }
 
-template <typename T>
-requires std::is_trivially_copyable_v<T>
-T read_from_rcv_buf(rpc::rcv_buf& data) {
-    if (data.size < sizeof(T)) {
-        throw std::runtime_error("Truncated compressed RPC frame");
-    }
-    auto it = std::get_if<temporary_buffer<char>>(&data.bufs);
-    if (!it) {
-        it = std::get<std::vector<temporary_buffer<char>>>(data.bufs).data();
-    }
-    std::array<T, 1> out;
-    auto out_span = std::as_writable_bytes(std::span(out)).subspan(0);
-    while (out_span.size()) {
-        size_t n = std::min<size_t>(out_span.size(), it->size());
-        // Make a special case for n==0, to avoid calling memcpy(src=..., it->get()=nullptr, n=0). The nullptr bothers UBSAN.
-        if (n) {
-            std::memcpy(static_cast<void*>(out_span.data()), it->get(), n);
-            out_span = out_span.subspan(n);
-            it->trim_front(n);
-            data.size -= n;
+// Reads an rcv_buf from the front. Doesn't copy the payload.
+class rcv_buf_reader {
+    utils::small_vector<temporary_buffer<char>, 4> _frags;
+    size_t _idx = 0;
+    size_t _remaining;
+public:
+    explicit rcv_buf_reader(rpc::rcv_buf data) : _remaining(data.size) {
+        if (auto* single = std::get_if<temporary_buffer<char>>(&data.bufs)) {
+            _frags.push_back(std::move(*single));
+        } else {
+            for (auto& frag : std::get<std::vector<temporary_buffer<char>>>(data.bufs)) {
+                _frags.push_back(std::move(frag));
+            }
         }
-        ++it;
     }
-    return out[0];
-}
+
+    size_t remaining() const noexcept {
+        return _remaining;
+    }
+
+    template <typename T>
+    requires std::is_trivially_copyable_v<T>
+    T read() {
+        if (_remaining < sizeof(T)) {
+            throw std::runtime_error("Truncated compressed RPC frame");
+        }
+        std::array<T, 1> out;
+        auto out_span = std::as_writable_bytes(std::span(out)).subspan(0);
+        while (out_span.size()) {
+            auto& frag = _frags[_idx];
+            if (frag.empty()) {
+                ++_idx;
+                continue;
+            }
+            size_t n = std::min<size_t>(out_span.size(), frag.size());
+            std::memcpy(static_cast<void*>(out_span.data()), frag.get(), n);
+            out_span = out_span.subspan(n);
+            frag.trim_front(n);
+            _remaining -= n;
+        }
+        return out[0];
+    }
+
+    // Returns the next `n` bytes.
+    rpc::rcv_buf read_buf(size_t n) {
+        if (_remaining < n) {
+            throw std::runtime_error("Truncated compressed RPC frame");
+        }
+        _remaining -= n;
+        utils::small_vector<temporary_buffer<char>, 1> pieces;
+        for (size_t left = n; left > 0;) {
+            auto& frag = _frags[_idx];
+            if (frag.size() <= left) {
+                left -= frag.size();
+                if (!frag.empty()) {
+                    pieces.push_back(std::move(frag));
+                }
+                ++_idx;
+            } else {
+                pieces.push_back(frag.share(0, left));
+                frag.trim_front(left);
+                left = 0;
+            }
+        }
+        if (pieces.size() == 0) {
+            return rpc::rcv_buf();
+        } else if (pieces.size() == 1) {
+            return rpc::rcv_buf(std::move(pieces.front()));
+        }
+        return rpc::rcv_buf({std::make_move_iterator(pieces.begin()), std::make_move_iterator(pieces.end())}, n);
+    }
+};
 
 static std::string format_dict_id(const shared_dict::dict_id& id) {
     return fmt::format("{{timestamp={}, origin_node={}, content_sha256={}}}", id.timestamp, id.origin_node, fmt_hex(id.content_sha256));
@@ -463,19 +511,23 @@ static std::string format_control_protocol(const control_protocol& cp) {
 }
 
 rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
-    const uint8_t header_byte = read_from_rcv_buf<uint8_t>(data);
+    auto in = rcv_buf_reader(std::move(data));
+    const uint8_t header_byte = in.read<uint8_t>();
     const bool has_checksum = header_byte & 0x40;
     const bool has_control_frame = header_byte & 0x80;
 
     uint32_t expected_crc = -1;
     if (has_checksum) {
-        expected_crc = seastar::le_to_cpu(read_from_rcv_buf<uint32_t>(data));
+        expected_crc = seastar::le_to_cpu(in.read<uint32_t>());
     }
 
     if (has_control_frame) {
-        auto control_protocol_frame_bytes = read_from_rcv_buf<std::array<std::byte, control_protocol_frame::serialized_size>>(data);
+        auto control_protocol_frame_bytes = in.read<std::array<std::byte, control_protocol_frame::serialized_size>>();
         _control.consume_control_header(control_protocol_frame::deserialize(control_protocol_frame_bytes));
     }
+
+    const size_t compressed_size = in.remaining();
+    const auto compressed = in.read_buf(compressed_size);
 
     // Will throw if the enum value is unknown.
     auto algo = compression_algorithm(header_byte & 0x3f);
@@ -484,10 +536,9 @@ rpc::rcv_buf advanced_rpc_compressor::decompress(rpc::rcv_buf data) {
     auto update_time_stats = defer([&, nanos_before = _tracker->get_steady_nanos()] noexcept {
         stats.decompression_cpu_nanos += _tracker->get_steady_nanos() - nanos_before;
     });
-    auto compressed_size = data.size;
     auto decompressed = std::invoke([&] {
         try {
-            return decompress_impl(data, get_decompressor(algo, _control.receiver_current_dict()), true, rpc::snd_buf::chunk_size);
+            return decompress_impl(compressed, get_decompressor(algo, _control.receiver_current_dict()), true, rpc::snd_buf::chunk_size);
          } catch (...) {
             arc_logger.error("Error during decompression with algorithm {}: {:t}. ", algo.name(), std::current_exception());
             throw;

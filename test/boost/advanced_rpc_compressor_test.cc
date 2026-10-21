@@ -186,6 +186,61 @@ SEASTAR_THREAD_TEST_CASE(test_tracker_dict_sanity) {
     }
 }
 
+// Splits `b` into fragments of random sizes in [0, max_fragment_size], including empty ones.
+// read_rcv_buf() returns a frame in the buffers returned by the socket,
+// so the fragment boundaries can fall anywhere, also inside a header field.
+static rpc::rcv_buf bytes_to_fragmented_rcv_buf(bytes_view b, size_t max_fragment_size) {
+    const size_t size = b.size();
+    auto frags = std::vector<temporary_buffer<char>>();
+    while (!b.empty()) {
+        const auto n = std::min(b.size(), tests::random::get_int<size_t>(0, max_fragment_size));
+        frags.push_back(bytes_view_to_temporary_buffer(b.substr(0, n)));
+        b.remove_prefix(n);
+    }
+    return rpc::rcv_buf(std::move(frags), size);
+}
+
+// Checks that decompress() parses a frame whose fragment boundaries fall anywhere,
+// including inside the header and between the header and the payload, for every algorithm,
+// with and without checksums. The other tests pass the frame in one fragment
+// (test_tracker_basic_sanity adds just an empty one), so they don't exercise this.
+SEASTAR_THREAD_TEST_CASE(test_fragmented_frame) {
+    // Larger than rpc::snd_buf::chunk_size after compression, for every algorithm.
+    const auto message = tests::random::get_bytes(150000) + bytes(size_t(150000), bytes::value_type(0));
+    for (const bool checksumming : {false, true})
+    for (const auto algo : {netw::compression_algorithm::type::RAW, netw::compression_algorithm::type::LZ4, netw::compression_algorithm::type::ZSTD}) {
+        auto cfg = netw::advanced_rpc_compressor::tracker::config{
+            .zstd_quota_fraction{1.0},
+            .algo_config = utils::updateable_value<netw::algo_config>{{algo}},
+            .checksumming = utils::updateable_value<bool>{checksumming},
+        };
+        tracker_without_clock tracker{cfg};
+        auto server_compressor = tracker.negotiate(tracker.supported(), true, [] { return make_ready_future<>(); });
+        auto close_server_compressor = deferred_close(*server_compressor);
+        auto client_compressor = tracker.negotiate(server_compressor->name(), false, [] { return make_ready_future<>(); });
+        auto close_client_compressor = deferred_close(*client_compressor);
+
+        // Let the algorithm negotiation settle.
+        for (int i = 0; i < 5; ++i) {
+            client_compressor->decompress(convert_rpc_buf<rpc::rcv_buf>(server_compressor->compress(0, rpc::snd_buf{0})));
+            server_compressor->decompress(convert_rpc_buf<rpc::rcv_buf>(client_compressor->compress(0, rpc::snd_buf{0})));
+        }
+
+        for (const auto [a, b] : {
+            std::make_pair(std::ref(server_compressor), std::ref(client_compressor)),
+            std::make_pair(std::ref(client_compressor), std::ref(server_compressor)),
+        })
+        for (const size_t max_fragment_size : {7, 1000, 100000}) {
+            constexpr int head_space = 4;
+            const auto compressed = rpc_buf_to_bytes(a->compress(head_space, rpc::snd_buf{bytes_view_to_temporary_buffer(message)}));
+            const auto messages_received_before = tracker.get_stats()[netw::compression_algorithm(algo).idx()].messages_received;
+            auto decompressed = b->decompress(bytes_to_fragmented_rcv_buf(bytes_view(compressed).substr(head_space), max_fragment_size));
+            BOOST_REQUIRE_EQUAL(message, rpc_buf_to_bytes(decompressed));
+            BOOST_REQUIRE_EQUAL(tracker.get_stats()[netw::compression_algorithm(algo).idx()].messages_received, messages_received_before + 1);
+        }
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_tracker_cpu_limit_shortterm) {
     constexpr int quota = 10;
     constexpr int quota_refresh = 128;
