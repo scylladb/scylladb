@@ -369,7 +369,7 @@ rpc::snd_buf advanced_rpc_compressor::compress(size_t head_space, rpc::snd_buf d
         stats.compression_cpu_nanos += _tracker->get_steady_nanos() - nanos_before;
     });
 
-    _tracker->ingest(data);
+    _tracker->ingest(snd_buf_cursor(data), data.size);
 
     auto protocol_header = _control.produce_control_header();
     const size_t protocol_header_size = protocol_header ? control_protocol_frame::serialized_size : 0;
@@ -619,9 +619,17 @@ lz4_cstream& advanced_rpc_compressor::tracker::get_global_lz4_cstream() {
     return *_global_lz4_cstream;
 }
 
-template <typename T>
-requires std::same_as<T, rpc::rcv_buf> || std::same_as<T, rpc::snd_buf>
-void advanced_rpc_compressor::tracker::ingest_generic(const T& data) {
+void advanced_rpc_compressor::tracker::ingest(snd_buf_cursor from, size_t size) {
+    if (_dict_sampler && _dict_sampler->is_sampling()) {
+        while (size > 0) {
+            const auto piece = from.next(size);
+            _dict_sampler->ingest(std::as_bytes(piece));
+            size -= piece.size();
+        }
+    }
+}
+
+void advanced_rpc_compressor::tracker::ingest(const rpc::rcv_buf& data) {
     if (_dict_sampler && _dict_sampler->is_sampling()) {
         if (const auto* src = std::get_if<temporary_buffer<char>>(&data.bufs)) {
             _dict_sampler->ingest({reinterpret_cast<const std::byte*>(src->get()), src->size()});
@@ -632,14 +640,6 @@ void advanced_rpc_compressor::tracker::ingest_generic(const T& data) {
             }
         }
     }
-}
-
-void advanced_rpc_compressor::tracker::ingest(const rpc::snd_buf& data) {
-    ingest_generic(data);
-}
-
-void advanced_rpc_compressor::tracker::ingest(const rpc::rcv_buf& data) {
-    ingest_generic(data);
 }
 
 void advanced_rpc_compressor::tracker::announce_dict(dict_ptr d) {
