@@ -22,6 +22,7 @@
 #include <seastar/coroutine/try_future.hh>
 
 #include <fmt/ostream.h>
+#include "locator/tablets.hh"
 
 namespace replica {
 

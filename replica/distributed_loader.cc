@@ -35,6 +35,8 @@
 #include "ent/encryption/replicated_key_provider.hh"
 #include <unordered_map>
 #include "db/view/view_builder.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
 
 extern logging::logger dblog;
 

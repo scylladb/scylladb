@@ -23,6 +23,7 @@
 #include "db/cluster_config_registry.hh"
 #include "cql3/statements/cluster_config_props.hh"
 #include <random>
+#include "locator/tablets.hh"
 
 namespace cql3 {
 

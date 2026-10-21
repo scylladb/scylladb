@@ -16,7 +16,7 @@
 #include "compaction/compaction_strategy_state.hh"
 // FIXME: un-nest compaction_reenabler, so we can forward declare it and remove this include.
 #include "compaction/compaction_manager.hh"
-#include "locator/tablets.hh"
+#include "locator/tablet_types.hh"
 #include "replica/logstor/logstor_fwd.hh"
 #include "replica/logstor/segment_types.hh"
 #include "sstables/sstable_set.hh"

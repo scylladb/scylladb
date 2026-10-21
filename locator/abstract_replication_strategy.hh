@@ -18,7 +18,7 @@
 #include "utils/maybe_yield.hh"
 #include "utils/sequenced_set.hh"
 #include "utils/simple_hashers.hh"
-#include "tablets.hh"
+#include "locator/tablet_types.hh"
 #include "data_dictionary/consistency_config_options.hh"
 #include "locator/replication_strategy_type.hh"
 #include "locator/abstract_replication_strategy_fwd.hh"

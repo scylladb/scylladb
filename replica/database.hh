@@ -71,7 +71,7 @@
 #include "sstables/generation_type.hh"
 #include "db/rate_limiter.hh"
 #include "db/operation_type.hh"
-#include "locator/tablets.hh"
+#include "locator/tablet_types.hh"
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_fwd.hh"
 #include "compaction_group.hh"
