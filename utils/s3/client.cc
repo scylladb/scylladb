@@ -91,7 +91,7 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
         , _creds_invalidation_timer([this] {
             std::ignore = [this]() -> future<> {
                 auto units = co_await get_units(_creds_sem, 1);
-                s3l.info("Credentials update attempt in background failed. Outdated credentials will be discarded, triggering synchronous re-obtainment"
+                s3l.info("Credentials expired. Outdated credentials will be discarded, triggering synchronous re-obtainment"
                          " attempts for future requests.");
                 _credentials = {};
             }();
@@ -103,7 +103,8 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
                 try {
                     co_await update_credentials_and_rearm();
                 } catch (...) {
-                    _credentials = {};
+                    s3l.warn("Background credentials update failed: {}, retrying", std::current_exception());
+                    _creds_update_timer.rearm(lowres_clock::now() + _creds_retry_period);
                 }
             }();
         })
@@ -171,6 +172,15 @@ shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, s
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), std::move(gf), private_tag{}, std::move(rs));
 }
 
+shared_ptr<client> client::make(
+        std::string endpoint, endpoint_config_ptr cfg, aws::aws_credentials_provider_chain creds_provider_chain, lowres_clock::duration creds_retry_period) {
+    auto c = make(std::move(endpoint), std::move(cfg));
+    // The constructor only armed the update timer, so swapping before it fires is safe.
+    c->_creds_provider_chain = std::move(creds_provider_chain);
+    c->_creds_retry_period = creds_retry_period;
+    return c;
+}
+
 shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, global_factory gf, unsigned connections_per_shard) {
     auto url = utils::http::parse_simple_url(ep);
     endpoint_config cfg = {
@@ -184,11 +194,21 @@ shared_ptr<client> client::make(std::string ep, std::string region, std::string 
 }
 
 future<> client::update_credentials_and_rearm() {
-    _credentials = co_await _creds_provider_chain.get_aws_credentials();
-    if (_credentials) {
-        _creds_invalidation_timer.rearm(_credentials.expires_at);
-        _creds_update_timer.rearm(_credentials.expires_at - 1h);
+    auto new_credentials = co_await _creds_provider_chain.get_aws_credentials();
+    if (!new_credentials) {
+        // Current credentials, if any, stay valid until the invalidation timer fires.
+        s3l.warn("Failed to update credentials, retrying in the background");
+        auto retry_at = lowres_clock::now() + _creds_retry_period;
+        // Don't postpone a sooner update, e.g. the one update_config_sync() requested.
+        if (!_creds_update_timer.armed() || _creds_update_timer.get_timeout() > retry_at) {
+            _creds_update_timer.rearm(retry_at);
+        }
+        co_return;
     }
+    _credentials = std::move(new_credentials);
+    _creds_invalidation_timer.rearm(_credentials.expires_at);
+    // Credentials living under an hour would otherwise re-arm in the past and spin.
+    _creds_update_timer.rearm(std::max(_credentials.expires_at - 1h, lowres_clock::now() + _creds_retry_period));
 }
 
 future<> client::authorize(http::request& req) {

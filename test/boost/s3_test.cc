@@ -959,6 +959,92 @@ SEASTAR_THREAD_TEST_CASE(test_credentials_chain_returns_falsy_on_total_failure) 
     BOOST_REQUIRE_EQUAL(calls, attempts);
 }
 
+namespace {
+
+// Each call runs the script with its 1-based call number; throwing fails the call.
+class scripted_provider final : public aws::aws_credentials_provider {
+public:
+    using script = std::function<future<s3::aws_credentials>(unsigned)>;
+
+private:
+    unsigned& _calls;
+    script _script;
+
+public:
+    scripted_provider(unsigned& calls, script s)
+        : _calls(calls)
+        , _script(std::move(s)) {
+    }
+    const char* get_name() const override {
+        return "scripted_provider";
+    }
+
+protected:
+    future<> reload() override {
+        creds = co_await _script(++_calls);
+    }
+};
+
+s3::aws_credentials make_test_credentials(lowres_clock::duration ttl) {
+    return {
+            .access_key_id = "TEST_ACCESS_KEY",
+            .secret_access_key = "TEST_SECRET_KEY",
+            .expires_at = lowres_clock::now() + ttl,
+    };
+}
+
+shared_ptr<s3::client> make_client_with_provider(unsigned& calls, scripted_provider::script s, lowres_clock::duration retry_period) {
+    aws::aws_credentials_provider_chain chain;
+    chain.add_credentials_provider(std::make_unique<scripted_provider>(calls, std::move(s)));
+    auto cfg = make_lw_shared<s3::endpoint_config>(s3::endpoint_config{.port = 0, .use_https = false});
+    return s3::client::make("127.0.0.1", std::move(cfg), std::move(chain), retry_period);
+}
+
+void wait_for_calls(const unsigned& calls, unsigned expected) {
+    auto deadline = lowres_clock::now() + 10s;
+    while (calls < expected && lowres_clock::now() < deadline) {
+        seastar::sleep(10ms).get();
+    }
+    BOOST_REQUIRE_GE(calls, expected);
+}
+
+} // anonymous namespace
+
+SEASTAR_THREAD_TEST_CASE(test_client_retries_failed_credentials_update) {
+    unsigned calls = 0;
+    auto client = make_client_with_provider(
+            calls,
+            [](unsigned call) -> future<s3::aws_credentials> {
+                if (call <= 2) {
+                    throw std::runtime_error("simulated credentials outage");
+                }
+                co_return make_test_credentials(2h);
+            },
+            100ms);
+    auto close = seastar::deferred_close(*client);
+
+    wait_for_calls(calls, 3);
+    // Valid for 2h, so the next update is an hour away.
+    seastar::sleep(500ms).get();
+    BOOST_REQUIRE_EQUAL(calls, 3);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_short_lived_credentials_update_does_not_spin) {
+    unsigned calls = 0;
+    auto client = make_client_with_provider(
+            calls,
+            [](unsigned) -> future<s3::aws_credentials> {
+                co_return make_test_credentials(10min);
+            },
+            100ms);
+    auto close = seastar::deferred_close(*client);
+
+    seastar::sleep(1s).get();
+    // One update per retry period; re-arming in the past would loop thousands of times.
+    BOOST_REQUIRE_GE(calls, 2);
+    BOOST_REQUIRE_LE(calls, 15);
+}
+
 BOOST_AUTO_TEST_CASE(s3_fqn_manipulation) {
     std::string bucket_name, object_name;
     // Empty input
