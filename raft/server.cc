@@ -1489,7 +1489,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
             // notify_commit_waiters() asserts.
             drop_commit_waiters(&snp);
             if (_non_joint_conf_commit_promise && !snp.config.is_joint() &&
-                    snp.idx > _non_joint_conf_commit_promise->joint_idx) {
+                    snp.idx >= _non_joint_conf_commit_promise->joint_idx) {
                 // A configuration change is in progress here, and the
                 // snapshot says it has gone through. snp.config is the
                 // configuration committed as of snp.idx, and the joint entry
@@ -1514,7 +1514,9 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
                 // change is replacing, and says nothing about the change --
                 // whose joint entry went with the log the snapshot replaced,
                 // leaving its commit waiter to be failed once the index is
-                // committed by whoever took over.
+                // committed by whoever took over. It is `>=`: a single-entry change's
+                // own entry is C_new, so a snapshot at it completes the change; a
+                // snapshot at a joint entry is joint and is excluded above.
                 logger.trace("[{}] io_fiber: snapshot {} at idx {} carries a non-joint configuration,"
                         " completing the configuration change at idx {}",
                         _tag, snp.id, snp.idx, _non_joint_conf_commit_promise->joint_idx);
