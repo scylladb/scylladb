@@ -587,6 +587,7 @@ class segment_manager_impl {
         uint64_t bytes_read{0};
         uint64_t bytes_freed{0};
         uint64_t segments_allocated{0};
+        uint64_t segment_allocation_failures{0};
         uint64_t segments_freed{0};
         uint64_t compaction_bytes_written{0};
         uint64_t compaction_data_bytes_written{0};
@@ -1046,6 +1047,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of data bytes freed.")),
         sm::make_counter("segments_allocated", _stats.segments_allocated,
                        sm::description("Counts number of segments allocated.")),
+        sm::make_counter("segment_allocation_failures", _stats.segment_allocation_failures,
+                       sm::description("Counts number of failed attempts of the reserve replenisher to allocate a segment.")),
         sm::make_counter("segments_freed", _stats.segments_freed,
                        sm::description("Counts number of segments freed.")),
         sm::make_gauge("disk_usage", [this] { return get_disk_usage(); },
@@ -1406,7 +1409,9 @@ future<> segment_manager_impl::replenish_reserve() {
             break;
         } catch (...) {
             retry = true;
-            logstor_logger.warn("Exception in reserve replenisher: {:t}, will retry", std::current_exception());
+            ++_stats.segment_allocation_failures;
+            static thread_local logger::rate_limit replenish_failure_rate_limit(std::chrono::seconds(10));
+            logstor_logger.log(log_level::warn, replenish_failure_rate_limit, "Exception in reserve replenisher: {:t}, will retry", std::current_exception());
         }
 
         if (retry) {
