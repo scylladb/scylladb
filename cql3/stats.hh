@@ -93,7 +93,9 @@ struct cql_stats {
     uint64_t write_consistency_levels_disallowed_violations = 0;
     uint64_t write_consistency_levels_warned_violations = 0;
 
+    // Forwards to a tablet replica (strong consistency) and to the group 0 leader.
     uint64_t forwarded_requests = 0;
+    uint64_t forwarded_group0_requests = 0;
 private:
     uint64_t _unpaged_select_queries[(size_t)ks_selector::SIZE] = {0ul};
     uint64_t _query_cnt[(size_t)source_selector::SIZE]

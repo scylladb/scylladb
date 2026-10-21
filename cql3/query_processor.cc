@@ -119,6 +119,8 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
     sm::label ks_label("ks");
     const auto system_ks_label_instance = ks_label("system");
 
+    sm::label subsystem_label("subsystem");
+
     std::vector<sm::metric_definition> qp_group;
     qp_group.push_back(sm::make_counter(
         "statements_prepared",
@@ -530,8 +532,17 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                     sm::make_counter(
                             "forwarded_requests",
                             _cql_stats.forwarded_requests,
-                            sm::description("Counts the total number of attempts to forward CQL requests to other nodes. One request may be forwarded multiple times, "
-                                            "particularly when a write is handled by a non-replica node.")).set_skip_when_empty(),
+                            sm::description("Counts the total number of attempts to forward CQL requests to other nodes: to a tablet replica (strong_consistency) "
+                                            "or to the group 0 leader (group0). One request may be forwarded multiple times, "
+                                            "particularly when a write is handled by a non-replica node."),
+                            {subsystem_label("strong_consistency")}).set_skip_when_empty(),
+                    sm::make_counter(
+                            "forwarded_requests",
+                            _cql_stats.forwarded_group0_requests,
+                            sm::description("Counts the total number of attempts to forward CQL requests to other nodes: to a tablet replica (strong_consistency) "
+                                            "or to the group 0 leader (group0). One request may be forwarded multiple times, "
+                                            "particularly when a write is handled by a non-replica node."),
+                            {subsystem_label("group0")}).set_skip_when_empty(),
             });
 
     std::vector<sm::metric_definition> cql_cl_group;
@@ -638,7 +649,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
                 }
                 return mm->local().get_group0_barrier().trigger();
             };
-            co_return bounce_to_node({*leader, 0}, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()), db::no_timeout, true, std::move(on_finished));
+            co_return bounce_to_node({*leader, 0}, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()), db::no_timeout, true, std::move(on_finished), true);
         }
     }
     size_t retries = remote_.get().mm.get_concurrent_ddl_retries();
@@ -1425,9 +1436,10 @@ shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_n
         cql3::computed_function_values cached_fn_calls,
         seastar::lowres_clock::time_point timeout,
         bool is_write,
-        locator::host_id_or_exception_callback on_forwarding_finished) {
-    get_cql_stats().forwarded_requests++;
-    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, is_write, std::move(on_forwarding_finished));
+        locator::host_id_or_exception_callback on_forwarding_finished,
+        bool group0) {
+    ++(group0 ? get_cql_stats().forwarded_group0_requests : get_cql_stats().forwarded_requests);
+    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, is_write, std::move(on_forwarding_finished), group0);
 }
 
 query_processor::consistency_level_set query_processor::to_consistency_level_set(const query_processor::cl_option_list& levels) {
