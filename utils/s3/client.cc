@@ -89,24 +89,14 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
         , _cfg(std::move(cfg))
         , _creds_sem(1)
         , _creds_invalidation_timer([this] {
-            std::ignore = [this]() -> future<> {
-                auto units = co_await get_units(_creds_sem, 1);
-                s3l.info("Credentials expired. Outdated credentials will be discarded, triggering synchronous re-obtainment"
-                         " attempts for future requests.");
-                _credentials = {};
-            }();
+            if (auto holder = _config_update_gate.try_hold()) {
+                std::ignore = invalidate_expired_credentials(std::move(*holder));
+            }
         })
         , _creds_update_timer([this] {
-            std::ignore = [this]() -> future<> {
-                auto units = co_await get_units(_creds_sem, 1);
-                s3l.info("Update creds in the background");
-                try {
-                    co_await update_credentials_and_rearm();
-                } catch (...) {
-                    s3l.warn("Background credentials update failed: {}, retrying", std::current_exception());
-                    _creds_update_timer.rearm(lowres_clock::now() + _creds_retry_period);
-                }
-            }();
+            if (auto holder = _config_update_gate.try_hold()) {
+                std::ignore = update_credentials_in_background(std::move(*holder));
+            }
         })
         , _gf(std::move(gf))
         , _retry_strategy(std::move(rs)) {
@@ -191,6 +181,24 @@ shared_ptr<client> client::make(std::string ep, std::string region, std::string 
         .connections_per_shard = connections_per_shard,
     };
     return make(url.host, make_lw_shared<endpoint_config>(std::move(cfg)), gf);
+}
+
+future<> client::invalidate_expired_credentials(gate::holder) {
+    auto units = co_await get_units(_creds_sem, 1);
+    s3l.info("Credentials expired. Outdated credentials will be discarded, triggering synchronous re-obtainment"
+             " attempts for future requests.");
+    _credentials = {};
+}
+
+future<> client::update_credentials_in_background(gate::holder) {
+    auto units = co_await get_units(_creds_sem, 1);
+    s3l.info("Update creds in the background");
+    try {
+        co_await update_credentials_and_rearm();
+    } catch (...) {
+        s3l.warn("Background credentials update failed: {}, retrying", std::current_exception());
+        _creds_update_timer.rearm(lowres_clock::now() + _creds_retry_period);
+    }
 }
 
 future<> client::update_credentials_and_rearm() {

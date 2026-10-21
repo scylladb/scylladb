@@ -19,6 +19,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
 #include "test/lib/scylla_test_case.hh"
@@ -1043,6 +1044,40 @@ SEASTAR_THREAD_TEST_CASE(test_client_short_lived_credentials_update_does_not_spi
     // One update per retry period; re-arming in the past would loop thousands of times.
     BOOST_REQUIRE_GE(calls, 2);
     BOOST_REQUIRE_LE(calls, 15);
+}
+
+// close() must await an in-flight update and keep timers that fire meanwhile
+// from starting callbacks that would outlive the client.
+SEASTAR_THREAD_TEST_CASE(test_client_close_with_credentials_update_in_flight) {
+    unsigned calls = 0;
+    bool in_flight = false;
+    auto client = make_client_with_provider(
+            calls,
+            [&in_flight](unsigned call) -> future<s3::aws_credentials> {
+                if (call == 1) {
+                    co_return make_test_credentials(300ms);
+                }
+                in_flight = true;
+                co_await seastar::sleep(400ms);
+                in_flight = false;
+                throw std::runtime_error("simulated credentials outage");
+            },
+            100ms);
+    auto close_on_failure = seastar::defer([&client]() noexcept {
+        if (client) {
+            client->close().get();
+        }
+    });
+
+    wait_for_calls(calls, 2);
+    BOOST_REQUIRE(in_flight);
+    // The invalidation timer fires at ~300ms, while close() waits for the update.
+    client->close().get();
+    client = {};
+    BOOST_REQUIRE(!in_flight);
+    auto calls_at_close = calls;
+    seastar::sleep(500ms).get();
+    BOOST_REQUIRE_EQUAL(calls, calls_at_close);
 }
 
 BOOST_AUTO_TEST_CASE(s3_fqn_manipulation) {

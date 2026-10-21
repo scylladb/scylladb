@@ -154,6 +154,9 @@ class client : public enable_shared_from_this<client> {
     struct private_tag {};
 
     future<> update_credentials_and_rearm();
+    // Hold _config_update_gate so close() awaits them before cancelling the timers.
+    future<> invalidate_expired_credentials(gate::holder);
+    future<> update_credentials_in_background(gate::holder);
     future<> authorize(http::request&);
     future<group_client&> find_or_create_client();
     future<group_client&> find_or_create_client_slow();
