@@ -127,6 +127,20 @@ async def get_table_raft_group_id(manager: ScyllaClusterManager, ks: str, table:
     rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
     return str(rows[0].raft_group_id)
 
+async def expect_retry_before_timeout(manager: ScyllaClusterManager, server: ServerInfo, host: Host | None, statement,
+                                      error: type[Exception], metric: str, reason: str, scale_timeout) -> None:
+    """Run `statement(timeout_ms)` until it fails with `error` after `server` counted a retry with `reason`
+    in `metric`. A too short timeout ends the request before it retries, so each attempt doubles it."""
+    timeout_ms = scale_timeout(10)
+    while True:
+        before = (await manager.metrics.query(server.ip_addr)).get(metric, {'reason': reason}) or 0
+        with pytest.raises(error):
+            await manager.get_cql().run_async(statement(timeout_ms), host=host)
+        if ((await manager.metrics.query(server.ip_addr)).get(metric, {'reason': reason}) or 0) > before:
+            return
+        assert timeout_ms < scale_timeout(5000), f"no retry with reason {reason} counted with a {timeout_ms}ms timeout"
+        timeout_ms *= 2
+
 async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
 
     logger.info("Bootstrapping cluster")
@@ -1710,6 +1724,35 @@ async def test_apply_latency_metrics(manager: ScyllaClusterManager):
                     return (await applied_entries() or 0) >= 3 or None
                 await wait_for(three_applied, time.time() + 60, label=f"{server} to apply 3 entries")
                 assert await applied_entries() == 3
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_stale_leader_retries_metrics(manager: ScyllaClusterManager, scale_timeout):
+    """
+    Verify that a write and a read whose local raft server names a leader that can't
+    lead at the tablet's stage are counted as retries with reason "stale_leader". The
+    error injection names such a leader on every attempt, so each request waits for a
+    new leader until its timeout.
+    """
+    [server] = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            no_retry = FallthroughRetryPolicy()
+            def write(timeout_ms):
+                return SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 0) USING TIMEOUT {timeout_ms}ms", retry_policy=no_retry)
+            def read(timeout_ms):
+                return SimpleStatement(f"SELECT * FROM {table} WHERE pk = 0 USING TIMEOUT {timeout_ms}ms", retry_policy=no_retry)
+
+            await manager.api.enable_injection(server.ip_addr, "sc_report_stale_leader", one_shot=False)
+            try:
+                await expect_retry_before_timeout(manager, server, None, write, WriteTimeout,
+                    'scylla_strong_consistency_coordinator_write_retries', 'stale_leader', scale_timeout)
+                await expect_retry_before_timeout(manager, server, None, read, ReadTimeout,
+                    'scylla_strong_consistency_coordinator_read_retries', 'stale_leader', scale_timeout)
+            finally:
+                await manager.api.disable_injection(server.ip_addr, "sc_report_stale_leader")
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
