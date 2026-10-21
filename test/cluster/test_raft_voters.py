@@ -7,6 +7,7 @@
 import asyncio
 import logging
 import random
+import re
 import time
 import pytest
 
@@ -245,3 +246,46 @@ async def test_raft_voters_stop_leader_keeps_quorum(manager: ScyllaClusterManage
     # alive voters count 1". Short timeout so a quorum loss surfaces fast.
     barrier_timeout = scale_timeout_by_mode(build_mode, 5)
     await read_barrier(manager.api, survivor.ip_addr, timeout=barrier_timeout)
+
+
+async def test_raft_non_voter_add_skips_joint(manager: ScyllaClusterManager, build_mode: str):
+    """
+    Adding a group0 non-voter keeps the voter set, so the leader appends a single non-joint
+    configuration entry instead of C_old,new + C_new. A voter promotion still goes joint.
+
+    Grows 1 -> 2 -> 3: group0 keeps an odd voter count, so with 2 nodes the 2nd one stays a
+    non-voter, and the 3rd node triggers the promotion of both learners.
+    """
+    non_joint = re.escape("appending non-joint config entry at") + ".*" + re.escape("(voter set unchanged)")
+    joint = re.escape("appending joint config entry at")
+
+    # The only node is the group0 leader and the only voter until the promotion below.
+    leader = await manager.server_add(cmdline=['--logger-log-level', 'raft=trace'])
+    leader_log = await manager.server_open_log(leader.server_id)
+    mark = await leader_log.mark()
+
+    second = await manager.server_add()
+    second_host_id = await manager.get_host_id(second.server_id)
+    assert await get_number_of_voters(manager, leader) == 1
+
+    lines = await leader_log.grep(non_joint, from_mark=mark)
+    assert any(second_host_id in line for line, _ in lines), \
+        f"No single-entry config append adding {second_host_id}: {lines}"
+    joint_lines = await leader_log.grep(joint, from_mark=mark)
+    assert not joint_lines, f"Adding a non-voter went through joint consensus: {joint_lines}"
+
+    mark = await leader_log.mark()
+    third = await manager.server_add()
+    third_host_id = await manager.get_host_id(third.server_id)
+
+    async def three_voters() -> bool | None:
+        return await get_number_of_voters(manager, leader) == 3 or None
+    await wait_for(three_voters, deadline=time.time() + scale_timeout_by_mode(build_mode, 60))
+
+    # In log order: the 3rd node's add is a single entry, and the promotion that follows is joint.
+    lines = [line for line, _ in await leader_log.grep(f"{non_joint}|{joint}", from_mark=mark)]
+    add_pos = next((i for i, line in enumerate(lines)
+                    if re.search(non_joint, line) and third_host_id in line), None)
+    assert add_pos is not None, f"No single-entry config append adding {third_host_id}: {lines}"
+    assert any(re.search(joint, line) for line in lines[add_pos + 1:]), \
+        f"No joint config entry for the voter promotion after the 3rd node's add: {lines}"

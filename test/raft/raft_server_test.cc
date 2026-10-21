@@ -912,13 +912,19 @@ SEASTAR_THREAD_TEST_CASE(test_add_entry_append_succeeds_only_in_current_term) {
 // the one committed at its own index -- the configuration the change is
 // replacing, not its result. Taking that for the change having gone through
 // would complete a change that never committed.
-SEASTAR_THREAD_TEST_CASE(test_conf_change_not_completed_by_an_earlier_snapshot) {
+//
+// With `learner` set the change removes a learner, which leaves the voters as
+// they are, so it is a single non-joint entry. The snapshot the old leader
+// takes below it carries a non-joint configuration just like the entry would:
+// what keeps the change pending is the snapshot's index alone.
+static void test_conf_change_not_completed_by_an_earlier_snapshot_aux(bool learner) {
+    const size_t nodes = learner ? 4 : 3;
     test_case test_config {
-        .nodes = 3,
+        .nodes = nodes,
         // No forwarding, so that the change fails with the old leader instead
         // of being retried against the new one, which would complete it for
         // real and hide what is under test here.
-        .config = std::vector<raft::server::configuration>(3,
+        .config = std::vector<raft::server::configuration>(nodes,
                 raft::server::configuration { .enable_forwarding = false })
     };
     auto cluster = raft_cluster<std::chrono::steady_clock>{
@@ -933,6 +939,17 @@ SEASTAR_THREAD_TEST_CASE(test_conf_change_not_completed_by_an_earlier_snapshot) 
 
     auto& leader = cluster.get_server(0);
     cluster.get_server(1).wait_for_leader(nullptr).get();
+
+    if (learner) {
+        // Make node 3 a learner, so that removing it below leaves the voters
+        // {0,1,2} as they are. Demoting it changes the voters, so this change
+        // is joint; it is let to complete.
+        auto m = to_config_member(3);
+        m.can_vote = raft::is_voter::no;
+        leader.modify_config({m}, {}, nullptr).get();
+        BOOST_REQUIRE(!leader.get_configuration().is_joint());
+        BOOST_REQUIRE_EQUAL(leader.get_configuration().can_vote(to_raft_id(3)), raft::is_voter::no);
+    }
 
     // Cut the leader off first, so that everything it appends from here on
     // stays uncommitted and the configuration change never gets past its
@@ -966,9 +983,9 @@ SEASTAR_THREAD_TEST_CASE(test_conf_change_not_completed_by_an_earlier_snapshot) 
         seastar::yield().get();
     }
 
-    auto change = leader.modify_config({}, {to_raft_id(2)}, nullptr);
+    auto change = leader.modify_config({}, {to_raft_id(learner ? 3 : 2)}, nullptr);
 
-    // The other two elect a leader between themselves, node 0 being isolated;
+    // Nodes 1 and 2 elect a leader between themselves, node 0 being isolated;
     // which of them wins does not matter. Waited for rather than driven with
     // elect_new_leader(), which reconnects the old leader for a moment so it
     // can vote -- long enough for the entries above to escape.
@@ -984,19 +1001,35 @@ SEASTAR_THREAD_TEST_CASE(test_conf_change_not_completed_by_an_earlier_snapshot) 
         seastar::yield().get();
     }
     auto& new_leader = cluster.get_server(new_leader_id);
+    // The dummy entry it appended on election is the last entry in its log,
+    // and nothing is appended above it until the entries committed below.
+    // Usually one above `base`; two in the learner variant when the demoted
+    // node, not yet knowing that its demotion committed, wins the election
+    // first and steps down once its own dummy commits the demotion.
+    const auto dummy_idx = new_leader.get_status().last_idx;
+    BOOST_REQUIRE(dummy_idx > base);
+    BOOST_REQUIRE(dummy_idx < base + raft::index_t{below + 1});
 
-    // It snapshots at the dummy entry it appended on election, four indexes
-    // below the joint entry. Keeping no trailing entries puts the start of its
-    // log above the index where the old leader's log diverges, so the old
-    // leader has to be sent the snapshot rather than caught up with
-    // append_entries. Retried because the dummy has to be applied before there
-    // is anything to snapshot.
+    // It snapshots at that dummy entry, below the joint entry. Keeping no
+    // trailing entries puts the start of its log above the index where the
+    // old leader's log diverges, so the old leader has to be sent the snapshot
+    // rather than caught up with append_entries -- which would overwrite the
+    // old leader's entries and fail the change outright, leaving nothing about
+    // snapshots tested. trigger_snapshot() snapshots at whatever is applied,
+    // and with the learner prelude the entries below the dummy are applied
+    // already, so wait for the dummy itself first.
+    const auto apply_deadline = std::chrono::steady_clock::now() + tick_delay * 200;
+    while (new_leader.get_status().applied_idx < dummy_idx) {
+        BOOST_REQUIRE(std::chrono::steady_clock::now() < apply_deadline);
+        seastar::yield().get();
+    }
     const auto snap_deadline = std::chrono::steady_clock::now() + tick_delay * 200;
     while (!new_leader.trigger_snapshot(nullptr).get()) {
         BOOST_REQUIRE(std::chrono::steady_clock::now() < snap_deadline);
         seastar::yield().get();
     }
     BOOST_REQUIRE(!new_leader.get_configuration().is_joint());
+    BOOST_REQUIRE_EQUAL(new_leader.get_status().last_snapshot_idx, dummy_idx);
 
     cluster.connect_all();
 
@@ -1033,6 +1066,15 @@ SEASTAR_THREAD_TEST_CASE(test_conf_change_not_completed_by_an_earlier_snapshot) 
     } catch (...) {
         BOOST_ERROR(fmt::format("unexpected exception: {}", std::current_exception()));
     }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_conf_change_not_completed_by_an_earlier_snapshot) {
+    test_conf_change_not_completed_by_an_earlier_snapshot_aux(false);
+}
+
+// The same for a change that only removes a learner.
+SEASTAR_THREAD_TEST_CASE(test_non_voter_conf_change_not_completed_by_an_earlier_snapshot) {
+    test_conf_change_not_completed_by_an_earlier_snapshot_aux(true);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_conf_change_completed_by_a_snapshot) {
@@ -1173,6 +1215,254 @@ SEASTAR_THREAD_TEST_CASE(test_is_configuration_committed) {
     }
     BOOST_REQUIRE(!follower.get_configuration().is_joint());
 #endif
+}
+
+// A snapshot taken at or above a single-entry change's own index completes the
+// change. The entry is C_new itself, so no committed batch reports it once a
+// snapshot has replaced it (fsm::get_output() reports from above the snapshot
+// index), and the snapshot's configuration is the only sign left.
+//
+// Getting such a snapshot to the change's holder H (node 0) takes an
+// intermediate leader. While H holds its own term-T entries, a leader probing
+// it matches at every term-T index, so it sends append_entries, and a
+// snapshot of any other term fails the first wait (drop_commit_waiters()
+// matches on the term). So, with `trailing` ordinary term-T entries after the
+// change's entry e:
+//   1. H (leader, term T) appends e at conf_idx and the trailing entries, and
+//      replicates them to node 3 only.
+//   2. Node 1 wins term T2 with the votes of nodes 2 and 4, which are then cut
+//      off from it before its dummy entry reaches them; the dummy reaches H
+//      only and replaces e and the trailing entries there. H's commit waiters
+//      survive: waiters are failed only by a committed batch.
+//   3. Node 3, still holding them, wins with nodes 2 and 4 and commits them
+//      with its dummy.
+//   4. Node 1 rejoins node 3 alone. Probing, node 3 sends it one entry at a
+//      time with a commit index above it; node 1 is cut off after each one
+//      before the rest arrives, until it holds and commits exactly the last
+//      term-T entry, snap_idx, and snapshots there.
+//   5. Node 1 catches up, wins the next term and probes H: H's conf_idx holds
+//      node 1's T2 dummy, the entries below snap_idx are inside node 1's
+//      snapshot, so H is sent the snapshot. Its term is e's, so the first wait
+//      passes, and the snapshot shortcut is what completes the change.
+//
+// Every window the test closes by cutting a link (between a vote request and
+// the leader's first append, between an append and the next one) is at least
+// two network hops wide, hence the network delay; and every step checks the
+// state it was meant to produce, so a lost race fails the test rather than
+// passing it for the wrong reason.
+static void test_non_voter_conf_change_completed_by_a_snapshot_aux(size_t trailing) {
+    constexpr size_t nodes = 6;
+    test_case test_config {
+        .nodes = nodes,
+        // No forwarding: node 0 has to keep the change while it is not the
+        // leader. See test_conf_change_not_completed_by_an_earlier_snapshot.
+        .config = std::vector<raft::server::configuration>(nodes,
+                raft::server::configuration { .enable_forwarding = false })
+    };
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        100,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{ .network_delay = tick_delay / 5 }
+    };
+    // Outlives the servers: node 0's pending calls are subscribed to it.
+    seastar::abort_source as;
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto s = [&] (size_t n) -> raft::server& { return cluster.get_server(n); };
+    using clk = std::chrono::steady_clock;
+    // Only the links listed (a < b) are up, both ways.
+    auto links = [&] (std::initializer_list<std::pair<size_t, size_t>> up) {
+        cluster.connect_all();
+        for (size_t a = 0; a < nodes; ++a) {
+            for (size_t b = a + 1; b < nodes; ++b) {
+                if (std::ranges::find(up, std::pair{a, b}) == up.end()) {
+                    cluster.block_receive(a, b);
+                    cluster.block_receive(b, a);
+                }
+            }
+        }
+    };
+    // Tickers are paused for most of the test, so that no election happens
+    // but the ones driven here. `ticking` stands in for one server's ticker.
+    auto wait_until = [&] (std::function<bool()> pred, std::string_view what, raft::server* ticking = nullptr) {
+        const auto deadline = clk::now() + tick_delay * 200;
+        auto next_tick = clk::now() + tick_delay;
+        while (!pred()) {
+            BOOST_REQUIRE_MESSAGE(clk::now() < deadline, what);
+            if (ticking && clk::now() >= next_tick) {
+                ticking->tick();
+                next_tick += tick_delay;
+            }
+            seastar::sleep(1ms).get();
+        }
+    };
+    // Elect node n with the votes of `voters`, which must be cut off from
+    // whatever leader they follow (elapse_election() never ends otherwise).
+    auto elect = [&] (size_t n, std::vector<size_t> voters) {
+        auto& c = s(n);
+        const auto deadline = clk::now() + tick_delay * 400;
+        while (!c.is_leader()) {
+            BOOST_REQUIRE_MESSAGE(clk::now() < deadline, fmt::format("node {} did not win an election", n));
+            for (auto v : voters) {
+                s(v).elapse_election();
+            }
+            c.elapse_election();
+            c.wait_until_candidate();
+            // A rejected candidate is retried on its next turn; a stuck one
+            // campaigns again once its own ticks run out.
+            const auto round = clk::now() + tick_delay * 30;
+            auto next_tick = clk::now() + tick_delay;
+            while (!c.is_leader() && c.get_status().state == 1 && clk::now() < round) {
+                if (clk::now() >= next_tick) {
+                    c.tick();
+                    next_tick += tick_delay;
+                }
+                seastar::sleep(1ms).get();
+            }
+        }
+    };
+    auto at = [] (raft::index_t idx, raft::term_t term) { return std::pair{idx, term}; };
+
+    auto& h = s(0);
+    s(1).wait_for_leader(nullptr).get();
+
+    // Node 5 leaves with a completed (joint) change, so that adding it back as
+    // a learner is the single-entry change under test, among voters {0..4}.
+    h.modify_config({}, {to_raft_id(5)}, nullptr).get();
+    BOOST_REQUIRE(!h.get_configuration().is_joint());
+    BOOST_REQUIRE(!h.get_configuration().contains(to_raft_id(5)));
+    cluster.disconnect(5);
+    for (size_t n = 1; n < 5; ++n) {
+        wait_until([&] {
+            return s(n).log_last_idx_term() == h.log_last_idx_term() &&
+                    s(n).get_status().commit_idx == h.get_status().commit_idx;
+        }, fmt::format("node {} did not catch up", n));
+    }
+
+    cluster.pause_tickers();
+    const auto T = h.get_current_term();
+    const auto base = h.log_last_idx_term().first;
+    const auto conf_idx = base + raft::index_t{1};
+    const auto snap_idx = conf_idx + raft::index_t{trailing};
+
+    // 1. e and the trailing entries go to node 3 only.
+    links({{0, 3}});
+    auto learner = to_config_member(5);
+    learner.can_vote = raft::is_voter::no;
+    std::optional<future<>> change = h.modify_config({learner}, {}, &as);
+    std::vector<future<>> tail;
+    // If the test fails half-way, node 0's calls are still pending, and must
+    // be done with before the servers are gone.
+    auto observe = defer([&] noexcept {
+        as.request_abort();
+        if (change) {
+            std::move(*change).handle_exception([] (std::exception_ptr) {}).get();
+        }
+        for (auto& f : tail) {
+            std::move(f).handle_exception([] (std::exception_ptr) {}).get();
+        }
+    });
+    wait_until([&] { return h.log_last_idx_term() == at(conf_idx, T); }, "node 0 did not append e");
+    for (size_t i = 0; i < trailing; ++i) {
+        tail.push_back(h.add_entry(create_command(i), raft::wait_type::committed, &as));
+    }
+    wait_until([&] { return s(3).log_last_idx_term() == at(snap_idx, T); }, "node 3 did not get e and the entries after it");
+    BOOST_REQUIRE(!h.get_configuration().is_joint());
+    BOOST_REQUIRE_EQUAL(h.get_configuration().can_vote(to_raft_id(5)), raft::is_voter::no);
+
+    // 2. Node 1 wins term T2 with nodes 2 and 4. Their votes are on the way to
+    // it once their term has moved; only then are they cut off from it, one
+    // way, and node 1 is connected to node 0 -- after its term is above T, so
+    // nothing node 0 sends as the leader of T can land in its log.
+    links({{1, 2}, {1, 4}, {2, 4}});
+    for (size_t n : {1, 2, 4}) {
+        s(n).elapse_election();
+    }
+    s(1).wait_until_candidate();
+    wait_until([&] { return s(2).get_current_term() > T && s(4).get_current_term() > T; },
+            "nodes 2 and 4 were not asked to vote for node 1");
+    const auto T2 = s(1).get_current_term();
+    links({{0, 1}, {1, 2}, {1, 4}, {2, 4}});
+    cluster.block_receive(2, 1);
+    cluster.block_receive(4, 1);
+    wait_until([&] { return s(1).is_leader(); }, "node 1 did not win term T2");
+    BOOST_REQUIRE_EQUAL(s(1).get_current_term(), T2);
+    wait_until([&] { return h.log_last_idx_term() == at(conf_idx, T2); }, "node 1's dummy did not replace e on node 0");
+    links({});
+    for (size_t n : {2, 4}) {
+        BOOST_REQUIRE_MESSAGE(s(n).log_last_idx_term() == at(base, T),
+                fmt::format("node 1's dummy reached node {}", n));
+    }
+    BOOST_REQUIRE(h.get_status().commit_idx < conf_idx);
+    BOOST_REQUIRE(!change->available());
+
+    // 3. Node 3 restores e and the entries after it.
+    links({{2, 3}, {2, 4}, {3, 4}});
+    elect(3, {2, 4});
+    wait_until([&] { return s(3).get_status().commit_idx > snap_idx; }, "node 3 did not commit e");
+
+    // 4. Node 1 gets them one at a time, with a commit index above them, and
+    // nothing after snap_idx. After each one node 3 sends the rest at once,
+    // which the cut drops; its next heartbeat is rejected, so it probes again
+    // with the next entry alone. The cut is held until whatever node 3 sent
+    // before it is delivered, and dropped, so nothing in flight gets through
+    // once the link is up again.
+    for (auto idx = conf_idx; idx <= snap_idx; idx += raft::index_t{1}) {
+        links({{1, 3}, {2, 3}, {2, 4}, {3, 4}});
+        wait_until([&] { return s(1).log_last_idx_term() == at(idx, T); },
+                fmt::format("node 1 did not get the entry at {}", idx), &s(3));
+        cluster.block_receive(1, 3);
+        seastar::sleep(tick_delay).get();
+        BOOST_REQUIRE(s(1).log_last_idx_term() == at(idx, T));
+    }
+    wait_until([&] {
+        auto st = s(1).get_status();
+        return st.commit_idx == snap_idx && st.applied_idx == snap_idx;
+    }, "node 1 did not apply up to the snapshot index");
+    BOOST_REQUIRE(s(1).log_last_idx_term() == at(snap_idx, T));
+    BOOST_REQUIRE(s(1).trigger_snapshot(nullptr).get());
+    auto check_snapshot = [&] (raft::server& srv) {
+        auto st = srv.get_status();
+        BOOST_REQUIRE_EQUAL(st.last_snapshot_idx, snap_idx);
+        BOOST_REQUIRE_EQUAL(st.last_snapshot_term, T);
+    };
+    check_snapshot(s(1));
+
+    // 5. Node 1 catches up and leads; node 0 is then connected to it.
+    links({{1, 3}, {2, 3}, {2, 4}, {3, 4}});
+    wait_until([&] { return s(1).log_last_idx_term() == s(3).log_last_idx_term(); }, "node 1 did not catch up", &s(3));
+    links({{1, 2}, {1, 4}, {2, 4}});
+    elect(1, {2, 4});
+    wait_until([&] { return s(1).get_status().commit_idx > snap_idx + raft::index_t{1}; }, "node 1 did not commit its dummy");
+    check_snapshot(s(1));
+    BOOST_REQUIRE(!change->available());
+
+    links({{0, 1}, {1, 2}, {1, 3}, {1, 4}, {2, 3}, {2, 4}, {3, 4}});
+    cluster.restart_tickers().get();
+
+    seastar::with_timeout(clk::now() + tick_delay * 200, std::move(*std::exchange(change, std::nullopt))).get();
+    // Node 0 got there through node 1's snapshot, whose term let the commit
+    // waiters of the entries it replaced through.
+    check_snapshot(h);
+    for (auto& f : std::exchange(tail, {})) {
+        f.get();
+    }
+    BOOST_REQUIRE(!h.get_configuration().is_joint());
+    BOOST_REQUIRE_EQUAL(h.get_configuration().can_vote(to_raft_id(5)), raft::is_voter::no);
+}
+
+// The snapshot is at the change's own index: this is what `>=` in the snapshot
+// shortcut is for. With `>`, nothing would ever resolve the change.
+SEASTAR_THREAD_TEST_CASE(test_non_voter_conf_change_completed_by_a_snapshot_at_entry) {
+    test_non_voter_conf_change_completed_by_a_snapshot_aux(0);
+}
+
+// The snapshot is on a term-T entry above the change's own one.
+SEASTAR_THREAD_TEST_CASE(test_non_voter_conf_change_completed_by_a_snapshot_above_entry) {
+    test_non_voter_conf_change_completed_by_a_snapshot_aux(2);
 }
 
 // A committed entry that a snapshot replaces in the raft log before the
