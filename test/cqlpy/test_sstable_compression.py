@@ -73,6 +73,26 @@ def test_chunk_length_invalid(cql, test_keyspace, garbage):
         with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { '" + sstable_compression + "': 'LZ4Compressor', 'chunk_length_in_kb': " + garbage + " }") as table:
             pass
 
+# The compression_level of ZstdCompressor must be in the range which Zstd
+# supports. The highest level that Zstd supports is 22.
+def test_zstd_compression_level_out_of_range(cql, test_keyspace):
+    # Cassandra calls the sstable_compression option "class" (see #8948).
+    option = 'sstable_compression' if is_scylla(cql) else 'class'
+    with pytest.raises(ConfigurationException, match='compression_level'):
+        with new_test_table(cql, test_keyspace, 'p int primary key, v int', f"with compression = {{ '{option}': 'ZstdCompressor', 'compression_level': 23 }}") as table:
+            pass
+
+# Like test_zstd_compression_level_out_of_range, but checks Scylla's error
+# message, which should say which option is out of range, and what its
+# allowed range is. Cassandra's message is different ("compression_level=23
+# is invalid"), so this test is scylla_only.
+# Reproduces SCYLLADB-5596 (the message had its parts in the wrong order:
+# "-131072 must be between 22 and compression_level, got 23").
+def test_zstd_compression_level_out_of_range_message(cql, test_keyspace, scylla_only):
+    with pytest.raises(ConfigurationException, match='compression_level must be between -[0-9]+ and 22, got 23'):
+        with new_test_table(cql, test_keyspace, 'p int primary key, v int', "with compression = { 'sstable_compression': 'ZstdCompressor', 'compression_level': 23 }") as table:
+            pass
+
 # If a user is allowed to specify a huge number for chunk_length_in_kb, it can
 # result in unbounded allocations and potentially crashing Scylla. Therefore,
 # there ought to be some limit for the configured chunk length. Let's check it
