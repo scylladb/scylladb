@@ -673,6 +673,21 @@ future<std::vector<tasks::task_stats>> migration_virtual_task::get_stats() {
 
 // pow2_convergence_virtual_task
 
+// Whether the balancer is converging this table to a power-of-two tablet
+// count right now, and so whether it is a task an operator can watch.
+//
+// Having a target is not enough. build_tablet_map_for_migration() sets one
+// when the table is prepared, but a table of a vnode keyspace is left alone
+// by the balancer until its migration is finalized, so a prepared table has
+// a target it cannot move towards. Reporting it would show a task that stays
+// at zero progress for as long as the round lasts.
+static bool converges_to_pow2(const replica::keyspace& ks, const locator::tablet_map& tmap) {
+    if (!tmap.is_converging_to_pow2()) {
+        return false;
+    }
+    return ks.uses_tablets() || tmap.migration_finalized();
+}
+
 tasks::task_id pow2_convergence_virtual_task::make_ks_task_id(const sstring& keyspace) {
     auto uuid = utils::UUID_gen::get_name_UUID("pow2_convergence:" + keyspace);
     return tasks::task_id{uuid};
@@ -737,12 +752,15 @@ pow2_convergence_virtual_task::find_converging_table_for_task_id(tasks::task_id 
     const auto& tablet_metadata = _ss.get_token_metadata().tablets();
     for (const auto& ks_name : db.get_all_keyspaces()) {
         auto& ks = db.find_keyspace(ks_name);
-        if (!ks.uses_tablets()) {
-            continue;
-        }
+        // A vnode keyspace is not skipped: a table whose migration has been
+        // finalized converges like any other tablet table while its keyspace
+        // still replicates by vnodes. converges_to_pow2() admits exactly those.
+        // base_tables() yields only tables that have a tablet map, and leaves
+        // out a view co-located with its base, which shares the base's map and
+        // so does not converge on its own.
         for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
             auto& tmap = tablet_metadata.get_tablet_map(schema->id());
-            if (!tmap.is_converging_to_pow2()) {
+            if (!converges_to_pow2(ks, tmap)) {
                 continue;
             }
             if (make_table_task_id(ks_name, schema->cf_name()) == id) {
@@ -759,12 +777,9 @@ pow2_convergence_virtual_task::find_converging_ks_for_task_id(tasks::task_id id)
     const auto& tablet_metadata = _ss.get_token_metadata().tablets();
     for (const auto& ks_name : db.get_all_keyspaces()) {
         auto& ks = db.find_keyspace(ks_name);
-        if (!ks.uses_tablets()) {
-            continue;
-        }
         bool has_converging_table = false;
         for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
-            if (tablet_metadata.get_tablet_map(schema->id()).is_converging_to_pow2()) {
+            if (converges_to_pow2(ks, tablet_metadata.get_tablet_map(schema->id()))) {
                 has_converging_table = true;
                 break;
             }
@@ -810,13 +825,10 @@ future<std::vector<tasks::task_stats>> pow2_convergence_virtual_task::get_stats(
 
     for (const auto& ks_name : db.get_all_keyspaces()) {
         auto& ks = db.find_keyspace(ks_name);
-        if (!ks.uses_tablets()) {
-            continue;
-        }
         bool has_converging_table = false;
         for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
             auto& tmap = tablet_metadata.get_tablet_map(schema->id());
-            if (!tmap.is_converging_to_pow2()) {
+            if (!converges_to_pow2(ks, tmap)) {
                 continue;
             }
             has_converging_table = true;
@@ -882,10 +894,8 @@ future<std::optional<tasks::task_status>> pow2_convergence_virtual_task::get_sta
     }
 
     // Keyspace-level task.
+    // As above: a vnode keyspace may hold finalized, converging tables.
     auto& ks = db.find_keyspace(*ks_name);
-    if (!ks.uses_tablets()) {
-        co_return std::nullopt;
-    }
 
     double tables_converging = 0;
     double tables_total = 0;
@@ -893,7 +903,7 @@ future<std::optional<tasks::task_status>> pow2_convergence_virtual_task::get_sta
 
     for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
         auto& tmap = tablet_metadata.get_tablet_map(schema->id());
-        if (!tmap.is_converging_to_pow2()) {
+        if (!converges_to_pow2(ks, tmap)) {
             continue;
         }
         tables_total++;
@@ -956,7 +966,7 @@ future<std::optional<tasks::task_status>> pow2_convergence_virtual_task::wait(ta
         auto& ks = db.find_keyspace(*ks_name);
         const auto& tablet_metadata = _ss.get_token_metadata().tablets();
         for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
-            if (tablet_metadata.get_tablet_map(schema->id()).is_converging_to_pow2()) {
+            if (converges_to_pow2(ks, tablet_metadata.get_tablet_map(schema->id()))) {
                 tracked_tables.insert(schema->id());
             }
         }
