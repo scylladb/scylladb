@@ -28,6 +28,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError, get_host_api_address, read_barrier
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
 from typing import Optional, List, Union
+from cassandra import AlreadyExists
 
 logger = logging.getLogger(__name__)
 
@@ -875,3 +876,57 @@ def corrupt_commitlog_segment(path: str, sector: int = 1) -> None:
         assert len(stored) == crc_size, f"{path} is shorter than sector {sector}"
         f.seek(crc_offset)
         f.write(bytes(b ^ 0xff for b in stored))
+_ASAN_WARNING = re.compile(r"^==\d+==WARNING: ASan .*\n?", re.MULTILINE)
+def strip_asan_warnings(text: str) -> str:
+    """
+    Drops the warnings AddressSanitizer itself prints in debug builds (for
+    example "==N==WARNING: ASan doesn't fully support makecontext/swapcontext
+    functions ..."), so that a tool's stderr holds only the tool's output.
+    """
+    return _ASAN_WARNING.sub("", text)
+async def run_nodetool(manager: ScyllaClusterManager, server: ServerInfo, *args: str,
+                       check: bool = True) -> tuple[str, str, int]:
+    """
+    Runs "scylla nodetool <args>" against the server, the way an operator
+    would, and returns its stdout, stderr (without ASan's own warnings) and
+    exit code. With check=True a non-zero exit code fails the test.
+    """
+    exe = await manager.server_get_exe(server.server_id)
+    # The host option goes before a "--", after which all arguments are positional.
+    i = args.index("--") if "--" in args else len(args)
+    proc = await asyncio.create_subprocess_exec(exe, "nodetool", *args[:i], "-h", server.ip_addr, *args[i:],
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, err = await proc.communicate()
+    stdout, stderr = out.decode(), strip_asan_warnings(err.decode())
+    if check:
+        assert proc.returncode == 0, f"nodetool {' '.join(args)} failed ({proc.returncode}): {stderr}"
+    return stdout, stderr, proc.returncode
+async def cassandra_stress(manager: ScyllaClusterManager, server: ServerInfo, *args: str, rf: int = 1,
+                           create_keyspace: bool = True) -> str:
+    """
+    Runs cassandra-stress with the given arguments (for example "write",
+    "n=1000") against the server and returns its output. Like the dtests'
+    stress() helper, it first creates keyspace1 with the given replication
+    factor, with NetworkTopologyStrategy instead of cassandra-stress's
+    default SimpleStrategy, unless create_keyspace=False; as there, a
+    keyspace1 created before is left as it is.
+    """
+    if create_keyspace:
+        with suppress(AlreadyExists):
+            await manager.get_cql().run_async("CREATE KEYSPACE keyspace1 WITH replication = "
+                                              f"{{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
+    proc = await asyncio.create_subprocess_exec("cassandra-stress", *args, "-node", server.ip_addr,
+                                                "-mode", "native", "cql3", "user=cassandra", "password=cassandra",
+                                                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    out, _ = await proc.communicate()
+    output = out.decode()
+    assert proc.returncode == 0, f"cassandra-stress {' '.join(args)} failed: {output}"
+    return output
+async def stop_servers_gracefully(manager: ScyllaClusterManager) -> None:
+    """
+    Stops the test's running servers gracefully, as the dtests' teardown
+    (ccm's cluster.stop()) did: shutdown flushes the memtables and closes
+    the sstables, where the harness would otherwise kill the nodes.
+    """
+    for server in await manager.running_servers():
+        await manager.server_stop_gracefully(server.server_id)
