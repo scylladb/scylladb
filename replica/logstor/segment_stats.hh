@@ -45,25 +45,32 @@ struct segment_stats {
     uint64_t segment_count{0};
     uint64_t live_record_bytes{0};
     utilization_histogram utilization{};
+    // The segments with no live records. Bucket 0 of the histogram also holds the segments with a
+    // few live records, so it cannot show when a segment dies.
+    uint64_t dead_segments{0};
 
     void add_segment(uint64_t segment_record_bytes, size_t bucket) noexcept {
         ++segment_count;
         live_record_bytes += segment_record_bytes;
         ++utilization[bucket];
+        dead_segments += segment_record_bytes == 0;
     }
 
     void remove_segment(uint64_t segment_record_bytes, size_t bucket) noexcept {
         --segment_count;
         live_record_bytes -= segment_record_bytes;
         --utilization[bucket];
+        dead_segments -= segment_record_bytes == 0;
     }
 
-    void free_from_segment(uint64_t freed_record_bytes, size_t old_bucket, size_t new_bucket) noexcept {
+    // `remaining_record_bytes` is what the segment holds after the free.
+    void free_from_segment(uint64_t freed_record_bytes, uint64_t remaining_record_bytes, size_t old_bucket, size_t new_bucket) noexcept {
         live_record_bytes -= freed_record_bytes;
         if (old_bucket != new_bucket) {
             --utilization[old_bucket];
             ++utilization[new_bucket];
         }
+        dead_segments += remaining_record_bytes == 0 && freed_record_bytes != 0;
     }
 
     bool operator==(const segment_stats&) const noexcept = default;

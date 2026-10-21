@@ -2917,6 +2917,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_set_stats) {
         for (const auto* set : {&segments, &other}) {
             expected.segment_count += set->stats().segment_count;
             expected.live_record_bytes += set->stats().live_record_bytes;
+            expected.dead_segments += set->stats().dead_segments;
             for (size_t i = 0; i < utilization_bucket_count; ++i) {
                 expected.utilization[i] += set->stats().utilization[i];
             }
@@ -2951,13 +2952,22 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_set_stats) {
     BOOST_REQUIRE_EQUAL(bucket_of(segments, freed_records - 1), 1);
     check_shard();
 
+    // A segment whose last record is freed stays in bucket 0, so only the dead count shows it.
+    sparse.on_free(frame_size, 1);
+    segments.update_segment(sparse, frame_size);
+    check_stats(segments, 2, freed_records * frame_size);
+    BOOST_REQUIRE_EQUAL(bucket_of(segments, 0), 1);
+    BOOST_REQUIRE_EQUAL(segments.stats().dead_segments, 1);
+    check_shard();
+
     // A merge moves the segments and their statistics to the other set. The shard statistics do not
     // change.
     other.merge(segments).get();
     check_stats(segments, 0, 0);
-    check_stats(other, 2, (freed_records + 1) * frame_size);
+    check_stats(other, 2, freed_records * frame_size);
     BOOST_REQUIRE_EQUAL(bucket_of(other, 0), 1);
     BOOST_REQUIRE_EQUAL(bucket_of(other, freed_records - 1), 1);
+    BOOST_REQUIRE_EQUAL(other.stats().dead_segments, 1);
     check_shard();
     BOOST_REQUIRE_EQUAL(shard.segment_count, 2);
 
@@ -2965,6 +2975,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_set_stats) {
     other.remove_segment(sparse);
     check_stats(other, 1, freed_records * frame_size);
     BOOST_REQUIRE_EQUAL(bucket_of(other, 0), 0);
+    BOOST_REQUIRE_EQUAL(other.stats().dead_segments, 0);
     check_shard();
 
     other.clear();
