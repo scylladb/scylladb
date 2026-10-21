@@ -69,6 +69,9 @@ struct raw_value_vector_with_unset {
  */
 class query_options {
 public:
+    // The routing statement index of a batch the driver didn't route by any statement.
+    static constexpr uint16_t no_routing_statement = 0xFFFF;
+
     // Options that are likely to not be present in most queries
     struct specific_options final {
         static thread_local const specific_options DEFAULT;
@@ -88,6 +91,9 @@ private:
     unset_bind_variable_vector _unset;
     const bool _skip_metadata;
     std::optional<locator::tablet_version_block> _tablet_version_block;
+    // The 0-based index of the statement the driver routed the batch by,
+    // or `no_routing_statement`. Only relevant for batches.
+    uint16_t _routing_statement_index = no_routing_statement;
     const specific_options _options;
     std::optional<std::vector<query_options>> _batch_options;
     // We must use the same microsecond-precision timestamp for
@@ -225,6 +231,16 @@ public:
 
     std::optional<locator::tablet_version_block> get_tablet_version_block() const noexcept {
         return _tablet_version_block;
+    }
+
+    // Set the routing statement index received in a BATCH request (TABLETS_ROUTING_V2).
+    void set_routing_statement_index(uint16_t index) noexcept {
+        _routing_statement_index = index;
+    }
+
+    // Only relevant for batches.
+    uint16_t routing_statement_index() const noexcept {
+        return _routing_statement_index;
     }
 
     // Mainly for the sake of BatchQueryOptions

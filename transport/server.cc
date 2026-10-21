@@ -2071,6 +2071,34 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
     }
 
+    if (client_state.is_protocol_extension_set(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
+        const utils::result_with_exception_ptr<uint16_t> routing_statement_index = in.read_short();
+        if (!routing_statement_index) [[unlikely]] {
+            return make_exception_future<cql_server::process_fn_return_type>(std::move(routing_statement_index).assume_error());
+        }
+        const utils::result_with_exception_ptr<int8_t> tablet_version_byte = in.read_byte();
+        if (!tablet_version_byte) [[unlikely]] {
+            return make_exception_future<cql_server::process_fn_return_type>(std::move(tablet_version_byte).assume_error());
+        }
+        const uint16_t index = routing_statement_index.assume_value();
+        if (index != cql3::query_options::no_routing_statement) {
+            if (index >= modifications.size()) [[unlikely]] {
+                return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(format(
+                        "Invalid routing statement index in BATCH message: {} for a batch of {} statements",
+                        index, modifications.size())));
+            }
+            // The driver can only compute the token from the partition key bind indices
+            // it got in the PREPARED metadata of the statement.
+            if (!modifications[index].statement->may_use_token_aware_routing()) [[unlikely]] {
+                return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(format(
+                        "Invalid routing statement index in BATCH message: "
+                        "the token can't be computed from statement {}", index)));
+            }
+        }
+        options.set_routing_statement_index(index);
+        options.set_tablet_version_block(locator::tablet_version_block{uint8_t(tablet_version_byte.assume_value())});
+    }
+
     if (init_trace && trace_state) {
         tracing::add_prepared_query_options(trace_state, options);
         tracing::set_common_query_parameters(trace_state, options.get_consistency(),

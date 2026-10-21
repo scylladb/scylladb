@@ -302,6 +302,24 @@ the whole 64-bit version is checked; any single mismatching block is enough to
 trigger a refresh. A driver that holds no version yet for a tablet should still
 send a byte — the resulting mismatch makes the server return the current routing.
 
+Every BATCH request carries a routing hint, immediately after the regular batch
+parameters:
+
+```
+<type><n><query_1>...<query_n><consistency><flags>[<serial_consistency>][<timestamp>]
+<routing_statement_index><tablet_version_block>
+```
+
+`routing_statement_index` is a `[short]`: the 0-based position of the statement
+the driver routed the batch by, or `0xFFFF` if it didn't route it by any. The
+`tablet_version_block` is presented for the tablet of that statement, and it's
+ignored when the index is `0xFFFF`. The driver must be able to compute the token
+from the routing statement: it must be a prepared statement (kind 1) with
+partition key bind indices. A BATCH request without the hint, with an index
+that's neither smaller than `n` nor `0xFFFF`, or with an index of a statement
+the token can't be computed from, is a protocol error. More information can be
+found in [tablets-routing-v2-batches.md](tablets-routing-v2-batches.md).
+
 ### Receiving the refreshed routing info
 
 The server takes the tablet's current `tablet_version`, extracts the same block
@@ -339,8 +357,8 @@ group is always the first in the list.
 
 This extension tells the database that the driver understands the
 `tablets-routing-v2` mechanism described above: that it will present a
-`tablet_version_block` on EXECUTE requests and can interpret the
-`tablets-routing-v2` `custom_payload`.
+`tablet_version_block` on EXECUTE requests, a routing hint on BATCH requests,
+and can interpret the `tablets-routing-v2` `custom_payload`.
 
 The feature is identified by the `TABLETS_ROUTING_V2_EXPERIMENTAL` key, which is
 meant to be sent in the SUPPORTED message.

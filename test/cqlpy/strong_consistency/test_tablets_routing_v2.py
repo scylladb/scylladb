@@ -6,7 +6,8 @@
 # Tests for the tablets-routing-v2 protocol extension (see
 # docs/dev/tablets-routing-v2.md). An EXECUTE request carries a tablet version
 # block, and if it doesn't match the version of the tablet, the response
-# carries routing information for the tablet.
+# carries routing information for the tablet. A BATCH request carries a routing
+# hint (see docs/dev/tablets-routing-v2-batches.md).
 #
 # The Python driver supports the extension, but it chooses the tablet version
 # blocks by itself, and it only sends well-formed requests. The tests need to
@@ -28,7 +29,9 @@ from ..util import ScyllaMetrics, new_test_table
 
 EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL"
 PAYLOAD_KEY = "tablets-routing-v2"
+NO_ROUTING_STATEMENT = 0xFFFF
 
+CL_ONE = 0x0001
 CL_QUORUM = 0x0004
 VALUES_FLAG = 0x01
 PAGE_SIZE_FLAG = 0x04
@@ -167,6 +170,46 @@ def paging_plan_rederivations(cql) -> int:
     return int(ScyllaMetrics.query(cql).get("scylla_cql_select_paging_plan_rederivations") or 0)
 
 
+# A statement of a BATCH request: query text, or the ID of a prepared
+# statement, with its int values.
+def batch_statement(query_or_id: str | bytes, values: list[int]) -> bytes:
+    if isinstance(query_or_id, str):
+        statement = cql_frames.encode_byte(0)
+        statement += cql_frames.encode_long_string(query_or_id)
+    else:
+        statement = cql_frames.encode_byte(1)
+        statement += cql_frames.encode_short_bytes(query_or_id)
+    statement += cql_frames.encode_short(len(values))
+    return statement + b''.join(cql_frames.encode_bytes(cql_frames.encode_int(value)) for value in values)
+
+
+# Sends a LOGGED BATCH request without waiting for the response. `hint` is a
+# pair of the routing statement index and the tablet version block, or None to
+# leave out the routing hint.
+def send_batch(sock: socket.socket, statements: list[bytes], cl: int, hint: tuple[int, int] | None) -> None:
+    body = cql_frames.encode_byte(0) # LOGGED
+    body += cql_frames.encode_short(len(statements))
+    body += b''.join(statements)
+    body += cql_frames.encode_short(cl)
+    body += cql_frames.encode_byte(0) # No flags.
+    if hint is not None:
+        index, block = hint
+        body += cql_frames.encode_short(index)
+        body += cql_frames.encode_byte(block)
+    cql_frames.send_frame(sock, opcode=cql_frames.BATCH, stream=3, body=body)
+
+
+# Sends a LOGGED BATCH request, like send_batch(), and returns the response.
+def batch(sock: socket.socket, statements: list[bytes], cl: int, hint: tuple[int, int] | None) -> cql_frames.Response:
+    send_batch(sock, statements, cl, hint)
+    return cql_frames.read_frame(sock)
+
+
+def assert_protocol_error(response: cql_frames.Response) -> None:
+    assert response.opcode == cql_frames.ERROR
+    assert response.body.read_int() == PROTOCOL_ERROR
+
+
 # Without the extension, an EXECUTE request carries no tablet version block, and
 # its response carries no routing information.
 def test_execute_without_extension(cql, connect, test_keyspace):
@@ -179,9 +222,7 @@ def test_execute_without_extension(cql, connect, test_keyspace):
 def test_execute_without_tablet_version_block(cql, connect, test_keyspace):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table, connect() as sock:
         statement_id = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)").query_id
-        response = execute(sock, statement_id, [1, 1], None)
-    assert response.opcode == cql_frames.ERROR
-    assert response.body.read_int() == PROTOCOL_ERROR
+        assert_protocol_error(execute(sock, statement_id, [1, 1], None))
 
 
 # Whichever block of the tablet version the driver sends, the server returns
@@ -276,3 +317,28 @@ def test_routing_information_after_query_plan_change(cql, connect, test_keyspace
         infos = execute_with_both_blocks(sock, statement_id, [1, 1], page_size=1, paging_state=paging_state)
         assert paging_plan_rederivations(cql) > rederivations
         assert any(info is not None for info in infos)
+
+
+# The routing statement must be one the driver could compute the token from:
+# a statement sent as the ID of a prepared statement with partition key bind
+# indices. Any other routing statement index, or a missing hint, is a protocol
+# error.
+def test_invalid_routing_hint(cql, connect, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table, connect() as sock:
+        statements = [
+            batch_statement(cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)").query_id, [1, 1]),
+            # The partition key is a literal, so the driver can't compute the token.
+            batch_statement(cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (1, ?)").query_id, [1]),
+            # The driver has no partition key bind indices for query text.
+            batch_statement(f"INSERT INTO {table} (pk, v) VALUES (?, ?)", [1, 1]),
+        ]
+
+        # 3 is past the end of the batch.
+        for hint in [(1, 0), (2, 0), (3, 0), None]:
+            assert_protocol_error(batch(sock, statements, CL_ONE, hint))
+        # An empty batch has no statement to route by.
+        assert_protocol_error(batch(sock, [], CL_ONE, (0, 0)))
+
+        for hint in [(0, 0), (NO_ROUTING_STATEMENT, 0)]:
+            assert batch(sock, statements, CL_ONE, hint).opcode == cql_frames.RESULT
+        assert batch(sock, [], CL_ONE, (NO_ROUTING_STATEMENT, 0)).opcode == cql_frames.RESULT
