@@ -2915,6 +2915,71 @@ SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion_shard_distribution) {
     }).get();
 }
 
+// A tablet with replicas in two racks is a candidate of both rack scopes, but is scheduled once.
+SEASTAR_THREAD_TEST_CASE(test_tablet_drained_in_two_racks_is_scheduled_once) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto dc = topo.dc();
+        auto rack1 = topo.rack();
+        auto host1 = topo.add_node(node_state::normal, 1);
+        topo.add_node(node_state::normal, 2);
+        auto rack2 = topo.start_new_rack();
+        auto host2 = topo.add_node(node_state::normal, 1);
+        topo.add_node(node_state::normal, 2);
+        auto rack3 = topo.start_new_rack();
+        auto host3 = topo.add_node(node_state::normal, 1);
+        // The drained nodes are not excluded, so that the migrations stream from them,
+        // and not all from host3, whose streaming cap would limit the plan.
+        topo.add_draining_request(host1);
+        topo.add_draining_request(host2);
+
+        auto ks_name = add_keyspace_racks(e, {{dc, {rack1.rack, rack2.rack, rack3.rack}}}, 2);
+        auto table1 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(2);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica{host1, 0},
+                        tablet_replica{host2, 0},
+                        tablet_replica{host3, 0},
+                    }
+                });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        migration_plan plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+
+        // The rack scope which schedules first takes one tablet. The other scope collects
+        // its candidates after that, so it takes the other tablet. The first scope collected
+        // both tablets as its candidates, and its target has a free slot for the second one.
+        BOOST_REQUIRE_EQUAL(plan.tablet_migration_count(), 2);
+        std::unordered_set<global_tablet_id> tablets;
+        std::unordered_map<sstring, unsigned> migrations_per_rack;
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Migration: {}", mig);
+            BOOST_REQUIRE(tablets.insert(mig.tablet).second);
+            BOOST_REQUIRE(mig.src && mig.dst);
+            BOOST_REQUIRE(mig.src->host == host1 || mig.src->host == host2);
+            auto& rack = stm.get()->get_topology().get_rack(mig.dst->host);
+            BOOST_REQUIRE_EQUAL(stm.get()->get_topology().get_rack(mig.src->host), rack);
+            migrations_per_rack[rack]++;
+        }
+        BOOST_REQUIRE_EQUAL(migrations_per_rack[rack1.rack], 1);
+        BOOST_REQUIRE_EQUAL(migrations_per_rack[rack2.rack], 1);
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_colocation_skipped_on_excluded_nodes) {
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
