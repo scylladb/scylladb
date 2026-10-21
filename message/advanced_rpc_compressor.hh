@@ -193,16 +193,17 @@ private:
     std::function<future<>()> _send_empty_frame;
     future<> _progress_fiber;
 
-    // These return global compression contexts (for non-streaming compression modes), lazily initializing them.
-    zstd_dstream& get_global_zstd_dstream();
-    zstd_cstream& get_global_zstd_cstream();
-    lz4_dstream& get_global_lz4_dstream();
-    lz4_cstream& get_global_lz4_cstream();
+    // These return global compression contexts (for non-streaming compression modes), lazily initializing them,
+    // and plug the given dict into them.
+    zstd_dstream& get_global_zstd_dstream(const shared_dict&);
+    zstd_cstream& get_global_zstd_cstream(const shared_dict&);
+    lz4_dstream& get_global_lz4_dstream(const shared_dict&);
+    lz4_cstream& get_global_lz4_cstream(const shared_dict&);
 
     // Calls the appropriate get_*_cstream() function.
-    stream_compressor& get_compressor(compression_algorithm);
+    stream_compressor& get_compressor(compression_algorithm, const shared_dict&);
     // Calls the appropriate get_*_dstream() function.
-    stream_decompressor& get_decompressor(compression_algorithm);
+    stream_decompressor& get_decompressor(compression_algorithm, const shared_dict&);
 
     // Decides the algorithm used for the next message, based
     // on the state of the negotiation and the size of the message.
