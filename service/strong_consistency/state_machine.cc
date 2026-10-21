@@ -150,9 +150,10 @@ public:
             throw;
         }
          catch (...) {
-            throw std::runtime_error(::format(
-                "tablet {}, group id {}: error while applying mutations {}",
-                _tablet, _group_id, std::current_exception()));
+            // Nested, so that the Raft server can still tell what the error is.
+            std::throw_with_nested(std::runtime_error(::format(
+                "tablet {}, group id {}: error while applying mutations",
+                _tablet, _group_id)));
         }
     }
 
