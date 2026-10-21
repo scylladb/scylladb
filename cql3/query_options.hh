@@ -88,6 +88,9 @@ private:
     unset_bind_variable_vector _unset;
     const bool _skip_metadata;
     std::optional<locator::tablet_version_block> _tablet_version_block;
+    // The 0-based index of the statement the driver routed the batch by, if it
+    // routed it by any. Only relevant for batches.
+    std::optional<size_t> _routing_statement_index;
     const specific_options _options;
     std::optional<std::vector<query_options>> _batch_options;
     // We must use the same microsecond-precision timestamp for
@@ -223,8 +226,21 @@ public:
         _tablet_version_block = block;
     }
 
+    // Set the routing hint received in a BATCH request (TABLETS_ROUTING_V2):
+    // - index of the routing statement,
+    // - tablet version block.
+    void set_routing_hint(size_t routing_statement_index, locator::tablet_version_block block) noexcept {
+        _routing_statement_index = routing_statement_index;
+        _tablet_version_block = block;
+    }
+
     std::optional<locator::tablet_version_block> get_tablet_version_block() const noexcept {
         return _tablet_version_block;
+    }
+
+    // Only relevant for batches (TABLETS_ROUTING_V2).
+    std::optional<size_t> routing_statement_index() const noexcept {
+        return _routing_statement_index;
     }
 
     // Mainly for the sake of BatchQueryOptions
