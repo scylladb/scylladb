@@ -121,7 +121,14 @@ public:
                 // Concurrent apply_in_memory() calls can complete out of order under memory pressure
                 // (suspended at run_when_memory_available()), making mutations visible out of Raft log order.
                 // Therefore we must await each apply_in_memory() sequentially to preserve Raft log order.
-                co_await _db.apply_in_memory(mut, std::move(schema), std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance());
+                // apply_in_memory() skips the write counters of database::apply(), so count here.
+                try {
+                    co_await _db.apply_in_memory(mut, std::move(schema), std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance());
+                } catch (...) {
+                    ++_db.get_stats().total_writes_failed;
+                    throw;
+                }
+                ++_db.get_stats().total_writes;
                 // The entry has been applied, but the handle hasn't necessarily
                 // been consumed. Prevent releasing the handle by destroying it.
                 replay_positions[i].replay_position_handle = db::rp_handle{};
