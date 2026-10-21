@@ -32,6 +32,7 @@
 
 #include "idl/frozen_mutation.dist.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace service::paxos {
 

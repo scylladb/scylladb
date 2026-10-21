@@ -100,6 +100,8 @@
 
 #include <algorithm>
 #include <flat_set>
+#include "service/topology_state_machine.hh"
+#include "replica/compaction_group.hh"
 
 using namespace std::chrono_literals;
 using namespace db;

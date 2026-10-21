@@ -29,6 +29,9 @@
 #include "idl/view.dist.hh"
 #include "sstables/sstables.hh"
 #include "utils/exponential_backoff_retry.hh"
+#include "locator/tablets.hh"
+
+using namespace std::chrono_literals;
 
 static logging::logger vbw_logger("view_building_worker");
 

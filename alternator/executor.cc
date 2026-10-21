@@ -78,6 +78,8 @@
 #include "vector_search/vector_store_client.hh"
 #include "utils/simple_value_with_expiry.hh"
 #include "service/paxos/paxos_state.hh"
+#include "service/storage_service.hh"
+#include "service/raft/raft_group0_client.hh"
 
 using namespace std::chrono_literals;
 
