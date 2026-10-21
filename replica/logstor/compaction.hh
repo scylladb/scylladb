@@ -173,9 +173,9 @@ public:
         const auto record_bytes = desc.record_bytes(_segment_size);
         const auto old_bucket = utilization_bucket_of(record_bytes + freed_bytes, _segment_size);
         const auto new_bucket = utilization_bucket_of(record_bytes, _segment_size);
-        _stats.free_from_segment(freed_bytes, old_bucket, new_bucket);
+        _stats.free_from_segment(freed_bytes, record_bytes, old_bucket, new_bucket);
         if (_shard_stats) {
-            _shard_stats->free_from_segment(freed_bytes, old_bucket, new_bucket);
+            _shard_stats->free_from_segment(freed_bytes, record_bytes, old_bucket, new_bucket);
         }
     }
 
