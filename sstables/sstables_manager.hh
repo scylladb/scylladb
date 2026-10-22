@@ -318,6 +318,14 @@ public:
     // table was dropped while the node was down. Called on startup, after all
     // the sstables are loaded, and before reads start.
     future<> evict_orphans_from_page_cache() noexcept;
+    // Copies to this shard's object storage page cache the pages which another
+    // shard cached for the given sstables of a table with the given storage
+    // options, which moved from that shard to this one, keeping their
+    // sstable_id - in an intra-node tablet migration. Reading the pages from
+    // the other shard's cache is cheaper than reading them again from the
+    // object store.
+    future<> copy_cached_pages(const data_dictionary::storage_options& so,
+            const std::vector<sstable_id>& ssts, shard_id from) noexcept;
 
     // Only for sstable::storage usage
     sstables::sstables_registry& sstables_registry() const noexcept {
