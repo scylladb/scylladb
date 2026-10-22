@@ -866,7 +866,8 @@ private:
                                         streamed_mutation::forwarding fwd,
                                         mutation_reader::forwarding fwd_mr,
                                         const sstables::sstable_predicate& = sstables::default_sstable_predicate(),
-                                        sstables::integrity_check integrity = sstables::integrity_check::no) const;
+                                        sstables::integrity_check integrity = sstables::integrity_check::no,
+                                        sstables::populate_disk_cache populate = sstables::populate_disk_cache::no) const;
 
     lw_shared_ptr<const sstables::sstable_set> make_compound_sstable_set() const;
     // Compound sstable set must be refreshed whenever any of its managed sets are changed

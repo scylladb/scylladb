@@ -309,6 +309,7 @@ public:
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
             read_monitor& monitor = default_read_monitor(),
             integrity_check integrity = integrity_check::no,
+            populate_disk_cache populate = populate_disk_cache::no,
             const utils::hashed_key* single_partition_read_murmur_hash = nullptr
         );
 
@@ -863,6 +864,11 @@ public:
     // When created with `integrity_check::yes`, the integrity mechanisms
     // of the underlying data streams will be enabled.
     //
+    // If the sstable is on object storage in a keyspace with the 'disk_cache'
+    // option, the data is read through the disk page cache, which the read
+    // populates only with `populate_disk_cache::yes` (see the comment on
+    // populate_disk_cache).
+    //
     // The `error_handler` parameter allows to customize the error handling
     // logic when a checksum or digest mismatch is detected on an
     // integrity-checked stream with no compression. The parameter is ignored
@@ -875,12 +881,14 @@ public:
     future<input_stream<char>> data_stream(uint64_t pos, size_t len,
             reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
             raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
+            populate_disk_cache populate = populate_disk_cache::no,
             integrity_error_handler error_handler = throwing_integrity_error_handler);
 
     future<input_stream<char>> data_stream(uint64_t pos, size_t len,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
         file_input_stream_options options,
         raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
+        populate_disk_cache populate = populate_disk_cache::no,
         integrity_error_handler error_handler = throwing_integrity_error_handler);
 
     // Read exactly the specific byte range from the data file (after
@@ -889,7 +897,8 @@ public:
     // determined using the index file).
     // This function is intended (and optimized for) random access, not
     // for iteration through all the rows.
-    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, reader_permit permit);
+    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, reader_permit permit,
+            populate_disk_cache populate = populate_disk_cache::no);
 
 private:
     future<summary_entry&> read_summary_entry(size_t i);
@@ -1238,10 +1247,10 @@ public:
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
     friend future<std::unique_ptr<DataConsumeRowsContext>>
-    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t, integrity_check);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t, integrity_check, populate_disk_cache);
     template <typename DataConsumeRowsContext>
     friend future<std::unique_ptr<DataConsumeRowsContext>>
-    data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, integrity_check);
+    data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, integrity_check, populate_disk_cache);
     template <typename DataConsumeRowsContext>
     friend future<std::unique_ptr<DataConsumeRowsContext>>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, integrity_check);

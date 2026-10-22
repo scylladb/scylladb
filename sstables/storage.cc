@@ -105,7 +105,8 @@ public:
     virtual future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
-    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
+    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt,
+            populate_disk_cache populate) const override;
     future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
@@ -155,7 +156,8 @@ future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, comp
     }
 }
 
-future<data_source> filesystem_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const {
+future<data_source> filesystem_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt,
+        populate_disk_cache) const {
     SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
     co_return co_await make_source(sst, type, std::move(f), offset, len, std::move(opt));
 }
@@ -730,7 +732,8 @@ protected:
     // A source of the given range of the sstable's component, which reads it
     // through the disk page cache - or nothing, if it should not be read
     // through the cache.
-    future<std::optional<data_source>> maybe_make_page_cached_source(const sstable& sst, component_type type, uint64_t offset, uint64_t len) const;
+    future<std::optional<data_source>> maybe_make_page_cached_source(const sstable& sst, component_type type, uint64_t offset, uint64_t len,
+            populate_disk_cache populate) const;
 public:
     object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as,
             data_dictionary::storage_options::disk_cache_mode disk_cache)
@@ -756,7 +759,8 @@ public:
     future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept override;
     future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
-    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
+    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt,
+            populate_disk_cache populate) const override;
     future<data_source> make_source(sstable& sst, component_type type, file, uint64_t offset, uint64_t len, file_input_stream_options) const override;
 
     future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
@@ -850,7 +854,8 @@ public:
         : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), layout, as, disk_cache)
     {}
 
-    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
+    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt,
+            populate_disk_cache populate) const override;
     future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
 };
 
@@ -968,7 +973,7 @@ future<file> object_storage_base::open_component(const sstable& sst, component_t
     if (_disk_cache == data_dictionary::storage_options::disk_cache_mode::pages
             && (type == component_type::Index || type == component_type::Partitions || type == component_type::Rows)) {
         if (auto cache = sst.manager().get_object_storage_page_cache()) {
-            f = make_page_cached_file(std::move(cache), get_sstable_identifier(sst), type, std::move(f));
+            f = make_page_cached_file(std::move(cache), get_sstable_identifier(sst), type, std::move(f), populate_disk_cache::yes);
         }
     }
     return maybe_wrap_file(sst, type, flags, std::move(f));
@@ -1024,18 +1029,19 @@ future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, com
 // geometry, and reads any pages which are not cached from the object store.
 static data_source make_cached_object_source(shared_ptr<object_storage_page_cache> cache, sstable_id sid, component_type type,
         shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t len,
-        shared_ptr<object_storage_client> client, object_name name, seastar::abort_source* as) {
+        shared_ptr<object_storage_client> client, object_name name, seastar::abort_source* as, populate_disk_cache populate) {
     auto& cache_ref = *cache;
     return make_page_cached_source(cache_ref, sid, type, std::move(geometry), offset, len,
             [client = std::move(client), name = std::move(name), as, cache = std::move(cache)] (uint64_t offset, uint64_t length) {
         // Capturing "cache" keeps it alive as long as this source, even if
         // it is unplugged (on shutdown) in the meantime.
         return make_ready_future<data_source>(client->make_ranged_download_source(name, offset, length, as));
-    });
+    }, populate);
 }
 
 future<std::optional<data_source>>
-object_storage_base::maybe_make_page_cached_source(const sstable& sst, component_type type, uint64_t offset, uint64_t len) const {
+object_storage_base::maybe_make_page_cached_source(const sstable& sst, component_type type, uint64_t offset, uint64_t len,
+        populate_disk_cache populate) const {
     // Besides Data, the older Index component is also sometimes read through a
     // data_source rather than through its file (see open_component()).
     if (_disk_cache != data_dictionary::storage_options::disk_cache_mode::pages
@@ -1075,9 +1081,9 @@ object_storage_base::maybe_make_page_cached_source(const sstable& sst, component
         // here, but every read ends either at a page boundary or at the end
         // of the object, so the geometry of each read can end where it does.
         co_return co_await transformer->wrap_ranged_source(sst, type, offset, len, size,
-                [cache, sid, type, client = _client, name = make_object_name(sst, type), as = abort_source()] (uint64_t offset, uint64_t length) {
+                [cache, sid, type, client = _client, name = make_object_name(sst, type), as = abort_source(), populate] (uint64_t offset, uint64_t length) {
             return make_ready_future<data_source>(make_cached_object_source(cache, sid, type,
-                    make_shared<fixed_size_page_geometry>(offset + length), offset, length, client, name, as));
+                    make_shared<fixed_size_page_geometry>(offset + length), offset, length, client, name, as, populate));
         });
     }
     shared_ptr<const page_geometry> geometry;
@@ -1091,12 +1097,13 @@ object_storage_base::maybe_make_page_cached_source(const sstable& sst, component
         geometry = make_shared<fixed_size_page_geometry>(sst.ondisk_data_size());
     }
     co_return make_cached_object_source(std::move(cache), sid, type, std::move(geometry), offset, len,
-            _client, make_object_name(sst, type), abort_source());
+            _client, make_object_name(sst, type), abort_source(), populate);
 }
 
 future<data_source>
-object_storage_base::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
-    if (auto src = co_await maybe_make_page_cached_source(sst, type, offset, len)) {
+object_storage_base::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options,
+        populate_disk_cache populate) const {
+    if (auto src = co_await maybe_make_page_cached_source(sst, type, offset, len, populate)) {
         co_return std::move(*src);
     }
     co_return co_await make_source(sst, type, f, offset, len, options);
@@ -1108,8 +1115,9 @@ object_storage_base::make_source(sstable& sst, component_type type, file f, uint
 }
 
 future<data_source>
-s3_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
-    if (auto src = co_await maybe_make_page_cached_source(sst, type, offset, len)) {
+s3_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options,
+        populate_disk_cache populate) const {
+    if (auto src = co_await maybe_make_page_cached_source(sst, type, offset, len, populate)) {
         co_return std::move(*src);
     }
     co_return co_await make_source(sst, type, std::move(f), offset, len, std::move(options));

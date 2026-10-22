@@ -3133,6 +3133,7 @@ sstable::make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& mon,
         integrity_check integrity,
+        populate_disk_cache populate,
         const utils::hashed_key* single_partition_read_murmur_hash
 ) {
     const auto reversed = slice.is_reversed();
@@ -3152,6 +3153,7 @@ sstable::make_reader(
             fwd_mr,
             mon,
             integrity,
+            populate,
             std::move(index_reader),
             single_partition_read_murmur_hash);
     }
@@ -3165,7 +3167,7 @@ sstable::make_reader(
         // The only mx case falling through here is reversed multi-partition reader
         auto rd = make_reversing_reader(mx::make_reader(shared_from_this(), query_schema->make_reversed(), std::move(permit),
                 range, reverse_slice(*query_schema, slice), std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon,
-                integrity, std::move(index_reader), single_partition_read_murmur_hash),
+                integrity, populate, std::move(index_reader), single_partition_read_murmur_hash),
             max_result_size);
         if (fwd) {
             rd = make_forwardable(std::move(rd));
@@ -3328,18 +3330,18 @@ component_type sstable::component_from_sstring(version_types v, const sstring &s
 
 future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw,
-        integrity_check integrity, integrity_error_handler error_handler) {
+        integrity_check integrity, populate_disk_cache populate, integrity_error_handler error_handler) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.read_ahead = 4;
     options.dynamic_adjustments = std::move(history);
-    return data_stream(pos, len, permit, std::move(trace_state), history, std::move(options), raw, integrity, std::move(error_handler));
+    return data_stream(pos, len, permit, std::move(trace_state), history, std::move(options), raw, integrity, populate, std::move(error_handler));
 }
 
 future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
         file_input_stream_options options,
-        raw_stream raw, integrity_check integrity,
+        raw_stream raw, integrity_check integrity, populate_disk_cache populate,
         integrity_error_handler error_handler) {
 
     file f = make_tracked_file(_data_file, permit);
@@ -3351,8 +3353,8 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
     if (integrity == integrity_check::yes) {
         digest = get_digest();
     }
-    auto stream_creator = [this, f](uint64_t pos, uint64_t len, file_input_stream_options options) mutable -> future<input_stream<char>> {
-        co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
+    auto stream_creator = [this, f, populate](uint64_t pos, uint64_t len, file_input_stream_options options) mutable -> future<input_stream<char>> {
+        co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options), populate));
     };
     if (_components->compression && raw == raw_stream::no) {
         if (_version >= sstable_version_types::mc) {
@@ -3382,8 +3384,8 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
     co_return co_await stream_creator(pos, len, std::move(options));
 }
 
-future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, reader_permit permit) {
-    auto stream = co_await data_stream(pos, len, std::move(permit), tracing::trace_state_ptr(), {});
+future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, reader_permit permit, populate_disk_cache populate) {
+    auto stream = co_await data_stream(pos, len, std::move(permit), tracing::trace_state_ptr(), {}, raw_stream::no, integrity_check::no, populate);
     auto buff = co_await stream.read_exactly(len);
     co_await stream.close();
     co_return buff;
@@ -3657,7 +3659,7 @@ future<validate_checksums_result> validate_checksums_and_digests(shared_sstable 
                 nullptr, nullptr, sstable::raw_stream::yes)
         : sst->data_stream(0, sst->data_size(), permit,
                 nullptr, nullptr, sstable::raw_stream::no,
-                integrity_check::yes, [&ret](sstring msg) {
+                integrity_check::yes, populate_disk_cache::no, [&ret](sstring msg) {
                     sstlog.error("{}", msg);
                     ret.status = validate_checksums_status::invalid;
                 })

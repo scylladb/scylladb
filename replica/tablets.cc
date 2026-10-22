@@ -1156,7 +1156,8 @@ public:
             streamed_mutation::forwarding,
             mutation_reader::forwarding,
             const sstables::sstable_predicate&,
-            sstables::integrity_check integrity = sstables::integrity_check::no) const override;
+            sstables::integrity_check integrity = sstables::integrity_check::no,
+            sstables::populate_disk_cache populate = sstables::populate_disk_cache::no) const override;
 
     // Will always return an engaged sstable set ptr.
     const lw_shared_ptr<const sstables::sstable_set>& find_sstable_set(size_t i) const {
@@ -1394,11 +1395,12 @@ tablet_sstable_set::create_single_key_sstable_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         const sstables::sstable_predicate& predicate,
-        sstables::integrity_check integrity) const {
+        sstables::integrity_check integrity,
+        sstables::populate_disk_cache populate) const {
     // The singular partition_range start bound must be engaged.
     auto idx = group_of(pr.start()->value().token());
     const auto& set = find_sstable_set(idx);
-    return set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate, integrity);
+    return set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate, integrity, populate);
 }
 
 sstables::sstable_set_impl::selector_and_schema_t tablet_sstable_set::make_incremental_selector() const {
