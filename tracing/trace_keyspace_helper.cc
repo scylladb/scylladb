@@ -10,9 +10,10 @@
 #include <seastar/core/metrics.hh>
 #include "types/types.hh"
 #include "tracing/trace_keyspace_helper.hh"
-#include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/query_processor.hh"
+#include "mutation/mutation.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "cql3/cql_config.hh"
 #include "types/set.hh"
 #include "types/map.hh"
@@ -120,8 +121,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                            "session_id) VALUES (?, ?, ?) "
                                            "USING TTL ?", KEYSPACE_NAME, SESSIONS_TIME_IDX))
 
-            , _events(KEYSPACE_NAME, EVENTS,
-                      fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
+            , _events_cql(fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
                                 "session_id uuid,"
                                 "event_id timeuuid,"
                                 "activity text,"
@@ -131,18 +131,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                 "scylla_parent_id bigint,"
                                 "scylla_span_id bigint,"
                                 "PRIMARY KEY ((session_id), event_id)) "
-                                "WITH default_time_to_live = 86400", KEYSPACE_NAME, EVENTS),
-
-                      fmt::format("INSERT INTO {}.{} ("
-                                "session_id, "
-                                "event_id, "
-                                "activity, "
-                                "source, "
-                                "source_elapsed, "
-                                "thread,"
-                                "scylla_parent_id,"
-                                "scylla_span_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                                "USING TTL ?", KEYSPACE_NAME, EVENTS))
+                                "WITH default_time_to_live = 86400", KEYSPACE_NAME, EVENTS))
 
             , _slow_query_log(KEYSPACE_NAME, NODE_SLOW_QUERY_LOG,
                               fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
@@ -212,7 +201,8 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
 future<> trace_keyspace_helper::start(cql3::query_processor& qp, service::migration_manager& mm) {
     _qp_anchor = &qp;
     _mm_anchor = &mm;
-    return table_helper::setup_keyspace(qp, mm, KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", "2", _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx });
+    return table_helper::setup_keyspace(qp, mm, KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", "2", _dummy_query_state,
+            std::vector<sstring>{ _sessions.create_cql(), _sessions_time_idx.create_cql(), _events_cql, _slow_query_log.create_cql(), _slow_query_log_time_idx.create_cql() });
 }
 
 gms::inet_address trace_keyspace_helper::my_address() const noexcept {
@@ -247,6 +237,32 @@ void trace_keyspace_helper::write_records_bulk(records_bulk& bulk) {
     std::for_each(bulk.begin(), bulk.end(), [this] (records_bulk::value_type& one_session_records_ptr) {
         write_one_session_records(std::move(one_session_records_ptr));
     });
+}
+
+// The serialized form of a text value is its UTF-8 bytes.
+static bytes_view text_value(std::string_view text) {
+    return to_bytes_view(text);
+}
+
+// The schema of a table of the trace keyspace, which setup_keyspace() created at start. A table
+// that is gone is reported as one that doesn't meet the expected schema, like any other schema
+// problem of the trace tables.
+static schema_ptr table_schema(cql3::query_processor& qp, std::string_view table) {
+    try {
+        return qp.db().find_schema(trace_keyspace_helper::KEYSPACE_NAME, table);
+    } catch (const data_dictionary::no_such_column_family& e) {
+        throw bad_column_family(sstring(trace_keyspace_helper::KEYSPACE_NAME), sstring(table), e);
+    }
+}
+
+// The definition of a column of a trace table, without which the table doesn't meet the expected
+// schema.
+static const column_definition& column(const schema& s, std::string_view name) {
+    const auto* def = s.get_column_definition(to_bytes(name));
+    if (!def) {
+        throw bad_column_family(s.ks_name(), s.cf_name(), std::runtime_error(format("no {} column", name)));
+    }
+    return *def;
 }
 
 cql3::query_options trace_keyspace_helper::make_session_mutation_data(gms::inet_address my_address, const one_session_records& session_records) {
@@ -371,46 +387,67 @@ cql3::query_options trace_keyspace_helper::make_slow_query_time_idx_mutation_dat
             db::consistency_level::ANY, std::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT);
 }
 
-std::vector<cql3::raw_value> trace_keyspace_helper::make_event_mutation_data(gms::inet_address my_address, one_session_records& session_records, const event_record& record) {
+mutation trace_keyspace_helper::make_events_mutation(cql3::query_processor& qp, one_session_records& session_records, const std::deque<event_record>& events_records) {
+    auto schema = table_schema(qp, EVENTS);
     auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(session_records.backend_state_ptr.get());
 
-    std::vector<cql3::raw_value> values({
-        cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
-        cql3::raw_value::make_value(timeuuid_type->decompose(utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(backend_state_ptr->last_nanos, record.event_time_point)))),
-        cql3::raw_value::make_value(utf8_type->decompose(record.message)),
-        cql3::raw_value::make_value(inet_addr_type->decompose(my_address.addr())),
-        cql3::raw_value::make_value(int32_type->decompose(elapsed_to_micros(record.elapsed))),
-        cql3::raw_value::make_value(utf8_type->decompose(fmt::format("{}/{}", _local_tracing.get_thread_name(), record.scheduling_group_name))),
-        cql3::raw_value::make_value(long_type->decompose(int64_t(session_records.parent_id.get_id()))),
-        cql3::raw_value::make_value(long_type->decompose(int64_t(session_records.my_span_id.get_id()))),
-        cql3::raw_value::make_value(int32_type->decompose((int32_t)(session_records.ttl.count())))
-    });
+    // What an INSERT ... USING TTL of the record would write: the timestamp of the query state the
+    // statements ran with, and a row marker and cells that all expire together.
+    const auto timestamp = _dummy_query_state.get_timestamp();
+    const gc_clock::duration ttl = session_records.ttl;
+    const auto expiry = gc_clock::now() + ttl;
 
-    return values;
+    const auto& activity_def = column(*schema, "activity");
+    const auto& source_def = column(*schema, "source");
+    const auto& source_elapsed_def = column(*schema, "source_elapsed");
+    const auto& thread_def = column(*schema, "thread");
+    const auto& parent_id_def = column(*schema, "scylla_parent_id");
+    const auto& span_id_def = column(*schema, "scylla_span_id");
+
+    // The values every row of the session shares.
+    const auto source = inet_addr_type->decompose(my_address().addr());
+    const auto parent_id = long_type->decompose(int64_t(session_records.parent_id.get_id()));
+    const auto span_id = long_type->decompose(int64_t(session_records.my_span_id.get_id()));
+    const auto& thread_name = _local_tracing.get_thread_name();
+
+    mutation m(schema, partition_key::from_single_value(*schema, uuid_type->decompose(session_records.session_id)));
+    for (const event_record& record : events_records) {
+        auto event_id = utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(backend_state_ptr->last_nanos, record.event_time_point));
+        auto& row = m.partition().clustered_row(*schema, clustering_key::from_single_value(*schema, timeuuid_type->decompose(event_id)));
+        const auto thread = fmt::format("{}/{}", thread_name, record.scheduling_group_name);
+        row.apply(ttl.count() ? row_marker(timestamp, ttl, expiry) : row_marker(timestamp));
+        auto set_cell = [&] (const column_definition& def, bytes_view value) {
+            // A TTL of 0 means no TTL, as with an INSERT ... USING TTL 0
+            row.cells().apply(def, ttl.count() ? atomic_cell::make_live(*def.type, timestamp, value, expiry, ttl) : atomic_cell::make_live(*def.type, timestamp, value));
+        };
+        set_cell(activity_def, text_value(record.message));
+        set_cell(source_def, source);
+        set_cell(source_elapsed_def, int32_type->decompose(elapsed_to_micros(record.elapsed)));
+        set_cell(thread_def, text_value(thread));
+        set_cell(parent_id_def, parent_id);
+        set_cell(span_id_def, span_id);
+    }
+    return m;
 }
 
-future<> trace_keyspace_helper::apply_events_mutation(cql3::query_processor& qp, service::migration_manager& mm, lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records) {
+future<> trace_keyspace_helper::apply_events_mutation(cql3::query_processor& qp, lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records) {
     if (events_records.empty()) {
         return now();
     }
 
-    return _events.cache_table_info(qp, mm, _dummy_query_state).then([this, &qp, records, &events_records] {
-        tlogger.trace("{}: storing {} events records: parent_id {} span_id {}", records->session_id, events_records.size(), records->parent_id, records->my_span_id);
+    tlogger.trace("{}: storing {} events records: parent_id {} span_id {}", records->session_id, events_records.size(), records->parent_id, records->my_span_id);
 
-        std::vector<cql3::statements::batch_statement::single_statement> modifications(events_records.size(), cql3::statements::batch_statement::single_statement(_events.insert_stmt(), false));
-        std::vector<cql3::raw_value_vector_with_unset> values;
+    // The records of a session are stored with one mutation, built here directly rather than
+    // by a batch of INSERT statements, one per record, which costs the statement execution on
+    // top of the write and ends up merged into the same one mutation anyway.
+    utils::chunked_vector<mutation> mutations;
+    mutations.emplace_back(make_events_mutation(qp, *records, events_records));
+    return write_mutations(qp, std::move(mutations));
+}
 
-        values.reserve(events_records.size());
-        std::for_each(events_records.begin(), events_records.end(), [&values, all_records = records, this] (event_record& one_event_record) { values.emplace_back(make_event_mutation_data(my_address(), *all_records, one_event_record)); });
-
-        return do_with(
-            cql3::query_options::make_batch_options(cql3::query_options(cql3::default_cql_config, db::consistency_level::ANY, std::nullopt, std::vector<cql3::raw_value>{}, false, cql3::query_options::specific_options::DEFAULT), std::move(values)),
-            cql3::statements::batch_statement(cql3::statements::batch_statement::type::UNLOGGED, std::move(modifications), cql3::attributes::none(), qp.get_cql_stats()),
-            [this, &qp] (auto& batch_options, auto& batch) {
-                return batch.execute(qp, _dummy_query_state, batch_options, std::nullopt).then([] (shared_ptr<cql_transport::messages::result_message> res) { return now(); });
-            }
-        );
-    });
+future<> trace_keyspace_helper::write_mutations(cql3::query_processor& qp, utils::chunked_vector<mutation> mutations) {
+    auto timeout = db::timeout_clock::now() + _dummy_query_state.get_client_state().get_timeout_config().write_timeout;
+    return qp.proxy().mutate(std::move(mutations), db::consistency_level::ANY, timeout, trace_state_ptr(), _dummy_query_state.get_permit(), db::allow_per_partition_rate_limit::yes);
 }
 
 future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_session_records> records) {
@@ -440,7 +477,7 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
             SCYLLA_ASSERT(_qp_anchor != nullptr && _mm_anchor != nullptr);
             cql3::query_processor& qp = *_qp_anchor;
             service::migration_manager& mm = *_mm_anchor;
-            return apply_events_mutation(qp, mm, records, events_records).then([this, &qp, &mm, session_record_is_ready, records] {
+            return apply_events_mutation(qp, records, events_records).then([this, &qp, &mm, session_record_is_ready, records] {
                 if (session_record_is_ready) {
 
                     // if session is finished - store a session and a session time index entries

@@ -14,6 +14,9 @@
 #include "tracing/tracing.hh"
 #include "table_helper.hh"
 #include "cql3/values.hh"
+#include "utils/chunked_vector.hh"
+
+class mutation;
 
 namespace tracing {
 
@@ -39,7 +42,7 @@ private:
 
     table_helper _sessions;
     table_helper _sessions_time_idx;
-    table_helper _events;
+    const sstring _events_cql; /** the CREATE TABLE statement of the events table, which is written with mutations */
     table_helper _slow_query_log;
     table_helper _slow_query_log_time_idx;
 
@@ -108,7 +111,13 @@ private:
      * @note A caller must ensure that @param events_records is alive till the
      * returned future resolves.
      */
-    future<> apply_events_mutation(cql3::query_processor& qp, service::migration_manager& mm, lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records);
+    future<> apply_events_mutation(cql3::query_processor& qp, lw_shared_ptr<one_session_records> records, std::deque<event_record>& events_records);
+
+    /**
+     * Writes the given mutations the way the INSERT statements they replace did: at consistency
+     * level ANY, with the write timeout of the query state.
+     */
+    future<> write_mutations(cql3::query_processor& qp, utils::chunked_vector<mutation> mutations);
 
     /**
      * Create a mutation data for a new session record
@@ -149,16 +158,15 @@ private:
     static cql3::query_options make_slow_query_time_idx_mutation_data(gms::inet_address my_address, const one_session_records& all_records_handle, const utils::UUID& start_time_id);
 
     /**
-     * Create a mutation data for a new trace point record
+     * Create the mutation that stores the trace point records of a session: one row per record in
+     * the events table, with the row marker and the TTL an INSERT of the record would give it.
      *
      * @param session_records handle to access an object with all records of this session.
      *                        It's needed here in order to update the last event's mutation
      *                        timestamp value stored inside it.
-     * @param record data describing this trace event
-     *
-     * @return a vector with the mutation data
+     * @param events_records the records to store, in the order they were created
      */
-    std::vector<cql3::raw_value> make_event_mutation_data(gms::inet_address my_address, one_session_records& session_records, const event_record& record);
+    mutation make_events_mutation(cql3::query_processor& qp, one_session_records& session_records, const std::deque<event_record>& events_records);
 
     /**
      * Converts a @param elapsed to an int32_t value of microseconds.
