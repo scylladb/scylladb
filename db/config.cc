@@ -2128,7 +2128,8 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"tablets", feature::UNUSED},
         {"views-with-tablets", feature::UNUSED},
         {"strongly-consistent-tables", feature::STRONGLY_CONSISTENT_TABLES},
-        {"logstor", feature::LOGSTOR}
+        {"logstor", feature::LOGSTOR},
+        {"object-storage-page-cache", feature::OBJECT_STORAGE_PAGE_CACHE},
     };
 }
 
