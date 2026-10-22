@@ -307,17 +307,34 @@ future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) 
     co_return get_open_file(file_id);
 }
 
+bool file_manager::check_file_ready_for_new_segment(file_id_t file_id) {
+    check_recovery_step(recovery_step::finished, "check_file_ready_for_new_segment");
+    if (file_id < _allocated_file_count) {
+        return true;
+    }
+    if (file_id != _allocated_file_count) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to check file {}: {} files allocated", file_id, _allocated_file_count));
+    }
+    retry_failed_format();
+    return _next_file_format.available() && !_next_file_format.failed();
+}
+
+// A format failure is assumed to be temporary, and a failure that lasts is not handled. The format
+// starts again only when a segment needs the file, so no timer runs it. A retry is safe, because
+// format_file() does not change a file that it published, and it truncates the temporary file.
+void file_manager::retry_failed_format() {
+    if (_next_file_format.failed() && lowres_clock::now() - _next_file_format_failed_at >= _cfg.format_retry_interval) {
+        logstor_logger.debug("Trying again to format file {}", file_path(_allocated_file_count).string());
+        start_next_file_format();
+    }
+}
+
+// Before the retry interval passes, a failed format fails the allocation at once with its error.
 future<> file_manager::allocate_file(file_id_t file_id) {
     if (file_id != _allocated_file_count || file_id >= _cfg.file_count) [[unlikely]] {
         on_internal_error(logstor_logger, fmt::format("Attempted to allocate file {}: {} files allocated, {} configured", file_id, _allocated_file_count, _cfg.file_count));
     }
-    // If the format of the file failed, it starts again when the retry interval has passed, and
-    // before that the allocation fails with the error of the format. A retry is safe, because
-    // format_file() does not change a file that it published, and it truncates the temporary file.
-    if (_next_file_format.failed() && lowres_clock::now() - _next_file_format_failed_at >= _cfg.format_retry_interval) {
-        logstor_logger.debug("Trying again to format file {}", file_path(file_id).string());
-        start_next_file_format();
-    }
+    retry_failed_format();
     co_await _next_file_format.get_future();
     if (file_id != _allocated_file_count) [[unlikely]] {
         on_internal_error(logstor_logger, fmt::format("Attempted to allocate file {} twice", file_id));

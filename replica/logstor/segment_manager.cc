@@ -835,6 +835,8 @@ private:
 
     future<> replenish_reserve();
     future<seg_ptr> allocate_segment();
+    // Returns true if the segment can be opened without a wait for the format of its file.
+    bool is_segment_ready(log_segment_id);
 
     future<> request_segment_switch();
     future<> switch_active_segment();
@@ -1483,6 +1485,10 @@ future<> segment_manager_impl::replenish_reserve() {
     logstor_logger.debug("Reserve replenisher stopped");
 }
 
+bool segment_manager_impl::is_segment_ready(log_segment_id seg_id) {
+    return _file_mgr.check_file_ready_for_new_segment(segment_id_to_file_location(seg_id).file_id);
+}
+
 future<seg_ptr> segment_manager_impl::allocate_segment() {
     auto make_segment = [this] (log_segment_id seg_id) -> future<seg_ptr> {
         auto seg_loc = segment_id_to_file_location(seg_id);
@@ -1495,21 +1501,26 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
 
     while (true) {
         // first, allocate all new segments sequentially
-        if (_next_new_segment_id < _configured_max_segments) {
-            // Do not skip a new segment that fails, because a skipped segment can be the first
-            // segment of a file, and then the allocation of the next file fails.
-            auto seg_f = co_await coroutine::as_future(make_segment(log_segment_id(_next_new_segment_id)));
+        // Go to the next new segment only after this one is allocated. If the allocation fails,
+        // the next attempt tries the same segment again. A skipped segment can be the first segment
+        // of a file, and then the allocation of the file after it fails. The file of the new segment
+        // can be unavailable for a while, because its format failed or is not done. Then use a free
+        // segment if there is one, so that the store continues with the files it has, and wait for
+        // the format only if there is no free segment.
+        const log_segment_id new_seg_id(_next_new_segment_id);
+        const bool allocate_new = _next_new_segment_id < _configured_max_segments && (_free_segments.empty() || is_segment_ready(new_seg_id));
+        if (allocate_new) {
+            auto seg_f = co_await coroutine::as_future(make_segment(new_seg_id));
             if (!seg_f.failed()) {
                 ++_next_new_segment_id;
                 co_return seg_f.get();
             }
-            // The file of the new segment can be unavailable for a while, for example if its format
-            // failed, so the store continues with the free segments.
             auto ex = seg_f.get_exception();
             if (_free_segments.empty()) {
                 co_return coroutine::exception(std::move(ex));
             }
-            logstor_logger.debug("Cannot allocate new segment {}: {}. Using a free segment", _next_new_segment_id, ex);
+            static thread_local logger::rate_limit new_segment_failure_rate_limit(std::chrono::seconds(10));
+            logstor_logger.log(log_level::warn, new_segment_failure_rate_limit, "Cannot allocate new segment {}: {}. Using a free segment", new_seg_id, ex);
         }
 
         // reuse freed segments

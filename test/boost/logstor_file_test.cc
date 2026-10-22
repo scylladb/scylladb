@@ -344,6 +344,44 @@ SEASTAR_THREAD_TEST_CASE(test_file_manager_tries_a_failed_format_again) {
         BOOST_REQUIRE_EQUAL(files.allocated_file_count(), 1);
         BOOST_REQUIRE(on_disk(files.file_path(0)));
     });
+
+    // Before the retry interval passes, a check returns false and does not start the format again.
+    // The test shows this because a retry would succeed, but the allocation after the check fails.
+    with_failed_format(std::chrono::hours(1), [] (file_manager& files) {
+        BOOST_REQUIRE(!files.check_file_ready_for_new_segment(0));
+        BOOST_REQUIRE_THROW(files.get_file_for_new_segment(0).get(), std::runtime_error);
+        BOOST_REQUIRE(!files.check_file_ready_for_new_segment(0));
+        BOOST_REQUIRE_EQUAL(files.allocated_file_count(), 0);
+    });
+
+    // After the retry interval, a check starts the format again. The first check finds the file
+    // not ready in all cases: the failed format did not end yet, or the check started the retry,
+    // which does I/O and is not done when the check returns.
+    with_failed_format(std::chrono::milliseconds(0), [] (file_manager& files) {
+        BOOST_REQUIRE(!files.check_file_ready_for_new_segment(0));
+        BOOST_REQUIRE(eventually_true([&files] { return files.check_file_ready_for_new_segment(0); }));
+        BOOST_REQUIRE_EQUAL(files.allocated_file_count(), 0);
+        files.get_file_for_new_segment(0).get();
+        BOOST_REQUIRE_EQUAL(files.allocated_file_count(), 1);
+    });
+}
+
+// Checks that a file is not ready while its format runs, and that it is ready after the
+// allocation.
+SEASTAR_THREAD_TEST_CASE(test_file_manager_check_during_a_format) {
+    tmpdir dir;
+    file_manager files(make_config(dir, 2, false));
+    auto stop = defer([&files] noexcept { files.stop().get(); });
+
+    // The end of the recovery starts the format of file 0. Nothing yields after it, and a format
+    // does I/O, so the format is not done at the first check.
+    recover(files);
+    BOOST_REQUIRE(!files.check_file_ready_for_new_segment(0));
+    BOOST_REQUIRE_EQUAL(files.allocated_file_count(), 0);
+
+    files.get_file_for_new_segment(0).get();
+    BOOST_REQUIRE_EQUAL(files.allocated_file_count(), 1);
+    BOOST_REQUIRE(files.check_file_ready_for_new_segment(0));
 }
 
 // Checks that each misuse of the file manager is an internal error: the recovery steps out of order

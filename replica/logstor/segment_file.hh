@@ -126,10 +126,17 @@ public:
     // Returns the open file for a new segment. Recovery allocates the files that it finds, and with
     // format_on_startup also the files that it formats. A file that is formatted in the background
     // is allocated here, by the first segment taken from it. Each later segment finds the file
-    // allocated and open. The caller must have finished the recovery. The caller must not call
-    // this again before the call returns, because a second call for a file that is in allocation is
-    // an internal error.
+    // allocated and open. The call waits for the format of the file, and fails with the error of a
+    // failed format. The caller must have finished the recovery. The caller must not call this again
+    // before the call returns, because a second call for a file that is in allocation is an internal
+    // error.
     future<seastar::file> get_file_for_new_segment(file_id_t);
+
+    // Returns true if get_file_for_new_segment() can give the file without a wait, because the file
+    // is allocated, or because its format is done and did not fail. If the format of the file
+    // failed and the retry interval has passed, this starts the format again. The caller must have
+    // finished the recovery, and must not ask for a file after the next one.
+    bool check_file_ready_for_new_segment(file_id_t);
 
     uint64_t allocated_file_count() const noexcept { return _allocated_file_count; }
 
@@ -203,9 +210,12 @@ private:
     // temporary file of a format.
     future<> write_zeros(seastar::file file, uint64_t offset, uint64_t size);
 
+    // Starts the format of the next file again if it failed and the retry interval has passed.
+    void retry_failed_format();
+
     // Allocates the next file: waits for its format, opens it, and starts the format of the file
-    // after it in the background. The caller must give the next file, below the configured
-    // count, and must not call this again before it returns.
+    // after it in the background. The caller must give the next file, below the configured count,
+    // and must not call this again before it returns.
     future<> allocate_file(file_id_t);
 
     // Opens the file and puts it in the cache. An open of a file that is open is an internal error.
