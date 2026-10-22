@@ -3256,7 +3256,12 @@ async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterMa
         writes = 10
         for i in range(writes):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})")
-        before = await manager.metrics.query(src.ip_addr)
+        # A write waits for its entry to be committed, not applied.
+        async def writes_applied():
+            metrics = await manager.metrics.query(src.ip_addr)
+            applied_entries = metrics.get(f'{SC_RAFT_METRICS_PREFIX}applied_entries', applied) or 0
+            return metrics if applied_entries >= writes else None
+        before = await wait_for(writes_applied, time.time() + 60)
         commands_before = before.get(f'{SC_RAFT_METRICS_PREFIX}add_entries', commands) or 0
         applied_before = before.get(f'{SC_RAFT_METRICS_PREFIX}applied_entries', applied) or 0
         assert commands_before >= writes
