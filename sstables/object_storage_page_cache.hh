@@ -22,6 +22,7 @@
 #include <seastar/core/temporary_buffer.hh>
 #include "sstables/component_type.hh"
 #include "sstables/types.hh"
+#include "sstables/types_fwd.hh"
 #include "seastarx.hh"
 
 namespace sstables {
@@ -54,7 +55,8 @@ public:
     virtual ~object_storage_page_cache() = default;
 
     // Caches a page of the sstable's component, which starts at the given
-    // offset. A page already cached at the same offset is replaced.
+    // offset. A page already cached at the same offset is replaced. Caching
+    // a page doesn't count as a hit of it (see get_pages()).
     virtual future<> put_page(sstable_id sst, component_type component,
             uint64_t offset, temporary_buffer<char> data) = 0;
 
@@ -70,8 +72,15 @@ public:
     // "from" is not returned even if it extends into the range. So "from" is
     // normally the start offset of the first page the caller needs, and "to"
     // any offset after the start offset of the last page it needs.
+    //
+    // With populate_disk_cache::yes - for a user's read, which may populate
+    // the cache - it also records that the returned pages were hit, for
+    // choosing which pages to evict when the cache is full. A read which
+    // must not populate the cache, such as a scan with BYPASS CACHE, reads
+    // whole sstables, and its hits would only make all of their pages look
+    // recently used (see populate_disk_cache).
     virtual future<std::vector<page>> get_pages(sstable_id sst, component_type component,
-            uint64_t from, uint64_t to, size_t max_pages) = 0;
+            uint64_t from, uint64_t to, size_t max_pages, populate_disk_cache populate) = 0;
 
     // Drops all the cached pages of the sstable, of all its components.
     virtual future<> evict_sstable(sstable_id sst) = 0;
