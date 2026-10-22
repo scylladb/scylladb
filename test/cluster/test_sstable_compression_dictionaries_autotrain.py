@@ -113,3 +113,37 @@ async def test_autoretrain_dict(manager: ScyllaClusterManager):
         logger.info(f"Round {i}")
         await repopulate()
         await with_retries(test_ratio, timeout=TIMEOUT, period=2)
+
+async def test_autotrain_backoff_after_discard(manager: ScyllaClusterManager):
+    """
+    Tests that after a discarded training attempt, the autotrainer doesn't
+    re-sample the table on every tick, but waits for the retrain period.
+    """
+    blob_size = 16*1024
+    n_blobs = 1024
+
+    cfg = { "sstable_compression_user_table_options": { 'sstable_compression': 'ZstdWithDictsCompressor' } }
+    # An improvement factor of 0 makes every new dict get discarded.
+    server = await manager.server_add(cmdline=[
+        '--logger-log-level=storage_service=debug',
+        '--logger-log-level=sstable_dict_autotrainer=debug',
+        '--sstable-compression-dictionaries-retrain-period-in-seconds=3600',
+        '--sstable-compression-dictionaries-autotrainer-tick-period-in-seconds=1',
+        f'--sstable-compression-dictionaries-min-training-dataset-bytes={blob_size * n_blobs // 2}',
+        '--sstable-compression-dictionaries-min-training-improvement-factor=0',
+    ], config=cfg)
+    log = await manager.server_open_log(server.server_id)
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c blob);")
+    insert = cql.prepare("INSERT INTO test.test (pk, c) VALUES (?, ?);")
+    for pks in itertools.batched(range(n_blobs), n=100):
+        await asyncio.gather(*[cql.run_async(insert, [k, random.randbytes(blob_size)]) for k in pks])
+    await manager.api.keyspace_flush(server.ip_addr, "test", "test")
+
+    mark, _ = await log.wait_for(r"test\.test: .*Discarding the new dict", timeout=TIMEOUT)
+    for _ in range(5):
+        mark, _ = await log.wait_for(r"sstable_dict_autotrainer::tick\(\): entering", from_mark=mark, timeout=TIMEOUT)
+    # One training and one validation sample, never repeated.
+    assert len(await log.grep(r"sending out send_sample_sstables")) <= 2
+    assert await log.grep(r"test\.test had a training attempt less than")

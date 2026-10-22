@@ -40,12 +40,16 @@ future<> sstable_dict_autotrainer::tick() {
         }
     });
     for (const auto& s : dict_aware_tables) {
+        auto min_delta = std::chrono::duration<float>(_cfg.retrain_period_in_seconds());
+        if (auto it = _last_attempt.find(s->id()); it != _last_attempt.end() && db_clock::now() - it->second < min_delta) {
+            alogger.debug("sstable_dict_autotrainer::tick(): {}.{} had a training attempt less than {} ago, not retrying", s->ks_name(), s->cf_name(), min_delta);
+            continue;
+        }
         auto dict_name = fmt::format("sstables/{}", s->id());
         auto current_dict_timestamp = co_await _ss.get_system_keyspace().query_dict_timestamp(dict_name);
         if (current_dict_timestamp) {
             alogger.debug("sstable_dict_autotrainer::tick(): {}.{} has timestamp {}", s->ks_name(), s->cf_name(), current_dict_timestamp);
             auto delta = (db_clock::now() - *current_dict_timestamp);
-            auto min_delta = std::chrono::duration<float>(_cfg.retrain_period_in_seconds());
             if (delta < min_delta) {
                 alogger.debug("sstable_dict_autotrainer::tick(): {}.{} has dict younger than {}, not updating", s->ks_name(), s->cf_name(), min_delta);
                 continue;
@@ -63,6 +67,8 @@ future<> sstable_dict_autotrainer::tick() {
         }
         auto params = s->get_compressor_params();
         auto ticket = co_await get_units(_ss.get_do_sample_sstables_concurrency_limiter(), 1);
+        // Set before sampling, so a discarded, short or failed attempt isn't repeated every tick.
+        _last_attempt[s->id()] = db_clock::now();
         // When we sample a block from a set of files, we can think of this block's
         // compression ratio like about a random variable, with value in [0;1] and
         // some underlying distribution.
@@ -105,7 +111,7 @@ future<> sstable_dict_autotrainer::tick() {
         auto training_sample = co_await _ss.do_sample_sstables(s->id(), params.chunk_length(), n_chunks);
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: got training sample with {} chunks", s->ks_name(), s->cf_name(), training_sample.size());
         if (training_sample.size() < n_chunks) {
-            alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: not enough chunks, giving up on the update", s->ks_name(), s->cf_name());
+            alogger.info("sstable_dict_autotrainer::tick(): {}.{}: not enough chunks for training ({} < {}), retrying in {}", s->ks_name(), s->cf_name(), training_sample.size(), n_chunks, min_delta);
             continue;
         }
         auto dict = co_await _ss.train_dict(std::move(training_sample));
@@ -114,7 +120,7 @@ future<> sstable_dict_autotrainer::tick() {
         auto validation_sample = co_await _ss.do_sample_sstables(s->id(), params.chunk_length(), n_chunks);
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: got validation sample with {} chunks", s->ks_name(), s->cf_name(), validation_sample.size());
         if (validation_sample.size() < n_chunks) {
-            alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: not enough chunks, giving up on the update", s->ks_name(), s->cf_name());
+            alogger.info("sstable_dict_autotrainer::tick(): {}.{}: not enough chunks for validation ({} < {}), retrying in {}", s->ks_name(), s->cf_name(), validation_sample.size(), n_chunks, min_delta);
             continue;
         }
         auto ratio_before = co_await try_one_compression_config(_ss.get_database().get_user_sstables_manager().get_compressor_factory(), s, params, validation_sample);
@@ -122,7 +128,7 @@ future<> sstable_dict_autotrainer::tick() {
         float threshold = _cfg.min_improvement_factor() * ratio_before;
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: ratio_before={}, ratio_after={}, update_threshold={}", s->ks_name(), s->cf_name(), ratio_before, ratio_after, threshold);
         if (ratio_after > threshold) {
-            alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: ratio_after below threshold. Discarding the new dict.", s->ks_name(), s->cf_name());
+            alogger.info("sstable_dict_autotrainer::tick(): {}.{}: ratio_after={} above update_threshold={}. Discarding the new dict, retrying in {}", s->ks_name(), s->cf_name(), ratio_after, threshold, min_delta);
             continue;
         }
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: Publishing the new dict.", s->ks_name(), s->cf_name());
@@ -149,7 +155,7 @@ future<> sstable_dict_autotrainer::run() {
         } catch (const raft::stopped_error&) {
             alogger.debug("sstable_dict_autotrainer::run(): exiting via raft::stopped_error");
         } catch (...) {
-            alogger.debug("sstable_dict_autotrainer::run(): tick() failed with: {:t}", std::current_exception());
+            alogger.warn("sstable_dict_autotrainer::run(): tick() failed with: {:t}", std::current_exception());
         }
     }
 }

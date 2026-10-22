@@ -22,6 +22,7 @@
 // we train a new dict and check if it's significantly better
 // than the current one (provides ratio smaller than 95% of current ratio),
 // and if so, we update the dict.
+// A table whose attempt fails or is discarded isn't retried for $retrain_period.
 class sstable_dict_autotrainer {
 public:
     struct config {
@@ -34,6 +35,8 @@ private:
     service::storage_service& _ss;
     service::raft_group0_client& _group0_client;
     config _cfg;
+    // In-memory only; a new leader may retry once.
+    std::unordered_map<table_id, db_clock::time_point> _last_attempt;
     abort_source _as;
     future<> _fiber;
 
