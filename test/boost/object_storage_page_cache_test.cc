@@ -12,6 +12,7 @@
 
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/core/smp.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
@@ -20,6 +21,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
+#include "db_clock.hh"
 #include "db/object_storage_page_cache_table.hh"
 #include "dht/fixed_shard.hh"
 #include "replica/database.hh"
@@ -131,6 +133,9 @@ static void check_pages(const std::vector<page>& pages, std::vector<expected_pag
     }
 }
 
+// For the tests of the cache's contents, which don't check its hits.
+static const auto no_hits = sstables::populate_disk_cache::no;
+
 static sstables::sstable_id new_sstable_id() {
     return sstables::sstable_id(utils::UUID_gen::get_time_UUID());
 }
@@ -147,15 +152,15 @@ SEASTAR_TEST_CASE(test_page_cache_get_pages_in_range) {
         cache.put_page(sst, Data, 4096, make_page('b')).get();
 
         // Check that a range covering all the pages returns all of them.
-        check_pages(cache.get_pages(sst, Data, 0, 12288, 100).get(), {{0, 'a'}, {4096, 'b'}, {8192, 'c'}});
+        check_pages(cache.get_pages(sst, Data, 0, 12288, 100, no_hits).get(), {{0, 'a'}, {4096, 'b'}, {8192, 'c'}});
         // Check that the range includes a page starting at "from", and
         // excludes a page starting at "to".
-        check_pages(cache.get_pages(sst, Data, 4096, 8192, 100).get(), {{4096, 'b'}});
+        check_pages(cache.get_pages(sst, Data, 4096, 8192, 100, no_hits).get(), {{4096, 'b'}});
         // Check that a page starting before "from" is not returned, even if
         // it extends into the range.
-        check_pages(cache.get_pages(sst, Data, 1, 4096, 100).get(), {});
+        check_pages(cache.get_pages(sst, Data, 1, 4096, 100, no_hits).get(), {});
         // Check that a range without any cached page returns nothing.
-        check_pages(cache.get_pages(sst, Data, 12288, 20000, 100).get(), {});
+        check_pages(cache.get_pages(sst, Data, 12288, 20000, 100, no_hits).get(), {});
     }, page_cache_config());
 }
 
@@ -169,11 +174,11 @@ SEASTAR_TEST_CASE(test_page_cache_get_pages_max_pages) {
             cache.put_page(sst, Data, i * 4096, make_page('a' + i)).get();
         }
 
-        auto pages = cache.get_pages(sst, Data, 0, 5 * 4096, 2).get();
+        auto pages = cache.get_pages(sst, Data, 0, 5 * 4096, 2, no_hits).get();
         check_pages(pages, {{0, 'a'}, {4096, 'b'}});
-        pages = cache.get_pages(sst, Data, pages.back().offset + 1, 5 * 4096, 2).get();
+        pages = cache.get_pages(sst, Data, pages.back().offset + 1, 5 * 4096, 2, no_hits).get();
         check_pages(pages, {{8192, 'c'}, {12288, 'd'}});
-        pages = cache.get_pages(sst, Data, pages.back().offset + 1, 5 * 4096, 2).get();
+        pages = cache.get_pages(sst, Data, pages.back().offset + 1, 5 * 4096, 2, no_hits).get();
         check_pages(pages, {{16384, 'e'}});
     }, page_cache_config());
 }
@@ -189,10 +194,10 @@ SEASTAR_TEST_CASE(test_page_cache_components_and_sstables_are_separate) {
         cache.put_page(sst1, Rows, 0, make_page('b')).get();
         cache.put_page(sst2, Data, 0, make_page('c')).get();
 
-        check_pages(cache.get_pages(sst1, Data, 0, 4096, 100).get(), {{0, 'a'}});
-        check_pages(cache.get_pages(sst1, Rows, 0, 4096, 100).get(), {{0, 'b'}});
-        check_pages(cache.get_pages(sst1, Partitions, 0, 4096, 100).get(), {});
-        check_pages(cache.get_pages(sst2, Data, 0, 4096, 100).get(), {{0, 'c'}});
+        check_pages(cache.get_pages(sst1, Data, 0, 4096, 100, no_hits).get(), {{0, 'a'}});
+        check_pages(cache.get_pages(sst1, Rows, 0, 4096, 100, no_hits).get(), {{0, 'b'}});
+        check_pages(cache.get_pages(sst1, Partitions, 0, 4096, 100, no_hits).get(), {});
+        check_pages(cache.get_pages(sst2, Data, 0, 4096, 100, no_hits).get(), {{0, 'c'}});
     }, page_cache_config());
 }
 
@@ -204,7 +209,7 @@ SEASTAR_TEST_CASE(test_page_cache_put_replaces_page) {
         cache.put_page(sst, Data, 0, make_page('a')).get();
         cache.put_page(sst, Data, 0, make_page('b', 100)).get();
 
-        check_pages(cache.get_pages(sst, Data, 0, 4096, 100).get(), {{0, 'b', 100}});
+        check_pages(cache.get_pages(sst, Data, 0, 4096, 100, no_hits).get(), {{0, 'b', 100}});
     }, page_cache_config());
 }
 
@@ -222,7 +227,7 @@ SEASTAR_TEST_CASE(test_page_cache_page_sizes) {
             cache.put_page(sst, Data, p.offset, make_page(p.fill, p.size)).get();
         }
 
-        check_pages(cache.get_pages(sst, Data, 0, 100064, 100).get(), pages);
+        check_pages(cache.get_pages(sst, Data, 0, 100064, 100, no_hits).get(), pages);
     }, page_cache_config());
 }
 
@@ -241,10 +246,10 @@ SEASTAR_TEST_CASE(test_page_cache_evict_sstable) {
         cache.evict_sstable(sst1).get();
 
         // Check that all of sst1's pages are gone.
-        check_pages(cache.get_pages(sst1, Data, 0, 8192, 100).get(), {});
-        check_pages(cache.get_pages(sst1, Rows, 0, 4096, 100).get(), {});
+        check_pages(cache.get_pages(sst1, Data, 0, 8192, 100, no_hits).get(), {});
+        check_pages(cache.get_pages(sst1, Rows, 0, 4096, 100, no_hits).get(), {});
         // Check that sst2's page remains.
-        check_pages(cache.get_pages(sst2, Data, 0, 4096, 100).get(), {{0, 'd'}});
+        check_pages(cache.get_pages(sst2, Data, 0, 4096, 100, no_hits).get(), {{0, 'd'}});
     }, page_cache_config());
 }
 
@@ -265,7 +270,7 @@ SEASTAR_TEST_CASE(test_page_cache_per_shard) {
             return seastar::async([&env, sst] {
                 db::object_storage_page_cache_table cache(env.qp().local());
                 // Check that this shard sees only the page it put.
-                check_pages(cache.get_pages(sst, Data, 0, 4096, 100).get(), {{0, char('a' + this_shard_id())}});
+                check_pages(cache.get_pages(sst, Data, 0, 4096, 100, no_hits).get(), {{0, char('a' + this_shard_id())}});
                 // Check that the page was written on this shard: its memtable
                 // holds one partition, the cache of this shard.
                 auto& table = env.local_db().find_column_family(db::object_storage_page_cache_table::SYSTEM_CACHE,
@@ -277,6 +282,63 @@ SEASTAR_TEST_CASE(test_page_cache_per_shard) {
                 BOOST_REQUIRE_EQUAL(partitions, 1);
             });
         }).get();
+    }, page_cache_config());
+}
+
+// The (component, offset) of each page of the sstable which the calling
+// shard cached, with when it was last hit - if it was.
+static std::map<std::pair<sstring, int64_t>, std::optional<db_clock::time_point>> hits(cql_test_env& env, sstables::sstable_id sst) {
+    static const auto query = fmt::format("SELECT component, offset, last_hit FROM {}.{} WHERE shard = ? AND sstable = ?",
+            db::object_storage_page_cache_table::SYSTEM_CACHE, db::object_storage_page_cache_table::PAGECACHE_HITS);
+    auto rs = env.qp().local().execute_internal(query, {int16_t(this_shard_id()), sst.uuid()}, cql3::query_processor::cache_internal::no).get();
+    std::map<std::pair<sstring, int64_t>, std::optional<db_clock::time_point>> ret;
+    for (const auto& row : *rs) {
+        ret[{row.get_as<sstring>("component"), row.get_as<int64_t>("offset")}] = row.get_opt<db_clock::time_point>("last_hit");
+    }
+    return ret;
+}
+
+// get_pages() records that the pages it returns were hit - only when it is
+// asked to, by a read which may populate the cache - and a later hit
+// replaces the time of the earlier one. Caching a page doesn't count as a
+// hit, but adds a row without a hit for the page, and evict_sstable() drops
+// the sstable's hits too.
+SEASTAR_TEST_CASE(test_page_cache_hits) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        db::object_storage_page_cache_table cache(env.local_qp());
+        auto sst = new_sstable_id();
+        const std::pair<sstring, int64_t> page0{"Data", 0}, page1{"Data", 4096};
+        cache.put_page(sst, Data, 0, make_page('a')).get();
+        cache.put_page(sst, Data, 4096, make_page('b')).get();
+        // Check that each cached page has a row, without a hit.
+        auto no_hits_yet = hits(env, sst);
+        BOOST_REQUIRE_EQUAL(no_hits_yet.size(), 2);
+        BOOST_REQUIRE(!no_hits_yet[page0] && !no_hits_yet[page1]);
+
+        // Check that a read which doesn't populate the cache records no hit.
+        cache.get_pages(sst, Data, 0, 8192, 100, sstables::populate_disk_cache::no).get();
+        BOOST_REQUIRE(hits(env, sst) == no_hits_yet);
+
+        // Check that a read which may populate it records a hit of each page.
+        cache.get_pages(sst, Data, 0, 8192, 100, sstables::populate_disk_cache::yes).get();
+        auto first_hits = hits(env, sst);
+        BOOST_REQUIRE_EQUAL(first_hits.size(), 2);
+        BOOST_REQUIRE(first_hits[page0] && first_hits[page1]);
+
+        // Check that hitting only the first page again updates only its hit.
+        // The clock has millisecond resolution, so wait for it to advance.
+        sleep(std::chrono::milliseconds(2)).get();
+        cache.get_pages(sst, Data, 0, 4096, 100, sstables::populate_disk_cache::yes).get();
+        auto second_hits = hits(env, sst);
+        BOOST_REQUIRE(*second_hits[page0] > *first_hits[page0]);
+        BOOST_REQUIRE(second_hits[page1] == first_hits[page1]);
+
+        // Check that caching a page which was hit again keeps its hit.
+        cache.put_page(sst, Data, 0, make_page('c')).get();
+        BOOST_REQUIRE(hits(env, sst) == second_hits);
+
+        cache.evict_sstable(sst).get();
+        BOOST_REQUIRE(hits(env, sst).empty());
     }, page_cache_config());
 }
 
@@ -292,15 +354,20 @@ SEASTAR_TEST_CASE(test_page_cache_evict_other_sstables) {
         cache.put_page(sst2, Data, 0, make_page('b')).get();
         cache.put_page(sst2, Rows, 0, make_page('c')).get();
         cache.put_page(sst3, Data, 0, make_page('d')).get();
+        // Record hits of the pages of sst1 and sst2.
+        cache.get_pages(sst1, Data, 0, 4096, 100, sstables::populate_disk_cache::yes).get();
+        cache.get_pages(sst2, Data, 0, 4096, 100, sstables::populate_disk_cache::yes).get();
 
         cache.evict_other_sstables({sst1, sst3}).get();
 
-        // Check that all of sst2's pages are gone.
-        check_pages(cache.get_pages(sst2, Data, 0, 4096, 100).get(), {});
-        check_pages(cache.get_pages(sst2, Rows, 0, 4096, 100).get(), {});
+        // Check that all of sst2's pages, and their hits, are gone.
+        check_pages(cache.get_pages(sst2, Data, 0, 4096, 100, no_hits).get(), {});
+        check_pages(cache.get_pages(sst2, Rows, 0, 4096, 100, no_hits).get(), {});
+        BOOST_REQUIRE(hits(env, sst2).empty());
+        BOOST_REQUIRE_EQUAL(hits(env, sst1).size(), 1);
         // Check that the pages of the other sstables remain.
-        check_pages(cache.get_pages(sst1, Data, 0, 4096, 100).get(), {{0, 'a'}});
-        check_pages(cache.get_pages(sst3, Data, 0, 4096, 100).get(), {{0, 'd'}});
+        check_pages(cache.get_pages(sst1, Data, 0, 4096, 100, no_hits).get(), {{0, 'a'}});
+        check_pages(cache.get_pages(sst3, Data, 0, 4096, 100, no_hits).get(), {{0, 'd'}});
     }, page_cache_config());
 }
 
@@ -321,7 +388,7 @@ SEASTAR_TEST_CASE(test_page_cache_evict_other_sstables_per_shard) {
         smp::invoke_on_all([&env, sst] {
             return seastar::async([&env, sst] {
                 db::object_storage_page_cache_table cache(env.qp().local());
-                auto pages = cache.get_pages(sst, Data, 0, 4096, 100).get();
+                auto pages = cache.get_pages(sst, Data, 0, 4096, 100, no_hits).get();
                 if (this_shard_id() == 0) {
                     check_pages(std::move(pages), {});
                 } else {
@@ -372,21 +439,27 @@ SEASTAR_TEST_CASE(test_page_cache_copy_sstable_from_shard) {
         cache.put_page(sst, Data, 4096, make_page('b', 100)).get();
         cache.put_page(sst, Rows, 0, make_page('c')).get();
         cache.put_page(other_sst, Data, 0, make_page('d')).get();
+        cache.get_pages(sst, Data, 0, 4096, 100, sstables::populate_disk_cache::yes).get();
+        // The three pages have rows, of which one has a hit.
+        auto hits_before = hits(env, sst);
+        BOOST_REQUIRE_EQUAL(hits_before.size(), 3);
 
-        smp::submit_to(1, [&env, sst, other_sst] {
-            return seastar::async([&env, sst, other_sst] {
+        smp::submit_to(1, [&env, sst, other_sst, &hits_before] {
+            return seastar::async([&env, sst, other_sst, &hits_before] {
                 db::object_storage_page_cache_table cache(env.qp().local());
                 cache.copy_sstable_from_shard(sst, 0).get();
                 // Check that shard 1 now has all of the sstable's pages, and
                 // only of that sstable.
-                check_pages(cache.get_pages(sst, Data, 0, 8192, 100).get(), {{0, 'a'}, {4096, 'b', 100}});
-                check_pages(cache.get_pages(sst, Rows, 0, 4096, 100).get(), {{0, 'c'}});
-                check_pages(cache.get_pages(other_sst, Data, 0, 4096, 100).get(), {});
+                check_pages(cache.get_pages(sst, Data, 0, 8192, 100, no_hits).get(), {{0, 'a'}, {4096, 'b', 100}});
+                check_pages(cache.get_pages(sst, Rows, 0, 4096, 100, no_hits).get(), {{0, 'c'}});
+                check_pages(cache.get_pages(other_sst, Data, 0, 4096, 100, no_hits).get(), {});
+                // Check that the hits were copied too.
+                BOOST_REQUIRE(hits(env, sst) == hits_before);
             });
         }).get();
 
         // Check that shard 0 still has its pages.
-        check_pages(cache.get_pages(sst, Data, 0, 8192, 100).get(), {{0, 'a'}, {4096, 'b', 100}});
+        check_pages(cache.get_pages(sst, Data, 0, 8192, 100, no_hits).get(), {{0, 'a'}, {4096, 'b', 100}});
     }, page_cache_config());
 }
 
@@ -485,6 +558,8 @@ class fake_page_cache : public sstables::object_storage_page_cache {
 public:
     std::map<std::pair<sstables::component_type, uint64_t>, sstring> pages;
     int reads = 0;
+    // How many hits get_pages() recorded.
+    size_t hits = 0;
 
     // The cached Data page at the given offset, or an empty string.
     sstring data_page(uint64_t offset) const {
@@ -498,12 +573,15 @@ public:
         return make_ready_future<>();
     }
     virtual future<std::vector<page>> get_pages(sstables::sstable_id, sstables::component_type component,
-            uint64_t from, uint64_t to, size_t max_pages) override {
+            uint64_t from, uint64_t to, size_t max_pages, sstables::populate_disk_cache populate) override {
         reads++;
         std::vector<page> ret;
         for (auto it = pages.lower_bound({component, from});
                 it != pages.end() && it->first.first == component && it->first.second < to && ret.size() < max_pages; ++it) {
             ret.push_back(page{it->first.second, temporary_buffer<char>(it->second.data(), it->second.size())});
+        }
+        if (populate) {
+            hits += ret.size();
         }
         return make_ready_future<std::vector<page>>(std::move(ret));
     }
@@ -658,6 +736,22 @@ SEASTAR_THREAD_TEST_CASE(test_page_cached_source_no_populate) {
     BOOST_REQUIRE_EQUAL(object.requests.size(), 2);
     // Check that the pages read from the object store were not cached.
     BOOST_REQUIRE_EQUAL(cache.pages.size(), 1);
+}
+
+// A source which may populate the cache records the hits of the pages it
+// reads from the cache, and a source which must not populate it doesn't.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_hits) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+    read_cached(cache, object, geometry, 0, 10000);
+    // Check that caching the pages recorded no hit.
+    BOOST_REQUIRE_EQUAL(cache.hits, 0);
+
+    read_cached(cache, object, geometry, 0, 10000, sstables::populate_disk_cache::no);
+    BOOST_REQUIRE_EQUAL(cache.hits, 0);
+    read_cached(cache, object, geometry, 0, 10000);
+    BOOST_REQUIRE_EQUAL(cache.hits, 3);
 }
 
 // A long cached range is read from the cache in several reads, each of a
