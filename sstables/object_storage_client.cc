@@ -14,6 +14,9 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/iostream.hh>
+#include <seastar/core/coroutine.hh>
+#include <seastar/core/file.hh>
+#include <seastar/util/memory-data-source.hh>
 #include <fmt/core.h>
 
 #include "utils/log.hh"
@@ -148,6 +151,47 @@ static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_p
     return s3::client::make(epc.endpoint, epc.region, epc.iam_role_arn, std::move(factory), connections_per_shard);
 }
 
+namespace {
+
+// A data_source with no data.
+data_source make_empty_source() {
+    return data_source(std::make_unique<util::memory_data_source>(std::vector<temporary_buffer<char>>()));
+}
+
+// The size of each request for a range of a GCS object. Above about 8 MiB,
+// a request's time is dominated by the transfer rather than by its latency,
+// so splitting a long range into requests of this size costs little time.
+constexpr uint64_t gcs_ranged_download_request_size = 8 * 1024 * 1024;
+
+// A data_source of the byte range [offset, offset + length) of a file, which
+// reads it with consecutive reads of at most request_size bytes each.
+class file_range_source : public data_source_impl {
+    file _file;
+    uint64_t _pos;
+    uint64_t _end;
+    uint64_t _request_size;
+public:
+    file_range_source(file f, uint64_t offset, uint64_t length, uint64_t request_size)
+        : _file(std::move(f)), _pos(offset), _end(offset + length), _request_size(request_size) {}
+
+    virtual future<temporary_buffer<char>> get() override {
+        if (_pos >= _end) {
+            co_return temporary_buffer<char>();
+        }
+        auto buf = co_await _file.dma_read_bulk<char>(_pos, std::min(_request_size, _end - _pos));
+        // An empty buffer means the file ended before the range; the caller
+        // sees the end of the data.
+        _pos = buf.empty() ? _end : _pos + buf.size();
+        co_return buf;
+    }
+
+    virtual future<> close() override {
+        return _file.close();
+    }
+};
+
+} // anonymous namespace
+
 class s3_client_wrapper : public sstables::object_storage_client {
     shared_ptr<s3::client> _client;
     shard_client_factory _cf;
@@ -185,6 +229,12 @@ public:
     }
     data_source make_download_source(object_name name, abort_source* as) override {
         return _client->make_chunked_download_source(name.str(), s3::full_range, as);
+    }
+    data_source make_ranged_download_source(object_name name, uint64_t offset, uint64_t length, abort_source* as) override {
+        if (length == 0) {
+            return make_empty_source();
+        }
+        return _client->make_download_source(name.str(), s3::range{offset, length}, as);
     }
     future<bool> object_exists(object_name name, abort_source* as) override {
         return _client->object_exists(name.str(), as);
@@ -292,6 +342,22 @@ public:
     }
     data_source make_download_source(object_name name, abort_source* as) override {
         return _client->create_download_source(name.bucket(), name.object(), as);
+    }
+    data_source make_ranged_download_source(object_name name, uint64_t offset, uint64_t length, abort_source* as) override {
+        if (length == 0) {
+            return make_empty_source();
+        }
+        // The GCS client reads a response whole into memory, so the range is
+        // read in requests of a bounded size, each a read of the readable file.
+        // Before its first read, the readable file also sends a request for the
+        // object's metadata (its size and generation).
+        // FIXME: add to the GCS client a ranged download which streams the
+        // response as it arrives, like s3::client::make_download_source(), and
+        // use it here to read the whole range in a single request, as on S3.
+        // It needs no metadata request: the caller asks for a range inside the
+        // object, and sstable objects never change.
+        return data_source(std::make_unique<file_range_source>(make_readable_file(std::move(name), as), offset, length,
+                gcs_ranged_download_request_size));
     }
     future<bool> object_exists(object_name name, abort_source* as) override {
         return _client->object_exists(name.bucket(), name.object(), as);
