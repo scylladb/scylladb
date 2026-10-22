@@ -172,7 +172,15 @@ private:
 
     seastar::semaphore _flush_hints_batchlog_sem{1};
     gc_clock::time_point _flush_hints_batchlog_time;
-    future<std::tuple<bool, bool, gc_clock::time_point>> flush_hints(repair_uniq_id id,
+    struct flush_hints_result {
+        // A table of the repair uses repair-mode tombstone gc, which needs the flush.
+        bool needed = false;
+        bool flushed = false;
+        gc_clock::time_point flush_time;
+    };
+    // Flushes hints and batchlog on all nodes if one of the tables uses
+    // repair-mode tombstone gc.
+    future<flush_hints_result> flush_hints(repair_uniq_id id,
             sstring keyspace, std::vector<sstring> cfs,
             std::unordered_set<locator::host_id> ignore_nodes);
 

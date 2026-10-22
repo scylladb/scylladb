@@ -455,27 +455,25 @@ static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
 }
 
 
-future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints(repair_uniq_id id,
+future<repair_service::flush_hints_result> repair_service::flush_hints(repair_uniq_id id,
         sstring keyspace, std::vector<sstring> cfs,
         std::unordered_set<locator::host_id> ignore_nodes) {
     auto& db = get_db().local();
     auto uuid = id.uuid();
-    bool needs_flush_before_repair = false;
+    flush_hints_result res;
     if (db.features().tombstone_gc_options) {
         for (auto& table: cfs) {
             if (const auto* cf = find_column_family_if_exists(db, keyspace, table)) {
                 auto s = cf->schema();
                 const auto& options = s->tombstone_gc_options();
                 if (options.mode() == tombstone_gc_mode::repair) {
-                    needs_flush_before_repair = true;
+                    res.needed = true;
                 }
             }
         }
     }
 
-    gc_clock::time_point flush_time;
-    bool hints_batchlog_flushed = false;
-    if (needs_flush_before_repair) {
+    if (res.needed) {
         auto waiting_nodes = db.get_token_metadata().get_topology().get_all_host_ids();
         std::erase_if(waiting_nodes, [&] (const auto& addr) {
             return ignore_nodes.contains(addr);
@@ -506,7 +504,7 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
             if (!nodes_down.empty()) {
                 rlogger.warn("repair[{}]: Skipped sending repair_flush_hints_batchlog due to nodes_down={}, continue to run repair",
                         uuid, nodes_down);
-                co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
+                co_return res;
             }
             co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (locator::host_id node) -> future<> {
                 rlogger.debug("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
@@ -529,18 +527,18 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
             });
             if (!times.empty()) {
                 auto it = std::min_element(times.begin(), times.end());
-                flush_time = *it;
+                res.flush_time = *it;
             }
-            hints_batchlog_flushed = true;
+            res.flushed = true;
             auto duration = std::chrono::duration<float>(gc_clock::now() - start_time);
-            rlogger.debug("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, flush_time, duration);
+            rlogger.debug("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, res.flush_time, duration);
         } catch (...) {
             rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog failed, continue to run repair", uuid);
         }
     } else {
         rlogger.debug("repair[{}]: Skipped sending repair_flush_hints_batchlog", uuid);
     }
-    co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
+    co_return res;
 }
 
 
@@ -1559,7 +1557,9 @@ future<> repair_service::run_user_requested_repair(
         } else {
             participants = get_hosts_participating_in_repair(_gossiper.local(), germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
-        auto [_, hints_batchlog_flushed, flush_time] = flush_hints(id, keyspace, cfs, ignore_nodes).get();
+        auto flush = flush_hints(id, keyspace, cfs, ignore_nodes).get();
+        auto hints_batchlog_flushed = flush.flushed;
+        auto flush_time = flush.flush_time;
 
         std::vector<future<>> repair_results;
         repair_results.reserve(this_smp_shard_count());
@@ -2741,7 +2741,10 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                     co_await seastar::sleep(std::chrono::milliseconds(*delay));
                 }
                 if (!skip_flush) {
-                    std::tie(needs_flush_before_repair, hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
+                    auto flush = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
+                    needs_flush_before_repair = flush.needed;
+                    hints_batchlog_flushed = flush.flushed;
+                    flush_time = flush.flush_time;
                 }
                 bool small_table_optimization = false;
 
