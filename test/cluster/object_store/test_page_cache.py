@@ -178,6 +178,19 @@ def cached_pages(cql, host=None):
                   cql.execute('SELECT sstable, component, offset FROM system_cache.pagecache', host=host))
 
 
+def page_hits(cql):
+    '''The time each cached page was last hit - or None, if it wasn't - by
+    its (sstable, component, offset).'''
+    return {(row.sstable, row.component, row.offset): row.last_hit for row in
+            cql.execute('SELECT sstable, component, offset, last_hit FROM system_cache.pagecache_hits')}
+
+
+def page_hits_with_shard(cql):
+    '''The (shard, sstable, component, offset, last_hit) of each hit page.'''
+    return sorted((row.shard, row.sstable, row.component, row.offset, row.last_hit) for row in
+                  cql.execute('SELECT shard, sstable, component, offset, last_hit FROM system_cache.pagecache_hits'))
+
+
 def cached_pages_with_shard(cql):
     '''The (shard, sstable, component, offset) of each cached page.'''
     return sorted((row.shard, row.sstable, row.component, row.offset) for row in
@@ -322,10 +335,16 @@ async def test_restart_evicts_orphan_pages(manager: ScyllaClusterManager, s3_sto
         cql.execute(insert, [0, orphan, 'Data', 0, b'orphan'])
         cql.execute(insert, [1000, pages[0][0], 'Data', 0, b'orphan'])
         assert len(cached_pages(cql)) == len(pages) + 2
+        # Add also an orphan hit, of an sstable which doesn't exist. The pages
+        # which the scan cached have rows in the hits table, without hits.
+        cql.execute('INSERT INTO system_cache.pagecache_hits (shard, sstable, component, offset, last_hit) '
+                    'VALUES (0, %s, %s, 0, toTimestamp(now()))', [orphan, 'Data'])
+        assert page_hits(cql)
 
         await manager.server_restart(server.server_id)
         cql, _ = await manager.get_ready_cql([server])
         assert cached_pages(cql) == pages
+        assert page_hits(cql) == {page: None for page in pages}
         assert scan(cql, ks) == data
 
 
@@ -820,11 +839,13 @@ def cached_sstables(cql):
 
 
 async def wait_for_eviction(cql, sstables):
-    '''Waits until none of the given sstables has cached pages. An sstable is
-    deleted - and its pages evicted - only after its last user is done with
-    it, which may happen some time after the operation which deleted it.'''
+    '''Waits until none of the given sstables has cached pages, or hits. An
+    sstable is deleted - and its pages evicted - only after its last user is
+    done with it, which may happen some time after the operation which
+    deleted it.'''
     async def evicted():
-        return True if not cached_sstables(cql) & sstables else None
+        hit_sstables = {sstable for sstable, _, _ in page_hits(cql)}
+        return True if not (cached_sstables(cql) | hit_sstables) & sstables else None
     await wait_for(evicted, time.time() + 60)
 
 
@@ -844,6 +865,10 @@ async def test_compaction_evicts_compacted_sstables(manager: ScyllaClusterManage
         assert scan(cql, ks) == data
         compacted = cached_sstables(cql)
         assert compacted
+        # Scan again, to record the hits of the cached pages.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        assert {sstable for sstable, _, _ in page_hits(cql)} == compacted
 
         await manager.api.keyspace_compaction(server.ip_addr, ks)
         await wait_for_eviction(cql, compacted)
@@ -892,8 +917,8 @@ async def test_truncate_evicts_sstables(manager: ScyllaClusterManager, s3_storag
 async def test_intranode_migration_copies_pages(manager: ScyllaClusterManager, s3_storage):
     '''When a tablet moves between shards of the same node, its sstables keep
     their objects, and their sstable_id, so the pages which the old shard
-    cached are still useful: they are copied to the new shard's cache, and
-    evicted from the old shard's cache.'''
+    cached are still useful: they are copied to the new shard's cache - with
+    the times they were last hit - and evicted from the old shard's cache.'''
     server = await manager.server_add(config=page_cache_config(s3_storage), cmdline=['--smp', '2'])
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
@@ -904,6 +929,11 @@ async def test_intranode_migration_copies_pages(manager: ScyllaClusterManager, s
         host, src_shard = await get_tablet_replica(manager, server, ks, 'test', 0)
         pages = cached_pages_with_shard(cql)
         assert pages and all(shard == src_shard for shard, _, _, _ in pages)
+        # Scan again, to record the hits of the cached pages.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        hits = page_hits_with_shard(cql)
+        assert hits
 
         dst_shard = 1 - src_shard
         await manager.api.move_tablet(server.ip_addr, ks, 'test', host, src_shard, host, dst_shard, 0)
@@ -914,6 +944,9 @@ async def test_intranode_migration_copies_pages(manager: ScyllaClusterManager, s
         async def pages_moved():
             return True if cached_pages_with_shard(cql) == moved_pages else None
         await wait_for(pages_moved, time.time() + 60)
+        # Check that the hits moved too.
+        assert page_hits_with_shard(cql) == sorted((dst_shard, sstable, component, offset, last_hit)
+                                                   for _, sstable, component, offset, last_hit in hits)
 
         # Check that a scan, on the new shard, reads everything from the cache.
         await manager.api.drop_sstable_caches(server.ip_addr)
@@ -955,6 +988,50 @@ async def test_migration_to_another_node_evicts_pages(manager: ScyllaClusterMana
         await manager.api.drop_sstable_caches(servers[dst].ip_addr)
         assert scan(cql, ks) == data
         assert cached_pages(cql, hosts[dst])
+
+
+async def test_hits(manager: ScyllaClusterManager, s3_storage):
+    '''The page cache records when each cached page was last hit - read from
+    the cache by a read which may populate it. Caching a page isn't a hit, so
+    a page which was read only once looks old. A read with BYPASS CACHE reads
+    the cached pages, but doesn't record their hits: a scan with BYPASS CACHE
+    would otherwise make all of a table's pages look recently used.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+
+        def point_read(options=''):
+            assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17 {options}').one().v == data[17]
+
+        # Check that a point read which caches its pages records no hits:
+        # each cached page has a row in the hits table, without a hit.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        point_read()
+        pages = cached_pages(cql)
+        assert pages
+        assert page_hits(cql) == {page: None for page in pages}
+
+        # Check that reading them again records a hit of each of them.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        point_read()
+        first_hits = page_hits(cql)
+        assert sorted(first_hits) == pages
+
+        # Check that the next read records later hits. The clock has
+        # millisecond resolution, so wait for it to advance.
+        await asyncio.sleep(0.002)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        point_read()
+        second_hits = page_hits(cql)
+        assert sorted(second_hits) == pages
+        assert all(second_hits[page] > first_hits[page] for page in pages)
+
+        # Check that a read with BYPASS CACHE records no hits.
+        await asyncio.sleep(0.002)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        point_read('BYPASS CACHE')
+        assert page_hits(cql) == second_hits
 
 
 async def test_lwt_populates_cache(manager: ScyllaClusterManager, s3_storage):

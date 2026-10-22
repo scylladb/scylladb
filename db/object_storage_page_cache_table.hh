@@ -26,7 +26,8 @@ class query_processor;
 namespace db {
 
 // The disk page cache of sstables on object storage, which is stored in
-// the system_cache.pagecache table.
+// the system_cache.pagecache table - and in the system_cache.pagecache_hits
+// table, which records when each cached page was last hit.
 class object_storage_page_cache_table : public sstables::object_storage_page_cache {
     cql3::query_processor& _qp;
 public:
@@ -34,8 +35,10 @@ public:
     // to it skip the commitlog, and it may grow very large.
     static constexpr auto SYSTEM_CACHE = "system_cache";
     static constexpr auto PAGECACHE = "pagecache";
+    static constexpr auto PAGECACHE_HITS = "pagecache_hits";
 
     static schema_ptr schema();
+    static schema_ptr hits_schema();
     // The timestamp of a write to the tables. The writes of a shard's cache -
     // of the same rows, which it writes, deletes and writes again - must be
     // ordered by their timestamps, but api::new_timestamp() may return the
@@ -49,7 +52,7 @@ public:
     virtual future<> put_page(sstables::sstable_id sst, sstables::component_type component,
             uint64_t offset, temporary_buffer<char> data) override;
     virtual future<std::vector<page>> get_pages(sstables::sstable_id sst, sstables::component_type component,
-            uint64_t from, uint64_t to, size_t max_pages) override;
+            uint64_t from, uint64_t to, size_t max_pages, sstables::populate_disk_cache populate) override;
     virtual future<> evict_sstable(sstables::sstable_id sst) override;
     virtual future<> evict_other_sstables(const std::unordered_set<sstables::sstable_id>& live) override;
     virtual future<> copy_sstable_from_shard(sstables::sstable_id sst, shard_id from) override;
