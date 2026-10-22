@@ -18,6 +18,7 @@
 #include "sstables/component_type.hh"
 #include "sstables/object_storage_page_cache.hh"
 #include "sstables/types.hh"
+#include "sstables/types_fwd.hh"
 #include "seastarx.hh"
 
 namespace sstables {
@@ -35,8 +36,12 @@ namespace sstables {
 // utils::cached_file). So each of their reads from this file is one or a few
 // whole pages of the object storage page cache.
 //
+// With populate_disk_cache::no, the file reads the pages which are already
+// cached, but doesn't add pages to the cache (see populate_disk_cache).
+//
 // Only reads go through the cache; other operations are forwarded to the
 // underlying file. The cache must outlive the returned file.
-file make_page_cached_file(object_storage_page_cache& cache, sstable_id sst, component_type component, file underlying);
+file make_page_cached_file(object_storage_page_cache& cache, sstable_id sst, component_type component, file underlying,
+        populate_disk_cache populate);
 
 } // namespace sstables

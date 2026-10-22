@@ -116,7 +116,8 @@ public:
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
         const sstable_predicate&,
-        sstables::integrity_check integrity = sstables::integrity_check::no) const override;
+        sstables::integrity_check integrity = sstables::integrity_check::no,
+        sstables::populate_disk_cache populate = sstables::populate_disk_cache::no) const override;
 
     friend class sstable_position_reader_queue;
 };
@@ -152,7 +153,8 @@ public:
             streamed_mutation::forwarding,
             mutation_reader::forwarding,
             const sstable_predicate&,
-            sstables::integrity_check integrity = sstables::integrity_check::no) const override;
+            sstables::integrity_check integrity = sstables::integrity_check::no,
+        sstables::populate_disk_cache populate = sstables::populate_disk_cache::no) const override;
 
     class incremental_selector;
 };
