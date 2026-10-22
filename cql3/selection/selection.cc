@@ -134,7 +134,7 @@ protected:
         virtual bool requires_thread() const override { return false; }
 
         // Should not be reached, since this is called when aggregating
-        virtual std::vector<managed_bytes_opt> get_output_row() override {
+        virtual std::vector<managed_bytes_opt> get_output_row(result_set_builder& rs) override {
             on_internal_error(cql_logger, "simple_selectors::get_output_row() called, but we don't support aggregation");
         }
 
@@ -437,7 +437,7 @@ protected:
             return output_row;
         }
 
-        virtual std::vector<managed_bytes_opt> get_output_row() override {
+        virtual std::vector<managed_bytes_opt> get_output_row(result_set_builder& rs) override {
             std::vector<managed_bytes_opt> output_row;
             output_row.reserve(_sel._outer_loop.size());
             auto inputs = expr::evaluation_inputs{
@@ -445,7 +445,8 @@ protected:
                     .clustering_key = {},
                     .static_and_regular_columns = {},
                     .selection = &_sel,
-                    .options = nullptr,
+                    // The outer loop may use bind variables, e.g., max(m)[?]
+                    .options = rs._options,
                     .static_and_regular_timestamps = {},
                     .static_and_regular_ttls = {},
                     .temporaries = _temporaries,
@@ -463,7 +464,8 @@ protected:
                     .clustering_key = rs.current_clustering_key,
                     .static_and_regular_columns = rs.current,
                     .selection = &_sel,
-                    .options = nullptr,
+                    // The inner loop may use bind variables, e.g., max(intasblob(?))
+                    .options = rs._options,
                     .static_and_regular_timestamps = rs._timestamps,
                     .static_and_regular_ttls = rs._ttls,
                     .temporaries = _temporaries,
@@ -698,7 +700,7 @@ void result_set_builder::flush_selectors() {
     }
     if (_result_set->size() < _limit) {
         if (_per_partition_remaining > 0) {
-            _result_set->add_row(_selectors->get_output_row());
+            _result_set->add_row(_selectors->get_output_row(*this));
             --_per_partition_remaining;
         }
         _selectors->reset();
@@ -784,7 +786,7 @@ std::unique_ptr<result_set> result_set_builder::build() {
     }
 
     if (_result_set->empty() && _selectors->is_aggregate() && _group_by_cell_indices.empty()) {
-        _result_set->add_row(_selectors->get_output_row());
+        _result_set->add_row(_selectors->get_output_row(*this));
     }
     return std::move(_result_set);
 }
