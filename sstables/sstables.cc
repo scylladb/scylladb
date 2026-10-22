@@ -4855,6 +4855,11 @@ future<data_source> file_io_extension::wrap_source(const sstable& sst, component
     SCYLLA_ASSERT(0 && "You are not supposed to get here, file_io_extension::wrap_source() is not implemented");
 }
 
+future<std::optional<data_source>> file_io_extension::wrap_ranged_source(const sstable&, component_type,
+        uint64_t, uint64_t, uint64_t, stored_range_reader) {
+    return make_ready_future<std::optional<data_source>>(std::nullopt);
+}
+
 namespace trie {
 
 // This implementation would belong better in sstables/trie/bti_partition_index_writer.cc,

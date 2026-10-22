@@ -1360,6 +1360,19 @@ public:
 
     virtual future<data_source>
     wrap_source(const sstable&, component_type, data_source);
+
+    // Reads the byte range [offset, offset + length) of a component as it is
+    // stored, before the extension's transformation is undone.
+    using stored_range_reader = noncopyable_function<future<data_source>(uint64_t offset, uint64_t length)>;
+    // Like wrap_source(), but for the byte range [offset, offset + len) of the
+    // component (as the sstable code reads it, after the transformation is
+    // undone), which may start anywhere in the component, whose size is "size".
+    // The extension reads the stored bytes it needs with read_stored(). Returns
+    // nothing if the extension cannot do this; the caller should then read the
+    // component in another way, such as through wrap_file().
+    virtual future<std::optional<data_source>>
+    wrap_ranged_source(const sstable&, component_type, uint64_t offset, uint64_t len, uint64_t size,
+            stored_range_reader read_stored);
     // optionally return a map of attributes for a given sstable,
     // suitable for "describe".
     // This would preferably be interesting info on what/why the extension did

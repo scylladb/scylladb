@@ -730,7 +730,7 @@ protected:
     // A source of the given range of the sstable's component, which reads it
     // through the disk page cache - or nothing, if it should not be read
     // through the cache.
-    std::optional<data_source> maybe_make_page_cached_source(const sstable& sst, component_type type, uint64_t offset, uint64_t len) const;
+    future<std::optional<data_source>> maybe_make_page_cached_source(const sstable& sst, component_type type, uint64_t offset, uint64_t len) const;
 public:
     object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as,
             data_dictionary::storage_options::disk_cache_mode disk_cache)
@@ -1019,29 +1019,71 @@ future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, com
     return maybe_wrap_sink(sst, type, make_data_upload_sink(make_object_name(sst, type), object_storage_attributes{}, std::nullopt));
 }
 
-std::optional<data_source>
+// A source of the byte range [offset, offset + len) of an sstable component's
+// object, which reads it through the disk page cache, in pages of the given
+// geometry, and reads any pages which are not cached from the object store.
+static data_source make_cached_object_source(shared_ptr<object_storage_page_cache> cache, sstable_id sid, component_type type,
+        shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t len,
+        shared_ptr<object_storage_client> client, object_name name, seastar::abort_source* as) {
+    auto& cache_ref = *cache;
+    return make_page_cached_source(cache_ref, sid, type, std::move(geometry), offset, len,
+            [client = std::move(client), name = std::move(name), as, cache = std::move(cache)] (uint64_t offset, uint64_t length) {
+        // Capturing "cache" keeps it alive as long as this source, even if
+        // it is unplugged (on shutdown) in the meantime.
+        return make_ready_future<data_source>(client->make_ranged_download_source(name, offset, length, as));
+    });
+}
+
+future<std::optional<data_source>>
 object_storage_base::maybe_make_page_cached_source(const sstable& sst, component_type type, uint64_t offset, uint64_t len) const {
     // Besides Data, the older Index component is also sometimes read through a
     // data_source rather than through its file (see open_component()).
     if (_disk_cache != data_dictionary::storage_options::disk_cache_mode::pages
             || (type != component_type::Data && type != component_type::Index)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
     // The cache is not plugged if its experimental feature was disabled
     // after the keyspace was created.
     auto cache = sst.manager().get_object_storage_page_cache();
     if (!cache) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
+    auto sid = get_sstable_identifier(sst);
     // The cache holds the component's bytes as they are stored in the object
-    // store, and returns them as they are. If a file I/O extension (such as
-    // encryption) transformed the sstable, those bytes need to be transformed
-    // back, which is not supported yet for a read from the middle of the
-    // component, so such an sstable is read without the cache.
+    // store. If a file I/O extension (namely, encryption) transformed the
+    // sstable, which it reports with get_attributes(), the stored bytes need
+    // to be transformed back, by the extension.
+    file_io_extension* transformer = nullptr;
     for (auto* ext : sst.manager().file_io_extensions()) {
         if (!ext->get_attributes(sst).empty()) {
-            return std::nullopt;
+            if (transformer) {
+                // Two transformations of the same sstable are not supported.
+                co_return std::nullopt;
+            }
+            transformer = ext;
         }
+    }
+    if (transformer) {
+        // The size of the component as it is read, after the transformation
+        // is undone.
+        uint64_t size = type == component_type::Index ? sst.index_size()
+                : sst.get_compression() ? sst.get_compression().compressed_file_length()
+                : sst.ondisk_data_size();
+        // The extension reads the stored bytes it needs (for encryption,
+        // whole 4 KiB blocks, and to the end of the object if it needs the
+        // last block) in 4 KiB pages. The stored object's size is not known
+        // here, but every read of an encrypted component ends either at a
+        // page boundary or at the end of the object, which may be after
+        // "size" - so the geometry of each read can end where it does, or at
+        // "size", if that is later. A component which the extension doesn't
+        // transform (not encrypted) is read as requested, and stored as it is
+        // read, so its geometry ends at "size", like that of the file which
+        // reads its index (see open_component()).
+        co_return co_await transformer->wrap_ranged_source(sst, type, offset, len, size,
+                [cache, sid, type, client = _client, name = make_object_name(sst, type), as = abort_source(), size] (uint64_t offset, uint64_t length) {
+            return make_ready_future<data_source>(make_cached_object_source(cache, sid, type,
+                    make_shared<fixed_size_page_geometry>(std::max(offset + length, size)), offset, length, client, name, as));
+        });
     }
     shared_ptr<const page_geometry> geometry;
     if (type == component_type::Index) {
@@ -1053,17 +1095,13 @@ object_storage_base::maybe_make_page_cached_source(const sstable& sst, component
     } else {
         geometry = make_shared<fixed_size_page_geometry>(sst.ondisk_data_size());
     }
-    return make_page_cached_source(*cache, get_sstable_identifier(sst), type, std::move(geometry), offset, len,
-            [client = _client, name = make_object_name(sst, type), as = abort_source(), cache] (uint64_t offset, uint64_t length) {
-        // Capturing "cache" keeps it alive as long as this source, even if
-        // it is unplugged (on shutdown) in the meantime.
-        return make_ready_future<data_source>(client->make_ranged_download_source(name, offset, length, as));
-    });
+    co_return make_cached_object_source(std::move(cache), sid, type, std::move(geometry), offset, len,
+            _client, make_object_name(sst, type), abort_source());
 }
 
 future<data_source>
 object_storage_base::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
-    if (auto src = maybe_make_page_cached_source(sst, type, offset, len)) {
+    if (auto src = co_await maybe_make_page_cached_source(sst, type, offset, len)) {
         co_return std::move(*src);
     }
     co_return co_await make_source(sst, type, f, offset, len, options);
@@ -1076,7 +1114,7 @@ object_storage_base::make_source(sstable& sst, component_type type, file f, uint
 
 future<data_source>
 s3_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
-    if (auto src = maybe_make_page_cached_source(sst, type, offset, len)) {
+    if (auto src = co_await maybe_make_page_cached_source(sst, type, offset, len)) {
         co_return std::move(*src);
     }
     co_return co_await make_source(sst, type, std::move(f), offset, len, std::move(options));
