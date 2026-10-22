@@ -259,6 +259,14 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // table starts with many tablets).
         .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
     };
+    // Tests may shrink the in-memory raft log, so that a follower with a stalled state
+    // machine reaches its bound after a few writes instead of ~21MB of them. The other
+    // limits keep the ratios recommended in raft::server::configuration.
+    if (auto size = utils::get_local_injector().inject_parameter<size_t>("sc_raft_max_log_size")) {
+        config.max_log_size = *size;
+        config.snapshot_threshold_log_size = *size / 2;
+        config.snapshot_trailing_size = *size / 4;
+    }
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config, std::move(server_stats));
 
