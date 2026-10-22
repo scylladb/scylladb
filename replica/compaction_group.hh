@@ -21,6 +21,8 @@
 #include "replica/logstor/segment_types.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/moving_average_rate.hh"
+#include "db_clock.hh"
 #include "db/commitlog/replay_position.hh"
 #include <absl/container/flat_hash_map.h>
 
@@ -103,6 +105,15 @@ class compaction_group : public compaction::compaction_backlog_source {
     std::unique_ptr<compaction_group_logstor_state> _logstor_state;
 
     db::replay_position _lowest_rp;
+    // The rates this group tracks share the window and the start, so rates read from them
+    // at the same time cover the same interval, whether the window has filled or not, and
+    // can be compared and combined.
+    // FIXME: make the window configurable.
+    static constexpr lowres_db_clock::duration rate_window = std::chrono::minutes(30);
+    lowres_db_clock::time_point _rates_start = lowres_db_clock::now();
+    // Bytes flushed from memtables into this group, which the compaction controller
+    // will use to match compaction to ingestion.
+    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _flushed_bytes{rate_window, _rates_start};
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();
@@ -212,6 +223,8 @@ public:
     void set_compaction_strategy_state(compaction::compaction_strategy_state compaction_strategy_state) noexcept;
 
     lw_shared_ptr<memtable_list>& memtables() noexcept;
+    // Accounts the sstables a memtable flush added to this group.
+    void on_memtable_flushed(const std::vector<sstables::shared_sstable>& ssts) noexcept;
     size_t memtable_count() const noexcept;
     bool memtable_empty() const noexcept;
     // Returns minimum timestamp from memtable list
