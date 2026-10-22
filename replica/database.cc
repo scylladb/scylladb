@@ -2364,7 +2364,10 @@ future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm,
                                             s->ks_name(), s->cf_name(), s->version()));
         }
         try {
-            return apply_with_commitlog(cf, m, timeout);
+            // During an intranode migration this shard may be one the counter
+            // guard does not cover, so enter the phaser here as do_apply() does.
+            auto op = cf.write_in_progress();
+            return apply_with_commitlog(cf, m, timeout).finally([op = std::move(op)] {});
         } catch (no_such_column_family&) {
             dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
             throw;
