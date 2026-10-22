@@ -905,6 +905,10 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
                 resource = auth::make_data_resource(v->ks_name(), v->cf_name());
                 co_await auth::revoke_all(*cs.get().get_auth_service(), resource, mc);
             }
+            // The table's stream (CDC log table), if it has one, is dropped
+            // with it.
+            resource = auth::make_data_resource(schema->ks_name(), cdc::log_name(schema->cf_name()));
+            co_await auth::revoke_all(*cs.get().get_auth_service(), resource, mc);
             std::tie(m, group0_guard) = co_await std::move(mc).extract();
 
             try {
@@ -2600,6 +2604,13 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 co_await auth::grant_applicable_permissions(
                     *client_state.get_auth_service(), *client_state.user(), resource, mc);
             }
+            // The role also needs permissions to read the stream - the CDC
+            // log table - with GetRecords.
+            if (stream_enabled) {
+                resource = auth::make_data_resource(schema->ks_name(), cdc::log_name(schema->cf_name()));
+                co_await auth::grant_applicable_permissions(
+                    *client_state.get_auth_service(), *client_state.user(), resource, mc);
+            }
         }
         std::tie(schema_mutations, group0_guard) = co_await std::move(mc).extract();
         try {
@@ -2808,9 +2819,11 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     co_return api_error::validation("You cannot create or delete index while changing stream status");
                 }
             }
+            bool enabling_stream = false;
             if (stream_specification && stream_specification->IsObject()) {
                 empty_request = false;
                 if (add_stream_options(*stream_specification, builder, p.local(), tab->cdc_options())) {
+                    enabling_stream = true;
                     validate_cdc_log_name_length(builder.cf_name());
                     // If the table already has a vector index, ensure CDC uses
                     // delta_mode=full so the vector store can read full column
@@ -3250,14 +3263,20 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
             // If a role is allowed to create a GSI, we should give it permissions
             // to read the GSI it just created. This is known as "auto-grant".
+            // Similarly, a role enabling a stream should be able to read it.
             // Also, when we delete a GSI we should revoke any permissions set on
             // it - so if it's ever created again the old permissions wouldn't be
             // remembered for the new GSI. This is known as "auto-revoke"
-            if (local_client_state.user() && (!new_views.empty() || !dropped_views.empty())) {
+            if (local_client_state.user() && (!new_views.empty() || !dropped_views.empty() || enabling_stream)) {
                 service::group0_batch mc(std::move(group0_guard));
                 mc.add_mutations(std::move(m));
                 for (view_ptr view : new_views) {
                     auto resource = auth::make_data_resource(view->ks_name(), view->cf_name());
+                    co_await auth::grant_applicable_permissions(
+                        *local_client_state.get_auth_service(), *local_client_state.user(), resource, mc);
+                }
+                if (enabling_stream) {
+                    auto resource = auth::make_data_resource(schema->ks_name(), cdc::log_name(schema->cf_name()));
                     co_await auth::grant_applicable_permissions(
                         *local_client_state.get_auth_service(), *local_client_state.user(), resource, mc);
                 }

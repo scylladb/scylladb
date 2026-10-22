@@ -978,7 +978,6 @@ def test_rbac_streams(dynamodb, cql):
 # later in an already existing table.
 # Reproduces issue #19798 - which was fixed only for CQL - and SCYLLADB-5248
 # (the same missing auto-grant in Alternator).
-@pytest.mark.xfail(reason="SCYLLADB-5248")
 @pytest.mark.parametrize("during_creation", [True, False])
 def test_rbac_streams_autogrant(dynamodb, cql, during_creation):
     schema = {
@@ -1010,12 +1009,48 @@ def test_rbac_streams_autogrant(dynamodb, cql, during_creation):
                     # Note: use low timeout to avoid slow xfail
                     authorized(lambda: ds.get_records(ShardIterator=iter), timeout=3*permissions_validity_in_ms(cql))
 
+# In test_rbac_streams_autogrant above, the role which created a table with
+# a stream can read it. Check that this remains true after the stream is
+# disabled - a disabled stream remains readable (for 24 hours), so its
+# permissions shouldn't be revoked - and after the stream is enabled again,
+# which replaces the stream's CDC log table by a new one.
+# Reproduces SCYLLADB-5248.
+def test_rbac_streams_autogrant_disable_and_reenable(dynamodb, cql):
+    schema = {
+        'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        'AttributeDefinitions': [{'AttributeName': 'p', 'AttributeType': 'S'}],
+        'StreamSpecification': {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
+        # Work around issue #16137 that Alternator Streams doesn't work with
+        # tablets. When that issue is solved, the following Tags should be
+        # removed.
+        'Tags': [{'Key': 'system:initial_tablets', 'Value': 'none'}]
+    }
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d, new_dynamodb_streams(dynamodb, role, key) as ds:
+            with temporary_grant(cql, 'CREATE', 'ALL KEYSPACES', role):
+                with new_named_table(d, unique_table_name(), **schema) as table:
+                    # Read the stream as created with the table, then after
+                    # disabling it, and then after enabling it again.
+                    for stream_update in [None, {'StreamEnabled': False}, schema['StreamSpecification']]:
+                        if stream_update:
+                            table.update(StreamSpecification=stream_update)
+                        arn = ds.list_streams(TableName=table.name)['Streams'][0]['StreamArn']
+                        shard_id = ds.describe_stream(StreamArn=arn)['StreamDescription']['Shards'][0]['ShardId']
+                        iter = ds.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
+                        authorized(lambda: ds.get_records(ShardIterator=iter))
+
 # Once autogrant works (tested in the above test, test_rbac_streams_autogrant)
-# we also need auto-revoke - i.e., when the stream is deleted the permissions
-# should be deleted - otherwise if role1 creates a table and a stream, deletes
-# it, and later role2 creates a table with the same name, role1 might be able
-# to read the new stream!
-def test_rbac_streams_autorevoke(dynamodb, cql):
+# we also need auto-revoke - i.e., when a table is deleted, the permissions on
+# its stream should be deleted too - otherwise if role1 creates a table with a
+# stream, deletes the table, and later role2 creates a table with the same
+# name, role1 might be able to read the new table's stream! Note that this
+# auto-revoke happens only when the whole table is deleted: Disabling the
+# stream doesn't revoke its permissions, because a disabled stream remains
+# readable (see test_rbac_streams_autogrant_disable_and_reenable).
+# As in test_rbac_streams_autogrant, role1 enables the stream either when
+# creating the table or later with UpdateTable.
+@pytest.mark.parametrize('during_creation', [True, False])
+def test_rbac_streams_autorevoke(dynamodb, cql, during_creation):
     schema = {
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }],
@@ -1025,11 +1060,14 @@ def test_rbac_streams_autorevoke(dynamodb, cql):
         # removed.
         'Tags': [{'Key': 'system:initial_tablets', 'Value': 'none'}]
     }
+    role1_schema = schema if during_creation else {k: v for k, v in schema.items() if k != 'StreamSpecification'}
     table_name = unique_table_name()
     with new_role(cql) as (role1, key1), new_role(cql) as (role2, key2):
         with new_dynamodb(dynamodb, role1, key1) as d1, new_dynamodb(dynamodb, role2, key2) as d2, new_dynamodb_streams(dynamodb, role1, key1) as ds1:
             with temporary_grant(cql, 'CREATE', 'ALL KEYSPACES', role1):
-                with new_named_table(d1, table_name, **schema) as table:
+                with new_named_table(d1, table_name, **role1_schema) as table:
+                    if not during_creation:
+                        authorized(lambda: table.update(StreamSpecification=schema['StreamSpecification']))
                     # role1 created table_name, so autogrant will now give
                     # it permissions to read the table and the CDC log.
                     # we hope this permission is auto-revoked when the
