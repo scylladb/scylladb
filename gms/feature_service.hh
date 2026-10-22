@@ -12,7 +12,6 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 #include <map>
-#include <optional>
 #include <unordered_map>
 #include <functional>
 #include <set>
@@ -57,7 +56,6 @@ using namespace std::literals;
 class feature_service final : public peering_sharded_service<feature_service> {
     void register_feature(feature& f);
     void unregister_feature(feature& f);
-    friend class feature;
     std::unordered_map<sstring, std::reference_wrapper<feature>> _registered_features;
     std::unordered_set<sstring> _suppressed_features;
 
@@ -81,17 +79,18 @@ public:
 
     // The values of the features defined in feature_service.cc, by their
     // feature_definition::index().
-    // A contiguous array keeps the lookup in operator[] cheap; std::optional lets us
-    // construct each feature in place, because a feature cannot be moved.
-    std::vector<std::optional<feature>> _defined_features;
+    // A contiguous array keeps the lookup in operator[] cheap. Filled in the constructor
+    // and never resized, because _registered_features and the callers of operator[]
+    // refer to its elements.
+    std::vector<feature> _defined_features;
 
 public:
     // The value of the feature `f`: whether it is enabled, and its listeners.
     feature& operator[](const feature_definition& f) noexcept {
-        return *_defined_features[f.index()];
+        return _defined_features[f.index()];
     }
     const feature& operator[](const feature_definition& f) const noexcept {
-        return *_defined_features[f.index()];
+        return _defined_features[f.index()];
     }
 
     // Features created at run time rather than declared above: one per cluster config

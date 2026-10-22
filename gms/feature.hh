@@ -25,8 +25,6 @@ namespace bs2 = boost::signals2;
 
 namespace gms {
 
-class feature_service;
-
 /// The definition of one cluster feature: its name, and its index - its
 /// position in the list of all the cluster features.
 ///
@@ -73,7 +71,6 @@ public:
 class feature final {
     using signal_type = bs2::signal_type<void (), bs2::keywords::mutex_type<bs2::dummy_mutex>>::type;
 
-    feature_service* _service = nullptr;
     sstring _name;
     bool _enabled = false;
     mutable signal_type _s;
@@ -100,13 +97,10 @@ public:
         // Has to run inside seastar::async context
         virtual void on_enabled() = 0;
     };
-    explicit feature(feature_service& service, std::string_view name, bool enabled = false);
+    explicit feature(std::string_view name, bool enabled = false);
     feature() = default;
-    ~feature();
-    feature(const feature& other) = delete;
     // Has to run inside seastar::async context
     void enable();
-    feature& operator=(feature&& other);
     const sstring& name() const {
         return _name;
     }

@@ -181,11 +181,10 @@ bool is_test_only_feature_enabled() {
             || is_test_only_feature_deprecated();
 }
 
-feature_service::feature_service(feature_config cfg)
-        : _config(cfg)
-        , _defined_features(feature_definitions().size()) {
+feature_service::feature_service(feature_config cfg) : _config(cfg) {
+    _defined_features.reserve(feature_definitions().size());
     for (const feature_definition* f : feature_definitions()) {
-        _defined_features[f->index()].emplace(*this, f->name());
+        register_feature(_defined_features.emplace_back(f->name()));
     }
 
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
@@ -230,7 +229,8 @@ feature& feature_service::add_feature(const sstring& name) {
     if (const auto it = _registered_features.find(name); it != _registered_features.end()) {
         return it->second.get();
     }
-    const auto [it, inserted] = _dynamic_features.try_emplace(name, *this, std::string_view(name));
+    const auto [it, inserted] = _dynamic_features.try_emplace(name, std::string_view(name));
+    register_feature(it->second);
     return it->second;
 }
 
@@ -330,27 +330,9 @@ const std::unordered_map<sstring, std::reference_wrapper<feature>>& feature_serv
     return _registered_features;
 }
 
-feature::feature(feature_service& service, std::string_view name, bool enabled)
-        : _service(&service)
-        , _name(name)
+feature::feature(std::string_view name, bool enabled)
+        : _name(name)
         , _enabled(enabled) {
-    _service->register_feature(*this);
-}
-
-feature::~feature() {
-    if (_service) {
-        _service->unregister_feature(*this);
-    }
-}
-
-feature& feature::operator=(feature&& other) {
-    _service->unregister_feature(*this);
-    _service = std::exchange(other._service, nullptr);
-    _name = other._name;
-    _enabled = other._enabled;
-    _s = std::move(other._s);
-    _service->register_feature(*this);
-    return *this;
 }
 
 void feature::enable() {
