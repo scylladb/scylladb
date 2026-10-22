@@ -137,6 +137,14 @@ def range_read_requests(object_storage):
     return 1 if object_storage.type == 'S3' else 2
 
 
+PLAINTEXT_MARKER = 'plaintext-marker:Xq7Hz2Lw9Kp4Nr8Vt3'
+
+
+def marker_in(pages):
+    '''Whether any of the pages contains PLAINTEXT_MARKER.'''
+    return any(PLAINTEXT_MARKER.encode() in page for page in pages)
+
+
 async def create_table(manager: ScyllaClusterManager, server, ks, table_options=''):
     '''Creates the table ks.test with some data, flushed to sstables, and
     returns the data as a dict. The data does not compress well, so its
@@ -147,6 +155,9 @@ async def create_table(manager: ScyllaClusterManager, server, ks, table_options=
     insert = cql.prepare(f'INSERT INTO {ks}.test (p, v) VALUES (?, ?)')
     rand = random.Random(1)
     data = {p: rand.randbytes(500).hex() for p in range(400)}
+    # A value whose bytes can be looked for in the sstables, to check if they
+    # hold it as plaintext.
+    data[400] = PLAINTEXT_MARKER
     await asyncio.gather(*[cql.run_async(insert, [p, v]) for p, v in data.items()])
     await manager.api.flush_keyspace(server.ip_addr, ks)
     return data
@@ -197,6 +208,10 @@ async def test_scan_populates_cache(manager: ScyllaClusterManager, object_storag
         await manager.api.drop_sstable_caches(server.ip_addr)
         assert scan(cql, ks) == data
         assert cached_data_pages(cql)
+        # Check that the cached Data holds the values as plaintext (a control
+        # for test_encrypted_sstables, which checks the opposite).
+        assert marker_in(row.page for row in cql.execute(
+            "SELECT page FROM system_cache.pagecache WHERE component = 'Data' ALLOW FILTERING"))
 
         await manager.api.drop_sstable_caches(server.ip_addr)
         requests_before = await read_requests(manager, server, object_storage)
@@ -321,36 +336,51 @@ def object_bytes(object_storage, sstable, component):
     return obj.get()['Body'].read()
 
 
-async def test_encrypted_sstables(manager: ScyllaClusterManager, s3_storage, tmp_path):
+@pytest.mark.parametrize('compression', ['compressed', 'uncompressed'])
+async def test_encrypted_sstables(manager: ScyllaClusterManager, s3_storage, tmp_path, compression):
     '''Encrypted sstables are read correctly through the page cache, which
-    holds their index exactly as stored in the object store - encrypted - and
-    does not yet cache their Data, which cannot yet be decrypted from the
-    middle of the component.'''
+    holds their Data and index exactly as stored in the object store, i.e.,
+    encrypted - and needs no more requests to the object store than for
+    sstables which are not encrypted. The Data of a compressed table is
+    compressed before it is encrypted, so its compressed chunks are not
+    aligned to the encryption's blocks.'''
     server = await manager.server_add(config=page_cache_config(s3_storage) | encryption_config(tmp_path))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
-        data = await create_table(manager, server, ks)
+        table_options = "WITH compression = {'sstable_compression': ''}" if compression == 'uncompressed' else ''
+        data = await create_table(manager, server, ks, table_options)
 
-        # Check that point reads return the right row, both when the index is
-        # read from the object store and when it is read from the cache, and
-        # that a scan returns the right data.
-        for _ in range(2):
-            await manager.api.drop_sstable_caches(server.ip_addr)
-            assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+        # Check that a scan which misses the cache returns the right data, and
+        # reads each sstable's Data in a single request, and its index once,
+        # as for sstables which are not encrypted.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
         assert scan(cql, ks) == data
+        requests = await read_requests(manager, server, s3_storage) - requests_before
+        sstables = {sstable for sstable, _ in cached_data_pages(cql)}
+        assert len(sstables) >= 1
+        assert requests == 2 * len(sstables)
 
-        # Check that the cached index pages are exactly the bytes stored in
-        # the object store, i.e., encrypted.
-        pages = list(cql.execute("SELECT sstable, component, offset, page FROM system_cache.pagecache "
-                                 "WHERE component IN ('Partitions', 'Rows') ALLOW FILTERING"))
-        assert pages
+        # Check that a second scan, and point reads, are served from the cache.
+        for read in [lambda: scan(cql, ks) == data,
+                     lambda: cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]]:
+            await manager.api.drop_sstable_caches(server.ip_addr)
+            requests_before = await read_requests(manager, server, s3_storage)
+            assert read()
+            assert await read_requests(manager, server, s3_storage) == requests_before
+
+        # Check that the cached pages, of both the Data and the index, are
+        # exactly the bytes stored in the object store, i.e., encrypted.
+        pages = list(cql.execute("SELECT sstable, component, offset, page FROM system_cache.pagecache"))
+        assert {page.component for page in pages} >= {'Data', 'Partitions'}
         for page in pages:
             stored = object_bytes(s3_storage, page.sstable, page.component)
             assert page.page == stored[page.offset:page.offset + len(page.page)]
-
-        # Check that the Data of the encrypted sstables was not cached. This
-        # also shows that the sstables are indeed encrypted.
-        assert cached_data_pages(cql) == []
+        # Check that the sstables are indeed encrypted: unlike in an sstable
+        # which is not encrypted (see test_scan_populates_cache), neither the
+        # stored Data nor the cache holds the values as plaintext.
+        assert not marker_in(object_bytes(s3_storage, sstable, 'Data') for sstable in sstables)
+        assert not marker_in(page.page for page in pages)
 
 
 async def test_many_concurrent_reads(manager: ScyllaClusterManager, s3_storage):
