@@ -61,6 +61,40 @@ endfunction(generate_cxxbridge)
 
 add_rust_library(rust_combined)
 
+# The AWS ClockBound bounded-clock backend links against libclockbound.a, built
+# from the clock-bound git submodule (the clock-bound-ffi workspace member). The
+# submodule is its own cargo workspace with its own Cargo.toml/Cargo.lock, and is
+# always built with the release profile, independent of the Scylla build mode,
+# since it only exposes a plain C ABI.
+set(clockbound_src_dir ${CMAKE_SOURCE_DIR}/clock-bound)
+set(clockbound_target_dir ${CMAKE_CURRENT_BINARY_DIR}/clock-bound)
+# Use the archive where cargo writes it: cargo emits its dep-info file alongside,
+# naming that exact path as the target, which is what lets DEPFILE line up.
+# CARGO_BUILD_DEP_INFO_BASEDIR stays unset here so cargo writes absolute paths,
+# which DEPFILE accepts; WORKING_DIRECTORY below is the submodule, and a relative
+# basedir would resolve against it.
+set(clockbound_library ${clockbound_target_dir}/release/libclockbound.a)
+set(clockbound_depfile ${clockbound_target_dir}/release/libclockbound.d)
+add_custom_command(
+  OUTPUT ${clockbound_library}
+  COMMAND ${CMAKE_COMMAND} -E env ${RUSTC_WRAPPER_ENV} ${CARGO} build --locked --release --manifest-path=${clockbound_src_dir}/Cargo.toml -p clock-bound-ffi --target-dir=${clockbound_target_dir}
+  # The dep-info covers the workspace's Rust sources, so a submodule bump
+  # rebuilds the archive. The manifests are named here so they do too.
+  DEPENDS
+    ${clockbound_src_dir}/Cargo.lock
+    ${clockbound_src_dir}/Cargo.toml
+    ${clockbound_src_dir}/clock-bound-ffi/Cargo.toml
+  DEPFILE ${clockbound_depfile}
+  WORKING_DIRECTORY ${clockbound_src_dir}
+  COMMENT "Building Rust library: ${clockbound_library}")
+add_custom_target(rust-clockbound
+  DEPENDS ${clockbound_library})
+add_library(Rust::clockbound STATIC IMPORTED GLOBAL)
+add_dependencies(Rust::clockbound rust-clockbound)
+set_target_properties(Rust::clockbound PROPERTIES
+  IMPORTED_LOCATION "${clockbound_library}"
+  INTERFACE_INCLUDE_DIRECTORIES "${clockbound_src_dir}/clock-bound-ffi/include")
+
 set(binding_gen_build_dir "${scylla_gen_build_dir}/rust")
 
 set(cxx_header "${binding_gen_build_dir}/cxx.h")
