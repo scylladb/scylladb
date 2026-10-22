@@ -3855,9 +3855,14 @@ void database::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
     _large_data_handler->plug_system_keyspace(sys_ks);
     _corrupt_data_handler->plug_system_keyspace(sys_ks);
     _user_sstables_manager->plug_sstables_registry(std::make_unique<db::system_keyspace_sstables_registry>(sys_ks));
+    if (_cfg.check_experimental(db::experimental_features_t::feature::OBJECT_STORAGE_PAGE_CACHE)) {
+        _user_sstables_manager->plug_object_storage_page_cache(
+                make_shared<db::object_storage_page_cache_table>(sys_ks.query_processor()));
+    }
 }
 
 future<> database::unplug_system_keyspace() noexcept {
+    _user_sstables_manager->unplug_object_storage_page_cache();
     _user_sstables_manager->unplug_sstables_registry();
     co_await _compaction_manager.unplug_system_keyspace();
     co_await _large_data_handler->unplug_system_keyspace();

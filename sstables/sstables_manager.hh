@@ -46,6 +46,7 @@ namespace gms { class feature_service; }
 namespace sstables {
 
 class object_storage_client;
+class object_storage_page_cache;
 class directory_semaphore;
 class storage;
 using schema_ptr = lw_shared_ptr<const schema>;
@@ -186,6 +187,9 @@ private:
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
     directory_semaphore& _dir_semaphore;
     std::unique_ptr<sstables::sstables_registry> _sstables_registry;
+    // A shared pointer, so that sstable readers which still use the cache when
+    // it is unplugged (on shutdown) can keep it alive until they are done.
+    shared_ptr<sstables::object_storage_page_cache> _object_storage_page_cache;
     // This function is bound to token_metadata.get_my_id() in the database constructor,
     // it can return unset value (bool(host_id) == false) until host_id is loaded
     // after system_keyspace initialization.
@@ -300,6 +304,15 @@ public:
     // can use this to avoid touching the registry after it has been unplugged.
     bool has_sstables_registry() const noexcept {
         return bool(_sstables_registry);
+    }
+
+    // The disk page cache of sstables on object storage is plugged only when
+    // its experimental feature is enabled.
+    void plug_object_storage_page_cache(shared_ptr<sstables::object_storage_page_cache>) noexcept;
+    void unplug_object_storage_page_cache() noexcept;
+    // The disk page cache, or a null pointer if it is not plugged.
+    shared_ptr<sstables::object_storage_page_cache> get_object_storage_page_cache() const noexcept {
+        return _object_storage_page_cache;
     }
 
     // Only for sstable::storage usage
