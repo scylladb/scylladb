@@ -1676,6 +1676,10 @@ static cql3::raw_value do_evaluate(const bind_variable& bind_var, const evaluati
         on_internal_error(expr_logger,
             "evaluate(bind_variable) called with nullptr receiver, should be prepared first");
     }
+    if (inputs.options == nullptr) {
+        on_internal_error(expr_logger,
+            "evaluate(bind_variable) called without query options");
+    }
 
     cql3::raw_value_view value = inputs.options->get_value_at(bind_var.bind_index);
 
