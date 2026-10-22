@@ -25,6 +25,8 @@
 #include "dht/fixed_shard.hh"
 #include "replica/database.hh"
 #include "replica/memtable.hh"
+#include "sstables/compress.hh"
+#include "sstables/object_storage_page_cache_geometry.hh"
 #include "test/lib/cql_test_env.hh"
 #include "tombstone_gc_options.hh"
 #include "utils/UUID_gen.hh"
@@ -329,6 +331,95 @@ SEASTAR_TEST_CASE(test_page_cache_per_shard) {
             });
         }).get();
     }, page_cache_config());
+}
+
+static void check_page(sstables::page_geometry::page_bounds page, uint64_t start, uint64_t end) {
+    BOOST_REQUIRE_EQUAL(page.start, start);
+    BOOST_REQUIRE_EQUAL(page.end, end);
+}
+
+// Fixed-size pages are aligned to the page size, and the last page ends at
+// the end of the file.
+BOOST_AUTO_TEST_CASE(test_fixed_size_page_geometry) {
+    sstables::fixed_size_page_geometry geometry(10000, 4096);
+    BOOST_REQUIRE_EQUAL(geometry.file_size(), 10000);
+    BOOST_REQUIRE_EQUAL(geometry.average_page_size(), 4096);
+    check_page(geometry.page_at(0), 0, 4096);
+    check_page(geometry.page_at(4095), 0, 4096);
+    check_page(geometry.page_at(4096), 4096, 8192);
+    // Check that the last page is shorter, and ends at the end of the file.
+    check_page(geometry.page_at(8192), 8192, 10000);
+    check_page(geometry.page_at(9999), 8192, 10000);
+    // Check that a position at or beyond the end of the file is refused.
+    BOOST_REQUIRE_THROW(geometry.page_at(10000), std::out_of_range);
+
+    // Check that if the file size is a multiple of the page size, the last
+    // page is a whole page.
+    sstables::fixed_size_page_geometry whole_pages(8192, 4096);
+    check_page(whole_pages.page_at(8191), 4096, 8192);
+    BOOST_REQUIRE_THROW(whole_pages.page_at(8192), std::out_of_range);
+}
+
+// The pages of a compressed Data component are its compressed chunks.
+BOOST_AUTO_TEST_CASE(test_compressed_page_geometry) {
+    sstables::compression c;
+    c.set_uncompressed_chunk_length(4096);
+    auto writer = c.offsets.get_writer();
+    for (uint64_t offset : {0, 1000, 2500, 2600}) {
+        writer.push_back(offset);
+    }
+    c.set_compressed_file_length(4000);
+
+    sstables::compressed_page_geometry geometry(c);
+    BOOST_REQUIRE_EQUAL(geometry.file_size(), 4000);
+    // Check that the average page size is that of the 4 chunks.
+    BOOST_REQUIRE_EQUAL(geometry.average_page_size(), 1000);
+    check_page(geometry.page_at(0), 0, 1000);
+    check_page(geometry.page_at(999), 0, 1000);
+    check_page(geometry.page_at(1000), 1000, 2500);
+    check_page(geometry.page_at(2599), 2500, 2600);
+    // Check that the last chunk ends at the end of the file.
+    check_page(geometry.page_at(2600), 2600, 4000);
+    check_page(geometry.page_at(3999), 2600, 4000);
+    BOOST_REQUIRE_THROW(geometry.page_at(4000), std::out_of_range);
+}
+
+// The chunk containing a position is found among many chunks of different
+// sizes.
+BOOST_AUTO_TEST_CASE(test_compressed_page_geometry_many_chunks) {
+    sstables::compression c;
+    c.set_uncompressed_chunk_length(4096);
+    auto writer = c.offsets.get_writer();
+    std::vector<uint64_t> starts;
+    uint64_t offset = 0;
+    for (int i = 0; i < 1000; i++) {
+        starts.push_back(offset);
+        writer.push_back(offset);
+        offset += 100 + (i * 37) % 3000;
+    }
+    c.set_compressed_file_length(offset);
+
+    sstables::compressed_page_geometry geometry(c);
+    for (size_t i = 0; i < starts.size(); i++) {
+        uint64_t end = i + 1 < starts.size() ? starts[i + 1] : offset;
+        check_page(geometry.page_at(starts[i]), starts[i], end);
+        check_page(geometry.page_at(end - 1), starts[i], end);
+    }
+}
+
+// pages_covering() extends a byte range to the whole pages containing it.
+BOOST_AUTO_TEST_CASE(test_pages_covering) {
+    sstables::fixed_size_page_geometry geometry(10000, 4096);
+    // Check a range inside one page.
+    check_page(geometry.pages_covering(100, 200), 0, 4096);
+    // Check a range of exactly one page.
+    check_page(geometry.pages_covering(4096, 8192), 4096, 8192);
+    // Check a range crossing a page boundary.
+    check_page(geometry.pages_covering(4000, 4100), 0, 8192);
+    // Check a range ending at the end of the file.
+    check_page(geometry.pages_covering(5000, 10000), 4096, 10000);
+    // Check that an empty range is refused.
+    BOOST_REQUIRE_THROW(geometry.pages_covering(100, 100), std::out_of_range);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
