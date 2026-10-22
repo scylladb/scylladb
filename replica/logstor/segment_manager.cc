@@ -1071,16 +1071,14 @@ future<> segment_manager_impl::run_separator_fiber() {
             co_return;
         }
 
-        auto write_to_separator_failed = defer([seg_ref = task.seg_ref] mutable noexcept {
-            seg_ref.keep_on_release();
-        });
+        segment_keep_guard keep_guard(std::move(task.seg_ref));
 
         try {
-            co_await write_to_separator(task.records, task.chunk_position, std::move(task.seg_ref), task.seq_num);
-            write_to_separator_failed.cancel();
+            co_await write_to_separator(task.records, task.chunk_position, keep_guard.ref(), task.seq_num);
+            keep_guard.cancel();
         } catch (...) {
             ++_stats.separator_task_failures;
-            logstor_logger.debug("logstor separator task failure in separator fiber: {:t}", std::current_exception());
+            logstor_logger.debug("Separator task failed: {:t}", std::current_exception());
         }
     }
 }
@@ -1118,9 +1116,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         wb.seal(seq_num, std::nullopt, block_alignment);
 
         // if we wrote a record to the segment but failed to write it to the separator, the segment should not be freed.
-        auto write_to_separator_failed = defer([seg_ref] mutable noexcept {
-            seg_ref.keep_on_release();
-        });
+        segment_keep_guard keep_guard(seg_ref);
 
         logstor_logger.trace("Write active segment {} seq {}", seg->id(), seq_num);
 
@@ -1153,7 +1149,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
                 });
             });
         }
-        write_to_separator_failed.cancel();
+        keep_guard.cancel();
         break;
     }
 }
@@ -1183,15 +1179,9 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
     _stats.bytes_written[static_cast<size_t>(source)] += chunk.size();
     _stats.data_bytes_written[static_cast<size_t>(source)] += wb.record_bytes();
 
-    // The records are on disk and the index already points into this segment, so if adding it to
-    // the compaction group fails, the segment must not be freed when the reference below is
-    // released. keep_on_release() leaves it allocated instead, so the records stay readable, at the
-    // cost of the segment never being reclaimed.
-    auto seg_ref = seg->ref();
-    auto add_to_group_failed = defer([seg_ref] mutable noexcept {
-        seg_ref.keep_on_release();
-        logstor_logger.warn("Failed to add segment {} to a compaction group, it will not be reclaimed", seg_ref.id());
-    });
+    // The index already points into this segment, so if the group cannot take the segment, the
+    // guard keeps the segment.
+    segment_keep_guard keep_guard(seg->ref());
 
     co_await wb.complete_writes(pos);
     co_await seg->stop();
@@ -1199,7 +1189,7 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
     // add the segment after all index updates are completed.
     auto& desc = get_segment_descriptor(seg->id());
     cg.add_logstor_segment(desc);
-    add_to_group_failed.cancel();
+    keep_guard.cancel();
 }
 
 void segment_manager_impl::on_add_record(record_location location) noexcept {
@@ -2047,7 +2037,7 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
         co_await coroutine::return_exception_ptr(std::move(ep));
     }
 
-    // give the buffer back to the pool and release all held segments
+    buf.release_held_segments();
     co_await buf.release();
 }
 
@@ -2345,11 +2335,8 @@ future<> segment_manager_impl::separate_recovered_segments() {
 }
 
 future<> segment_manager_impl::separate_segment_records(recovery_catalog& catalog, log_segment_id seg_id, recovery_stats& stats) {
-    auto seg_ref = make_segment_ref(seg_id);
-    auto write_to_separator_failed = defer([seg_ref] mutable noexcept {
-        seg_ref.keep_on_release();
-    });
-    co_await for_each_record(seg_id, [seg_ref, &catalog, &stats] (const chunk_record& record) {
+    segment_keep_guard keep_guard(make_segment_ref(seg_id));
+    co_await for_each_record(seg_id, [seg_ref = keep_guard.ref(), &catalog, &stats] (const chunk_record& record) {
         const auto& header = record.header;
         auto key = header.index_key();
         auto* index = catalog.index(header.table);
@@ -2376,7 +2363,7 @@ future<> segment_manager_impl::separate_segment_records(recovery_catalog& catalo
             }
         );
     });
-    write_to_separator_failed.cancel();
+    keep_guard.cancel();
 }
 
 future<utils::chunked_vector<segment_snapshot>> segment_manager_impl::make_snapshot(logstor_group& cg) {
@@ -2614,17 +2601,11 @@ separator_buffer::~separator_buffer() {
     if (held_segments.empty()) {
         return;
     }
-    logstor_logger.error("Destroying a logstor separator buffer that still holds {} segments,"
+    logstor_logger.error("Destroying a separator buffer that still holds {} segments,"
             " they will not be reclaimed", held_segments.size());
-    for (auto& seg_ref : held_segments) {
-        seg_ref.keep_on_release();
-    }
 }
 
 future<> separator_buffer::abort(std::exception_ptr ep) {
-    for (auto& seg_ref : held_segments) {
-        seg_ref.keep_on_release();
-    }
     if (!empty()) {
         co_await buf->abort_writes(std::move(ep));
     }
@@ -2800,10 +2781,10 @@ future<> logstor_group::close_separator() {
             logstor_logger.warn("Discarding a logstor separator buffer of table {} with {} bytes from {} segments,"
                     " the segments will not be reclaimed", table_id(), buf.serialized_size(), buf.held_segments.size());
         }
-        // The same teardown a failed flush takes: abort() fails the writes the buffer holds, which
-        // is what lets it be closed, and marks the segments those writes came from. Failing partway
-        // leaves the rest to the group's destruction, which is why remove() only logs what comes out
-        // of here.
+        // A failed flush does the same teardown. abort() fails the writes of the buffer, which the
+        // close in release() needs, and release() drops the guards, which keep the held segments.
+        // If a step fails, the destruction of the group does the rest, so remove() only logs the
+        // error.
         co_await buf.abort(std::make_exception_ptr(
                 std::runtime_error("logstor separator buffer was discarded with its compaction group")));
         co_await buf.release();
