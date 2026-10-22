@@ -2357,6 +2357,10 @@ future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm,
     auto m = fm.unfreeze(s);
     m.upgrade(cf.schema());
 
+    if (utils::get_local_injector().inject_parameter<unsigned>("apply_counter_update_wait", "shard") == this_shard_id()) {
+        co_await utils::get_local_injector().inject("apply_counter_update_wait", utils::wait_for_message(5min));
+    }
+
     tracing::trace(trace_state, "Applying counter update");
     co_await coroutine::try_future(update_write_metrics(seastar::futurize_invoke([&] {
         if (!s->is_synced()) {
