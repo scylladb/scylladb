@@ -28,6 +28,11 @@
 
 namespace data_dictionary {
 
+// The STORAGE option choosing a storage_options::disk_cache_mode, and its values.
+static constexpr auto disk_cache_option = "disk_cache";
+static constexpr auto disk_cache_none = "none";
+static constexpr auto disk_cache_pages = "pages";
+
 schema_ptr
 table::schema() const {
     return _ops->get_table_schema(*this);
@@ -263,6 +268,19 @@ void keyspace_metadata::validate(const gms::feature_service& fs, const locator::
     if (params.consistency && *params.consistency == data_dictionary::consistency_config_option::local) {
         throw exceptions::configuration_exception("Local consistency is not supported yet");
     }
+    auto* os = std::get_if<storage_options::object_storage>(&get_storage_options().value);
+    if (os && os->disk_cache != storage_options::disk_cache_mode::none) {
+        if (!fs.object_storage_page_cache) {
+            throw exceptions::configuration_exception(fmt::format("STORAGE option '{}' requires the experimental feature "
+                    "'object-storage-page-cache' to be enabled on all nodes", disk_cache_option));
+        }
+        // With tablets, whole sstables move between nodes and shards, so the
+        // page cache can follow its sstables or be dropped along with them.
+        if (!params.initial_tablets) {
+            throw exceptions::configuration_exception(fmt::format("STORAGE option '{}' is only supported in keyspaces with tablets",
+                    disk_cache_option));
+        }
+    }
 }
 
 locator::replication_strategy_config_options keyspace_metadata::strategy_options_v1() const {
@@ -346,18 +364,33 @@ static storage_options::object_storage object_storage_from_map(std::string_view 
             throw std::runtime_error(fmt::format("Missing {} option: {}", type, option.first));
         }
     }
-    if (values.size() > allowed_options.size()) {
-        throw std::runtime_error(fmt::format("Extraneous options for {}: {}; allowed: {}",
+    size_t known_options = allowed_options.size();
+    if (auto it = values.find(disk_cache_option); it != values.end()) {
+        if (it->second == disk_cache_pages) {
+            options.disk_cache = storage_options::disk_cache_mode::pages;
+        } else if (it->second != disk_cache_none) {
+            throw std::runtime_error(fmt::format("Unknown {} value '{}'; allowed: {},{}", disk_cache_option, it->second,
+                    disk_cache_none, disk_cache_pages));
+        }
+        ++known_options;
+    }
+    if (values.size() > known_options) {
+        throw std::runtime_error(fmt::format("Extraneous options for {}: {}; allowed: {},{}",
             type, fmt::join(values | std::views::keys, ","),
-            fmt::join(allowed_options | std::views::keys, ",")));
+            fmt::join(allowed_options | std::views::keys, ","), disk_cache_option));
     }
     options.type = std::string(type);
     return options;
 }
 
 std::map<sstring, sstring> storage_options::object_storage::to_map() const {
-    return {{"bucket", bucket},
-            {"endpoint", endpoint}};
+    std::map<sstring, sstring> ret{{"bucket", bucket},
+                                   {"endpoint", endpoint}};
+    // Without a disk cache, the map stays as it was before the option existed.
+    if (disk_cache == disk_cache_mode::pages) {
+        ret.emplace(disk_cache_option, disk_cache_pages);
+    }
+    return ret;
 }
 
 std::string_view storage_options::object_storage::name() const {
