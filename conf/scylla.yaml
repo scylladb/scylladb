@@ -279,6 +279,7 @@ batch_size_fail_threshold_in_kb: 1024
 #     - udf
 #     - strongly-consistent-tables
 #     - logstor
+#     - object-storage-page-cache
 
 # The directory where hints files are stored if hinted handoff is enabled.
 # hints_directory: /var/lib/scylla/hints
