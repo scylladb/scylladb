@@ -9,6 +9,9 @@
 # sstables on the object store, but caches byte ranges read from it on the
 # node's disk.
 
+import asyncio
+import random
+
 import pytest
 from cassandra.protocol import ConfigurationException, InvalidRequest
 
@@ -119,3 +122,180 @@ async def test_disk_cache_needs_experimental_feature(manager: ScyllaClusterManag
     pages_options = keyspace_options(s3_storage, disk_cache='pages')
     with pytest.raises(ConfigurationException, match="requires the experimental feature 'object-storage-page-cache'"):
         await cql.run_async(f'CREATE KEYSPACE ks_no_feature {pages_options}')
+
+
+async def read_requests(manager: ScyllaClusterManager, server, object_storage):
+    '''The number of read requests that the server has sent to the object store.'''
+    metrics = await manager.metrics.query(server.ip_addr)
+    return metrics.get('scylla_object_storage_total_read_requests', {'type': object_storage.type.lower()}) or 0
+
+
+def range_read_requests(object_storage):
+    '''The number of requests to read a range (of up to 8 MiB) of an object:
+    a single request on S3, while on GCS there is also a request for the
+    object's metadata (see the FIXME in make_ranged_download_source()).'''
+    return 1 if object_storage.type == 'S3' else 2
+
+
+# A scan of a table with tablets reads each sstable's index once, to find
+# where the tablet's token range starts. The index components are not yet
+# cached, so this read is always a request to the object store.
+INDEX_READS_PER_SCAN = 1
+
+
+async def create_table(manager: ScyllaClusterManager, server, ks, table_options=''):
+    '''Creates the table ks.test with some data, flushed to sstables, and
+    returns the data as a dict. The data does not compress well, so its
+    sstables are larger than the sstable reader's 128 KiB read buffer, but
+    the whole table fits in one page of query results.'''
+    cql = manager.get_cql()
+    await cql.run_async(f'CREATE TABLE {ks}.test (p int PRIMARY KEY, v text) {table_options}')
+    insert = cql.prepare(f'INSERT INTO {ks}.test (p, v) VALUES (?, ?)')
+    rand = random.Random(1)
+    data = {p: rand.randbytes(500).hex() for p in range(400)}
+    await asyncio.gather(*[cql.run_async(insert, [p, v]) for p, v in data.items()])
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+    return data
+
+
+def scan(cql, ks):
+    return {row.p: row.v for row in cql.execute(f'SELECT p, v FROM {ks}.test')}
+
+
+def cached_data_pages(cql):
+    '''The (sstable, offset) of each cached page of a Data component.'''
+    return [(row.sstable, row.offset) for row in
+            cql.execute("SELECT sstable, offset FROM system_cache.pagecache WHERE component = 'Data' ALLOW FILTERING")]
+
+
+async def test_scan_reads_each_sstable_in_one_request(manager: ScyllaClusterManager, object_storage):
+    '''A scan which misses the page cache reads each sstable's Data from the
+    object store in a single request (on S3), even though the sstable is
+    larger than the sstable reader's read buffer.'''
+    server = await manager.server_add(config=page_cache_config(object_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(object_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+
+        requests_before = await read_requests(manager, server, object_storage)
+        assert scan(cql, ks) == data
+        requests = await read_requests(manager, server, object_storage) - requests_before
+        # Check that each sstable's Data was read in one request (whose pages
+        # are now in the cache), besides the read of its index.
+        sstables = {sstable for sstable, _ in cached_data_pages(cql)}
+        assert len(sstables) >= 1
+        assert requests == len(sstables) * (range_read_requests(object_storage) + INDEX_READS_PER_SCAN)
+
+
+async def test_scan_populates_cache(manager: ScyllaClusterManager, object_storage):
+    '''A scan caches the Data pages it reads, so that a second scan, even after
+    the in-memory caches are dropped, sends no request to the object store.'''
+    server = await manager.server_add(config=page_cache_config(object_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(object_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        assert cached_data_pages(cql)
+
+        # Check that the second scan reads no Data from the object store, only
+        # each sstable's index.
+        sstables = {sstable for sstable, _ in cached_data_pages(cql)}
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, object_storage)
+        assert scan(cql, ks) == data
+        assert await read_requests(manager, server, object_storage) - requests_before == len(sstables) * INDEX_READS_PER_SCAN
+
+
+async def test_scan_populates_cache_uncompressed(manager: ScyllaClusterManager, s3_storage):
+    '''Like test_scan_populates_cache, for a table without compression, whose
+    Data component is cached in fixed-size pages rather than in compressed
+    chunks.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks, "WITH compression = {'sstable_compression': ''}")
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        # Check that the pages are of the fixed size, 4 KiB, apart from the
+        # last page of each sstable.
+        offsets = [offset for _, offset in cached_data_pages(cql)]
+        assert offsets and all(offset % 4096 == 0 for offset in offsets)
+
+        sstables = {sstable for sstable, _ in cached_data_pages(cql)}
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert scan(cql, ks) == data
+        assert await read_requests(manager, server, s3_storage) - requests_before == len(sstables) * INDEX_READS_PER_SCAN
+
+
+async def test_point_read_populates_cache(manager: ScyllaClusterManager, s3_storage):
+    '''A point read caches the Data pages it reads - only some of the pages
+    of the sstable - and returns the right row.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+
+        assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+        point_read_pages = len(cached_data_pages(cql))
+        assert point_read_pages > 0
+
+        # Check that a scan, which reads all the pages, caches more.
+        assert scan(cql, ks) == data
+        assert len(cached_data_pages(cql)) > point_read_pages
+
+
+async def test_cache_survives_restart(manager: ScyllaClusterManager, s3_storage):
+    '''The cached pages survive a restart of the node: a scan after the restart
+    sends no request to the object store.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+
+        sstables = {sstable for sstable, _ in cached_data_pages(cql)}
+
+        await manager.server_restart(server.server_id)
+        cql, _ = await manager.get_ready_cql([server])
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert scan(cql, ks) == data
+        # Check that the scan read no Data from the object store, only each
+        # sstable's index.
+        assert await read_requests(manager, server, s3_storage) - requests_before == len(sstables) * INDEX_READS_PER_SCAN
+
+
+async def test_no_cache_without_disk_cache_option(manager: ScyllaClusterManager, s3_storage):
+    '''Reads of a keyspace without the 'disk_cache' option do not use the
+    page cache, even though the cache is enabled.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage)) as ks:
+        data = await create_table(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        assert cached_data_pages(cql) == []
+
+
+async def test_many_concurrent_reads(manager: ScyllaClusterManager, s3_storage):
+    '''Many more concurrent reads than the reader concurrency semaphore admits
+    (100 per shard) all complete. A read looks pages up in the cache while it
+    holds its permit, so a lookup must not wait for admission on the same
+    semaphore, behind reads which wait for it.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage), cmdline=['--smp', '1'])
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        # Without the row cache, every read reads the sstables.
+        data = await create_table(manager, server, ks, "WITH caching = {'enabled': 'false'}")
+        select = cql.prepare(f'SELECT v FROM {ks}.test WHERE p = ?')
+        keys = [random.randrange(len(data)) for _ in range(500)]
+
+        # Check that the reads complete both while the cache is cold - when
+        # they miss, and cache pages - and when it is warm.
+        for _ in range(2):
+            results = await asyncio.gather(*[cql.run_async(select, [p]) for p in keys])
+            assert [result[0].v for result in results] == [data[p] for p in keys]
