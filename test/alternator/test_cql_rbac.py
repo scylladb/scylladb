@@ -22,10 +22,11 @@ from functools import cache
 import re
 
 from test.pylib.skip_types import skip_env
-from .util import new_role, new_dynamodb, unique_table_name, random_string, new_test_table, get_cert
+from .util import new_role, new_dynamodb, unique_table_name, random_string, new_test_table, get_cert, get_table_arn
 from .test_gsi_updatetable import wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
 from test.alternator.test_vector import needs_vector_store, wait_for_vector_index_active, table_vs, vector_store_configured, VECTOR_STORE_TIMEOUT, need_vector_search_in_botocore
+from .test_export import unknown_export_id
 
 @contextmanager
 def new_dynamodb_streams(dynamodb, role, key):
@@ -889,6 +890,84 @@ def test_rbac_updatetimetolive(dynamodb, cql):
                 with temporary_grant(cql, 'ALTER', cql_table_name(table), role):
                     authorized(lambda: d.meta.client.update_time_to_live(TableName=table.name,
                         TimeToLiveSpecification={'AttributeName': 'dog', 'Enabled': True}))
+
+# DescribeExport of an export of the table which does not exist, so that a
+# role which is allowed to describe it gets ExportNotFoundException.
+def describe_unknown_export(client, table_arn):
+    export_arn = f'{table_arn}/export/{unknown_export_id()}'
+    try:
+        client.describe_export(ExportArn=export_arn)
+        pytest.fail(f'DescribeExport found {export_arn}')
+    except ClientError as e:
+        if e.response['Error']['Code'] != 'ExportNotFoundException':
+            raise
+
+def list_table_exports(client, table_arn):
+    client.list_exports(TableArn=table_arn)
+
+def list_all_exports(client, table_arn):
+    client.list_exports()
+
+# Test that ExportTableToPointInTime needs both the SELECT permission on the
+# table and the MODIFY permission on ALL OBJECT STORAGE.
+def test_rbac_export_table_to_point_in_time(dynamodb, cql, test_table_s):
+    table_arn = get_table_arn(test_table_s)
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            tab = d.Table(test_table_s.name)
+            export = lambda: d.meta.client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket')
+            with temporary_grant(cql, 'MODIFY', 'ALL OBJECT STORAGE', role):
+                with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                    authorized(export)
+                # MODIFY on ALL OBJECT STORAGE alone is not enough.
+                unauthorized(export)
+            # Neither is SELECT on the table alone. GetItem shows that the
+            # grant has taken effect.
+            with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
+                authorized(lambda: tab.get_item(Key={'p': random_string()}))
+                unauthorized(export)
+
+# Test that DescribeExport and ListExports, with or without a TableArn, need
+# just the SELECT permission on ALL OBJECT STORAGE, and none on the table.
+# MODIFY on ALL OBJECT STORAGE, which allows exporting, does not allow them.
+@pytest.mark.parametrize('call', [describe_unknown_export, list_table_exports, list_all_exports],
+    ids=['DescribeExport', 'ListExports_TableArn', 'ListExports'])
+def test_rbac_exports(dynamodb, cql, test_table_s, call):
+    table_arn = get_table_arn(test_table_s)
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            unauthorized(lambda: call(d.meta.client, table_arn))
+            with temporary_grant(cql, 'SELECT', 'ALL OBJECT STORAGE', role):
+                authorized(lambda: call(d.meta.client, table_arn))
+            with temporary_grant(cql, 'MODIFY', 'ALL OBJECT STORAGE', role):
+                with temporary_grant(cql, 'SELECT', 'ALL OBJECT STORAGE', role):
+                    authorized(lambda: call(d.meta.client, table_arn))
+                unauthorized(lambda: call(d.meta.client, table_arn))
+
+# Test that the creator of a table, which CreateTable grants all the
+# permissions on the table, may not export it without the MODIFY permission
+# on ALL OBJECT STORAGE. Once the creator deletes the table, which revokes
+# the permissions on it, the SELECT permission on ALL OBJECT STORAGE still
+# allows describing and listing the exports of the table.
+def test_rbac_exports_table_creator(dynamodb, cql):
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]
+    }
+    with new_role(cql) as (role, key):
+        with new_dynamodb(dynamodb, role, key) as d:
+            client = d.meta.client
+            with temporary_grant(cql, 'CREATE', 'ALL KEYSPACES', role):
+                with new_named_table(d, unique_table_name(), **schema) as tab:
+                    table_arn = get_table_arn(tab)
+                    export = lambda: client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket')
+                    authorized(lambda: tab.get_item(Key={'p': random_string()}))
+                    unauthorized(export)
+                    with temporary_grant(cql, 'MODIFY', 'ALL OBJECT STORAGE', role):
+                        authorized(export)
+            with temporary_grant(cql, 'SELECT', 'ALL OBJECT STORAGE', role):
+                for call in (describe_unknown_export, list_table_exports):
+                    authorized(lambda: call(client, table_arn))
 
 @pytest.fixture(scope="module")
 def dot_table(dynamodb):

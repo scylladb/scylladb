@@ -58,6 +58,21 @@ def test_grant_applicable_data_and_role_permissions(cql, test_keyspace, cassandr
                 with pytest.raises((InvalidRequest, SyntaxException), match="support.*permissions"):
                     cql.execute(f"GRANT {permission} ON {resource} TO {user}")
 
+# Test that only SELECT, MODIFY and AUTHORIZE can be granted on ALL OBJECT
+# STORAGE, a resource which Cassandra does not have, and that GRANT ALL grants
+# all three.
+def test_grant_object_storage_permissions(cql, scylla_only):
+    with new_user(cql) as username:
+        for permission in ['create', 'alter', 'drop', 'describe', 'execute']:
+            with pytest.raises((InvalidRequest, SyntaxException), match="support.*permissions"):
+                cql.execute(f"GRANT {permission} ON ALL OBJECT STORAGE TO {username}")
+        cql.execute(f"GRANT ALL ON ALL OBJECT STORAGE TO {username}")
+        rows = cql.execute(f"LIST ALL PERMISSIONS OF {username}")
+        assert {(row.resource, row.permission) for row in rows} == {('<all object storage>', 'SELECT'), ('<all object storage>', 'MODIFY'), ('<all object storage>', 'AUTHORIZE')}
+        cql.execute(f"REVOKE MODIFY ON ALL OBJECT STORAGE FROM {username}")
+        rows = cql.execute(f"LIST ALL PERMISSIONS ON ALL OBJECT STORAGE OF {username}")
+        assert {(row.resource, row.permission) for row in rows} == {('<all object storage>', 'SELECT'), ('<all object storage>', 'AUTHORIZE')}
+
 
 def eventually_authorized(fun, timeout_s=10):
     for i in range(timeout_s * 10):
