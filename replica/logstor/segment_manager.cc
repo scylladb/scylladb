@@ -516,13 +516,16 @@ static sstring write_source_to_string(write_source src) {
 
 // Holds the segments that are ready for writes. The reserve replenisher is the only producer. The
 // last segments in the pool are the compaction reserve, and only compaction takes them, because
-// compaction must always get a segment to free segments.
+// compaction must always get a segment to free segments. When the replenisher cannot allocate a
+// segment, a compaction that waits fails like the other consumers, and runs again later.
 class segment_pool {
 
     seastar::circular_buffer<seg_ptr> _segments;
     size_t _capacity;
     size_t _reserved_for_compaction;
     seastar::condition_variable _segment_available;
+    uint64_t _failed_replenish_count{0};
+    std::exception_ptr _replenish_error;
 
 public:
 
@@ -562,15 +565,29 @@ public:
         _stats.segments_put++;
     }
 
+    // Fails each consumer that waits for a segment now with `ex`, so that a write does not wait for
+    // a segment that may never come. A consumer that starts to wait after this call waits for the
+    // next attempt.
+    void fail_waiters(std::exception_ptr ex) noexcept {
+        _replenish_error = std::move(ex);
+        ++_failed_replenish_count;
+        _segment_available.broadcast();
+    }
+
     future<seg_ptr> get_segment(write_source src) {
         const size_t reserved = src == write_source::compaction ? 0 : _reserved_for_compaction;
-        if (_segments.size() <= reserved) {
-            if (src == write_source::normal_write) {
-                _stats.normal_segments_wait++;
-            }
-            co_await coroutine::try_future(_segment_available.wait([this, reserved] {
-                return _segments.size() > reserved;
+        if (_segments.size() <= reserved && src == write_source::normal_write) {
+            _stats.normal_segments_wait++;
+        }
+        // A put wakes each waiter, and the first one takes the segment. The others wait again.
+        while (_segments.size() <= reserved) {
+            const auto failed_replenish_count = _failed_replenish_count;
+            co_await coroutine::try_future(_segment_available.wait([this, reserved, failed_replenish_count] {
+                return _segments.size() > reserved || _failed_replenish_count != failed_replenish_count;
             }));
+            if (_failed_replenish_count != failed_replenish_count && _segments.size() <= reserved) {
+                co_await coroutine::return_exception_ptr(_replenish_error);
+            }
         }
         _stats.segments_get[static_cast<size_t>(src)]++;
         auto seg = std::move(_segments.front());
@@ -1464,9 +1481,11 @@ future<> segment_manager_impl::replenish_reserve() {
 
         auto seg_f = co_await coroutine::as_future(allocate_segment());
         if (seg_f.failed()) {
+            auto ex = seg_f.get_exception();
             ++_stats.segment_allocation_failures;
             static thread_local logger::rate_limit replenish_failure_rate_limit(std::chrono::seconds(10));
-            logstor_logger.log(log_level::warn, replenish_failure_rate_limit, "Cannot allocate a segment for the segment pool: {:t}. Trying again", seg_f.get_exception());
+            logstor_logger.log(log_level::warn, replenish_failure_rate_limit, "Cannot allocate a segment for the segment pool: {:t}. Trying again", ex);
+            _segment_pool.fail_waiters(std::move(ex));
             // The timeout is the usual result, so the wait does not throw it.
             auto wait_f = co_await coroutine::as_future(_replenisher_wakeup.wait(std::chrono::seconds(1), [this] {
                 return _replenisher_stopping;
