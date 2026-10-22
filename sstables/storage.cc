@@ -729,6 +729,9 @@ protected:
     seastar::abort_source* abort_source() const {
         return _as;
     }
+    // The disk page cache through which open_component() reads the given
+    // component, or nullptr if it reads it without the cache.
+    shared_ptr<object_storage_page_cache> index_page_cache(const sstable& sst, component_type type) const;
     // A source of the given range of the sstable's component, which reads it
     // through the disk page cache - or nothing, if it should not be read
     // through the cache.
@@ -758,6 +761,7 @@ public:
     void open(sstable& sst) override;
     future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept override;
     future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
+    future<std::optional<file>> open_non_populating_component(const sstable& sst, component_type type) override;
     future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt,
             populate_disk_cache populate) const override;
@@ -970,13 +974,30 @@ future<file> object_storage_base::open_component(const sstable& sst, component_t
     // so read them through the disk page cache. The cache is below any file
     // I/O extension (such as encryption), so it holds the bytes as they are
     // stored in the object store.
-    if (_disk_cache == data_dictionary::storage_options::disk_cache_mode::pages
-            && (type == component_type::Index || type == component_type::Partitions || type == component_type::Rows)) {
-        if (auto cache = sst.manager().get_object_storage_page_cache()) {
-            f = make_page_cached_file(std::move(cache), get_sstable_identifier(sst), type, std::move(f), populate_disk_cache::yes);
-        }
+    if (auto cache = index_page_cache(sst, type)) {
+        f = make_page_cached_file(std::move(cache), get_sstable_identifier(sst), type, std::move(f), populate_disk_cache::yes);
     }
     return maybe_wrap_file(sst, type, flags, std::move(f));
+}
+
+shared_ptr<object_storage_page_cache> object_storage_base::index_page_cache(const sstable& sst, component_type type) const {
+    if (_disk_cache != data_dictionary::storage_options::disk_cache_mode::pages
+            || (type != component_type::Index && type != component_type::Partitions && type != component_type::Rows)) {
+        return nullptr;
+    }
+    // The cache is not plugged if its experimental feature was disabled
+    // after the keyspace was created.
+    return sst.manager().get_object_storage_page_cache();
+}
+
+future<std::optional<file>> object_storage_base::open_non_populating_component(const sstable& sst, component_type type) {
+    auto cache = index_page_cache(sst, type);
+    if (!cache) {
+        co_return std::nullopt;
+    }
+    auto f = make_page_cached_file(std::move(cache), get_sstable_identifier(sst), type, make_readable_file(make_object_name(sst, type)),
+            populate_disk_cache::no);
+    co_return co_await maybe_wrap_file(sst, type, open_flags::ro, std::move(f));
 }
 
 static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type, data_sink sink) {

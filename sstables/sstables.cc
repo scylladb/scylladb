@@ -1615,7 +1615,11 @@ future<> sstable::read_partitions_db_footer() {
             _partitions_file = co_await open_file(component_type::Partitions, open_flags::ro);
             _partitions_file_size = co_await _partitions_file.size();
         }
-        _partitions_db_footer = co_await trie::read_bti_partitions_db_footer(*_schema, _version, _partitions_file, _partitions_file_size);
+        // Opening an sstable isn't a user's read, so it doesn't populate the
+        // disk page cache (see populate_disk_cache).
+        co_await open_non_populating_index_files();
+        _partitions_db_footer = co_await trie::read_bti_partitions_db_footer(*_schema, _version,
+                _non_populating_partitions_file ? _non_populating_partitions_file : _partitions_file, _partitions_file_size);
     }
 }
 
@@ -1894,8 +1898,21 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
     return when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
 
+future<> sstable::open_non_populating_index_files() {
+    for (auto [type, f] : {std::pair{component_type::Index, &_non_populating_index_file},
+                           std::pair{component_type::Partitions, &_non_populating_partitions_file},
+                           std::pair{component_type::Rows, &_non_populating_rows_file}}) {
+        if (has_component(type) && !*f) {
+            if (auto opened = co_await _storage->open_non_populating_component(*this, type)) {
+                *f = make_checked_file(_read_error_handler, std::move(*opened));
+            }
+        }
+    }
+}
+
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await open_or_create_data(open_flags::ro);
+    co_await open_non_populating_index_files();
     co_await update_info_for_opened_data(cfg);
     parse_assert(!_shards.empty(), get_filename());
     auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
@@ -3139,7 +3156,7 @@ sstable::make_reader(
     const auto reversed = slice.is_reversed();
 
     auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
-    auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
+    auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular(), populate);
 
     if (_version >= version_types::mc && (!reversed || range.is_singular())) {
         return mx::make_reader(
@@ -3829,6 +3846,14 @@ future<> sstable::close_files() {
             general_disk_error();
         }));
     }
+    for (auto* f : {&_non_populating_index_file, &_non_populating_partitions_file, &_non_populating_rows_file}) {
+        if (*f) {
+            close_futures.push_back(f->close().handle_exception([me = shared_from_this()] (auto ep) {
+                sstlog.warn("sstable close non-populating index file failed: {}", ep);
+                general_disk_error();
+            }));
+        }
+    }
 
     if (_marked_for_deletion != mark_for_deletion::none && !_unlinked_at) {
         // If a deletion fails for some reason we
@@ -4301,16 +4326,20 @@ sstable::sstable(schema_ptr schema,
     manager.add(this);
 }
 
-file sstable::uncached_index_file() {
-    return _cached_index_file->get_file();
+file sstable::uncached_index_file(populate_disk_cache populate) {
+    return !populate && _non_populating_index_file ? _non_populating_index_file : _cached_index_file->get_file();
 }
 
-file sstable::uncached_partitions_file() {
-    return _cached_partitions_file->get_file();
+file sstable::uncached_partitions_file(populate_disk_cache populate) {
+    return !populate && _non_populating_partitions_file ? _non_populating_partitions_file : _cached_partitions_file->get_file();
 }
 
-file sstable::uncached_rows_file() {
-    return _cached_rows_file->get_file();
+file sstable::uncached_rows_file(populate_disk_cache populate) {
+    return !populate && _non_populating_rows_file ? _non_populating_rows_file : _cached_rows_file->get_file();
+}
+
+use_caching sstable::index_caching(use_caching caching, populate_disk_cache populate) const {
+    return use_caching(caching && (populate || (!_non_populating_index_file && !_non_populating_partitions_file)));
 }
 
 void sstable::unused() {
@@ -4400,16 +4429,18 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
     reader_permit permit,
     tracing::trace_state_ptr trace_state,
     use_caching caching,
-    bool single_partition_read
+    bool single_partition_read,
+    populate_disk_cache populate
 ) {
     if (!_index_file) {
         if (!_partitions_db_footer) [[unlikely]] {
             on_internal_error(sstlog, fmt::format("_partitions_db_footer is empty for sstable {}", get_filename()));
         }
+        caching = index_caching(caching, populate);
         auto cached_partitions_file = caching == use_caching::yes
             ? _cached_partitions_file
             :  seastar::make_shared<cached_file>(
-                uncached_partitions_file(),
+                uncached_partitions_file(populate),
                 _manager.get_cache_tracker().get_index_cached_file_stats(),
                 _manager.get_cache_tracker().get_lru(),
                 _manager.get_cache_tracker().region(),
@@ -4419,7 +4450,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             auto cached_rows_file = caching == use_caching::yes
             ? _cached_rows_file
             :  seastar::make_shared<cached_file>(
-                uncached_rows_file(),
+                uncached_rows_file(populate),
                 _manager.get_cache_tracker().get_index_cached_file_stats(),
                 _manager.get_cache_tracker().get_lru(),
                 _manager.get_cache_tracker().region(),
@@ -4437,7 +4468,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             std::move(trace_state)
         );
     }
-    return std::make_unique<index_reader>(shared_from_this(), std::move(permit), std::move(trace_state), caching, single_partition_read);
+    return std::make_unique<index_reader>(shared_from_this(), std::move(permit), std::move(trace_state), caching, single_partition_read, populate);
 }
 
 // Returns error code, 0 is success

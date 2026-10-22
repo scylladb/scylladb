@@ -167,6 +167,12 @@ def scan(cql, ks):
     return {row.p: row.v for row in cql.execute(f'SELECT p, v FROM {ks}.test')}
 
 
+def cached_pages(cql):
+    '''The (sstable, component, offset) of each cached page.'''
+    return sorted((row.sstable, row.component, row.offset) for row in
+                  cql.execute('SELECT sstable, component, offset FROM system_cache.pagecache'))
+
+
 def cached_data_pages(cql):
     '''The (sstable, offset) of each cached page of a Data component.'''
     return [(row.sstable, row.offset) for row in
@@ -460,35 +466,42 @@ async def test_point_read_then_scan(manager: ScyllaClusterManager, s3_storage, t
 
 
 async def test_bypass_cache(manager: ScyllaClusterManager, s3_storage):
-    '''A read with BYPASS CACHE doesn't populate the page cache with the Data
-    it reads, but does read the pages which are already cached - both for a
-    scan and for a point read.'''
+    '''A read with BYPASS CACHE doesn't populate the page cache - neither with
+    the Data nor with the index - but does read the pages which are already
+    cached - both for a scan and for a point read.'''
     server = await manager.server_add(config=page_cache_config(s3_storage))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
         await manager.api.drop_sstable_caches(server.ip_addr)
 
-        # Check that a scan with BYPASS CACHE caches no Data.
+        # Check that a scan with BYPASS CACHE caches nothing.
         assert {row.p: row.v for row in cql.execute(f'SELECT p, v FROM {ks}.test BYPASS CACHE')} == data
-        assert cached_data_pages(cql) == []
+        assert cached_pages(cql) == []
 
-        # A scan without BYPASS CACHE caches all of the Data. Check that a
-        # scan with BYPASS CACHE then reads everything from the cache, and
-        # sends no request to the object store.
+        # A scan without BYPASS CACHE caches all of the Data, and the index.
+        # Check that a scan with BYPASS CACHE then reads everything from the
+        # cache, and sends no request to the object store.
         assert scan(cql, ks) == data
-        pages = sorted(cached_data_pages(cql))
+        pages = cached_pages(cql)
         await manager.api.drop_sstable_caches(server.ip_addr)
         requests_before = await read_requests(manager, server, s3_storage)
         assert {row.p: row.v for row in cql.execute(f'SELECT p, v FROM {ks}.test BYPASS CACHE')} == data
         assert await read_requests(manager, server, s3_storage) == requests_before
-        assert sorted(cached_data_pages(cql)) == pages
+        assert cached_pages(cql) == pages
 
         # Check the same for a point read with BYPASS CACHE.
         await manager.api.drop_sstable_caches(server.ip_addr)
         requests_before = await read_requests(manager, server, s3_storage)
         assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17 BYPASS CACHE').one().v == data[17]
         assert await read_requests(manager, server, s3_storage) == requests_before
+
+        # Check that a point read with BYPASS CACHE of a partition whose
+        # pages are not cached caches nothing either.
+        await cql.run_async(f"INSERT INTO {ks}.test (p, v) VALUES (1000, 'new')")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 1000 BYPASS CACHE').one().v == 'new'
+        assert cached_pages(cql) == pages
 
 
 async def test_reversed_read(manager: ScyllaClusterManager, s3_storage):
@@ -509,16 +522,16 @@ async def test_reversed_read(manager: ScyllaClusterManager, s3_storage):
         def reversed_read(options=''):
             return [(row.c, row.v) for row in cql.execute(f'SELECT c, v FROM {ks}.test WHERE p = 0 ORDER BY c DESC {options}')]
 
-        # Check that a reversed read with BYPASS CACHE caches no Data.
+        # Check that a reversed read with BYPASS CACHE caches nothing.
         await manager.api.drop_sstable_caches(server.ip_addr)
         assert reversed_read('BYPASS CACHE') == reversed_data
-        assert cached_data_pages(cql) == []
+        assert cached_pages(cql) == []
 
         # Check that a reversed read caches the Data, so that repeating it
         # sends no request to the object store.
         assert reversed_read() == reversed_data
-        pages = sorted(cached_data_pages(cql))
-        assert pages
+        assert cached_data_pages(cql)
+        pages = cached_pages(cql)
         await manager.api.drop_sstable_caches(server.ip_addr)
         requests_before = await read_requests(manager, server, s3_storage)
         assert reversed_read() == reversed_data
@@ -530,7 +543,7 @@ async def test_reversed_read(manager: ScyllaClusterManager, s3_storage):
         requests_before = await read_requests(manager, server, s3_storage)
         assert reversed_read('BYPASS CACHE') == reversed_data
         assert await read_requests(manager, server, s3_storage) == requests_before
-        assert sorted(cached_data_pages(cql)) == pages
+        assert cached_pages(cql) == pages
 
 
 async def test_compaction_does_not_populate_cache(manager: ScyllaClusterManager, s3_storage):
@@ -552,7 +565,7 @@ async def test_compaction_does_not_populate_cache(manager: ScyllaClusterManager,
         requests_before = await read_requests(manager, server, s3_storage)
         await manager.api.keyspace_compaction(server.ip_addr, ks)
         assert await read_requests(manager, server, s3_storage) > requests_before
-        assert cached_data_pages(cql) == []
+        assert cached_pages(cql) == []
 
         assert scan(cql, ks) == data
         assert cached_data_pages(cql)
@@ -591,6 +604,22 @@ async def test_compaction_reads_cache(manager: ScyllaClusterManager, s3_storage)
     uncached_requests = await compaction_requests(scan_first=False)
     cached_requests = await compaction_requests(scan_first=True)
     assert cached_requests < uncached_requests
+
+
+async def test_opening_sstables_does_not_populate_cache(manager: ScyllaClusterManager, s3_storage):
+    '''Opening an sstable, which reads the footer of its Partitions component,
+    doesn't populate the page cache: after a restart, which opens all the
+    sstables again, nothing is cached.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        assert cached_pages(cql) == []
+
+        await manager.server_restart(server.server_id)
+        cql, _ = await manager.get_ready_cql([server])
+        assert cached_pages(cql) == []
+        assert scan(cql, ks) == data
 
 
 async def test_lwt_populates_cache(manager: ScyllaClusterManager, s3_storage):
