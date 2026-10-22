@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstring>
+#include <limits>
 #include <ranges>
 #include <set>
 #include <stdexcept>
@@ -48,6 +49,11 @@ uint64_t segment_geometry::checked_segment_size(uint64_t segment_size, uint64_t 
     }
     if (segment_size % ondisk::block_alignment != 0) {
         throw exceptions::configuration_exception(fmt::format("Segment size {} must be a multiple of the block alignment {}", segment_size, ondisk::block_alignment));
+    }
+    // An append offset can be equal to the segment size, after the last append.
+    constexpr uint64_t max_segment_size = std::numeric_limits<decltype(segment_position::offset)>::max();
+    if (segment_size > max_segment_size) {
+        throw exceptions::configuration_exception(fmt::format("Segment size {} must be less than or equal to {}", segment_size, max_segment_size));
     }
     if (file_size == 0) {
         throw exceptions::configuration_exception("File size must not be zero");
