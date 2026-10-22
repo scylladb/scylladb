@@ -1206,6 +1206,10 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     ss::set_incremental_backups_enabled.set(r, [&db] (std::unique_ptr<http::request> req) {
         bool value = get_query_param<bool>(*req, "value");
+        if (value) {
+            apilog.warn("Enabling incremental backups, but this feature is deprecated"
+                    " and support for it may be removed in a future release.");
+        }
         return db.invoke_on_all([value] (replica::database& db) {
             db.set_enable_incremental_backups(value);
 
