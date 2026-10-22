@@ -42,6 +42,10 @@
 #include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
 
+namespace gms::features {
+extern const feature_definition batchlog_v2;
+}
+
 static logging::logger blogger("batchlog_manager");
 
 namespace db {
@@ -659,7 +663,7 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
 }
 
 future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, db::timeout_clock::time_point deadline) {
-    if (_fs.batchlog_v2) {
+    if (_fs[gms::features::batchlog_v2]) {
         return replay_all_failed_batches_v2(cleanup, deadline);
     }
     return replay_all_failed_batches_v1(cleanup, deadline);

@@ -18,6 +18,10 @@
 
 #include "api/api-doc/client_routes.json.hh"
 
+namespace gms::features {
+extern const feature_definition client_routes;
+}
+
 using namespace seastar::httpd;
 using namespace std::chrono_literals;
 using namespace json;
@@ -27,7 +31,7 @@ extern logging::logger apilog;
 namespace api {
 
 static void validate_client_routes_endpoint(sharded<service::client_routes_service>& cr, sstring endpoint_name) {
-    if (!cr.local().get_feature_service().client_routes) {
+    if (!cr.local().feature(gms::features::client_routes)) {
         apilog.warn("{}: called before the cluster feature was enabled", endpoint_name);
         throw std::runtime_error(fmt::format("{} requires all nodes to support the CLIENT_ROUTES cluster feature", endpoint_name));
     }

@@ -29,6 +29,10 @@
 #include "utils/log.hh"
 #include "utils/on_internal_error.hh"
 
+namespace gms::features {
+extern const feature_definition cluster_config;
+}
+
 namespace db::cluster_config_registry {
 
 namespace {
@@ -254,7 +258,7 @@ std::span<const std::string_view> retired_feature_names() {
 }
 
 bool enabled(const gms::feature_service& features) {
-    return features.cluster_config;
+    return features[gms::features::cluster_config];
 }
 
 bool is_supported(const option& opt, const gms::feature_service& features) {

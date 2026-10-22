@@ -67,6 +67,11 @@
 #include "replica/mutation_dump.hh"
 #include "cql3/cql_config.hh"
 
+namespace gms::features {
+extern const feature_definition parallelized_aggregation;
+extern const feature_definition uda_native_parallelized_aggregation;
+}
+
 
 template<typename T = void>
 using coordinator_result = cql3::statements::select_statement::coordinator_result<T>;
@@ -2315,8 +2320,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         return all_aggregates(prepared_selectors)   // Note: before we levellized aggregation depth
             && ( // SUPPORTED PARALLELIZATION
                  // All potential intermediate coordinators must support mapreduceing
-                (db.features().parallelized_aggregation && selection->is_count())
-                || (db.features().uda_native_parallelized_aggregation && selection->is_reducible())
+                (db.feature(gms::features::parallelized_aggregation) && selection->is_count())
+                || (db.feature(gms::features::uda_native_parallelized_aggregation) && selection->is_reducible())
             )
             && !restrictions->need_filtering()  // No filtering
             && group_by_cell_indices->empty()   // No GROUP BY

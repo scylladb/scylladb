@@ -23,6 +23,10 @@
 
 #include <atomic>
 
+namespace gms::features {
+extern const feature_definition topology_requests_type_column;
+}
+
 struct shared_load_stats {
     locator::load_stats stats;
 
@@ -374,7 +378,7 @@ public:
             muts.emplace_back(builder.build());
 
             service::topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(),
-                                                                 _env.local_db().features().topology_requests_type_column);
+                                                                 _env.local_db().feature(gms::features::topology_requests_type_column));
             rtbuilder.set("initiating_host", raft::server_id(topo.my_host_id().uuid()))
                     .set("done", false);
             rtbuilder.set("request_type", req);

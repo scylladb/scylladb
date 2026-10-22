@@ -40,6 +40,10 @@
 #include "db/schema_tables.hh"
 #include "alternator/ttl_tag.hh"
 
+namespace gms::features {
+extern const feature_definition cql_row_ttl;
+}
+
 namespace cql3 {
 
 namespace statements {
@@ -518,7 +522,7 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
         return make_pair(std::move(new_base_schema), std::move(view_updates));
     }
     case alter_table_statement::type::ttl:
-        if (!db.features().cql_row_ttl) {
+        if (!db.feature(gms::features::cql_row_ttl)) {
             throw exceptions::invalid_request_exception("The CQL per-row TTL feature is not yet supported by this cluster. Upgrade all nodes to use it.");
         }
         if (_ttl_change) {

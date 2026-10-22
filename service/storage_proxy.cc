@@ -99,6 +99,22 @@
 #include "utils/labels.hh"
 #include "debug.hh"
 
+namespace gms::features {
+extern const feature_definition address_nodes_by_host_ids;
+extern const feature_definition batchlog_v2;
+extern const feature_definition empty_replica_mutation_pages;
+extern const feature_definition empty_replica_pages;
+extern const feature_definition lwt_with_tablets;
+extern const feature_definition native_reverse_queries;
+extern const feature_definition range_scan_data_variant;
+extern const feature_definition separate_page_size_and_safety_limit;
+extern const feature_definition snapshot_as_topology_operation;
+extern const feature_definition topology_global_request_queue;
+extern const feature_definition topology_requests_type_column;
+extern const feature_definition truncate_as_topology_operation;
+extern const feature_definition typed_errors_in_read_rpc;
+}
+
 namespace bi = boost::intrusive;
 
 template<typename T = void>
@@ -155,7 +171,7 @@ seastar::metrics::label_instance current_scheduling_group_label() {
 
 template<typename ResultType>
 static future<ResultType> encode_replica_exception_for_rpc(const gms::feature_service& features, std::exception_ptr eptr) {
-    if (features.typed_errors_in_read_rpc) {
+    if (features[gms::features::typed_errors_in_read_rpc]) {
         if (auto ex = replica::try_encode_replica_exception(eptr); ex) {
             if constexpr (std::is_same_v<ResultType, replica::exception_variant>) {
                 return make_ready_future<ResultType>(std::move(ex));
@@ -324,7 +340,7 @@ public:
     // assuming `stop()` is called before destruction.
     inet_address_vector_replica_set get_forward_ips_if_needed(const host_id_vector_replica_set& forward) {
         inet_address_vector_replica_set forward_ips;
-        if (!_sp.features().address_nodes_by_host_ids) {
+        if (!_sp.feature(gms::features::address_nodes_by_host_ids)) {
             // if not the entire cluster is upgraded we may be sending the request no a non upgraded node
             // that does not know how to handle new, host id, based forward array, so the old one needs to
             // be populated
@@ -1178,7 +1194,7 @@ private:
 
             auto desc = begin();
 
-            if (!_sp._features.topology_global_request_queue) {
+            if (!_sp._features[gms::features::topology_global_request_queue]) {
                 // Check if we already have a similar op for the same table. This can happen when a, say, truncate has timed out
                 // and the client retried by issuing the same truncate again. In this case, instead of failing the request with
                 // an "Another global topology request is ongoing" error, we can wait for the already queued request to complete.
@@ -1203,11 +1219,11 @@ private:
             global_request_id = guard.new_group0_state_id();
 
             topology_mutation_builder builder(guard.write_timestamp());
-            topology_request_tracking_mutation_builder trbuilder(global_request_id, _sp._features.topology_requests_type_column);
+            topology_request_tracking_mutation_builder trbuilder(global_request_id, _sp._features[gms::features::topology_requests_type_column]);
 
             auto req = create_mutations(trbuilder);
 
-            if (!_sp._features.topology_global_request_queue) {
+            if (!_sp._features[gms::features::topology_global_request_queue]) {
                 builder.set_global_topology_request(req)
                        .set_global_topology_request_id(global_request_id);
             } else {
@@ -2787,7 +2803,7 @@ bool paxos_response_handler::learned(locator::host_id ep) {
 }
 
 query::max_result_size storage_proxy::get_max_result_size(const query::partition_slice& slice) const {
-    if (_features.separate_page_size_and_safety_limit) {
+    if (_features[gms::features::separate_page_size_and_safety_limit]) {
         return _db.local().get_query_max_result_size();
     }
     // FIXME: Remove the code below once SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT
@@ -2802,7 +2818,7 @@ query::max_result_size storage_proxy::get_max_result_size(const query::partition
 
 query::tombstone_limit storage_proxy::get_tombstone_limit() const {
     auto& db = _db.local();
-    if (!db.is_internal_query() && _features.empty_replica_pages) {
+    if (!db.is_internal_query() && _features[gms::features::empty_replica_pages]) {
         return query::tombstone_limit(db.get_config().query_tombstone_page_limit());
     }
     return query::tombstone_limit::max;
@@ -4487,7 +4503,7 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
     public:
         context(storage_proxy & p, utils::chunked_vector<mutation>&& mutations, lw_shared_ptr<cdc::operation_result_tracker>&& cdc_tracker, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, coordinator_mutate_options options)
                 : _p(p)
-                , _schema(_p.local_db().find_schema(db::system_keyspace::NAME, _p.features().batchlog_v2 ? db::system_keyspace::BATCHLOG_V2 : db::system_keyspace::BATCHLOG))
+                , _schema(_p.local_db().find_schema(db::system_keyspace::NAME, _p.feature(gms::features::batchlog_v2) ? db::system_keyspace::BATCHLOG_V2 : db::system_keyspace::BATCHLOG))
                 , _ermp(_p.local_db().find_column_family(_schema->id()).get_effective_replication_map())
                 , _mutations(std::move(mutations))
                 , _cdc_tracker(std::move(cdc_tracker))
@@ -5680,7 +5696,7 @@ public:
                          , _effective_replication_map_ptr(std::move(ermp))
                          , _cmd(std::move(cmd)), _partition_range(std::move(pr)), _block_for(block_for), _targets(std::move(targets)), _trace_state(std::move(trace_state)),
                            _cf(std::move(cf)), _permit(std::move(permit)), _rate_limit_info(rate_limit_info), _cl(cl),
-                           _native_reversed_queries_enabled(_proxy->features().native_reverse_queries) {
+                           _native_reversed_queries_enabled(_proxy->feature(gms::features::native_reverse_queries)) {
         _proxy->get_stats().reads++;
         _proxy->get_stats().foreground_reads++;
     }
@@ -5856,7 +5872,7 @@ protected:
         data_resolver_ptr data_resolver = ::make_shared<data_read_resolver>(_schema, cl, _targets.size(), timeout);
         auto exec = shared_from_this();
 
-        if (_proxy->features().empty_replica_mutation_pages) {
+        if (_proxy->feature(gms::features::empty_replica_mutation_pages)) {
             cmd->slice.options.set<query::partition_slice::option::allow_mutation_read_page_without_live_row>();
         }
 
@@ -6015,7 +6031,7 @@ public:
                 auto&& [result, digests_match] = res.value();
 
                 if (digests_match) {
-                    if (exec->_proxy->features().empty_replica_pages && digest_resolver->response_count() > 1) {
+                    if (exec->_proxy->feature(gms::features::empty_replica_pages) && digest_resolver->response_count() > 1) {
                         auto& mp = digest_resolver->min_position();
                         auto& lp = result->last_position();
                         if (!mp || bool(lp) < bool(mp) || full_position::cmp(*exec->_schema, *mp, *lp) < 0) {
@@ -6510,7 +6526,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     auto cf = _db.local().find_column_family(schema).shared_from_this();
     auto pcf = _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr;
 
-    if (_features.range_scan_data_variant) {
+    if (_features[gms::features::range_scan_data_variant]) {
         cmd->slice.options.set<query::partition_slice::option::range_scan_data_variant>();
     }
 
@@ -7020,7 +7036,7 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
 
     auto& table = local_db().find_column_family(schema->id());
     if (table.uses_tablets()) {
-        if (!_features.lwt_with_tablets) {
+        if (!_features[gms::features::lwt_with_tablets]) {
             auto msg = format("Cannot use LightWeight Transactions for table {}.{}: LWT is not yet supported with tablets", schema->ks_name(), schema->cf_name());
             co_await coroutine::return_exception(exceptions::invalid_request_exception(msg));
         }
@@ -7324,7 +7340,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     const replica::keyspace& ks = local_db().find_keyspace(keyspace);
     if (ks.get_replication_strategy().is_local()) {
         co_await replica::database::truncate_table_on_all_shards(_db, remote().system_keyspace().container(), keyspace, cfname);
-    } else if (ks.uses_tablets() && features().truncate_as_topology_operation) {
+    } else if (ks.uses_tablets() && features()[gms::features::truncate_as_topology_operation]) {
         co_await remote().truncate_with_tablets(std::move(keyspace), std::move(cfname), timeout_in_ms);
     } else {
         co_await remote().send_truncate_blocking(std::move(keyspace), std::move(cfname), timeout_in_ms);
@@ -7332,7 +7348,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
 }
 
 future<> storage_proxy::snapshot_keyspace(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, const db::snapshot_options& opts) {
-    if (!features().snapshot_as_topology_operation) {
+    if (!features()[gms::features::snapshot_as_topology_operation]) {
         throw std::runtime_error("Cannot do cluster wide snapshot. Feature 'snapshot_as_topology_operation' is not available in cluster");
     }
 

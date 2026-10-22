@@ -17,6 +17,7 @@
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
+#include <string_view>
 
 using namespace seastar;
 
@@ -26,11 +27,48 @@ namespace gms {
 
 class feature_service;
 
+/// The definition of one cluster feature: its name, and its index - its
+/// position in the list of all the cluster features.
+///
+/// A definition holds no state. Whether the feature is enabled, and the
+/// listeners waiting for it to be enabled, are the feature's value: a
+/// gms::feature, kept in a feature_service, which holds the values of all the
+/// definitions in an array indexed by index().
+///
+/// All the cluster features are defined in gms/feature_service.cc, and that is
+/// the only file which must be recompiled when a feature is added. Code that
+/// uses a feature declares it, like we declare loggers:
+///
+///     namespace gms::features {
+///     extern const feature_definition my_feature;
+///     }
+///
+/// and gets the feature's value with feature_service[my_feature].
+class feature_definition {
+    std::string_view _name;
+    size_t _index;
+public:
+    // Should only be called in gms/feature_service.cc, which defines all the
+    // features and assigns their indexes in the order of their definitions.
+    explicit feature_definition(std::string_view name);
+    feature_definition(const feature_definition&) = delete;
+    feature_definition& operator=(const feature_definition&) = delete;
+    std::string_view name() const noexcept {
+        return _name;
+    }
+    size_t index() const noexcept {
+        return _index;
+    }
+};
+
 /**
- * A gossip feature tracks whether all the nodes the current one is
- * aware of support the specified feature.
+ * The value of one cluster feature in one feature_service: whether the
+ * feature is enabled - which happens once all the nodes in the cluster
+ * support it - and the listeners waiting for it to be enabled.
  *
- * A feature should only be created once the gossiper is available.
+ * A feature_service holds one such value for each feature_definition, and
+ * one for each feature it creates at run time (see
+ * feature_service::add_feature()).
  */
 class feature final {
     using signal_type = bs2::signal_type<void (), bs2::keywords::mutex_type<bs2::dummy_mutex>>::type;

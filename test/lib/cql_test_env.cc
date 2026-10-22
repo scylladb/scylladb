@@ -91,6 +91,10 @@
 
 #include <sys/time.h>
 
+namespace gms::features {
+extern const feature_definition sstable_compression_dicts;
+}
+
 using namespace std::chrono_literals;
 
 future<scheduling_groups> get_scheduling_groups() {
@@ -631,7 +635,7 @@ private:
 
             auto schema_initializer_checkpoint = schema_builder::capture_schema_initializers_checkpoint();
             register_compression_initializer(*cfg, [this] {
-                return bool(_feature_service.local().sstable_compression_dicts);
+                return bool(_feature_service.local()[gms::features::sstable_compression_dicts]);
             });
             register_speculative_retry_initializer(*cfg);
 

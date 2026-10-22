@@ -24,6 +24,11 @@
 #include "cql3/statements/cluster_config_props.hh"
 #include <random>
 
+namespace gms::features {
+extern const feature_definition rack_list_rf;
+extern const feature_definition tablets;
+}
+
 namespace cql3 {
 
 namespace statements {
@@ -459,11 +464,11 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     auto sc = get_replication_strategy_class().value();
     // if tablets options have not been specified, but tablets are globally enabled, set the value to 0. The strategy will
     // validate it and throw an error if it does not support tablets.
-    auto enable_tablets = feat.tablets && cfg.enable_tablets_by_default();
+    auto enable_tablets = feat[gms::features::tablets] && cfg.enable_tablets_by_default();
     std::optional<unsigned> default_initial_tablets = enable_tablets ? std::optional<unsigned>(0) : std::nullopt;
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
     bool uses_tablets = initial_tablets.has_value();
-    bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat.rack_list_rf;
+    bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat[gms::features::rack_list_rf];
     auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), {}, rack_list_enabled, uses_tablets);
     auto config_options = apply_config_updates({}, *this, feat);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
@@ -480,7 +485,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
         throw exceptions::invalid_request_exception("Cannot alter replication strategy vnode/tablets flavor");
     }
     auto sc = get_replication_strategy_class();
-    bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat.rack_list_rf;
+    bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat[gms::features::rack_list_rf];
     if (sc) {
         options = prepare_options(*sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), old_options, rack_list_enabled, uses_tablets);
     } else {

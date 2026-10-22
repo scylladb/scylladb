@@ -56,13 +56,17 @@
 
 #include "ttl.hh"
 
+namespace gms::features {
+extern const feature_definition alternator_ttl;
+}
+
 static logging::logger tlogger("alternator_ttl");
 
 namespace alternator {
 
 future<executor::request_return_type> executor::update_time_to_live(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.update_time_to_live++;
-    if (!_proxy.features().alternator_ttl) {
+    if (!_proxy.feature(gms::features::alternator_ttl)) {
         co_return api_error::unknown_operation("UpdateTimeToLive not yet supported. Upgrade all nodes to a version that supports it.");
     }
 

@@ -27,6 +27,13 @@
 #include "compaction/compaction_manager.hh"
 #include "dht/fixed_shard.hh"
 
+namespace gms::features {
+extern const feature_definition tablet_incremental_repair;
+extern const feature_definition tablet_migration_virtual_task;
+extern const feature_definition tablet_repair_scheduler;
+extern const feature_definition tablet_resize_virtual_task;
+}
+
 namespace replica {
 
 using namespace locator;
@@ -276,7 +283,7 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             m.set_static_cell("selected_tablets_for_merge", make_list_value(list_type, std::move(values)), ts);
         }
     }
-    if (features.tablet_resize_virtual_task && tablets.resize_task_info().is_valid()) {
+    if (features[gms::features::tablet_resize_virtual_task] && tablets.resize_task_info().is_valid()) {
         m.set_static_cell("resize_task_info", tablet_task_info_to_data_value(tablets.resize_task_info()), ts);
     }
 
@@ -295,13 +302,13 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
         auto last_token = tablets.get_last_token(tid);
         auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
         m.set_clustered_cell(ck, "replicas", make_list_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
-        if (features.tablet_migration_virtual_task && tablet.migration_task_info) {
+        if (features[gms::features::tablet_migration_virtual_task] && tablet.migration_task_info) {
             m.set_clustered_cell(ck, "migration_task_info", tablet_task_info_to_data_value(*tablet.migration_task_info), ts);
         }
-        if (features.tablet_repair_scheduler) {
+        if (features[gms::features::tablet_repair_scheduler]) {
             if (tablet.repair_task_info) {
                 m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(*tablet.repair_task_info), ts);
-                if (features.tablet_incremental_repair) {
+                if (features[gms::features::tablet_incremental_repair]) {
                     m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(tablet.repair_task_info->repair_incremental_mode), ts);
                 }
             }
@@ -310,7 +317,7 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             }
         }
 
-        if (features.tablet_incremental_repair) {
+        if (features[gms::features::tablet_incremental_repair]) {
             m.set_clustered_cell(ck, "sstables_repaired_at", data_value(tablet.sstables_repaired_at), ts);
         }
 
@@ -454,7 +461,7 @@ tablet_mutation_builder::set_sstables_repair_at(dht::token last_token, int64_t s
 tablet_mutation_builder&
 tablet_mutation_builder::set_repair_task_info(dht::token last_token, locator::tablet_task_info repair_task_info, const gms::feature_service& features) {
     _m.set_clustered_cell(get_ck(last_token), "repair_task_info", tablet_task_info_to_data_value(repair_task_info), _ts);
-    if (features.tablet_incremental_repair) {
+    if (features[gms::features::tablet_incremental_repair]) {
         auto mode = locator::tablet_repair_incremental_mode_to_string(repair_task_info.repair_incremental_mode);
         _m.set_clustered_cell(get_ck(last_token), "repair_incremental_mode", data_value(mode), _ts);
     }
@@ -471,7 +478,7 @@ tablet_mutation_builder&
 tablet_mutation_builder::del_repair_task_info(dht::token last_token, const gms::feature_service& features) {
     auto col = _s->get_column_definition("repair_task_info");
     _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
-    if (features.tablet_incremental_repair) {
+    if (features[gms::features::tablet_incremental_repair]) {
         auto col = _s->get_column_definition("repair_incremental_mode");
         _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
     }
@@ -487,7 +494,7 @@ tablet_mutation_builder::del_snapshot_name(dht::token last_token) {
 
 tablet_mutation_builder&
 tablet_mutation_builder::set_migration_task_info(dht::token last_token, locator::tablet_task_info migration_task_info, const gms::feature_service& features) {
-    if (features.tablet_migration_virtual_task) {
+    if (features[gms::features::tablet_migration_virtual_task]) {
         _m.set_clustered_cell(get_ck(last_token), "migration_task_info", tablet_task_info_to_data_value(migration_task_info), _ts);
     }
     return *this;
@@ -495,7 +502,7 @@ tablet_mutation_builder::set_migration_task_info(dht::token last_token, locator:
 
 tablet_mutation_builder&
 tablet_mutation_builder::del_migration_task_info(dht::token last_token, const gms::feature_service& features) {
-    if (features.tablet_migration_virtual_task) {
+    if (features[gms::features::tablet_migration_virtual_task]) {
         auto col = _s->get_column_definition("migration_task_info");
         _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
     }
@@ -504,7 +511,7 @@ tablet_mutation_builder::del_migration_task_info(dht::token last_token, const gm
 
 tablet_mutation_builder&
 tablet_mutation_builder::set_resize_task_info(locator::tablet_task_info resize_task_info, const gms::feature_service& features) {
-    if (features.tablet_resize_virtual_task) {
+    if (features[gms::features::tablet_resize_virtual_task]) {
         _m.set_static_cell("resize_task_info", tablet_task_info_to_data_value(resize_task_info), _ts);
     }
     return *this;
@@ -512,7 +519,7 @@ tablet_mutation_builder::set_resize_task_info(locator::tablet_task_info resize_t
 
 tablet_mutation_builder&
 tablet_mutation_builder::del_resize_task_info(const gms::feature_service& features) {
-    if (features.tablet_resize_virtual_task) {
+    if (features[gms::features::tablet_resize_virtual_task]) {
         auto col = _s->get_column_definition("resize_task_info");
         _m.set_static_cell(*col, atomic_cell::make_dead(_ts, gc_clock::now()));
     }

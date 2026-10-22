@@ -13,6 +13,10 @@
 #include <seastar/core/bitops.hh>
 #include "utils/log.hh"
 
+namespace gms::features {
+extern const feature_definition arbitrary_tablet_boundaries;
+}
+
 extern logging::logger dblog;
 
 namespace db {
@@ -107,7 +111,7 @@ std::map<sstring, sstring> tablet_options::to_map() const {
 void tablet_options::validate(const map_type& map, const gms::feature_service& features) {
     std::optional<ssize_t> min_tablets;
     std::optional<ssize_t> max_tablets;
-    bool pow2_count = features.arbitrary_tablet_boundaries ? default_pow2_count : true;
+    bool pow2_count = features[gms::features::arbitrary_tablet_boundaries] ? default_pow2_count : true;
 
     for (auto& [key, value_str] : map) {
         switch (tablet_options::from_string(key)) {
@@ -141,7 +145,7 @@ void tablet_options::validate(const map_type& map, const gms::feature_service& f
             } catch (const std::invalid_argument& e) {
                 throw exceptions::configuration_exception(format("Invalid value '{}' for pow2_count", value_str));
             }
-            if (!pow2_count && !features.arbitrary_tablet_boundaries) {
+            if (!pow2_count && !features[gms::features::arbitrary_tablet_boundaries]) {
                 throw exceptions::configuration_exception(
                         "pow2_count cannot be set to false until the arbitrary_tablet_boundaries feature is enabled");
             }

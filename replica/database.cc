@@ -99,6 +99,10 @@
 #include <algorithm>
 #include <flat_set>
 
+namespace gms::features {
+extern const feature_definition fragmented_commitlog_entries;
+}
+
 using namespace std::chrono_literals;
 using namespace db;
 
@@ -946,7 +950,7 @@ database::init_commitlog() {
     if (utils::get_local_injector().enter("decrease_commitlog_base_segment_id")) {
         config.base_segment_id = 0;
     }
-    if (features().fragmented_commitlog_entries) {
+    if (features()[gms::features::fragmented_commitlog_entries]) {
         config.allow_fragmented_entries = true;
     }
     // TODO: When removing the experimental flag, this must be replaced by a
@@ -959,7 +963,7 @@ database::init_commitlog() {
     return db::commitlog::create_commitlog(config).then([this](db::commitlog&& log) {
         _commitlog = std::make_unique<db::commitlog>(std::move(log));
 
-        auto reg = add_fragmented_listeners(features().fragmented_commitlog_entries, *_commitlog);
+        auto reg = add_fragmented_listeners(features()[gms::features::fragmented_commitlog_entries], *_commitlog);
 
         _commitlog->add_flush_handler([this, reg = std::move(reg)](db::cf_id_type id, db::replay_position pos) {
             if (!_tables_metadata.contains(id)) {
@@ -1103,13 +1107,13 @@ void database::init_schema_commitlog() {
     c.extensions = &_cfg.extensions();
     c.use_o_dsync = _cfg.commitlog_use_o_dsync();
     c.allow_going_over_size_limit = true; // for lower latency
-    if (features().fragmented_commitlog_entries) {
+    if (features()[gms::features::fragmented_commitlog_entries]) {
         c.allow_fragmented_entries = true;
     }
 
     _schema_commitlog = std::make_unique<db::commitlog>(db::commitlog::create_commitlog(c).get());
 
-    auto reg = add_fragmented_listeners(features().fragmented_commitlog_entries, *_schema_commitlog);
+    auto reg = add_fragmented_listeners(features()[gms::features::fragmented_commitlog_entries], *_schema_commitlog);
 
     _schema_commitlog->add_flush_handler([this, reg = std::move(reg)] (db::cf_id_type id, db::replay_position pos) {
         if (!_tables_metadata.contains(id)) {

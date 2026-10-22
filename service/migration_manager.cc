@@ -48,6 +48,11 @@
 #include "unimplemented.hh"
 #include "idl/migration_manager.dist.hh"
 
+namespace gms::features {
+extern const feature_definition fetch_column_mappings_on_tablet_migration;
+extern const feature_definition view_building_coordinator;
+}
+
 namespace service {
 
 static logging::logger mlogger("migration_manager");
@@ -734,7 +739,7 @@ future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(stora
     return seastar::async([&sp, &keyspace, ts, ks_name] {
         auto& db = sp.local_db();
         auto mutations = db::schema_tables::make_drop_keyspace_mutations(db.features().cluster_schema_features(), keyspace.metadata(), ts);
-        if (sp.features().view_building_coordinator && keyspace.uses_tablets()) {
+        if (sp.feature(gms::features::view_building_coordinator) && keyspace.uses_tablets()) {
             add_cleanup_view_building_state_drop_keyspace_mutations(sp, keyspace.metadata(), mutations, ts).get();
         }
         db.get_notifier().before_drop_keyspace(ks_name, mutations, ts);
@@ -782,7 +787,7 @@ future<utils::chunked_vector<mutation>> prepare_column_family_drop_announcement(
                 mutations.insert(mutations.end(), std::make_move_iterator(m.begin()), std::make_move_iterator(m.end()));
             }
         }
-        if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {
+        if (sp.feature(gms::features::view_building_coordinator) && keyspace->uses_tablets()) {
             // Also deletes the table's PROCESS_STAGING tasks, which no view drop removes.
             db::view::view_building_task_mutation_builder builder(ts);
             co_await add_cleanup_view_building_state_drop_table_mutations(sp, schema->id(), views, builder, mutations, ts);
@@ -862,7 +867,7 @@ future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_pr
         mlogger.info("Create new view: {}", view);
         co_return co_await seastar::async([&db, keyspace = std::move(keyspace), &sp, view = std::move(view), ts] {
             auto mutations = db::schema_tables::make_create_view_mutations(keyspace, view, ts);
-            if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {
+            if (sp.feature(gms::features::view_building_coordinator) && keyspace->uses_tablets()) {
                 add_view_building_tasks_mutations(sp, view, mutations, ts).get();
             }
             // We don't have a separate on_before_create_view() listener to
@@ -941,7 +946,7 @@ future<utils::chunked_vector<mutation>> prepare_view_drop_announcement(storage_p
         auto keyspace = db.find_keyspace(ks_name).metadata();
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
         auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), ts);
-        if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {
+        if (sp.feature(gms::features::view_building_coordinator) && keyspace->uses_tablets()) {
             co_await add_cleanup_view_building_state_drop_view_mutations(sp, view, mutations, ts);
         }
         // notifiers must run in seastar thread
@@ -1218,7 +1223,7 @@ future<> migration_manager::fetch_column_mappings(table_id cf_id,
         bool ignore_down_replicas,
         abort_source& as)
 {
-    if (!_feat.fetch_column_mappings_on_tablet_migration) {
+    if (!_feat[gms::features::fetch_column_mappings_on_tablet_migration]) {
         co_return;
     }
 

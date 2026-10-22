@@ -53,6 +53,10 @@
 #include "idl/storage_proxy.dist.hh"
 #include "vector_search/vector_store_client.hh"
 
+namespace gms::features {
+extern const feature_definition large_data_virtual_tables;
+}
+
 using namespace locator;
 
 namespace db {
@@ -2334,7 +2338,7 @@ future<> initialize_virtual_tables(
         db.find_column_family(system_keyspace::built_indexes()).set_virtual_reader(mutation_source(db::index::built_indexes_virtual_reader(db)));
     });
 
-    if (feat.large_data_virtual_tables) {
+    if (feat[gms::features::large_data_virtual_tables]) {
         // Feature already enabled (e.g. test environment or restart after
         // upgrade).  Activate directly as a coroutine — no seastar::async
         // context needed.
@@ -2350,7 +2354,7 @@ future<> initialize_virtual_tables(
         // it in a static variable (process lifetime).  This function is
         // only called on shard 0, so the listener fires only on shard 0.
         static gms::feature::listener_registration large_data_vt_listener;
-        large_data_vt_listener = feat.large_data_virtual_tables.when_enabled([&dist_db, &sys_ks, &dist_ss] {
+        large_data_vt_listener = feat[gms::features::large_data_virtual_tables].when_enabled([&dist_db, &sys_ks, &dist_ss] {
             auto legacy_tables = replace_legacy_large_data_tables(dist_db, sys_ks, dist_ss).get();
             // Dropping the storage flushes system tables, so it runs in the
             // background. The group 0 state machine enables features and

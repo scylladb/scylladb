@@ -45,6 +45,11 @@
 
 #include <stdexcept>
 
+namespace gms::features {
+extern const feature_definition collection_indexing;
+extern const feature_definition secondary_indexes_on_static_columns;
+}
+
 namespace cql3 {
 
 namespace statements {
@@ -496,7 +501,7 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
                     format("No column definition found for column {}", target->column_name()));
         }
 
-        if (!db.features().secondary_indexes_on_static_columns && cd->is_static()) {
+        if (!db.feature(gms::features::secondary_indexes_on_static_columns) && cd->is_static()) {
             throw exceptions::invalid_request_exception("Cluster does not support secondary indexes on static columns yet,"
                     " upgrade the whole cluster first in order to be able to create them");
         }
@@ -527,7 +532,7 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
 
         if (cd->type->is_multi_cell()) {
             if (cd->type->is_collection()) {
-                if (!db.features().collection_indexing) {
+                if (!db.feature(gms::features::collection_indexing)) {
                     throw exceptions::invalid_request_exception(
                         "Indexing of collection columns not supported by some older nodes in this cluster. Please upgrade them.");
                 }

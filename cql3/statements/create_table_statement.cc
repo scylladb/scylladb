@@ -38,6 +38,11 @@
 #include "replica/database.hh"
 #include "alternator/ttl_tag.hh"
 
+namespace gms::features {
+extern const feature_definition counters_with_tablets;
+extern const feature_definition cql_row_ttl;
+}
+
 namespace cql3 {
 
 namespace statements {
@@ -268,7 +273,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
             throw exceptions::invalid_request_exception(format("Cannot use the 'counter' type for table {}.{}: counters are not supported in strongly consistent keyspaces", keyspace(), cf_name));
         }
 
-        if (ks_uses_tablets && pt.is_counter() && !db.features().counters_with_tablets) {
+        if (ks_uses_tablets && pt.is_counter() && !db.feature(gms::features::counters_with_tablets)) {
             throw exceptions::invalid_request_exception(format("Cannot use the 'counter' type for table {}.{}: Counters are not yet supported with tablets", keyspace(), cf_name));
         }
 
@@ -472,7 +477,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     // If a TTL column is defined, it must be a regular column - not a static
     // column or part of the primary key.
     if (_ttl_column) {
-        if (!db.features().cql_row_ttl) {
+        if (!db.feature(gms::features::cql_row_ttl)) {
             throw exceptions::invalid_request_exception("The CQL per-row TTL feature is not yet supported by this cluster. Upgrade all nodes to use it.");
         }
         for (const auto& alias : key_aliases) {

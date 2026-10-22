@@ -5,6 +5,10 @@
 #include <seastar/core/coroutine.hh>
 #include "db/system_keyspace.hh"
 
+namespace gms::features {
+extern const feature_definition compression_dicts;
+}
+
 dictionary_service::dictionary_service(
     netw::dict_sampler& ds,
     db::system_keyspace& sys_ks,
@@ -30,7 +34,7 @@ dictionary_service::dictionary_service(
         netw::dict_trainer_logger.debug("dictionary_service: _when_observer triggered");
         maybe_toggle_dict_training();
     }))
-    , _feature_observer(fs.compression_dicts.when_enabled([
+    , _feature_observer(fs[gms::features::compression_dicts].when_enabled([
         rpc_dict_training_min_time_seconds = std::move(cfg.rpc_dict_training_min_time_seconds),
         rpc_dict_training_min_bytes = std::move(cfg.rpc_dict_training_min_bytes),
         &alien_worker,

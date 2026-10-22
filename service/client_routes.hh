@@ -61,6 +61,9 @@ public:
     gms::feature_service& get_feature_service() noexcept {
         return _feature_service;
     }
+    gms::feature& feature(const gms::feature_definition& f) noexcept {
+        return _feature_service[f];
+    }
 
     // mutations
     future<mutation> make_remove_client_route_mutation(api::timestamp_type ts, const service::client_routes_service::client_route_key& key);

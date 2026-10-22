@@ -10,6 +10,10 @@
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
 
+namespace gms::features {
+extern const feature_definition workload_prioritization;
+}
+
 namespace cql3 {
 
 namespace statements {
@@ -39,7 +43,7 @@ audit::audit_info_ptr service_level_statement::audit_info() const {
 }
 
 void service_level_statement::validate_shares_option(const query_processor& qp, const qos::service_level_options& slo) const {
-    if (!std::holds_alternative<qos::service_level_options::unset_marker>(slo.shares) && !qp.proxy().features().workload_prioritization) {
+    if (!std::holds_alternative<qos::service_level_options::unset_marker>(slo.shares) && !qp.proxy().feature(gms::features::workload_prioritization)) {
         throw exceptions::invalid_request_exception("`shares` option can only be used when the cluster is fully upgraded to enterprise");
     }
 }

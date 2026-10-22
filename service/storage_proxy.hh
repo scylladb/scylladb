@@ -254,6 +254,8 @@ public:
 
     gms::feature_service& features() noexcept { return _features; }
     const gms::feature_service& features() const { return _features; }
+    gms::feature& feature(const gms::feature_definition& f) noexcept { return _features[f]; }
+    const gms::feature& feature(const gms::feature_definition& f) const { return _features[f]; }
 
     locator::effective_replication_map_factory& get_erm_factory() noexcept {
         return _erm_factory;

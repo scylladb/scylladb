@@ -71,6 +71,11 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/pretty_printers.hh"
 
+namespace gms::features {
+extern const feature_definition ms_sstable;
+extern const feature_definition mt_sstable;
+}
+
 using namespace seastar;
 using namespace sstables;
 
@@ -3550,8 +3555,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         // it, so resolve it here, while still in a seastar thread.
         const auto local_host_id = resolve_local_host_id(app_config, dbcfg, permit);
 
-        feature_service.ms_sstable.enable();
-        feature_service.mt_sstable.enable();
+        feature_service[gms::features::ms_sstable].enable();
+        feature_service[gms::features::mt_sstable].enable();
         sstables::sstables_manager sst_man(
             "scylla_sstable",
             large_data_handler,

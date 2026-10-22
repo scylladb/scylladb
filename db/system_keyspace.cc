@@ -62,6 +62,11 @@
 
 #include <unordered_map>
 
+namespace gms::features {
+extern const feature_definition compaction_history_upgrade;
+extern const feature_definition view_building_tasks_min_task_id;
+}
+
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
 static thread_local auto sstableinfo_type = user_type_impl::get_instance(
@@ -2444,7 +2449,7 @@ future<> system_keyspace::update_compaction_history(compaction_history_entry ent
     db_clock::time_point started_at{db_clock::duration{entry.started_at}};
 
     std::function<future<::shared_ptr<cql3::untyped_result_set>>()> execute;
-    if (local_db().features().compaction_history_upgrade) {
+    if (local_db().feature(gms::features::compaction_history_upgrade)) {
         static constexpr auto reqest_template = "INSERT INTO system.{} ( \
                 id, shard_id, keyspace_name, columnfamily_name, started_at, compacted_at, compaction_type, bytes_in, bytes_out, rows_merged, \
                 sstables_in, sstables_out, total_tombstone_purge_attempt, total_tombstone_purge_failure_due_to_overlapping_with_memtable, \
@@ -2779,7 +2784,7 @@ future<std::pair<db::view::building_tasks, std::optional<utils::UUID>>> system_k
     // scan. This skips tombstoned rows below the boundary, avoiding dead-cell
     // warnings from the tombstone_warn_threshold check.
     std::optional<utils::UUID> min_task_id;
-    if (_db.features().view_building_tasks_min_task_id) {
+    if (_db.feature(gms::features::view_building_tasks_min_task_id)) {
         auto schema = view_building_tasks();
         auto pk = partition_key::from_single_value(*schema, data_value(VIEW_BUILDING_KEY).serialize_nonnull());
         auto dk = dht::decorate_key(*schema, pk);

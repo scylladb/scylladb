@@ -17,6 +17,10 @@
 #include "raft/raft.hh"
 #include "raft_group0.hh"
 
+namespace gms::features {
+extern const feature_definition group0_limited_voters;
+}
+
 namespace service {
 
 namespace {
@@ -485,7 +489,7 @@ future<> group0_voter_handler::update_nodes(
     // Ensure we are not interrupted while calculating and modifying voters
     const auto lock = co_await get_units(_voter_lock, 1, as);
 
-    if (!_feature_service.group0_limited_voters) {
+    if (!_feature_service[gms::features::group0_limited_voters]) {
         // The previous implementation only handled voter removals.
         // Thus, we only handle the removed nodes here if the feature is not active.
         co_return co_await _group0.modify_voters({}, nodes_removed, as);
