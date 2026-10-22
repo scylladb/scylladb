@@ -10,7 +10,7 @@ This document describes the compaction strategy options available when creating 
 By default, ScyllaDB starts a compaction task whenever a new SSTable is written. Compaction merges several SSTables into a new SSTable, which contains only the live data from the input SSTables. Merging several sorted files to get a sorted result is an efficient process, and this is the main reason why SSTables are kept sorted. 
 
 Note that SStables created by node operations, such as ``bootstrap``, ``repair``, or ``replace``, 
-are kept in a temporary data set and undergo compaction only after a node operation is completed. 
+are kept in a temporary data set and may undergo off-strategy compaction while the node operation is in progress or after it is completed. 
 See :ref:`Off-strategy Compaction <compaction-off-strategy-compaction>` for details.
 
 To reduce read, write, and space amplification, you should choose an appropriate compaction strategy.
