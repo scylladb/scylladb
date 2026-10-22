@@ -81,8 +81,10 @@ The current migration procedure has the following limitations:
 * Clusters with :doc:`zero-token nodes </architecture/zero-token-nodes>` are
   not yet supported.
 
-* **No schema changes** during the migration. Do not create, alter, or drop
-  tables in the migrating keyspace until the migration is finished.
+* **No ALTER** during the migration. Do not alter the migrating keyspace or its
+  tables until the migration is finished. Creating and dropping tables, and
+  dropping the keyspace, are supported: a table created during the migration
+  joins it, so give it the ``repair`` mode of ``tombstone_gc`` too.
 * **No planned topology changes** during the migration. Do not add, remove,
   decommission, or rebuild nodes while a migration is in progress. Replacing
   a dead node is supported as an emergency recovery operation.
@@ -91,10 +93,10 @@ The current migration procedure has the following limitations:
 * **No backup and restore** for migrating tables during the migration.
   Do not take snapshots, run backups, or restore into the migrating keyspace
   while the migration is in progress.
-* **No TRUNCATE** on tables in the migrating keyspace during the migration.
 * Only **CQL base tables** can be migrated. Materialized views, secondary
   indexes, CDC tables, and Alternator tables are not supported.
-* Tables with **counters** or **LWTs** cannot be migrated.
+* Tables with **counters** or **LWTs** cannot be migrated. An LWT run during
+  the migration prevents finalizing it, and the migration has to be rolled back.
 * Only tables using the **Incremental Compaction Strategy (ICS)** can be migrated.
   Other compaction strategies are not supported.
 
