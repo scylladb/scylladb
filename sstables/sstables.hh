@@ -404,9 +404,16 @@ public:
     file& index_file() {
         return _index_file;
     }
-    file uncached_index_file();
-    file uncached_partitions_file();
-    file uncached_rows_file();
+    // The index files without the in-memory cache of index pages - and with
+    // populate_disk_cache::no, files which don't populate the disk page cache.
+    file uncached_index_file(populate_disk_cache populate);
+    file uncached_partitions_file(populate_disk_cache populate);
+    file uncached_rows_file(populate_disk_cache populate);
+    // The use_caching of a read of the index, given the read's use_caching
+    // and populate_disk_cache: the in-memory caches of the index read their
+    // misses through the index files, which populate the disk page cache, so
+    // a read which must not populate it can't use them.
+    use_caching index_caching(use_caching caching, populate_disk_cache populate) const;
     // Returns size of bloom filter data.
     uint64_t filter_size() const;
 
@@ -583,6 +590,12 @@ private:
     std::optional<trie::bti_partitions_db_footer> _partitions_db_footer;
     file _rows_file;
     seastar::shared_ptr<cached_file> _cached_rows_file;
+    // If the index files above read through the disk page cache, the same
+    // index files, but without populating the disk page cache, for the reads
+    // which must not populate it (see populate_disk_cache).
+    file _non_populating_index_file;
+    file _non_populating_partitions_file;
+    file _non_populating_rows_file;
     uint64_t _data_file_size;
     uint64_t _index_file_size = 0;
     uint64_t _partitions_file_size = 0;
@@ -924,6 +937,7 @@ private:
     }
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
+    future<> open_non_populating_index_files();
     // runs in async context (called from storage::open)
     void write_toc(std::unique_ptr<crc32_digest_file_writer> w);
     static future<uint32_t> read_digest_from_file(file f);
@@ -1238,7 +1252,8 @@ public:
         reader_permit permit,
         tracing::trace_state_ptr trace_state = {},
         use_caching caching = use_caching::yes,
-        bool single_partition_read = false);
+        bool single_partition_read = false,
+        populate_disk_cache populate = populate_disk_cache::no);
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
