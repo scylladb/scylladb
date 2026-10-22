@@ -323,6 +323,17 @@ static void warm_logstor_cache(cql_test_env& env, const test_config& cfg, cql3::
     max_concurrent_for_each(sequences.begin(), sequences.end(), populate_concurrency, std::move(read)).get();
 }
 
+// One operation of the measurement: the prepared statement, executed on the next key of this shard.
+// Idles for one measurement window instead when this shard owns no partitions in shard-aware mode,
+// rather than issue a cross-shard query.
+static future<> run_operation(cql_test_env& env, test_config& cfg, const std::vector<uint64_t>& shard_seqs, cql3::prepared_cache_key_type id) {
+    auto key = next_key(cfg, shard_seqs);
+    if (!key) {
+        return seastar::sleep(std::chrono::seconds(1));
+    }
+    return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
+}
+
 static std::vector<query_perf_result> test_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     create_partitions(env, cfg);
     sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"";
@@ -341,26 +352,14 @@ static std::vector<query_perf_result> test_read(cql_test_env& env, test_config& 
         warm_logstor_cache(env, cfg, id);
     }
     return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
-            auto key = next_key(cfg, shard_seqs.local());
-            if (!key) {
-                // This shard owns no partitions in shard-aware mode; idle for
-                // one measurement window instead of issuing a cross-shard query.
-                return seastar::sleep(std::chrono::seconds(1));
-            }
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
+            return run_operation(env, cfg, shard_seqs.local(), id);
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
 static std::vector<query_perf_result> test_write(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     auto id = env.prepare(make_write_query(cfg, make_timeout_using(cfg))).get();
     return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
-            auto key = next_key(cfg, shard_seqs.local());
-            if (!key) {
-                // This shard owns no partitions in shard-aware mode; idle for
-                // one measurement window instead of issuing a cross-shard query.
-                return seastar::sleep(std::chrono::seconds(1));
-            }
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
+            return run_operation(env, cfg, shard_seqs.local(), id);
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
@@ -368,26 +367,14 @@ static std::vector<query_perf_result> test_delete(cql_test_env& env, test_config
     create_partitions(env, cfg);
     auto id = env.prepare(make_delete_query(cfg, make_timeout_using(cfg))).get();
     return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
-            auto key = next_key(cfg, shard_seqs.local());
-            if (!key) {
-                // This shard owns no partitions in shard-aware mode; idle for
-                // one measurement window instead of issuing a cross-shard query.
-                return seastar::sleep(std::chrono::seconds(1));
-            }
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
+            return run_operation(env, cfg, shard_seqs.local(), id);
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
 static std::vector<query_perf_result> test_counter_update(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     auto id = env.prepare(make_counter_update_query(make_timeout_using(cfg))).get();
     return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
-            auto key = next_key(cfg, shard_seqs.local());
-            if (!key) {
-                // This shard owns no partitions in shard-aware mode; idle for
-                // one measurement window instead of issuing a cross-shard query.
-                return seastar::sleep(std::chrono::seconds(1));
-            }
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
+            return run_operation(env, cfg, shard_seqs.local(), id);
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
