@@ -13,6 +13,8 @@
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/query_processor.hh"
 #include "mutation/mutation.hh"
+#include "mutation/collection_mutation.hh"
+#include "db_clock.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/cql_config.hh"
 #include "types/set.hh"
@@ -45,8 +47,7 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
             : i_tracing_backend_helper(tr)
             , _pending_writes("trace_keyspace_helper::pending_writes")
             , _dummy_query_state(tracing_client_state(), empty_service_permit())
-            , _sessions(KEYSPACE_NAME, SESSIONS,
-                        fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
+            , _sessions_cql(fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
                                   "session_id uuid,"
                                   "command text,"
                                   "client inet,"
@@ -59,67 +60,14 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
                                   "response_size int,"
                                   "username text,"
                                   "PRIMARY KEY ((session_id))) "
-                                  "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS),
+                                  "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS))
 
-                        fmt::format("INSERT INTO {}.{} ("
-                                  "session_id,"
-                                  "command,"
-                                  "client,"
-                                  "coordinator,"
-                                  "duration,"
-                                  "parameters,"
-                                  "request,"
-                                  "started_at,"
-                                  "request_size,"
-                                  "response_size,"
-                                  "username) VALUES ("
-                                  ":session_id,"
-                                  ":command,"
-                                  ":client,"
-                                  ":coordinator,"
-                                  ":duration,"
-                                  ":parameters,"
-                                  ":request,"
-                                  ":started_at,"
-                                  ":request_size,"
-                                  ":response_size,"
-                                  ":username) USING TTL :ttl", KEYSPACE_NAME, SESSIONS),
-
-                        fmt::format("INSERT INTO {}.{} ("
-                                  "session_id,"
-                                  "command,"
-                                  "client,"
-                                  "coordinator,"
-                                  "duration,"
-                                  "parameters,"
-                                  "request,"
-                                  "started_at,"
-                                  "request_size,"
-                                  "response_size) VALUES ("
-                                  ":session_id,"
-                                  ":command,"
-                                  ":client,"
-                                  ":coordinator,"
-                                  ":duration,"
-                                  ":parameters,"
-                                  ":request,"
-                                  ":started_at,"
-                                  ":request_size,"
-                                  ":response_size) USING TTL :ttl", KEYSPACE_NAME, SESSIONS))
-
-            , _sessions_time_idx(KEYSPACE_NAME, SESSIONS_TIME_IDX,
-                                 fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
+            , _sessions_time_idx_cql(fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
                                            "minute timestamp,"
                                            "started_at timestamp,"
                                            "session_id uuid,"
                                            "PRIMARY KEY (minute, started_at, session_id)) "
-                                           "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS_TIME_IDX),
-
-                                 fmt::format("INSERT INTO {}.{} ("
-                                           "minute,"
-                                           "started_at,"
-                                           "session_id) VALUES (?, ?, ?) "
-                                           "USING TTL ?", KEYSPACE_NAME, SESSIONS_TIME_IDX))
+                                           "WITH default_time_to_live = 86400", KEYSPACE_NAME, SESSIONS_TIME_IDX))
 
             , _events_cql(fmt::format("CREATE TABLE IF NOT EXISTS {}.{} ("
                                 "session_id uuid,"
@@ -202,7 +150,7 @@ future<> trace_keyspace_helper::start(cql3::query_processor& qp, service::migrat
     _qp_anchor = &qp;
     _mm_anchor = &mm;
     return table_helper::setup_keyspace(qp, mm, KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", "2", _dummy_query_state,
-            std::vector<sstring>{ _sessions.create_cql(), _sessions_time_idx.create_cql(), _events_cql, _slow_query_log.create_cql(), _slow_query_log_time_idx.create_cql() });
+            std::vector<sstring>{ _sessions_cql, _sessions_time_idx_cql, _events_cql, _slow_query_log.create_cql(), _slow_query_log_time_idx.create_cql() });
 }
 
 gms::inet_address trace_keyspace_helper::my_address() const noexcept {
@@ -265,62 +213,73 @@ static const column_definition& column(const schema& s, std::string_view name) {
     return *def;
 }
 
-cql3::query_options trace_keyspace_helper::make_session_mutation_data(gms::inet_address my_address, const one_session_records& session_records) {
-    const session_record& record = session_records.session_rec;
-    auto millis_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(record.started_at.time_since_epoch()).count();
-    std::vector<std::pair<data_value, data_value>> parameters_values_vector;
-    parameters_values_vector.reserve(record.parameters.size());
-    std::for_each(record.parameters.begin(), record.parameters.end(), [&parameters_values_vector] (auto& val_pair) { parameters_values_vector.emplace_back(val_pair.first, val_pair.second); });
-    auto my_map_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
-    std::vector<std::string_view> names {
-        "session_id",
-        "command",
-        "client",
-        "coordinator",
-        "duration",
-        "parameters",
-        "request",
-        "started_at",
-        "request_size",
-        "response_size",
-        "username",
-        "ttl"
-    };
-    std::vector<cql3::raw_value> values {
-        cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
-        cql3::raw_value::make_value(utf8_type->decompose(type_to_string(record.command))),
-        cql3::raw_value::make_value(inet_addr_type->decompose(record.client.addr())),
-        cql3::raw_value::make_value(inet_addr_type->decompose(my_address.addr())),
-        cql3::raw_value::make_value(int32_type->decompose(elapsed_to_micros(record.elapsed))),
-        cql3::raw_value::make_value(make_map_value(my_map_type, map_type_impl::native_type(std::move(parameters_values_vector))).serialize()),
-        cql3::raw_value::make_value(utf8_type->decompose(record.request)),
-        cql3::raw_value::make_value(timestamp_type->decompose(millis_since_epoch)),
-        cql3::raw_value::make_value(int32_type->decompose((int32_t)(record.request_size))),
-        cql3::raw_value::make_value(int32_type->decompose((int32_t)(record.response_size))),
-        cql3::raw_value::make_value(utf8_type->decompose(record.username)),
-        cql3::raw_value::make_value(int32_type->decompose((int32_t)(session_records.ttl.count())))
-    };
-
-    return cql3::query_options(cql3::default_cql_config,
-            db::consistency_level::ANY, std::move(names), std::move(values), false, cql3::query_options::specific_options::DEFAULT);
+static db_clock::time_point to_db_clock(std::chrono::system_clock::time_point tp) {
+    return db_clock::time_point(std::chrono::duration_cast<db_clock::duration>(tp.time_since_epoch()));
 }
 
-cql3::query_options trace_keyspace_helper::make_session_time_idx_mutation_data(gms::inet_address my_address, const one_session_records& session_records) {
-    auto started_at_duration = session_records.session_rec.started_at.time_since_epoch();
-    // timestamp in minutes when the query began
-    auto minutes_in_millis = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::duration_cast<std::chrono::minutes>(started_at_duration)).count();
-    // timestamp when the query began
-    auto millis_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(started_at_duration).count();
+mutation trace_keyspace_helper::make_session_mutation(cql3::query_processor& qp, const one_session_records& session_records) {
+    auto schema = table_schema(qp, SESSIONS);
+    const session_record& record = session_records.session_rec;
 
-    std::vector<cql3::raw_value> values {
-        cql3::raw_value::make_value(timestamp_type->decompose(minutes_in_millis)),
-        cql3::raw_value::make_value(timestamp_type->decompose(millis_since_epoch)),
-        cql3::raw_value::make_value(uuid_type->decompose(session_records.session_id)),
-        cql3::raw_value::make_value(int32_type->decompose(int32_t(session_records.ttl.count())))
+    const auto timestamp = _dummy_query_state.get_timestamp();
+    const gc_clock::duration ttl = session_records.ttl;
+    const auto now = gc_clock::now();
+    const auto expiry = now + ttl;
+    // A TTL of 0 means no TTL, as with an INSERT ... USING TTL 0
+    auto make_cell = [&] (const abstract_type& type, bytes_view value, atomic_cell::collection_member cm = atomic_cell::collection_member::no) {
+        return ttl.count() ? atomic_cell::make_live(type, timestamp, value, expiry, ttl, cm) : atomic_cell::make_live(type, timestamp, value, cm);
     };
 
-    return cql3::query_options(cql3::default_cql_config,
-            db::consistency_level::ANY, std::nullopt, std::move(values), false, cql3::query_options::specific_options::DEFAULT);
+    mutation m(schema, partition_key::from_single_value(*schema, uuid_type->decompose(session_records.session_id)));
+    auto& row = m.partition().clustered_row(*schema, clustering_key::make_empty());
+    row.apply(ttl.count() ? row_marker(timestamp, ttl, expiry) : row_marker(timestamp));
+    auto set_cell = [&] (std::string_view name, bytes_view value) {
+        const auto& def = column(*schema, name);
+        row.cells().apply(def, make_cell(*def.type, value));
+    };
+    set_cell("command", text_value(type_to_string(record.command)));
+    set_cell("client", inet_addr_type->decompose(record.client.addr()));
+    set_cell("coordinator", inet_addr_type->decompose(my_address().addr()));
+    set_cell("duration", int32_type->decompose(elapsed_to_micros(record.elapsed)));
+    set_cell("request", text_value(record.request));
+    set_cell("started_at", timestamp_type->decompose(to_db_clock(record.started_at)));
+    set_cell("request_size", int32_type->decompose(int32_t(record.request_size)));
+    set_cell("response_size", int32_type->decompose(int32_t(record.response_size)));
+    // The sessions table of a cluster created before the username column was added to it has no
+    // such column; the record is stored without it then, as it always was.
+    if (const auto* username_def = schema->get_column_definition("username")) {
+        row.cells().apply(*username_def, make_cell(*username_def->type, text_value(record.username)));
+    }
+    // An INSERT of a map overwrites the whole value: a tombstone just before the new cells. The
+    // parameters are kept sorted, the order the cells of a map must be in.
+    const auto& parameters_def = column(*schema, "parameters");
+    collection_mutation_writer parameters(tombstone(timestamp - 1, now));
+    for (const auto& [key, value] : record.parameters) {
+        parameters.push_back(managed_bytes_view(text_value(key)),
+                make_cell(*utf8_type, text_value(value), atomic_cell::collection_member::yes));
+    }
+    row.cells().apply(parameters_def, std::move(parameters).finish());
+    return m;
+}
+
+mutation trace_keyspace_helper::make_session_time_idx_mutation(cql3::query_processor& qp, const one_session_records& session_records) {
+    auto schema = table_schema(qp, SESSIONS_TIME_IDX);
+    if (schema->partition_key_size() != 1 || schema->clustering_key_size() != 2) {
+        throw bad_column_family(sstring(KEYSPACE_NAME), sstring(SESSIONS_TIME_IDX), std::runtime_error("unexpected primary key"));
+    }
+    const auto timestamp = _dummy_query_state.get_timestamp();
+    const gc_clock::duration ttl = session_records.ttl;
+    const auto expiry = gc_clock::now() + ttl;
+
+    const auto started_at = to_db_clock(session_records.session_rec.started_at);
+    // The minute the query began in is the partition key
+    const auto minute = db_clock::time_point(std::chrono::duration_cast<std::chrono::minutes>(started_at.time_since_epoch()));
+
+    mutation m(schema, partition_key::from_single_value(*schema, timestamp_type->decompose(minute)));
+    auto& row = m.partition().clustered_row(*schema, clustering_key::from_exploded(*schema,
+            {timestamp_type->decompose(started_at), uuid_type->decompose(session_records.session_id)}));
+    row.apply(ttl.count() ? row_marker(timestamp, ttl, expiry) : row_marker(timestamp));
+    return m;
 }
 
 cql3::query_options trace_keyspace_helper::make_slow_query_mutation_data(gms::inet_address my_address, const one_session_records& session_records, const utils::UUID& start_time_id) {
@@ -450,6 +409,14 @@ future<> trace_keyspace_helper::write_mutations(cql3::query_processor& qp, utils
     return qp.proxy().mutate(std::move(mutations), db::consistency_level::ANY, timeout, trace_state_ptr(), _dummy_query_state.get_permit(), db::allow_per_partition_rate_limit::yes);
 }
 
+future<> trace_keyspace_helper::store_session_record(cql3::query_processor& qp, lw_shared_ptr<one_session_records> records) {
+    tlogger.trace("{}: storing the session record", records->session_id);
+    utils::chunked_vector<mutation> mutations;
+    mutations.emplace_back(make_session_mutation(qp, *records));
+    mutations.emplace_back(make_session_time_idx_mutation(qp, *records));
+    return write_mutations(qp, std::move(mutations));
+}
+
 future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_session_records> records) {
     // grab events records available so far
     return do_with(std::move(records->events_recs), [this, records] (std::deque<event_record>& events_records) {
@@ -481,11 +448,7 @@ future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_se
                 if (session_record_is_ready) {
 
                     // if session is finished - store a session and a session time index entries
-                    tlogger.trace("{}: going to store a session event", records->session_id);
-                    return _sessions.insert(qp, mm, _dummy_query_state, make_session_mutation_data, my_address(), std::ref(*records)).then([this, &qp, &mm, records] {
-                        tlogger.trace("{}: going to store a {} entry", records->session_id, _sessions_time_idx.name());
-                        return _sessions_time_idx.insert(qp, mm, _dummy_query_state, make_session_time_idx_mutation_data, my_address(), std::ref(*records));
-                    }).then([this, &qp, &mm, records] {
+                    return store_session_record(qp, records).then([this, &qp, &mm, records] {
                         if (!records->do_log_slow_query) {
                             return now();
                         }
