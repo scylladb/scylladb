@@ -394,51 +394,48 @@ async def test_localnodes_joining_nodes(manager: ScyllaClusterManager):
     """
     # Start a cluster with one node, and then bring up a second node,
     # pausing its bootstrap (with an injection) in JOINING state.
+    # The "delay_node_bootstrap" injection pauses the topology coordinator
+    # (the first node) while the new node is still in "bootstrapping" state,
+    # until we send the injection a message. An injection on the joining node
+    # itself (such as "delay_bootstrap_120s") is not enough: it only delays
+    # that node's own startup, while the coordinator may still complete the
+    # bootstrap and make the node NORMAL.
     # We need to start the second node in the background, because server_add()
     # will wait for the bootstrap to complete - which we don't want to do.
     server = await manager.server_add(config=alternator_config)
-    task = asyncio.create_task(manager.server_add(config=alternator_config | {'error_injections_at_startup': ['delay_bootstrap_120s']}))
-    # Sleep until the first node knows of the second one as a "live node"
-    # (we check this with the REST API's /gossiper/endpoint/live.
-    async def check_two_live_nodes():
-        j = await manager.api.client.get_json("/gossiper/endpoint/live", host=server.ip_addr)
-        if len(j) == 1:
-            return None # try again
-        elif len(j) == 2:
-            return True
-        else:
-            return False
-    assert await wait_for(check_two_live_nodes, time.time() + 60)
-
-    # At this point the second node is live, but hasn't finished bootstrapping
-    # (we delayed that with the injection). So the "/localnodes" should still
-    # return just one node - not both. Reproduces #19694 (two nodes used to
-    # be returned)
-    localnodes_request = f"http://{server.ip_addr}:{alternator_config['alternator_port']}/localnodes"
-    response = requests.get(localnodes_request)
-    j = json.loads(response.content.decode('utf-8'))
-    assert len(j) == 1
-
-    # We don't want to wait for the second server to finish its long
-    # injection-caused bootstrap delay, so we won't check here that when the
-    # second server finally comes up, both nodes will finally be visible in
-    # /localnodes. This case is checked in other tests, where bootstrap
-    # finishes normally, so we don't need to check this case again here.
-    # But we can't just finish here with "task" unwaited or we'll get a
-    # warning about an unwaited coroutine, and the ScyllaClusterManager's
-    # tasks_history will wait for it anyway. For the same reason we can't
-    # task.cancel() (this will cause ScyllaClusterManager's tasks_history
-    # to report the ScyllaClusterManager got BROKEN and fail the next test).
-    # The solution is kill (with SIGKILL) the server currently starting and
-    # then the "await task" will quickly finish (and report a "Failed to add
-    # server" error).
-    # Without this trick, this test will take 2 minutes of wait to finish.
-    for server in await manager.starting_servers():
-        await manager.server_stop(server.server_id, convict=False)
+    await manager.api.enable_injection(server.ip_addr, 'delay_node_bootstrap', one_shot=True)
+    task = asyncio.create_task(manager.server_add(config=alternator_config))
     try:
+        await manager.api.wait_for_injection_enter(server.ip_addr, 'delay_node_bootstrap', deadline=time.time() + 300)
+        # Sleep until the first node knows of the second one as a "live node"
+        # (we check this with the REST API's /gossiper/endpoint/live.
+        async def check_two_live_nodes():
+            j = await manager.api.client.get_json("/gossiper/endpoint/live", host=server.ip_addr)
+            if len(j) == 1:
+                return None # try again
+            elif len(j) == 2:
+                return True
+            else:
+                return False
+        assert await wait_for(check_two_live_nodes, time.time() + 60)
+
+        # At this point the second node is live, but hasn't finished bootstrapping
+        # (we delayed that with the injection). So the "/localnodes" should still
+        # return just one node - not both. Reproduces #19694 (two nodes used to
+        # be returned)
+        localnodes_request = f"http://{server.ip_addr}:{alternator_config['alternator_port']}/localnodes"
+        response = requests.get(localnodes_request)
+        j = json.loads(response.content.decode('utf-8'))
+        assert len(j) == 1
+    finally:
+        # Let the second node finish its bootstrap - also if a check above
+        # failed, so the test does not leave it stuck in the injection.
+        # If the injection wasn't entered yet, the message is remembered
+        # and releases it when it is entered.
+        # That both nodes are then visible in /localnodes is checked in
+        # other tests, so we don't check it again here.
+        await manager.api.message_injection(server.ip_addr, 'delay_node_bootstrap')
         await task
-    except Exception as e:
-        assert 'Failed to add server' in str(e)
 
 async def test_localnodes_multi_dc_multi_rack(manager: ScyllaClusterManager):
     """A test for /localnodes on a more general setup, with multiple DCs and
