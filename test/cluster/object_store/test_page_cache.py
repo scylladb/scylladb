@@ -11,6 +11,7 @@
 
 import asyncio
 import random
+import time
 
 import pytest
 from cassandra.protocol import ConfigurationException, InvalidRequest
@@ -18,6 +19,7 @@ from cassandra.protocol import ConfigurationException, InvalidRequest
 from test.pylib.object_storage import format_tuples
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
+from test.pylib.util import wait_for
 
 
 def page_cache_config(object_storage):
@@ -620,6 +622,81 @@ async def test_opening_sstables_does_not_populate_cache(manager: ScyllaClusterMa
         cql, _ = await manager.get_ready_cql([server])
         assert cached_pages(cql) == []
         assert scan(cql, ks) == data
+
+
+def cached_sstables(cql):
+    '''The sstables which have cached pages.'''
+    return {sstable for sstable, _, _ in cached_pages(cql)}
+
+
+async def wait_for_eviction(cql, sstables):
+    '''Waits until none of the given sstables has cached pages. An sstable is
+    deleted - and its pages evicted - only after its last user is done with
+    it, which may happen some time after the operation which deleted it.'''
+    async def evicted():
+        return True if not cached_sstables(cql) & sstables else None
+    await wait_for(evicted, time.time() + 60)
+
+
+async def test_compaction_evicts_compacted_sstables(manager: ScyllaClusterManager, s3_storage):
+    '''The cached pages of the sstables which compaction replaces, and
+    deletes, are evicted from the page cache.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        update = cql.prepare(f'UPDATE {ks}.test SET v = ? WHERE p = ?')
+        for p in range(0, 400, 10):
+            data[p] = f'updated {p}'
+            await cql.run_async(update, [data[p], p])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        compacted = cached_sstables(cql)
+        assert compacted
+
+        await manager.api.keyspace_compaction(server.ip_addr, ks)
+        await wait_for_eviction(cql, compacted)
+        assert scan(cql, ks) == data
+
+
+async def test_drop_table_evicts_its_sstables(manager: ScyllaClusterManager, s3_storage):
+    '''Dropping a table evicts the cached pages of all its sstables from the
+    page cache - but not the cached pages of another table.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks1, \
+               new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks2:
+        data1 = await create_table(manager, server, ks1)
+        data2 = await create_table(manager, server, ks2)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks1) == data1
+        sstables1 = cached_sstables(cql)
+        assert scan(cql, ks2) == data2
+        pages2 = [page for page in cached_pages(cql) if page[0] not in sstables1]
+        assert sstables1 and pages2
+
+        await cql.run_async(f'DROP TABLE {ks1}.test')
+        await wait_for_eviction(cql, sstables1)
+        # Check that the pages of the other table were not evicted.
+        assert cached_pages(cql) == pages2
+
+
+async def test_truncate_evicts_sstables(manager: ScyllaClusterManager, s3_storage):
+    '''Truncating a table evicts the cached pages of all its sstables from
+    the page cache.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        sstables = cached_sstables(cql)
+        assert sstables
+
+        await cql.run_async(f'TRUNCATE TABLE {ks}.test')
+        await wait_for_eviction(cql, sstables)
+        assert scan(cql, ks) == {}
 
 
 async def test_lwt_populates_cache(manager: ScyllaClusterManager, s3_storage):

@@ -732,6 +732,11 @@ protected:
     // The disk page cache through which open_component() reads the given
     // component, or nullptr if it reads it without the cache.
     shared_ptr<object_storage_page_cache> index_page_cache(const sstable& sst, component_type type) const;
+    // The disk page cache of the sstable's pages, or nullptr if its keyspace
+    // doesn't have the 'disk_cache' option, or the cache isn't plugged.
+    shared_ptr<object_storage_page_cache> disk_page_cache(const sstable& sst) const;
+    // Drops the pages of a deleted sstable from the disk page cache.
+    future<> evict_from_disk_page_cache(const sstable& sst) const noexcept;
     // A source of the given range of the sstable's component, which reads it
     // through the disk page cache - or nothing, if it should not be read
     // through the cache.
@@ -981,13 +986,35 @@ future<file> object_storage_base::open_component(const sstable& sst, component_t
 }
 
 shared_ptr<object_storage_page_cache> object_storage_base::index_page_cache(const sstable& sst, component_type type) const {
-    if (_disk_cache != data_dictionary::storage_options::disk_cache_mode::pages
-            || (type != component_type::Index && type != component_type::Partitions && type != component_type::Rows)) {
+    if (type != component_type::Index && type != component_type::Partitions && type != component_type::Rows) {
+        return nullptr;
+    }
+    return disk_page_cache(sst);
+}
+
+shared_ptr<object_storage_page_cache> object_storage_base::disk_page_cache(const sstable& sst) const {
+    if (_disk_cache != data_dictionary::storage_options::disk_cache_mode::pages) {
         return nullptr;
     }
     // The cache is not plugged if its experimental feature was disabled
-    // after the keyspace was created.
+    // after the keyspace was created, or on shutdown.
     return sst.manager().get_object_storage_page_cache();
+}
+
+future<> object_storage_base::evict_from_disk_page_cache(const sstable& sst) const noexcept {
+    auto cache = disk_page_cache(sst);
+    if (!cache) {
+        // TODO: if the cache was unplugged on shutdown before the sstable was
+        // destroyed, its pages stay in the cache - remove them on startup.
+        co_return;
+    }
+    try {
+        // Each shard caches the pages which it reads, so the pages of this
+        // sstable are on the shard which owns it - this one.
+        co_await cache->evict_sstable(get_sstable_identifier(sst));
+    } catch (...) {
+        sstlog.warn("Failed to evict {} from the disk page cache: {}", sst.toc_filename(), std::current_exception());
+    }
 }
 
 future<std::optional<file>> object_storage_base::open_non_populating_component(const sstable& sst, component_type type) {
@@ -1224,6 +1251,14 @@ future<> object_storage_base::destroy(const sstable& sst) {
     // The last reference can be dropped in any scheduling group, and the S3
     // requests would then use that group's connection pool.
     co_await coroutine::switch_to(sst.manager().maintenance_sg());
+
+    // The cached pages of a deleted sstable will never be read again. Drop
+    // them before deleting the sstable's objects, so that a crash in between
+    // leaves no pages of an sstable whose objects are gone. If other
+    // references to the objects remain, such as a snapshot's, only a clone of
+    // this sstable on this shard could have used these pages: it loses them,
+    // which costs only performance.
+    co_await evict_from_disk_page_cache(sst);
 
     auto node_owner = sst.manager().get_local_host_id();
     auto sid = get_sstable_identifier(sst);
