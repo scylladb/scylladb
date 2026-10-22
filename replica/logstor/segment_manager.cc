@@ -1820,7 +1820,7 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
 
 compaction_reenabler compaction_manager_impl::hold_compaction_disabled(logstor_group& cg, group_compaction_state& state) {
     ++state.compaction_disabled_counter;
-    return compaction_reenabler([this, &cg] {
+    return compaction_reenabler([this, &cg] noexcept {
         // The group can be removed while compaction of it is disabled.
         auto it = _groups.find(&cg);
         if (it != _groups.end() && --it->second->compaction_disabled_counter == 0) {
