@@ -169,3 +169,5 @@ in different racks - then this intra-cluster networking should also be reduced.
 The best way to do that is to enable compression of internode communication.
 Refer to [Advanced Internode (RPC) Compression](../operating-scylla/procedures/config-change/advanced-internode-compression.html)
 for instructions on how to enable it.
+
+<!-- RELENG-1091/1092 docs-ci verification: listed page (DEBUG, DO NOT MERGE) -->

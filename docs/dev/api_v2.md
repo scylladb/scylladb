@@ -20,3 +20,5 @@ The API is split into sections.
 By expanding the config section you can see all of the available configuration.
 
 The values returned by the API are the current values in the system (regardless if it is the default value, taken from a config file or from a command line parameter)
+
+<!-- RELENG-1091/1092 docs-ci verification: docs/dev must not be listed (DEBUG, DO NOT MERGE) -->
