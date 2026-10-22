@@ -2872,6 +2872,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
         co_return coroutine::exception(std::move(ex));
     }
     auto units = permit.get();
+    co_await utils::get_local_injector().inject("repair_flush_hints_batchlog_handler_hold", utils::wait_for_message(std::chrono::minutes(5)));
     // gc_clock counts whole seconds, so only a later second proves the flush started after arrival.
     if (_flush_hints_batchlog_time > arrival) {
         rlogger.debug("repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={} with a flush that started after it arrived, flush_hints_batchlog_time={}",
