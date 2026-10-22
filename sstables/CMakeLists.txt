@@ -39,11 +39,11 @@ target_link_libraries(sstables
     wasmtime_bindings
     Seastar::seastar
     xxHash::xxhash
+    libdeflate::libdeflate
   PRIVATE
     readers
     tracing
     absl::headers
-    libdeflate::libdeflate
     ZLIB::ZLIB)
 if (Scylla_USE_PRECOMPILED_HEADER_USE)
   target_precompile_headers(sstables REUSE_FROM scylla-precompiled-header)
