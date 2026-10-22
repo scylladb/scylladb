@@ -314,6 +314,13 @@ public:
     shared_ptr<sstables::object_storage_page_cache> get_object_storage_page_cache() const noexcept {
         return _object_storage_page_cache;
     }
+    // Drops from this shard's disk page cache the pages of the sstables which
+    // no longer exist on this shard. A deleted sstable's pages are dropped
+    // when it is deleted, but they may be left behind: when the node shut
+    // down, or crashed, before the sstable was deleted, or after its table
+    // was dropped while the node was down. Called on startup, after all the
+    // sstables are loaded, and before reads start.
+    future<> evict_orphans_from_disk_page_cache() noexcept;
 
     // Only for sstable::storage usage
     sstables::sstables_registry& sstables_registry() const noexcept {
