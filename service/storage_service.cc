@@ -3583,18 +3583,12 @@ future<utils::chunked_vector<temporary_buffer<char>>> storage_service::do_sample
         }
     }
     slogger.debug("do_sample_sstables(): sending out send_sample_sstables with proportions {}", chunks_per_host);
-    auto samples = co_await seastar::map_reduce(
-        chunks_per_host,
-        [&] (std::pair<locator::host_id, uint64_t> h_s) -> future<utils::chunked_vector<temporary_buffer<char>>> {
-            const auto& [h, sz] = h_s;
-            return ser::storage_service_rpc_verbs::send_sample_sstables(&ms, h, t, chunk_size, sz);
-        },
-        utils::chunked_vector<temporary_buffer<char>>(),
-        [] (auto v, auto some_samples) {
-            std::ranges::move(some_samples, std::back_inserter(v));
-            return v;
-        }
-    );
+    // Serial, so the caller's inbound link isn't flooded by all hosts replying at once.
+    utils::chunked_vector<temporary_buffer<char>> samples;
+    for (const auto& [h, sz] : chunks_per_host) {
+        auto some_samples = co_await ser::storage_service_rpc_verbs::send_sample_sstables(&ms, h, t, chunk_size, sz);
+        std::ranges::move(some_samples, std::back_inserter(samples));
+    }
     slogger.debug("do_sample_sstables(): returned {} chunks", samples.size());
     co_return samples;
 }
