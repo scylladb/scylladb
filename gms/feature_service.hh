@@ -200,6 +200,7 @@ public:
     // RPCs (and their warnings) to nodes that do not register the verb during a
     // rolling upgrade.
     gms::feature small_table_optimization_size_probe { *this, "SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"sv };
+    gms::feature object_storage_permissions { *this, "OBJECT_STORAGE_PERMISSIONS"sv };
     gms::feature alternator_composite_gsi_keys { *this, "ALTERNATOR_COMPOSITE_GSI_KEYS"sv };
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
