@@ -2200,7 +2200,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Check if incremental backup is enabled",
+               "summary":"Check if incremental backup is enabled (deprecated: support for incremental backup may be removed in a future release)",
                "type":"boolean",
                "nickname":"is_incremental_backups_enabled",
                "produces":[
@@ -2211,7 +2211,7 @@
             },
             {
                "method":"POST",
-               "summary":"",
+               "summary":"Enable or disable incremental backup (deprecated: support for incremental backup may be removed in a future release)",
                "type":"void",
                "nickname":"set_incremental_backups_enabled",
                "produces":[

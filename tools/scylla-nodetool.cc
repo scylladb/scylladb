@@ -4405,8 +4405,10 @@ For more information, see: {}
         {
             {
                 "disablebackup",
-                "Disables incremental backup",
+                "Disables incremental backup (deprecated)",
 fmt::format(R"(
+Incremental backup is deprecated, and support for it may be removed in a future release.
+
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/disablebackup.html")),
             },
@@ -4477,8 +4479,10 @@ For more information, see: {}
         {
             {
                 "enablebackup",
-                "Enables incremental backup",
+                "Enables incremental backup (deprecated)",
 fmt::format(R"(
+Incremental backup is deprecated, and support for it may be removed in a future release.
+
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/enablebackup.html")),
             },
@@ -5159,8 +5163,10 @@ For more information, see: {}
         {
             {
                 "statusbackup",
-                "Displays the incremental backup status",
+                "Displays the incremental backup status (deprecated)",
 fmt::format(R"(
+Incremental backup is deprecated, and support for it may be removed in a future release.
+
 Results can be one of the following: `running` or `not running`.
 
 By default, the incremental backup status is `not running`.
