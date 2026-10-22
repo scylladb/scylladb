@@ -231,4 +231,20 @@ future<> object_storage_page_cache_table::evict_other_sstables(const std::unorde
     }
 }
 
+future<> object_storage_page_cache_table::copy_sstable_from_shard(sstables::sstable_id sst, shard_id from) {
+    // Unlike the other queries, this one reads the partition of another
+    // shard, so it is executed on that shard.
+    static const auto select = fmt::format("SELECT component, offset, page FROM {}.{} WHERE shard = ? AND sstable = ?",
+            SYSTEM_CACHE, PAGECACHE);
+    // A page may be as large as a compressed chunk, so read only a few at a
+    // time.
+    constexpr int32_t pages_per_read = 100;
+    co_await _qp.query_internal(select, db::consistency_level::ONE, {int16_t(from), sst.uuid()}, pages_per_read,
+            [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        co_await apply(page_mutation(this_shard(), sst.uuid(), row.get_as<sstring>("component"), row.get_as<int64_t>("offset"),
+                row.get_blob_unfragmented("page")));
+        co_return stop_iteration::no;
+    });
+}
+
 } // namespace db
