@@ -220,8 +220,9 @@ private:
 // An append has two steps: reserve() takes the next region of the segment, and write_reserved()
 // writes the data to it. _append_sem has one unit, and a reservation holds it until its write
 // completes. Thus the writes go to the disk one at a time, in the order of their offsets, and a
-// segment has no hole before the data that it holds. When a write fails, the segment fails: it
-// accepts no more appends, and the callers write to a new segment.
+// segment has no hole before the data that it holds. Only write_reserved() moves the append offset,
+// thus a reservation that is dropped before its write leaves no hole either. When a write fails,
+// the segment fails: it accepts no more appends, and the callers write to a new segment.
 class segment {
 public:
     struct append_reservation {
