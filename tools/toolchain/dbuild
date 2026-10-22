@@ -272,6 +272,12 @@ fi
 
 tmpdir=$(mktemp -d)
 
+# test.py's subnet locks (test/pylib/host_registry.py) must be seen by every
+# run on the host, so that directory alone comes from the host's /tmp.
+# realpath: on macOS /tmp is a symlink into /private, which the podman VM shares.
+[ -d /tmp/scylla-test ] || mkdir -m 1777 /tmp/scylla-test
+subnet_locks="$(realpath /tmp/scylla-test)"
+
 if [ -e ~/.gdbinit ]; then
     docker_common_args+=(-v "$HOME/.gdbinit:$HOME/.gdbinit:ro")
 fi
@@ -295,6 +301,7 @@ docker_common_args+=(
        --ulimit nofile=$(ulimit -Sn):$hard_limit \
        -v "$PWD:$PWD" \
        -v "$tmpdir:/tmp" \
+       -v "$subnet_locks:/tmp/scylla-test" \
        -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO" \
        -v /etc/localtime:/etc/localtime:ro \
        --env CARGO_HOME \
