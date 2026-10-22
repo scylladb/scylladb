@@ -17,6 +17,7 @@
 #include <seastar/core/with_timeout.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/memory-data-source.hh>
 
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
@@ -27,6 +28,7 @@
 #include "replica/memtable.hh"
 #include "sstables/compress.hh"
 #include "sstables/object_storage_page_cache_geometry.hh"
+#include "sstables/object_storage_page_cache_source.hh"
 #include "test/lib/cql_test_env.hh"
 #include "tombstone_gc_options.hh"
 #include "utils/UUID_gen.hh"
@@ -420,6 +422,449 @@ BOOST_AUTO_TEST_CASE(test_pages_covering) {
     check_page(geometry.pages_covering(5000, 10000), 4096, 10000);
     // Check that an empty range is refused.
     BOOST_REQUIRE_THROW(geometry.pages_covering(100, 100), std::out_of_range);
+}
+
+// A page cache in memory, which counts its reads. It keeps the pages of
+// one sstable.
+class fake_page_cache : public sstables::object_storage_page_cache {
+public:
+    std::map<std::pair<sstables::component_type, uint64_t>, sstring> pages;
+    int reads = 0;
+
+    // The cached Data page at the given offset, or an empty string.
+    sstring data_page(uint64_t offset) const {
+        auto it = pages.find({Data, offset});
+        return it == pages.end() ? sstring() : it->second;
+    }
+
+    virtual future<> put_page(sstables::sstable_id, sstables::component_type component,
+            uint64_t offset, temporary_buffer<char> data) override {
+        pages[{component, offset}] = sstring(data.get(), data.size());
+        return make_ready_future<>();
+    }
+    virtual future<std::vector<page>> get_pages(sstables::sstable_id, sstables::component_type component,
+            uint64_t from, uint64_t to, size_t max_pages) override {
+        reads++;
+        std::vector<page> ret;
+        for (auto it = pages.lower_bound({component, from});
+                it != pages.end() && it->first.first == component && it->first.second < to && ret.size() < max_pages; ++it) {
+            ret.push_back(page{it->first.second, temporary_buffer<char>(it->second.data(), it->second.size())});
+        }
+        return make_ready_future<std::vector<page>>(std::move(ret));
+    }
+    virtual future<> evict_sstable(sstables::sstable_id) override {
+        pages.clear();
+        return make_ready_future<>();
+    }
+};
+
+// An object in a fake object store, which records the byte range of every
+// request to read it. It returns the data in buffers of 1000 bytes, which
+// are not aligned to pages, as a real object store would.
+struct fake_object {
+    sstring content;
+    std::vector<std::pair<uint64_t, uint64_t>> requests;
+
+    explicit fake_object(size_t size) : content(sstring::initialized_later(), size) {
+        // A different byte at every offset (mod 251), so data read from the
+        // wrong offset is noticed.
+        for (size_t i = 0; i < size; i++) {
+            content[i] = char(i % 251);
+        }
+    }
+
+    sstables::object_storage_range_reader reader() {
+        return [this] (uint64_t offset, uint64_t length) {
+            requests.emplace_back(offset, length);
+            std::vector<temporary_buffer<char>> bufs;
+            uint64_t end = std::min<uint64_t>(offset + length, content.size());
+            for (uint64_t pos = offset; pos < end; pos += 1000) {
+                bufs.emplace_back(content.data() + pos, std::min<uint64_t>(1000, end - pos));
+            }
+            return make_ready_future<data_source>(data_source(std::make_unique<util::memory_data_source>(std::move(bufs))));
+        };
+    }
+
+    sstring bytes(uint64_t offset, uint64_t length) const {
+        return content.substr(offset, length);
+    }
+};
+
+static const auto test_sstable = sstables::sstable_id(utils::UUID_gen::get_time_UUID());
+
+static input_stream<char> cached_stream(fake_page_cache& cache, fake_object& object,
+        shared_ptr<const sstables::page_geometry> geometry, uint64_t offset, uint64_t length) {
+    return input_stream<char>(sstables::make_page_cached_source(cache, test_sstable, Data, std::move(geometry),
+            offset, length, object.reader()));
+}
+
+static sstring read_to_end(input_stream<char>& in) {
+    sstring result;
+    while (auto buf = in.read().get()) {
+        result += sstring(buf.get(), buf.size());
+    }
+    in.close().get();
+    return result;
+}
+
+// Reads the byte range [offset, offset + length) through the cache.
+static sstring read_cached(fake_page_cache& cache, fake_object& object,
+        shared_ptr<const sstables::page_geometry> geometry, uint64_t offset, uint64_t length) {
+    auto in = cached_stream(cache, object, std::move(geometry), offset, length);
+    return read_to_end(in);
+}
+
+using request = std::pair<uint64_t, uint64_t>;
+
+// The first read of a range misses the cache, reads the range from the
+// object store in a single request, and caches its pages; reading it again
+// is served from the cache without any request.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_miss_then_hit) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 0, 10000), object.bytes(0, 10000));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{0, 10000}}));
+    // Check that all the pages were cached, with their right contents.
+    BOOST_REQUIRE_EQUAL(cache.pages.size(), 3);
+    BOOST_REQUIRE_EQUAL(cache.data_page(0), object.bytes(0, 4096));
+    BOOST_REQUIRE_EQUAL(cache.data_page(4096), object.bytes(4096, 4096));
+    BOOST_REQUIRE_EQUAL(cache.data_page(8192), object.bytes(8192, 1808));
+
+    // Check that reading again sends no request to the object store.
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 0, 10000), object.bytes(0, 10000));
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+}
+
+// A range which does not start and end at page boundaries is extended to
+// whole pages when it is read from the object store and cached, but only
+// the requested bytes are returned.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_unaligned_range) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 5000, 1000), object.bytes(5000, 1000));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{4096, 4096}}));
+    BOOST_REQUIRE_EQUAL(cache.pages.size(), 1);
+    BOOST_REQUIRE_EQUAL(cache.data_page(4096), object.bytes(4096, 4096));
+
+    // Check that another range inside the cached page is served from the
+    // cache.
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 4100, 3900), object.bytes(4100, 3900));
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+}
+
+// When the first pages of a range are cached but a later one is not, the
+// cached pages are read from the cache, and everything from the first
+// missing page to the end of the range is read in a single request - even
+// if some of these pages are cached.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_gap) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+    // Cache the first and the last page, but not the middle one.
+    read_cached(cache, object, geometry, 0, 100);
+    read_cached(cache, object, geometry, 9000, 100);
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 2);
+
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 0, 10000), object.bytes(0, 10000));
+    BOOST_REQUIRE(object.requests.back() == request(4096, 10000 - 4096));
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 3);
+    BOOST_REQUIRE_EQUAL(cache.data_page(4096), object.bytes(4096, 4096));
+}
+
+// A long cached range is read from the cache in several reads, each of a
+// batch of pages, without any request to the object store.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_many_cached_pages) {
+    fake_page_cache cache;
+    fake_object object(100 * 4096);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(100 * 4096);
+    read_cached(cache, object, geometry, 0, 100 * 4096);
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+    BOOST_REQUIRE_EQUAL(cache.pages.size(), 100);
+
+    cache.reads = 0;
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 0, 100 * 4096), object.bytes(0, 100 * 4096));
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+    BOOST_REQUIRE_GT(cache.reads, 1);
+}
+
+// Pages are read from the cache in batches of about 128 KiB, so the number
+// of pages in each batch depends on their size: 1 KiB pages are read 128 at
+// a time.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_batch_size) {
+    fake_page_cache cache;
+    fake_object object(300 * 1024);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(300 * 1024, 1024);
+    read_cached(cache, object, geometry, 0, 300 * 1024);
+    BOOST_REQUIRE_EQUAL(cache.pages.size(), 300);
+
+    cache.reads = 0;
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 0, 300 * 1024), object.bytes(0, 300 * 1024));
+    // Check that 300 pages took 3 reads, of 128, 128 and 44 pages.
+    BOOST_REQUIRE_EQUAL(cache.reads, 3);
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+}
+
+// skip() in a cached range skips the pages without reading them.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_skip_cached) {
+    fake_page_cache cache;
+    fake_object object(10 * 4096);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10 * 4096);
+    read_cached(cache, object, geometry, 0, 10 * 4096);
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+
+    auto in = cached_stream(cache, object, geometry, 0, 10 * 4096);
+    BOOST_REQUIRE_EQUAL(sstring(in.read_exactly(100).get().get(), 100), object.bytes(0, 100));
+    in.skip(3 * 4096).get();
+    BOOST_REQUIRE_EQUAL(read_to_end(in), object.bytes(100 + 3 * 4096, 10 * 4096 - 100 - 3 * 4096));
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+}
+
+// skip() after a request to the object store has started continues with the
+// same request, and the pages that it skips are cached too.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_skip_uncached) {
+    fake_page_cache cache;
+    fake_object object(10 * 4096);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10 * 4096);
+
+    auto in = cached_stream(cache, object, geometry, 0, 10 * 4096);
+    BOOST_REQUIRE_EQUAL(sstring(in.read_exactly(100).get().get(), 100), object.bytes(0, 100));
+    in.skip(3 * 4096).get();
+    BOOST_REQUIRE_EQUAL(read_to_end(in), object.bytes(100 + 3 * 4096, 10 * 4096 - 100 - 3 * 4096));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{0, 10 * 4096}}));
+    BOOST_REQUIRE_EQUAL(cache.pages.size(), 10);
+}
+
+// The following tests of skip() call it on the data_source directly, as an
+// input_stream does with what it has not buffered.
+
+static data_source cached_source(fake_page_cache& cache, fake_object& object,
+        shared_ptr<const sstables::page_geometry> geometry, uint64_t offset, uint64_t length) {
+    return sstables::make_page_cached_source(cache, test_sstable, Data, std::move(geometry), offset, length, object.reader());
+}
+
+static sstring read_to_end(data_source& src) {
+    sstring result;
+    while (auto buf = src.get().get()) {
+        result += sstring(buf.get(), buf.size());
+    }
+    src.close().get();
+    return result;
+}
+
+// A skip of up to max_read_through_skip bytes beyond what the request to the
+// object store returned continues with the same request, and caches the
+// pages it skipped.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_skip_up_to_limit) {
+    constexpr uint64_t size = sstables::max_read_through_skip + 4 * 4096;
+    fake_page_cache cache;
+    fake_object object(size);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(size);
+
+    auto src = cached_source(cache, object, geometry, 0, size);
+    BOOST_REQUIRE_EQUAL(sstring(src.get().get().get(), 4096), object.bytes(0, 4096));
+    src.skip(sstables::max_read_through_skip).get();
+    auto pos = 4096 + sstables::max_read_through_skip;
+    BOOST_REQUIRE_EQUAL(read_to_end(src), object.bytes(pos, size - pos));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{0, size}}));
+    // Check that the skipped pages were cached.
+    BOOST_REQUIRE_EQUAL(cache.data_page(4096), object.bytes(4096, 4096));
+    BOOST_REQUIRE_EQUAL(cache.pages.size(), size / 4096);
+}
+
+// A longer skip closes the request to the object store, without reading or
+// caching the pages it skipped, and the read continues with a new request.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_long_skip_uncached) {
+    constexpr uint64_t size = sstables::max_read_through_skip + 4 * 4096;
+    fake_page_cache cache;
+    fake_object object(size);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(size);
+
+    auto src = cached_source(cache, object, geometry, 0, size);
+    BOOST_REQUIRE_EQUAL(sstring(src.get().get().get(), 4096), object.bytes(0, 4096));
+    src.skip(sstables::max_read_through_skip + 4096).get();
+    auto pos = 2 * 4096 + sstables::max_read_through_skip;
+    BOOST_REQUIRE_EQUAL(read_to_end(src), object.bytes(pos, size - pos));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{0, size}, {pos, size - pos}}));
+    // Check that the skipped pages were not cached.
+    BOOST_REQUIRE_EQUAL(cache.data_page(4096), "");
+    BOOST_REQUIRE_EQUAL(cache.data_page(pos - 4096), "");
+    BOOST_REQUIRE_EQUAL(cache.pages.size(), 3);
+}
+
+// After a long skip, the read continues from the cache, so if the rest of
+// the range is cached, it needs no new request.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_long_skip_to_cached) {
+    constexpr uint64_t size = sstables::max_read_through_skip + 4 * 4096;
+    fake_page_cache cache;
+    fake_object object(size);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(size);
+    auto pos = 2 * 4096 + sstables::max_read_through_skip;
+    read_cached(cache, object, geometry, pos, size - pos);
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+
+    auto src = cached_source(cache, object, geometry, 0, size);
+    BOOST_REQUIRE_EQUAL(sstring(src.get().get().get(), 4096), object.bytes(0, 4096));
+    src.skip(sstables::max_read_through_skip + 4096).get();
+    BOOST_REQUIRE_EQUAL(read_to_end(src), object.bytes(pos, size - pos));
+    // Check that only the first page needed a request.
+    BOOST_REQUIRE(object.requests.back() == request(0, size));
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 2);
+}
+
+// skip(0) changes nothing.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_skip_zero) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+
+    auto src = cached_source(cache, object, geometry, 0, 10000);
+    BOOST_REQUIRE_EQUAL(src.skip(0).get().size(), 0);
+    BOOST_REQUIRE_EQUAL(read_to_end(src), object.bytes(0, 10000));
+}
+
+// A skip inside the first page, before anything was read, starts the read
+// in the middle of that page, which is still read and cached whole.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_skip_within_page) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+
+    auto src = cached_source(cache, object, geometry, 0, 10000);
+    src.skip(100).get();
+    BOOST_REQUIRE_EQUAL(read_to_end(src), object.bytes(100, 9900));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{0, 10000}}));
+    BOOST_REQUIRE_EQUAL(cache.data_page(0), object.bytes(0, 4096));
+}
+
+// A skip into the last page of a range which ends in the middle of a page
+// returns only the requested part of that page.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_skip_into_last_page) {
+    fake_page_cache cache;
+    fake_object object(10 * 4096);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10 * 4096);
+
+    auto src = cached_source(cache, object, geometry, 0, 10000);
+    src.skip(9000).get();
+    BOOST_REQUIRE_EQUAL(read_to_end(src), object.bytes(9000, 1000));
+    // Only the last page is read, extended to the end of the page.
+    BOOST_REQUIRE(object.requests == std::vector<request>({{8192, 4096}}));
+}
+
+// A skip to exactly the end of the range leaves nothing to read, and needs
+// no read from the cache and no request.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_skip_to_end) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+
+    auto src = cached_source(cache, object, geometry, 1000, 4000);
+    src.skip(4000).get();
+    BOOST_REQUIRE_EQUAL(read_to_end(src), "");
+    BOOST_REQUIRE_EQUAL(cache.reads, 0);
+    BOOST_REQUIRE(object.requests.empty());
+}
+
+// A skip beyond the end of the range fails, like the default skip() of a
+// data_source.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_skip_beyond_end) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+
+    auto src = cached_source(cache, object, geometry, 1000, 4000);
+    BOOST_REQUIRE_THROW(src.skip(4001).get(), std::runtime_error);
+    src.close().get();
+}
+
+// A skip from cached pages over pages which are not cached does not read the
+// skipped pages: the request to the object store starts at the page where
+// reading resumes.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_skip_over_uncached) {
+    fake_page_cache cache;
+    fake_object object(10 * 4096);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10 * 4096);
+    // Cache only the first two pages.
+    read_cached(cache, object, geometry, 0, 2 * 4096);
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+
+    auto src = cached_source(cache, object, geometry, 0, 10 * 4096);
+    BOOST_REQUIRE_EQUAL(sstring(src.get().get().get(), 4096), object.bytes(0, 4096));
+    src.skip(5 * 4096).get();
+    BOOST_REQUIRE_EQUAL(read_to_end(src), object.bytes(6 * 4096, 4 * 4096));
+    BOOST_REQUIRE(object.requests.back() == request(6 * 4096, 4 * 4096));
+    // Check that the skipped pages were not cached.
+    BOOST_REQUIRE_EQUAL(cache.data_page(2 * 4096), "");
+    BOOST_REQUIRE_EQUAL(cache.data_page(5 * 4096), "");
+}
+
+// The pages of a compressed Data component are its compressed chunks, so
+// the source caches whole chunks, which a later read of one chunk finds.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_compressed) {
+    sstables::compression c;
+    c.set_uncompressed_chunk_length(4096);
+    auto writer = c.offsets.get_writer();
+    for (uint64_t offset : {0, 1000, 2500, 2600}) {
+        writer.push_back(offset);
+    }
+    c.set_compressed_file_length(4000);
+    auto geometry = make_shared<sstables::compressed_page_geometry>(c);
+    fake_page_cache cache;
+    fake_object object(4000);
+
+    // The compressed reader reads from the start of a chunk to the end of
+    // the last chunk it needs.
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 1000, 3000), object.bytes(1000, 3000));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{1000, 3000}}));
+    BOOST_REQUIRE_EQUAL(cache.pages.size(), 3);
+    BOOST_REQUIRE_EQUAL(cache.data_page(1000), object.bytes(1000, 1500));
+    BOOST_REQUIRE_EQUAL(cache.data_page(2500), object.bytes(2500, 100));
+    BOOST_REQUIRE_EQUAL(cache.data_page(2600), object.bytes(2600, 1400));
+
+    // Check that a later read of one chunk is served from the cache.
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 2500, 100), object.bytes(2500, 100));
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+}
+
+// A cached page whose size is not the size of the page cannot be right, so
+// it is read again from the object store, and replaced in the cache.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_wrong_size_page) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+    read_cached(cache, object, geometry, 0, 100);
+    cache.pages[{Data, 4096}] = sstring(100, 'x');
+
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 0, 10000), object.bytes(0, 10000));
+    BOOST_REQUIRE(object.requests.back() == request(4096, 10000 - 4096));
+    BOOST_REQUIRE_EQUAL(cache.data_page(4096), object.bytes(4096, 4096));
+}
+
+// An empty range is read without any read from the cache or request.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_empty_range) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 5000, 0), "");
+    BOOST_REQUIRE_EQUAL(cache.reads, 0);
+    BOOST_REQUIRE(object.requests.empty());
+}
+
+// If the object store returns less data than the page geometry expects,
+// the read fails rather than return or cache a partial page.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_object_too_short) {
+    fake_page_cache cache;
+    fake_object object(9000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+
+    auto in = cached_stream(cache, object, geometry, 0, 10000);
+    BOOST_REQUIRE_THROW(read_to_end(in), std::runtime_error);
+    in.close().get();
+    BOOST_REQUIRE_EQUAL(cache.data_page(8192), "");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
