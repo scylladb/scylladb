@@ -664,33 +664,50 @@ async def test_hints_consistency_during_replace(manager: ScyllaClusterManager):
         for i in range(100):
             assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_draining_hints(manager: ScyllaClusterManager):
     """
     This test verifies that all hints are drained when a node is being decommissioned.
     """
+    # s1 and s2 share a rack, so s2 takes over s1's replicas when s1 leaves.
+    s1, s2, s3 = await manager.servers_add(3, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack2"},
+    ])
 
-    s1, s2, s3 = await manager.servers_add(3, auto_rack_dc="dc")
+    # All writes go through s1, so all hints are stored there.
+    cql = await manager.get_cql_exclusive(s1)
 
-    cql = manager.get_cql()
-
-    await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")
-
-    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
-    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2']}")
+    # A row is hinted towards s2 only if s2 is its rack1 replica. With enough
+    # tablets, the load balancer places some of rack1's replicas on s2.
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int) WITH tablets = {'min_tablet_count': 8}")
 
     await manager.server_stop_gracefully(s2.server_id)
+    await manager.others_not_see_server(s2.ip_addr)
 
-    # Generate hints towards s2 on s1 with probability 1 - ((#nodes - 1) / #nodes)^1000 ~= 1.
-    for i in range(1000):
-        await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+    await gather_safely(*[cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+                          for i in range(100)])
+    await wait_until_hint_writing_settled(manager, [s1])
+    assert await get_hint_metrics(manager.metrics, s1.ip_addr, "written") > 0
 
-    sync_point = await create_sync_point(manager.api.client, s1.ip_addr)
+    await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
     await manager.server_start(s2.server_id)
+    await manager.servers_see_each_other([s1, s2, s3])
 
-    await cql.run_async(f"ALTER KEYSPACE ks WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'dc': {[s2.rack, s3.rack]}}}")
+    s1_log = await manager.server_open_log(s1.server_id)
+    s1_mark = await s1_log.mark()
     async with asyncio.TaskGroup() as tg:
         _ = tg.create_task(manager.decommission_node(s1.server_id, timeout=60))
-        _ = tg.create_task(await_sync_point(manager.api.client, s1.ip_addr, sync_point, 60))
+        await s1_log.wait_for("DECOMMISSIONING: draining hints", from_mark=s1_mark, timeout=60)
+        await manager.api.disable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay")
+
+    await manager.server_stop_gracefully(s3.server_id)
+    await manager.others_not_see_server(s3.ip_addr)
+    cql = await manager.get_cql_exclusive(s2)
+    rows = await cql.run_async(SimpleStatement("SELECT pk, v FROM ks.t", consistency_level=ConsistencyLevel.ONE))
+    assert sorted((r.pk, r.v) for r in rows) == [(i, i + 1) for i in range(100)]
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_canceling_hint_draining(manager: ScyllaClusterManager):
