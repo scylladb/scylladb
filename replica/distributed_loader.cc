@@ -21,6 +21,7 @@
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/system_keyspace.hh"
+#include "db/object_storage_page_cache_table.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/schema_tables.hh"
 #include "service/task_manager_module.hh"
@@ -39,7 +40,7 @@
 extern logging::logger dblog;
 
 static const std::unordered_set<std::string_view> system_keyspaces = {
-                db::system_keyspace::NAME, db::schema_tables::NAME,
+                db::system_keyspace::NAME, db::schema_tables::NAME, db::object_storage_page_cache_table::SYSTEM_CACHE,
 };
 
 bool is_system_keyspace(std::string_view name) {
@@ -50,6 +51,7 @@ static const std::unordered_set<std::string_view> internal_keyspaces = {
         db::system_distributed_keyspace::NAME,
         db::system_keyspace::NAME,
         db::schema_tables::NAME,
+        db::object_storage_page_cache_table::SYSTEM_CACHE,
         auth::meta::legacy::AUTH_KS,
         tracing::trace_keyspace_helper::KEYSPACE_NAME,
         encryption::replicated_key_provider_factory::KSNAME
