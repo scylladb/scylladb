@@ -559,12 +559,12 @@ dependencies = [
 requires-dist = [
     { name = "pygments", specifier = ">=2.18.0" },
     { name = "redirects-cli", specifier = ">=0.1.3" },
-    { name = "sphinx", specifier = ">=9.0" },
+    { name = "sphinx", specifier = ">=9.1.1,<10" },
     { name = "sphinx-autobuild", specifier = ">=2025.8.25" },
     { name = "sphinx-collapse", specifier = ">=0.1.3" },
-    { name = "sphinx-multiversion-scylla", specifier = ">=0.3.8" },
+    { name = "sphinx-multiversion-scylla", specifier = ">=0.3.9" },
     { name = "sphinx-scylladb-markdown", specifier = ">=0.1.4" },
-    { name = "sphinx-scylladb-theme", specifier = ">=1.9.3" },
+    { name = "sphinx-scylladb-theme", specifier = ">=1.10.0,<1.11" },
     { name = "sphinx-sitemap", specifier = ">=2.9.0" },
     { name = "sphinxcontrib-datatemplates", specifier = ">=0.9.2" },
 ]
@@ -607,7 +607,7 @@ wheels = [
 
 [[package]]
 name = "sphinx"
-version = "9.1.0"
+version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "alabaster" },
@@ -628,9 +628,9 @@ dependencies = [
     { name = "sphinxcontrib-qthelp" },
     { name = "sphinxcontrib-serializinghtml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cd/bd/f08eb0f4eed5c83f1ba2a3bd18f7745a2b1525fad70660a1c00224ec468a/sphinx-9.1.0.tar.gz", hash = "sha256:7741722357dd75f8190766926071fed3bdc211c74dd2d7d4df5404da95930ddb", size = 8718324, upload-time = "2025-12-31T15:09:27.646Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fc/73/567727fc8c8d85bc3adc88a246e12937cfda8d565cf1d80e85bceaa61fe5/sphinx-9.1.1.tar.gz", hash = "sha256:48b627f02908f22c601b3ba9c7b17265b4f315dd05c8bc64cd4da41183f44fbc", size = 8725638, upload-time = "2026-10-20T00:41:13.96Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/73/f7/b1884cb3188ab181fc81fa00c266699dab600f927a964df02ec3d5d1916a/sphinx-9.1.0-py3-none-any.whl", hash = "sha256:c84fdd4e782504495fe4f2c0b3413d6c2bf388589bb352d439b2a3bb99991978", size = 3921742, upload-time = "2025-12-31T15:09:25.561Z" },
+    { url = "https://files.pythonhosted.org/packages/47/18/3c66ea76da7de47e716b181c35bdbfafbd5e9af0bb247b14578e9de348e9/sphinx-9.1.1-py3-none-any.whl", hash = "sha256:f8b60013ce25017be41a509e5c2d265bc1918410061315c36b809c7f335646c0", size = 3923559, upload-time = "2026-10-20T00:41:11.288Z" },
 ]
 
 [[package]]
@@ -727,14 +727,14 @@ wheels = [
 
 [[package]]
 name = "sphinx-multiversion-scylla"
-version = "0.3.8"
+version = "0.3.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "sphinx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/83/b7/ca070ac96cbca8b91c499827790ca4816a259b9259a961108a3fd9fa470c/sphinx_multiversion_scylla-0.3.8.tar.gz", hash = "sha256:418b563afd3c75c40f096b614cb4c595928692fb0b340762e5fd19c876567040", size = 12749, upload-time = "2026-04-13T16:45:16.119Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4a/52/8ef02f8288b6fa3eb72fa82c1bd106a6a60f5be0a5930e822bbaae0d7448/sphinx_multiversion_scylla-0.3.9.tar.gz", hash = "sha256:f829d38f31627663e40f8b20be472a229458026d8f868c7c31420bd38265db4c", size = 13171, upload-time = "2026-10-22T10:41:17.405Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/1d/c4dea80220e2cab5dc326da2369ecac60b5fc71cb0643df698ef76bb14bb/sphinx_multiversion_scylla-0.3.8-py3-none-any.whl", hash = "sha256:a3a16724eb5ec76563f12dd66efb2e7c5d9aa2ddf5e8bb755e817f9973b44ffd", size = 12675, upload-time = "2026-04-13T16:45:14.859Z" },
+    { url = "https://files.pythonhosted.org/packages/64/86/6f23f25e6226e8fef99bfd8a04b78200be0b49788ec972beeebad61de20c/sphinx_multiversion_scylla-0.3.9-py3-none-any.whl", hash = "sha256:7d7f791c19715e7d94f9333f234e131aad1d4ae9adfd64c3bffcff21cfaf3c18", size = 12765, upload-time = "2026-10-22T10:41:16.447Z" },
 ]
 
 [[package]]
@@ -766,7 +766,7 @@ wheels = [
 
 [[package]]
 name = "sphinx-scylladb-theme"
-version = "1.9.3"
+version = "1.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -780,9 +780,9 @@ dependencies = [
     { name = "sphinx-tabs" },
     { name = "sphinxcontrib-mermaid" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3d/43/2c6ca729655d99c69a7970efe56345d4bf345a345511ce4dc247aa5380df/sphinx_scylladb_theme-1.9.3.tar.gz", hash = "sha256:2a80252d6a5bb1ef8b61b6af47db4b7cbdec9c056b339ad4bc2cee97604603ad", size = 1691127, upload-time = "2026-07-16T16:44:51.404Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1d/a3/d63abd59e0f2c2f388a588f1dca2ec336f5172641c63a3e6e09bcdd18ca1/sphinx_scylladb_theme-1.10.0.tar.gz", hash = "sha256:784244323e3c6ac150dbe92b7f4bd3ce0912287785ff4eabc073a63a07db513d", size = 1716694, upload-time = "2026-10-22T10:36:44.125Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/0e/b79e97434339b4b935535709b5b20491451e5c5de5d4b90c8cafbdcc7c2f/sphinx_scylladb_theme-1.9.3-py3-none-any.whl", hash = "sha256:2b9eb999421711deb7ca0fbd5c287c668cdaee7bd41d19abf75b140e8e6982d4", size = 1674682, upload-time = "2026-07-16T16:44:49.644Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/ab/f61875676c7ec5b0e24ad308294b2cac4eed1a858d2723a6d14fbcf11ce1/sphinx_scylladb_theme-1.10.0-py3-none-any.whl", hash = "sha256:a63c9c6432841159ec5f56cb594ae33e32275941b9c7eccca5a1abb915fbb771", size = 1683263, upload-time = "2026-10-22T10:36:41.783Z" },
 ]
 
 [[package]]
