@@ -24,7 +24,8 @@ from test.pylib.util import gather_safely, wait_for
 
 from test.pylib import nodetool
 from test.pylib.encryption_provider import LocalFileSystemKeyProviderFactory
-from test.cluster.util import (commitlog_sector_has_data, corrupt_commitlog_segment,
+from test.cluster.util import (check_token_ring_and_group0_consistency,
+                               commitlog_sector_has_data, corrupt_commitlog_segment,
                                get_commitlog_segment_id, get_topology_coordinator,
                                keyspace_has_tablets, new_test_keyspace, new_test_table)
 
@@ -708,6 +709,21 @@ async def test_draining_hints(manager: ScyllaClusterManager):
     cql = await manager.get_cql_exclusive(s2)
     rows = await cql.run_async(SimpleStatement("SELECT pk, v FROM ks.t", consistency_level=ConsistencyLevel.ONE))
     assert sorted((r.pk, r.v) for r in rows) == [(i, i + 1) for i in range(100)]
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_failed_hint_draining_does_not_block_decommission(manager: ScyllaClusterManager):
+    """
+    This test verifies that a decommission finishes even if draining hints fails.
+    """
+    s1, _, _ = await manager.servers_add(3, auto_rack_dc="dc")
+
+    await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_drain_fail", one_shot=False)
+
+    s1_log = await manager.server_open_log(s1.server_id)
+    s1_mark = await s1_log.mark()
+    await manager.decommission_node(s1.server_id, timeout=60)
+    await s1_log.wait_for("DECOMMISSIONING: draining hints failed", from_mark=s1_mark, timeout=60)
+    await check_token_ring_and_group0_consistency(manager)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_canceling_hint_draining(manager: ScyllaClusterManager):
