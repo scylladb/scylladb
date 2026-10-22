@@ -1346,14 +1346,17 @@ private:
         auto [begin, end] = _index_reader->data_file_positions();
         parse_assert(bool(end), _sst->get_filename());
 
+        // The object storage page cache is a new feature, which doesn't
+        // support the ka and la formats - which Scylla no longer writes - so
+        // reads of these sstables never populate it.
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
-            _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, integrity_check::no);
+            _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, integrity_check::no, populate_disk_cache::no);
         } else {
             sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
             _read_enabled = bool(drr);
-            _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, integrity_check::no);
+            _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, integrity_check::no, populate_disk_cache::no);
         }
 
         _monitor.on_read_started(_context->reader_position());

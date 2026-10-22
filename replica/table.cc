@@ -106,17 +106,18 @@ table::make_sstable_reader(schema_ptr s,
                                    streamed_mutation::forwarding fwd,
                                    mutation_reader::forwarding fwd_mr,
                                    const sstables::sstable_predicate& predicate,
-                                   sstables::integrity_check integrity) const {
+                                   sstables::integrity_check integrity,
+                                   sstables::populate_disk_cache populate) const {
     // CAVEAT: if make_sstable_reader() is called on a single partition
     // we want to optimize and read exactly this partition. As a
     // consequence, fast_forward_to() will *NOT* work on the result,
     // regardless of what the fwd_mr parameter says.
     if (pr.is_singular() && pr.start()->value().has_key()) {
         return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
-                _stats.estimated_sstable_per_read, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
+                _stats.estimated_sstable_per_read, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity, populate);
     } else {
         return sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice,
-                std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), predicate, nullptr, integrity);
+                std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), predicate, nullptr, integrity, populate);
     }
 }
 
@@ -316,7 +317,10 @@ table::make_mutation_reader(schema_ptr s,
             readers.emplace_back(std::move(*reader_opt));
         }
     } else {
-        readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, std::move(trace_state), fwd, fwd_mr));
+        // This is a user's read, so unless it has BYPASS CACHE, it may use
+        // the disk page cache.
+        readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, std::move(trace_state), fwd, fwd_mr,
+                sstables::default_sstable_predicate(), sstables::integrity_check::no, sstables::populate_disk_cache(!bypass_cache)));
     }
 
     auto rd = make_combined_reader(s, permit, std::move(readers), fwd, fwd_mr);
@@ -4242,7 +4246,10 @@ table::sstables_as_snapshot_source() {
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding fwd_mr) {
-            auto reader = make_sstable_reader(std::move(s), std::move(permit), sst_set, r, slice, std::move(trace_state), fwd, fwd_mr);
+            // The row cache reads the sstables only for the user's reads,
+            // so they may use the disk page cache.
+            auto reader = make_sstable_reader(std::move(s), std::move(permit), sst_set, r, slice, std::move(trace_state), fwd, fwd_mr,
+                    sstables::default_sstable_predicate(), sstables::integrity_check::no, sstables::populate_disk_cache::yes);
             return make_compacting_reader(
                 std::move(reader),
                 gc_clock::now(),
