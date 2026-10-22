@@ -6408,6 +6408,9 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
             if (!table->uses_logstor()) {
                 load_per_shard[this_shard_id()].sstable_tablet_sizes += tablet_sizes;
             }
+            if (!combined_ls.tablet_unrepaired_ls.unrepaired_sizes.empty()) {
+                load_stats.tablet_unrepaired_stats[this_host].add_unrepaired_sizes(combined_ls.tablet_unrepaired_ls);
+            }
 
             co_await coroutine::maybe_yield();
         }
