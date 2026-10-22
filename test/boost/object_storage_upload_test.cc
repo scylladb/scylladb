@@ -12,6 +12,8 @@
 #include <fmt/format.h>
 
 #include <seastar/core/future.hh>
+#include <seastar/core/metrics_api.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/test_fixture.hh>
 
@@ -21,6 +23,7 @@
 #include "sstables/sstable_version.hh"
 #include "utils/upload_progress.hh"
 
+#include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/s3_fixture.hh"
 #include "test/lib/random_utils.hh"
@@ -121,6 +124,89 @@ future<> test_sstable_attributes(test_env_config cfg) {
         BOOST_REQUIRE_EQUAL(attributes.at(sstring(object_storage_sstable_version_attribute)), fmt::format("{}", sst->get_version()));
         BOOST_REQUIRE_EQUAL(attributes.at(sstring(object_storage_sstable_format_attribute)), fmt::format("{}", sst->get_format()));
     }, std::move(cfg));
+}
+
+// The number of read requests that the object storage clients of the given
+// type ("s3" or "gs") have sent.
+static uint64_t read_requests(std::string_view type) {
+    auto all_metrics = seastar::metrics::impl::get_values();
+    const auto& all_metadata = *all_metrics->metadata;
+    auto family = std::ranges::find_if(all_metadata, [] (const auto& x) { return x.mf.name == "object_storage_total_read_requests"; });
+    BOOST_REQUIRE(family != all_metadata.end());
+    const auto& values = all_metrics->values[std::distance(all_metadata.begin(), family)];
+    uint64_t total = 0;
+    for (size_t i = 0; i < family->metrics.size(); ++i) {
+        auto label = family->metrics[i].labels().find("type");
+        if (label != family->metrics[i].labels().end() && label->second.value() == type) {
+            total += values[i].ui();
+        }
+    }
+    return total;
+}
+
+// make_ranged_download_source() reads exactly the requested range, in as few
+// requests as the backend allows: on S3, a single request; on GCS, a request
+// per 8 MiB, after a request for the object's metadata (see the FIXME in
+// gs_client_wrapper::make_ranged_download_source()).
+future<> test_ranged_download(test_env_config cfg, sstring type, uint64_t request_size, uint64_t metadata_requests) {
+    auto bucket = cfg.storage.to_map()["bucket"];
+
+    return test_env::do_with_async([bucket, type, request_size, metadata_requests] (test_env& env) {
+        auto ep = env.db_config().object_storage_endpoints().front().key();
+        auto client = env.manager().get_endpoint_client(ep);
+        object_name name(bucket, fmt::format("ranged-download-{}", tests::random::get_int(0, 1000000)));
+        // A different byte at every offset (mod 251), so data read from the
+        // wrong offset is noticed.
+        constexpr size_t size = 20 * 1024 * 1024 + 123;
+        sstring content(sstring::initialized_later(), size);
+        for (size_t i = 0; i < size; i++) {
+            content[i] = char(i % 251);
+        }
+        auto out = output_stream<char>(client->make_upload_sink(name, {}));
+        out.write(content.data(), content.size()).get();
+        out.flush().get();
+        out.close().get();
+        auto delete_object = defer([&] () noexcept {
+            try {
+                client->delete_object(name).get();
+            } catch (...) {
+                testlog.warn("Failed to delete {}: {}", name, std::current_exception());
+            }
+        });
+
+        auto check_range = [&] (uint64_t offset, uint64_t length) {
+            auto requests_before = read_requests(type);
+            auto in = input_stream<char>(client->make_ranged_download_source(name, offset, length));
+            sstring result;
+            while (auto buf = in.read().get()) {
+                result += sstring(buf.get(), buf.size());
+            }
+            in.close().get();
+            BOOST_REQUIRE_EQUAL(result, content.substr(offset, length));
+            uint64_t expected_requests = length ? metadata_requests + (length - 1) / request_size + 1 : 0;
+            BOOST_REQUIRE_EQUAL(read_requests(type) - requests_before, expected_requests);
+        };
+        // Check a short range, in the middle of the object.
+        check_range(1000, 5000);
+        // Check a range at the end of the object.
+        check_range(size - 300, 300);
+        // Check a long range, more than one GCS request.
+        check_range(3 * 1024 * 1024 + 7, 12 * 1024 * 1024);
+        // Check that an empty range sends no request.
+        check_range(5000, 0);
+    }, std::move(cfg));
+}
+
+SEASTAR_TEST_CASE(test_ranged_download_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    // On S3, any range is a single request.
+    return test_ranged_download(test_env_config{ .storage = make_test_object_storage_options("S3") }, "s3",
+            std::numeric_limits<uint64_t>::max(), 0);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_ranged_download_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_ranged_download(test_env_config{ .storage = make_test_object_storage_options("GS") }, "gs",
+            8 * 1024 * 1024, 1);
 }
 
 constexpr auto large_size = 256 * 1024 * 1024 + 351;
