@@ -575,19 +575,31 @@ public:
         _segment_available.broadcast();
     }
 
-    future<seg_ptr> get_segment(write_source src) {
+    // A wait for a segment also ends when `as`, if given, is aborted: then the wait fails with
+    // abort_requested_exception. A compaction job passes its abort source, because the stop of the
+    // compaction manager requests the abort and waits for the job, and the pool can be empty with
+    // nothing to free.
+    future<seg_ptr> get_segment(write_source src, abort_source* as = nullptr) {
         const size_t reserved = src == write_source::compaction ? 0 : _reserved_for_compaction;
         if (_segments.size() <= reserved && src == write_source::normal_write) {
             _stats.normal_segments_wait++;
+        }
+        seastar::optimized_optional<abort_source::subscription> abort_subscription;
+        if (as && _segments.size() <= reserved) {
+            abort_subscription = as->subscribe([this] () noexcept { _segment_available.broadcast(); });
         }
         // One put wakes each waiter with a true predicate, and only one of them gets the segment.
         // The others find the pool low again and must wait again. A waiter fails only if an
         // attempt to replenish failed while it waited.
         while (_segments.size() <= reserved) {
             const auto failed_replenish_count = _failed_replenish_count;
-            co_await _segment_available.wait([this, reserved, failed_replenish_count] {
-                return _segments.size() > reserved || _failed_replenish_count != failed_replenish_count;
+            co_await _segment_available.wait([this, reserved, failed_replenish_count, as] {
+                return _segments.size() > reserved || _failed_replenish_count != failed_replenish_count
+                        || (as && as->abort_requested());
             });
+            if (as && as->abort_requested()) {
+                co_return coroutine::exception(std::make_exception_ptr(abort_requested_exception()));
+            }
             if (_failed_replenish_count != failed_replenish_count && _segments.size() <= reserved) {
                 co_return coroutine::exception(_replenish_error);
             }
@@ -722,7 +734,7 @@ public:
     future<> stop();
 
     future<> write(write_buffer&);
-    future<> write_full_segment(write_buffer&, logstor_group&, write_source);
+    future<> write_full_segment(write_buffer&, logstor_group&, write_source, abort_source* = nullptr);
 
     future<log_record> read(record_location);
 
@@ -887,8 +899,8 @@ private:
         );
     }
 
-    future<seg_ptr> get_segment(write_source src) {
-        seg_ptr seg = co_await _segment_pool.get_segment(src);
+    future<seg_ptr> get_segment(write_source src, abort_source* as = nullptr) {
+        seg_ptr seg = co_await _segment_pool.get_segment(src, as);
         _replenisher_cv.signal();
         seg->start(make_segment_ref(seg->id()), allocate_segment_seq());
         co_return seg;
@@ -1326,14 +1338,14 @@ future<> segment_manager_impl::write(write_buffer& wb) {
     }
 }
 
-future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_group& cg, write_source source) {
+future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_group& cg, write_source source, abort_source* as) {
     const auto chunk_size = wb.chunk_size(block_alignment);
 
     if (chunk_size > _cfg.segment_size) {
         throw std::runtime_error(fmt::format("Chunk size {} exceeds segment size {}", chunk_size, _cfg.segment_size));
     }
 
-    auto seg = co_await get_segment(source);
+    auto seg = co_await get_segment(source, as);
     logstor_logger.trace("Write full segment {} seq {} from {}", seg->id(), seg->seq_num(), write_source_to_string(source));
 
     wb.seal(seg->seq_num(), cg.table_id(), block_alignment);
@@ -1946,18 +1958,22 @@ struct compaction_buffer {
     segment_manager_impl& sm;
     owned_write_buffer buf;
     logstor_group& cg;
+    // The abort source of the compaction job. A flush that waits for a segment ends when the job
+    // is aborted.
+    abort_source& as;
     std::vector<future<>> pending_updates;
 
     compaction_buffer_stats stats;
 
-    compaction_buffer(segment_manager_impl& sm, owned_write_buffer buf, logstor_group& cg)
+    compaction_buffer(segment_manager_impl& sm, owned_write_buffer buf, logstor_group& cg, abort_source& as)
         : sm(sm)
         , buf(std::move(buf))
         , cg(cg)
+        , as(as)
     {}
 
     compaction_buffer(compaction_buffer&& o) noexcept
-        : sm(o.sm), buf(std::move(o.buf)), cg(o.cg)
+        : sm(o.sm), buf(std::move(o.buf)), cg(o.cg), as(o.as)
         , pending_updates(std::move(o.pending_updates)), stats(o.stats) {}
 
     ~compaction_buffer() {
@@ -1971,7 +1987,7 @@ struct compaction_buffer {
 
     future<> flush() {
         if (buf->has_data()) {
-            co_await sm.write_full_segment(*buf, cg, write_source::compaction);
+            co_await sm.write_full_segment(*buf, cg, write_source::compaction, &as);
             stats.flush_count++;
             logstor_logger.trace("Compaction buffer flushed with {} bytes", buf->record_bytes());
         }
@@ -2061,7 +2077,7 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_ba
     // with_closeable() returns the buffer to the pool on every way out, including the ones that
     // throw - a compaction that fails part way through simply discards what it had buffered.
     auto cb_stats = co_await with_closeable(
-            compaction_buffer(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg),
+            compaction_buffer(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg, as),
             [this, &index, &nonempty_segments] (compaction_buffer& cb) -> future<compaction_buffer_stats> {
         co_await _sm.for_each_record(nonempty_segments,
             [&index, &cb] (record_location read_location, const record_header& header) -> want_data {
@@ -2173,8 +2189,8 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
         auto split_buffers = co_await _sm._compaction_buffer_pool.allocate_many(2, as);
         auto batch_stats = co_await with_closeable(
                 split_buffer_pair{
-                    compaction_buffer(_sm, std::move(split_buffers[0]), src),
-                    compaction_buffer(_sm, std::move(split_buffers[1]), src),
+                    compaction_buffer(_sm, std::move(split_buffers[0]), src, as),
+                    compaction_buffer(_sm, std::move(split_buffers[1]), src, as),
                 },
                 [this, &index, &classifier, &nonempty_segments] (split_buffer_pair& bufs) -> future<compaction_buffer_stats> {
             co_await _sm.for_each_record(nonempty_segments,
