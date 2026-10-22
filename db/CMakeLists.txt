@@ -5,6 +5,7 @@ target_sources(db
     cluster_config_registry.cc
     consistency_level.cc
     system_keyspace.cc
+    object_storage_page_cache_table.cc
     virtual_table.cc
     virtual_tables.cc
     system_distributed_keyspace.cc

@@ -31,6 +31,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/coroutine/try_future.hh>
 #include "db/system_keyspace.hh"
+#include "db/object_storage_page_cache_table.hh"
 #include "gms/gossiper.hh"
 #include "db/system_keyspace_sstables_registry.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -1193,7 +1194,11 @@ future<> database::create_local_system_table(
         schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
     auto ks_name = table->ks_name();
     if (!has_keyspace(ks_name)) {
-        bool durable = _cfg.data_file_directories().size() > 0;
+        // Local system keyspaces use durable writes (the commitlog), except
+        // system_cache, the keyspace of the object-storage disk cache: losing
+        // the most recently cached pages in a crash is acceptable, so it does
+        // not need the commitlog.
+        bool durable = _cfg.data_file_directories().size() > 0 && ks_name != db::object_storage_page_cache_table::SYSTEM_CACHE;
         auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
                 "org.apache.cassandra.locator.LocalStrategy",
                 locator::replication_strategy_config_options{},

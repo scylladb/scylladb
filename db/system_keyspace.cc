@@ -26,6 +26,7 @@
 #include "locator/tablets.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
+#include "db/object_storage_page_cache_table.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"
@@ -2293,6 +2294,10 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
 
     r.insert(r.end(), {sstables_registry()});
 
+    if (cfg.check_experimental(db::experimental_features_t::feature::OBJECT_STORAGE_PAGE_CACHE)) {
+        r.insert(r.end(), {object_storage_page_cache_table::schema()});
+    }
+
     if (cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
         r.insert(r.end(), {raft_groups()});
     }
@@ -2306,6 +2311,7 @@ static bool maybe_write_in_user_memory(schema_ptr s, replica::database& db) {
             || (s.get() == system_keyspace::batchlog_v2().get())
             || (s.get() == system_keyspace::paxos().get())
             || s == system_keyspace::scylla_views_builds_in_progress()
+            || s == object_storage_page_cache_table::schema()
             || (strongly_consistent && s == system_keyspace::raft_groups());
 }
 
