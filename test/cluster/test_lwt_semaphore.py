@@ -25,9 +25,16 @@ async def test_cas_semaphore(manager):
         table = f"{ks}.test"
         await manager.cql.run_async(f"CREATE TABLE {table} (a int PRIMARY KEY, b int)")
 
+        # The paxos state table is created by the first LWT on the table,
+        # through raft, with that LWT's timeout as the raft timeout. Run one
+        # LWT, on a key not used below, with the default timeout, so that
+        # the table creation doesn't happen in the CAS phase below with its
+        # lowered timeout.
+        await manager.cql.run_async(f'INSERT INTO {table} (a) VALUES (1) IF NOT EXISTS')
+
         # Lower write timeout only for the CAS phase, after paxos state table
-        # creation (which goes through raft) has had time to complete with the
-        # default timeout.
+        # creation (which goes through raft) has completed with the default
+        # timeout.
         #
         # write_request_timeout_in_ms is only read when a CQL connection is
         # established (it's snapshotted into that connection's client_state),
