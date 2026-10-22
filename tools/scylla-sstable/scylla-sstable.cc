@@ -1675,6 +1675,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::Schema: return "schema";
         case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
         case sstables::scylla_metadata_type::LargeDataRecords: return "large_data_records";
+        case sstables::scylla_metadata_type::IngestionMetadata: return "ingestion_metadata";
     }
     std::abort();
 }
@@ -1763,6 +1764,16 @@ public:
     }
     void operator()(const sstables::run_identifier& val) const {
         _writer.AsString(val.id.uuid());
+    }
+    void operator()(const sstables::ingestion_metadata& val) const {
+        _writer.StartObject();
+        _writer.Key("fraction");
+        _writer.Double(val.fraction);
+        _writer.Key("min_timestamp");
+        _writer.Int64(val.min_timestamp);
+        _writer.Key("max_timestamp");
+        _writer.Int64(val.max_timestamp);
+        _writer.EndObject();
     }
     void operator()(const sstables::scylla_metadata::large_data_stats& val) const {
         _writer.StartObject();

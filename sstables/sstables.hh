@@ -127,6 +127,8 @@ struct sstable_writer_config {
     sstring origin;
     bool correct_pi_block_width = true;
     uint32_t large_data_records_per_sstable = 10;
+    // Stored in the scylla metadata when engaged.
+    std::optional<ingestion_metadata> ingestion;
 
 private:
     explicit sstable_writer_config() {}
@@ -749,7 +751,8 @@ private:
                                run_identifier identifier,
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
                                std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
-                               std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt);
+                               std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt,
+                               std::optional<ingestion_metadata> ingestion = std::nullopt);
     sstable_id ensure_sstable_identifier();
     // Verifies that the sstable identifier persisted in the Scylla metadata
     // agrees with the one this sstable is known by, when both are known.
@@ -1172,6 +1175,9 @@ public:
     // Return the extended timestamp statistics map.
     // Some or all entries may be missing if not present in scylla_metadata
     scylla_metadata::ext_timestamp_stats::map_type get_ext_timestamp_stats() const noexcept;
+
+    // When the data of the sstable was ingested, if recorded in scylla_metadata.
+    std::optional<ingestion_metadata> get_ingestion_metadata() const noexcept;
 
     const sstring& get_origin() const noexcept {
         return _origin;

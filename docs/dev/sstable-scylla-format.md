@@ -34,6 +34,7 @@ in individual sections
         | schema
         | components_digests
         | large_data_records
+        | ingestion_metadata
 
 `sharding_metadata` (tag 1): describes what token sub-ranges are included in this
 sstable. This is used, when loading the sstable, to determine which shard(s)
@@ -85,6 +86,10 @@ verifying the integrity of individual component files.
 data entries (partitions, rows, cells) found during the sstable write. Unlike `large_data_stats`
 which only stores aggregate statistics, this records the actual keys and sizes so they survive
 tablet/shard migration.
+
+`ingestion_metadata` (tag 14): when the data of the sstable was ingested through memtable
+flushes, by the server's clock: the share of the sstable's bytes that came from flushes, and
+the period over which they were flushed.
 
 The [scylla sstable dump-scylla-metadata](https://github.com/scylladb/scylladb/blob/master/docs/operating-scylla/admin-tools/scylla-sstable.rst#dump-scylla-metadata) tool
 can be used to dump the scylla metadata in JSON format.
@@ -241,3 +246,22 @@ The elements_count field carries a type-dependent element count:
 
 The range_tombstones and dead_rows fields are meaningful only for
 partition_size records and are zero for all other record types.
+
+## ingestion_metadata subcomponent
+
+    ingestion_metadata = fraction min_timestamp max_timestamp
+        fraction = be64       // IEEE 754 double: share of the sstable's bytes that came
+                              // from memtable flushes, between 0 and 1
+        min_timestamp = be64  // start of the period the ingested data was flushed in,
+                              // in milliseconds since the epoch
+        max_timestamp = be64  // end of that period, in milliseconds since the epoch
+
+The ingestion metadata records when the data of the sstable was ingested, by the
+server's clock rather than by the write timestamps of the data, which clients can
+set. A memtable flush writes a fraction of 1 and the period from when the memtable
+was created to when it was flushed. Data written otherwise than by memtable flushes,
+e.g. by repair or streaming, has no ingestion time and doesn't count toward the
+fraction. A compaction writes to every output the share of ingested bytes among its
+inputs, weighted by their sizes, and the period from the earliest start to the latest
+end of theirs, so the period survives compaction and rewrites. It tells how fast the
+data waiting for compaction was ingested.

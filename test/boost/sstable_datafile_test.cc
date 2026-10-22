@@ -3072,6 +3072,38 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
     });
 }
 
+// The ingestion metadata given to the writer is stored in the scylla metadata and
+// read back when the sstable is opened; without it, there is none.
+SEASTAR_TEST_CASE(test_sstable_ingestion_metadata) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        const auto pk = tests::generate_partition_key(s);
+        auto mut = mutation(s, pk);
+        ss.add_row(mut, ss.make_ckey(0), "val");
+
+        for (const auto version : writable_sstable_versions) {
+            auto mr = make_mutation_reader_from_mutations(s, env.make_reader_permit(), mut);
+            auto sst = make_sstable_easy(env, std::move(mr), env.manager().configure_writer(), version, 0);
+            BOOST_REQUIRE(!sst->get_ingestion_metadata());
+            BOOST_REQUIRE(!env.reusable_sst(sst).get()->get_ingestion_metadata());
+
+            const auto ingestion = sstables::ingestion_metadata{
+                .fraction = 0.25,
+                .min_timestamp = 1'700'000'000'000,
+                .max_timestamp = 1'700'000'060'000,
+            };
+            mr = make_mutation_reader_from_mutations(s, env.make_reader_permit(), mut);
+            sstable_writer_config cfg = env.manager().configure_writer();
+            cfg.ingestion = ingestion;
+            sst = make_sstable_easy(env, std::move(mr), cfg, version, 0);
+            BOOST_REQUIRE(sst->get_ingestion_metadata() == ingestion);
+            BOOST_REQUIRE(env.reusable_sst(sst).get()->get_ingestion_metadata() == ingestion);
+        }
+    });
+}
+
 SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family).with_column("p1", utf8_type, column_kind::partition_key).build();

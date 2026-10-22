@@ -561,6 +561,7 @@ enum class scylla_metadata_type : uint32_t {
     Schema = 11,
     ComponentsDigests = 12,
     LargeDataRecords = 13,
+    IngestionMetadata = 14,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -679,6 +680,25 @@ struct sstable_schema_type {
     auto describe_type(sstable_version_types v, Describer f) { return f(id, version, keyspace_name, table_name, columns); }
 };
 
+// When the data of an sstable was ingested through memtable flushes, by the
+// server's clock. A compaction output combines the ingestion metadata of its
+// inputs.
+struct ingestion_metadata {
+    // Share of the sstable's bytes that came from memtable flushes, between 0
+    // and 1. Data written otherwise, e.g. by repair or streaming, has no
+    // ingestion time.
+    double fraction;
+    // The period over which the ingested data was flushed, in milliseconds
+    // since the epoch.
+    int64_t min_timestamp;
+    int64_t max_timestamp;
+
+    bool operator==(const ingestion_metadata&) const = default;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(fraction, min_timestamp, max_timestamp); }
+};
+
 struct scylla_metadata {
     using extension_attributes = disk_hash<uint32_t, disk_string<uint32_t>, disk_string<uint32_t>>;
     using large_data_stats = disk_hash<uint32_t, large_data_type, large_data_stats_entry>;
@@ -704,7 +724,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableIdentifier, sstable_identifier>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ComponentsDigests, components_digests>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataRecords, large_data_records>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataRecords, large_data_records>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::IngestionMetadata, ingestion_metadata>
             > data;
     std::optional<uint32_t> digest;
 

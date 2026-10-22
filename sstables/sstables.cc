@@ -2567,7 +2567,7 @@ static sstable_column_kind to_sstable_column_kind(column_kind k) {
 void
 sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         std::optional<scylla_metadata::large_data_stats> ld_stats, std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
-        std::optional<scylla_metadata::large_data_records> ld_records) {
+        std::optional<scylla_metadata::large_data_records> ld_records, std::optional<ingestion_metadata> ingestion) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
 
@@ -2592,6 +2592,9 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     }
     if (ld_records) {
         _components->scylla_metadata->data.set<scylla_metadata_type::LargeDataRecords>(std::move(*ld_records));
+    }
+    if (ingestion) {
+        _components->scylla_metadata->data.set<scylla_metadata_type::IngestionMetadata>(std::move(*ingestion));
     }
     if (!_origin.empty()) {
         scylla_metadata::sstable_origin o;
@@ -4330,6 +4333,17 @@ scylla_metadata::ext_timestamp_stats::map_type sstable::get_ext_timestamp_stats(
         return _ext_timestamp_stats->map;
     }
     return scylla_metadata::ext_timestamp_stats::map_type{};
+}
+
+std::optional<ingestion_metadata> sstable::get_ingestion_metadata() const noexcept {
+    if (!_components->scylla_metadata) {
+        return std::nullopt;
+    }
+    auto* ingestion = _components->scylla_metadata->data.get<scylla_metadata_type::IngestionMetadata, ingestion_metadata>();
+    if (!ingestion) {
+        return std::nullopt;
+    }
+    return *ingestion;
 }
 
 // The gc_before returned by the function can only be used to estimate if the
