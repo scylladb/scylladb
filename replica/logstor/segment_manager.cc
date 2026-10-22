@@ -386,7 +386,7 @@ struct separator_task {
     // Where the chunk holding the records was written, which is what the records' own locations are
     // relative to.
     segment_position chunk_position{};
-    segment_ref seg_ref;
+    segment_keep_guard keep_guard;
     segment_sequence seq_num{};
     utils::phased_barrier::operation write_op;
 };
@@ -1071,11 +1071,9 @@ future<> segment_manager_impl::run_separator_fiber() {
             co_return;
         }
 
-        segment_keep_guard keep_guard(std::move(task.seg_ref));
-
         try {
-            co_await write_to_separator(task.records, task.chunk_position, keep_guard.ref(), task.seq_num);
-            keep_guard.cancel();
+            co_await write_to_separator(task.records, task.chunk_position, task.keep_guard.ref(), task.seq_num);
+            task.keep_guard.cancel();
         } catch (...) {
             ++_stats.separator_task_failures;
             logstor_logger.debug("Separator task failed: {:t}", std::current_exception());
@@ -1101,7 +1099,6 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 
         seg_ptr seg = _active_segment;
         auto seg_holder = seg->hold();
-        auto seg_ref = seg->ref();
 
         auto appender = co_await seg->begin_append(chunk_size);
         if (!appender) {
@@ -1115,9 +1112,6 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 
         wb.seal(seq_num, std::nullopt, block_alignment);
 
-        // if we wrote a record to the segment but failed to write it to the separator, the segment should not be freed.
-        segment_keep_guard keep_guard(seg_ref);
-
         logstor_logger.trace("Write active segment {} seq {}", seg->id(), seq_num);
 
         const auto chunk = wb.chunk();
@@ -1130,6 +1124,10 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         }
         auto pos = append_result.get();
 
+        // The index points into the chunk after complete_writes(), so nothing may free the segment
+        // until the separator fiber writes the records of the chunk.
+        segment_keep_guard keep_guard(seg->ref());
+
         _stats.bytes_written[static_cast<size_t>(source)] += chunk.size();
         _stats.data_bytes_written[static_cast<size_t>(source)] += wb.record_bytes();
 
@@ -1138,18 +1136,19 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         co_await wb.complete_writes(pos);
 
         auto records = wb.take_separator_records();
-        if (!records.empty()) {
-            co_await with_semaphore(_separator_enqueue_sem, 1, [&] {
-                return _separator_task_queue.push_eventually(separator_task{
-                    .records = std::move(records),
-                    .chunk_position = pos,
-                    .seg_ref = seg_ref,
-                    .seq_num = seq_num,
-                    .write_op = std::move(write_op),
-                });
-            });
+        if (records.empty()) {
+            keep_guard.cancel();
+            break;
         }
-        keep_guard.cancel();
+        co_await with_semaphore(_separator_enqueue_sem, 1, [&] {
+            return _separator_task_queue.push_eventually(separator_task{
+                .records = std::move(records),
+                .chunk_position = pos,
+                .keep_guard = std::move(keep_guard),
+                .seq_num = seq_num,
+                .write_op = std::move(write_op),
+            });
+        });
         break;
     }
 }
