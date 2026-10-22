@@ -508,6 +508,135 @@ async def test_bypass_cache(manager: ScyllaClusterManager, s3_storage):
         assert cached_pages(cql) == pages
 
 
+async def test_scan_then_point_reads(manager: ScyllaClusterManager, s3_storage):
+    '''After a scan cached the whole table, a point read of each of its
+    partitions sends no request to the object store: the pages which the
+    scan cached are the same pages which the point reads look for.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        select = cql.prepare(f'SELECT v FROM {ks}.test WHERE p = ?')
+        for p, v in data.items():
+            assert cql.execute(select, [p]).one().v == v
+        assert await read_requests(manager, server, s3_storage) == requests_before
+
+
+async def create_wide_partition(manager: ScyllaClusterManager, server, ks, rows=400):
+    '''Creates the table ks.test with a single wide partition, p = 0, flushed
+    to sstables, and returns its rows as a list of (c, v). Each row has 1000
+    bytes of value, which doesn't compress well. With the default number of
+    rows, the partition is larger than the sstable reader's 128 KiB read
+    buffer, and has a promoted index, so that reading one row looks it up in
+    the Rows component.'''
+    cql = manager.get_cql()
+    await cql.run_async(f'CREATE TABLE {ks}.test (p int, c int, v text, PRIMARY KEY (p, c))')
+    insert = cql.prepare(f'INSERT INTO {ks}.test (p, c, v) VALUES (0, ?, ?)')
+    rand = random.Random(1)
+    rows = [(c, rand.randbytes(500).hex()) for c in range(rows)]
+    await asyncio.gather(*[cql.run_async(insert, [c, v]) for c, v in rows])
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+    return rows
+
+
+def read_partition(cql, ks):
+    return [(row.c, row.v) for row in cql.execute(f'SELECT c, v FROM {ks}.test WHERE p = 0')]
+
+
+def read_rows(cql, ks, rows):
+    '''Reads each of the given rows of the wide partition separately, and
+    checks its value.'''
+    select = cql.prepare(f'SELECT v FROM {ks}.test WHERE p = 0 AND c = ?')
+    for c, v in rows:
+        assert cql.execute(select, [c]).one().v == v
+
+
+async def test_wide_partition_read_then_row_reads(manager: ScyllaClusterManager, s3_storage):
+    '''A read of a whole wide partition reads its Data in a single request,
+    and caches it in many pages. Reading each of its rows separately then
+    finds everything it needs in the cache.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        rows = await create_wide_partition(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert read_partition(cql, ks) == rows
+        # Check that the read needed one request for the partition's Data, and
+        # one for each of the index components, Partitions and Rows (each of
+        # them a single page, in this small sstable).
+        assert await read_requests(manager, server, s3_storage) - requests_before == 3
+        assert len(cached_data_pages(cql)) > 1
+
+        # Check that reading each row separately sends no request.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        read_rows(cql, ks, rows)
+        assert await read_requests(manager, server, s3_storage) == requests_before
+
+
+async def test_wide_partition_row_reads_then_read(manager: ScyllaClusterManager, s3_storage):
+    '''Reading each row of a wide partition separately caches the pages
+    which reading the whole partition needs: it then sends no request to
+    the object store.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        rows = await create_wide_partition(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read_rows(cql, ks, rows)
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert read_partition(cql, ks) == rows
+        assert await read_requests(manager, server, s3_storage) == requests_before
+
+
+async def test_wide_partition_some_row_reads_then_read(manager: ScyllaClusterManager, s3_storage):
+    '''Reading a whole wide partition, after only some of its rows were read
+    - and cached - returns all its rows correctly, and caches the rest of the
+    partition, so reading it again sends no request to the object store.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        rows = await create_wide_partition(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read_rows(cql, ks, [rows[0], rows[200]])
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert read_partition(cql, ks) == rows
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert read_partition(cql, ks) == rows
+        assert await read_requests(manager, server, s3_storage) == requests_before
+
+
+async def test_wide_partition_rows_far_apart(manager: ScyllaClusterManager, s3_storage):
+    '''A read of two rows far apart in a wide partition which isn't cached
+    doesn't download - or cache - the megabytes of the partition between
+    them. The reader reads the first row, and then skips to the second, and
+    a skip that long closes the request to the object store rather than read
+    through the pages it skips.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        # About 3 MB of rows.
+        rows = await create_wide_partition(manager, server, ks, rows=3000)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        result = cql.execute(f'SELECT c, v FROM {ks}.test WHERE p = 0 AND c IN (0, 2999)')
+        assert [(row.c, row.v) for row in result] == [rows[0], rows[-1]]
+        # Check that the read cached only a few pages of the partition's Data
+        # (each page is a compressed chunk, of at most 4 KiB), not the
+        # hundreds of pages between the rows.
+        assert 0 < len(cached_data_pages(cql)) <= 32
+
+
 async def test_reversed_read(manager: ScyllaClusterManager, s3_storage):
     '''A reversed read of a partition, which reads the Data in a different
     way than a forward read, also reads it through the page cache, which it
@@ -515,13 +644,7 @@ async def test_reversed_read(manager: ScyllaClusterManager, s3_storage):
     server = await manager.server_add(config=page_cache_config(s3_storage))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (p int, c int, v text, PRIMARY KEY (p, c))')
-        insert = cql.prepare(f'INSERT INTO {ks}.test (p, c, v) VALUES (0, ?, ?)')
-        rand = random.Random(1)
-        data = [(c, rand.randbytes(500).hex()) for c in range(400)]
-        await asyncio.gather(*[cql.run_async(insert, [c, v]) for c, v in data])
-        await manager.api.flush_keyspace(server.ip_addr, ks)
-        reversed_data = list(reversed(data))
+        reversed_data = list(reversed(await create_wide_partition(manager, server, ks)))
 
         def reversed_read(options=''):
             return [(row.c, row.v) for row in cql.execute(f'SELECT c, v FROM {ks}.test WHERE p = 0 ORDER BY c DESC {options}')]
@@ -552,17 +675,23 @@ async def test_reversed_read(manager: ScyllaClusterManager, s3_storage):
 
 async def test_compaction_does_not_populate_cache(manager: ScyllaClusterManager, s3_storage):
     '''Compaction, which reads whole sstables once, reads them from the object
-    store without populating the page cache. The sstable it writes is cached
-    when the user reads it.'''
+    store without populating the page cache. The sstable it writes - with the
+    rows which a later sstable overwrote or deleted merged correctly - is
+    cached when the user reads it.'''
     server = await manager.server_add(config=page_cache_config(s3_storage))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
-        # Write a second sstable, overwriting some of the rows.
+        # Write a second sstable, overwriting some of the rows, and deleting
+        # others.
         update = cql.prepare(f'UPDATE {ks}.test SET v = ? WHERE p = ?')
         for p in range(0, 400, 10):
             data[p] = f'updated {p}'
             await cql.run_async(update, [data[p], p])
+        delete = cql.prepare(f'DELETE FROM {ks}.test WHERE p = ?')
+        for p in range(5, 400, 10):
+            del data[p]
+            await cql.run_async(delete, [p])
         await manager.api.flush_keyspace(server.ip_addr, ks)
 
         await manager.api.drop_sstable_caches(server.ip_addr)
