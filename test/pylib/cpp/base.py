@@ -22,7 +22,7 @@ from _pytest._code.code import ReprFileLocation
 from scripts import coverage as coverage_script
 from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, asan_options, path_to, ubsan_options, use_traditional_build
 from test.pylib.coverage_utils import coverage_dir
-from test.pylib.runner import BUILD_MODE, CPP_TEST_LOG, CPP_TEST_LOG_KEPT, RUN_ID, TEST_SUITE
+from test.pylib.runner import BUILD_MODE, CPP_TEST_LOG, CPP_TEST_LOG_KEPT, RUN_ID, TEST_SUITE, coverage_enabled
 from test.pylib.scylla_server import merge_cmdline_options
 from test.pylib.util import get_configured_tests, ninja_build, ninja_cwd
 
@@ -170,7 +170,7 @@ class CppFile(pytest.File, ABC):
             **BASE_TEST_ENV,
             "TMPDIR": str(self.log_dir),
         }
-        if self.build_mode == "coverage":
+        if coverage_enabled(self.config, self.build_mode, self.stash[TEST_SUITE]):
             # "%m" in LLVM_PROFILE_FILE expands to a value unique to this
             # binary and makes the profile runtime merge counters into the
             # resulting file (under a file lock) rather than overwrite it.

@@ -350,13 +350,24 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     return scale_timeout_inner
 
 
+def coverage_enabled(config: pytest.Config, build_mode: str, suite_config: TestSuiteConfig) -> bool:
+    """Whether profiles of instrumented binaries run for the suite should be routed to its coverage dir.
+
+    Any mode can be instrumented (`configure.py --coverage`), so besides the coverage mode itself,
+    route the profiles of every mode coverage was requested for.
+    """
+    if not suite_config.cfg.get("coverage", True):
+        return False
+    options = config.option
+    return build_mode == "coverage" or (options.coverage and (not options.coverage_modes or build_mode in options.coverage_modes))
+
+
 @pytest.fixture(scope="module")
 def coverage_env(request: pytest.FixtureRequest, build_mode: str, suite_log_dir: pathlib.Path) -> dict[str, str]:
     """Environment routing the coverage profile of an instrumented process started for the current suite."""
     suite_config = get_params_stash(node=request.node)[TEST_SUITE]
-    options = request.config.option
 
-    if options.coverage and (build_mode in options.coverage_modes) and bool(suite_config.cfg.get("coverage", True)):
+    if coverage_enabled(request.config, build_mode, suite_config):
         # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
         # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
         # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
