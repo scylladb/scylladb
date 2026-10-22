@@ -1757,7 +1757,7 @@ future<compaction_reenabler> compaction_manager_impl::disable_compaction(logstor
     auto f = co_await coroutine::as_future(state->completion.get_future());
     f.ignore_ready_future();
 
-    co_return compaction_reenabler([this, &cg] {
+    co_return compaction_reenabler([this, &cg] noexcept {
         auto it = _groups.find(&cg);
         if (it != _groups.end()) {
             --it->second->compaction_disabled_counter;
@@ -1770,7 +1770,7 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
 
     ++state.compaction_disabled_counter;
 
-    return compaction_reenabler([this, &cg] {
+    return compaction_reenabler([this, &cg] noexcept {
         auto it = _groups.find(&cg);
         if (it != _groups.end()) {
             --it->second->compaction_disabled_counter;
