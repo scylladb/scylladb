@@ -191,6 +191,8 @@ add_scylla_test(managed_vector_test
   KIND SEASTAR)
 add_scylla_test(map_difference_test
   KIND BOOST)
+add_scylla_test(moving_average_rate_test
+  KIND BOOST)
 add_scylla_test(murmur_hash_test
   KIND BOOST)
 add_scylla_test(mutation_fragment_test

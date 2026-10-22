@@ -612,6 +612,7 @@ scylla_tests = set([
     'test/boost/managed_bytes_test',
     'test/boost/managed_vector_test',
     'test/boost/map_difference_test',
+    'test/boost/moving_average_rate_test',
     'test/boost/murmur_hash_test',
     'test/boost/mutation_fragment_test',
     'test/boost/mutation_query_test',
@@ -1658,6 +1659,7 @@ pure_boost_tests = set([
     'test/boost/linearizing_input_stream_test',
     'test/boost/lru_string_map_test',
     'test/boost/map_difference_test',
+    'test/boost/moving_average_rate_test',
     'test/boost/nonwrapping_interval_test',
     'test/boost/observable_test',
     'test/boost/wrapping_interval_test',
@@ -1837,6 +1839,7 @@ deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test
 deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc', 'utils/labels.cc']
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
 deps['test/boost/rolling_max_tracker_test'] = ['test/boost/rolling_max_tracker_test.cc']
+deps['test/boost/moving_average_rate_test'] = ['test/boost/moving_average_rate_test.cc', 'utils/on_internal_error.cc']
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/summary_test'] = ['test/boost/summary_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
