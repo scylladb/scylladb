@@ -75,6 +75,22 @@ constexpr std::array registry_options = {
         .scopes = table_oriented_scopes,
         .default_value = auto_repair_threshold_default_seconds,
     },
+    option{
+        .name = option_name::auto_repair_threshold_size_fraction,
+        .description = "Trigger automatic repair for a tablet once the average unrepaired size of its "
+                       "replicas reaches this fraction of their average total size. 0 disables the "
+                       "size-based trigger, leaving only the time-based one",
+        .scopes = table_oriented_scopes,
+        .default_value = 0.0,
+    },
+    option{
+        .name = option_name::auto_repair_threshold_min_size_in_bytes,
+        .description = "Floor for the size-based automatic repair trigger: a tablet is not repaired on "
+                       "the size threshold until the average unrepaired size of its replicas reaches "
+                       "this many bytes, however large a fraction of the tablet that is",
+        .scopes = table_oriented_scopes,
+        .default_value = int64_t(10 * 1024 * 1024),
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
