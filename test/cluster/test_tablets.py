@@ -3059,3 +3059,71 @@ async def test_shutdown_during_tablet_stream_seal(manager: ScyllaClusterManager,
         await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
         rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test")
         assert sorted((r.pk, r.v) for r in rows) == [(k, k) for k in range(10)]
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_shutdown_during_counter_update_on_pending_shard(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+    """
+    During an intranode tablet migration a counter update is applied to the
+    pending shard too, while its counter locks are taken only on the read
+    shard. Hold the apply on the pending shard and release it after drain has
+    flushed the user tables. On object storage the late write is flushed
+    again at close with no sstables registry, and the node aborts, unless the
+    apply enters the pending shard's write phaser.
+    """
+    if not storage_config.on_object_storage:
+        skip_env('the late flush needs the sstables registry only on object storage')
+    cfg = storage_config.get_cluster_cfg()
+    servers = await manager.servers_add(2, config=cfg, property_file=[
+        {'dc': 'dc1', 'rack': 'r1'},
+        {'dc': 'dc1', 'rack': 'r2'}
+    ])
+    await manager.disable_tablet_balancing()
+    cql, hosts = await manager.get_ready_cql(servers)
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c counter)")
+        await cql.run_async(f"UPDATE {ks}.test SET c = c + 1 WHERE pk = 0")
+
+        tablet_token = 0
+        replica_host, src_shard = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
+        host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+        replica_idx = host_ids.index(str(replica_host))
+        replica, coordinator = servers[replica_idx], hosts[1 - replica_idx]
+        dst_shard = 1 - src_shard
+
+        await manager.api.enable_injection(replica.ip_addr, 'intranode_migration_streaming_wait', one_shot=True)
+        migration_task = asyncio.create_task(
+            manager.api.move_tablet(replica.ip_addr, ks, 'test', replica_host, src_shard, replica_host, dst_shard, tablet_token))
+        await manager.api.wait_for_injection_enter(replica.ip_addr, 'intranode_migration_streaming_wait')
+
+        # The update reaches the replica by RPC from the other node: shutdown
+        # waits for a CQL request served by the stopping node itself.
+        await manager.api.enable_injection(replica.ip_addr, 'apply_counter_update_wait', one_shot=True,
+                                           parameters={'shard': str(dst_shard)})
+        update_task = asyncio.ensure_future(cql.run_async(
+            SimpleStatement(f"UPDATE {ks}.test SET c = c + 1 WHERE pk = 0", consistency_level=ConsistencyLevel.ONE),
+            host=coordinator))
+        await manager.api.wait_for_injection_enter(replica.ip_addr, 'apply_counter_update_wait')
+
+        # The counter guard keeps the read shard's drain waiting for this
+        # update, so drain as a whole cannot pass its flush; release the apply
+        # once the pending shard alone has flushed.
+        replica_log = await manager.server_open_log(replica.server_id)
+        stop_mark = await replica_log.mark()
+        stop_task = asyncio.create_task(manager.server_stop_gracefully(replica.server_id))
+        await replica_log.wait_for(rf'\[shard {dst_shard}:[^]]*\] database - Flushed non-system tables', from_mark=stop_mark)
+        await manager.api.message_injection(replica.ip_addr, 'apply_counter_update_wait')
+        await manager.api.message_injection(replica.ip_addr, 'intranode_migration_streaming_wait')
+        await stop_task
+        # The update fails one way or another once its replica is gone.
+        await asyncio.gather(update_task, return_exceptions=True)
+
+        await manager.server_start(replica.server_id)
+        await asyncio.gather(migration_task, return_exceptions=True)
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        rows = await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = 0")
+        assert len(rows) == 1 and rows[0].c in (1, 2), f"unexpected counter value: {rows}"
+
