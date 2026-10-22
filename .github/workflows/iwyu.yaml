@@ -38,8 +38,10 @@ jobs:
           submodules: true
       - name: Generate compilation database
         run: |
+          ./configure.py --use-cmake --mode=release --build-dir=$BUILD_DIR --install-dependencies-only
           cmake                                         \
             -DCMAKE_BUILD_TYPE=$BUILD_TYPE              \
+            -DCMAKE_PREFIX_PATH=$PWD/$BUILD_DIR/conan/cmake \
             -DCMAKE_C_COMPILER=clang                    \
             -DCMAKE_CXX_COMPILER=clang++                \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON          \

@@ -77,7 +77,6 @@ fedora_packages=(
     jsoncpp-devel
     rapidjson-devel
     snappy-devel
-    libdeflate-devel
     systemd-devel
     cryptopp-devel
     git
@@ -101,7 +100,6 @@ fedora_packages=(
     ethtool
     hwloc
     glibc-langpack-en
-    xxhash-devel
     makeself
     libzstd-static libzstd-devel
     lz4-static lz4-devel
@@ -471,6 +469,14 @@ if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ] || [ "$ID" = "centos" ]; then
         install -m 755 "${uv_tmpdir}/${uv_target}/uv" "${uv_tmpdir}/${uv_target}/uvx" /usr/local/bin/
         rm -rf "${uv_tmpdir}"
     fi
+fi
+
+# configure.py needs Conan to resolve native dependencies. Fedora gets it from
+# pip_packages above; other distributions install the same PyPI package as an
+# isolated uv tool, since their system Python may refuse pip installs (PEP 668).
+if [ "$ID" != "fedora" ] && (( EUID == 0 )); then
+    UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
+        uv tool install --upgrade "conan${pip_packages[conan]}"
 fi
 
 # Keep this version in lockstep with the `cxx` crate pinned in rust/inc/Cargo.toml

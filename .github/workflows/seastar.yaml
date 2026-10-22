@@ -26,10 +26,13 @@ jobs:
     container: ${{ needs.read-toolchain.outputs.image }}
     strategy:
       matrix:
-        build_type:
-          - Debug
-          - RelWithDebInfo
-          - Dev
+        include:
+          - build_type: Debug
+            mode: debug
+          - build_type: RelWithDebInfo
+            mode: release
+          - build_type: Dev
+            mode: dev
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -44,8 +47,10 @@ jobs:
       - name: Generate the building system
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
+          ./configure.py --use-cmake --mode=${{ matrix.mode }} --build-dir=$BUILD_DIR --install-dependencies-only
           cmake                                         \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_PREFIX_PATH=$PWD/$BUILD_DIR/conan/cmake \
             -DCMAKE_C_COMPILER=clang                    \
             -DCMAKE_CXX_COMPILER=clang++                \
             -G Ninja                                    \
