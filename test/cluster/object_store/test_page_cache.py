@@ -381,6 +381,84 @@ async def test_encrypted_sstables(manager: ScyllaClusterManager, s3_storage, tmp
         assert not marker_in(page.page for page in pages)
 
 
+@pytest.mark.parametrize('encryption', ['plain', 'encrypted'])
+async def test_large_compression_chunks(manager: ScyllaClusterManager, s3_storage, tmp_path, encryption):
+    '''With compression chunks larger than the default 4 KiB (here 64 KiB),
+    the pages of an sstable's Data - its compressed chunks - are larger, and
+    of varying sizes. For an encrypted sstable the pages are still the
+    encryption's 4 KiB blocks, which the chunks straddle. Either way, repeated
+    reads are served from the cache, which holds exactly the bytes stored in
+    the object store.'''
+    config = page_cache_config(s3_storage)
+    if encryption == 'encrypted':
+        config |= encryption_config(tmp_path)
+    server = await manager.server_add(config=config)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks,
+                                  "WITH compression = {'sstable_compression': 'LZ4Compressor', 'chunk_length_in_kb': 64}")
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+
+        # Check the sizes of the cached Data pages: the compressed 64 KiB
+        # chunks, larger than 4 KiB - or, if encrypted, 4 KiB blocks.
+        sizes = [len(row.page) for row in cql.execute(
+            "SELECT page FROM system_cache.pagecache WHERE component = 'Data' ALLOW FILTERING")]
+        if encryption == 'encrypted':
+            assert max(sizes) == 4096
+        else:
+            assert max(sizes) > 4096
+
+        # Check that a second scan, and point reads, are served from the cache.
+        for read in [lambda: scan(cql, ks) == data,
+                     lambda: cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]]:
+            await manager.api.drop_sstable_caches(server.ip_addr)
+            requests_before = await read_requests(manager, server, s3_storage)
+            assert read()
+            assert await read_requests(manager, server, s3_storage) == requests_before
+
+        # Check that the cached pages are exactly the bytes stored in the
+        # object store.
+        for page in cql.execute("SELECT sstable, component, offset, page FROM system_cache.pagecache"):
+            stored = object_bytes(s3_storage, page.sstable, page.component)
+            assert page.page == stored[page.offset:page.offset + len(page.page)]
+
+
+@pytest.mark.parametrize('encryption', ['plain', 'encrypted'])
+async def test_point_read_then_scan(manager: ScyllaClusterManager, s3_storage, tmp_path, encryption):
+    '''A point read which misses the cache needs one request for the sstable's
+    index and one for its Data, and repeating it needs none. A following scan
+    needs one request for each sstable's Data - even for the sstable whose
+    pages the point read cached in its middle - and one for each sstable's
+    index which is not yet cached. An encrypted sstable, whose pages are the
+    encryption's 4 KiB blocks rather than its compressed chunks, needs exactly
+    the same requests.'''
+    config = page_cache_config(s3_storage)
+    if encryption == 'encrypted':
+        config |= encryption_config(tmp_path)
+    server = await manager.server_add(config=config)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+
+        # Check the requests of a point read which misses the cache, and of
+        # the same point read again.
+        for expected_requests in [2, 0]:
+            await manager.api.drop_sstable_caches(server.ip_addr)
+            requests_before = await read_requests(manager, server, s3_storage)
+            assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+            assert await read_requests(manager, server, s3_storage) - requests_before == expected_requests
+
+        # Check the requests of a scan, after the point read cached some of
+        # the pages of one of the sstables, including its index.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert scan(cql, ks) == data
+        requests = await read_requests(manager, server, s3_storage) - requests_before
+        sstables = {sstable for sstable, _ in cached_data_pages(cql)}
+        assert requests == len(sstables) + (len(sstables) - 1)
+
+
 async def test_many_concurrent_reads(manager: ScyllaClusterManager, s3_storage):
     '''Many more concurrent reads than the reader concurrency semaphore admits
     (100 per shard) all complete. A read looks pages up in the cache while it
