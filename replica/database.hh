@@ -1799,6 +1799,9 @@ private:
 
     reader_concurrency_semaphore _streaming_concurrency_sem;
     reader_concurrency_semaphore _compaction_concurrency_sem;
+    // For the reads of the object storage page cache's tables (see
+    // object_storage_page_cache_semaphore()).
+    reader_concurrency_semaphore _object_storage_page_cache_sem;
     reader_concurrency_semaphore _system_read_concurrency_sem;
 
     // The view update read concurrency semaphores used for view updates coming from user writes.
@@ -2320,6 +2323,13 @@ public:
     // Get the reader concurrency semaphore, appropriate for the query class,
     // which is deduced from the current scheduling group.
     reader_concurrency_semaphore& get_reader_concurrency_semaphore();
+    // A semaphore without limits, for the lookups of the object storage page
+    // cache: a lookup is part of an sstable read which already holds a permit
+    // of its own semaphore, so it must not wait for admission or for memory -
+    // possibly behind the read waiting for it.
+    reader_concurrency_semaphore& object_storage_page_cache_semaphore() noexcept {
+        return _object_storage_page_cache_sem;
+    }
 
     // Convenience method to obtain an admitted permit. See reader_concurrency_semaphore::obtain_permit().
     future<reader_permit> obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr);

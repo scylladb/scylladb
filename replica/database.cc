@@ -277,6 +277,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
         semaphore_dump("streaming", _streaming_concurrency_sem);
         semaphore_dump("system", _system_read_concurrency_sem);
         semaphore_dump("compaction", _compaction_concurrency_sem);
+        semaphore_dump("object_storage_page_cache", _object_storage_page_cache_sem);
         _reader_concurrency_semaphores_group.foreach_semaphore([&semaphore_dump] (scheduling_group sg, reader_concurrency_semaphore& sem) {
              semaphore_dump(sg.name(), sem);
         });
@@ -452,6 +453,9 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
             reader_concurrency_semaphore_shared_pool::empty_pool())
     // No limits, just for accounting.
     , _compaction_concurrency_sem(reader_concurrency_semaphore::no_limits{}, "compaction", reader_concurrency_semaphore::register_metrics::no)
+    // No limits, just for accounting.
+    , _object_storage_page_cache_sem(reader_concurrency_semaphore::no_limits{}, "object_storage_page_cache",
+            reader_concurrency_semaphore::register_metrics::no)
     , _system_read_concurrency_sem(
             // Using higher initial concurrency, see revert_initial_system_read_concurrency_boost().
             max_count_concurrent_reads,
@@ -2129,6 +2133,7 @@ future<reader_permit> database::obtain_reader_permit(schema_ptr schema, const ch
 bool database::is_user_semaphore(const reader_concurrency_semaphore& semaphore) const {
     return &semaphore != &_streaming_concurrency_sem
         && &semaphore != &_compaction_concurrency_sem
+        && &semaphore != &_object_storage_page_cache_sem
         && &semaphore != &_system_read_concurrency_sem;
 }
 
@@ -2140,7 +2145,7 @@ future<> database::clear_inactive_reads_for_tablet(table_id table, dht::token_ra
 }
 
 future<> database::foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func) {
-    for (auto* sem : {&_streaming_concurrency_sem, &_compaction_concurrency_sem, &_system_read_concurrency_sem}) {
+    for (auto* sem : {&_streaming_concurrency_sem, &_compaction_concurrency_sem, &_object_storage_page_cache_sem, &_system_read_concurrency_sem}) {
         co_await func(*sem);
     }
     co_await _reader_concurrency_semaphores_group.foreach_semaphore_async([&] (scheduling_group sg, reader_concurrency_semaphore& sem) -> future<> {
@@ -3011,6 +3016,7 @@ future<> database::stop() {
     co_await _view_update_read_concurrency_semaphores_group.stop();
     co_await _streaming_concurrency_sem.stop();
     co_await _compaction_concurrency_sem.stop();
+    co_await _object_storage_page_cache_sem.stop();
     co_await _system_read_concurrency_sem.stop();
     dblog.info("Joining memtable update action");
     co_await _update_memtable_flush_static_shares_action.join();
