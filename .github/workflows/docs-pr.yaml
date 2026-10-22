@@ -45,7 +45,7 @@ jobs:
       - name: Set up env
         run: make -C docs FLAG="${{ env.FLAG }}" setupenv
       - name: Check redirects
-        run: make -C docs FLAG="${{ env.FLAG }}" check-redirects
+        run: make -C docs FLAG=manual check-redirects
 
       - name: Build docs
         id: docs-build
