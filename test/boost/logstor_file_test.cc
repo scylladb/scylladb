@@ -131,9 +131,10 @@ BOOST_AUTO_TEST_CASE(test_segment_geometry_counts_only_complete_segments_and_fil
 // Checks that segment_geometry refuses these configurations:
 // - a segment size or a file size that is zero,
 // - a segment size that is not block aligned,
+// - a segment size that a segment offset cannot hold,
 // - a file that cannot hold one complete segment,
 // - a disk size that cannot hold one complete file.
-// Also checks that segment_geometry accepts one segment in one file.
+// Also checks that segment_geometry accepts one segment in one file, and the largest segment size.
 BOOST_AUTO_TEST_CASE(test_segment_geometry_refuses_an_invalid_configuration) {
     constexpr uint64_t segment_size = 128 * 1024;
     BOOST_REQUIRE_THROW(segment_geometry(0, segment_size, segment_size), exceptions::configuration_exception);
@@ -142,8 +143,13 @@ BOOST_AUTO_TEST_CASE(test_segment_geometry_refuses_an_invalid_configuration) {
     BOOST_REQUIRE_THROW(segment_geometry(2 * segment_size, segment_size, 2 * segment_size), exceptions::configuration_exception);
     BOOST_REQUIRE_THROW(segment_geometry(segment_size, 2 * segment_size, segment_size), exceptions::configuration_exception);
 
+    constexpr uint64_t max_segment_size = 4 * 1024 * 1024 * 1024ull - ondisk::block_alignment;
+    BOOST_REQUIRE_THROW(segment_geometry(max_segment_size + ondisk::block_alignment, 2 * max_segment_size, 2 * max_segment_size), exceptions::configuration_exception);
+
     const segment_geometry geometry(segment_size, segment_size, segment_size);
     BOOST_REQUIRE_EQUAL(geometry.segment_count(), 1);
+    const segment_geometry largest(max_segment_size, max_segment_size, max_segment_size);
+    BOOST_REQUIRE_EQUAL(largest.segment_count(), 1);
 }
 
 // Checks that a file is allocated by its first segment, and not when its background format ends. A
