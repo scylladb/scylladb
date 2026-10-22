@@ -263,6 +263,8 @@ public:
     const lw_shared_ptr<sstables::sstable_set>& main_sstables() const noexcept;
     // compaction_backlog_source: the sstables the group's backlog is computed on
     lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override;
+    // compaction_backlog_source: the rates of the group
+    compaction::rate_stats rates() const override;
     sstables::sstable_set make_main_sstable_set() const;
     void set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables);
 

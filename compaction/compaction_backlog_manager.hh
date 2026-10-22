@@ -13,6 +13,7 @@
 #include "sstables/shared_sstable.hh"
 #include "mutation/timestamp.hh"
 #include "schema/schema_fwd.hh"
+#include "utils/rate.hh"
 
 class compaction_controller;
 
@@ -23,6 +24,16 @@ class sstable_set;
 namespace compaction {
 
 class compaction_backlog_manager;
+
+// Rates of a compaction group, which the compaction controller compares to match
+// compaction to ingestion. They cover the same interval: a window of minutes, or
+// the time since the group was created while it is younger than that.
+struct rate_stats {
+    utils::rate<utils::units::bytes> flushed_bytes;
+    // Byte-weighted mean size of the flushed sstables, in bytes, or 0 when nothing
+    // was flushed in the interval.
+    double mean_flush_size = 0;
+};
 
 // What a backlog tracker needs to know about the data it accounts for: the sstables
 // of a compaction group -- all of them, across every repair state -- and the schema
@@ -36,6 +47,8 @@ public:
     virtual ~compaction_backlog_source() = default;
     virtual const schema_ptr& schema() const noexcept = 0;
     virtual lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const = 0;
+    // The group's rates, for matching compaction to ingestion.
+    virtual rate_stats rates() const = 0;
 };
 
 // Fixed cost, in bytes, that each sstable adds to the backlog on top of its own size.
