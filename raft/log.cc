@@ -191,8 +191,8 @@ const configuration& log::last_conf_for(index_t idx) const {
     return _snapshot.config;
 }
 
-index_t log::maybe_append(log_entry_ptr_list&& entries, size_t max_memory_usage,
-                          bool force_at_least_one) {
+log::append_result log::maybe_append(log_entry_ptr_list&& entries, size_t max_memory_usage,
+                                     bool force_at_least_one) {
     SCYLLA_ASSERT(!entries.empty());
 
     index_t last_new_idx{0};
@@ -223,12 +223,13 @@ index_t log::maybe_append(log_entry_ptr_list&& entries, size_t max_memory_usage,
             // new entries only: a conflicting entry shrinks the log.
             truncate_uncommitted(e->idx);
         }
+        const size_t entry_size = memory_usage_of(*e, _max_command_size);
         if (max_memory_usage != 0 && !force_at_least_one &&
-                _memory_usage + memory_usage_of(*e, _max_command_size) > max_memory_usage) {
+                _memory_usage + entry_size > max_memory_usage) {
             logger.trace("append_entries: not appending entry with idx {}, log memory usage {} would exceed the limit {}",
                 e->idx, _memory_usage, max_memory_usage);
             // Stop here, so that the log stays contiguous.
-            break;
+            return {last_new_idx, entry_size};
         }
         // The allowance is consumed by the first new entry.
         force_at_least_one = false;
@@ -238,7 +239,7 @@ index_t log::maybe_append(log_entry_ptr_list&& entries, size_t max_memory_usage,
         emplace_back(std::move(e));
     }
 
-    return last_new_idx;
+    return {last_new_idx, 0};
 }
 
 const configuration* log::get_prev_configuration() const {

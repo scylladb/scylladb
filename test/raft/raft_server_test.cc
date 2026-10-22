@@ -1771,3 +1771,81 @@ SEASTAR_THREAD_TEST_CASE(test_follower_log_is_bounded_when_apply_is_slow) {
     slow.read_barrier(nullptr).get();
     BOOST_CHECK_LE(slow.get_status().log_memory_usage, bound);
 }
+
+// A follower whose applier is held fills its log up to max_follower_log_size and
+// refuses the next entry. It has to report the log full whatever the entry size,
+// including when the entries do not divide the bound and the refused entry
+// leaves usage short of it.
+SEASTAR_THREAD_TEST_CASE(test_follower_reports_full_log_when_entries_do_not_fill_the_bound) {
+    const size_t command_size = sizeof(size_t);
+    // One byte above a multiple of any entry size, so the follower stops short of
+    // the bound.
+    const size_t max_log_size = 10 * command_size + 1;
+    const size_t snapshot_trailing_size = command_size;
+
+    const auto follower_config = raft::server::configuration {
+        .snapshot_threshold = 5,
+        .snapshot_threshold_log_size = 5 * command_size,
+        .snapshot_trailing = 1,
+        .snapshot_trailing_size = snapshot_trailing_size,
+        .max_log_size = max_log_size,
+        .enable_forwarding = false,
+        .max_command_size = command_size,
+    };
+    // The other two nodes neither snapshot nor block admission while the test
+    // runs, so the leader's log keeps every entry the follower lacks and
+    // replicates to it from its log.
+    const auto healthy_config = raft::server::configuration {
+        .snapshot_threshold = 10000,
+        .snapshot_threshold_log_size = 1000 * command_size,
+        .snapshot_trailing = 1,
+        .snapshot_trailing_size = snapshot_trailing_size,
+        .max_log_size = 1000 * command_size,
+        .enable_forwarding = false,
+        .max_command_size = command_size,
+    };
+    test_case test_config {
+        .nodes = 3,
+        .config = {healthy_config, follower_config, healthy_config},
+    };
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        1000,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    const auto slow_id = to_raft_id(1);
+    auto& slow = cluster.get_server(1);
+    auto& leader = cluster.get_server(0);
+
+    delay_apply = slow_id;
+    auto release_apply = defer([] noexcept {
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.add_entries(1, 0).get();
+    apply_entered.wait().get();
+
+    // Several times what the follower can hold.
+    cluster.add_entries(49, 0).get();
+
+    const auto bound = max_log_size + snapshot_trailing_size;
+    BOOST_TEST_MESSAGE(fmt::format("slow follower log memory usage: {} (bound {})",
+            slow.get_status().log_memory_usage, bound));
+    BOOST_CHECK_LE(slow.get_status().log_memory_usage, bound);
+    BOOST_CHECK(eventually_true([&] { return slow.get_status().log_full; }));
+    BOOST_CHECK(eventually_true([&] { return leader.get_status().blocked.log_full == 1; }));
+
+    // Released, the follower drains, snapshots, reports room and catches up.
+    apply_release.signal();
+    cluster.wait_log_all().get();
+    slow.read_barrier(nullptr).get();
+    BOOST_CHECK(eventually_true([&] { return !slow.get_status().log_full; }));
+    BOOST_CHECK(eventually_true([&] { return leader.get_status().blocked.log_full == 0; }));
+}

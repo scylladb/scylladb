@@ -79,7 +79,7 @@ void table_metrics::register_table_gauges(const raft_metrics_options& options) {
         sm::make_gauge("log_memory_usage", [this] { return _sample.get().log_memory_usage; },
             sm::description("Bytes used by the in-memory part of the raft logs of the table"), labels).aggregate(aggregate),
         sm::make_gauge("full_logs", [this] { return _sample.get().full_logs; },
-            sm::description("Number of raft logs of the table which reached max_follower_log_size, so entries from a leader are being refused"), labels).aggregate(aggregate),
+            sm::description("Number of raft logs of the table which have no room under max_follower_log_size for the next entry from the leader, so entries from it are being refused"), labels).aggregate(aggregate),
         sm::make_gauge("uncommitted_entries", [this] { return _sample.get().uncommitted_entries; },
             sm::description("Number of raft log entries of the table not committed yet"), labels).aggregate(aggregate),
         sm::make_gauge("unapplied_entries", [this] { return _sample.get().unapplied_entries; },
