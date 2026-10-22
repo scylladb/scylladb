@@ -3650,10 +3650,14 @@ future<> database::flush_non_system_column_families() {
     dblog.info("Flushing non-system tables");
     return parallel_for_each(non_system_cfs, [this] (auto&& uuid_and_cf) {
         auto cf = uuid_and_cf.second;
+        if (auto n = cf->streams_in_progress()) {
+            dblog.info("Waiting for {} in-flight streams to {}.{} before flushing it", n, cf->schema()->ks_name(), cf->schema()->cf_name());
+        }
         // A write landing after the flush would be flushed again when the table
-        // closes, which on object storage needs the sstables registry that
-        // system_keyspace shutdown unplugs.
-        return cf->close_writes().then([cf] {
+        // closes, and a stream still running would seal its sstable then. On
+        // object storage both need the sstables registry that system_keyspace
+        // shutdown unplugs.
+        return when_all_succeed(cf->close_writes(), cf->close_streams()).discard_result().then([cf] {
             return cf->flush();
         }).then([this] {
             _drain_progress.remaining_cfs--;

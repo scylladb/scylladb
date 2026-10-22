@@ -2364,7 +2364,7 @@ table::stop() noexcept {
     co_await when_all(
         _pending_reads_phaser.close(),
         close_writes(),
-        _pending_streams_phaser.close());
+        close_streams());
     // Allow parallel flushes from the commitlog path
     // to synchronize with table::stop
     {
