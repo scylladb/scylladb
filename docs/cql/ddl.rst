@@ -997,16 +997,42 @@ available:
 ========================= =============== =============================================================================
  Option                    Default         Description
 ========================= =============== =============================================================================
- ``sstable_compression``   LZ4Compressor   The compression algorithm to use. Available compressors are
-                                           LZ4Compressor, SnappyCompressor, DeflateCompressor, and ZstdCompressor.
+ ``sstable_compression``   See below       The compression algorithm to use. Available compressors are
+                                           LZ4Compressor, LZ4WithDictsCompressor, SnappyCompressor, DeflateCompressor,
+                                           ZstdCompressor, and ZstdWithDictsCompressor. An empty string disables
+                                           compression. This sub-option is required if any other sub-option is given.
  ``chunk_length_in_kb``    4               On disk SSTables are compressed by block (to allow random reads). This
                                            defines the size (in KB) of the block. Bigger values may improve the
                                            compression rate, but increases the minimum size of data to be read from disk
                                            for a read. Allowed values are powers of two between 1 and 128.
+ ``compression_level``     3               The compression level of ZstdCompressor and ZstdWithDictsCompressor (it
+                                           can't be given for other compressors). Higher levels, up to 22, give better
+                                           compression ratios at the cost of slower compression.
  ``crc_check_chance``      1.0             Not implemented (option value is ignored).
 ========================= =============== =============================================================================
 
 .. crc_check_chance was promoted to a top-level table option since Cassandra 3.0, but we didn't do this.
+
+If a table is created without the ``compression`` option, its compression options are taken from the
+:confval:`sstable_compression_user_table_options` configuration parameter. By default, this is LZ4WithDictsCompressor
+(or LZ4Compressor, if some node in the cluster doesn't support dictionary compression yet). Tables in ScyllaDB's
+internal keyspaces, such as ``system``, use LZ4Compressor by default.
+
+Choosing a compressor:
+
+* LZ4Compressor and SnappyCompressor are the fastest compressors, but have lower compression ratios.
+* ZstdCompressor and DeflateCompressor give better compression ratios, but use more CPU. ZstdCompressor's tradeoff
+  between compression ratio and speed can be tuned with ``compression_level``.
+* LZ4WithDictsCompressor and ZstdWithDictsCompressor are LZ4 and Zstd with a compression dictionary which ScyllaDB
+  trains on the table's data and shares between all the blocks, so they also benefit from patterns which repeat across
+  blocks, and give better compression ratios. SSTables compressed with them can't be read by Cassandra or by older
+  versions of ScyllaDB. See
+  :doc:`Shared-Dictionary Compression for SSTables </operating-scylla/procedures/config-change/sstable-dictionary-compression>`,
+  which also explains how to estimate the compression ratios of the different options on your table's data.
+
+Changing a table's compression options with ``ALTER TABLE`` affects only SSTables written after the change. Existing
+SSTables are recompressed when compaction rewrites them, or when they are rewritten with
+``nodetool upgradesstables -a``.
 
 For example, to enable compression:
 
@@ -1015,6 +1041,11 @@ For example, to enable compression:
    
    CREATE TABLE id (id int PRIMARY KEY) WITH compression = {'sstable_compression': 'LZ4Compressor'};
 
+For example, to use Zstd with a compression dictionary, at a higher compression level than the default:
+
+.. code-block:: console
+
+   CREATE TABLE id (id int PRIMARY KEY) WITH compression = {'sstable_compression': 'ZstdWithDictsCompressor', 'compression_level': 5};
 
 For example, to disable compression:
 
