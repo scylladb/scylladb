@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <cmath>
+
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/aligned_buffer.hh>
@@ -18,6 +20,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/key_utils.hh"
+#include "test/lib/eventually.hh"
 
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
@@ -351,5 +354,95 @@ SEASTAR_THREAD_TEST_CASE(compaction_group_credits_regular_compaction_input_once_
         // Nothing is left to credit once it ended.
         BOOST_REQUIRE_EQUAL(cm.credit_compaction_progress(), 0);
         BOOST_REQUIRE_EQUAL(rates().compacted_bytes.amount(), input_data_size);
+    }, sgs.config()).get();
+}
+
+// Whether the sstable was written by regular compaction, rather than by another kind, like
+// major, or by a memtable flush.
+static bool has_regular_compaction_origin(const sstables::shared_sstable& sst) {
+    return sst->get_origin() == "compaction";
+}
+
+// A compaction group tracks the rates of its memtable flushes and regular compactions,
+// and derives the average flush size, weighted by size, from them.
+SEASTAR_TEST_CASE(compaction_group_rates_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_rates_test_schema("compaction_group_rates");
+        auto t = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(t);
+        t->start();
+        // Nothing gets compacted until the test says so.
+        t->disable_auto_compaction().get();
+        auto rates = [&] { return t.as_compaction_backlog_source().rates(); };
+
+        auto initial = rates();
+        BOOST_REQUIRE_EQUAL(initial.flushed_bytes.amount(), 0);
+        BOOST_REQUIRE_EQUAL(initial.mean_flush_size, 0);
+        BOOST_REQUIRE_EQUAL(initial.compacted_bytes.amount(), 0);
+        BOOST_REQUIRE_EQUAL(initial.compacted_bytes_long.amount(), 0);
+
+        // Flushes of different sizes, close enough to be compacted together later.
+        auto keys = tests::generate_partition_keys(3, s);
+        const int rows[] = {100, 120, 140};
+        for (int i = 0; i < 3; ++i) {
+            t->apply(make_partition(s, keys[i], rows[i]));
+            t->flush().get();
+        }
+        BOOST_REQUIRE_EQUAL(t->sstables_count(), 3);
+
+        // Rates are measured over time, so let some pass.
+        BOOST_REQUIRE(eventually_true([&] { return rates().flushed_bytes.per_second() > 0; }));
+        double bytes = 0;
+        double squared_bytes = 0;
+        for (const auto& sst : *t->get_sstables()) {
+            bytes += sst->data_size();
+            squared_bytes += double(sst->data_size()) * sst->data_size();
+        }
+        auto after_flushes = rates();
+        BOOST_REQUIRE_EQUAL(after_flushes.flushed_bytes.amount(), bytes);
+        BOOST_REQUIRE_CLOSE(after_flushes.mean_flush_size, squared_bytes / bytes, 1e-6);
+        BOOST_REQUIRE_EQUAL(after_flushes.compacted_bytes.amount(), 0);
+        // All rates cover the same interval, so the controller can compare them.
+        BOOST_REQUIRE(after_flushes.compacted_bytes.interval() == after_flushes.flushed_bytes.interval());
+        BOOST_REQUIRE(after_flushes.compacted_bytes_long.interval() == after_flushes.flushed_bytes.interval());
+
+        // Regular compaction counts.
+        t->enable_auto_compaction();
+        t->trigger_compaction();
+        BOOST_REQUIRE(eventually_true([&] { return rates().compacted_bytes.per_second() > 0; }));
+        // Both windows still cover everything since the table started.
+        auto compacted = rates();
+        BOOST_REQUIRE_EQUAL(compacted.compacted_bytes_long.amount(), compacted.compacted_bytes.amount());
+        // A compaction that ended reports what it read and wrote.
+        BOOST_REQUIRE(eventually_true([&] { return rates().completed_input_bytes.amount() > 0; }));
+        BOOST_REQUIRE_GT(rates().completed_output_bytes.amount(), 0);
+        BOOST_REQUIRE(std::ranges::any_of(*t->get_sstables(), has_regular_compaction_origin));
+    });
+}
+
+// Only regular compaction, the one the compaction controller drives, counts toward the
+// compaction rate; other kinds, like major, run in the maintenance scheduling group.
+SEASTAR_THREAD_TEST_CASE(compaction_group_rates_ignore_non_regular_compaction_test) {
+    compaction_scheduling_groups sgs;
+    test_env::do_with_async([] (test_env& env) {
+        auto s = make_rates_test_schema("compaction_group_rates_ignore_major");
+        auto t = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(t);
+        t->start();
+        // Keeps regular compaction from compacting the flushed sstables before major does.
+        t->disable_auto_compaction().get();
+        auto rates = [&] { return t.as_compaction_backlog_source().rates(); };
+
+        auto keys = tests::generate_partition_keys(2, s);
+        for (const auto& key : keys) {
+            t->apply(make_partition(s, key, 10));
+            t->flush().get();
+        }
+        t->compact_all_sstables(tasks::make_empty_task_info(), replica::table::do_flush::no).get();
+        BOOST_REQUIRE_EQUAL(t->sstables_count(), 1);
+        BOOST_REQUIRE(!has_regular_compaction_origin(*t->get_sstables()->begin()));
+
+        BOOST_REQUIRE(eventually_true([&] { return rates().flushed_bytes.per_second() > 0; }));
+        BOOST_REQUIRE_EQUAL(rates().compacted_bytes.amount(), 0);
     }, sgs.config()).get();
 }
