@@ -28,6 +28,8 @@
 #include "db/extensions.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/object_storage_client.hh"
+#include "sstables/object_storage_page_cache_geometry.hh"
+#include "sstables/object_storage_page_cache_source.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_version.hh"
@@ -602,7 +604,6 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
         // a. Compaction will retry deleting the sstable in the next pass, and
         // b. in the future sstables_manager is planned to handle sstables deletion.
         // c. Eventually we may want to record these failures in a system table
-        //    and notify the administrator about that for manual handling (rather than aborting).
         sstlog.warn("Failed to delete {}: {:t}. Ignoring.", name, std::current_exception());
     }
 
@@ -685,7 +686,6 @@ future<> filesystem_storage::unlink_component(const sstable& sst, component_type
         // a. Compaction will retry deleting the sstable in the next pass, and
         // b. in the future sstables_manager is planned to handle sstables deletion.
         // c. Eventually we may want to record these failures in a system table
-        //    and notify the administrator about that for manual handling (rather than aborting).
         sstlog.warn("Failed to delete {}: {:t}. Ignoring.", name, std::current_exception());
     }
 }
@@ -707,6 +707,7 @@ protected:
     const data_dictionary::storage_options::object_storage_layout _layout;
     sstring _prefix;
     seastar::abort_source* _as;
+    const data_dictionary::storage_options::disk_cache_mode _disk_cache;
 
     static constexpr auto status_creating = "creating";
     static constexpr auto status_sealed = "sealed";
@@ -736,8 +737,13 @@ protected:
     seastar::abort_source* abort_source() const {
         return _as;
     }
+    // A source of the given range of the sstable's component, which reads it
+    // through the object storage page cache - or nothing, if it should not be
+    // read through the cache.
+    std::optional<data_source> maybe_make_page_cached_source(const sstable& sst, component_type type, uint64_t offset, uint64_t len) const;
 public:
-    object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as)
+    object_storage_base(sstring type, schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as,
+            data_dictionary::storage_options::disk_cache_mode disk_cache)
         : _type(type) 
         , _schema(std::move(schema))
         , _client(std::move(client))
@@ -745,6 +751,7 @@ public:
         , _layout(layout)
         , _prefix(object_storage_prefix(loc))
         , _as(as)
+        , _disk_cache(disk_cache)
     {
         sstlog.debug("Object storage type={} keyspace={} table={} table_id={} bucket={} prefix={} layout={}", _type, _schema->ks_name(), _schema->cf_name(), _schema->id(), _bucket, _prefix, uses_foreign_layout() ? "foreign" : "unified");
     }
@@ -849,8 +856,9 @@ static object_storage_attributes make_sstable_object_attributes(component_type t
 
 class s3_storage : public object_storage_base {
 public:
-    s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as)
-        : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), layout, as)
+    s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as,
+            data_dictionary::storage_options::disk_cache_mode disk_cache)
+        : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), layout, as, disk_cache)
     {}
 };
 
@@ -1098,8 +1106,41 @@ future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, com
     return maybe_wrap_sink(sst, type, make_data_upload_sink(make_object_name(sst, type), object_storage_attributes{}, std::nullopt));
 }
 
+std::optional<data_source>
+object_storage_base::maybe_make_page_cached_source(const sstable& sst, component_type type, uint64_t offset, uint64_t len) const {
+    if (_disk_cache != data_dictionary::storage_options::disk_cache_mode::pages || type != component_type::Data) {
+        return std::nullopt;
+    }
+    // The cache is not plugged if its experimental feature was disabled
+    // after the keyspace was created.
+    auto* cache = sst.manager().get_object_storage_page_cache();
+    if (!cache) {
+        return std::nullopt;
+    }
+    // The cache holds the component's bytes as they are stored in the object
+    // store, and returns them as they are. If a file I/O extension (such as
+    // encryption) transformed the sstable, those bytes need to be transformed
+    // back, which is not supported yet for a read from the middle of the
+    // component, so such an sstable is read without the cache.
+    for (auto* ext : sst.manager().file_io_extensions()) {
+        if (!ext->get_attributes(sst).empty()) {
+            return std::nullopt;
+        }
+    }
+    shared_ptr<const page_geometry> geometry = sst.get_compression()
+            ? shared_ptr<const page_geometry>(make_shared<compressed_page_geometry>(sst.get_compression()))
+            : shared_ptr<const page_geometry>(make_shared<fixed_size_page_geometry>(sst.ondisk_data_size()));
+    return make_page_cached_source(*cache, get_sstable_identifier(sst), type, std::move(geometry), offset, len,
+            [client = _client, name = make_object_name(sst, type), as = abort_source()] (uint64_t offset, uint64_t length) {
+        return make_ready_future<data_source>(client->make_ranged_download_source(name, offset, length, as));
+    });
+}
+
 future<data_source>
 object_storage_base::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
+    if (auto src = maybe_make_page_cached_source(sst, type, offset, len)) {
+        co_return std::move(*src);
+    }
     co_return co_await make_source(sst, type, f, offset, len, options);
 }
 
@@ -1172,10 +1213,6 @@ future<> object_storage_base::wipe(sstable& sst, const atomic_deletion* deletion
 future<> object_storage_base::destroy(const sstable& sst) {
     // Only delete cloud objects if the SSTable was explicitly marked
     // for deletion (by compaction or unlink).  Two cases are skipped:
-    //  - Normal shutdown: the last shared_sstable ref is dropped but
-    //    the SSTable is NOT marked for deletion — it must survive on
-    //    S3 so the node can reload it on restart.
-    //  - SSTables never sealed: not marked for deletion, also skipped.
     if (!sst.marked_for_deletion()) {
         co_return;
     }
@@ -1477,10 +1514,10 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schem
         },
         [&] (const data_dictionary::storage_options::object_storage& os) mutable -> std::unique_ptr<sstables::storage> {
             if (s_opts.is_s3_type()) {
-                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.layout, os.abort_source);
+                return std::make_unique<sstables::s3_storage>(schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.layout, os.abort_source, os.disk_cache);
             }
             if (s_opts.is_gs_type()) {
-                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.layout, os.abort_source);
+                return std::make_unique<sstables::object_storage_base>("GS", schema, manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.layout, os.abort_source, os.disk_cache);
             }
             throw std::runtime_error(fmt::format("Not implemented: '{}'", os.type));
         }
@@ -1523,7 +1560,8 @@ static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_
     nopts.value = data_dictionary::storage_options::object_storage {
         .bucket = so.bucket,
         .endpoint = so.endpoint,
-        .type = so.type
+        .type = so.type,
+        .disk_cache = so.disk_cache,
     };
     co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }

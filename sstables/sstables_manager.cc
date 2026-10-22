@@ -20,6 +20,7 @@
 #include "utils/log.hh"
 #include "utils/error_injection.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/object_storage_page_cache.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_registry.hh"
 #include "sstables/partition_index_cache.hh"
@@ -658,6 +659,14 @@ void sstables_manager::plug_sstables_registry(std::unique_ptr<sstables::sstables
 
 void sstables_manager::unplug_sstables_registry() noexcept {
     _sstables_registry.reset();
+}
+
+void sstables_manager::plug_object_storage_page_cache(sstables::object_storage_page_cache& cache) noexcept {
+    _object_storage_page_cache = &cache;
+}
+
+void sstables_manager::unplug_object_storage_page_cache() noexcept {
+    _object_storage_page_cache = nullptr;
 }
 
 future<lw_shared_ptr<const data_dictionary::storage_options>> sstables_manager::init_table_storage(const schema& s, const data_dictionary::storage_options& so) {

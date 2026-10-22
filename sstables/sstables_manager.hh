@@ -46,6 +46,7 @@ namespace gms { class feature_service; }
 namespace sstables {
 
 class object_storage_client;
+class object_storage_page_cache;
 class directory_semaphore;
 class storage;
 using schema_ptr = lw_shared_ptr<const schema>;
@@ -188,6 +189,11 @@ private:
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
     directory_semaphore& _dir_semaphore;
     std::unique_ptr<sstables::sstables_registry> _sstables_registry;
+    // The database owns the cache, and stops it only after this manager was
+    // closed - after all sstables, and so all their readers, were released.
+    // So a reader which got the cache before it was unplugged (on shutdown)
+    // may keep using it.
+    sstables::object_storage_page_cache* _object_storage_page_cache = nullptr;
     // This function is bound to token_metadata.get_my_id() in the database constructor,
     // it can return unset value (bool(host_id) == false) until host_id is loaded
     // after system_keyspace initialization.
@@ -263,12 +269,8 @@ public:
     // according to cluster features and database config.
     //
     // 1. The choice must be new enough to support existing data.
-    //    (For example, range tombstones with infinite endpoints were added in version "mc",
-    //     so if the enabled cluster features permit such tombstones to exist, we must
-    //     pick at least "mc").
     // 2. The choice must be old enough to be supported by cluster features.
     // 3. The choice should respect the config, as long as it doesn't contradict (1) and (2).
-    //    The user might wish to use an older format, and we should respect that if possible.
     sstables::sstable::version_types get_preferred_sstable_version() const;
     // Like get_sstable_version_for_write(), but additionally assume that
     // all features implied by `existing_version` are enabled. 
@@ -285,9 +287,6 @@ public:
 
     // Wait until all sstables managed by this sstables_manager instance
     // (previously created by make_sstable()) have been disposed of:
-    //   - if they were marked for deletion, the files are deleted
-    //   - in any case, the open file handles are closed
-    //   - all memory resources are freed
     //
     // Note that close() will not complete until all references to all
     // sstables have been destroyed.
@@ -302,6 +301,15 @@ public:
     // can use this to avoid touching the registry after it has been unplugged.
     bool has_sstables_registry() const noexcept {
         return bool(_sstables_registry);
+    }
+
+    // The object storage page cache is plugged only when its experimental
+    // feature is enabled.
+    void plug_object_storage_page_cache(sstables::object_storage_page_cache&) noexcept;
+    void unplug_object_storage_page_cache() noexcept;
+    // The object storage page cache, or a null pointer if it is not plugged.
+    sstables::object_storage_page_cache* get_object_storage_page_cache() const noexcept {
+        return _object_storage_page_cache;
     }
 
     // Only for sstable::storage usage
