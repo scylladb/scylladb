@@ -1185,6 +1185,7 @@ void disableautocompaction_operation(scylla_rest_client& client, const bpo::vari
     }
 }
 
+// FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
 void disablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/incremental_backups", {{"value", "false"}});
 }
@@ -1216,6 +1217,7 @@ void enableautocompaction_operation(scylla_rest_client& client, const bpo::varia
     }
 }
 
+// FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
 void enablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/incremental_backups", {{"value", "true"}});
 }
@@ -2907,6 +2909,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     }
 }
 
+// FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
 void statusbackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto status = client.get("/storage_service/incremental_backups");
     fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");

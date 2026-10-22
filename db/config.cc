@@ -911,6 +911,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     /**
     * @Group Common automatic backup settings
     */
+    // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
     , incremental_backups(this, "incremental_backups", value_status::Used, false,
         "Deprecated: this feature is deprecated and support for it may be removed in a future release.\n"
         "\n"

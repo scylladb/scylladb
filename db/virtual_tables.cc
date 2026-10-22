@@ -748,6 +748,7 @@ public:
                         {"requests_recent", format("{}", static_cast<uint64_t>(s.requests_moving_average.mean_rate))}};
             });
         });
+        // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
         co_await add_partition(mutation_sink, "incremental_backup_enabled", [this] () {
             return _db.map_reduce0([] (replica::database& db) {
                 return std::ranges::any_of(db.get_keyspaces(), [] (const auto& id_and_ks) {
