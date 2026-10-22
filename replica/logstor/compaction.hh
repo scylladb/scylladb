@@ -415,15 +415,23 @@ struct separator_buffer {
 };
 
 class compaction_reenabler {
-    std::function<void()> _release;
+    noncopyable_function<void() noexcept> _release;
 public:
     compaction_reenabler() = default;
-    explicit compaction_reenabler(std::function<void()> release)
+    explicit compaction_reenabler(noncopyable_function<void() noexcept> release)
         : _release(std::move(release)) {}
     ~compaction_reenabler() { if (_release) _release(); }
 
-    compaction_reenabler(compaction_reenabler&&) = default;
-    compaction_reenabler& operator=(compaction_reenabler&&) = default;
+    compaction_reenabler(compaction_reenabler&&) noexcept = default;
+    compaction_reenabler& operator=(compaction_reenabler&& o) noexcept {
+        if (this != &o) {
+            if (_release) {
+                _release();
+            }
+            _release = std::move(o._release);
+        }
+        return *this;
+    }
     compaction_reenabler(const compaction_reenabler&) = delete;
     compaction_reenabler& operator=(const compaction_reenabler&) = delete;
 };
