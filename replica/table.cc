@@ -4821,6 +4821,17 @@ void compaction_group::on_memtable_flushed(const std::vector<sstables::shared_ss
     }
 }
 
+compaction::rate_stats compaction_group::rates() const {
+    // Read at the same time, the rates cover the same interval.
+    auto now = lowres_db_clock::now();
+    auto flushed_bytes = _flushed_bytes.rate(now);
+    auto flushed_squared_bytes = _flushed_squared_bytes.rate(now);
+    return {
+        .flushed_bytes = flushed_bytes,
+        .mean_flush_size = flushed_bytes.amount() > 0 ? flushed_squared_bytes.per(flushed_bytes) : 0,
+    };
+}
+
 size_t compaction_group::memtable_count() const noexcept {
     return _memtables->size();
 }
