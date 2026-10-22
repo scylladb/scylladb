@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <unordered_set>
 #include <vector>
 #include <seastar/core/future.hh>
 #include <seastar/core/temporary_buffer.hh>
@@ -93,6 +94,11 @@ public:
 
     // Drops all the cached pages of the sstable, of all its components.
     virtual future<> evict_sstable(sstable_id sst) = 0;
+
+    // Drops all the cached pages of all the sstables except those in "live" -
+    // the pages left in the cache by sstables which no longer exist on this
+    // shard (see sstables_manager::evict_orphans_from_page_cache()).
+    virtual future<> evict_other_sstables(const std::unordered_set<sstable_id>& live) = 0;
 };
 
 } // namespace sstables

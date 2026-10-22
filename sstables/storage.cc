@@ -1103,8 +1103,9 @@ object_storage_page_cache* object_storage_base::page_cache(const sstable& sst) c
 future<> object_storage_base::evict_from_page_cache(const sstable& sst) const noexcept {
     auto* cache = page_cache(sst);
     if (!cache) {
-        // TODO: if the cache was unplugged on shutdown before the sstable was
-        // destroyed, its pages stay in the cache - remove them on startup.
+        // If the cache was unplugged on shutdown before the sstable was
+        // destroyed, its pages stay in the cache until the next startup (see
+        // sstables_manager::evict_orphans_from_page_cache()).
         co_return;
     }
     try {
