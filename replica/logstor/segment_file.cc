@@ -298,16 +298,16 @@ future<> file_manager::write_zeros(seastar::file file, uint64_t offset, uint64_t
     }
 }
 
-future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) {
+future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id, wait_for_format wait) {
     check_recovery_step(recovery_step::finished, "get_file_for_new_segment");
     if (file_id == _allocated_file_count) [[unlikely]] {
-        co_await allocate_file(file_id);
+        co_await allocate_file(file_id, wait);
     }
     // A file after the next one fails here.
     co_return get_open_file(file_id);
 }
 
-future<> file_manager::allocate_file(file_id_t file_id) {
+future<> file_manager::allocate_file(file_id_t file_id, wait_for_format wait) {
     if (file_id != _allocated_file_count || file_id >= _cfg.file_count) [[unlikely]] {
         on_internal_error(logstor_logger, fmt::format("Attempted to allocate file {}: {} files allocated, {} configured", file_id, _allocated_file_count, _cfg.file_count));
     }
@@ -316,10 +316,15 @@ future<> file_manager::allocate_file(file_id_t file_id) {
     // format, and the caller uses a free segment instead. A format failure is assumed to be
     // temporary, and a failure that lasts is not handled. The format starts again only when a
     // segment needs the file, so no timer runs it. A retry is safe, because format_file() does not
-    // change a file that it published, and it truncates the temporary file.
+    // change a file that it published, and it truncates the temporary file. While a format runs,
+    // the allocation waits for it only if `wait` is yes. A failed format that does not start again
+    // here fails the allocation with its error in both cases.
     if (_next_file_format.failed() && lowres_clock::now() - _next_file_format_failed_at >= _cfg.format_retry_interval) {
         logstor_logger.debug("Trying again to format logstor file {}", file_path(file_id).string());
         start_next_file_format();
+    }
+    if (!wait && !_next_file_format.available()) {
+        throw std::runtime_error(fmt::format("Logstor file {} is not formatted yet", file_path(file_id).string()));
     }
     co_await _next_file_format.get_future();
     if (file_id != _allocated_file_count) [[unlikely]] {

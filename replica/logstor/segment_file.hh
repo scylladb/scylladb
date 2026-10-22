@@ -25,6 +25,7 @@
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/bool_class.hh>
 #include <seastar/util/log.hh>
 
 #include <fmt/format.h>
@@ -36,6 +37,8 @@ namespace replica::logstor {
 extern seastar::logger logstor_logger;
 
 using file_id_t = uint64_t;
+
+using wait_for_format = seastar::bool_class<class wait_for_format_tag>;
 
 // The configuration of the segment files of one shard.
 struct file_manager_config {
@@ -126,10 +129,11 @@ public:
     // Returns the open file for a new segment. Recovery allocates the files that it finds, and with
     // format_on_startup also the files that it formats. A file that is formatted in the background
     // is allocated here, by the first segment taken from it. Each later segment finds the file
-    // allocated and open. The caller must have finished the recovery. The caller must not call
-    // this again before the call returns, because a second call for a file that is in allocation is
-    // an internal error.
-    future<seastar::file> get_file_for_new_segment(file_id_t);
+    // allocated and open. If the format of the file is not done and `wait` is no, the call fails at
+    // once and does not wait for the format. The caller must have finished the recovery. The caller
+    // must not call this again before the call returns, because a second call for a file that is in
+    // allocation is an internal error.
+    future<seastar::file> get_file_for_new_segment(file_id_t, wait_for_format wait = wait_for_format::yes);
 
     uint64_t allocated_file_count() const noexcept { return _allocated_file_count; }
 
@@ -204,10 +208,11 @@ private:
     // temporary file of a format.
     future<> write_zeros(seastar::file file, uint64_t offset, uint64_t size);
 
-    // Allocates the next file: waits for its format, opens it, and starts the format of the file
-    // after it in the background. The caller must give the next file, below the configured
-    // count, and must not call this again before it returns.
-    future<> allocate_file(file_id_t);
+    // Allocates the next file: waits for its format (or fails, if `wait` is no and the format is not
+    // done), opens it, and starts the format of the file after it in the background. The caller
+    // must give the next file, below the configured count, and must not call this again before it
+    // returns.
+    future<> allocate_file(file_id_t, wait_for_format);
 
     // Opens the file and puts it in the cache. An open of a file that is open is an internal error.
     future<seastar::file> open_file(file_id_t);
