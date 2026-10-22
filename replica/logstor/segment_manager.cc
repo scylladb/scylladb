@@ -1454,9 +1454,9 @@ future<> segment_manager_impl::replenish_reserve() {
 }
 
 future<seg_ptr> segment_manager_impl::allocate_segment() {
-    auto make_segment = [this] (log_segment_id seg_id) -> future<seg_ptr> {
+    auto make_segment = [this] (log_segment_id seg_id, wait_for_format wait) -> future<seg_ptr> {
         auto seg_loc = segment_id_to_file_location(seg_id);
-        auto file = co_await _file_mgr.get_file_for_new_segment(seg_loc.file_id);
+        auto file = co_await _file_mgr.get_file_for_new_segment(seg_loc.file_id, wait);
         auto seg = make_lw_shared<writeable_segment>(seg_id, std::move(file), seg_loc.file_offset, _cfg.segment_size);
         get_segment_descriptor(seg_id).reset(_cfg.segment_size);
         _stats.segments_allocated++;
@@ -1468,13 +1468,14 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
         if (_next_new_segment_id < _configured_max_segments) {
             // Do not skip a new segment that fails, because a skipped segment can be the first
             // segment of a file, and then the allocation of the next file fails.
-            auto seg_f = co_await coroutine::as_future(make_segment(log_segment_id(_next_new_segment_id)));
+            auto seg_f = co_await coroutine::as_future(make_segment(log_segment_id(_next_new_segment_id),
+                    wait_for_format(_free_segments.empty())));
             if (!seg_f.failed()) {
                 ++_next_new_segment_id;
                 co_return seg_f.get();
             }
             // The file of the new segment can be unavailable for a while, for example if its format
-            // failed, so the store continues with the free segments.
+            // failed or is not done, so the store continues with the free segments.
             auto ex = seg_f.get_exception();
             if (_free_segments.empty()) {
                 co_return coroutine::exception(std::move(ex));
@@ -1488,7 +1489,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
         if (!_free_segments.empty()) {
             auto seg_id = _free_segments.front();
             _free_segments.pop_front();
-            auto seg_f = co_await coroutine::as_future(make_segment(seg_id));
+            auto seg_f = co_await coroutine::as_future(make_segment(seg_id, wait_for_format::yes));
             if (seg_f.failed()) {
                 _free_segments.push_back(seg_id);
                 co_return coroutine::exception(seg_f.get_exception());
