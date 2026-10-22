@@ -142,7 +142,7 @@ HARNESS_CONFTEST = textwrap.dedent("""\
 
     import pytest
 
-    from test.pylib.runner import (BUILD_MODE, TEST_SUITE, pytest_runtest_makereport, scylla_cluster,
+    from test.pylib.runner import (BUILD_MODE, TEST_SUITE, coverage_env, pytest_runtest_makereport, scylla_cluster,
                                    testpy_cluster_factory)
 
     def pytest_addoption(parser):

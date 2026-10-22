@@ -105,7 +105,7 @@ def split_list(l, delim):
     return (before, after)
 
 @pytest.fixture(scope="module")
-def nodetool(nodetool_path, rest_api_mock_server):
+def nodetool(nodetool_path, rest_api_mock_server, coverage_env):
     def invoker(method, *args, expected_requests=None, check_return_code=True):
         with expected_requests_manager(rest_api_mock_server, expected_requests or []):
             before, after = split_list(list(args), "--")
@@ -115,7 +115,8 @@ def nodetool(nodetool_path, rest_api_mock_server):
                    "-h", api_ip,
                    "-p", str(api_port)] + after
             env = {'UBSAN_OPTIONS': ubsan_options(),
-                   'ASAN_OPTIONS': asan_options()}
+                   'ASAN_OPTIONS': asan_options(),
+                   **coverage_env}
             res = subprocess.run(cmd, capture_output=True, text=True, env=env)
             sys.stdout.write(res.stdout)
             sys.stderr.write(res.stderr)

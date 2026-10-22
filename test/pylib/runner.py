@@ -351,17 +351,10 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
 
 
 @pytest.fixture(scope="module")
-def testpy_cluster_factory(request: pytest.FixtureRequest,
-                           build_mode: str,
-                           suite_log_dir: pathlib.Path,
-                           scylla_binary: str,
-                           testpy_logger: logging.Logger) -> ClusterFactory:
-    """A factory of Scylla clusters configured for the current suite and build mode."""
+def coverage_env(request: pytest.FixtureRequest, build_mode: str, suite_log_dir: pathlib.Path) -> dict[str, str]:
+    """Environment routing the coverage profile of an instrumented process started for the current suite."""
     suite_config = get_params_stash(node=request.node)[TEST_SUITE]
     options = request.config.option
-
-    # environment variables that should be the base of all processes running in this suit
-    base_env = {}
 
     if options.coverage and (build_mode in options.coverage_modes) and bool(suite_config.cfg.get("coverage", True)):
         # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
@@ -369,7 +362,23 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
         # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
         # thousands of tests it can easily reach 10 of GBs)
         # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
-        base_env["LLVM_PROFILE_FILE"] = str(coverage_dir(suite_log_dir) / suite_config.name / "%m.profraw")
+        return {"LLVM_PROFILE_FILE": str(coverage_dir(suite_log_dir) / suite_config.name / "%m.profraw")}
+    return {}
+
+
+@pytest.fixture(scope="module")
+def testpy_cluster_factory(request: pytest.FixtureRequest,
+                           build_mode: str,
+                           suite_log_dir: pathlib.Path,
+                           scylla_binary: str,
+                           coverage_env: dict[str, str],
+                           testpy_logger: logging.Logger) -> ClusterFactory:
+    """A factory of Scylla clusters configured for the current suite and build mode."""
+    suite_config = get_params_stash(node=request.node)[TEST_SUITE]
+    options = request.config.option
+
+    # environment variables that should be the base of all processes running in this suit
+    base_env = dict(coverage_env)
 
     @asynccontextmanager
     async def cluster_for_test(node: _pytest.nodes.Node, test_name: str) -> AsyncGenerator[ScyllaCluster]:
