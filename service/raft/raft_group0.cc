@@ -34,7 +34,6 @@
 #include "service/topology_mutation.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
-#include "utils/per_task_value.hh"
 
 #include <seastar/core/smp.hh>
 #include <seastar/core/sleep.hh>
@@ -1002,38 +1001,37 @@ void raft_group0::register_server_metrics(raft::server_id my_id, const raft::ser
     // The group name predates the "raft_group0" one used elsewhere and is kept
     // so that the existing dashboards keep working.
     register_raft_server_stats_metrics(_server_metrics, stats, raft_metrics_options{.group_name = "raft", .labels = {id}});
-    // One sweep feeds every gauge of a scrape.
-    auto sample = make_lw_shared(utils::per_task_value([&server] { return server.get_status(); }));
+    auto status = sm::make_collector([&server] { return server.get_status(); });
     _server_metrics.add_group("raft", {
-        sm::make_gauge("in_memory_log_size", [sample] { return sample->get().in_memory_log_size; },
+        sm::make_gauge("in_memory_log_size", status, &raft::server_status::in_memory_log_size,
              sm::description("size of in-memory part of the log"), {id}),
-        sm::make_gauge("log_memory_usage", [sample] { return sample->get().log_memory_usage; },
+        sm::make_gauge("log_memory_usage", status, &raft::server_status::log_memory_usage,
              sm::description("memory usage of in-memory part of the log in bytes"), {id}),
-        sm::make_gauge("log_full", [sample] { return uint64_t(sample->get().log_full); },
+        sm::make_gauge("log_full", status, &raft::server_status::log_full,
              sm::description("1 if the in-memory log has no room under max_follower_log_size for the next entry from the leader, so entries from it are being refused"), {id}),
-        sm::make_gauge("log_last_index", [sample] { return sample->get().last_idx.value(); },
+        sm::make_gauge("log_last_index", status, [] (const raft::server_status& s) { return s.last_idx.value(); },
              sm::description("index of the last log entry"), {id}),
-        sm::make_gauge("log_last_term", [sample] { return sample->get().last_term.value(); },
+        sm::make_gauge("log_last_term", status, [] (const raft::server_status& s) { return s.last_term.value(); },
              sm::description("term of the last log entry"), {id}),
-        sm::make_gauge("snapshot_last_index", [sample] { return sample->get().last_snapshot_idx.value(); },
+        sm::make_gauge("snapshot_last_index", status, [] (const raft::server_status& s) { return s.last_snapshot_idx.value(); },
              sm::description("index of the snapshot"), {id}),
-        sm::make_gauge("snapshot_last_term", [sample] { return sample->get().last_snapshot_term.value(); },
+        sm::make_gauge("snapshot_last_term", status, [] (const raft::server_status& s) { return s.last_snapshot_term.value(); },
              sm::description("term of the snapshot"), {id}),
-        sm::make_gauge("state", [sample] { return sample->get().state; },
+        sm::make_gauge("state", status, &raft::server_status::state,
              sm::description("current state: 0 - follower, 1 - candidate, 2 - leader"), {id}),
-        sm::make_gauge("commit_index", [sample] { return sample->get().commit_idx.value(); },
+        sm::make_gauge("commit_index", status, [] (const raft::server_status& s) { return s.commit_idx.value(); },
              sm::description("commit index"), {id}),
-        sm::make_gauge("apply_index", [sample] { return sample->get().applied_idx.value(); },
+        sm::make_gauge("apply_index", status, [] (const raft::server_status& s) { return s.applied_idx.value(); },
              sm::description("applied index"), {id}),
-        sm::make_gauge("log_limiter_waiters", [sample] { return sample->get().log_limiter_waiters; },
+        sm::make_gauge("log_limiter_waiters", status, &raft::server_status::log_limiter_waiters,
              sm::description("Number of entries currently waiting for the in-memory log to shrink below max_log_size"), {id}),
-        sm::make_gauge("blocked_followers", [sample] { return sample->get().blocked.probe; },
+        sm::make_gauge("blocked_followers", status, [] (const raft::server_status& s) { return s.blocked.probe; },
              sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight), snapshot (waiting for a snapshot transfer) or log_full (the follower reported that its log is full); followers the failure detector reports down are not counted"), {id, raft_blocked_reason_label("probe")}),
-        sm::make_gauge("blocked_followers", [sample] { return sample->get().blocked.pipeline_full; },
+        sm::make_gauge("blocked_followers", status, [] (const raft::server_status& s) { return s.blocked.pipeline_full; },
              sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight), snapshot (waiting for a snapshot transfer) or log_full (the follower reported that its log is full); followers the failure detector reports down are not counted"), {id, raft_blocked_reason_label("pipeline_full")}),
-        sm::make_gauge("blocked_followers", [sample] { return sample->get().blocked.snapshot; },
+        sm::make_gauge("blocked_followers", status, [] (const raft::server_status& s) { return s.blocked.snapshot; },
              sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight), snapshot (waiting for a snapshot transfer) or log_full (the follower reported that its log is full); followers the failure detector reports down are not counted"), {id, raft_blocked_reason_label("snapshot")}),
-        sm::make_gauge("blocked_followers", [sample] { return sample->get().blocked.log_full; },
+        sm::make_gauge("blocked_followers", status, [] (const raft::server_status& s) { return s.blocked.log_full; },
              sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight), snapshot (waiting for a snapshot transfer) or log_full (the follower reported that its log is full); followers the failure detector reports down are not counted"), {id, raft_blocked_reason_label("log_full")}),
     });
 }

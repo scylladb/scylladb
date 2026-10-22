@@ -67,7 +67,7 @@ table_metrics::table_metrics(const sstring& ks_name, const sstring& cf_name, rep
     register_apply_metrics(options);
 }
 
-// The gauges of the table itself, summed over its servers by _sample.get().
+// The gauges of the table itself, summed over its servers by sweep().
 void table_metrics::register_table_gauges(const raft_metrics_options& options) {
     const auto& labels = options.labels;
     const auto& aggregate = options.aggregate_labels;
@@ -76,28 +76,29 @@ void table_metrics::register_table_gauges(const raft_metrics_options& options) {
         result.push_back(raft_blocked_reason_label(reason));
         return result;
     };
+    auto sampler = sm::make_collector([this] { return sweep(); });
     _metrics.add_group("strong_consistency_raft", {
-        sm::make_gauge("leaders", [this] { return _sample.get().leaders; },
+        sm::make_gauge("leaders", sampler, &sample::leaders,
             sm::description("Number of tablet raft groups of the table led by this node"), labels).aggregate(aggregate),
-        sm::make_gauge("in_memory_log_size", [this] { return _sample.get().in_memory_log_size; },
+        sm::make_gauge("in_memory_log_size", sampler, &sample::in_memory_log_size,
             sm::description("Number of entries in the in-memory part of the raft logs of the table"), labels).aggregate(aggregate),
-        sm::make_gauge("log_memory_usage", [this] { return _sample.get().log_memory_usage; },
+        sm::make_gauge("log_memory_usage", sampler, &sample::log_memory_usage,
             sm::description("Bytes used by the in-memory part of the raft logs of the table"), labels).aggregate(aggregate),
-        sm::make_gauge("full_logs", [this] { return _sample.get().full_logs; },
+        sm::make_gauge("full_logs", sampler, &sample::full_logs,
             sm::description("Number of raft logs of the table which have no room under max_follower_log_size for the next entry from the leader, so entries from it are being refused"), labels).aggregate(aggregate),
-        sm::make_gauge("uncommitted_entries", [this] { return _sample.get().uncommitted_entries; },
+        sm::make_gauge("uncommitted_entries", sampler, &sample::uncommitted_entries,
             sm::description("Number of raft log entries of the table not committed yet"), labels).aggregate(aggregate),
-        sm::make_gauge("unapplied_entries", [this] { return _sample.get().unapplied_entries; },
+        sm::make_gauge("unapplied_entries", sampler, &sample::unapplied_entries,
             sm::description("Number of committed raft log entries of the table not applied yet"), labels).aggregate(aggregate),
-        sm::make_gauge("log_limiter_waiters", [this] { return _sample.get().log_limiter_waiters; },
+        sm::make_gauge("log_limiter_waiters", sampler, &sample::log_limiter_waiters,
             sm::description("Number of entries currently waiting for an in-memory raft log of the table to shrink below max_log_size"), labels).aggregate(aggregate),
-        sm::make_gauge("blocked_followers", [this] { return _sample.get().blocked.probe; },
+        sm::make_gauge("blocked_followers", sampler, [] (const sample& s) { return s.blocked.probe; },
             sm::description("Number of followers the tablet raft group leaders cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight), snapshot (waiting for a snapshot transfer) or log_full (the follower reported that its log is full); followers the failure detector reports down are not counted"), with_reason("probe")).aggregate(aggregate),
-        sm::make_gauge("blocked_followers", [this] { return _sample.get().blocked.pipeline_full; },
+        sm::make_gauge("blocked_followers", sampler, [] (const sample& s) { return s.blocked.pipeline_full; },
             sm::description("Number of followers the tablet raft group leaders cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight), snapshot (waiting for a snapshot transfer) or log_full (the follower reported that its log is full); followers the failure detector reports down are not counted"), with_reason("pipeline_full")).aggregate(aggregate),
-        sm::make_gauge("blocked_followers", [this] { return _sample.get().blocked.snapshot; },
+        sm::make_gauge("blocked_followers", sampler, [] (const sample& s) { return s.blocked.snapshot; },
             sm::description("Number of followers the tablet raft group leaders cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight), snapshot (waiting for a snapshot transfer) or log_full (the follower reported that its log is full); followers the failure detector reports down are not counted"), with_reason("snapshot")).aggregate(aggregate),
-        sm::make_gauge("blocked_followers", [this] { return _sample.get().blocked.log_full; },
+        sm::make_gauge("blocked_followers", sampler, [] (const sample& s) { return s.blocked.log_full; },
             sm::description("Number of followers the tablet raft group leaders cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight), snapshot (waiting for a snapshot transfer) or log_full (the follower reported that its log is full); followers the failure detector reports down are not counted"), with_reason("log_full")).aggregate(aggregate),
     });
 }
