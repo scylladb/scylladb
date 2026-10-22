@@ -152,6 +152,96 @@ async def test_write_failure_retires_active_segment(manager: ScyllaClusterManage
             assert rows[0].v == expected_v, f"Key {pk} has wrong value after recovery"
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_stop_while_segment_allocation_fails(manager: ScyllaClusterManager):
+    """
+    If the reserve replenisher cannot allocate segments, a write that waits for a segment must
+    fail. It must not wait forever, because a graceful stop of the node waits for it.
+
+    This test:
+    1. Writes a few keys
+    2. Makes each segment allocation fail
+    3. Writes large values until a write fails
+    4. Starts writers, waits until a write waits for a segment, and stops the node gracefully
+       while they run
+    5. Starts the node and verifies the keys of step 1 and each write that succeeded
+    """
+    inj = 'logstor_allocate_segment_fail'
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'experimental_features': ['logstor'],
+        'logstor_disk_size_in_mb': 128,
+        'logstor_file_size_in_mb': 32,
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        expected_data = {}
+        for pk in range(5):
+            value = f"before_{pk}"
+            expected_data[pk] = value
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
+
+        await manager.api.enable_injection(servers[0].ip_addr, inj, one_shot=False)
+
+        # Each value takes most of a segment, so each write takes at least one segment from the
+        # reserve. The replenisher cannot replace them, thus a write fails after some writes.
+        large_value = 'x' * (segment_size * 5 // 8)
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        write_failed = False
+        for pk in range(100, 1100):
+            try:
+                await cql.run_async(insert, [pk, large_value])
+            except (WriteFailure, WriteTimeout, ServerError):
+                write_failed = True
+                break
+            expected_data[pk] = large_value
+        assert write_failed, "No write failed while each segment allocation fails"
+
+        async def normal_segment_waits():
+            metrics = await manager.metrics.query(servers[0].ip_addr)
+            return metrics.get("scylla_logstor_sm_segment_pool_normal_segments_wait") or 0
+        waits_before = await normal_segment_waits()
+
+        # Each failed attempt of the replenisher fails the writes that wait, about once a second.
+        # Thus the writers write again until the stop ends, so that a write very likely waits when
+        # the stop starts. Each write has its own key.
+        stopped = False
+        written = []
+        async def writer(first_pk):
+            pk = first_pk
+            while not stopped:
+                try:
+                    await cql.run_async(insert, [pk, large_value])
+                    written.append(pk)
+                except Exception:
+                    # While the node stops, the driver raises other errors too.
+                    await asyncio.sleep(0.01)
+                pk += 1
+        writers = [asyncio.create_task(writer(10000 * (i + 1))) for i in range(8)]
+
+        async def a_write_waits():
+            return True if await normal_segment_waits() > waits_before else None
+        try:
+            await wait_for(a_write_waits, time.time() + 60)
+            await manager.server_stop_gracefully(servers[0].server_id)
+        finally:
+            stopped = True
+            await asyncio.gather(*writers)
+        for pk in written:
+            expected_data[pk] = large_value
+
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        for pk, expected_v in expected_data.items():
+            rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1, f"Key {pk} not found after restart"
+            assert rows[0].v == expected_v, f"Key {pk} has wrong value after restart"
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("fail_separator_flush", [False, True], ids=["normal", "fail_separator_flush"])
 async def test_recovery_basic(manager: ScyllaClusterManager, fail_separator_flush: bool):
     """
