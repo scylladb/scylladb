@@ -477,6 +477,15 @@ permissions can be granted on which types of resources, and which statements are
    * - ``PATTERN_SEARCH_INDEXING``
      - ``ALL KEYSPACES``
      - ``SELECT`` on all tables with pattern search indexes, and on some :ref:`system tables <external-index-system-tables>`
+   * - ``SELECT``
+     - ``ALL OBJECT STORAGE``
+     - Alternator's ``DescribeExport`` and ``ListExports``
+   * - ``MODIFY``
+     - ``ALL OBJECT STORAGE``
+     - Alternator's ``ExportTableToPointInTime`` (with ``SELECT`` on the table)
+   * - ``AUTHORIZE``
+     - ``ALL OBJECT STORAGE``
+     - ``GRANT PERMISSION`` and ``REVOKE PERMISSION`` on ``ALL OBJECT STORAGE``
 
 .. _external-index-system-tables:
 
@@ -507,6 +516,9 @@ Granting permission uses the ``GRANT PERMISSION`` statement:
            :| [ TABLE ] `table_name`
            :| ALL USERS
            :| USER `user_name`
+           :| ALL OBJECT STORAGE
+
+Granting permissions on ``ALL OBJECT STORAGE`` fails while a node of the cluster runs a version prior to 2026.4.
 
 For instance::
 

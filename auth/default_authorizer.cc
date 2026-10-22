@@ -25,6 +25,7 @@ extern "C" {
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "exceptions/exceptions.hh"
+#include "gms/feature_service.hh"
 #include "utils/log.hh"
 
 namespace auth {
@@ -104,6 +105,11 @@ default_authorizer::modify(
 
 
 future<> default_authorizer::grant(std::string_view role_name, permission_set set, const resource& resource, ::service::group0_batch& mc) {
+    // A node that does not know the object storage resource fails to list all permissions once a grant names it.
+    if (resource.kind() == resource_kind::object_storage && !_qp.db().features().object_storage_permissions) {
+        return make_exception_future<>(unsupported_authorization_operation(
+                "Permissions on ALL OBJECT STORAGE are not yet supported by this cluster. Upgrade all nodes to use them."));
+    }
     return modify(role_name, std::move(set), resource, "+", mc);
 }
 

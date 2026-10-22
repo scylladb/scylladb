@@ -335,6 +335,7 @@ future<bool> service::exists(const resource& r) const {
             return make_ready_future<bool>(true);
         }
         case resource_kind::service_level:
+        case resource_kind::object_storage:
             return make_ready_future<bool>(true);
 
         case resource_kind::functions: {
@@ -529,6 +530,8 @@ static sstring describe_resource_kind(const permission& perm, const resource& r,
             on_internal_error(log, "Granting permissions for service levels is not supported");
         case resource_kind::functions:
             return describe_udf_resource(perm, r, role);
+        case resource_kind::object_storage:
+            return seastar::format("GRANT {} ON ALL OBJECT STORAGE TO {};", permissions::to_string(perm), cql3::util::maybe_quote(role));
     }
 }
 

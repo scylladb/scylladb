@@ -37,7 +37,7 @@ public:
 };
 
 enum class resource_kind {
-    data, role, service_level, functions
+    data, role, service_level, functions, object_storage
 };
 
 }
@@ -56,6 +56,8 @@ struct fmt::formatter<auth::resource_kind> : fmt::formatter<string_view> {
             return formatter<string_view>::format("service_level", ctx);
         case functions:
             return formatter<string_view>::format("functions", ctx);
+        case object_storage:
+            return formatter<string_view>::format("object_storage", ctx);
         }
         std::abort();
     }
@@ -136,6 +138,7 @@ private:
     friend class role_resource_view;
     friend class service_level_resource_view;
     friend class functions_resource_view;
+    friend class object_storage_resource_view;
 
     friend bool operator<(const resource&, const resource&);
     friend bool operator==(const resource&, const resource&) = default;
@@ -217,6 +220,17 @@ public:
 };
 
 ///
+/// An "object_storage" view of \ref resource.
+///
+class object_storage_resource_view final {
+public:
+    ///
+    /// \throws \ref resource_kind_mismatch if the argument is not an "object_storage" resource.
+    ///
+    explicit object_storage_resource_view(const resource&);
+};
+
+///
 /// Parse a resource from its name.
 ///
 /// \throws \ref invalid_resource_name when the name is malformed.
@@ -264,6 +278,8 @@ inline resource make_functions_resource(std::string_view keyspace, std::string_v
 
 resource make_functions_resource(const cql3::functions::function& f);
 
+const resource& root_object_storage_resource();
+
 sstring encode_signature(std::string_view name, std::vector<data_type> args);
 
 std::pair<sstring, std::vector<data_type>> decode_signature(std::string_view encoded_signature);
@@ -290,6 +306,10 @@ struct hash<auth::resource> {
         return utils::tuple_hash()(std::make_tuple(auth::resource_kind::functions, fv.keyspace(), fv.function_signature()));
     }
 
+    static size_t hash_object_storage(const auth::object_storage_resource_view&) {
+        return utils::tuple_hash()(std::make_tuple(auth::resource_kind::object_storage));
+    }
+
     size_t operator()(const auth::resource& r) const {
         std::size_t value;
 
@@ -298,6 +318,7 @@ struct hash<auth::resource> {
         case auth::resource_kind::role: value = hash_role(auth::role_resource_view(r)); break;
         case auth::resource_kind::service_level: value = hash_service_level(auth::service_level_resource_view(r)); break;
         case auth::resource_kind::functions: value = hash_function(auth::functions_resource_view(r)); break;
+        case auth::resource_kind::object_storage: value = hash_object_storage(auth::object_storage_resource_view(r)); break;
         }
 
         return value;
