@@ -28,6 +28,7 @@
 #include "replica/memtable.hh"
 #include "sstables/compress.hh"
 #include "sstables/object_storage_page_cache_geometry.hh"
+#include "sstables/object_storage_page_cache_file.hh"
 #include "sstables/object_storage_page_cache_source.hh"
 #include "test/lib/cql_test_env.hh"
 #include "tombstone_gc_options.hh"
@@ -865,6 +866,156 @@ SEASTAR_THREAD_TEST_CASE(test_page_cached_source_object_too_short) {
     BOOST_REQUIRE_THROW(read_to_end(in), std::runtime_error);
     in.close().get();
     BOOST_REQUIRE_EQUAL(cache.data_page(8192), "");
+}
+
+// A file on a fake object store, whose dma_read_bulk() is one request to read
+// the object, like that of a file on S3. Only reading is supported.
+class fake_object_file : public file_impl {
+    fake_object& _object;
+public:
+    explicit fake_object_file(fake_object& object) : _object(object) {}
+
+    virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent*) override {
+        _object.requests.emplace_back(offset, range_size);
+        auto len = offset < _object.content.size() ? std::min<uint64_t>(range_size, _object.content.size() - offset) : 0;
+        return make_ready_future<temporary_buffer<uint8_t>>(
+                temporary_buffer<uint8_t>(reinterpret_cast<const uint8_t*>(_object.content.data()) + offset, len));
+    }
+    virtual future<uint64_t> size() override {
+        return make_ready_future<uint64_t>(_object.content.size());
+    }
+    virtual future<> close() override {
+        return make_ready_future<>();
+    }
+    virtual std::unique_ptr<file_handle_impl> dup() override {
+        struct handle : public file_handle_impl {
+            fake_object& object;
+            explicit handle(fake_object& o) : object(o) {}
+            virtual std::unique_ptr<file_handle_impl> clone() const override {
+                return std::make_unique<handle>(object);
+            }
+            virtual shared_ptr<file_impl> to_file() && override {
+                return make_shared<fake_object_file>(object);
+            }
+        };
+        return std::make_unique<handle>(_object);
+    }
+    virtual future<size_t> read_dma(uint64_t, void*, size_t, io_intent*) override { unsupported(); }
+    virtual future<size_t> read_dma(uint64_t, std::vector<iovec>, io_intent*) override { unsupported(); }
+    virtual future<size_t> write_dma(uint64_t, const void*, size_t, io_intent*) override { unsupported(); }
+    virtual future<size_t> write_dma(uint64_t, std::vector<iovec>, io_intent*) override { unsupported(); }
+    virtual future<> flush() override { unsupported(); }
+    virtual future<struct stat> stat() override { unsupported(); }
+    virtual future<> truncate(uint64_t) override { unsupported(); }
+    virtual future<> discard(uint64_t, uint64_t) override { unsupported(); }
+    virtual future<> allocate(uint64_t, uint64_t) override { unsupported(); }
+    virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry)>) override { unsupported(); }
+private:
+    [[noreturn]] static void unsupported() {
+        throw std::logic_error("unsupported operation on fake_object_file");
+    }
+};
+
+static file cached_file_of(shared_ptr<fake_page_cache> cache, fake_object& object) {
+    return sstables::make_page_cached_file(std::move(cache), test_sstable, Rows, file(make_shared<fake_object_file>(object)));
+}
+
+static sstring bulk_read(file& f, uint64_t offset, size_t size) {
+    auto buf = f.dma_read_bulk<char>(offset, size).get();
+    return sstring(buf.get(), buf.size());
+}
+
+// The first read of a page misses the cache, reads it with one request, and
+// caches it; reading it again is served from the cache.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_file_miss_then_hit) {
+    auto cache = make_shared<fake_page_cache>();
+    fake_object object(10000);
+    auto f = cached_file_of(cache, object);
+
+    BOOST_REQUIRE_EQUAL(bulk_read(f, 4096, 4096), object.bytes(4096, 4096));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{4096, 4096}}));
+    BOOST_REQUIRE_EQUAL(cache->pages.size(), 1);
+
+    BOOST_REQUIRE_EQUAL(bulk_read(f, 4096, 4096), object.bytes(4096, 4096));
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+    f.close().get();
+}
+
+// A read of several pages, e.g., with read-ahead, of which only the first is
+// cached, reads the rest in a single request.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_file_several_pages) {
+    auto cache = make_shared<fake_page_cache>();
+    fake_object object(5 * 4096);
+    auto f = cached_file_of(cache, object);
+    bulk_read(f, 0, 4096);
+
+    BOOST_REQUIRE_EQUAL(bulk_read(f, 0, 3 * 4096), object.bytes(0, 3 * 4096));
+    BOOST_REQUIRE(object.requests.back() == request(4096, 2 * 4096));
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 2);
+    BOOST_REQUIRE_EQUAL(cache->pages.size(), 3);
+    f.close().get();
+}
+
+// A read beyond the end of the file returns only the bytes up to the end, or
+// nothing - like any file - and only whole pages are read and cached.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_file_end_of_file) {
+    auto cache = make_shared<fake_page_cache>();
+    fake_object object(10000);
+    auto f = cached_file_of(cache, object);
+
+    // Check a read of a whole page which extends beyond the end of the file.
+    BOOST_REQUIRE_EQUAL(bulk_read(f, 8192, 4096), object.bytes(8192, 1808));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{8192, 1808}}));
+    // Check a read which starts at the end of the file.
+    BOOST_REQUIRE_EQUAL(bulk_read(f, 10000, 4096), "");
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+    f.close().get();
+}
+
+// read_dma(), into a buffer or into an iovec, reads through the cache too.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_file_read_dma) {
+    auto cache = make_shared<fake_page_cache>();
+    fake_object object(10000);
+    auto f = cached_file_of(cache, object);
+
+    std::vector<char> buf(100);
+    BOOST_REQUIRE_EQUAL(f.dma_read(5000, buf.data(), buf.size()).get(), 100);
+    BOOST_REQUIRE_EQUAL(sstring(buf.data(), buf.size()), object.bytes(5000, 100));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{4096, 4096}}));
+
+    // Check that a read into an iovec of the same page is served from the cache.
+    std::vector<char> buf1(50), buf2(70);
+    std::vector<iovec> iov = {{buf1.data(), buf1.size()}, {buf2.data(), buf2.size()}};
+    BOOST_REQUIRE_EQUAL(f.dma_read(6000, std::move(iov)).get(), 120);
+    BOOST_REQUIRE_EQUAL(sstring(buf1.data(), buf1.size()), object.bytes(6000, 50));
+    BOOST_REQUIRE_EQUAL(sstring(buf2.data(), buf2.size()), object.bytes(6050, 70));
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+    f.close().get();
+}
+
+// A duplicate of the file, which resharding opens on other shards, reads the
+// underlying file directly, without the cache.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_file_dup) {
+    auto cache = make_shared<fake_page_cache>();
+    fake_object object(10000);
+    auto f = cached_file_of(cache, object);
+
+    auto dup = f.dup().to_file();
+    BOOST_REQUIRE_EQUAL(bulk_read(dup, 4096, 4096), object.bytes(4096, 4096));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{4096, 4096}}));
+    BOOST_REQUIRE(cache->pages.empty());
+    dup.close().get();
+    f.close().get();
+}
+
+// Operations other than reads are forwarded to the underlying file.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_file_forwards_size) {
+    auto cache = make_shared<fake_page_cache>();
+    fake_object object(10000);
+    auto f = cached_file_of(cache, object);
+
+    BOOST_REQUIRE_EQUAL(f.size().get(), 10000);
+    f.close().get();
 }
 
 BOOST_AUTO_TEST_SUITE_END()
