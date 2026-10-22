@@ -12,6 +12,7 @@
 import asyncio
 import random
 import time
+import uuid
 
 import pytest
 from cassandra.protocol import ConfigurationException, InvalidRequest
@@ -291,6 +292,33 @@ async def test_cache_survives_restart(manager: ScyllaClusterManager, s3_storage)
         requests_before = await read_requests(manager, server, s3_storage)
         assert scan(cql, ks) == data
         assert await read_requests(manager, server, s3_storage) == requests_before
+
+
+async def test_restart_evicts_orphan_pages(manager: ScyllaClusterManager, s3_storage):
+    '''On startup, the pages of sstables which no longer exist - orphans,
+    which a crash for example could leave behind - are evicted from the page
+    cache, while the pages of the existing sstables stay. The test adds
+    orphan pages to the cache table directly: of an sstable which doesn't
+    exist, and of a shard which doesn't exist.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        pages = cached_pages(cql)
+        assert pages
+
+        orphan = uuid.uuid4()
+        insert = cql.prepare('INSERT INTO system_cache.pagecache (shard, sstable, component, offset, page) VALUES (?, ?, ?, ?, ?)')
+        cql.execute(insert, [0, orphan, 'Data', 0, b'orphan'])
+        cql.execute(insert, [1000, pages[0][0], 'Data', 0, b'orphan'])
+        assert len(cached_pages(cql)) == len(pages) + 2
+
+        await manager.server_restart(server.server_id)
+        cql, _ = await manager.get_ready_cql([server])
+        assert cached_pages(cql) == pages
+        assert scan(cql, ks) == data
 
 
 async def test_no_cache_without_disk_cache_option(manager: ScyllaClusterManager, s3_storage):

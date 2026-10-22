@@ -129,7 +129,8 @@ static mutation sstable_deletion(schema_ptr s, int16_t shard, utils::UUID sstabl
 // with internal CQL statements: a statement costs much more than the write
 // itself - its execution, and the coordinator's write path - and the cache
 // writes a page for each page which a read misses. The mutations are of
-// this shard's partitions, so they are applied on this shard.
+// this shard's partitions (or of shards which no longer exist, which are
+// stored on the last shard), so they are applied on this shard.
 future<> object_storage_page_cache_table::apply(mutation m) {
     auto s = m.schema();
     co_await _qp.proxy().local_db().apply(std::move(s), freeze(m), {}, db::commitlog_force_sync::no, db::no_timeout);
@@ -198,6 +199,36 @@ object_storage_page_cache_table::get_pages(sstables::sstable_id sst, sstables::c
 
 future<> object_storage_page_cache_table::evict_sstable(sstables::sstable_id sst) {
     co_await apply(sstable_deletion(schema(), this_shard(), sst.uuid()));
+}
+
+future<> object_storage_page_cache_table::evict_other_sstables(const std::unordered_set<sstables::sstable_id>& live) {
+    // The fixed_shard_partitioner puts the shard in the high bits of the
+    // token, so the partitions of this shard are a contiguous range of
+    // tokens, which the query below reads without leaving this shard. The
+    // last shard also holds the partitions of shards which no longer exist,
+    // after the node restarted with fewer shards: their tokens are after
+    // its own, and their pages are of no use to any shard.
+    static const auto select = fmt::format("SELECT DISTINCT shard, sstable FROM {}.{} "
+            "WHERE token(shard, sstable) >= ? AND token(shard, sstable) <= ?", SYSTEM_CACHE, PAGECACHE);
+    auto first = dht::fixed_shard_partitioner::token_for_shard(this_shard_id(), 0);
+    auto last = this_shard_id() == smp::count - 1
+            ? dht::fixed_shard_partitioner::token_for_shard(dht::fixed_shard_partitioner::max_shard, dht::fixed_shard_partitioner::hash_mask)
+            : dht::fixed_shard_partitioner::token_for_shard(this_shard_id(), dht::fixed_shard_partitioner::hash_mask);
+    std::vector<std::pair<int16_t, utils::UUID>> orphans;
+    co_await _qp.query_internal(select, db::consistency_level::ONE, {first.raw(), last.raw()},
+            cql3::query_processor::default_internal_page_size, [&] (const cql3::untyped_result_set_row& row) {
+        auto shard = row.get_as<int16_t>("shard");
+        auto sst = row.get_as<utils::UUID>("sstable");
+        if (shard != this_shard() || !live.contains(sstables::sstable_id(sst))) {
+            orphans.emplace_back(shard, sst);
+        }
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+    // The partition of another shard number, which no longer exists, is on
+    // this shard too, so this deletion doesn't leave it either.
+    for (auto& [shard, sst] : orphans) {
+        co_await apply(sstable_deletion(schema(), shard, sst));
+    }
 }
 
 } // namespace db

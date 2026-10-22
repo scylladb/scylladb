@@ -336,6 +336,83 @@ SEASTAR_TEST_CASE(test_page_cache_per_shard) {
     }, page_cache_config());
 }
 
+// evict_other_sstables() drops the cached pages of all the sstables except
+// the given ones.
+SEASTAR_TEST_CASE(test_page_cache_evict_other_sstables) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        db::object_storage_page_cache_table cache(env.local_qp());
+        auto sst1 = new_sstable_id();
+        auto sst2 = new_sstable_id();
+        auto sst3 = new_sstable_id();
+        cache.put_page(sst1, Data, 0, make_page('a')).get();
+        cache.put_page(sst2, Data, 0, make_page('b')).get();
+        cache.put_page(sst2, Rows, 0, make_page('c')).get();
+        cache.put_page(sst3, Data, 0, make_page('d')).get();
+
+        cache.evict_other_sstables({sst1, sst3}).get();
+
+        // Check that all of sst2's pages are gone.
+        check_pages(cache.get_pages(sst2, Data, 0, 4096, 100).get(), {});
+        check_pages(cache.get_pages(sst2, Rows, 0, 4096, 100).get(), {});
+        // Check that the pages of the other sstables remain.
+        check_pages(cache.get_pages(sst1, Data, 0, 4096, 100).get(), {{0, 'a'}});
+        check_pages(cache.get_pages(sst3, Data, 0, 4096, 100).get(), {{0, 'd'}});
+    }, page_cache_config());
+}
+
+// evict_other_sstables() drops only the calling shard's cached pages.
+SEASTAR_TEST_CASE(test_page_cache_evict_other_sstables_per_shard) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        auto sst = new_sstable_id();
+        smp::invoke_on_all([&env, sst] {
+            return seastar::async([&env, sst] {
+                db::object_storage_page_cache_table cache(env.qp().local());
+                cache.put_page(sst, Data, 0, make_page('a' + this_shard_id())).get();
+            });
+        }).get();
+
+        db::object_storage_page_cache_table cache(env.local_qp());
+        cache.evict_other_sstables({}).get();
+
+        smp::invoke_on_all([&env, sst] {
+            return seastar::async([&env, sst] {
+                db::object_storage_page_cache_table cache(env.qp().local());
+                auto pages = cache.get_pages(sst, Data, 0, 4096, 100).get();
+                if (this_shard_id() == 0) {
+                    check_pages(std::move(pages), {});
+                } else {
+                    check_pages(std::move(pages), {{0, char('a' + this_shard_id())}});
+                }
+            });
+        }).get();
+    }, page_cache_config());
+}
+
+// The cached pages of shards which no longer exist - after the node
+// restarted with fewer shards - are stored on the last shard, and its
+// evict_other_sstables() drops them, even of an sstable which is live.
+SEASTAR_TEST_CASE(test_page_cache_evict_other_sstables_removed_shard) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        auto sst = new_sstable_id();
+        auto removed_shard = int16_t(smp::count);
+        static const auto insert = fmt::format("INSERT INTO {}.{} (shard, sstable, component, offset, page) VALUES (?, ?, 'Data', 0, 0x00)",
+                db::object_storage_page_cache_table::SYSTEM_CACHE, db::object_storage_page_cache_table::PAGECACHE);
+        static const auto select = fmt::format("SELECT offset FROM {}.{} WHERE shard = ? AND sstable = ?",
+                db::object_storage_page_cache_table::SYSTEM_CACHE, db::object_storage_page_cache_table::PAGECACHE);
+        env.local_qp().execute_internal(insert, {removed_shard, sst.uuid()}, cql3::query_processor::cache_internal::no).get();
+        BOOST_REQUIRE_EQUAL(env.local_qp().execute_internal(select, {removed_shard, sst.uuid()}, cql3::query_processor::cache_internal::no).get()->size(), 1);
+
+        smp::submit_to(smp::count - 1, [&env, sst] {
+            return seastar::async([&env, sst] {
+                db::object_storage_page_cache_table cache(env.qp().local());
+                cache.evict_other_sstables({sst}).get();
+            });
+        }).get();
+
+        BOOST_REQUIRE_EQUAL(env.local_qp().execute_internal(select, {removed_shard, sst.uuid()}, cql3::query_processor::cache_internal::no).get()->size(), 0);
+    }, page_cache_config());
+}
+
 static void check_page(sstables::page_geometry::page_bounds page, uint64_t start, uint64_t end) {
     BOOST_REQUIRE_EQUAL(page.start, start);
     BOOST_REQUIRE_EQUAL(page.end, end);
@@ -456,6 +533,9 @@ public:
     virtual future<> evict_sstable(sstables::sstable_id) override {
         pages.clear();
         return make_ready_future<>();
+    }
+    virtual future<> evict_other_sstables(const std::unordered_set<sstables::sstable_id>&) override {
+        throw std::logic_error("unsupported operation on fake_page_cache");
     }
 };
 

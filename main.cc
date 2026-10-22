@@ -2311,6 +2311,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
+            checkpoint(stop_signal, "evicting orphan pages from the disk page cache");
+            db.invoke_on_all([] (replica::database& db) {
+                return db.get_user_sstables_manager().evict_orphans_from_disk_page_cache();
+            }).get();
+
             checkpoint(stop_signal, "recovering logstor");
             db.invoke_on_all([] (replica::database& db) {
                 return db.recover_logstor();
