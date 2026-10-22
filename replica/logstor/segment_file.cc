@@ -330,6 +330,18 @@ future<seastar::file> file_manager::open_file(file_id_t file_id) {
         seastar::open_flags::rw | seastar::open_flags::dsync
     );
 
+    // The segments write chunks with direct writes, and a chunk is aligned to ondisk::block_alignment
+    // in the file and in memory. A write that the device cannot take fails as a disk error, which
+    // isolates the node, thus a device that needs a larger alignment is refused here.
+    const auto write_alignment = file.disk_write_dma_alignment();
+    const auto memory_alignment = file.memory_dma_alignment();
+    if (ondisk::block_alignment % write_alignment != 0 || ondisk::block_alignment % memory_alignment != 0) [[unlikely]] {
+        co_await file.close();
+        co_await coroutine::return_exception(std::runtime_error(fmt::format(
+                "Cannot use logstor file {}: its device needs direct writes aligned to {} bytes in the file and {} bytes in memory, and the block size {} is not a multiple of them",
+                file_path(file_id).string(), write_alignment, memory_alignment, ondisk::block_alignment)));
+    }
+
     // Each file is opened once. The file is open now if the caller opened an open file, or if
     // another caller opened it at the same time.
     if (_open_files[file_id]) [[unlikely]] {
