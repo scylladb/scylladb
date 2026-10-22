@@ -301,6 +301,7 @@ void fsm::become_leader() {
     // A leader bounds its log with log_limiter_semaphore instead, so drop any
     // outstanding "my log is full" state to avoid prodding a leader spuriously
     // if we step down later.
+    _refused_entry_size = 0;
     _log_full_reported = false;
     // a new leader needs to commit at least one entry to make sure that
     // all existing entries in its log are committed as well. Also it should
@@ -1030,11 +1031,11 @@ bool fsm::report_log_full() {
         _log_full_reported = log_full;
         if (log_full) {
             logger.log(log_level::warn, _log_full_rate_limit,
-                    "[{}]: in-memory log reached the limit of {} bytes (usage {}), refusing "
-                    "further entries from the leader until a snapshot shrinks it. "
-                    "Committed but not yet applied entries: {}. This means the state machine "
-                    "is applying entries slower than the leader is producing them.",
-                    _tag, _config.max_follower_log_size, _log.memory_usage(),
+                    "[{}]: in-memory log has no room for the next entry ({} bytes, usage {}, "
+                    "limit {}), refusing further entries from the leader until a snapshot "
+                    "shrinks it. Committed but not yet applied entries: {}. This means the "
+                    "state machine is applying entries slower than the leader is producing them.",
+                    _tag, _refused_entry_size, _log.memory_usage(), _config.max_follower_log_size,
                     _commit_idx - _log.get_snapshot().idx);
         } else {
             logger.log(log_level::info, _log_has_room_rate_limit,
@@ -1108,11 +1109,12 @@ void fsm::append_entries(server_id from, append_request&& request) {
     index_t last_new_idx = request.prev_log_idx;
 
     if (!request.entries.empty()) {
-        const index_t appended = _log.maybe_append(std::move(request.entries),
+        const auto appended = _log.maybe_append(std::move(request.entries),
                 _config.max_follower_log_size, !can_shrink);
-        if (appended != index_t{0}) {
-            last_new_idx = appended;
+        if (appended.last_new_idx != index_t{0}) {
+            last_new_idx = appended.last_new_idx;
         }
+        _refused_entry_size = appended.refused_size;
     }
 
     // Do not advance commit index further than last_new_idx, or we could incorrectly

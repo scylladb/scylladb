@@ -188,6 +188,15 @@ public:
     // The returned pointer, if not null, is only valid until the next operation on the log.
     const configuration* get_prev_configuration() const;
 
+    struct append_result {
+        // Index of the last entry that was appended or was already present, or
+        // index_t{0} if none of the entries were processed.
+        index_t last_new_idx;
+        // memory_usage_of() the first entry that did not fit, or 0 if every
+        // entry was processed.
+        size_t refused_size;
+    };
+
     // Called on a follower to append entries from a leader.
     //
     // Appends only the prefix of `entries` whose new entries fit into
@@ -201,10 +210,7 @@ public:
     // log cannot shrink on its own: refusing everything in that case would
     // deadlock the group, since a leader needs this follower to accept entries
     // in order to commit anything at all.
-    //
-    // @retval index of the last entry that was appended or was already present,
-    //         or index_t{0} if none of the entries were processed
-    index_t maybe_append(log_entry_ptr_list&& entries, size_t max_memory_usage,
+    append_result maybe_append(log_entry_ptr_list&& entries, size_t max_memory_usage,
             bool force_at_least_one);
 
     friend fmt::formatter<log>;
