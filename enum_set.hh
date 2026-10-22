@@ -9,13 +9,14 @@
 #pragma once
 
 #include "utils/assert.hh"
-#include <boost/iterator/transform_iterator.hpp>
 #include <seastar/core/bitset-iter.hh>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <optional>
+#include <ranges>
 #include <stdexcept>
 #include <type_traits>
 #include <limits>
@@ -120,7 +121,7 @@ public:
 };
 
 template<typename Enum>
-class enum_set {
+class enum_set : public std::ranges::view_interface<enum_set<Enum>> {
 private:
     // The number of bits needed to represent all the enumeration values.
     static constexpr size_t required_bit_count = size_t(Enum::max_sequence) + 1;
@@ -154,14 +155,38 @@ private:
         return Enum::template sequence_for<Elem>();
     }
 
-    static auto make_iterator(mask_iterator iter) {
-        return boost::make_transform_iterator(std::move(iter), [](typename Enum::sequence_type s) {
-            return enum_type(s);
-        });
-    }
-
 public:
-    using iterator = std::invoke_result_t<decltype(&enum_set::make_iterator), mask_iterator>;
+    // Iterates over the enumeration values contained in the set. It holds
+    // a copy of the mask, so it remains valid after the set is destroyed.
+    class iterator {
+        mask_iterator _iter;
+    public:
+        using iterator_category = std::input_iterator_tag;
+        using iterator_concept = std::forward_iterator_tag;
+        using value_type = enum_type;
+        using difference_type = std::ptrdiff_t;
+
+        iterator() = default;
+        explicit iterator(mask_iterator iter) : _iter(std::move(iter)) {}
+
+        enum_type operator*() const {
+            return enum_type(*_iter);
+        }
+
+        iterator& operator++() {
+            ++_iter;
+            return *this;
+        }
+
+        iterator operator++(int) {
+            auto ret = *this;
+            ++_iter;
+            return ret;
+        }
+
+        bool operator==(const iterator&) const = default;
+    };
+    static_assert(std::forward_iterator<iterator>);
 
     constexpr enum_set() : _mask(0) {}
 
@@ -274,11 +299,11 @@ public:
     }
 
     iterator begin() const {
-        return make_iterator(mask_iterator(_mask));
+        return iterator(mask_iterator(_mask));
     }
 
     iterator end() const {
-        return make_iterator(mask_iterator(0));
+        return iterator(mask_iterator(0));
     }
 
     template<enum_type... items>
@@ -322,3 +347,7 @@ public:
         return frozen<items...>::unfreeze();
     }
 };
+
+// enum_set's iterators hold a copy of the mask, so they don't dangle when the set does.
+template<typename Enum>
+inline constexpr bool std::ranges::enable_borrowed_range<enum_set<Enum>> = true;
