@@ -40,9 +40,10 @@ private:
     cql3::query_processor* _qp_anchor;
     service::migration_manager* _mm_anchor;
 
-    table_helper _sessions;
-    table_helper _sessions_time_idx;
-    const sstring _events_cql; /** the CREATE TABLE statement of the events table, which is written with mutations */
+    // The CREATE TABLE statements of the tables written with mutations
+    const sstring _sessions_cql;
+    const sstring _sessions_time_idx_cql;
+    const sstring _events_cql;
     table_helper _slow_query_log;
     table_helper _slow_query_log_time_idx;
 
@@ -120,22 +121,25 @@ private:
     future<> write_mutations(cql3::query_processor& qp, utils::chunked_vector<mutation> mutations);
 
     /**
-     * Create a mutation data for a new session record
-     *
-     * @param all_records_handle handle to access an object with all records of this session
-     *
-     * @return the relevant cql3::query_options object with the mutation data
+     * Stores the session record of a session: its row of the sessions table and its entry of the
+     * sessions time index, with one write.
      */
-    static cql3::query_options make_session_mutation_data(gms::inet_address my_address, const one_session_records& all_records_handle);
+    future<> store_session_record(cql3::query_processor& qp, lw_shared_ptr<one_session_records> records);
 
     /**
-     * Create a mutation data for a new session_idx record
+     * Create the mutation that stores the session record of a session in the sessions table, with
+     * the row marker and the TTL an INSERT of the record would give it.
      *
-     * @param all_records_handle handle to access an object with all records of this session
-     *
-     * @return the relevant cql3::query_options object with the mutation data
+     * @param session_records handle to access an object with all records of this session
      */
-    static cql3::query_options make_session_time_idx_mutation_data(gms::inet_address my_address, const one_session_records& all_records_handle);
+    mutation make_session_mutation(cql3::query_processor& qp, const one_session_records& session_records);
+
+    /**
+     * Create the mutation that stores the entry of a session in the sessions time index.
+     *
+     * @param session_records handle to access an object with all records of this session
+     */
+    mutation make_session_time_idx_mutation(cql3::query_processor& qp, const one_session_records& session_records);
 
     /**
      * Create mutation for a new slow_query_log record
