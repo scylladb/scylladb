@@ -1270,6 +1270,7 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     mutation_reader::forwarding _fwd_mr;
     read_monitor& _monitor;
     integrity_check _integrity;
+    populate_disk_cache _populate;
     lw_shared_ptr<checksum> _checksum;
 
     // For reversed (single partition) reads, points to the current position in the sstable
@@ -1287,6 +1288,7 @@ public:
                             mutation_reader::forwarding fwd_mr,
                             read_monitor& mon,
                             integrity_check integrity,
+                            populate_disk_cache populate,
                             std::unique_ptr<abstract_index_reader> ir,
                             const utils::hashed_key* single_partition_read_murmur_hash)
             : mp_row_consumer_reader_mx(std::move(schema), permit, std::move(sst))
@@ -1306,7 +1308,8 @@ public:
             , _fwd(fwd)
             , _fwd_mr(fwd_mr)
             , _monitor(mon)
-            , _integrity(integrity) {
+            , _integrity(integrity)
+            , _populate(populate) {
         sstlog.trace("mx_sstable_mutation_reader {}: init with _pr={}", fmt::ptr(this), _pr.get());
         if (reversed()) {
             if (!_single_partition_read) {
@@ -1587,17 +1590,17 @@ private:
                     on_internal_error(sstlog, "mx reader: integrity checking not supported for single-partition reversed reads");
                 }
                 auto reversed_context = data_consume_reversed_partition<DataConsumeRowsContext>(
-                        *_schema, _sst, *_index_reader, _consumer, { begin, *end });
+                        *_schema, _sst, *_index_reader, _consumer, { begin, *end }, _populate);
                 _context = std::move(reversed_context.the_context);
                 _reversed_read_sstable_position = &reversed_context.current_position_in_sstable;
             } else {
-                _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, _integrity);
+                _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, _integrity, _populate);
             }
         } else {
             sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
             _read_enabled = bool(drr);
-            _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, _integrity);
+            _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, _integrity, _populate);
         }
 
         _monitor.on_read_started(_context->reader_position());
@@ -1873,12 +1876,13 @@ static mutation_reader make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
         integrity_check integrity,
+        populate_disk_cache populate,
         std::unique_ptr<abstract_index_reader> ir,
         const utils::hashed_key* single_partition_read_murmur_hash
     ) {
     return make_mutation_reader<mx_sstable_mutation_reader>(
         std::move(sstable), std::move(schema), std::move(permit), range,
-        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir), single_partition_read_murmur_hash);
+        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, populate, std::move(ir), single_partition_read_murmur_hash);
 }
 
 mutation_reader make_reader(
@@ -1892,11 +1896,12 @@ mutation_reader make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
         integrity_check integrity,
+        populate_disk_cache populate,
         std::unique_ptr<abstract_index_reader> ir,
         const utils::hashed_key* single_partition_read_murmur_hash
 ) {
     return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
-            value_or_reference(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir), single_partition_read_murmur_hash);
+            value_or_reference(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, populate, std::move(ir), single_partition_read_murmur_hash);
 }
 
 mutation_reader make_reader(
@@ -1910,11 +1915,12 @@ mutation_reader make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
         integrity_check integrity,
+        populate_disk_cache populate,
         std::unique_ptr<abstract_index_reader> ir,
         const utils::hashed_key* single_partition_read_murmur_hash
 ) {
     return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
-            value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir), single_partition_read_murmur_hash);
+            value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor, integrity, populate, std::move(ir), single_partition_read_murmur_hash);
 }
 
 /// a reader which does not support seeking to given position.

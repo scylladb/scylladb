@@ -147,7 +147,11 @@ public:
     virtual future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept = 0;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) = 0;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) = 0;
-    virtual future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const = 0;
+    // Reads the byte range [offset, offset + len) of the component - through
+    // the disk page cache, for a keyspace with the 'disk_cache' storage
+    // option, which it populates only with populate_disk_cache::yes.
+    virtual future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt,
+            populate_disk_cache populate) const = 0;
     virtual future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const = 0;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
     virtual future<> destroy(const sstable& sst) = 0;

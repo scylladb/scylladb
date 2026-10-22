@@ -22,6 +22,7 @@
 #include "sstables/object_storage_page_cache.hh"
 #include "sstables/object_storage_page_cache_geometry.hh"
 #include "sstables/types.hh"
+#include "sstables/types_fwd.hh"
 #include "seastarx.hh"
 
 namespace sstables {
@@ -55,7 +56,10 @@ constexpr uint64_t max_read_through_skip = 1024 * 1024;
 //   are cached. A request to the object store costs the same regardless of
 //   its size, so one large request is cheaper than splitting the rest of the
 //   range into several requests around the cached pages. The source splits
-//   the data that arrives into pages, and caches each of them.
+//   the data that arrives into pages, and caches each of them - unless
+//   "populate" is populate_disk_cache::no, for a read which may use the pages
+//   which are already cached, but must not add pages to the cache (see
+//   populate_disk_cache).
 //
 // * The range is extended to whole pages (see page_geometry::pages_covering()),
 //   so whole pages are read from the object store and cached, but only the
@@ -64,14 +68,15 @@ constexpr uint64_t max_read_through_skip = 1024 * 1024;
 // skip() only moves the position: the pages it skips are not read from the
 // cache. Once a request to the object store has started, the source keeps
 // reading from it, and also caches the pages that a short skip() passed
-// over, as they arrive anyway. But after a skip of more than
-// max_read_through_skip bytes beyond what the request returned, the source
-// closes the request, and continues as at the start of the range: from the
-// cache, and with a new request at the first page which isn't cached.
+// over, as they arrive anyway (if it caches pages). But after a skip of more
+// than max_read_through_skip bytes beyond what the request returned, the
+// source closes the request, and continues as at the start of the range:
+// from the cache, and with a new request at the first page which isn't
+// cached.
 //
 // The cache must outlive the returned source.
 data_source make_page_cached_source(object_storage_page_cache& cache, sstable_id sst, component_type component,
         shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t length,
-        object_storage_range_reader read_range);
+        object_storage_range_reader read_range, populate_disk_cache populate);
 
 } // namespace sstables

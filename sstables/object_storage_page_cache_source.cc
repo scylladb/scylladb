@@ -36,6 +36,7 @@ class page_cached_source_impl : public data_source_impl {
     component_type _component;
     shared_ptr<const page_geometry> _geometry;
     object_storage_range_reader _read_range;
+    populate_disk_cache _populate;
     // The next byte to return, and the end of the requested range.
     uint64_t _pos;
     uint64_t _end;
@@ -53,12 +54,13 @@ class page_cached_source_impl : public data_source_impl {
 public:
     page_cached_source_impl(object_storage_page_cache& cache, sstable_id sst, component_type component,
             shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t length,
-            object_storage_range_reader read_range)
+            object_storage_range_reader read_range, populate_disk_cache populate)
         : _cache(cache)
         , _sst(sst)
         , _component(component)
         , _geometry(std::move(geometry))
         , _read_range(std::move(read_range))
+        , _populate(populate)
         , _pos(offset)
         , _end(offset + length)
         , _pages_end(length ? _geometry->pages_covering(offset, offset + length).end : _end)
@@ -87,7 +89,7 @@ public:
         }
         if (_object) {
             // Read the pages that a short skip() passed over, to cache them
-            // too.
+            // too (the request to the object store returns them anyway).
             while (_object_pos < page.start) {
                 co_await read_page_from_object(_geometry->page_at(_object_pos));
             }
@@ -140,7 +142,7 @@ private:
     }
 
     // Reads the given page, which starts at _object_pos, from the object
-    // store, and caches it.
+    // store, and caches it, unless this source must not populate the cache.
     future<temporary_buffer<char>> read_page_from_object(page_geometry::page_bounds page) {
         auto size = page.end - page.start;
         auto data = co_await _object->read_exactly(size);
@@ -149,7 +151,9 @@ private:
                     _component, _sst, page.start + data.size(), page.start, page.end));
         }
         _object_pos = page.end;
-        co_await _cache.put_page(_sst, _component, page.start, data.share());
+        if (_populate) {
+            co_await _cache.put_page(_sst, _component, page.start, data.share());
+        }
         co_return data;
     }
 };
@@ -158,9 +162,9 @@ private:
 
 data_source make_page_cached_source(object_storage_page_cache& cache, sstable_id sst, component_type component,
         shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t length,
-        object_storage_range_reader read_range) {
+        object_storage_range_reader read_range, populate_disk_cache populate) {
     return data_source(std::make_unique<page_cached_source_impl>(cache, sst, component, std::move(geometry),
-            offset, length, std::move(read_range)));
+            offset, length, std::move(read_range), populate));
 }
 
 } // namespace sstables

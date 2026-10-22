@@ -361,7 +361,8 @@ static future<> test_object_storage_source_reads_through_file(test_env_config cf
         const uint64_t offset = size / 2;
         const uint64_t len = 100;
         auto counting = make_shared<counting_file_impl>(f);
-        auto src = sst->get_storage().make_data_or_index_source(*sst, component_type::Data, file(counting), offset, len, {}).get();
+        auto src = sst->get_storage().make_data_or_index_source(*sst, component_type::Data, file(counting), offset, len, {},
+                sstables::populate_disk_cache::no).get();
         auto in = input_stream<char>(std::move(src));
         auto read = util::read_entire_stream_contiguous(in).get();
         in.close().get();
