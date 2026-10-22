@@ -350,13 +350,13 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     return scale_timeout_inner
 
 
-def coverage_enabled(config: pytest.Config, build_mode: str, suite_config: TestSuiteConfig) -> bool:
+def coverage_enabled(config: pytest.Config, build_mode: str, suite_config: TestSuiteConfig | None) -> bool:
     """Whether profiles of instrumented binaries run for the suite should be routed to its coverage dir.
 
     Any mode can be instrumented (`configure.py --coverage`), so besides the coverage mode itself,
     route the profiles of every mode coverage was requested for.
     """
-    if not suite_config.cfg.get("coverage", True):
+    if suite_config is None or not suite_config.cfg.get("coverage", True):
         return False
     options = config.option
     return build_mode == "coverage" or (options.coverage and (not options.coverage_modes or build_mode in options.coverage_modes))
@@ -375,6 +375,19 @@ def coverage_env(request: pytest.FixtureRequest, build_mode: str, suite_log_dir:
         # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
         return {"LLVM_PROFILE_FILE": str(coverage_dir(suite_log_dir) / suite_config.name / "%m.profraw")}
     return {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def route_coverage_profiles(coverage_env: dict[str, str]) -> Generator[None]:
+    """Route the profiles of instrumented binaries the tests run themselves (e.g. Scylla tools).
+
+    Processes inheriting the environment pick it up as is; ones started with an explicit environment
+    have to add test.llvm_profile_env() to it.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        for name, value in coverage_env.items():
+            mp.setenv(name, value)
+        yield
 
 
 @pytest.fixture(scope="module")
