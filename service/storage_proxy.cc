@@ -7312,6 +7312,9 @@ future<> storage_proxy::drain_hints_for_left_nodes() {
 }
 
 future<> storage_proxy::drain_all_hints() {
+    utils::get_local_injector().inject("hinted_handoff_drain_fail", [] {
+        throw std::runtime_error("hinted_handoff_drain_fail injection");
+    });
     const auto my_id = get_token_metadata_ptr()->get_my_id();
     const auto my_ip = my_address();
     auto drain = [my_id, my_ip] (db::hints::manager& m, std::string_view kind) {
