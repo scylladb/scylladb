@@ -132,6 +132,7 @@ struct experimental_features_t {
         UDF,
         STRONGLY_CONSISTENT_TABLES,
         LOGSTOR,
+        OBJECT_STORAGE_PAGE_CACHE,
     };
     static std::map<sstring, feature> map(); // See enum_option.
     static std::vector<enum_option<experimental_features_t>> all();
