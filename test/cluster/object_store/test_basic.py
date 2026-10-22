@@ -1393,12 +1393,15 @@ async def test_registry_sealed_state_survives_ungraceful_restart(manager: Scylla
     server = await manager.server_add(config=cfg)
     cql = manager.get_cql()
 
-    # One tablet, and no autocompaction to add an sstable the test did not ask
-    # for while it is counting registry entries.
+    # One tablet, and no compaction to add an sstable the test did not ask for
+    # while it is counting registry entries, or to replace the checked sstable
+    # after the restart. Disabling autocompaction through the REST API is not
+    # enough: the restarted node does not remember it, and compacts the checked
+    # sstable with the one flushed after the commitlog replay.
     ks_opts = keyspace_options(s3_storage) + " AND tablets = {'initial': 1}"
     async with new_test_keyspace(manager, ks_opts) as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
-        await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
+        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int)"
+                            " WITH compaction = {'class': 'NullCompactionStrategy'};")
         rows = {}
         for k in range(4):
             rows[str(k)] = k
