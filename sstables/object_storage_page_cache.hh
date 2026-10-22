@@ -23,6 +23,7 @@
 #include <seastar/core/temporary_buffer.hh>
 #include "sstables/component_type.hh"
 #include "sstables/types.hh"
+#include "sstables/types_fwd.hh"
 #include "seastarx.hh"
 
 namespace sstables {
@@ -55,7 +56,8 @@ public:
     virtual ~object_storage_page_cache() = default;
 
     // Caches a page of the sstable's component, which starts at the given
-    // offset. A page already cached at the same offset is replaced.
+    // offset. A page already cached at the same offset is replaced. Caching
+    // a page doesn't count as a hit of it (see read_pages()).
     virtual future<> put_page(sstable_id sst, component_type component,
             uint64_t offset, temporary_buffer<char> data) = 0;
 
@@ -70,7 +72,8 @@ public:
         virtual ~page_cursor() = default;
         // Returns the cached page which starts at the given offset, or an
         // empty buffer if no page starts there. Each call must be for a
-        // larger offset than the previous one.
+        // larger offset than the previous one. With populate_disk_cache::yes
+        // (see read_pages()), it records that the page was hit.
         virtual future<temporary_buffer<char>> get_page(uint64_t offset) = 0;
         // Must be called, and waited for, before the cursor is destroyed.
         virtual future<> close() noexcept = 0;
@@ -86,12 +89,19 @@ public:
     // normally the start offset of the first page the caller needs, and "to"
     // any offset after the start offset of the last page it needs.
     //
+    // With populate_disk_cache::yes - for a user's read, which may populate
+    // the cache - the cursor records that the pages it returns were hit, for
+    // choosing which pages to evict when the cache is full. A read which
+    // must not populate the cache, such as a scan with BYPASS CACHE, reads
+    // whole sstables, and its hits would only make all of their pages look
+    // recently used (see populate_disk_cache).
+    //
     // The cursor doesn't see pages which are cached after it starts reading
     // the cache, so they look missing to it; and it may return a page which
     // was evicted after it started. Both are harmless: the object store has
     // all the pages, and a page of an sstable never changes.
     virtual std::unique_ptr<page_cursor> read_pages(sstable_id sst, component_type component,
-            uint64_t from, uint64_t to) = 0;
+            uint64_t from, uint64_t to, populate_disk_cache populate) = 0;
 
     // Drops all the cached pages of the sstable, of all its components.
     virtual future<> evict_sstable(sstable_id sst) = 0;

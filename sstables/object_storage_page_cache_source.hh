@@ -68,8 +68,8 @@ constexpr uint64_t max_read_through_skip = 1024 * 1024;
 //   requested bytes are returned.
 //
 // skip() only moves the position: the pages it skips are not looked up in
-// the cache (although the cursor may read over them in the cache's table, to
-// the next page). Once a request to the object store has started, the source keeps
+// the cache, nor counted as hits (although the cursor may read over them in
+// the cache's table, to the next page). Once a request to the object store has started, the source keeps
 // reading from it, and also caches the pages that a short skip() passed
 // over, as they arrive anyway (if it caches pages). But after a skip of more
 // than max_read_through_skip bytes beyond what the request returned, the

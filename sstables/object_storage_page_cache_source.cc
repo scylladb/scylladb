@@ -118,7 +118,7 @@ private:
     // the following pages with it.
     future<temporary_buffer<char>> get_cached_page(page_geometry::page_bounds page) {
         if (!_cursor) {
-            _cursor = _cache.read_pages(_sst, _component, page.start, _pages_end);
+            _cursor = _cache.read_pages(_sst, _component, page.start, _pages_end, _populate);
         }
         auto data = co_await _cursor->get_page(page.start);
         // A cached page of the wrong size cannot be a page of this component,
