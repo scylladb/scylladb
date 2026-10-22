@@ -1,0 +1,97 @@
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+
+// This file is part of the object storage page cache (the 'disk_cache': 'pages'
+// keyspace storage option). It defines the interface through which the sstables
+// code uses the cache, which is implemented in
+// db/object_storage_page_cache_table.hh.
+
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+#include <seastar/core/future.hh>
+#include <seastar/core/temporary_buffer.hh>
+#include "sstables/component_type.hh"
+#include "sstables/types.hh"
+#include "seastarx.hh"
+
+namespace sstables {
+
+// An abstract interface to the object storage page cache: byte ranges ("pages")
+// of sstable components, which were read from the object store and are kept on
+// the node's disk, so that reading them again does not need another request to
+// the object store.
+//
+// The only implementation is db::object_storage_page_cache_table (in
+// db/object_storage_page_cache_table.hh), which stores the pages in the
+// system_cache.pagecache table. The sstables code uses only this interface,
+// so it does not depend on the code that reads and writes tables, and can
+// be tested with a fake cache.
+//
+// Each shard has its own cache, of the sstables that it owns, and all the
+// methods work on the cache of the calling shard.
+//
+// All offsets are positions in the component's file as it is stored on the
+// object store. In particular, a compressed Data component is cached in
+// compressed chunks, and the offset of a page is the position of its chunk
+// in the compressed file - never a position in the uncompressed data.
+class object_storage_page_cache {
+public:
+    struct page {
+        uint64_t offset;
+        temporary_buffer<char> data;
+    };
+
+    virtual ~object_storage_page_cache() = default;
+
+    // Caches a page of the sstable's component, which starts at the given
+    // offset. A page already cached at the same offset is replaced.
+    virtual future<> put_page(sstable_id sst, component_type component,
+            uint64_t offset, temporary_buffer<char> data) = 0;
+
+    // A read of the cached pages of a range of an sstable component, which
+    // returns the pages one by one, at increasing offsets (see read_pages()).
+    // It keeps its position in the cache between pages, so reading a long
+    // range of cached pages looks it up in the cache only once - and a read
+    // which saves its sstable reader between pages of a query (in the
+    // querier cache) keeps its cursor with it.
+    class page_cursor {
+    public:
+        virtual ~page_cursor() = default;
+        // Returns the cached page which starts at the given offset, or an
+        // empty buffer if no page starts there. Each call must be for a
+        // larger offset than the previous one.
+        virtual future<temporary_buffer<char>> get_page(uint64_t offset) = 0;
+        // Must be called, and waited for, before the cursor is destroyed.
+        virtual future<> close() noexcept = 0;
+    };
+
+    // Returns a cursor over the cached pages of the sstable's component whose
+    // start offset is in [from, to).
+    //
+    // "from" and "to" may be any offsets, but only the start offset of each
+    // page is compared to them: a page that starts before "to" is returned
+    // whole even if it extends beyond "to", while a page that starts before
+    // "from" is not returned even if it extends into the range. So "from" is
+    // normally the start offset of the first page the caller needs, and "to"
+    // any offset after the start offset of the last page it needs.
+    //
+    // The cursor doesn't see pages which are cached after it starts reading
+    // the cache, so they look missing to it; and it may return a page which
+    // was evicted after it started. Both are harmless: the object store has
+    // all the pages, and a page of an sstable never changes.
+    virtual std::unique_ptr<page_cursor> read_pages(sstable_id sst, component_type component,
+            uint64_t from, uint64_t to) = 0;
+
+    // Drops all the cached pages of the sstable, of all its components.
+    virtual future<> evict_sstable(sstable_id sst) = 0;
+};
+
+} // namespace sstables
