@@ -1090,13 +1090,15 @@ void fsm::append_entries(server_id from, append_request&& request) {
     // fiber takes a snapshot once it applies past the snapshot index, and it can
     // only apply committed entries; max_follower_log_size is above
     // snapshot_threshold_log_size, so the byte trigger for taking a snapshot is
-    // guaranteed to fire. If nothing is committed beyond the snapshot we cannot
-    // shrink, and refusing would deadlock the group: the leader needs us to
-    // accept entries in order to commit anything at all, in particular the dummy
-    // entry it appends on election, without which maybe_commit() does not
-    // advance the commit index at all. The dummy needs this even though it is
-    // zero-sized: it sits above the entries we are refusing, and the log stays
-    // contiguous, so it arrives only once they do.
+    // guaranteed to fire. The applier checks it whenever the log grows, not only
+    // after applying entries, so it also fires when the log fills up after
+    // everything committed was applied. If nothing is committed beyond the
+    // snapshot we cannot shrink, and refusing would deadlock the group: the
+    // leader needs us to accept entries in order to commit anything at all, in
+    // particular the dummy entry it appends on election, without which
+    // maybe_commit() does not advance the commit index at all. The dummy needs
+    // this even though it is zero-sized: it sits above the entries we are
+    // refusing, and the log stays contiguous, so it arrives only once they do.
     //
     // This is the same condition log_is_full() reports to the leader, so that
     // what we tell it agrees with what we actually do.

@@ -157,6 +157,12 @@ public:
         _drop_apply_waiters = true;
         _changed.signal();
     }
+    // New entries were appended to the log. Nothing new to apply, but the
+    // log may have grown enough to call for a snapshot of what is already
+    // applied.
+    void notify_log_grew() {
+        _changed.signal();
+    }
     // Called by trigger_snapshot(), not by io_fiber.
     void request_snapshot() {
         _snapshot_requested = true;
@@ -1553,6 +1559,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
 
         last_stable = (*entries.crbegin())->idx;
         _stats->persisted_log_entries += entries.size();
+        _applier_mailbox.notify_log_grew();
 
         // Lets a test hold the io fiber on the batch that appends the non-joint
         // configuration entry, which the fsm produced together with the commit
@@ -1794,6 +1801,19 @@ future<> server_impl::applier_fiber() {
         _stats->sm_load_snapshot++;
     };
 
+    // True if the configured thresholds call for a snapshot of what has been
+    // applied.
+    //
+    // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
+    // (i.e. didn't yet see in the mailbox) but will soon. We avoid unnecessary work
+    // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
+    auto snapshot_due = [this] {
+        const auto last_snap_idx = _fsm->log_last_snapshot_idx();
+        return _applied_idx > last_snap_idx &&
+            ((_applied_idx - last_snap_idx).value() >= _config.snapshot_threshold ||
+            _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size);
+    };
+
     // Takes a state machine snapshot at the applied index and installs it
     // into the fsm, which drops the log up to it but for the trailing
     // entries.
@@ -1829,7 +1849,7 @@ future<> server_impl::applier_fiber() {
     // taking a state machine snapshot when the configured thresholds say so.
     // Returns early, leaving _applied_idx below apply_upto, when a snapshot
     // received from the leader removed the remaining entries from the fsm log.
-    auto apply_entries = [this, &take_snapshot] (index_t apply_upto) -> future<> {
+    auto apply_entries = [this, &take_snapshot, &snapshot_due] (index_t apply_upto) -> future<> {
         while (_applied_idx < apply_upto) {
             if (_applier_mailbox.stopped()) {
                 // abort() waits for this fiber before it aborts the state
@@ -1913,17 +1933,9 @@ future<> server_impl::applier_fiber() {
                 return true;
             });
 
-            // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
-            // (i.e. didn't yet see in the mailbox) but will soon. We avoid unnecessary work
-            // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
-            const auto last_snap_idx = _fsm->log_last_snapshot_idx();
-
             const bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
 
-            if (force_snapshot || (_applied_idx > last_snap_idx &&
-                ((_applied_idx - last_snap_idx).value() >= _config.snapshot_threshold ||
-                _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size)))
-            {
+            if (force_snapshot || snapshot_due()) {
                 const auto max_trailing = force_snapshot ? 0 : _config.snapshot_trailing;
                 const auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
                 co_await take_snapshot(max_trailing, max_trailing_bytes);
@@ -1937,7 +1949,7 @@ future<> server_impl::applier_fiber() {
     // waits for the snapshot rather than for more entries. The truncation
     // only ever moves up, so a stale read here cannot turn into a missed
     // wakeup; at worst it costs one extra turn through the loop.
-    auto has_work = [this] {
+    auto has_work = [this, &snapshot_due] {
         const auto& mailbox = _applier_mailbox;
         if (mailbox.snapshot_to_load()) {
             return true;
@@ -1945,7 +1957,7 @@ future<> server_impl::applier_fiber() {
         if (_applied_idx < mailbox.stable_commit_idx()) {
             return _fsm->log_last_snapshot_idx() <= _applied_idx;
         }
-        return mailbox.drop_apply_waiters_requested() || mailbox.snapshot_requested();
+        return mailbox.drop_apply_waiters_requested() || mailbox.snapshot_requested() || snapshot_due();
     };
 
     try {
@@ -1972,6 +1984,19 @@ future<> server_impl::applier_fiber() {
                 // meanwhile; they are acted on once everything committed
                 // before them has been applied.
                 continue;
+            }
+
+            if (snapshot_due()) {
+                // Everything committed is applied, but the log has grown past
+                // snapshot_threshold_log_size since: io_fiber appended
+                // entries which are not committed yet. A follower relies on
+                // this snapshot to make room in its log. It refuses entries
+                // once the log is full, and reports that to the leader, as
+                // long as something is committed above its snapshot index
+                // (see fsm::can_shrink_log()). If the leader needs it for a
+                // quorum, it cannot commit anything more, so without the
+                // snapshot taken here the log would stay full forever.
+                co_await take_snapshot(_config.snapshot_trailing, _config.snapshot_trailing_size);
             }
 
             if (_applier_mailbox.take_drop_apply_waiters_request()) {
