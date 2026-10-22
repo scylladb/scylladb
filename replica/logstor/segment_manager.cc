@@ -722,7 +722,7 @@ private:
             },
             [this, seg_id] {
                 ++_stats.segment_free_failures;
-                logstor_logger.warn("Segment {} can't be freed", seg_id);
+                logstor_logger.warn("Cannot free {}, because records in it can still be needed", seg_id);
             }
         );
     }
@@ -1072,7 +1072,7 @@ future<> segment_manager_impl::run_separator_fiber() {
         }
 
         auto write_to_separator_failed = defer([seg_ref = task.seg_ref] mutable noexcept {
-            seg_ref.set_flush_failure();
+            seg_ref.keep_on_release();
         });
 
         try {
@@ -1119,7 +1119,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 
         // if we wrote a record to the segment but failed to write it to the separator, the segment should not be freed.
         auto write_to_separator_failed = defer([seg_ref] mutable noexcept {
-            seg_ref.set_flush_failure();
+            seg_ref.keep_on_release();
         });
 
         logstor_logger.trace("Write active segment {} seq {}", seg->id(), seq_num);
@@ -1185,11 +1185,11 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
 
     // The records are on disk and the index already points into this segment, so if adding it to
     // the compaction group fails, the segment must not be freed when the reference below is
-    // released. Marking the reference as failed leaves it allocated instead, so the records stay
-    // readable, at the cost of the segment never being reclaimed.
+    // released. keep_on_release() leaves it allocated instead, so the records stay readable, at the
+    // cost of the segment never being reclaimed.
     auto seg_ref = seg->ref();
     auto add_to_group_failed = defer([seg_ref] mutable noexcept {
-        seg_ref.set_flush_failure();
+        seg_ref.keep_on_release();
         logstor_logger.warn("Failed to add segment {} to a compaction group, it will not be reclaimed", seg_ref.id());
     });
 
@@ -2330,10 +2330,10 @@ future<> segment_manager_impl::separate_recovered_segments() {
         co_return;
     }
     logstor_logger.info("Separating the records of {} recovered segments", recovered.to_separate.size());
-    // If a separation throws, start() fails and the segments that are not separated stay on disk
-    // with no owner. Nothing frees them: no group owns them and no reference holds them, and the
-    // segment that failed keeps its reference with the flush failure set. The index still points
-    // into them, so no record is lost, and the next recovery lists them again.
+    // If a separation throws, start() fails, and the segments that are not separated stay on disk.
+    // Nothing frees them, because no group owns them and the failed separation kept its segment.
+    // The index still points into them, so no record is lost, and the next recovery lists them
+    // again.
     recovery_stats stats;
     for (auto seg_id : recovered.to_separate) {
         co_await separate_segment_records(*recovered.catalog, seg_id, stats);
@@ -2347,7 +2347,7 @@ future<> segment_manager_impl::separate_recovered_segments() {
 future<> segment_manager_impl::separate_segment_records(recovery_catalog& catalog, log_segment_id seg_id, recovery_stats& stats) {
     auto seg_ref = make_segment_ref(seg_id);
     auto write_to_separator_failed = defer([seg_ref] mutable noexcept {
-        seg_ref.set_flush_failure();
+        seg_ref.keep_on_release();
     });
     co_await for_each_record(seg_id, [seg_ref, &catalog, &stats] (const chunk_record& record) {
         const auto& header = record.header;
@@ -2617,13 +2617,13 @@ separator_buffer::~separator_buffer() {
     logstor_logger.error("Destroying a logstor separator buffer that still holds {} segments,"
             " they will not be reclaimed", held_segments.size());
     for (auto& seg_ref : held_segments) {
-        seg_ref.set_flush_failure();
+        seg_ref.keep_on_release();
     }
 }
 
 future<> separator_buffer::abort(std::exception_ptr ep) {
     for (auto& seg_ref : held_segments) {
-        seg_ref.set_flush_failure();
+        seg_ref.keep_on_release();
     }
     if (!empty()) {
         co_await buf->abort_writes(std::move(ep));

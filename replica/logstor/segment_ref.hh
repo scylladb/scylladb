@@ -16,17 +16,19 @@
 
 namespace replica::logstor {
 
+// A shared reference to a segment. The last copy that goes frees the segment, unless a copy called
+// keep_on_release() because records in the segment can still be needed.
 class segment_ref {
     struct state {
         log_segment_id id;
         std::function<void()> on_last_release;
-        std::function<void()> on_failure;
-        bool flush_failure{false};
+        std::function<void()> on_kept;
+        bool keep{false};
         ~state() {
-            if (!flush_failure) {
+            if (!keep) {
                 if (on_last_release) on_last_release();
             } else {
-                if (on_failure) on_failure();
+                if (on_kept) on_kept();
             }
         }
     };
@@ -43,12 +45,12 @@ public:
     log_segment_id id() const noexcept { return _state->id; }
     bool empty() const noexcept { return !_state; }
 
-    void set_flush_failure() noexcept { if (_state) _state->flush_failure = true; }
+    void keep_on_release() noexcept { if (_state) _state->keep = true; }
 
 private:
     friend class segment_manager_impl;
-    explicit segment_ref(log_segment_id id, std::function<void()> on_last_release, std::function<void()> on_failure)
-        : _state(make_lw_shared<state>(id, std::move(on_last_release), std::move(on_failure)))
+    explicit segment_ref(log_segment_id id, std::function<void()> on_last_release, std::function<void()> on_kept)
+        : _state(make_lw_shared<state>(id, std::move(on_last_release), std::move(on_kept)))
     {}
 };
 
