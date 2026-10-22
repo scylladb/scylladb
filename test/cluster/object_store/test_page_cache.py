@@ -137,12 +137,6 @@ def range_read_requests(object_storage):
     return 1 if object_storage.type == 'S3' else 2
 
 
-# A scan of a table with tablets reads each sstable's index once, to find
-# where the tablet's token range starts. The index components are not yet
-# cached, so this read is always a request to the object store.
-INDEX_READS_PER_SCAN = 1
-
-
 async def create_table(manager: ScyllaClusterManager, server, ks, table_options=''):
     '''Creates the table ks.test with some data, flushed to sstables, and
     returns the data as a dict. The data does not compress well, so its
@@ -182,15 +176,20 @@ async def test_scan_reads_each_sstable_in_one_request(manager: ScyllaClusterMana
         assert scan(cql, ks) == data
         requests = await read_requests(manager, server, object_storage) - requests_before
         # Check that each sstable's Data was read in one request (whose pages
-        # are now in the cache), besides the read of its index.
+        # are now in the cache). The scan also reads each sstable's index, to
+        # find where the tablet's token range starts: these sstables' indexes
+        # are a single page, which this first read of it brings to the cache.
+        # The index is read through its file, which got the object's size when
+        # the sstable was opened, so this is a single request also on GCS.
         sstables = {sstable for sstable, _ in cached_data_pages(cql)}
         assert len(sstables) >= 1
-        assert requests == len(sstables) * (range_read_requests(object_storage) + INDEX_READS_PER_SCAN)
+        index_requests = len(sstables)
+        assert requests == len(sstables) * range_read_requests(object_storage) + index_requests
 
 
 async def test_scan_populates_cache(manager: ScyllaClusterManager, object_storage):
-    '''A scan caches the Data pages it reads, so that a second scan, even after
-    the in-memory caches are dropped, sends no request to the object store.'''
+    '''A scan caches the pages it reads, so that a second scan, even after the
+    in-memory caches are dropped, sends no request to the object store.'''
     server = await manager.server_add(config=page_cache_config(object_storage))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(object_storage, disk_cache='pages')) as ks:
@@ -199,13 +198,10 @@ async def test_scan_populates_cache(manager: ScyllaClusterManager, object_storag
         assert scan(cql, ks) == data
         assert cached_data_pages(cql)
 
-        # Check that the second scan reads no Data from the object store, only
-        # each sstable's index.
-        sstables = {sstable for sstable, _ in cached_data_pages(cql)}
         await manager.api.drop_sstable_caches(server.ip_addr)
         requests_before = await read_requests(manager, server, object_storage)
         assert scan(cql, ks) == data
-        assert await read_requests(manager, server, object_storage) - requests_before == len(sstables) * INDEX_READS_PER_SCAN
+        assert await read_requests(manager, server, object_storage) == requests_before
 
 
 async def test_scan_populates_cache_uncompressed(manager: ScyllaClusterManager, s3_storage):
@@ -223,16 +219,16 @@ async def test_scan_populates_cache_uncompressed(manager: ScyllaClusterManager, 
         offsets = [offset for _, offset in cached_data_pages(cql)]
         assert offsets and all(offset % 4096 == 0 for offset in offsets)
 
-        sstables = {sstable for sstable, _ in cached_data_pages(cql)}
         await manager.api.drop_sstable_caches(server.ip_addr)
         requests_before = await read_requests(manager, server, s3_storage)
         assert scan(cql, ks) == data
-        assert await read_requests(manager, server, s3_storage) - requests_before == len(sstables) * INDEX_READS_PER_SCAN
+        assert await read_requests(manager, server, s3_storage) == requests_before
 
 
 async def test_point_read_populates_cache(manager: ScyllaClusterManager, s3_storage):
-    '''A point read caches the Data pages it reads - only some of the pages
-    of the sstable - and returns the right row.'''
+    '''A point read caches the pages it reads - only some of the pages of the
+    sstable - so that reading the same row again sends no request to the
+    object store.'''
     server = await manager.server_add(config=page_cache_config(s3_storage))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
@@ -242,6 +238,14 @@ async def test_point_read_populates_cache(manager: ScyllaClusterManager, s3_stor
         assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
         point_read_pages = len(cached_data_pages(cql))
         assert point_read_pages > 0
+
+        # Check that the same point read again, even after the in-memory
+        # caches are dropped, reads both the index and the Data from the
+        # cache, and sends no request to the object store.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+        assert await read_requests(manager, server, s3_storage) == requests_before
 
         # Check that a scan, which reads all the pages, caches more.
         assert scan(cql, ks) == data
@@ -258,15 +262,12 @@ async def test_cache_survives_restart(manager: ScyllaClusterManager, s3_storage)
         await manager.api.drop_sstable_caches(server.ip_addr)
         assert scan(cql, ks) == data
 
-        sstables = {sstable for sstable, _ in cached_data_pages(cql)}
 
         await manager.server_restart(server.server_id)
         cql, _ = await manager.get_ready_cql([server])
         requests_before = await read_requests(manager, server, s3_storage)
         assert scan(cql, ks) == data
-        # Check that the scan read no Data from the object store, only each
-        # sstable's index.
-        assert await read_requests(manager, server, s3_storage) - requests_before == len(sstables) * INDEX_READS_PER_SCAN
+        assert await read_requests(manager, server, s3_storage) == requests_before
 
 
 async def test_no_cache_without_disk_cache_option(manager: ScyllaClusterManager, s3_storage):
@@ -278,6 +279,77 @@ async def test_no_cache_without_disk_cache_option(manager: ScyllaClusterManager,
         data = await create_table(manager, server, ks)
         await manager.api.drop_sstable_caches(server.ip_addr)
         assert scan(cql, ks) == data
+        assert cached_data_pages(cql) == []
+
+
+async def test_me_format(manager: ScyllaClusterManager, s3_storage):
+    '''Repeated point reads and scans send no request to the object store, also
+    for sstables of the older "me" format, whose index is the Index component
+    rather than Partitions and Rows, and is read in different ways.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage) | {'sstable_format': 'me'})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+
+        # Check that the same point read again sends no request.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+        assert await read_requests(manager, server, s3_storage) == requests_before
+
+        # Check that after a scan, a second scan sends no request.
+        assert scan(cql, ks) == data
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert scan(cql, ks) == data
+        assert await read_requests(manager, server, s3_storage) == requests_before
+
+
+def encryption_config(tmp_path):
+    '''Configuration which encrypts all user tables (encryption at rest).'''
+    keys = tmp_path / 'system_keys'
+    keys.mkdir()
+    return {'system_key_directory': str(keys),
+            'user_info_encryption': {'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory'}}
+
+
+def object_bytes(object_storage, sstable, component):
+    '''The content of an sstable component's object in the object store.'''
+    obj = object_storage.get_resource().Object(object_storage.bucket_name, f'sstables/{sstable}/{component}.db')
+    return obj.get()['Body'].read()
+
+
+async def test_encrypted_sstables(manager: ScyllaClusterManager, s3_storage, tmp_path):
+    '''Encrypted sstables are read correctly through the page cache, which
+    holds their index exactly as stored in the object store - encrypted - and
+    does not yet cache their Data, which cannot yet be decrypted from the
+    middle of the component.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage) | encryption_config(tmp_path))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+
+        # Check that point reads return the right row, both when the index is
+        # read from the object store and when it is read from the cache, and
+        # that a scan returns the right data.
+        for _ in range(2):
+            await manager.api.drop_sstable_caches(server.ip_addr)
+            assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+        assert scan(cql, ks) == data
+
+        # Check that the cached index pages are exactly the bytes stored in
+        # the object store, i.e., encrypted.
+        pages = list(cql.execute("SELECT sstable, component, offset, page FROM system_cache.pagecache "
+                                 "WHERE component IN ('Partitions', 'Rows') ALLOW FILTERING"))
+        assert pages
+        for page in pages:
+            stored = object_bytes(s3_storage, page.sstable, page.component)
+            assert page.page == stored[page.offset:page.offset + len(page.page)]
+
+        # Check that the Data of the encrypted sstables was not cached. This
+        # also shows that the sstables are indeed encrypted.
         assert cached_data_pages(cql) == []
 
 
