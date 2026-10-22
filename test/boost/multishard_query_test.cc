@@ -35,6 +35,7 @@
 #include <fmt/ranges.h>
 #include <utility>
 #include <algorithm>
+#include "replica/database.hh"
 
 namespace {
 

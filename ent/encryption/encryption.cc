@@ -49,6 +49,7 @@
 #include "bytes.hh"
 #include "utils/unqualified_name.hh"
 #include "cql3/query_processor.hh"
+#include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/system_keyspace.hh"
 #include "serializer.hh"

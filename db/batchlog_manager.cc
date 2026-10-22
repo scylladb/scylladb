@@ -41,6 +41,7 @@
 #include "service_permit.hh"
 #include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
+#include "gms/feature_service.hh"
 
 static logging::logger blogger("batchlog_manager");
 

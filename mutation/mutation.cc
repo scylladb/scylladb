@@ -18,6 +18,8 @@
 #include "dht/i_partitioner.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/from_mutations.hh"
+#include "tracing/trace_state.hh"
+#include "tombstone_gc.hh"
 
 logging::logger mlog("mutation");
 

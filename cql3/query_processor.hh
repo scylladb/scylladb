@@ -31,10 +31,10 @@
 #include "utils/assert.hh"
 #include "utils/observable.hh"
 #include "utils/rolling_max_tracker.hh"
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
 #include "types/types.hh"
 #include "db/consistency_level_type.hh"
-#include "db/config.hh"
+#include "db/consistency_level_restriction.hh"
 #include "utils/enum_option.hh"
 #include "service/storage_proxy_fwd.hh"
 #include "service/pager/query_plan.hh"
@@ -45,6 +45,7 @@ class chunked_string;
 
 namespace lang { class manager; }
 namespace service {
+class storage_service;
 class migration_manager;
 class query_state;
 class mapreduce_service;

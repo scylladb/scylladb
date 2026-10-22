@@ -31,6 +31,8 @@
 #include "message/messaging_service.hh"
 #include "service/storage_proxy.hh"
 #include "utils/rjson.hh"
+#include "db/system_keyspace.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(batchlog_manager_test)
 

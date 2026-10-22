@@ -17,6 +17,7 @@
 #include "service/pager/paging_state.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/UUID_gen.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(index_with_paging_test)
 

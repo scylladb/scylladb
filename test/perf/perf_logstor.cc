@@ -313,6 +313,7 @@
 #include "serializer_impl.hh"
 #include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"
+#include <seastar/core/seastar.hh>
 
 using namespace replica::logstor;
 

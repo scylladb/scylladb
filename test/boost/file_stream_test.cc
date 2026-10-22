@@ -38,6 +38,9 @@
 #include <sstream>
 #include <cryptopp/sha.h>
 #include "utils/io-wrappers.hh"
+#include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
 
 future<sstring> generate_file_hash(sstring filename) {
     auto f = co_await seastar::open_file_dma(filename, seastar::open_flags::ro);

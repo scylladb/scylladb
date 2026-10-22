@@ -28,6 +28,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "transport/messages/result_message.hh"
 #include "types/types.hh"
+#include <seastar/core/when_all.hh>
 
 auto make_manager(cql_test_env& env) {
     auto stop_role_manager = [] (auth::standard_role_manager* m) {

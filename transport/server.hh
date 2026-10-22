@@ -44,6 +44,7 @@
 #include "service/client_routes.hh"
 #include "utils/estimated_histogram.hh"
 #include "transport/forward.hh"
+#include "service/qos/service_level_controller.hh"
 
 namespace cql3 {
 

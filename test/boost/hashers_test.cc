@@ -18,6 +18,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/random_utils.hh"
 #include "reader_concurrency_semaphore.hh"
+#include "tracing/trace_state.hh"
 
 bytes text_part1("sanity");
 bytes text_part2("check");

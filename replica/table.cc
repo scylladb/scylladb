@@ -52,6 +52,7 @@
 #include "db/snapshot_types.hh"
 #include "db/extensions.hh"
 #include "query/query-result-writer.hh"
+#include "db/view/view.hh"
 #include "db/view/view_update_generator.hh"
 #include "utils/error_injection.hh"
 #include "utils/histogram_metrics_helper.hh"
@@ -1054,6 +1055,10 @@ std::optional<locator::tablet_routing_info_v2> table::tablet_routing_info_v2_for
         return std::nullopt;
     }
     return _erm->check_tablet_version(token, block);
+}
+
+bool table::uses_static_sharding() const {
+    return !_erm || _erm->get_replication_strategy().is_vnode_based();
 }
 
 storage_group::storage_group(compaction_group_ptr cg)

@@ -55,6 +55,7 @@
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "service/strong_consistency/groups_manager.hh"
+#include "gms/gossiper.hh"
 
 #include <boost/regex.hpp>
 #include <atomic>

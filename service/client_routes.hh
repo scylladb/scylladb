@@ -11,9 +11,16 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sharded.hh>
 
-#include "gms/feature_service.hh"
 #include "mutation/mutation.hh"
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
+
+namespace cql3 {
+class query_processor;
+}
+
+namespace gms {
+class feature_service;
+}
 
 namespace service {
 

@@ -12,6 +12,7 @@
 #include "auth/authorizer.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "service/query_state.hh"
+#include "service/raft/raft_group0_client.hh"
 
 std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::revoke_statement::prepare(
                 data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {

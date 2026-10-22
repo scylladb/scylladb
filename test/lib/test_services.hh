@@ -33,6 +33,7 @@
 #include "compaction/compaction_manager.hh"
 #include "compaction/compaction_group_view.hh"
 #include "sstables/sstables_manager.hh"
+#include "replica/compaction_group.hh"
 
 struct table_for_tests {
     class compaction_group_view;

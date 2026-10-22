@@ -22,6 +22,7 @@
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
+#include "types/tuple.hh"
 
 BOOST_AUTO_TEST_SUITE(restrictions_test)
 

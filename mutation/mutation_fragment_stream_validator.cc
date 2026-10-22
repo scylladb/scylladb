@@ -9,6 +9,7 @@
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include <fmt/std.h>
 #include "seastarx.hh"
+#include <seastar/util/lazy.hh>
 
 logging::logger validator_log("mutation_fragment_stream_validator");
 

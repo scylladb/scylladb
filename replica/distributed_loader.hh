@@ -18,6 +18,7 @@
 #include "compaction/compaction_descriptor.hh"
 #include "db/system_keyspace.hh"
 #include "sstables/sstable_directory.hh"
+#include "service/topology_state_machine_fwd.hh"
 
 namespace seastar {
     class abort_source;

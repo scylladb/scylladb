@@ -21,6 +21,7 @@
 
 #include <seastar/util/later.hh>
 #include <seastar/util/optimized_optional.hh>
+#include "utils/hash.hh"
 
 struct mutation_consume_cookie {
     using crs_iterator_type = mutation_partition::rows_type::iterator;

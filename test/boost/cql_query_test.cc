@@ -67,6 +67,8 @@
 #include "locator/token_metadata.hh"
 #include "locator/topology.hh"
 #include <seastar/core/smp.hh>
+#include "replica/database.hh"
+#include "service/raft/raft_group0_client.hh"
 
 
 BOOST_AUTO_TEST_SUITE(cql_query_test)

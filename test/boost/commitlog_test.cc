@@ -52,6 +52,7 @@
 #include "test/lib/test_utils.hh"
 #include "utils/checked-file-impl.hh"
 #include "idl/commitlog.dist.impl.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 BOOST_AUTO_TEST_SUITE(commitlog_test)
 

@@ -12,6 +12,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "db/config.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(cache_algorithm_test)
 

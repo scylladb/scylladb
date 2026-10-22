@@ -38,17 +38,21 @@
 #include "replica/exceptions.hh"
 #include "locator/host_id.hh"
 #include "dht/token_range_endpoints.hh"
-#include "service/storage_service.hh"
 #include "service/cas_shard.hh"
 #include "service/maintenance_mode.hh"
 #include "timeout_config.hh"
 #include "service/storage_proxy_fwd.hh"
+#include "service/fencing_token.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
 class frozen_mutation;
 class cache_temperature;
 class query_ranges_to_vnodes_generator;
+
+namespace data_dictionary {
+class database;
+}
 
 namespace seastar::rpc {
 
@@ -83,6 +87,8 @@ struct view_building_state_machine;
 }
 
 namespace service {
+
+struct topology_state_machine;
 
 namespace paxos {
     class prepare_summary;

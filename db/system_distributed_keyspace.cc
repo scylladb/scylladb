@@ -37,6 +37,8 @@
 
 #include <optional>
 #include <vector>
+#include "service/raft/raft_group0_client.hh"
+#include "locator/tablets.hh"
 
 static logging::logger dlogger("system_distributed_keyspace");
 extern logging::logger cdc_log;

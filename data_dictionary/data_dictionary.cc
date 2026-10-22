@@ -24,6 +24,7 @@
 #include <array>
 #include "replica/database.hh"
 #include "utils/overloaded_functor.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 namespace data_dictionary {
 

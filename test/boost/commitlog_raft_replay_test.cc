@@ -42,6 +42,7 @@
 #include "test/lib/error_injection.hh"
 #include "locator/tablets.hh"
 #include "locator/token_metadata.hh"
+#include "service/storage_service.hh"
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft_storage.dist.impl.hh"
 

@@ -19,6 +19,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "cql3/untyped_result_set_idl_utils.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "replica/database.hh"
 #include "schema/schema_builder.hh"
 
@@ -31,6 +32,7 @@
 
 #include "idl/frozen_mutation.dist.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace service::paxos {
 

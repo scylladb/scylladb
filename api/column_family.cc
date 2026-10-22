@@ -8,6 +8,7 @@
 
 #include <fmt/ranges.h>
 #include "column_family.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "api/api.hh"
 #include "api/api-doc/column_family.json.hh"
 #include "api/api-doc/storage_service.json.hh"

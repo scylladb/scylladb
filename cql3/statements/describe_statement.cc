@@ -61,6 +61,9 @@
 #include "replica/database.hh"
 #include "cql3/description.hh"
 #include "replica/schema_describe_helper.hh"
+#include "service/raft/raft_group0_client.hh"
+#include "service/storage_service.hh"
+#include "service/qos/service_level_controller.hh"
 
 static logging::logger dlogger("describe");
 

@@ -30,6 +30,7 @@
 #include "utils/hash.hh"
 
 #include <ranges>
+#include "gms/feature_service.hh"
 
 namespace cql3::expr {
 

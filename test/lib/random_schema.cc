@@ -30,6 +30,7 @@
 #include "utils/big_decimal.hh"
 #include "utils/UUID_gen.hh"
 #include "replica/schema_describe_helper.hh"
+#include "replica/database.hh"
 
 namespace tests {
 
