@@ -18,7 +18,6 @@
 #include "service/strong_consistency/state_machine.hh"
 #include "seastarx.hh"
 #include "utils/estimated_histogram.hh"
-#include "utils/per_task_value.hh"
 
 namespace service { struct raft_metrics_options; }
 
@@ -59,7 +58,6 @@ class table_metrics : public seastar::weakly_referencable<table_metrics> {
         raft::blocked_followers blocked;
     };
     sample sweep() const;
-    utils::per_task_value<std::function<sample()>> _sample{[this] { return sweep(); }};
 
     // Destroyed first, so that no gauge is evaluated once _servers is gone.
     seastar::metrics::metric_groups _metrics;
@@ -72,7 +70,7 @@ public:
     enum class reporting { none, per_node, per_shard };
 
     table_metrics(const sstring& ks_name, const sstring& cf_name, reporting mode);
-    // The gauges and the sample capture `this`.
+    // The collector of the gauges captures `this`.
     table_metrics(const table_metrics&) = delete;
     table_metrics& operator=(const table_metrics&) = delete;
 
