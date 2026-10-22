@@ -9,7 +9,8 @@
 // This file is part of the disk page cache of sstables on object storage
 // (the 'disk_cache': 'pages' keyspace storage option). It defines the
 // interface through which the sstables code uses the cache, which is
-// implemented in db/object_storage_page_cache_table.hh.
+// implemented in db/object_storage_page_cache_table.hh. How the cache splits
+// sstable components into pages is in object_storage_page_cache_geometry.hh.
 
 #pragma once
 
