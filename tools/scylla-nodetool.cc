@@ -5175,7 +5175,7 @@ For more information, see: {}
         {
             {
                 "statusbinary",
-                "Displays the incremental backup status",
+                "Displays the native transport (binary protocol) status",
 fmt::format(R"(
 Provides the status of native transport - CQL (binary protocol).
 In case that you don’t want to use CQL you can disable it using the disablebinary
