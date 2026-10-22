@@ -92,7 +92,19 @@ public:
     virtual file make_readable_file(object_name, abort_source* = nullptr) = 0;
     virtual data_sink make_data_upload_sink(object_name, object_storage_attributes, std::optional<unsigned> max_parts_per_piece, abort_source* = nullptr) = 0;
     virtual data_sink make_upload_sink(object_name, object_storage_attributes, abort_source* = nullptr) = 0;
+    // Reads a whole object, from its beginning.
     virtual data_source make_download_source(object_name, abort_source* = nullptr) = 0;
+    // Reads the byte range [offset, offset + length) of the object, with as
+    // few requests as the backend allows: on S3, a single request, whose
+    // response is read only as the caller consumes it; on GCS, a request per
+    // up to 8 MiB, after a request for the object's metadata.
+    // (make_download_source() can't start in the middle of the object, and on
+    // S3 it reads up to 5 MiB ahead of the caller, in the background. So a
+    // source which is kept long - e.g., with its reader in the querier cache,
+    // between pages of a query - would hold that much more memory. Reading the
+    // range through make_readable_file() would send a request for every read
+    // of the file, and hold its data in memory whole.)
+    virtual data_source make_ranged_download_source(object_name, uint64_t offset, uint64_t length, abort_source* = nullptr) = 0;
     virtual future<bool> object_exists(object_name name, abort_source* as = nullptr) = 0;
     virtual future<object_storage_attributes> get_object_metadata(object_name name, abort_source* as = nullptr) = 0;
 
