@@ -44,8 +44,8 @@ private:
     const sstring _sessions_cql;
     const sstring _sessions_time_idx_cql;
     const sstring _events_cql;
-    table_helper _slow_query_log;
-    table_helper _slow_query_log_time_idx;
+    const sstring _slow_query_log_cql;
+    const sstring _slow_query_log_time_idx_cql;
 
     struct stats {
         uint64_t tracing_errors = 0;
@@ -142,24 +142,27 @@ private:
     mutation make_session_time_idx_mutation(cql3::query_processor& qp, const one_session_records& session_records);
 
     /**
-     * Create mutation for a new slow_query_log record
-     *
-     * @param all_records_handle handle to access an object with all records of this session
-     * @param start_time_id time UUID generated from the query start time
-     *
-     * @return the relevant mutation
+     * Stores the slow query log record of a session: its row of the slow query log and its entry
+     * of the slow query log time index, with one write.
      */
-    static cql3::query_options make_slow_query_mutation_data(gms::inet_address my_address, const one_session_records& all_records_handle, const utils::UUID& start_time_id);
+    future<> store_slow_query_record(cql3::query_processor& qp, lw_shared_ptr<one_session_records> records);
 
     /**
-     * Create mutation for a new slow_query_log_time_idx record
+     * Create the mutation that stores the slow query log record of a session, with the row marker
+     * and the TTL an INSERT of the record would give it.
      *
-     * @param all_records_handle handle to access an object with all records of this session
+     * @param session_records handle to access an object with all records of this session
      * @param start_time_id time UUID generated from the query start time
-     *
-     * @return the relevant mutation
      */
-    static cql3::query_options make_slow_query_time_idx_mutation_data(gms::inet_address my_address, const one_session_records& all_records_handle, const utils::UUID& start_time_id);
+    mutation make_slow_query_mutation(cql3::query_processor& qp, const one_session_records& session_records, const utils::UUID& start_time_id);
+
+    /**
+     * Create the mutation that stores the entry of a session in the slow query log time index.
+     *
+     * @param session_records handle to access an object with all records of this session
+     * @param start_time_id time UUID generated from the query start time
+     */
+    mutation make_slow_query_time_idx_mutation(cql3::query_processor& qp, const one_session_records& session_records, const utils::UUID& start_time_id);
 
     /**
      * Create the mutation that stores the trace point records of a session: one row per record in
