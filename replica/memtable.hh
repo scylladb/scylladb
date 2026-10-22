@@ -16,6 +16,7 @@
 #include "encoding_stats.hh"
 #include "dirty_memory_manager.hh"
 #include "db/commitlog/replay_position.hh"
+#include "db_clock.hh"
 #include "db/commitlog/rp_set.hh"
 #include "utils/extremum_tracking.hh"
 #include "mutation/mutation_cleaner.hh"
@@ -152,6 +153,8 @@ private:
     uint64_t _total_memory_low_watermark_during_flush = 0;
     bool _merged_into_cache = false;
     replica::table_stats& _table_stats;
+    // When the memtable was created, i.e. started accepting writes.
+    db_clock::time_point _creation_time = db_clock::now();
 
     class memtable_encoding_stats_collector : public encoding_stats_collector {
     private:
@@ -232,6 +235,7 @@ public:
     // Never resolves with a failed future.
     future<> clear_gently() noexcept;
     schema_ptr schema() const noexcept { return _schema; }
+    db_clock::time_point creation_time() const noexcept { return _creation_time; }
     void set_schema(schema_ptr) noexcept;
     future<> apply(memtable&, reader_permit);
     // Applies mutation to this memtable.

@@ -620,6 +620,8 @@ protected:
     utils::observable<> _stop_request_observable;
     tombstone_gc_state _tombstone_gc_state;
     int64_t _output_repaired_at = 0;
+    // Combination of the inputs' ingestion metadata, written to every output.
+    std::optional<sstables::ingestion_metadata> _output_ingestion;
 private:
     // Keeps track of monitors for input sstable.
     // If _update_backlog_tracker is set to true, monitors are responsible for adjusting backlog as compaction progresses.
@@ -716,6 +718,7 @@ protected:
     sstables::sstable_writer_config make_sstable_writer_config(compaction_type type) {
         sstables::sstable_writer_config cfg = _table_s.configure_writer(compaction_origin(type));
         cfg.max_sstable_size = _max_sstable_size;
+        cfg.ingestion = _output_ingestion;
         cfg.monitor = &sstables::default_write_monitor();
         cfg.run_identifier = _run_identifier;
         cfg.replay_position = _rp;
@@ -753,6 +756,7 @@ protected:
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
         sstables::sstable_writer_config cfg = _table_s.configure_writer("garbage_collection");
         cfg.run_identifier = gc_run;
+        cfg.ingestion = _output_ingestion;
         cfg.monitor = monitor.get();
         uint64_t estimated_partitions = std::max(1UL, uint64_t(ceil(partitions_per_sstable() * _estimated_droppable_tombstone_ratio)));
         auto writer = sst->get_writer(*schema(), estimated_partitions, cfg, get_encoding_stats());
@@ -883,6 +887,8 @@ private:
         int64_t repaired_at = 0;
         std::vector<int64_t> repaired_at_for_compacted_sstables;
         uint64_t compaction_size = 0;
+        double ingested_bytes = 0;
+        std::optional<sstables::ingestion_metadata> ingestion;
         for (auto& sst : _sstables) {
             co_await coroutine::maybe_yield();
             auto& sst_stats = sst->get_stats_metadata();
@@ -907,6 +913,18 @@ private:
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
 
             compaction_size += sst->data_size();
+            // The output gets the share of ingested bytes among the inputs, weighted by their
+            // sizes, and the period spanning theirs. Inputs without ingestion metadata, e.g.
+            // from repair, count as not ingested.
+            if (auto sst_ingestion = sst->get_ingestion_metadata()) {
+                ingested_bytes += sst_ingestion->fraction * sst->data_size();
+                if (ingestion) {
+                    ingestion->min_timestamp = std::min(ingestion->min_timestamp, sst_ingestion->min_timestamp);
+                    ingestion->max_timestamp = std::max(ingestion->max_timestamp, sst_ingestion->max_timestamp);
+                } else {
+                    ingestion = sst_ingestion;
+                }
+            }
             // We also capture the sstable, so we keep it alive while the read isn't done
             ssts->insert(sst);
             // FIXME: If the sstables have cardinality estimation bitmaps, use that
@@ -924,6 +942,10 @@ private:
         log_debug("{} [{}]", report_start_desc(), fmt::join(_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
         if (repaired_at) {
             _output_repaired_at = repaired_at;
+        }
+        if (ingestion && compaction_size) {
+            ingestion->fraction = ingested_bytes / compaction_size;
+            _output_ingestion = ingestion;
         }
         log_debug("repaired_at_vec={} output_repaired_at={}", repaired_at_for_compacted_sstables, _output_repaired_at);
         if (ssts->size() < _sstables.size()) {

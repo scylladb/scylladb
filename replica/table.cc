@@ -2249,6 +2249,12 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
     co_await utils::get_local_injector().inject("flush_memtable_to_sstable_wait", utils::wait_for_message(60s));
 
     auto permit = make_lw_shared(std::move(permit_));
+    // The flushed data was ingested from the memtable's creation until now.
+    auto ingestion = sstables::ingestion_metadata{
+        .fraction = 1.0,
+        .min_timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(old->creation_time().time_since_epoch()).count(),
+        .max_timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(db_clock::now().time_since_epoch()).count(),
+    };
     co_await coroutine::switch_to(_config.memtable_scheduling_group);
     // Note that due to our sharded architecture, it is possible that
     // in the face of a value change some shards will backup sstables
@@ -2272,11 +2278,12 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.view_for_unrepaired_data());
     }
 
-    auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
+    auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg, &ingestion] (mutation_reader reader) mutable -> future<> {
       std::exception_ptr ex;
       try {
         sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
         cfg.backup = incremental_backups_enabled();
+        cfg.ingestion = ingestion;
 
         auto newtab = make_sstable();
         newtabs.push_back(newtab);

@@ -367,3 +367,87 @@ SEASTAR_TEST_CASE(compaction_group_rates_ignore_non_regular_compaction_test) {
         BOOST_REQUIRE_EQUAL(rates().compacted_bytes.amount(), 0);
     });
 }
+
+static int64_t to_milliseconds(db_clock::time_point tp) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch()).count();
+}
+
+// A memtable flush records that all of the sstable's data was ingested, from the
+// memtable's creation to the flush.
+SEASTAR_TEST_CASE(memtable_flush_records_ingestion_metadata_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_rates_test_schema("memtable_flush_ingestion_metadata");
+        auto before = to_milliseconds(db_clock::now());
+        auto t = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(t);
+        t->start();
+        t->disable_auto_compaction().get();
+
+        for (const auto& key : tests::generate_partition_keys(2, s)) {
+            t->apply(make_partition(s, key, 10));
+            t->flush().get();
+        }
+        auto after = to_milliseconds(db_clock::now());
+
+        BOOST_REQUIRE_EQUAL(t->sstables_count(), 2);
+        for (const auto& sst : *t->get_sstables()) {
+            auto ingestion = sst->get_ingestion_metadata();
+            BOOST_REQUIRE(ingestion);
+            BOOST_REQUIRE_EQUAL(ingestion->fraction, 1.0);
+            BOOST_REQUIRE_LE(before, ingestion->min_timestamp);
+            BOOST_REQUIRE_LE(ingestion->min_timestamp, ingestion->max_timestamp);
+            BOOST_REQUIRE_LE(ingestion->max_timestamp, after);
+        }
+    });
+}
+
+// Compaction writes to every output the share of ingested bytes among its inputs,
+// weighted by their sizes, and the period spanning theirs; inputs without ingestion
+// metadata count as not ingested.
+SEASTAR_TEST_CASE(compaction_propagates_ingestion_metadata_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_rates_test_schema("compaction_ingestion_metadata");
+        auto t = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(t);
+        t->start();
+        auto sst_gen = env.make_sst_factory(s);
+
+        auto keys = tests::generate_partition_keys(30, s);
+        auto make_input = [&] (size_t first_key, int rows, std::optional<sstables::ingestion_metadata> ingestion) {
+            utils::chunked_vector<mutation> muts;
+            for (size_t i = first_key; i < first_key + 10; ++i) {
+                muts.push_back(make_partition(s, keys[i], rows));
+            }
+            auto cfg = env.manager().configure_writer();
+            cfg.ingestion = ingestion;
+            return make_sstable_easy(env, make_memtable(s, muts).get(), cfg);
+        };
+        auto flushed = make_input(0, 10, sstables::ingestion_metadata{.fraction = 1.0, .min_timestamp = 1000, .max_timestamp = 2000});
+        auto compacted = make_input(10, 20, sstables::ingestion_metadata{.fraction = 0.5, .min_timestamp = 1500, .max_timestamp = 3000});
+        auto repaired = make_input(20, 30, std::nullopt);
+
+        // A small maximum sstable size makes the compaction write several outputs.
+        auto compact = [&] (std::vector<sstables::shared_sstable> input) {
+            constexpr uint64_t max_sstable_bytes = 1;
+            auto desc = compaction::compaction_descriptor(std::move(input), compaction::compaction_descriptor::default_level, max_sstable_bytes);
+            return compact_sstables(env, std::move(desc), t, sst_gen).get().new_sstables;
+        };
+
+        auto output = compact({flushed, compacted, repaired});
+        BOOST_REQUIRE_GT(output.size(), 1);
+        double input_bytes = flushed->data_size() + compacted->data_size() + repaired->data_size();
+        auto expected_fraction = (1.0 * flushed->data_size() + 0.5 * compacted->data_size()) / input_bytes;
+        for (const auto& sst : output) {
+            auto ingestion = sst->get_ingestion_metadata();
+            BOOST_REQUIRE(ingestion);
+            BOOST_REQUIRE_CLOSE(ingestion->fraction, expected_fraction, 1e-6);
+            BOOST_REQUIRE_EQUAL(ingestion->min_timestamp, 1000);
+            BOOST_REQUIRE_EQUAL(ingestion->max_timestamp, 3000);
+        }
+
+        // Without any ingested input, the output has no ingestion metadata.
+        for (const auto& sst : compact({make_input(20, 30, std::nullopt)})) {
+            BOOST_REQUIRE(!sst->get_ingestion_metadata());
+        }
+    });
+}
