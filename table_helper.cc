@@ -189,6 +189,20 @@ future<> table_helper::insert(cql3::query_processor& qp, service::migration_mana
 
 future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_strategy_name,
                                       sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
+    if (std::any_of(tables.begin(), tables.end(), [&] (table_helper* t) { return t->_keyspace != keyspace_name; })) {
+        throw std::invalid_argument("setup_keyspace called with table_helper for different keyspace");
+    }
+
+    std::vector<sstring> create_cqls;
+    create_cqls.reserve(tables.size());
+    for (const table_helper* t : tables) {
+        create_cqls.push_back(t->_create_cql);
+    }
+    return setup_keyspace(qp, mm, keyspace_name, std::move(replication_strategy_name), std::move(replication_factor), qs, std::move(create_cqls));
+}
+
+future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_strategy_name,
+                                      sstring replication_factor, service::query_state& qs, std::vector<sstring> create_cqls) {
     if (this_shard_id() != 0) {
         co_return;
     }
@@ -198,10 +212,6 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
     // Note that the CQL code in `parse_new_cf_statement` assumes that the keyspace exists.
     // To solve this problem, we could, for example, use `schema_builder` instead of the
     // CQL statements to create tables in `table_helper`.
-
-    if (std::any_of(tables.begin(), tables.end(), [&] (table_helper* t) { return t->_keyspace != keyspace_name; })) {
-        throw std::invalid_argument("setup_keyspace called with table_helper for different keyspace");
-    }
 
     data_dictionary::database db = qp.db();
 
@@ -234,13 +244,23 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
 
     qs.get_client_state().set_keyspace(db.real_database(), keyspace_name);
 
-    while (std::any_of(tables.begin(), tables.end(), [db] (table_helper* t) { return !db.has_schema(t->_keyspace, t->_name); })) {
+    // The statements can only be parsed once the keyspace exists
+    std::vector<schema_ptr> schemas;
+    schemas.reserve(create_cqls.size());
+    for (const auto& create_cql : create_cqls) {
+        auto schema = parse_new_cf_statement(qp, create_cql);
+        if (schema->ks_name() != keyspace_name) {
+            throw std::invalid_argument(format("setup_keyspace called with a table of a different keyspace: {}.{}", schema->ks_name(), schema->cf_name()));
+        }
+        schemas.push_back(std::move(schema));
+    }
+
+    while (std::any_of(schemas.begin(), schemas.end(), [db] (const schema_ptr& s) { return !db.has_schema(s->ks_name(), s->cf_name()); })) {
         auto group0_guard = co_await mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> table_mutations;
 
-        co_await coroutine::parallel_for_each(tables, [&] (auto&& table) -> future<> {
-            auto schema = parse_new_cf_statement(qp, table->_create_cql);
+        co_await coroutine::parallel_for_each(schemas, [&] (const schema_ptr& schema) -> future<> {
             if (!db.has_schema(schema->ks_name(), schema->cf_name())) {
                 co_return co_await service::prepare_new_column_family_announcement(table_mutations, qp.proxy(), *ksm, schema, ts);
             }
