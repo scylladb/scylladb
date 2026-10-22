@@ -198,6 +198,10 @@ future<> verify_permission(bool enforce_authorization, bool warn_authorization, 
 /// ALL KEYSPACES instead of any specific table.
 future<> verify_create_permission(bool enforce_authorization, bool warn_authorization, const service::client_state&, stats& stats);
 
+/// Similar to verify_create_permission() above, but for operations which read
+/// or write object storage, so require permissions on ALL OBJECT STORAGE.
+future<> verify_object_storage_permission(bool enforce_authorization, bool warn_authorization, const service::client_state&, auth::permission, stats& stats);
+
 // Sets a KeySchema JSON array inside the given parent object describing the
 // key attributes of the given schema as HASH or RANGE keys. Additionally,
 // adds mappings from key attribute names to their DynamoDB type string into
