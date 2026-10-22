@@ -17,7 +17,6 @@ from botocore import UNSIGNED
 
 from test.alternator.util import create_test_table, is_aws, scylla_log
 from test.conftest import dynamic_scope
-from test.cqlpy.conftest import host  # add required fixtures
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.skip_types import skip_env
 from test.pylib.connect_options import add_host_option
@@ -127,6 +126,17 @@ def get_valid_alternator_role():
         return ('unknownuser', 'unknownsecret')
 
     return _get_valid_alternator_role
+
+# Allow to get the host to connect to from a test.py fixture instead of the
+# traditional "--url" option that test/alternator's conftest.py used.
+@pytest.fixture(scope=dynamic_scope())
+def host(request, scylla_cluster):
+    # The scylla_cluster fixture, defined in the top-level test/conftest.py,
+    # returns None when running through test/alternator/run, or a
+    # ScyllaCluster object with an endpoint() method when run through test.py.
+    if scylla_cluster is None:
+        return request.config.getoption("--host")
+    return scylla_cluster.endpoint()
 
 # "dynamodb" fixture: set up client object for communicating with the DynamoDB
 # API. Currently this chooses either Amazon's DynamoDB in the default region
