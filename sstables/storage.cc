@@ -28,6 +28,7 @@
 #include "db/extensions.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/object_storage_client.hh"
+#include "sstables/object_storage_page_cache_file.hh"
 #include "sstables/object_storage_page_cache_geometry.hh"
 #include "sstables/object_storage_page_cache_source.hh"
 #include "sstables/sstable_directory.hh"
@@ -959,7 +960,18 @@ future<file> object_storage_base::open_component(const sstable& sst, component_t
     if (type == component_type::TemporaryTOC) {
         type = component_type::TOC;
     }
-    return maybe_wrap_file(sst, type, flags, make_readable_file(make_object_name(sst, type)));
+    auto f = make_readable_file(make_object_name(sst, type));
+    // The sstable index readers read the index components through this file,
+    // so read them through the disk page cache. The cache is below any file
+    // I/O extension (such as encryption), so it holds the bytes as they are
+    // stored in the object store.
+    if (_disk_cache == data_dictionary::storage_options::disk_cache_mode::pages
+            && (type == component_type::Index || type == component_type::Partitions || type == component_type::Rows)) {
+        if (auto cache = sst.manager().get_object_storage_page_cache()) {
+            f = make_page_cached_file(std::move(cache), get_sstable_identifier(sst), type, std::move(f));
+        }
+    }
+    return maybe_wrap_file(sst, type, flags, std::move(f));
 }
 
 static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type, data_sink sink) {
@@ -1009,7 +1021,10 @@ future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, com
 
 std::optional<data_source>
 object_storage_base::maybe_make_page_cached_source(const sstable& sst, component_type type, uint64_t offset, uint64_t len) const {
-    if (_disk_cache != data_dictionary::storage_options::disk_cache_mode::pages || type != component_type::Data) {
+    // Besides Data, the older Index component is also sometimes read through a
+    // data_source rather than through its file (see open_component()).
+    if (_disk_cache != data_dictionary::storage_options::disk_cache_mode::pages
+            || (type != component_type::Data && type != component_type::Index)) {
         return std::nullopt;
     }
     // The cache is not plugged if its experimental feature was disabled
@@ -1028,9 +1043,16 @@ object_storage_base::maybe_make_page_cached_source(const sstable& sst, component
             return std::nullopt;
         }
     }
-    shared_ptr<const page_geometry> geometry = sst.get_compression()
-            ? shared_ptr<const page_geometry>(make_shared<compressed_page_geometry>(sst.get_compression()))
-            : shared_ptr<const page_geometry>(make_shared<fixed_size_page_geometry>(sst.ondisk_data_size()));
+    shared_ptr<const page_geometry> geometry;
+    if (type == component_type::Index) {
+        // The same pages as those in which make_page_cached_file() caches the
+        // Index component (see open_component()).
+        geometry = make_shared<fixed_size_page_geometry>(sst.index_size());
+    } else if (sst.get_compression()) {
+        geometry = make_shared<compressed_page_geometry>(sst.get_compression());
+    } else {
+        geometry = make_shared<fixed_size_page_geometry>(sst.ondisk_data_size());
+    }
     return make_page_cached_source(*cache, get_sstable_identifier(sst), type, std::move(geometry), offset, len,
             [client = _client, name = make_object_name(sst, type), as = abort_source(), cache] (uint64_t offset, uint64_t length) {
         // Capturing "cache" keeps it alive as long as this source, even if
