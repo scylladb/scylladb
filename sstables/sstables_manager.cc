@@ -522,6 +522,29 @@ void sstables_manager::unplug_object_storage_page_cache() noexcept {
     _object_storage_page_cache = nullptr;
 }
 
+future<> sstables_manager::evict_orphans_from_disk_page_cache() noexcept {
+    auto cache = _object_storage_page_cache;
+    if (!cache) {
+        co_return;
+    }
+    try {
+        // All the sstables of this shard, whether in use or being closed.
+        std::unordered_set<sstable_id> live;
+        for (auto* list : {&_active, &_undergoing_close}) {
+            for (const auto& sst : *list) {
+                if (const auto& id = sst.sstable_identifier()) {
+                    live.insert(*id);
+                }
+            }
+        }
+        co_await cache->evict_other_sstables(live);
+    } catch (...) {
+        // The orphan pages only waste disk space, so failing to drop them
+        // shouldn't fail the startup.
+        smlogger.warn("Failed to evict orphan pages from the disk page cache: {}", std::current_exception());
+    }
+}
+
 future<lw_shared_ptr<const data_dictionary::storage_options>> sstables_manager::init_table_storage(const schema& s, const data_dictionary::storage_options& so) {
     return sstables::init_table_storage(*this, s, so);
 }

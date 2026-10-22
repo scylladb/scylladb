@@ -51,6 +51,7 @@ public:
     virtual future<std::vector<page>> get_pages(sstables::sstable_id sst, sstables::component_type component,
             uint64_t from, uint64_t to, size_t max_pages) override;
     virtual future<> evict_sstable(sstables::sstable_id sst) override;
+    virtual future<> evict_other_sstables(const std::unordered_set<sstables::sstable_id>& live) override;
 private:
     future<> apply(mutation m);
 };
