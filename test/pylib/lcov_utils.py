@@ -333,11 +333,13 @@ class LcovRecord(metaclass = MakeLcovRouter):
                 self.line_hits[line] = other.line_hits[line]
             else:
                 self.line_hits[line] += other.line_hits[line]
-        for key in other.function_hits.keys():
-            if key not in self.function_hits:
-                self.function_hits[key] = other.function_hits[key]
-            else:
-                self.function_hits[key] += other.function_hits[key]
+        # Different binaries can report a different start line for the same
+        # function (e.g. a header compiled with and without the PCH), so merge
+        # functions by name and keep the line already recorded.
+        self._refresh_functions_to_lines()
+        for (line, func_name), hits in other.function_hits.items():
+            key = (self.functions_to_lines.setdefault(func_name, line), func_name)
+            self.function_hits[key] = self.function_hits.get(key, 0) + hits
         self._refresh_functions_to_lines()
         for key in other.branch_hits.keys():
             if key not in self.branch_hits or self.branch_hits[key] is None:
