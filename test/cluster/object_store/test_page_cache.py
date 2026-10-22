@@ -20,7 +20,8 @@ from cassandra.protocol import ConfigurationException, InvalidRequest
 from test.pylib.object_storage import format_tuples
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
-from test.pylib.util import wait_for
+from test.pylib.tablets import get_tablet_replica
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
 
 def page_cache_config(object_storage):
@@ -170,10 +171,17 @@ def scan(cql, ks):
     return {row.p: row.v for row in cql.execute(f'SELECT p, v FROM {ks}.test')}
 
 
-def cached_pages(cql):
-    '''The (sstable, component, offset) of each cached page.'''
+def cached_pages(cql, host=None):
+    '''The (sstable, component, offset) of each cached page - of the given
+    node, or of the node which the driver chooses.'''
     return sorted((row.sstable, row.component, row.offset) for row in
-                  cql.execute('SELECT sstable, component, offset FROM system_cache.pagecache'))
+                  cql.execute('SELECT sstable, component, offset FROM system_cache.pagecache', host=host))
+
+
+def cached_pages_with_shard(cql):
+    '''The (shard, sstable, component, offset) of each cached page.'''
+    return sorted((row.shard, row.sstable, row.component, row.offset) for row in
+                  cql.execute('SELECT shard, sstable, component, offset FROM system_cache.pagecache'))
 
 
 def cached_data_pages(cql):
@@ -854,6 +862,74 @@ async def test_truncate_evicts_sstables(manager: ScyllaClusterManager, s3_storag
         await cql.run_async(f'TRUNCATE TABLE {ks}.test')
         await wait_for_eviction(cql, sstables)
         assert scan(cql, ks) == {}
+
+
+async def test_intranode_migration_copies_pages(manager: ScyllaClusterManager, s3_storage):
+    '''When a tablet moves between shards of the same node, its sstables keep
+    their objects, and their sstable_id, so the pages which the old shard
+    cached are still useful: they are copied to the new shard's cache, and
+    evicted from the old shard's cache.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage), cmdline=['--smp', '2'])
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks, "WITH tablets = {'min_tablet_count': 1}")
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        host, src_shard = await get_tablet_replica(manager, server, ks, 'test', 0)
+        pages = cached_pages_with_shard(cql)
+        assert pages and all(shard == src_shard for shard, _, _, _ in pages)
+
+        dst_shard = 1 - src_shard
+        await manager.api.move_tablet(server.ip_addr, ks, 'test', host, src_shard, host, dst_shard, 0)
+        # Check that all the pages moved to the new shard. The old sstables,
+        # and their pages on the old shard, are deleted only after their last
+        # reader is done, so wait for it.
+        moved_pages = sorted((dst_shard, sstable, component, offset) for _, sstable, component, offset in pages)
+        async def pages_moved():
+            return True if cached_pages_with_shard(cql) == moved_pages else None
+        await wait_for(pages_moved, time.time() + 60)
+
+        # Check that a scan, on the new shard, reads everything from the cache.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert scan(cql, ks) == data
+        assert await read_requests(manager, server, s3_storage) == requests_before
+
+
+async def test_migration_to_another_node_evicts_pages(manager: ScyllaClusterManager, s3_storage):
+    '''When a tablet moves to another node, the old node evicts the pages
+    which it cached for the tablet's sstables - although the new node shares
+    their objects. The new node's cache starts empty, and its reads populate
+    it.'''
+    servers = [await manager.server_add(config=page_cache_config(s3_storage)) for _ in range(2)]
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, servers[0], ks, "WITH tablets = {'min_tablet_count': 1}")
+        await manager.api.flush_keyspace(servers[1].ip_addr, ks)
+        src_host_id, src_shard = await get_tablet_replica(manager, servers[0], ks, 'test', 0)
+        host_ids = [await manager.get_host_id(server.server_id) for server in servers]
+        src = host_ids.index(str(src_host_id))
+        dst = 1 - src
+        await manager.api.drop_sstable_caches(servers[src].ip_addr)
+        assert scan(cql, ks) == data
+        assert cached_pages(cql, hosts[src])
+        assert cached_pages(cql, hosts[dst]) == []
+
+        await manager.api.move_tablet(servers[0].ip_addr, ks, 'test', src_host_id, src_shard, host_ids[dst], 0, 0)
+        # The old node deletes its sstables, and evicts their pages, only after
+        # their last reader is done, so wait for it.
+        async def pages_evicted():
+            return True if cached_pages(cql, hosts[src]) == [] else None
+        await wait_for(pages_evicted, time.time() + 60)
+
+        # Check that the new node's cache is empty, until it reads the table.
+        assert cached_pages(cql, hosts[dst]) == []
+        await manager.api.drop_sstable_caches(servers[dst].ip_addr)
+        assert scan(cql, ks) == data
+        assert cached_pages(cql, hosts[dst])
 
 
 async def test_lwt_populates_cache(manager: ScyllaClusterManager, s3_storage):

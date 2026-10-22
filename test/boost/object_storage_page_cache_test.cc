@@ -357,6 +357,39 @@ SEASTAR_TEST_CASE(test_page_cache_evict_other_sstables_removed_shard) {
     }, page_cache_config());
 }
 
+// copy_sstable_from_shard() copies to the calling shard's cache all the
+// pages which another shard cached for the sstable, and only for it.
+SEASTAR_TEST_CASE(test_page_cache_copy_sstable_from_shard) {
+    if (smp::count < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with less than 2 shards" << std::endl;
+        return make_ready_future<>();
+    }
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        auto sst = new_sstable_id();
+        auto other_sst = new_sstable_id();
+        db::object_storage_page_cache_table cache(env.local_qp());
+        cache.put_page(sst, Data, 0, make_page('a')).get();
+        cache.put_page(sst, Data, 4096, make_page('b', 100)).get();
+        cache.put_page(sst, Rows, 0, make_page('c')).get();
+        cache.put_page(other_sst, Data, 0, make_page('d')).get();
+
+        smp::submit_to(1, [&env, sst, other_sst] {
+            return seastar::async([&env, sst, other_sst] {
+                db::object_storage_page_cache_table cache(env.qp().local());
+                cache.copy_sstable_from_shard(sst, 0).get();
+                // Check that shard 1 now has all of the sstable's pages, and
+                // only of that sstable.
+                check_pages(cache.get_pages(sst, Data, 0, 8192, 100).get(), {{0, 'a'}, {4096, 'b', 100}});
+                check_pages(cache.get_pages(sst, Rows, 0, 4096, 100).get(), {{0, 'c'}});
+                check_pages(cache.get_pages(other_sst, Data, 0, 4096, 100).get(), {});
+            });
+        }).get();
+
+        // Check that shard 0 still has its pages.
+        check_pages(cache.get_pages(sst, Data, 0, 8192, 100).get(), {{0, 'a'}, {4096, 'b', 100}});
+    }, page_cache_config());
+}
+
 static void check_page(sstables::page_geometry::page_bounds page, uint64_t start, uint64_t end) {
     BOOST_REQUIRE_EQUAL(page.start, start);
     BOOST_REQUIRE_EQUAL(page.end, end);
@@ -479,6 +512,9 @@ public:
         return make_ready_future<>();
     }
     virtual future<> evict_other_sstables(const std::unordered_set<sstables::sstable_id>&) override {
+        throw std::logic_error("unsupported operation on fake_page_cache");
+    }
+    virtual future<> copy_sstable_from_shard(sstables::sstable_id, shard_id) override {
         throw std::logic_error("unsupported operation on fake_page_cache");
     }
 };

@@ -545,6 +545,24 @@ future<> sstables_manager::evict_orphans_from_disk_page_cache() noexcept {
     }
 }
 
+future<> sstables_manager::copy_disk_cached_pages(const data_dictionary::storage_options& so,
+        const std::vector<sstable_id>& ssts, shard_id from) noexcept {
+    auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&so.value);
+    auto cache = _object_storage_page_cache;
+    if (!os || os->disk_cache != data_dictionary::storage_options::disk_cache_mode::pages || !cache) {
+        co_return;
+    }
+    try {
+        for (auto sst : ssts) {
+            co_await cache->copy_sstable_from_shard(sst, from);
+        }
+    } catch (...) {
+        // The pages which weren't copied will be read again from the object
+        // store, so failing to copy them shouldn't fail the migration.
+        smlogger.warn("Failed to copy pages from shard {} in the disk page cache: {}", from, std::current_exception());
+    }
+}
+
 future<lw_shared_ptr<const data_dictionary::storage_options>> sstables_manager::init_table_storage(const schema& s, const data_dictionary::storage_options& so) {
     return sstables::init_table_storage(*this, s, so);
 }

@@ -18,6 +18,7 @@
 #include <unordered_set>
 #include <vector>
 #include <seastar/core/future.hh>
+#include <seastar/core/shard_id.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include "sstables/component_type.hh"
 #include "sstables/types.hh"
@@ -79,6 +80,11 @@ public:
     // the pages left in the cache by sstables which no longer exist on this
     // shard (see sstables_manager::evict_orphans_from_disk_page_cache()).
     virtual future<> evict_other_sstables(const std::unordered_set<sstable_id>& live) = 0;
+
+    // Copies to this shard's cache the pages which another shard cached for
+    // the sstable - which moved from that shard to this one, keeping its
+    // sstable_id (see sstables_manager::copy_disk_cached_pages()).
+    virtual future<> copy_sstable_from_shard(sstable_id sst, shard_id from) = 0;
 };
 
 } // namespace sstables

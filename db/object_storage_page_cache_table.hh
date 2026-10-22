@@ -44,6 +44,7 @@ public:
             uint64_t from, uint64_t to, size_t max_pages) override;
     virtual future<> evict_sstable(sstables::sstable_id sst) override;
     virtual future<> evict_other_sstables(const std::unordered_set<sstables::sstable_id>& live) override;
+    virtual future<> copy_sstable_from_shard(sstables::sstable_id sst, shard_id from) override;
 private:
     future<> apply(mutation m);
 };
