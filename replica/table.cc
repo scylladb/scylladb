@@ -2355,6 +2355,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         });
 
         co_await update_cache(cg, old, newtabs);
+        cg.on_memtable_flushed(newtabs);
 
         co_await utils::get_local_injector().inject("replica_post_flush_after_update_cache", [this] (auto& handler) -> future<> {
             const auto this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
@@ -4880,6 +4881,12 @@ bool compaction_group::needs_flush() const {
 
 lw_shared_ptr<memtable_list>& compaction_group::memtables() noexcept {
     return _memtables;
+}
+
+void compaction_group::on_memtable_flushed(const std::vector<sstables::shared_sstable>& ssts) noexcept {
+    for (const auto& sst : ssts) {
+        _flushed_bytes.add(sst->data_size());
+    }
 }
 
 size_t compaction_group::memtable_count() const noexcept {
