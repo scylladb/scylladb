@@ -9,6 +9,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
+from ....util import is_scylla
 import random
 
 # Test for cassandra 8558
@@ -972,7 +973,9 @@ def testDeleteWithOnlyPK(cql, test_keyspace):
         assertRows(execute(cql, table, "SELECT * FROM %s"), row(1, 2))
 
 def testDeleteColumnNoClustering(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(k int primary key, v int) WITH gc_grace_seconds=0") as table:
+    # Scylla: RF=1 tables in the default 'repair' tombstone_gc mode purge tombstones only after a repair.
+    tombstone_gc = " AND tombstone_gc = {'mode': 'immediate'}" if is_scylla(cql) else ""
+    with create_table(cql, test_keyspace, "(k int primary key, v int) WITH gc_grace_seconds=0" + tombstone_gc) as table:
         # This is a regression test for CASSANDRA-11068 (and ultimately another test for CASSANDRA-11102)
         # Creates a table without clustering, insert a row (with a column) and only remove the column.
         # We should still have a row (with a null column value) even post-compaction.
