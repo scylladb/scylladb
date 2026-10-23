@@ -23,6 +23,8 @@
 
 #include <ranges>
 
+#include <seastar/coroutine/exception.hh>
+
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
 
@@ -112,7 +114,7 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
     auto cl_for_learn = options.get_consistency();
     utils::result_with_exception_ptr<db::consistency_level> cl_for_paxos = options.check_serial_consistency();
     if (!cl_for_paxos) [[unlikely]] {
-        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(std::move(cl_for_paxos).assume_error());
+        co_await coroutine::return_exception_ptr(std::move(cl_for_paxos).assume_error());
     }
     std::unique_ptr<cas_request> request;
     schema_ptr schema;
@@ -153,23 +155,19 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
 
     auto cas_shard = service::cas_shard(*statements[0].statement->s, request->key()[0].start()->value().as_decorated_key().token());
     if (!cas_shard.this_shard()) {
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                qp.bounce_to_shard(cas_shard.shard(), std::move(cached_fn_calls))
-            );
+        co_return qp.bounce_to_shard(cas_shard.shard(), std::move(cached_fn_calls));
     }
 
-    auto* request_ptr = request.get();
-    return qp.proxy().cas(schema, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
+    service::storage_proxy::cas_result cas_result = co_await qp.proxy().cas(schema, std::move(cas_shard), *request, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout).then([&batch, request = std::move(request)] (service::storage_proxy::cas_result cas_result) {
-        auto result = request->build_cas_result_set(batch.cas_result_metadata(), batch.columns_of_cas_result_set(), cas_result.is_applied);
-        // Surface any coordinator-side large data guardrail soft limit violations
-        // detected during the LWT to the client as a CQL warning.
-        if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
-            result->add_warning(std::move(warning));
-        }
-        return result;
-    });
+            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout);
+    auto result = request->build_cas_result_set(batch.cas_result_metadata(), batch.columns_of_cas_result_set(), cas_result.is_applied);
+    // Surface any coordinator-side large data guardrail soft limit violations
+    // detected during the LWT to the client as a CQL warning.
+    if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
+        result->add_warning(std::move(warning));
+    }
+    co_return result;
 }
 
 } // namespace
@@ -244,7 +242,7 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
     const auto cl = options.get_consistency();
     const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl, query_state.get_client_state());
     if (guardrail_state == query_processor::write_consistency_guardrail_state::FAIL) {
-        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(
+        co_await coroutine::return_exception(
                 exceptions::invalid_request_exception(
                         format("Write consistency level {} is forbidden by the current configuration "
                                "setting of write_consistency_levels_disallowed. Please use a different "
@@ -260,39 +258,34 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
     if (batch.has_conditions()) {
         ++batch.stats().cas_batches;
         batch.stats().statements_in_cas_batches += statements.size();
-        return execute_with_conditions(batch, qp, options, query_state).then([guardrail_state, cl] (auto result) {
-            if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-                result->add_warning(format("Using write consistency level {} listed on the "
-                                           "write_consistency_levels_warned is not recommended.", cl));
-            }
-            return result;
-        });
+        auto result = co_await execute_with_conditions(batch, qp, options, query_state);
+        if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+            result->add_warning(format("Using write consistency level {} listed on the "
+                                       "write_consistency_levels_warned is not recommended.", cl));
+        }
+        co_return result;
     }
 
     ++batch.stats().batches;
     batch.stats().statements_in_batches += statements.size();
 
     auto timeout = db::timeout_clock::now() + batch.get_timeout(query_state.get_client_state(), options);
-    auto violations = make_lw_shared<db::large_data_violation_type>(db::large_data_violation_type::none);
+    db::large_data_violation_type violations = db::large_data_violation_type::none;
 
-    return get_mutations(batch, qp, options, timeout, local, now, query_state).then([&batch, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
-                    permit = query_state.get_permit(), violations] (utils::chunked_vector<mutation> ms) mutable {
-        return execute_without_conditions(batch, qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), violations.get());
-    }).then([guardrail_state, cl, violations] (coordinator_result<> res) {
-        if (!res) {
-            return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                    seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
-        }
-        auto result = make_shared<cql_transport::messages::result_message::void_message>();
-        if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-            result->add_warning(format("Using write consistency level {} listed on the "
-                                       "write_consistency_levels_warned is not recommended.", cl));
-        }
-        if (auto warning = db::large_data_soft_violation_warning(*violations); !warning.empty()) [[unlikely]] {
-            result->add_warning(std::move(warning));
-        }
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(result));
-    });
+    utils::chunked_vector<mutation> ms = co_await get_mutations(batch, qp, options, timeout, local, now, query_state);
+    coordinator_result<> res = co_await execute_without_conditions(batch, qp, std::move(ms), cl, timeout, query_state.get_trace_state(), query_state.get_permit(), &violations);
+    if (!res) {
+        co_return seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error());
+    }
+    auto result = make_shared<cql_transport::messages::result_message::void_message>();
+    if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+        result->add_warning(format("Using write consistency level {} listed on the "
+                                   "write_consistency_levels_warned is not recommended.", cl));
+    }
+    if (auto warning = db::large_data_soft_violation_warning(violations); !warning.empty()) [[unlikely]] {
+        result->add_warning(std::move(warning));
+    }
+    co_return result;
 }
 
 const batch_executor& batch_executor::instance() {
