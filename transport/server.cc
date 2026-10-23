@@ -1774,6 +1774,8 @@ maybe_rederive_with_pinned_plan(cql3::query_processor& qp, const service::client
             "Paging state pins another query plan; re-deriving the statement with that plan pinned");
     rederived.statement = qp.get_statement(stmt.raw_cql_statement, client_state, dialect,
             std::move(pinned), keyspace);
+    // It's still the statement the driver prepared.
+    rederived.statement->statement->set_may_use_token_aware_routing(stmt.may_use_token_aware_routing());
     // Counts the pages that got a statement back. A refusal pays the re-parse
     // too - it is thrown while preparing what was parsed - but serves no page.
     ++qp.get_cql_stats().select_paging_plan_rederivations;
