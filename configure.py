@@ -720,6 +720,7 @@ perf_tests = set([
     'test/perf/perf_big_decimal',
     'test/perf/perf_bti_key_translation',
     'test/perf/perf_sort_by_proximity',
+    'test/perf/perf_array_search',
 ])
 
 perf_standalone_tests = set([
@@ -954,7 +955,6 @@ scylla_core = (['message/messaging_service.cc',
                 'schema/schema_mutations.cc',
                 'transport/generic_server.cc',
                 'utils/alien_worker.cc',
-                'utils/array-search.cc',
                 'utils/base64.cc',
                 'utils/crypt_sha512.cc',
                 'utils/logalloc.cc',
