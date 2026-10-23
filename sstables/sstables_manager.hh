@@ -19,6 +19,7 @@
 #include "db_clock.hh"
 #include "sstables/sstables.hh"
 #include "sstables/shareable_components.hh"
+#include "sstables/object_storage_page_cache_stats.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/version.hh"
 #include "db/cache_tracker.hh"
@@ -194,6 +195,9 @@ private:
     // So a reader which got the cache before it was unplugged (on shutdown)
     // may keep using it.
     sstables::object_storage_page_cache* _object_storage_page_cache = nullptr;
+    // The statistics of the reads of each table through the object storage page
+    // cache, which the tables register, and report as metrics.
+    std::unordered_map<table_id, lw_shared_ptr<object_storage_page_cache_table_stats>> _page_cache_table_stats;
     // This function is bound to token_metadata.get_my_id() in the database constructor,
     // it can return unset value (bool(host_id) == false) until host_id is loaded
     // after system_keyspace initialization.
@@ -269,8 +273,12 @@ public:
     // according to cluster features and database config.
     //
     // 1. The choice must be new enough to support existing data.
+    //    (For example, range tombstones with infinite endpoints were added in version "mc",
+    //     so if the enabled cluster features permit such tombstones to exist, we must
+    //     pick at least "mc").
     // 2. The choice must be old enough to be supported by cluster features.
     // 3. The choice should respect the config, as long as it doesn't contradict (1) and (2).
+    //    The user might wish to use an older format, and we should respect that if possible.
     sstables::sstable::version_types get_preferred_sstable_version() const;
     // Like get_sstable_version_for_write(), but additionally assume that
     // all features implied by `existing_version` are enabled. 
@@ -287,6 +295,9 @@ public:
 
     // Wait until all sstables managed by this sstables_manager instance
     // (previously created by make_sstable()) have been disposed of:
+    //   - if they were marked for deletion, the files are deleted
+    //   - in any case, the open file handles are closed
+    //   - all memory resources are freed
     //
     // Note that close() will not complete until all references to all
     // sstables have been destroyed.
@@ -307,6 +318,25 @@ public:
     // feature is enabled.
     void plug_object_storage_page_cache(sstables::object_storage_page_cache&) noexcept;
     void unplug_object_storage_page_cache() noexcept;
+    // The statistics of the reads of a table through the object storage page
+    // cache: the table registers them, when it is created, and unregisters them
+    // when it is destroyed. The sstables code that reads through the cache
+    // counts its hits and misses in the statistics of the sstable's table, if
+    // it has - and holds them while it reads, so they outlive the table if it
+    // is dropped meanwhile. A table unregisters only its own statistics, in
+    // case another table object with the same id registered since.
+    void register_page_cache_table_stats(table_id id, lw_shared_ptr<object_storage_page_cache_table_stats> stats) {
+        _page_cache_table_stats[id] = std::move(stats);
+    }
+    void unregister_page_cache_table_stats(table_id id, const lw_shared_ptr<object_storage_page_cache_table_stats>& stats) noexcept {
+        if (auto it = _page_cache_table_stats.find(id); it != _page_cache_table_stats.end() && it->second == stats) {
+            _page_cache_table_stats.erase(it);
+        }
+    }
+    lw_shared_ptr<object_storage_page_cache_table_stats> get_page_cache_table_stats(table_id id) const {
+        auto it = _page_cache_table_stats.find(id);
+        return it == _page_cache_table_stats.end() ? nullptr : it->second;
+    }
     // The object storage page cache, or a null pointer if it is not plugged.
     sstables::object_storage_page_cache* get_object_storage_page_cache() const noexcept {
         return _object_storage_page_cache;

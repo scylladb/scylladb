@@ -42,6 +42,6 @@ namespace sstables {
 // Only reads go through the cache; other operations are forwarded to the
 // underlying file. The cache must outlive the returned file.
 file make_page_cached_file(object_storage_page_cache& cache, sstable_id sst, component_type component, file underlying,
-        populate_disk_cache populate);
+        populate_disk_cache populate, lw_shared_ptr<object_storage_page_cache_table_stats> table_stats = {});
 
 } // namespace sstables

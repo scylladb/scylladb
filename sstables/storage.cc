@@ -1081,7 +1081,8 @@ future<file> object_storage_base::open_component(const sstable& sst, component_t
     // file I/O extension (such as encryption), so it holds the bytes as they
     // are stored in the object store.
     if (auto* cache = index_page_cache(sst, type)) {
-        f = make_page_cached_file(*cache, get_sstable_identifier(sst), type, std::move(f), populate_disk_cache::yes);
+        f = make_page_cached_file(*cache, get_sstable_identifier(sst), type, std::move(f), populate_disk_cache::yes,
+                sst.manager().get_page_cache_table_stats(sst.get_schema()->id()));
     }
     return maybe_wrap_file(sst, type, flags, std::move(f));
 }
@@ -1126,7 +1127,7 @@ future<std::optional<file>> object_storage_base::open_non_populating_component(c
         co_return std::nullopt;
     }
     auto f = make_page_cached_file(*cache, get_sstable_identifier(sst), type, make_readable_file(make_object_name(sst, type)),
-            populate_disk_cache::no);
+            populate_disk_cache::no, sst.manager().get_page_cache_table_stats(sst.get_schema()->id()));
     co_return co_await maybe_wrap_file(sst, type, open_flags::ro, std::move(f));
 }
 
@@ -1181,11 +1182,12 @@ future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, com
 // store.
 static data_source make_cached_object_source(object_storage_page_cache& cache, sstable_id sid, component_type type,
         shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t len,
-        shared_ptr<object_storage_client> client, object_name name, seastar::abort_source* as, populate_disk_cache populate) {
+        shared_ptr<object_storage_client> client, object_name name, seastar::abort_source* as, populate_disk_cache populate,
+        lw_shared_ptr<object_storage_page_cache_table_stats> table_stats) {
     return make_page_cached_source(cache, sid, type, std::move(geometry), offset, len,
             [client = std::move(client), name = std::move(name), as] (uint64_t offset, uint64_t length) {
         return make_ready_future<data_source>(client->make_ranged_download_source(name, offset, length, as));
-    }, populate);
+    }, populate, std::move(table_stats));
 }
 
 future<std::optional<data_source>>
@@ -1204,6 +1206,7 @@ object_storage_base::maybe_make_page_cached_source(const sstable& sst, component
         co_return std::nullopt;
     }
     auto sid = get_sstable_identifier(sst);
+    auto table_stats = sst.manager().get_page_cache_table_stats(sst.get_schema()->id());
     // The cache holds the component's bytes as they are stored in the object
     // store. If a file I/O extension (namely, encryption) transformed the
     // sstable, which it reports with get_attributes(), the stored bytes need
@@ -1236,9 +1239,10 @@ object_storage_base::maybe_make_page_cached_source(const sstable& sst, component
         // read, so its geometry ends at "size", like that of the file which
         // reads its index (see open_component()).
         auto src = co_await transformer->wrap_ranged_source(sst, type, offset, len, size,
-                [cache, sid, type, client = _client, name = make_object_name(sst, type), as = abort_source(), populate, size] (uint64_t offset, uint64_t length) {
+                [cache, sid, type, client = _client, name = make_object_name(sst, type), as = abort_source(), populate, table_stats, size]
+                (uint64_t offset, uint64_t length) {
             return make_ready_future<data_source>(make_cached_object_source(*cache, sid, type,
-                    make_shared<fixed_size_page_geometry>(std::max(offset + length, size)), offset, length, client, name, as, populate));
+                    make_shared<fixed_size_page_geometry>(std::max(offset + length, size)), offset, length, client, name, as, populate, table_stats));
         });
         if (!src) {
             // The extension can't read a range of the component through the
@@ -1258,7 +1262,7 @@ object_storage_base::maybe_make_page_cached_source(const sstable& sst, component
         geometry = make_shared<fixed_size_page_geometry>(sst.ondisk_data_size());
     }
     co_return make_cached_object_source(*cache, sid, type, std::move(geometry), offset, len,
-            _client, make_object_name(sst, type), abort_source(), populate);
+            _client, make_object_name(sst, type), abort_source(), populate, std::move(table_stats));
 }
 
 future<data_source>

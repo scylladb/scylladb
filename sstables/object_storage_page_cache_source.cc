@@ -37,8 +37,10 @@ class page_cached_source_impl : public data_source_impl {
     shared_ptr<const page_geometry> _geometry;
     object_storage_range_reader _read_range;
     populate_disk_cache _populate;
-    // The statistics of hits and misses of this kind of read.
+    // The statistics of hits and misses of this kind of read, and the
+    // statistics of the sstable's table (if given).
     object_storage_page_cache_read_stats& _read_stats;
+    lw_shared_ptr<object_storage_page_cache_table_stats> _table_stats;
     // The next byte to return, and the end of the requested range.
     uint64_t _pos;
     uint64_t _end;
@@ -54,7 +56,8 @@ class page_cached_source_impl : public data_source_impl {
 public:
     page_cached_source_impl(object_storage_page_cache& cache, sstable_id sst, component_type component,
             shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t length,
-            object_storage_range_reader read_range, populate_disk_cache populate)
+            object_storage_range_reader read_range, populate_disk_cache populate,
+            lw_shared_ptr<object_storage_page_cache_table_stats> table_stats)
         : _cache(cache)
         , _sst(sst)
         , _component(component)
@@ -62,6 +65,7 @@ public:
         , _read_range(std::move(read_range))
         , _populate(populate)
         , _read_stats(populate ? cache.get_stats().populating : cache.get_stats().non_populating)
+        , _table_stats(std::move(table_stats))
         , _pos(offset)
         , _end(offset + length)
         , _pages_end(length ? _geometry->pages_covering(offset, offset + length).end : _end)
@@ -88,10 +92,17 @@ public:
                 co_await close_cursor();
                 _cache.get_stats().object_reads++;
                 _cache.get_stats().object_read_bytes += _pages_end - page.start;
+                if (_table_stats) {
+                    _table_stats->object_reads++;
+                    _table_stats->object_read_bytes += _pages_end - page.start;
+                }
                 _object = input_stream<char>(co_await _read_range(page.start, _pages_end - page.start));
                 _object_pos = page.start;
             } else {
                 _read_stats.hits++;
+                if (_table_stats) {
+                    table_read_stats().hits++;
+                }
             }
         }
         if (_object) {
@@ -127,6 +138,10 @@ public:
     }
 
 private:
+    object_storage_page_cache_read_stats& table_read_stats() {
+        return &_read_stats == &_cache.get_stats().populating ? _table_stats->populating : _table_stats->non_populating;
+    }
+
     // Returns the given page from the cache, or an empty buffer if it is not
     // cached. Starts a cursor at the first page which it looks up, and reads
     // the following pages with it.
@@ -178,6 +193,9 @@ private:
         }
         _object_pos = page.end;
         _read_stats.misses++;
+        if (_table_stats) {
+            table_read_stats().misses++;
+        }
         if (_populate) {
             // A failure to cache the page doesn't fail the read, which has the
             // page anyway - but this source stops caching pages.
@@ -199,9 +217,10 @@ private:
 
 data_source make_page_cached_source(object_storage_page_cache& cache, sstable_id sst, component_type component,
         shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t length,
-        object_storage_range_reader read_range, populate_disk_cache populate) {
+        object_storage_range_reader read_range, populate_disk_cache populate,
+        lw_shared_ptr<object_storage_page_cache_table_stats> table_stats) {
     return data_source(std::make_unique<page_cached_source_impl>(cache, sst, component, std::move(geometry),
-            offset, length, std::move(read_range), populate));
+            offset, length, std::move(read_range), populate, std::move(table_stats)));
 }
 
 } // namespace sstables
