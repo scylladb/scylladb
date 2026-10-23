@@ -607,6 +607,7 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
         // a. Compaction will retry deleting the sstable in the next pass, and
         // b. in the future sstables_manager is planned to handle sstables deletion.
         // c. Eventually we may want to record these failures in a system table
+        //    and notify the administrator about that for manual handling (rather than aborting).
         sstlog.warn("Failed to delete {}: {:t}. Ignoring.", name, std::current_exception());
     }
 
@@ -689,6 +690,7 @@ future<> filesystem_storage::unlink_component(const sstable& sst, component_type
         // a. Compaction will retry deleting the sstable in the next pass, and
         // b. in the future sstables_manager is planned to handle sstables deletion.
         // c. Eventually we may want to record these failures in a system table
+        //    and notify the administrator about that for manual handling (rather than aborting).
         sstlog.warn("Failed to delete {}: {:t}. Ignoring.", name, std::current_exception());
     }
 }
@@ -1113,6 +1115,7 @@ future<> object_storage_base::evict_from_page_cache(const sstable& sst) const no
         // sstable are on the shard which owns it - this one.
         co_await cache->evict_sstable(get_sstable_identifier(sst));
     } catch (...) {
+        cache->get_stats().eviction_errors++;
         sstlog.warn("Failed to evict {} from the object storage page cache: {}", sst.toc_filename(), std::current_exception());
     }
 }
@@ -1210,6 +1213,7 @@ object_storage_base::maybe_make_page_cached_source(const sstable& sst, component
         if (!ext->get_attributes(sst).empty()) {
             if (transformer) {
                 // Two transformations of the same sstable are not supported.
+                cache->get_stats().transform_bypasses++;
                 co_return std::nullopt;
             }
             transformer = ext;
@@ -1231,11 +1235,17 @@ object_storage_base::maybe_make_page_cached_source(const sstable& sst, component
         // transform (not encrypted) is read as requested, and stored as it is
         // read, so its geometry ends at "size", like that of the file which
         // reads its index (see open_component()).
-        co_return co_await transformer->wrap_ranged_source(sst, type, offset, len, size,
+        auto src = co_await transformer->wrap_ranged_source(sst, type, offset, len, size,
                 [cache, sid, type, client = _client, name = make_object_name(sst, type), as = abort_source(), populate, size] (uint64_t offset, uint64_t length) {
             return make_ready_future<data_source>(make_cached_object_source(*cache, sid, type,
                     make_shared<fixed_size_page_geometry>(std::max(offset + length, size)), offset, length, client, name, as, populate));
         });
+        if (!src) {
+            // The extension can't read a range of the component through the
+            // cache, so the component is read without it.
+            cache->get_stats().transform_bypasses++;
+        }
+        co_return src;
     }
     shared_ptr<const page_geometry> geometry;
     if (type == component_type::Index) {
@@ -1329,6 +1339,10 @@ future<> object_storage_base::wipe(sstable& sst, const atomic_deletion* deletion
 future<> object_storage_base::destroy(const sstable& sst) {
     // Only delete cloud objects if the SSTable was explicitly marked
     // for deletion (by compaction or unlink).  Two cases are skipped:
+    //  - Normal shutdown: the last shared_sstable ref is dropped but
+    //    the SSTable is NOT marked for deletion — it must survive on
+    //    S3 so the node can reload it on restart.
+    //  - SSTables never sealed: not marked for deletion, also skipped.
     if (!sst.marked_for_deletion()) {
         co_return;
     }
