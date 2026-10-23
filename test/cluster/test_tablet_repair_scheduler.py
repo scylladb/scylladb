@@ -7,9 +7,10 @@
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts, Host
-from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, create_table_insert_data_for_repair_multiple_rows, get_tablet_task_id, load_tablet_repair_task_infos
+from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, create_table_insert_data_for_repair_multiple_rows, get_tablet_task_id, load_tablet_repair_task_infos, load_tablet_pending_repair_requests
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.cluster.util import create_new_test_keyspace
+from test.cluster.tasks.task_manager_client import TaskManagerClient
 
 from cassandra.cluster import Session as CassandraSession
 from cassandra.query import SimpleStatement, ConsistencyLevel
@@ -494,6 +495,122 @@ async def config_auto_repair(manager, servers, ks, table, auto_repair_enabled, a
     else:
         cql = manager.get_cql()
         await cql.run_async(f"ALTER TABLE {ks}.{table} WITH auto_repair_enabled = {str(auto_repair_enabled).lower()} AND auto_repair_threshold_in_seconds = {auto_repair_threshold}")
+
+async def list_auto_repair_tasks(tm: TaskManagerClient, server: ServerInfo, ks: str):
+    return [t for t in await tm.list_tasks(server.ip_addr, "tablets") if t.type == "auto_repair" and t.keyspace == ks]
+
+async def resume_paused_repairs(manager: ScyllaClusterManager, servers: list[ServerInfo], injection: str):
+    await inject_error_off(manager, injection, servers)
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, injection)
+
+async def pause_repairs_and_start_auto_repair(manager: ScyllaClusterManager, tm: TaskManagerClient, servers: list[ServerInfo], ks: str, injection: str):
+    """Pause tablet repairs with the injection, turn on auto repair with a one second threshold and wait for an auto repair to be in progress."""
+    await inject_error_on(manager, injection, servers)
+    await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=True, auto_repair_threshold=1)
+    while not await list_auto_repair_tasks(tm, servers[0], ks):
+        await asyncio.sleep(0.1)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_user_repair_waits_for_auto_repair(manager: ScyllaClusterManager):
+    """A user repair request on a tablet under auto repair is queued, not rejected.
+
+    Pause tablet repairs in repair_tablet_repair_task_impl_run, turn on auto
+    repair and wait for an auto repair to be in progress. A request for all
+    tokens is accepted and sits in pending_repair_request on the tablets
+    under auto repair. Once repairs resume, the auto repair of such a tablet
+    finishes before its user repair starts, and every tablet is repaired
+    once under the user task id.
+    """
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, disable_flush_cache_time=True)
+    tm = TaskManagerClient(manager.api)
+    injection = "repair_tablet_repair_task_impl_run"
+    nr_tablets = 8
+
+    await pause_repairs_and_start_auto_repair(manager, tm, servers, ks, injection)
+    try:
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+        res = await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token="all", await_completion=False)
+        task_id = res['tablet_task_id']
+
+        await read_barrier(manager.api, servers[0].ip_addr)
+        rows = await cql.run_async(f"SELECT last_token, transition, repair_task_info, pending_repair_request FROM system.tablets WHERE table_id = {table_id}", host=hosts[0])
+        assert len(rows) == nr_tablets
+        # The rows are in last_token order, which is the tablet id order.
+        busy = [tid for tid, row in enumerate(rows)
+                if row.transition == "repair" and row.repair_task_info is not None and row.repair_task_info.request_type == "auto_repair"]
+        assert busy
+        for tid in busy:
+            assert rows[tid].pending_repair_request['tablet_task_id'] == task_id
+
+        await resume_paused_repairs(manager, servers, injection)
+        await manager.api.wait_task(servers[0].ip_addr, task_id)
+
+        finished = 0
+        for log, mark in zip(logs, marks):
+            finished += len(await log.grep(r"Finished tablet repair .*request_type=user_repair", from_mark=mark))
+        assert finished == nr_tablets
+
+        # The auto repair of a busy tablet finished before its user repair
+        # started. Both lines come from the coordinator; they are collected
+        # from all logs and ordered by timestamp in case the coordinator moved.
+        for tid in busy:
+            gid = f"{table_id}:{tid}"
+            auto_finished = re.compile(rf"Finished tablet repair .*tablet={gid} .*request_type=auto_repair")
+            user_initiated = re.compile(rf"Initiating tablet repair .*tablet={gid} request_type=user_repair")
+            lines = []
+            for log, mark in zip(logs, marks):
+                lines += [line for line, _ in await log.grep(rf"{auto_finished.pattern}|{user_initiated.pattern}", from_mark=mark)]
+            lines.sort(key=lambda line: line.split()[1:3])
+            kinds = ["auto" if auto_finished.search(line) else "user" for line in lines]
+            assert "user" in kinds, f"no user repair of tablet {gid} was initiated"
+            assert "auto" in kinds and kinds.index("auto") < kinds.index("user"), f"{gid}: {lines}"
+    finally:
+        await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=False, auto_repair_threshold=1)
+        await inject_error_off(manager, injection, servers)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_user_repair_pending_abort(manager: ScyllaClusterManager):
+    """Aborting a user repair request removes it from the tablets where it is still pending.
+
+    Pause tablet repairs in repair_tablet_repair_task_impl_run, turn on auto
+    repair and wait for an auto repair to be in progress. A request for all
+    tokens is queued and its task is aborted: no tablet carries the request
+    in either slot afterwards, and the paused auto repairs still finish.
+    """
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, disable_flush_cache_time=True)
+    tm = TaskManagerClient(manager.api)
+    injection = "repair_tablet_repair_task_impl_run"
+
+    await pause_repairs_and_start_auto_repair(manager, tm, servers, ks, injection)
+    try:
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+        res = await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token="all", await_completion=False)
+        task_id = res['tablet_task_id']
+
+        await read_barrier(manager.api, servers[0].ip_addr)
+        pending = await load_tablet_pending_repair_requests(cql, hosts[0], table_id)
+        assert task_id in [info['tablet_task_id'] for info in pending.values()]
+
+        await manager.api.abort_task(servers[0].ip_addr, task_id)
+        await read_barrier(manager.api, servers[0].ip_addr)
+        assert not await load_tablet_pending_repair_requests(cql, hosts[0], table_id)
+        infos = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
+        assert task_id not in [str(info.tablet_task_id) for info in infos.values()]
+
+        await resume_paused_repairs(manager, servers, injection)
+        async def auto_repair_finished():
+            for log, mark in zip(logs, marks):
+                if await log.grep(r"Finished tablet repair .*request_type=auto_repair", from_mark=mark):
+                    return True
+            return False
+        while not await auto_repair_finished():
+            await asyncio.sleep(0.1)
+    finally:
+        await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=False, auto_repair_threshold=1)
+        await inject_error_off(manager, injection, servers)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_auto_repair(manager: ScyllaClusterManager):

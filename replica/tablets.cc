@@ -357,7 +357,7 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
                 m.set_clustered_cell(ck, "repair_time", data_value(tablet.repair_time), ts);
             }
         }
-        if (tablet.pending_repair_request) {
+        if (features.tablet_pending_repair_request && tablet.pending_repair_request) {
             m.set_clustered_cell(ck, "pending_repair_request", pending_repair_request_to_data_value(*tablet.pending_repair_request), ts);
         }
 
@@ -531,14 +531,18 @@ tablet_mutation_builder::del_repair_task_info(dht::token last_token, const gms::
 
 tablet_mutation_builder&
 tablet_mutation_builder::set_pending_repair_request(dht::token last_token, locator::tablet_task_info info, const gms::feature_service& features) {
-    _m.set_clustered_cell(get_ck(last_token), "pending_repair_request", pending_repair_request_to_data_value(info), _ts);
+    if (features.tablet_pending_repair_request) {
+        _m.set_clustered_cell(get_ck(last_token), "pending_repair_request", pending_repair_request_to_data_value(info), _ts);
+    }
     return *this;
 }
 
 tablet_mutation_builder&
 tablet_mutation_builder::del_pending_repair_request(dht::token last_token, const gms::feature_service& features) {
-    auto col = _s->get_column_definition("pending_repair_request");
-    _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    if (features.tablet_pending_repair_request) {
+        auto col = _s->get_column_definition("pending_repair_request");
+        _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    }
     return *this;
 }
 
