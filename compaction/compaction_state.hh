@@ -104,6 +104,13 @@ public:
     // Raised by any function running under run_with_compaction_disabled();
     long compaction_disabled_counter = 0;
 
+    // Set by compaction_manager::perform_cleanup() for the whole duration of
+    // a cleanup, including the waits between its compaction tasks, during
+    // which no cleanup task is registered with the compaction manager.
+    // A concurrent cleanup request on the same table is rejected while set,
+    // so it cannot rewrite the cleanup state the ongoing cleanup is using.
+    bool cleanup_in_progress = false;
+
     // Signaled whenever a compaction task completes.
     condition_variable compaction_done;
 

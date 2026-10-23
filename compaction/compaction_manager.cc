@@ -2433,14 +2433,14 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     // Reject a concurrent cleanup before touching the compaction state:
     // calculate_sstables_cleanup_state() rewrites sstables_requiring_cleanup
     // and the cleanup owned ranges, which the ongoing cleanup is still using.
-    auto check_for_cleanup = [this, &t] {
-        return std::ranges::any_of(_tasks, [&t] (auto& task) {
-            return task.compacting_table() == &t && task.compaction_type() == compaction_type::Cleanup;
-        });
-    };
-    if (check_for_cleanup()) {
+    // The marker is held until we return, so it also covers the waits
+    // between compaction tasks below, when no cleanup task is registered
+    // in _tasks.
+    if (cs.cleanup_in_progress) {
         throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}", t));
     }
+    cs.cleanup_in_progress = true;
+    auto clear_cleanup_in_progress = defer([&cs] noexcept { cs.cleanup_in_progress = false; });
 
     // A quarantined sstable is never eligible for compaction, so a cleanup
     // that samples one can only wait for the idle timeout and fail.  Fail
