@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-# Tests for the disk page cache of object-storage keyspaces: a keyspace
-# created with STORAGE = {..., 'disk_cache': 'pages'} keeps all of its
+# Tests for the object storage page cache of object-storage keyspaces: a
+# keyspace created with STORAGE = {..., 'disk_cache': 'pages'} keeps all of its
 # sstables on the object store, but caches byte ranges read from it on the
 # node's disk.
 

@@ -148,7 +148,7 @@ CREATE KEYSPACE ks
   };
 ```
 
-## Disk page cache
+## Object storage page cache
 
 A keyspace created with the `'disk_cache': 'pages'` storage option (which
 requires the experimental feature `object-storage-page-cache`) caches, on the
