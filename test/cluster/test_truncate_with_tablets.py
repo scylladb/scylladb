@@ -8,7 +8,7 @@ from cassandra.cluster import TruncateError
 from cassandra.policies import FallthroughRetryPolicy
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import get_topology_coordinator, new_test_keyspace, FeatureConfig, feature_configs, \
-    FeatureConfigurations, count_rows, trigger_stepdown
+    FeatureConfigurations, count_rows, trigger_stepdown, with_physical_truncate
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 import time
@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 LOGSTOR_TRUNCATE_NOT_IMPLEMENTED = pytest.mark.skip_bug(
     link="https://scylladb.atlassian.net/browse/SCYLLADB-5484",
     reason="logstor truncate is not implemented yet")
+
+# These tests exercise the physical TRUNCATE of tablet tables, which is used until the
+# EVENTUALLY_CONSISTENT_TRUNCATE cluster feature is enabled, so they suppress the feature.
 
 
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
@@ -38,7 +41,7 @@ async def test_truncate_while_migration(manager: ScyllaClusterManager, feature_c
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}"))
 
     servers = []
-    servers.append(await manager.server_add(config=cfg))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
 
     cql = manager.get_cql()
 
@@ -50,7 +53,7 @@ async def test_truncate_while_migration(manager: ScyllaClusterManager, feature_c
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
 
         # Add a node to the cluster. This will cause the tablet load balancer to migrate one tablet to the new node
-        servers.append(await manager.server_add(config=cfg))
+        servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
 
         # Wait for tablet streaming to start
         pending_node = servers[1]
@@ -90,9 +93,9 @@ async def test_truncate_with_concurrent_drop(manager: ScyllaClusterManager, stor
     cfg = storage_config.get_cluster_cfg(cfg)
 
     servers = []
-    servers.append(await manager.server_add(config=cfg))
-    servers.append(await manager.server_add(config=cfg))
-    servers.append(await manager.server_add(config=cfg))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
 
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -150,9 +153,9 @@ async def test_truncate_while_node_restart(manager: ScyllaClusterManager, featur
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}"))
 
     servers = []
-    servers.append(await manager.server_add(config=cfg))
-    servers.append(await manager.server_add(config=cfg))
-    servers.append(await manager.server_add(config=cfg))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
 
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -198,8 +201,8 @@ async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager, st
     cfg = storage_config.get_cluster_cfg(cfg)
 
     servers = []
-    servers.append(await manager.server_add(config=cfg))
-    servers.append(await manager.server_add(config=cfg))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
 
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -253,7 +256,7 @@ async def test_truncate_while_truncate_already_waiting(manager: ScyllaClusterMan
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}"))
 
     servers = []
-    servers.append(await manager.server_add(config=cfg))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
 
     cql = manager.get_cql()
 
@@ -265,7 +268,7 @@ async def test_truncate_while_truncate_already_waiting(manager: ScyllaClusterMan
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
 
         # Add a node to the cluster. This will cause the load balancer to migrate one tablet to the new node
-        servers.append(await manager.server_add(config=cfg))
+        servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
 
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
         s1_log = await manager.server_open_log(servers[1].server_id)
@@ -304,7 +307,7 @@ async def test_replay_position_check_during_truncate(manager, feature_config: Fe
     keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"))
     cmdline = ['--smp=1']
-    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    servers = await manager.servers_add(1, cmdline=cmdline, config=with_physical_truncate(cfg))
     server = servers[0]
 
     cql = manager.get_cql()
@@ -347,7 +350,7 @@ async def test_parallel_truncate(manager: ScyllaClusterManager, feature_config: 
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}"))
 
     servers = []
-    servers.append(await manager.server_add(config=cfg))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
 
     cql = manager.get_cql()
 
@@ -361,7 +364,7 @@ async def test_parallel_truncate(manager: ScyllaClusterManager, feature_config: 
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test1 (pk, c) VALUES ({k}, {k});') for k in keys])
 
         # Add a node to the cluster. This will cause the load balancer to migrate one tablet to the new node
-        servers.append(await manager.server_add(config=cfg))
+        servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
 
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
         s1_log = await manager.server_open_log(servers[1].server_id)
@@ -410,7 +413,7 @@ async def test_split_emitted_during_truncate(manager: ScyllaClusterManager, stor
         '--logger-log-level', 'load_balancer=debug',
         '--logger-log-level', 'debug_error_injection=debug',
     ]
-    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    servers = await manager.servers_add(1, cmdline=cmdline, config=with_physical_truncate(cfg))
     server = servers[0]
 
     cql = manager.get_cql()
@@ -477,9 +480,9 @@ async def test_truncate_by_stale_coordinator_with_foreign_session(manager: Scyll
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
 
     servers = []
-    servers.append(await manager.server_add(config=cfg))
-    servers.append(await manager.server_add(config=cfg))
-    servers.append(await manager.server_add(config=cfg))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
+    servers.append(await manager.server_add(config=with_physical_truncate(cfg)))
 
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)

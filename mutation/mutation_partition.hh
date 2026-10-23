@@ -218,6 +218,14 @@ public:
 
     row difference(const schema&, column_kind, const row& other) const;
 
+    // Removes the cells and collection elements written at or before `truncated_at`, i.e. covered by
+    // a table's truncation tombstone (see docs/dev/eventually-consistent-truncate.md).
+    // Counter cells are removed by their timestamp too, unlike with a tombstone, which covers a
+    // counter cell regardless of its timestamp.
+    void strip_truncated(const schema& s, column_kind kind, api::timestamp_type truncated_at);
+    // Returns true iff any cell or collection element was written at or before `truncated_at`.
+    bool has_truncated(const schema& s, column_kind kind, api::timestamp_type truncated_at) const;
+
     bool equal(column_kind kind, const schema& this_schema, const row& other, const schema& other_schema) const;
 
     size_t external_memory_usage(const schema&, column_kind) const;
@@ -912,6 +920,12 @@ public:
                             gc_clock::time_point gc_before,
                             compaction_garbage_collector* collector = nullptr);
 
+    // Removes the cells, row marker and row tombstones written at or before `truncated_at`
+    // (see row::strip_truncated()). The regular and the shadowable row tombstones are stripped
+    // separately, so that nothing is merged into what is left of them.
+    void strip_truncated(const schema& s, api::timestamp_type truncated_at);
+    bool has_truncated(const schema& s, api::timestamp_type truncated_at) const;
+
     class printer {
         const schema& _schema;
         const deletable_row& _deletable_row;
@@ -1496,6 +1510,13 @@ public:
             | std::views::filter([] (const rows_entry& e) { return bool(!e.dummy()); });
     }
     void accept(const schema&, mutation_partition_visitor&) const;
+
+    // Removes the data written at or before `truncated_at`, i.e. covered by a table's truncation
+    // tombstone (see docs/dev/eventually-consistent-truncate.md): cells and collection elements,
+    // row markers, and row, range and partition tombstones. Rows that end up empty are erased.
+    void strip_truncated(const schema& s, api::timestamp_type truncated_at);
+    // Returns true iff any data was written at or before `truncated_at`.
+    bool has_truncated(const schema& s, api::timestamp_type truncated_at) const;
 
     // Returns the number of live CQL rows in this partition.
     //

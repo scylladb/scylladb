@@ -1015,6 +1015,14 @@ public:
     struct all_tokens_tag {};
     future<std::unordered_map<sstring, sstring>> add_repair_tablet_request(table_id table, std::variant<utils::chunked_vector<dht::token>, all_tokens_tag> tokens_variant, std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter, bool await_completion, locator::tablet_repair_incremental_mode incremental_mode);
     future<> del_repair_tablet_request(table_id table, locator::tablet_task_id);
+    // The eventually-consistent TRUNCATE of a tablet table (see docs/dev/eventually-consistent-truncate.md):
+    // sets the truncation tombstone of the table and of its materialized views and secondary indexes,
+    // in one group0 command, keeping the later of it and their current one, and waits until the live
+    // nodes apply it.
+    future<> truncate_with_timestamp(table_id table, tombstone truncation_tombstone);
+    // Whether this node holds no data of the table covered by its truncation tombstone,
+    // which can be garbage-collected once no replica holds any.
+    future<bool> is_truncation_tombstone_clean(table_id table, api::timestamp_type truncated_at);
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);

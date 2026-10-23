@@ -40,6 +40,10 @@ public:
     tablet_mutation_builder& del_session(dht::token last_token);
     tablet_mutation_builder& del_transition(dht::token last_token);
     tablet_mutation_builder& set_resize_decision(locator::resize_decision, const gms::feature_service&);
+    // Sets or deletes the table's truncation tombstone, set by the eventually-consistent TRUNCATE.
+    // Must be used only once the EVENTUALLY_CONSISTENT_TRUNCATE cluster feature is enabled.
+    tablet_mutation_builder& set_truncated_at(tombstone);
+    tablet_mutation_builder& del_truncated_at();
     tablet_mutation_builder& set_repair_time(dht::token last_token, db_clock::time_point repair_time);
     tablet_mutation_builder& set_sstables_repair_at(dht::token last_token, int64_t sstables_repaired_at);
     tablet_mutation_builder& set_repair_task_info(dht::token last_token, locator::tablet_task_info info, const gms::feature_service& features);

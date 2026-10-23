@@ -4938,7 +4938,7 @@ public:
                         const auto& s = *sp;
                         if (s.id() != base_id) {
                             lblogger.debug("Creating tablets for {}.{} id={} with base={}", s.ks_name(), s.cf_name(), s.id(), base_id);
-                            muts.emplace_back(colocated_tablet_map_to_mutation(s.id(), s.ks_name(), s.cf_name(), base_id, ts));
+                            muts.emplace_back(colocated_tablet_map_to_mutation(s.id(), s.ks_name(), s.cf_name(), base_id, ts, tombstone()));
                             _db.get_notifier().before_allocate_tablet_map_in_notification(base_map, s, muts, ts);
                         }
                     }
@@ -4954,7 +4954,7 @@ public:
                     tablet_map_to_mutations(base_map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features(), [&] (mutation m) {
                         muts.emplace_back(std::move(m));
                         return make_ready_future<>();
-                    }).get();
+                    }, tombstone()).get();
                     _db.get_notifier().before_allocate_tablet_map_in_notification(base_map, s, muts, ts);
 
                     create_colocated_tablet_maps(base_map);

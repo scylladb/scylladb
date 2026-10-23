@@ -86,6 +86,7 @@
 #include "readers/mutation_source.hh"
 #include "readers/reversing.hh"
 #include "readers/forwardable.hh"
+#include "readers/truncation_stripping.hh"
 #include "sstables/trie/bti_index.hh"
 #include "partition_slice_builder.hh"
 
@@ -3124,6 +3125,28 @@ future<> delayed_commit_changes::commit() {
 
 mutation_reader
 sstable::make_reader(
+        schema_ptr query_schema,
+        reader_permit permit,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        read_monitor& mon,
+        integrity_check integrity,
+        const utils::hashed_key* single_partition_read_murmur_hash
+) {
+    const auto truncation_tombstone = permit.truncation_tombstone(*query_schema);
+    auto rd = make_unstripped_reader(std::move(query_schema), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr, mon,
+            integrity, single_partition_read_murmur_hash);
+    if (truncation_tombstone && get_stats_metadata().min_timestamp <= truncation_tombstone.timestamp) {
+        rd = make_truncation_stripping_reader(std::move(rd), truncation_tombstone);
+    }
+    return rd;
+}
+
+mutation_reader
+sstable::make_unstripped_reader(
         schema_ptr query_schema,
         reader_permit permit,
         const dht::partition_range& range,

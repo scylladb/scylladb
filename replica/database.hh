@@ -228,6 +228,8 @@ private:
     seastar::scheduling_group _compaction_scheduling_group;
     replica::table_stats& _table_stats;
     shared_tombstone_gc_state* _shared_gc_state = nullptr;
+    // The table's truncation tombstone, stamped on every new memtable.
+    tombstone _truncation_tombstone;
 public:
     using iterator = decltype(_memtables)::iterator;
     using const_iterator = decltype(_memtables)::const_iterator;
@@ -346,6 +348,11 @@ public:
 
     void add_memtable() {
         _memtables.emplace_back(new_memtable());
+    }
+
+    // Sets the truncation tombstone stamped on memtables created from now on.
+    void set_truncation_tombstone(tombstone t) noexcept {
+        _truncation_tombstone = t;
     }
 
     dirty_memory_manager_logalloc::region_group& region_group() noexcept {
@@ -528,10 +535,32 @@ private:
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list(compaction_group& cg);
 
+    struct sealed_memtable {
+        compaction_group& cg;
+        shared_memtable memtable;
+        // Keeps the compaction group alive until the memtable is flushed.
+        gate::holder flush_gate_holder;
+        utils::phased_barrier::operation flush_op;
+    };
+    // Installs the table's truncation tombstone from the tablet metadata.
+    // When it is a newer one, it switches the active memtables synchronously,
+    // and invalidates the cache and flushes the switched memtables in the background.
+    void set_truncation_tombstone(tombstone);
+    future<> on_new_truncation_tombstone(tombstone, std::vector<sealed_memtable>);
+
     compaction::compaction_manager& _compaction_manager;
     compaction::compaction_strategy _compaction_strategy;
     logstor::logstor* _logstor = nullptr;
     std::unique_ptr<logstor::primary_index> _logstor_index;
+    // The truncation tombstone of the table, set by the eventually-consistent TRUNCATE of
+    // tablet tables and installed from the tablet metadata (see docs/dev/eventually-consistent-truncate.md).
+    // Unrelated to _truncated_at, the time of the last legacy TRUNCATE.
+    // Declared before _sg_manager, since creating compaction groups reads it.
+    tombstone _truncation_tombstone;
+    // The truncation tombstone up to which the row cache is known to hold no covered data.
+    // While it lags behind _truncation_tombstone, the cache is being invalidated, and reads
+    // must strip covered data from the cache's output too.
+    tombstone _cache_truncation_tombstone;
     // The storage_group_manager manages either a single storage_group for vnodes or per-tablet storage_group for tablets.
     // It contains and manages both the compaction_groups list and the storage_groups vector.
     std::unique_ptr<storage_group_manager> _sg_manager;
@@ -668,6 +697,18 @@ public:
         _truncated_at = truncated_at;
     }
     db_clock::time_point get_truncation_time() const;
+
+    tombstone get_truncation_tombstone() const noexcept {
+        return _truncation_tombstone;
+    }
+    // Whether the row cache may still hold data covered by the truncation tombstone.
+    bool cache_may_hold_truncated_data() const noexcept {
+        return _cache_truncation_tombstone < _truncation_tombstone;
+    }
+    // Whether the table may hold data written at or before `truncated_at`, i.e. covered by its truncation
+    // tombstone, in memtables, sstables or the row cache, on this shard. Checks metadata only.
+    // The truncation tombstone can be garbage-collected once no replica holds any covered data.
+    bool may_hold_truncated_data(api::timestamp_type truncated_at) const;
 
     void notify_bootstrap_or_replace_start();
 
@@ -1480,7 +1521,9 @@ private:
     //
     // The function never fails.
     // It either succeeds eventually after retrying or aborts.
-    future<> seal_active_memtable(compaction_group& cg, flush_permit&&) noexcept;
+    // When `sealed` is engaged, it is a memtable that was already switched out of the
+    // active position, and only needs to be flushed.
+    future<> seal_active_memtable(compaction_group& cg, flush_permit&&, shared_memtable sealed = {}) noexcept;
 
     void check_valid_rp(const db::replay_position&) const;
 

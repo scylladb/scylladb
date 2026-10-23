@@ -298,6 +298,10 @@ public:
 
     // Returns a mutation_reader for given range of partitions.
     //
+    // Data covered by the table's truncation tombstone, as sampled by the permit, is stripped
+    // (see docs/dev/eventually-consistent-truncate.md). It is stripped per sstable, before merging
+    // with other sources, since merging counter cells can keep a covered shard.
+    //
     // Precondition: if the slice is reversed, the schema must be reversed as well.
     mutation_reader make_reader(
             schema_ptr query_schema,
@@ -312,6 +316,19 @@ public:
             const utils::hashed_key* single_partition_read_murmur_hash = nullptr
         );
 
+private:
+    mutation_reader make_unstripped_reader(
+            schema_ptr query_schema,
+            reader_permit permit,
+            const dht::partition_range& range,
+            const query::partition_slice& slice,
+            tracing::trace_state_ptr trace_state,
+            streamed_mutation::forwarding fwd,
+            mutation_reader::forwarding fwd_mr,
+            read_monitor& monitor,
+            integrity_check integrity,
+            const utils::hashed_key* single_partition_read_murmur_hash);
+public:
     // A reader which doesn't use the index at all. It reads everything from the
     // sstable and it doesn't support skipping.
     mutation_reader make_full_scan_reader(

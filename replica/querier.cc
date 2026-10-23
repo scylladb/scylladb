@@ -26,7 +26,8 @@ enum class can_use {
     no_ring_pos_mismatch,
     no_clustering_pos_mismatch,
     no_scheduling_group_mismatch,
-    no_fatal_semaphore_mismatch
+    no_fatal_semaphore_mismatch,
+    no_truncation_tombstone_mismatch
 };
 
 static sstring cannot_use_reason(can_use cu)
@@ -45,6 +46,8 @@ static sstring cannot_use_reason(can_use cu)
             return "scheduling group mismatch";
         case can_use::no_fatal_semaphore_mismatch:
             return "fatal semaphore mismatch";
+        case can_use::no_truncation_tombstone_mismatch:
+            return "truncation tombstone mismatch";
     }
     return "unknown reason";
 }
@@ -161,6 +164,14 @@ template <typename Querier>
 static can_use can_be_used_for_page(querier_cache::is_user_semaphore_func& is_user_semaphore, Querier& q, const schema& s, const dht::partition_range& range, const query::partition_slice& slice, reader_concurrency_semaphore& current_sem) {
     if (s.version() != q.schema().version()) {
         return can_use::no_schema_version_mismatch;
+    }
+
+    // The querier's readers strip the data covered by the truncation tombstone sampled when they
+    // were created. If it changed since, drop the querier, so that the page is read by new readers,
+    // which sample it again, rather than applying different truncation tombstones to the sources
+    // of the querier's readers.
+    if (q.permit().truncation_tombstone(s) != s.truncation_tombstone().value_or(tombstone())) {
+        return can_use::no_truncation_tombstone_mismatch;
     }
 
     auto& querier_sem = q.permit().semaphore();

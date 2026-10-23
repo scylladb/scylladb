@@ -52,6 +52,9 @@ public:
     void remove_tombstone() { _row.remove_tombstone(); }
     row_tombstone tomb() const { return _row.deleted_at(); }
 
+    // See deletable_row::strip_truncated().
+    void strip_truncated(const schema& s, api::timestamp_type truncated_at) { _row.strip_truncated(s, truncated_at); }
+
     const row_marker& marker() const { return _row.marker(); }
     row_marker& marker() { return _row.marker(); }
 

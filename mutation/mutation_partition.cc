@@ -1747,6 +1747,97 @@ bool deletable_row::compact_and_expire(const schema& s,
 }
 
 
+void row::strip_truncated(const schema& s, column_kind kind, api::timestamp_type truncated_at) {
+    if (s.is_counter()) {
+        // A counter cell is covered by any tombstone, regardless of its timestamp,
+        // so it is removed by its timestamp here. Counter tables have no other kind of columns.
+        remove_if([&] (column_id id, atomic_cell_or_collection& c) {
+            return c.as_atomic_cell(s.column_at(kind, id)).timestamp() <= truncated_at;
+        });
+        return;
+    }
+    compact_and_expire(s, kind, row_tombstone(tombstone(truncated_at, gc_clock::time_point::max())),
+            gc_clock::time_point::min(), never_gc, gc_clock::time_point::min());
+}
+
+bool row::has_truncated(const schema& s, column_kind kind, api::timestamp_type truncated_at) const {
+    bool found = false;
+    for_each_cell_until([&] (column_id id, const atomic_cell_or_collection& c) {
+        auto& def = s.column_at(kind, id);
+        if (def.is_atomic()) {
+            found = c.as_atomic_cell(def).timestamp() <= truncated_at;
+        } else {
+            auto cmv = c.as_collection_mutation();
+            auto t = cmv.tomb();
+            found = (t && t.timestamp <= truncated_at)
+                    || std::ranges::any_of(cmv, [&] (const auto& e) { return e.second.timestamp() <= truncated_at; });
+        }
+        return stop_iteration(found);
+    });
+    return found;
+}
+
+void deletable_row::strip_truncated(const schema& s, api::timestamp_type truncated_at) {
+    auto covered = [&] (const tombstone& t) {
+        return t && t.timestamp <= truncated_at;
+    };
+    const auto regular = covered(_deleted_at.regular()) ? tombstone() : _deleted_at.regular();
+    const auto shadowable = covered(_deleted_at.tomb()) ? tombstone() : _deleted_at.tomb();
+    if (regular != _deleted_at.regular() || shadowable != _deleted_at.tomb()) {
+        _deleted_at = row_tombstone(regular, shadowable_tombstone(shadowable));
+    }
+    if (!_marker.is_missing() && _marker.timestamp() <= truncated_at) {
+        _marker = row_marker();
+    }
+    _cells.strip_truncated(s, column_kind::regular_column, truncated_at);
+}
+
+bool deletable_row::has_truncated(const schema& s, api::timestamp_type truncated_at) const {
+    return (_deleted_at.regular() && _deleted_at.regular().timestamp <= truncated_at)
+            || (_deleted_at.tomb() && _deleted_at.tomb().timestamp <= truncated_at)
+            || (!_marker.is_missing() && _marker.timestamp() <= truncated_at)
+            || _cells.has_truncated(s, column_kind::regular_column, truncated_at);
+}
+
+void mutation_partition::strip_truncated(const schema& s, api::timestamp_type truncated_at) {
+    if (_tombstone && _tombstone.timestamp <= truncated_at) {
+        _tombstone = tombstone();
+    }
+    if (!_static_row.empty()) {
+        _static_row.maybe_create().strip_truncated(s, column_kind::static_column, truncated_at);
+    }
+    auto deleter = current_deleter<rows_entry>();
+    for (auto it = _rows.begin(); it != _rows.end();) {
+        if (it->dummy()) {
+            ++it;
+            continue;
+        }
+        it->row().strip_truncated(s, truncated_at);
+        if (it->row().empty()) {
+            it = _rows.erase_and_dispose(it, deleter);
+        } else {
+            ++it;
+        }
+    }
+    _row_tombstones.erase_where([&] (const range_tombstone& rt) {
+        return rt.tomb.timestamp <= truncated_at;
+    });
+}
+
+bool mutation_partition::has_truncated(const schema& s, api::timestamp_type truncated_at) const {
+    if (_tombstone && _tombstone.timestamp <= truncated_at) {
+        return true;
+    }
+    if (!_static_row.empty() && _static_row.get_existing().has_truncated(s, column_kind::static_column, truncated_at)) {
+        return true;
+    }
+    if (std::ranges::any_of(non_dummy_rows(), [&] (const rows_entry& e) { return e.row().has_truncated(s, truncated_at); })) {
+        return true;
+    }
+    return std::ranges::any_of(_row_tombstones, [&] (const range_tombstone_entry& e) { return e.tombstone().tomb.timestamp <= truncated_at; });
+}
+
+
 deletable_row deletable_row::difference(const schema& s, column_kind kind, const deletable_row& other) const
 {
     deletable_row dr;

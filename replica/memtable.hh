@@ -151,6 +151,11 @@ private:
     // This tracks the lowest value of _total_memory seen during the flush.
     uint64_t _total_memory_low_watermark_during_flush = 0;
     bool _merged_into_cache = false;
+    // The truncation tombstone of the table when this memtable was created.
+    // Writes applied to the memtable are stripped of the data covered by it,
+    // so only a memtable created before a truncation tombstone was set may hold
+    // data covered by it.
+    tombstone _truncation_tombstone;
     replica::table_stats& _table_stats;
 
     class memtable_encoding_stats_collector : public encoding_stats_collector {
@@ -334,6 +339,14 @@ public:
     mutation_source as_data_source();
 
     bool empty() const noexcept { return partitions.empty(); }
+    tombstone truncation_tombstone() const noexcept { return _truncation_tombstone; }
+    // Whether the memtable may hold data covered by the given truncation tombstone.
+    // Writes applied to a memtable are stripped of the data covered by the truncation tombstone
+    // it was created with, so only a memtable created before it was set may hold covered data.
+    bool may_hold_truncated_data(tombstone t) const noexcept {
+        return t && _truncation_tombstone < t && get_min_timestamp() <= t.timestamp;
+    }
+    void set_truncation_tombstone(tombstone t) noexcept { _truncation_tombstone = t; }
     void mark_flushed(mutation_source) noexcept;
     bool is_merging_to_cache() const noexcept;
     bool is_flushed() const noexcept;

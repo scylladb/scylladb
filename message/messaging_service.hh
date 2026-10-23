@@ -223,8 +223,9 @@ enum class messaging_verb : int32_t {
     BACKUP_SNAPSHOT_SSTABLES = 93,
     WAIT_FOR_SNAPSHOT_TRANSFER = 94,
     SYNC_RAFT_GROUP_CONFIG = 95,
+    TRUNCATION_TOMBSTONE_CLEAN = 96,
 
-    LAST = 96,
+    LAST = 97,
 };
 
 } // namespace netw

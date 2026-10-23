@@ -57,19 +57,25 @@ std::vector<data_value> replicas_to_data_value(const locator::tablet_replica_set
 /// The mutations will delete any older tablet information for the same table.
 /// The provided timestamp should be strictly monotonically increasing
 /// between calls for the overriding to work correctly.
+///
+/// Since the table's partition is replaced, `truncated_at` must be the table's current
+/// truncation tombstone when rewriting the tablet map of an existing table, or it is lost.
+/// It is empty for a new table.
 future<> tablet_map_to_mutations(const locator::tablet_map&,
                                         table_id,
                                         const sstring& keyspace_name,
                                         const sstring& table_name,
                                         api::timestamp_type,
                                         const gms::feature_service& features,
-                                        std::function<future<>(mutation)> process_mutation);
+                                        std::function<future<>(mutation)> process_mutation,
+                                        tombstone truncated_at);
 
 mutation colocated_tablet_map_to_mutation(table_id,
                                         const sstring& keyspace_name,
                                         const sstring& table_name,
                                         table_id base_table,
-                                        api::timestamp_type);
+                                        api::timestamp_type,
+                                        tombstone truncated_at);
 
 mutation make_drop_tablet_map_mutation(table_id, api::timestamp_type);
 

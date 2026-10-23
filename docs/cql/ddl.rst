@@ -1357,7 +1357,8 @@ A table can be truncated using the ``TRUNCATE`` statement:
 .. code-block::
    
    truncate_statement: TRUNCATE [ TABLE ] `table_name`
-                     : [ USING TIMEOUT `timeout` ]
+                     : [ USING `truncate_parameter` ( AND `truncate_parameter` )* ]
+   truncate_parameter: TIMESTAMP `timestamp` | TIMEOUT `timeout`
    timeout: `duration` | `bind_marker`
    bind_marker: '?' | ':' `identifier`
 
@@ -1365,6 +1366,7 @@ Note that ``TRUNCATE TABLE foo`` is allowed for consistency with other DDL state
 that can be truncated currently and so the ``TABLE`` keyword can be omitted.
 
 Truncating a table permanently removes all existing data from the table, but without removing the table itself.
+Truncating a table also truncates its materialized views and secondary indexes.
 
 The ``USING TIMEOUT`` clause allows specifying a timeout for a specific request.
 
@@ -1377,6 +1379,43 @@ In a prepared statement, the timeout can be given as a bind marker::
   TRUNCATE TABLE users USING TIMEOUT ?;
 
 .. caution:: Do not run any operation on a table that is being truncated. Truncate operation is an administrative operation, and running any other operation on the same table in parallel may cause the truncating table's data to end up in an undefined state.
+   This does not apply to tables using tablets, which are truncated by timestamp, as described below,
+   except for counter updates.
+
+Truncating tables using tablets
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Tables using tablets, which are not strongly consistent, are truncated by timestamp: ``TRUNCATE`` deletes the data
+written at or before its timestamp, like a ``DELETE`` of every partition of the table, and keeps the data written
+after it. Writes concurrent with the ``TRUNCATE`` are resolved by their timestamp, like writes concurrent with a ``DELETE``.
+The timestamp is given by the ``USING TIMESTAMP`` clause, or else by the client-side timestamp, if the driver sends one,
+or else by the coordinator. For example::
+
+  TRUNCATE TABLE users USING TIMESTAMP 1700000000000000;
+
+.. caution:: Most drivers send a client-side timestamp with every request by default. If the client's clock is behind
+   the clock of the clients or nodes which wrote the table's data, data written shortly before the ``TRUNCATE`` may have
+   timestamps above the truncation timestamp, and is not truncated. Use ``USING TIMESTAMP``, or have the coordinator
+   generate the timestamp, to truncate all the data written until the ``TRUNCATE``.
+
+``USING TIMESTAMP`` is supported only for such tables, once all the nodes of the cluster are upgraded to a version that
+supports it. Until then, and for other tables, ``TRUNCATE`` removes the table's data regardless of its write timestamps.
+
+The truncated data is not removed from disk right away. It is removed as the table's SSTables are compacted, and major
+compaction (``nodetool compact``) removes all of it. SSTables which hold only truncated data, typically most of the table's
+SSTables, are removed without being rewritten. ``TRUNCATE`` does not require all the table's replicas to be alive: a replica
+which is down observes the truncation when it comes back.
+
+The truncation is recorded like a tombstone, and garbage-collected like one, following the table's ``tombstone_gc``
+options (see :ref:`Tombstones GC options <ddl-tombstones-gc>`), once no replica holds truncated data. Until then, data written
+with a timestamp at or before the truncation timestamp is ignored, even if written after the ``TRUNCATE``.
+Afterwards, such data, e.g. restored from a backup taken before the ``TRUNCATE``, is visible again.
+
+Unlike a ``DELETE``, ``TRUNCATE`` does not prevent counters from being updated again: counter updates after the ``TRUNCATE``
+count from zero. The outcome of counter updates concurrent with the ``TRUNCATE`` is undefined, so they should be stopped
+while a counter table is truncated.
+
+``TRUNCATE`` does not truncate the table's CDC log table, nor does it write a CDC log entry.
 
 * :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 

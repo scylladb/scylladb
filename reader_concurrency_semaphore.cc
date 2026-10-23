@@ -17,6 +17,7 @@
 #include <utility>
 
 #include "reader_concurrency_semaphore.hh"
+#include "utils/small_vector.hh"
 #include "query/query-result.hh"
 #include "readers/mutation_reader.hh"
 #include "utils/assert.hh"
@@ -173,6 +174,10 @@ private:
     uint64_t _need_cpu_branches = 0;
     uint64_t _awaits_branches = 0;
     uint64_t _sstables_read = 0;
+
+    // The truncation tombstones sampled for the tables read, see reader_permit::truncation_tombstone().
+    // Usually a single table is read with a permit.
+    utils::small_vector<std::pair<table_id, tombstone>, 1> _truncation_tombstone_samples;
     size_t _requested_memory = 0;
     uint64_t _oom_kills = 0;
     reader_permit::state _state = reader_permit::state::active;
@@ -327,6 +332,19 @@ public:
 
     const schema_ptr& get_schema() const {
         return _schema;
+    }
+
+    tombstone truncation_tombstone(const schema& s) {
+        for (const auto& [id, t] : _truncation_tombstone_samples) {
+            if (id == s.id()) {
+                return t;
+            }
+        }
+        return _truncation_tombstone_samples.emplace_back(s.id(), s.truncation_tombstone().value_or(tombstone())).second;
+    }
+
+    void resample_truncation_tombstone() noexcept {
+        _truncation_tombstone_samples.clear();
     }
 
     std::string_view get_op_name() const {
@@ -612,6 +630,14 @@ reader_concurrency_semaphore& reader_permit::semaphore() {
 
 const schema_ptr& reader_permit::get_schema() const {
     return _impl->get_schema();
+}
+
+tombstone reader_permit::truncation_tombstone(const schema& s) {
+    return _impl->truncation_tombstone(s);
+}
+
+void reader_permit::resample_truncation_tombstone() noexcept {
+    _impl->resample_truncation_tombstone();
 }
 
 std::string_view reader_permit::get_op_name() const {
