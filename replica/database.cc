@@ -3857,7 +3857,8 @@ void database::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
     _user_sstables_manager->plug_sstables_registry(std::make_unique<db::system_keyspace_sstables_registry>(sys_ks));
     if (_cfg.check_experimental(db::experimental_features_t::feature::OBJECT_STORAGE_PAGE_CACHE)) {
         _object_storage_page_cache = make_shared<db::object_storage_page_cache_table>(sys_ks.query_processor(),
-                utils::updateable_value<uint64_t>(_cfg.object_storage_page_cache_size_in_mb));
+                utils::updateable_value<uint64_t>(_cfg.object_storage_page_cache_size_in_mb),
+                utils::updateable_value<uint64_t>(_cfg.object_storage_page_cache_max_remembered_hits));
         _object_storage_page_cache->start(_user_sstables_manager->maintenance_sg());
         _user_sstables_manager->plug_object_storage_page_cache(_object_storage_page_cache);
     }
