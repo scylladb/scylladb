@@ -16,6 +16,7 @@
 #include <cmath>
 #include <set>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/with_scheduling_group.hh>
@@ -39,7 +40,10 @@
 #include "types/types.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/fragment_range.hh"
+#include "utils/hash.hh"
 #include "utils/log.hh"
+#include "utils/murmur_hash.hh"
+#include "utils/stall_free.hh"
 
 namespace db {
 
@@ -218,12 +222,17 @@ static mutation page_deletion(schema_ptr s, int16_t shard, utils::UUID sstable, 
 }
 
 object_storage_page_cache_table::object_storage_page_cache_table(replica::database& db, cql3::query_processor& qp,
-        utils::updateable_value<uint64_t> size_in_mb)
+        utils::updateable_value<uint64_t> size_in_mb, utils::updateable_value<uint64_t> max_remembered_hits)
     : _db(db)
     , _qp(qp)
     , _size_in_mb(std::move(size_in_mb))
+    , _max_remembered_hits(std::move(max_remembered_hits))
     , _size_observer(_size_in_mb.observe([this] (uint64_t) { _eviction_needed.signal(); }))
-{}
+{
+    // Before the hand's first pass, which may come long after the cache
+    // started filling. Without yielding, but only once, as the node starts.
+    reset_hit_filter_now();
+}
 
 size_t object_storage_page_cache_table::hand_position_hash::operator()(const hand_position& k) const noexcept {
     return utils::hash_combine(std::hash<utils::UUID>()(k.sstable),
@@ -235,10 +244,10 @@ size_t object_storage_page_cache_table::hand_position_hash::operator()(const han
 // execution, and of the coordinator's write path - in a benchmark, writing
 // directly cut a write's instructions by a third - and the cache writes
 // often: a page for each page which a read misses, a hit for each page
-// which is hit, and a deletion for each evicted page. The mutations are of
-// this shard's partitions (or of shards which no longer exist, which are
-// stored on the last shard - see this_shard_token_range()), so they are
-// applied on this shard.
+// which is hit (at most once in each pass of the hand), and a deletion for
+// each evicted page. The mutations are of this shard's partitions (or of
+// shards which no longer exist, which are stored on the last shard - see
+// this_shard_token_range()), so they are applied on this shard.
 future<> object_storage_page_cache_table::apply(mutation m) {
     auto s = m.schema();
     co_await _db.apply(std::move(s), freeze(m), {}, db::commitlog_force_sync::no, db::no_timeout);
@@ -354,19 +363,27 @@ future<> object_storage_page_cache_table::put_page(sstables::sstable_id sst, sst
             _pages_being_put.erase(it);
         }
     });
+    std::optional<db_clock::time_point> last_hit;
+    if (hit_in_pass(page_key{sst.uuid(), component, offset})) {
+        // The page's hit was recorded in this pass, but the page may have
+        // been evicted, with its hit, since - and the filter of pages hit in
+        // the pass can't forget it, so its next hit in the pass wouldn't be
+        // recorded. So the page is written with a hit now (see _hit_filter).
+        last_hit = db_clock::now();
+    }
     // The hits row is written first: eviction and the count of the cache's
     // bytes find pages only through their hits rows, so if the page's write
     // fails, a hits row without a page is evicted and counted harmlessly,
     // while a page without a hits row would stay until its sstable is
     // deleted. Not writing last_hit means that a page which is cached again
     // keeps its last hit.
-    co_await apply(hits_mutation(this_shard(), sst.uuid(), component_name, int64_t(offset), int32_t(data.size()), std::nullopt));
+    co_await apply(hits_mutation(this_shard(), sst.uuid(), component_name, int64_t(offset), int32_t(data.size()), last_hit));
     co_await utils::get_local_injector().inject("object_storage_page_cache_put_page_between_writes",
             utils::wait_for_message(std::chrono::minutes(5)), false);
     co_await apply(page_mutation(this_shard(), sst.uuid(), component_name, int64_t(offset),
             bytes(reinterpret_cast<const int8_t*>(data.get()), data.size())));
     _pages_written = true;
-    count_written_page(this_shard(), sst.uuid(), component_name, int64_t(offset), int32_t(data.size()), std::nullopt);
+    count_written_page(this_shard(), sst.uuid(), component_name, int64_t(offset), int32_t(data.size()), last_hit);
     // A page which was already cached is counted twice, until the bytes are
     // recounted.
     _bytes += data.size();
@@ -495,6 +512,7 @@ class object_storage_page_cache_table::page_cursor_impl : public sstables::objec
 
     object_storage_page_cache_table& _cache;
     sstables::sstable_id _sst;
+    sstables::component_type _component;
     sstring _component_name;
     uint64_t _from;
     uint64_t _to;
@@ -513,6 +531,7 @@ public:
             uint64_t from, uint64_t to, sstables::populate_disk_cache populate)
         : _cache(cache)
         , _sst(sst)
+        , _component(component)
         , _component_name(fmt::to_string(component))
         , _from(from)
         , _to(to)
@@ -553,7 +572,7 @@ public:
         auto data = std::move(_next->data);
         _next.reset();
         if (_populate) {
-            co_await _cache.record_hits(_sst, _component_name, {int64_t(offset)});
+            co_await _cache.record_hits(_sst, _component, _component_name, {int64_t(offset)});
         }
         co_return data;
     }
@@ -606,13 +625,13 @@ object_storage_page_cache_table::get_pages(sstables::sstable_id sst, sstables::c
         for (const auto& p : pages) {
             offsets.push_back(int64_t(p.offset));
         }
-        co_await record_hits(sst, component_name, std::move(offsets));
+        co_await record_hits(sst, component, component_name, std::move(offsets));
     }
     co_return pages;
 }
 
-future<> object_storage_page_cache_table::record_hits(sstables::sstable_id sst, const sstring& component_name,
-        std::vector<int64_t> offsets) {
+future<> object_storage_page_cache_table::record_hits(sstables::sstable_id sst, sstables::component_type component,
+        const sstring& component_name, std::vector<int64_t> offsets) {
     auto operation = _operations.try_hold();
     if (!operation) {
         // The cache was drained (see drain()). Not recording a hit only
@@ -621,8 +640,108 @@ future<> object_storage_page_cache_table::record_hits(sstables::sstable_id sst, 
     }
     auto now = db_clock::now();
     co_await coroutine::parallel_for_each(offsets, [&] (int64_t offset) -> future<> {
+        page_key key{sst.uuid(), component, uint64_t(offset)};
+        if (hit_in_pass(key)) {
+            co_return;
+        }
+        remember_hit(key);
         co_await apply(hits_mutation(this_shard(), sst.uuid(), component_name, offset, std::nullopt, now));
     });
+}
+
+// The filter of pages hit in a pass (see _hit_filter) has 10 bits per page,
+// and 7 hash functions, the best number for 10 bits per page: about 0.8% of
+// the pages which it doesn't hold seem to be in it, when it holds as many
+// pages as it was sized for.
+static constexpr uint64_t hit_filter_bits_per_page = 10;
+static constexpr unsigned hit_filter_hashes = 7;
+
+static size_t hit_filter_words(uint64_t pages) {
+    return (pages * hit_filter_bits_per_page + 63) / 64;
+}
+
+uint64_t object_storage_page_cache_table::hit_filter_pages() const noexcept {
+    // A page is usually at most 4 KiB: a compressed chunk, 4 KiB by default
+    // before compression, or a 4 KiB page of an uncompressed component. This
+    // assumes that pages are 2 KiB on average - if they are smaller, the
+    // filter fills before the cache does, and the hits of the pages beyond
+    // it are recorded every time. A cache without a limit is sized only by
+    // object_storage_page_cache_max_remembered_hits.
+    //
+    // It is sized for at least 64K pages: a smaller filter would save little
+    // memory (64K pages take 80 KB), and a small cache, which would fill a
+    // filter sized for it, hardly fills this one, which then misjudges almost
+    // none of its pages.
+    constexpr uint64_t average_page_size = 2048;
+    constexpr uint64_t min_pages = 64 * 1024;
+    auto pages = limit() ? std::max(limit() / average_page_size + 1, min_pages) : std::numeric_limits<uint64_t>::max();
+    return std::min(pages, _max_remembered_hits());
+}
+
+void object_storage_page_cache_table::reset_hit_filter_now() {
+    auto pages = hit_filter_pages();
+    _hit_filter.clear();
+    _hit_filter.resize(hit_filter_words(pages));
+    _hit_filter_pages = pages;
+    _hit_filter_size = 0;
+    ++_hit_filter_seed;
+}
+
+future<> object_storage_page_cache_table::reset_hit_filter() {
+    // The filter is emptied first: while the new one is filled, hits are
+    // recorded, and the pages aren't remembered.
+    _hit_filter.clear();
+    _hit_filter_pages = 0;
+    _hit_filter_size = 0;
+    ++_hit_filter_seed;
+    auto pages = hit_filter_pages();
+    auto words = hit_filter_words(pages);
+    utils::chunked_vector<uint64_t> filter;
+    co_await utils::reserve_gently(filter, words);
+    while (filter.size() < words) {
+        filter.resize(std::min(words, filter.size() + filter.max_chunk_capacity()));
+        co_await coroutine::maybe_yield();
+    }
+    _hit_filter = std::move(filter);
+    _hit_filter_pages = pages;
+}
+
+// Calls func with each of the page's bits in a filter of the given number of
+// bits, by double hashing - the i-th hash function is h1 + i * h2 - until
+// func returns false. Returns whether it never did.
+template <typename Func>
+static bool for_each_hit_filter_bit(utils::UUID sstable, sstables::component_type component, uint64_t offset,
+        uint64_t seed, size_t bits, Func func) {
+    std::array<uint64_t, 4> key{uint64_t(sstable.get_most_significant_bits()), uint64_t(sstable.get_least_significant_bits()),
+            uint64_t(component), offset};
+    std::array<uint64_t, 2> h;
+    utils::murmur_hash::hash3_x64_128(bytes_view(reinterpret_cast<const int8_t*>(key.data()), sizeof(key)), seed, h);
+    // The number of bits is a multiple of 64, so an even h2 would reach
+    // fewer of them.
+    h[1] |= 1;
+    for (unsigned i = 0; i < hit_filter_hashes; i++) {
+        if (!func((h[0] + i * h[1]) % bits)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool object_storage_page_cache_table::hit_in_pass(const page_key& key) const noexcept {
+    if (!_hit_filter_size || !_max_remembered_hits()) {
+        return false;
+    }
+    return for_each_hit_filter_bit(key.sstable, key.component, key.offset, _hit_filter_seed, _hit_filter.size() * 64,
+            [this] (size_t bit) { return bool((_hit_filter[bit / 64] >> (bit % 64)) & 1); });
+}
+
+void object_storage_page_cache_table::remember_hit(const page_key& key) noexcept {
+    if (_hit_filter_size >= _hit_filter_pages) {
+        return;
+    }
+    for_each_hit_filter_bit(key.sstable, key.component, key.offset, _hit_filter_seed, _hit_filter.size() * 64,
+            [this] (size_t bit) { _hit_filter[bit / 64] |= uint64_t(1) << (bit % 64); return true; });
+    ++_hit_filter_size;
 }
 
 future<> object_storage_page_cache_table::evict_sstable(sstables::sstable_id sst) {
@@ -1155,6 +1274,8 @@ future<> object_storage_page_cache_table::sweep(uint64_t target) {
     // hit all the time.
     for (int passes = 0; _bytes > target && !_stopping && passes < 3;) {
         if (!_hand) {
+            // A hit of a page on this pass is recorded again.
+            co_await reset_hit_filter();
             ++passes;
             // Lets tests hit pages after the histogram, from which this
             // pass's cutoff is chosen, was built.

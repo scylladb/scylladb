@@ -25,9 +25,19 @@ from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
 
-def page_cache_config(object_storage):
-    return {'object_storage_endpoints': object_storage.create_endpoint_conf(),
-            'experimental_features': ['object-storage-page-cache']}
+def page_cache_config(object_storage, exact_hits=False):
+    '''The configuration of a node with the page cache. With exact_hits, the
+    node records every hit of a page. Otherwise, as by default, a page's hit
+    is recorded only once in each pass of the hand which evicts pages: the
+    pages whose hits were recorded in the pass are remembered in a Bloom
+    filter, which by chance misjudges a few pages - which ones depends on the
+    sstables' ids, which are random. So a test whose result depends on which
+    pages were hit, which could otherwise fail by chance, uses exact_hits.'''
+    config = {'object_storage_endpoints': object_storage.create_endpoint_conf(),
+              'experimental_features': ['object-storage-page-cache']}
+    if exact_hits:
+        config['object_storage_page_cache_max_remembered_hits'] = 0
+    return config
 
 
 def storage_options(object_storage, **extra):
@@ -1018,10 +1028,14 @@ async def test_migration_to_another_node_evicts_pages(manager: ScyllaClusterMana
 
 async def test_hits(manager: ScyllaClusterManager, s3_storage):
     '''The page cache records when each cached page was last hit - read from
-    the cache by a read which may populate it. Caching a page isn't a hit, so
-    a page which was read only once looks old. A read with BYPASS CACHE reads
-    the cached pages, but doesn't record their hits: a scan with BYPASS CACHE
-    would otherwise make all of a table's pages look recently used.'''
+    the cache by a read which may populate it - but only once in each pass of
+    the hand which evicts pages. Caching a page isn't a hit, so a page which
+    was read only once looks old. A read with BYPASS CACHE reads the cached
+    pages, but doesn't record their hits: a scan with BYPASS CACHE would
+    otherwise make all of a table's pages look recently used.'''
+    # The test can't fail by chance with the filter of the pages whose hits
+    # were recorded in a pass (see page_cache_config()): it holds only the
+    # pages which the test checks, and is empty until they are hit.
     server = await manager.server_add(config=page_cache_config(s3_storage))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
@@ -1044,20 +1058,20 @@ async def test_hits(manager: ScyllaClusterManager, s3_storage):
         first_hits = page_hits(cql)
         assert sorted(first_hits) == pages
 
-        # Check that the next read records later hits. The clock has
-        # millisecond resolution, so wait for it to advance.
+        # Check that the next read doesn't record their hits again: the cache
+        # is far from full, so the hand which evicts pages didn't start a new
+        # pass, and the pages were already hit in its current pass. The clock
+        # has millisecond resolution, so wait for it to advance.
         await asyncio.sleep(0.002)
         await manager.api.drop_sstable_caches(server.ip_addr)
         point_read()
-        second_hits = page_hits(cql)
-        assert sorted(second_hits) == pages
-        assert all(second_hits[page] > first_hits[page] for page in pages)
+        assert page_hits(cql) == first_hits
 
         # Check that a read with BYPASS CACHE records no hits.
         await asyncio.sleep(0.002)
         await manager.api.drop_sstable_caches(server.ip_addr)
         point_read('BYPASS CACHE')
-        assert page_hits(cql) == second_hits
+        assert page_hits(cql) == first_hits
 
 
 def cached_bytes(cql):
@@ -1071,7 +1085,9 @@ async def test_cache_size_limit(manager: ScyllaClusterManager, s3_storage):
     it, it evicts pages - first the pages which weren't hit recently - so the
     pages which are read repeatedly stay in the cache, while it fills with
     pages which are read only once.'''
-    config = page_cache_config(s3_storage) | {'object_storage_page_cache_size_in_mb': 1}
+    # Which pages stay depends on which pages were hit, so the hits are
+    # recorded exactly (see page_cache_config()).
+    config = page_cache_config(s3_storage, exact_hits=True) | {'object_storage_page_cache_size_in_mb': 1}
     server = await manager.server_add(config=config)
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
