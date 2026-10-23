@@ -598,7 +598,7 @@ def test_oversized_write_on_sc_table(cql, sc_keyspace):
     """
     A write whose raft command exceeds the command size limit of the
     group is rejected with a clear error, not the raft error surfacing as
-    a server error.
+    a server error. The rejection leaves the table writable.
     """
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v blob") as table:
         insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
@@ -608,6 +608,12 @@ def test_oversized_write_on_sc_table(cql, sc_keyspace):
         m = re.search(r"write of (\d+) bytes exceeds the limit of (\d+) bytes", str(e.value))
         size, limit = int(m.group(1)), int(m.group(2))
         assert size >= 200 * 1024 > limit
+
+        # Close to the limit, so the test also fails if the limit shrinks.
+        cql.execute(insert, [3, b'y' * (90 * 1024)])
+        assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE pk = 1")] == [b'x' * 1024]
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk = 2")) == []
+        assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE pk = 3")] == [b'y' * (90 * 1024)]
 
 
 def test_mutation_fragments_on_sc_table(cql, sc_keyspace):
