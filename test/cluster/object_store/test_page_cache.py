@@ -1274,3 +1274,32 @@ async def test_many_concurrent_reads(manager: ScyllaClusterManager, s3_storage):
         for _ in range(2):
             results = await asyncio.gather(*[cql.run_async(select, [p]) for p in keys])
             assert [result[0].v for result in results] == [data[p] for p in keys]
+
+
+@pytest.mark.parametrize('compression', ['compressed', 'uncompressed'])
+async def test_point_read_requests_few_bytes(manager: ScyllaClusterManager, s3_storage, compression):
+    '''A point read which misses the cache requests from the object store
+    only the pages of the partition which it reads, and of the index which
+    leads to it - not the rest of the sstable after them.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    table_options = "WITH caching = {'enabled': 'false'}"
+    if compression == 'uncompressed':
+        table_options += " AND compression = {'sstable_compression': ''}"
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        # Each row has 1000 bytes of value, so each sstable is about a
+        # megabyte.
+        data = await create_table(manager, server, ks, table_options, rows=4000)
+        select = cql.prepare(f'SELECT v FROM {ks}.test WHERE p = ?')
+        total_requested = 0
+        for p in random.Random(1).sample(range(4000), 10):
+            await manager.api.drop_sstable_caches(server.ip_addr)
+            before = await page_cache_metric(manager, server, 'object_read_bytes')
+            assert cql.execute(select, [p]).one().v == data[p]
+            requested = await page_cache_metric(manager, server, 'object_read_bytes') - before
+            # Check that the read requested at most a few pages: of its
+            # partition's Data, and of the index, read through the cache.
+            assert requested <= 64 * 1024
+            total_requested += requested
+        # Check that the reads did miss the cache, and request pages.
+        assert total_requested > 0
