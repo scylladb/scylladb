@@ -42,7 +42,7 @@ future<minimal_sst_info> clone_backup_sstable(replica::table& table, const sstab
     co_return minimal_sst_info{shards.front(), gen, desc.version, desc.format, desc.sid, *source_sid};
 }
 
-future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger) {
+future<minimal_sst_info> download_sstable(replica::table& table, sstables::shared_sstable sstable, logging::logger& logger) {
     constexpr auto foptions = file_open_options{.extent_allocation_size_hint = 32_MiB, .sloppy_size = true};
     constexpr auto stream_options = file_output_stream_options{.buffer_size = 128_KiB, .write_behind = 10};
     auto components = sstable->all_components();
