@@ -603,6 +603,68 @@ void compaction_controller_v1::set_max_shares(float max_shares) {
     _control_points.back().output = max_shares;
 }
 
+compaction_controller_v2::compaction_controller_v2(scheduling_group sg, float static_shares, std::optional<float> max_shares,
+        std::chrono::milliseconds interval, std::function<compaction::compaction_rates()> current_rates, std::function<bool()> compacting)
+    : _scheduling_group(std::move(sg))
+    , _current_rates(std::move(current_rates))
+    , _compacting(std::move(compacting))
+    , _static_shares(static_shares)
+    , _update_timer([this] { adjust(); })
+{
+    if (max_shares) {
+        set_max_shares(*max_shares);
+    }
+    _update_timer.arm_periodic(interval);
+}
+
+future<> compaction_controller_v2::shutdown() {
+    _update_timer.cancel();
+    return make_ready_future<>();
+}
+
+future<> compaction_controller_v2::update_static_shares(float static_shares) {
+    _static_shares = static_shares;
+    return make_ready_future<>();
+}
+
+void compaction_controller_v2::set_max_shares(float max_shares) {
+    if (max_shares < min_shares) {
+        dblog.warn("The maximum compaction shares of {} is too low and can degrade performance. Increasing it to the minimum {}",
+                   max_shares, min_shares);
+        max_shares = min_shares;
+    }
+    _max_shares = max_shares;
+    _shares = std::min(_shares, _max_shares);
+}
+
+float compaction_controller_v2::next_shares(float shares, const compaction::compaction_rates& rates, float max_shares) {
+    auto target = rates.target.per_second();
+    auto achieved = rates.achieved.per_second();
+    double step = 1;
+    if (achieved > 0) {
+        step = std::clamp(std::pow(target / achieved, alpha), 1 / max_step, max_step);
+    } else if (target > 0) {
+        step = max_step;
+    }
+    return std::clamp(float(shares * step), min_shares, max_shares);
+}
+
+void compaction_controller_v2::adjust() {
+    if (_static_shares > 0) {
+        _scheduling_group.set_shares(_static_shares);
+        return;
+    }
+    try {
+        if (_compacting()) {
+            _shares = next_shares(_shares, _current_rates(), _max_shares);
+        }
+    } catch (...) {
+        // The shares are left as they are, as with unknown rates.
+        dblog.warn("Failed to compute the compaction rates, leaving compaction shares at {}: {}", _shares, std::current_exception());
+    }
+    _scheduling_group.set_shares(_shares);
+}
+
 namespace replica {
 
 static const metrics::label class_label("class");
