@@ -594,6 +594,26 @@ def test_null_primary_key_on_sc_table(cql, sc_keyspace):
         assert list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1")) == []
 
 
+def test_partial_update_on_sc_table(cql, sc_keyspace):
+    """
+    A strongly consistent UPDATE, or a DELETE of a single column, changes the
+    cells it names and nothing else: the other regular columns of the row and
+    the static column of the partition keep their values, and an update of the
+    static column leaves the clustering rows alone.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, w int, s int static, PRIMARY KEY (pk, ck)") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v, w, s) VALUES (1, 1, 10, 100, 7)")
+
+        cql.execute(f"UPDATE {table} SET v = 11 WHERE pk = 1 AND ck = 1")
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 1")) == [(1, 11, 100, 7)]
+
+        cql.execute(f"UPDATE {table} SET s = 8 WHERE pk = 1")
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 1")) == [(1, 11, 100, 8)]
+
+        cql.execute(f"DELETE w FROM {table} WHERE pk = 1 AND ck = 1")
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 1")) == [(1, 11, None, 8)]
+
+
 def test_oversized_write_on_sc_table(cql, sc_keyspace):
     """
     A write whose raft command exceeds the command size limit of the
