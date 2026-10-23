@@ -675,6 +675,16 @@ public:
                mutation_application_stats& app_stats,
                db::large_data_cache_tracker* tracker = nullptr);
 
+    // Consumes mp, which must be allocated in this entry's region (stolen, not copied).
+    // On exception mp may be left consumed, so callers must be able to rebuild it on retry.
+    void apply(logalloc::region&,
+               mutation_cleaner&,
+               const schema& s,
+               mutation_partition&& mp,
+               const schema& mp_schema,
+               mutation_application_stats& app_stats,
+               db::large_data_cache_tracker* tracker = nullptr);
+
     // Adds mutation_partition represented by "pe" to the one represented
     // by this entry.
     // This entry must be evictable.
