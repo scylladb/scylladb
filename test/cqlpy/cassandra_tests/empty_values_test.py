@@ -79,7 +79,6 @@ def verifyJsonInsert(cql, table, typ, emptyValue):
 # cassandra_bug.
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyInt(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v INT)") as table:
         verifyPlainInsert(cql, table, "int", "")
@@ -87,19 +86,17 @@ def testEmptyInt(cql, test_keyspace):
 # Reproduces #7944 (Scylla rejects the empty string in INSERT JSON for this
 # type, but with a server error) and SCYLLADB-5185 (SELECT JSON of an empty
 # value fails)
-@pytest.mark.xfail(reason="#7944, SCYLLADB-5185")
+@pytest.mark.xfail(reason="#7944")
 def testEmptyIntJson(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v INT)") as table:
         verifyJsonInsert(cql, table, "int", "")
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyTimestamp(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIMESTAMP)") as table:
         verifyPlainInsert(cql, table, "timestamp", "")
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyTimestampJson(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIMESTAMP)") as table:
         verifyJsonInsert(cql, table, "timestamp", "")
@@ -121,7 +118,6 @@ def testEmptyInetAddressJson(cql, test_keyspace):
         verifyJsonInsert(cql, table, "inet", "")
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyLong(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v BIGINT)") as table:
         verifyPlainInsert(cql, table, "bigint", "")
@@ -129,43 +125,37 @@ def testEmptyLong(cql, test_keyspace):
 # Reproduces #7944 (Scylla rejects the empty string in INSERT JSON for this
 # type, but with a server error) and SCYLLADB-5185 (SELECT JSON of an empty
 # value fails)
-@pytest.mark.xfail(reason="#7944, SCYLLADB-5185")
+@pytest.mark.xfail(reason="#7944")
 def testEmptyLongJson(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v BIGINT)") as table:
         verifyJsonInsert(cql, table, "bigint", "")
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyDecimal(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DECIMAL)") as table:
         verifyPlainInsert(cql, table, "decimal", "")
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyDecimalJson(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DECIMAL)") as table:
         verifyJsonInsert(cql, table, "decimal", "")
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyDouble(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DOUBLE)") as table:
         verifyPlainInsert(cql, table, "double", "")
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyDoubleJson(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DOUBLE)") as table:
         verifyJsonInsert(cql, table, "double", "")
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyFloat(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v FLOAT)") as table:
         verifyPlainInsert(cql, table, "float", "")
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyFloatJson(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v FLOAT)") as table:
         verifyJsonInsert(cql, table, "float", "")
