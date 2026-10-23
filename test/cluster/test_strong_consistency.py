@@ -2221,6 +2221,98 @@ async def test_tablet_migration_config_change_retried(manager: ScyllaClusterMana
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_sc_add_nonvoter_skips_joint(manager: ScyllaClusterManager):
+    """
+    sc_add_nonvoter adds the pending replica to the tablet's raft group as a learner. The voter
+    set is unchanged, so the leader appends a single non-joint configuration entry. The later
+    sc_become_voter flip changes the voters and still goes joint.
+    """
+    logger.info("Bootstrapping cluster")
+    config = {
+        'experimental_features': ['strongly-consistent-tables']
+    }
+    cmdline = [
+        '--logger-log-level', 'sc_groups_manager=debug',
+        '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'raft=trace',
+        '--logger-log-level', 'debug_error_injection=debug'
+    ]
+    servers = await manager.servers_add(4, config=config, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    logger.info("Creating a strongly-consistent keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            tablet_token = tablets[0].last_token
+            original_replicas = tablets[0].replicas
+            assert len(original_replicas) == 3, f"Expected 3 replicas, got {len(original_replicas)}"
+
+            replica_server = servers[host_ids.index(original_replicas[0][0])]
+            leader_host_id = await wait_for_leader(manager, replica_server, group_id)
+            leader_host = hosts[host_ids.index(leader_host_id)]
+            for i in range(10):
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({i}, {i+1})", host=leader_host)
+
+            rack3 = [host_ids[1], host_ids[2]]
+            src_host_id, src_shard = next((host_id, shard) for host_id, shard in original_replicas if host_id in rack3)
+            dst_host_id = next(host_id for host_id in rack3 if host_id != src_host_id)
+            dst_server = servers[host_ids.index(dst_host_id)]
+
+            tag = re.escape(f"[sc-{group_id}]")
+            non_joint = tag + ".*" + re.escape("appending non-joint config entry at") + ".*" + re.escape("(voter set unchanged)")
+            joint = tag + ".*" + re.escape("appending joint config entry at")
+
+            # Mark every log before arming the injection: the group leader can be any replica.
+            logs = await gather_safely(*[manager.server_open_log(s.server_id) for s in servers])
+            marks = await gather_safely(*[log.mark() for log in logs])
+
+            async def grep_all(pattern):
+                found = await gather_safely(*[log.grep(pattern, from_mark=m) for log, m in zip(logs, marks)])
+                return [line for lines in found for line, _ in lines]
+
+            await manager.api.enable_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer", one_shot=True)
+            move_task = asyncio.create_task(
+                manager.api.move_tablet(servers[0].ip_addr, ks, table_name, src_host_id, src_shard, dst_host_id, 0, tablet_token))
+            dst_log = logs[servers.index(dst_server)]
+            await dst_log.wait_for("sc_wait_for_snapshot_transfer: waiting for message",
+                                   from_mark=marks[servers.index(dst_server)], timeout=60)
+
+            # Parked after sc_add_nonvoter, before sc_become_voter.
+            non_joint_lines = await grep_all(non_joint)
+            assert non_joint_lines, f"sc_add_nonvoter did not append a single-entry config in group {group_id}"
+            joint_lines = await grep_all(joint)
+            assert not joint_lines, f"sc_add_nonvoter went through joint consensus: {joint_lines}"
+
+            await manager.api.message_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer")
+            await move_task
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            assert dst_host_id in [host_id for host_id, _ in tablets[0].replicas], \
+                f"Expected {dst_host_id} among the replicas, got {tablets[0].replicas}"
+            for i in range(10):
+                rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}")
+                assert len(rows) == 1, f"Expected 1 row for pk={i}, got {len(rows)}"
+                assert rows[0].c == i + 1, f"Data integrity check failed for pk={i}: expected c={i+1}, got c={rows[0].c}"
+
+            assert await grep_all(joint), f"sc_become_voter did not go through joint consensus in group {group_id}"
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClusterManager):
     """Rolling back from sc_become_voter must not require completing the change
     being rolled back.

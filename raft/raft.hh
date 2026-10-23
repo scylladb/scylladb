@@ -161,6 +161,20 @@ struct configuration {
             return s.can_vote == is_voter::yes; });
     }
 
+    // True if `a` and `b` have the same voters. Learners and server_info
+    // do not count. Not the same as comparing the sets: config_member
+    // equality compares the id only, so it misses a member whose vote
+    // changes.
+    static bool same_voters(const config_member_set& a, const config_member_set& b) {
+        return voter_count(a) == voter_count(b) && std::ranges::all_of(a, [&b] (const config_member& s) {
+            if (s.can_vote == is_voter::no) {
+                return true;
+            }
+            auto it = b.find(s.addr.id);
+            return it != b.end() && it->can_vote == is_voter::yes;
+        });
+    }
+
     // Check if transitioning to a proposed configuration is safe.
     static void check(const config_member_set& c_new) {
         // We must have at least one voting member in the config.

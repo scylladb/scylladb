@@ -2989,6 +2989,10 @@ struct reconfiguration {
         std::unordered_set<raft::server_id>& known;
         logical_timer& timer;
         std::mt19937 rnd;
+        // The voters of the last reconfigure, if it succeeded and nothing
+        // has been attempted since. Lets execute() draw a change that keeps
+        // them and changes the learners only.
+        std::optional<std::vector<raft::server_id>> last_voters{};
     };
 
     using result_type = reconfigure_result_t;
@@ -3035,6 +3039,8 @@ struct reconfiguration {
         tlogger.debug("reconfig modify_config end add {} remove {} start tid {} start time {} current time {} last contact {}",
                 added, removed, ctx.thread, ctx.start, s.timer.now(), last);
 
+        s.last_voters = std::nullopt;
+
         co_return res;
     }
 
@@ -3059,10 +3065,12 @@ struct reconfiguration {
             return env.reconfigure(id, nodes_voters, timeout, timer);
         }}(s.timer, s.known, contact, 10, 10_t, 10_t);
 
+        s.last_voters = std::nullopt;
         std::visit(make_visitor(
         [&, last = last] (std::monostate) {
             tlogger.debug("reconfig successful from {} to {} by {}", s.known, nodes_voters, last);
             s.known = std::unordered_set<raft::server_id>{nodes.begin(), nodes.begin() + members_end};
+            s.last_voters = std::vector<raft::server_id>{nodes.begin(), nodes.begin() + voters_end};
             // TODO: include the old leader as well in case it's not part of the new config?
             // it may remain a leader for some time...
         },
@@ -3083,8 +3091,26 @@ struct reconfiguration {
 
     future<result_type> execute(state_type& s, const operation::context& ctx) {
         static std::bernoulli_distribution bdist{0.5};
+        static std::bernoulli_distribution learners_only_dist{0.3};
 
         SCYLLA_ASSERT(s.all_servers.size() > 1);
+
+        if (s.last_voters && learners_only_dist(s.rnd)) {
+            // Keep the voters and draw the learners from the other servers,
+            // so that the change leaves the voter set as it is and takes the
+            // single-entry path. Best effort: if a racing change made
+            // last_voters stale, this is an ordinary voter change.
+            std::vector<raft::server_id> nodes = *s.last_voters;
+            const size_t voters_end = nodes.size();
+            for (auto id : s.all_servers) {
+                if (std::ranges::find(nodes, id) == nodes.end()) {
+                    nodes.push_back(id);
+                }
+            }
+            std::shuffle(nodes.begin() + voters_end, nodes.end(), s.rnd);
+            size_t members_end = std::uniform_int_distribution<size_t>{voters_end, nodes.size()}(s.rnd);
+            return execute_reconfigure(s, ctx, std::move(nodes), members_end, voters_end);
+        }
         std::vector<raft::server_id> nodes{s.all_servers.begin(), s.all_servers.end()};
 
         std::shuffle(nodes.begin(), nodes.end(), s.rnd);

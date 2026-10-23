@@ -118,6 +118,13 @@ majorities - the old one and the new one - to commit new entries.
 entry, a final entry with new configuration is appended
 to the log.
 
+A change that leaves the set of voters unchanged, such as adding or
+removing non-voting members, skips the joint step: every quorum counts
+voters only, so each majority of the old configuration is a majority of
+the new one, and the leader appends the final configuration directly,
+as a single entry (Raft thesis, 4.1). Such a change completes once that
+entry is committed.
+
 If a leader is deposed during a configuration change,
 a new leader carries out the transition from joint
 to the final configuration.
