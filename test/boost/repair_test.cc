@@ -15,12 +15,15 @@
 #include "repair/row_level.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/simple_schema.hh"
 #include "test/lib/cql_test_env.hh"
 #include "service/storage_proxy.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include <boost/lexical_cast.hpp>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 #include "test/lib/sstable_utils.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
@@ -352,6 +355,42 @@ SEASTAR_TEST_CASE(repair_rows_size_considers_external_memory) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(repair_row_moved_off_read_permit_freezes_on_demand) {
+    reader_concurrency_semaphore read_sem(reader_concurrency_semaphore::no_limits{}, "read", reader_concurrency_semaphore::register_metrics::no);
+    reader_concurrency_semaphore keep_sem(reader_concurrency_semaphore::no_limits{}, "keep", reader_concurrency_semaphore::register_metrics::no);
+    auto stop_read_sem = deferred_stop(read_sem);
+    auto stop_keep_sem = deferred_stop(keep_sem);
+
+    simple_schema ss;
+    schema_ptr s = ss.schema();
+    auto ck = ss.make_ckey(0);
+    reader_permit read_permit = read_sem.make_tracking_only_permit(s, "read", db::no_timeout, {});
+    reader_permit keep_permit = keep_sem.make_tracking_only_permit(s, "repair-row-buf", db::no_timeout, {});
+
+    auto mf = ss.make_row(read_permit, ck, "value");
+    auto expected = freeze(*s, mf);
+    auto mf_memory = mf.memory_usage();
+    auto read_memory = read_permit.consumed_resources().memory;
+    auto keep_memory = keep_permit.consumed_resources().memory;
+    auto kept = make_lw_shared<mutation_fragment>(mutation_fragment(*s, keep_permit, std::move(mf)));
+    BOOST_REQUIRE_EQUAL(read_permit.consumed_resources().memory, read_memory - ssize_t(mf_memory));
+    BOOST_REQUIRE_EQUAL(keep_permit.consumed_resources().memory, keep_memory + ssize_t(mf_memory));
+
+    // Row read from disk: freeze_for_send() drops the in-memory form.
+    repair_row row{std::nullopt, std::nullopt, nullptr, std::nullopt, is_dirty_on_master::no, kept};
+    BOOST_REQUIRE_EQUAL(row.size(), mf_memory + sizeof(repair_row));
+    row.freeze_for_send(*s);
+    BOOST_REQUIRE(!row.get_mutation_fragment_ptr());
+    BOOST_REQUIRE_EQUAL(row.size(), row.get_frozen_mutation().representation().size() + sizeof(repair_row));
+    BOOST_REQUIRE(row.get_frozen_mutation().unfreeze(*s, keep_permit).equal(*s, expected.unfreeze(*s, keep_permit)));
+
+    // Row from a peer: freeze_for_send() keeps the in-memory form for flush.
+    repair_row dirty{std::nullopt, std::nullopt, nullptr, std::nullopt, is_dirty_on_master::yes, kept};
+    dirty.freeze_for_send(*s);
+    BOOST_REQUIRE(dirty.get_mutation_fragment_ptr());
+    BOOST_REQUIRE(dirty.get_frozen_mutation().unfreeze(*s, keep_permit).equal(*s, expected.unfreeze(*s, keep_permit)));
+}
+
 SEASTAR_TEST_CASE(test_tablet_token_range_count) {
     {
         // Simple case: one large range covers a smaller one
@@ -405,6 +444,37 @@ SEASTAR_TEST_CASE(test_tablet_token_range_count) {
 
         BOOST_REQUIRE(co_await count_finished_tablets(r1, r2_empty) == 0);
         BOOST_REQUIRE(co_await count_finished_tablets(r1_empty, r2) == 0);
+    }
+}
+
+// Collections are held serialized in memory and can freeze larger than the fragment memory a round
+// reserves for them; repair charges the excess. Atomic cells freeze smaller.
+SEASTAR_THREAD_TEST_CASE(repair_row_freeze_growth) {
+    reader_concurrency_semaphore read_sem(reader_concurrency_semaphore::no_limits{}, "read", reader_concurrency_semaphore::register_metrics::no);
+    auto stop_read_sem = deferred_stop(read_sem);
+
+    simple_schema ss(simple_schema::with_static::no, simple_schema::with_collection::yes);
+    schema_ptr s = ss.schema();
+    reader_permit permit = read_sem.make_tracking_only_permit(s, "read", db::no_timeout, {});
+    auto freeze_row = [&] (mutation_fragment mf) {
+        repair_row row{std::nullopt, std::nullopt, nullptr, std::nullopt, is_dirty_on_master::no, make_lw_shared<mutation_fragment>(std::move(mf))};
+        auto reserved = row.size();
+        row.freeze_for_send(*s);
+        return std::pair(reserved, row.size());
+    };
+
+    std::map<bytes, bytes> kv;
+    for (int i = 0; i < 500; ++i) {
+        kv.emplace(to_bytes(format("{}", i)), to_bytes("v"));
+    }
+    mutation m(s, ss.make_pkey(0));
+    ss.add_row_with_collection(m, ss.make_ckey(0), kv);
+    auto [map_reserved, map_frozen] = freeze_row(mutation_fragment(*s, permit, clustering_row(*s, *m.partition().clustered_rows().begin())));
+    BOOST_REQUIRE_GT(map_frozen, map_reserved);
+
+    for (size_t value_size : {1, 8, 100, 10000}) {
+        auto [reserved, frozen] = freeze_row(ss.make_row(permit, ss.make_ckey(0), sstring(value_size, 'x')));
+        BOOST_REQUIRE_LE(frozen, reserved);
     }
 }
 

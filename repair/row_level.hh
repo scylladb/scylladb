@@ -14,6 +14,7 @@
 #include "node_ops/node_ops_ctl.hh"
 #include "repair/repair.hh"
 #include "repair/task_manager_module.hh"
+#include "reader_concurrency_semaphore.hh"
 #include "service/topology_guard.hh"
 #include "tasks/task_manager.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -158,6 +159,8 @@ private:
 
     size_t _max_repair_memory;
     seastar::semaphore _memory_sem;
+    // Tracks rows held in repair buffers, so they don't count against read admission.
+    reader_concurrency_semaphore _row_buf_sem{reader_concurrency_semaphore::no_limits{}, "repair_row_buf", reader_concurrency_semaphore::register_metrics::no};
     seastar::named_semaphore _load_parallelism_semaphore = {16, named_semaphore_exception_factory{"Load repair history parallelism"}};
 
     utils::disk_space_monitor::subscription _out_of_space_subscription;
@@ -290,6 +293,9 @@ public:
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
+    reader_permit make_row_buf_permit(schema_ptr s) {
+        return _row_buf_sem.make_tracking_only_permit(std::move(s), "repair-row-buf", db::no_timeout, {});
+    }
     locator::host_id my_host_id() const noexcept;
 
     repair::task_manager_module& get_repair_module() noexcept {
