@@ -1211,6 +1211,39 @@ async def test_metrics(manager: ScyllaClusterManager, s3_storage):
         assert await page_cache_metric(manager, server, 'evictions', {'reason': 'capacity'}) == 0
 
 
+async def test_table_metrics(manager: ScyllaClusterManager, s3_storage):
+    '''With per-table metrics enabled, each table reports the hits and misses
+    of its reads through the page cache, and its requests to the object
+    store.'''
+    config = page_cache_config(s3_storage) | {'enable_keyspace_column_family_metrics': True}
+    server = await manager.server_add(config=config)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks1, \
+               new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks2:
+        data1 = await create_table(manager, server, ks1)
+        await create_table(manager, server, ks2)
+
+        async def table_metric(ks, name, labels={}):
+            metrics = await manager.metrics.query(server.ip_addr)
+            return metrics.get(f'scylla_column_family_page_cache_{name}', {'ks': ks, 'cf': 'test'} | labels) or 0
+
+        # Scan the first table twice: a miss, and then a hit, of each page.
+        for _ in range(2):
+            await manager.api.drop_sstable_caches(server.ip_addr)
+            assert scan(cql, ks1) == data1
+        populating = {'reads': 'populating'}
+        assert await table_metric(ks1, 'misses', populating) > 0
+        assert await table_metric(ks1, 'hits', populating) > 0
+        assert await table_metric(ks1, 'object_reads') > 0
+        # Check that the other table, which wasn't read, counted nothing.
+        assert await table_metric(ks2, 'misses', populating) == 0
+        assert await table_metric(ks2, 'hits', populating) == 0
+        assert await table_metric(ks2, 'object_reads') == 0
+        # Check that the table's misses are all of the shard's misses.
+        assert await table_metric(ks1, 'misses', populating) == \
+            await page_cache_metric(manager, server, 'misses', populating)
+
+
 async def test_lwt_populates_cache(manager: ScyllaClusterManager, s3_storage):
     '''The read of a conditional update (LWT) is a user read, which reads
     through the page cache, and populates it.'''

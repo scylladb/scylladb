@@ -43,6 +43,6 @@ namespace sstables {
 // Only reads go through the cache; other operations are forwarded to the
 // underlying file. The returned file keeps the cache alive.
 file make_page_cached_file(shared_ptr<object_storage_page_cache> cache, sstable_id sst, component_type component, file underlying,
-        populate_disk_cache populate);
+        populate_disk_cache populate, lw_shared_ptr<object_storage_page_cache_table_stats> table_stats = {});
 
 } // namespace sstables

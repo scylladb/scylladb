@@ -1687,6 +1687,30 @@ SEASTAR_THREAD_TEST_CASE(test_page_cached_source_stats) {
     BOOST_REQUIRE_EQUAL(stats.populating.hits, 3);
 }
 
+// When the source is given the statistics of the sstable's table, it counts
+// its hits, misses and requests there too.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_table_stats) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+    auto table_stats = make_lw_shared<sstables::object_storage_page_cache_table_stats>();
+    auto read = [&] (sstables::populate_disk_cache populate) {
+        auto in = input_stream<char>(sstables::make_page_cached_source(cache, test_sstable, Data, geometry,
+                0, 10000, object.reader(), populate, table_stats));
+        return read_to_end(in);
+    };
+    read(sstables::populate_disk_cache::yes);
+    read(sstables::populate_disk_cache::yes);
+    read(sstables::populate_disk_cache::no);
+    BOOST_REQUIRE_EQUAL(table_stats->populating.misses, 3);
+    BOOST_REQUIRE_EQUAL(table_stats->populating.hits, 3);
+    BOOST_REQUIRE_EQUAL(table_stats->non_populating.hits, 3);
+    BOOST_REQUIRE_EQUAL(table_stats->object_reads, 1);
+    BOOST_REQUIRE_EQUAL(table_stats->object_read_bytes, 10000);
+    // Check that the cache's statistics count the same.
+    BOOST_REQUIRE_EQUAL(cache.get_stats().populating.hits, 3);
+}
+
 // A long cached range is read from the cache in several reads, each of a
 // batch of pages, without any request to the object store.
 SEASTAR_THREAD_TEST_CASE(test_page_cached_source_many_cached_pages) {

@@ -19,6 +19,7 @@
 #include "db_clock.hh"
 #include "sstables/sstables.hh"
 #include "sstables/shareable_components.hh"
+#include "sstables/object_storage_page_cache_stats.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/version.hh"
 #include "db/cache_tracker.hh"
@@ -190,6 +191,9 @@ private:
     // A shared pointer, so that sstable readers which still use the cache when
     // it is unplugged (on shutdown) can keep it alive until they are done.
     shared_ptr<sstables::object_storage_page_cache> _object_storage_page_cache;
+    // The statistics of the reads of each table through the disk page cache,
+    // which the tables register, and report as metrics.
+    std::unordered_map<table_id, lw_shared_ptr<object_storage_page_cache_table_stats>> _page_cache_table_stats;
     // This function is bound to token_metadata.get_my_id() in the database constructor,
     // it can return unset value (bool(host_id) == false) until host_id is loaded
     // after system_keyspace initialization.
@@ -310,6 +314,25 @@ public:
     // its experimental feature is enabled.
     void plug_object_storage_page_cache(shared_ptr<sstables::object_storage_page_cache>) noexcept;
     void unplug_object_storage_page_cache() noexcept;
+    // The statistics of the reads of a table through the disk page cache: the
+    // table registers them, when it is created, and unregisters them when it
+    // is destroyed. The sstables code that reads through the cache counts its
+    // hits and misses in the statistics of the sstable's table, if it has -
+    // and holds them while it reads, so they outlive the table if it is
+    // dropped meanwhile. A table unregisters only its own statistics, in
+    // case another table object with the same id registered since.
+    void register_page_cache_table_stats(table_id id, lw_shared_ptr<object_storage_page_cache_table_stats> stats) {
+        _page_cache_table_stats[id] = std::move(stats);
+    }
+    void unregister_page_cache_table_stats(table_id id, const lw_shared_ptr<object_storage_page_cache_table_stats>& stats) noexcept {
+        if (auto it = _page_cache_table_stats.find(id); it != _page_cache_table_stats.end() && it->second == stats) {
+            _page_cache_table_stats.erase(it);
+        }
+    }
+    lw_shared_ptr<object_storage_page_cache_table_stats> get_page_cache_table_stats(table_id id) const {
+        auto it = _page_cache_table_stats.find(id);
+        return it == _page_cache_table_stats.end() ? nullptr : it->second;
+    }
     // The disk page cache, or a null pointer if it is not plugged.
     shared_ptr<sstables::object_storage_page_cache> get_object_storage_page_cache() const noexcept {
         return _object_storage_page_cache;

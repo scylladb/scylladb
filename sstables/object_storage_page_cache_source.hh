@@ -74,9 +74,13 @@ constexpr uint64_t max_read_through_skip = 1024 * 1024;
 // from the cache, and with a new request at the first page which isn't
 // cached.
 //
+// The source counts its hits, misses and requests in the cache's statistics,
+// and also in table_stats, if given: the statistics of the sstable's table.
+//
 // The cache must outlive the returned source.
 data_source make_page_cached_source(object_storage_page_cache& cache, sstable_id sst, component_type component,
         shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t length,
-        object_storage_range_reader read_range, populate_disk_cache populate);
+        object_storage_range_reader read_range, populate_disk_cache populate,
+        lw_shared_ptr<object_storage_page_cache_table_stats> table_stats = {});
 
 } // namespace sstables

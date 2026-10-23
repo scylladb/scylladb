@@ -10,8 +10,8 @@
 // (the 'disk_cache': 'pages' keyspace storage option). It defines the
 // cache's statistics, which object_storage_page_cache.hh counts and the
 // cache's implementation reports as metrics - in a small header of their
-// own, so that headers which only need the statistics don't need to include
-// the cache's interface.
+// own, so that replica/database.hh, which reports the per-table statistics,
+// doesn't need to include the cache's interface.
 
 #pragma once
 
@@ -61,6 +61,16 @@ struct object_storage_page_cache_stats {
     // a component.
     uint64_t dup_bypasses = 0;
     uint64_t transform_bypasses = 0;
+};
+
+// The statistics of the reads of one table through the cache, which its
+// table reports as metrics - a subset of the cache's statistics, of the
+// reads of that table.
+struct object_storage_page_cache_table_stats {
+    object_storage_page_cache_read_stats populating;
+    object_storage_page_cache_read_stats non_populating;
+    uint64_t object_reads = 0;
+    uint64_t object_read_bytes = 0;
 };
 
 } // namespace sstables
