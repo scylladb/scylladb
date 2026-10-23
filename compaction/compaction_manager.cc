@@ -3487,6 +3487,21 @@ double compaction_backlog_manager::backlog() const {
     }
 }
 
+compaction_rates compaction_backlog_manager::rates() const {
+    compaction_rates rates;
+    for (auto& [tracker, src] : _backlog_trackers) {
+        auto r = tracker->rates(*src);
+        // A group with nothing pending has no say in the shard's shares: its target
+        // would add nothing, and what it achieved lately would only hide what the
+        // groups with pending work are short of.
+        if (r.target.per_second() <= 0) {
+            continue;
+        }
+        rates = rates + r;
+    }
+    return rates;
+}
+
 void compaction_backlog_manager::register_backlog_tracker(compaction_backlog_tracker& tracker, const compaction_backlog_source& src) {
     tracker._manager = this;
     _backlog_trackers.insert_or_assign(&tracker, &src);
