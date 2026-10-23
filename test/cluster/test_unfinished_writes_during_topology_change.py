@@ -41,9 +41,17 @@ async def test_unfinished_audit_write_during_topology_change(manager: ManagerCli
      5. Check that the statement really was audited.
     """
     cmdline = ['--logger-log-level', 'debug_error_injection=debug']
+<<<<<<< HEAD
     # Table audit with the ADMIN category is not on by default on this branch.
     config = {'audit': 'table', 'audit_categories': 'DCL,DDL,AUTH,ADMIN'}
     await manager.servers_add(2, auto_rack_dc="dc1", cmdline=cmdline, config=config)
+||||||| parent of 9445e64b59 (audit: don't time out audit writes sooner than client writes)
+    await manager.servers_add(2, auto_rack_dc="dc1", cmdline=cmdline)
+=======
+    # test.py's default write timeout would raise the audit write timeout above its 5s floor
+    config = {"write_request_timeout_in_ms": 5000}
+    await manager.servers_add(2, auto_rack_dc="dc1", cmdline=cmdline, config=config)
+>>>>>>> 9445e64b59 (audit: don't time out audit writes sooner than client writes)
 
     running = await manager.running_servers()
     cql, hosts = await manager.get_ready_cql(running)
