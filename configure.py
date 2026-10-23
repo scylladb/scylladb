@@ -1512,7 +1512,7 @@ alternator = [
        'alternator/streams.cc',
        'alternator/ttl.cc',
        'alternator/http_compression.cc',
-       'alternator/export.cc'
+       'alternator/export.cc',
 ]
 
 idls = ['idl/gossip_digest.idl.hh',

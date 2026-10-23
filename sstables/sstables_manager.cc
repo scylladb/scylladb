@@ -191,7 +191,7 @@ bool storage_manager::is_known_endpoint(sstring endpoint, sstring type) const {
     return it != _object_storage_endpoints.end() && (type == "" || it->second.cfg.is_storage_of_type(type));
 }
 
-std::vector<sstring> storage_manager::endpoints(sstring type) const noexcept {
+std::vector<sstring> storage_manager::endpoints(sstring type) const {
     return _object_storage_endpoints | std::views::filter([&type] (auto& ep) {
         return type == "" || ep.second.cfg.is_storage_of_type(type);
     }) | std::views::keys | std::ranges::to<std::vector>();

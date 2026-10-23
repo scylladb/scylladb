@@ -9,6 +9,7 @@
 #pragma once
 
 #include "snapshot_types.hh"
+#include "db_clock.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
 #include "db/consistency_level_type.hh"
@@ -16,10 +17,12 @@
 #include "dht/token.hh"
 #include "sstables/types.hh"
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
 
+#include <chrono>
 #include <optional>
 #include <unordered_map>
 
@@ -140,6 +143,67 @@ public:
 
 private:
     future<> create_tables(std::vector<schema_ptr> tables);
+};
+
+/* Writes of the two Alternator export to S3 tables (see their schemas above). Alternator reads
+ * them through storage_proxy, but the writes are conditional, which is one CQL statement each
+ * and a fair amount of hand-written code otherwise, so they are made here, through the
+ * query_processor system_distributed_keyspace already holds - as snapshot_table_helper below
+ * does for the backup tables. The scan of the client token table is here too, next to the write
+ * of that table. */
+class alternator_export_table_helper {
+    cql3::query_processor& _qp;
+public:
+    /* A row of alternator_export_to_s3_exports. `node_id` is kept as stored - its meaning is
+     * Alternator's (see live_node_identifier in alternator/export.cc). */
+    struct export_row {
+        sstring export_arn;
+        sstring client_token;
+        sstring request;
+        ::table_id table_id;
+        std::optional<sstring> export_manifest;
+        sstring export_status;
+        std::optional<sstring> failure_code;
+        std::optional<sstring> failure_message;
+        std::optional<int64_t> item_count;
+        std::optional<int64_t> billed_size_bytes;
+        sstring export_id_token;
+        db_clock::time_point export_time;
+        db_clock::time_point accepted_at;
+        std::optional<db_clock::time_point> completed_at;
+        sstring node_id;
+    };
+
+    /* A row of alternator_export_to_s3_client_tokens. */
+    struct client_token_row {
+        sstring client_token;
+        sstring export_arn;
+        sstring request;
+        sstring node_id;
+    };
+
+    explicit alternator_export_table_helper(cql3::query_processor&);
+
+    /* Inserts an export row unless one with the same ARN already exists; returns whether it was
+     * inserted. The row is written with `ttl`, which is what makes it expire: an UPDATE cannot
+     * rewrite the row marker, so a row inserted without a TTL would outlive the TTL of every
+     * update of it, as a row with nothing but its key in it. */
+    future<bool> insert_export(const export_row&, std::chrono::seconds ttl);
+
+    /* Rewrites every non-key column of an export row, but only if the row is still in state
+     * `expected_export_status` and still owned by `expected_node_id`; returns whether it was.
+     * `ttl`, when given, applies to the columns written - which is why all of them are. */
+    future<bool> update_export(const export_row&, const sstring& expected_export_status, const sstring& expected_node_id,
+            std::optional<std::chrono::seconds> ttl = std::nullopt);
+
+    /* Inserts a client token row unless one with the same token already exists; returns whether
+     * it was inserted. The table's default TTL applies. */
+    future<bool> insert_client_token(const client_token_row&);
+
+    /* Returns every client token row there is, in no particular order. `as`, when given, aborts
+     * the scan - it reads the whole table, so a caller which can be stopped needs a way to cut
+     * it short. */
+    future<utils::chunked_vector<client_token_row>> get_all_client_tokens(const seastar::abort_source* as = nullptr) const;
 };
 
 class snapshot_table_helper {

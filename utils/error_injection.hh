@@ -337,6 +337,9 @@ private:
     // Map enabled-injection-name -> is-one-shot
     std::unordered_map<std::string_view, injection_data> _enabled;
 
+    // Callbacks invoked when a specific injection is enabled.
+    std::unordered_map<sstring, std::function<void()>> _on_enable_callbacks;
+
     // Callbacks invoked when a specific injection is disabled.
     // Registered independently of the injection being enabled, so
     // the callback can be set up before the injection is ever activated.
@@ -422,6 +425,9 @@ public:
         _enabled.emplace(name, std::move(data));
         errinj_logger.debug("Enabling injection {} \"{}\"",
                 one_shot? "one-shot ": "", injection_name);
+        if (auto cb = _on_enable_callbacks.find(sstring(injection_name)); cb != _on_enable_callbacks.end()) {
+            cb->second();
+        }
     }
 
     void disable(const std::string_view& injection_name) {
@@ -459,6 +465,21 @@ public:
                 | std::views::filter([] (const auto& pair) { return !pair.second.is_ongoing_oneshot(); })
                 | std::views::keys
                 | std::ranges::to<std::vector<sstring>>();
+    }
+
+    // Register a callback that is invoked when a specific injection is
+    // enabled (via enable()).  The callback is stored independently of the
+    // injections themselves, so it survives enable/disable cycles.  Only one
+    // callback per injection name is supported; a second registration for the
+    // same name replaces the previous one.
+    // Useful for a fiber which is sleeping (or otherwise waiting) and has to
+    // react to the injection becoming enabled, instead of polling for it.
+    void register_on_enable(const sstring& injection_name, std::function<void()> callback) {
+        _on_enable_callbacks[injection_name] = std::move(callback);
+    }
+
+    void unregister_on_enable(const sstring& injection_name) {
+        _on_enable_callbacks.erase(injection_name);
     }
 
     // Register a callback that is invoked when a specific injection is
@@ -705,6 +726,12 @@ public:
 
     [[gnu::always_inline]]
     std::vector<sstring> enabled_injections() const { return {}; };
+
+    [[gnu::always_inline]]
+    void register_on_enable(const sstring&, std::function<void()>) {}
+
+    [[gnu::always_inline]]
+    void unregister_on_enable(const sstring&) {}
 
     [[gnu::always_inline]]
     void register_on_disable(const sstring&, std::function<void()>) {}

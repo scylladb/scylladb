@@ -323,7 +323,8 @@ executor::executor(gms::gossiper& gossiper,
       _ssg(ssg),
       _parsed_expression_cache(std::make_unique<parsed::expression_cache>(
         parsed::expression_cache::config{_proxy.data_dictionary().get_config().alternator_max_expression_cache_entries_per_shard},
-        _stats))
+        _stats)),
+      _s3_exports(*this)
 {
     s_default_timeout_in_ms = std::move(default_timeout_in_ms);
     _describe_table_info_manager = std::make_unique<describe_table_info_manager>(*this);
@@ -5720,12 +5721,24 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
 }
 
 future<> executor::start() {
-    // Currently, nothing to do on initialization. We delay the keyspace
-    // creation (create_keyspace()) until a table is actually created.
+    // The garbage collector of S3 exports has to run on every node, not only on the
+    // nodes which happened to serve an ExportTableToPointInTime request: the exports
+    // of a node which dies mid-export are not resumed by anyone, they are marked
+    // FAILED by the collectors of the other nodes, so if the dead node was the only
+    // one running a collector, its exports would stay IN_PROGRESS forever. One collector per node is enough, so it runs
+    // on shard 0 only. It stops when _s3_exports is stopped in stop().
+    if (this_shard_id() == 0) {
+        (void)_s3_exports.run_garbage_collector();
+    }
+    // Other than that, nothing to do on initialization. Each Alternator table
+    // lives in its own keyspace, named KEYSPACE_NAME_PREFIX + the table's name,
+    // and that keyspace is created (see create_keyspace_metadata()) while
+    // serving the CreateTable request for that table, not here.
     return make_ready_future<>();
 }
 
 future<> executor::stop() {
+    co_await _s3_exports.stop();
     co_await _describe_table_info_manager->stop();
     // disconnect from the value source, but keep the value unchanged.
     s_default_timeout_in_ms = utils::updateable_value<uint32_t>{s_default_timeout_in_ms()};

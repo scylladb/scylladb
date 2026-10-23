@@ -7,7 +7,10 @@ import run
 import os
 import requests
 import glob
+import random
+import shutil
 import signal
+import string
 
 # When tests are to be run against AWS (the "--aws" option), it is not
 # necessary to start Scylla at all. All we need to do is to run pytest.
@@ -60,6 +63,101 @@ if "-h" in sys.argv or "--help" in sys.argv:
     run.run_pytest(sys.path[0], sys.argv)
     exit(0)
 
+# The "--s3" option makes an S3 server available to Scylla and to the tests
+# (e.g., test_export.py), which skip when there is none. It starts the S3
+# server container used by the other tests (see test/pylib/s3mock_server.py
+# for what this image is), so it needs podman or docker - which is why it is
+# optional, and off by default. If the S3_SERVER_*_FOR_TEST environment
+# variables are already set (e.g., by test.py or by a manually started
+# "python3 -m test.pylib.s3mock_server"), that server is used and nothing is
+# started. Either way, the server's address and credentials are in the
+# environment, which both Scylla and pytest inherit.
+start_s3 = '--s3' in sys.argv
+if start_s3:
+    sys.argv.remove('--s3')
+
+# The image, its port, the region and the environment variables must be the
+# same as in test/pylib/s3mock_server.py. We deliberately don't import them
+# from there: this script has no other dependency on test.pylib, and that
+# module pulls in boto3 and more.
+S3_IMAGE = 'docker.io/versity/versitygw:v1.8.0'
+S3_IMAGE_PORT = 7070
+S3_REGION = 'local'
+S3_ENV_ADDRESS = 'S3_SERVER_ADDRESS_FOR_TEST'
+S3_ENV_PORT = 'S3_SERVER_PORT_FOR_TEST'
+S3_ENV_ACCESS_KEY = 'AWS_ACCESS_KEY_ID'
+S3_ENV_SECRET_KEY = 'AWS_SECRET_ACCESS_KEY'
+
+# The S3 server is run exactly like Scylla below - in the foreground in its
+# own temporary directory, with run_with_temporary_dir(). So run.py remembers
+# its process id and, on exit for any reason, kills it, shows its log (the
+# container's output, written to the temporary directory like Scylla's) and
+# deletes the directory. "podman run" (or "docker run") stops and removes the
+# container when it is signalled, so killing it takes the container down too.
+def run_s3_cmd(pid, dir):
+    ip = run.pid_to_ip(pid)
+    print('Booting S3 server on ' + ip + ' in ' + dir + '...')
+    # Key-only "-e": the container runtime takes the values from its own
+    # environment, so a real key pair inherited from CI is never on a
+    # command line.
+    env = {'ROOT_ACCESS_KEY': os.environ[S3_ENV_ACCESS_KEY],
+           'ROOT_SECRET_KEY': os.environ[S3_ENV_SECRET_KEY]}
+    global container_runtime # set by the code below
+    cmd = [container_runtime, 'run', '--rm', '--name', f's3mock-{pid}',
+        # Every process started here gets an IP address of its own, so we
+        # don't need the container runtime to find a free host port for us -
+        # the image's port on our own address is free.
+        '-p', f'{ip}:{S3_IMAGE_PORT}:{S3_IMAGE_PORT}',
+        # run.py gives a killed process 10 seconds before resorting to
+        # SIGKILL, so don't let the container linger longer than that.
+        '--stop-timeout', '2',
+        '-e', 'ROOT_ACCESS_KEY', '-e', 'ROOT_SECRET_KEY',
+        S3_IMAGE,
+        # The gateway verifies SigV4 signatures: the root account must be the
+        # pair the tests sign with (above), and the region the one they sign
+        # for. /tmp is the image's writable scratch space, thrown away with
+        # the container. The gateway closes every connection after one reply
+        # unless told otherwise (see SCYLLADB-4576).
+        '--region', S3_REGION, '--keep-alive', 'posix', '/tmp']
+    return (cmd, env)
+
+s3_endpoint = None
+if os.environ.get(S3_ENV_ADDRESS) or start_s3:
+    if not os.environ.get(S3_ENV_ADDRESS):
+        global container_runtime
+        container_runtime = shutil.which('podman') or shutil.which('docker')
+        if not container_runtime:
+            print('The "--s3" option needs podman or docker to run an S3 server.\nPlease install one of them, or drop the option to run the tests without an S3 server.')
+            exit(1)
+        # The key pair the tests sign with and the server's root account is
+        # set to: a random one unless the environment already carries one.
+        os.environ.setdefault(S3_ENV_ACCESS_KEY, ''.join(random.choices(string.hexdigits, k=16)))
+        os.environ.setdefault(S3_ENV_SECRET_KEY, ''.join(random.choices(string.hexdigits, k=32)))
+        s3_pid = run.run_with_temporary_dir(run_s3_cmd)
+        s3_ip = run.pid_to_ip(s3_pid)
+        run.wait_for_services(s3_pid, [lambda: run.check_rest_api(s3_ip, S3_IMAGE_PORT)])
+        os.environ[S3_ENV_ADDRESS] = s3_ip
+        os.environ[S3_ENV_PORT] = str(S3_IMAGE_PORT)
+    s3_endpoint = f"http://{os.environ[S3_ENV_ADDRESS]}:{os.environ[S3_ENV_PORT]}"
+    print(f'S3 server is: {s3_endpoint}.')
+
+# Scylla can't parse object_storage_endpoints from the command line, so write
+# a copy of the options file with the endpoint added, and use it instead.
+def add_s3_endpoint_to_options_file(cmd, dir):
+    import yaml
+    i = cmd.index('--options-file') + 1
+    with open(cmd[i]) as f:
+        conf = yaml.safe_load(f) or {}
+    # No credentials here - Scylla picks them up from the environment
+    # variables it inherits from us (see scylladb/scylla-pkg#3845).
+    conf['object_storage_endpoints'] = [{'name': s3_endpoint,
+                                         'aws_region': S3_REGION,
+                                         'iam_role_arn': '',
+                                         'type': 's3'}]
+    cmd[i] = os.path.join(dir, 'scylla.yaml')
+    with open(cmd[i], 'w') as f:
+        yaml.safe_dump(conf, f)
+
 # run_alternator_cmd runs the same as run_scylla_cmd with *additional*
 # parameters, so in particular both CQL and Alternator will be enabled.
 # This is useful for us because we need CQL to setup authentication.
@@ -100,6 +198,8 @@ def run_alternator_cmd(pid, dir):
         ]
     if '--vs' in sys.argv:
         cmd += ['--vector-store-primary-uri', f'http://{ip}:6080']
+    if s3_endpoint:
+        add_s3_endpoint_to_options_file(cmd, dir)
     cmd += extra_scylla_options
 
     for i in remove_scylla_options:
@@ -200,7 +300,7 @@ run.wait_for_services(pid, [
 # should interrupt this process (e.g., control-C) to kill the server.
 if '--interactive' in sys.argv:
     if len(sys.argv) != 2:
-        print('The "--interactive" option can be combined with "--release" or "--vs", but no other options.')
+        print('The "--interactive" option can be combined with "--release", "--vs" or "--s3", but no other options.')
         exit(1)
     print(f'Scylla with Alternator is running without authorization enforced.\nConnect at: {alternator_url}\nPress Ctrl-C to stop.')
     signal.pause()

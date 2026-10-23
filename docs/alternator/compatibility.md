@@ -350,6 +350,13 @@ is different, or can be configured in Alternator:
   So for example, if you create a table whose name is 192 characters, you
   can't create a GSI whose name is longer than 29 characters.
 
+* DynamoDB limits the number of ExportTableToPointInTime exports running at the
+  same time in an account. Alternator limits them per shard instead: the limit
+  defaults to 10 and can be changed with the
+  `alternator_max_concurrent_exports_per_shard` configuration parameter. Like
+  DynamoDB, Alternator rejects a request which would exceed the limit with a
+  LimitExceededException, and the request can be retried later.
+
 * DynamoDB's DescribeTable will return information about the table. According to
   AWS documentation, fields TableSizeBytes, IndexSizeBytes and ItemCount can
   lag behind by up to 6 hours.
