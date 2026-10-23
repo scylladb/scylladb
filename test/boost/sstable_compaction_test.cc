@@ -5126,6 +5126,9 @@ struct throwing_backlog_tracker_impl : public compaction::compaction_backlog_tra
         (*calls)++;
         throw std::runtime_error("injected backlog computation failure");
     }
+    compaction::compaction_rates rates(const compaction::compaction_backlog_source& src) const override {
+        return compaction::achieved_compaction_rates(src);
+    }
 };
 }
 

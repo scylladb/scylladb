@@ -56,6 +56,10 @@ public:
     incremental_backlog_tracker(incremental_compaction_strategy_options options);
 
     virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override;
+    // FIXME: compute the target from the strategy's model.
+    virtual compaction_rates rates(const compaction_backlog_source& src) const override {
+        return achieved_compaction_rates(src);
+    }
 
     // The replaced sstables are already reflected in the group's sstable set, so this
     // only invalidates the cached backlog contribution.

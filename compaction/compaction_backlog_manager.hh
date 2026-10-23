@@ -73,6 +73,30 @@ public:
     virtual compaction_group_stats stats() const = 0;
 };
 
+// Compaction rates of a compaction group, which the compaction controller compares
+// to set the shares of compaction.
+struct compaction_rates {
+    // TARGET_COMPACTION_RATE: the bytes the group's data has to be compacted at,
+    //
+    //   max(ingestion_rate * WA, ingestion_rate_from_sstables) * URGENCY_FACTOR
+    //
+    // where ingestion_rate is the group's flushed bytes, WA the write amplification of
+    // the strategy, ingestion_rate_from_sstables the bytes in sstables awaiting
+    // compaction over the period they were ingested in, and URGENCY_FACTOR how much
+    // faster than that compaction has to go. The terms cover different intervals, so
+    // they are compared per second, and the target covers the interval of the larger one.
+    utils::rate<utils::units::bytes> target;
+    // The bytes regular compaction compacted, from the group's stats.
+    utils::rate<utils::units::bytes> achieved;
+};
+
+// The rates of a group whose strategy has no model for the target: the target is
+// what compaction achieves, which leaves the shares as they are.
+inline compaction_rates achieved_compaction_rates(const compaction_backlog_source& src) {
+    auto achieved = src.stats().rates.compacted_bytes;
+    return compaction_rates{.target = achieved, .achieved = achieved};
+}
+
 // Fixed cost, in bytes, that each sstable adds to the backlog on top of its own size.
 //
 // The backlog of an sstable is (Si - Ci) * log4(T / Si), so tiny sstables barely move
@@ -141,6 +165,9 @@ public:
         // FIXME: Should provide strong exception safety guarantees
         virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) = 0;
         virtual double backlog(const compaction_backlog_source& src, const ongoing_writes& ow, const ongoing_compactions& oc) const = 0;
+        // The compaction rates of the group, from the strategy's model of how much work
+        // ingestion produces.
+        virtual compaction_rates rates(const compaction_backlog_source& src) const = 0;
         virtual ~impl() { }
     };
 
@@ -151,6 +178,9 @@ public:
     ~compaction_backlog_tracker();
 
     double backlog(const compaction_backlog_source& src);
+    // When the rates can't be computed, the tracker is disabled and they are unknown: the
+    // target and the achieved rate are 0.
+    compaction_rates rates(const compaction_backlog_source& src);
     // FIXME: Should provide strong exception safety guarantees
     void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts);
     void register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp);

@@ -363,6 +363,10 @@ public:
         , _stcs_options(stcs_options)
     {}
 
+    // FIXME: compute the target from the strategy's model.
+    virtual compaction_rates rates(const compaction_backlog_source& src) const override {
+        return achieved_compaction_rates(src);
+    }
     virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         auto no_ow = compaction_backlog_tracker::ongoing_writes();
         auto no_oc = compaction_backlog_tracker::ongoing_compactions();
@@ -477,6 +481,10 @@ public:
         , _max_sstable_size(max_sstable_size_in_mb * 1024 * 1024)
     {}
 
+    // FIXME: compute the target from the strategy's model.
+    virtual compaction_rates rates(const compaction_backlog_source& src) const override {
+        return achieved_compaction_rates(src);
+    }
     virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         std::vector<uint64_t> effective_size_per_level = _size_per_level;
         compaction_backlog_tracker::ongoing_writes l0_partial_writes;
@@ -589,6 +597,9 @@ public:
 };
 
 struct unimplemented_backlog_tracker final : public compaction_backlog_tracker::impl {
+    virtual compaction_rates rates(const compaction_backlog_source& src) const override {
+        return achieved_compaction_rates(src);
+    }
     virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return compaction_controller::disable_backlog;
     }
@@ -596,6 +607,9 @@ struct unimplemented_backlog_tracker final : public compaction_backlog_tracker::
 };
 
 struct null_backlog_tracker final : public compaction_backlog_tracker::impl {
+    virtual compaction_rates rates(const compaction_backlog_source& src) const override {
+        return achieved_compaction_rates(src);
+    }
     virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return 0;
     }

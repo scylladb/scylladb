@@ -321,6 +321,9 @@ private:
     virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return _added_backlog * _available_memory;
     }
+    virtual compaction_rates rates(const compaction_backlog_source& src) const override {
+        return achieved_compaction_rates(src);
+    }
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override {}
 };
 
@@ -2764,6 +2767,16 @@ double compaction_backlog_tracker::backlog(const compaction_backlog_source& src)
         cmlog.error("Disabling backlog tracker due to exception during backlog computation: {}", std::current_exception());
         disable();
         return compaction_controller::disable_backlog;
+    }
+}
+
+compaction_rates compaction_backlog_tracker::rates(const compaction_backlog_source& src) {
+    try {
+        return disabled() ? achieved_compaction_rates(src) : _impl->rates(src);
+    } catch (...) {
+        cmlog.error("Disabling backlog tracker due to exception during compaction rates computation: {}", std::current_exception());
+        disable();
+        return {};
     }
 }
 
