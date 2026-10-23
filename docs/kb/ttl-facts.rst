@@ -16,7 +16,7 @@ This article clarifies what may not be apparent.
 It corrects some assumptions you may have that are not exactly true.
 
 This document is about CQL's :doc:`per-write TTL feature </cql/time-to-live>`,
-the `per-row TTL <https://docs.scylladb.com/stable/cql/cql-extensions.html#per-row-ttl>`_
+the :ref:`Per-Row TTL <per-row-ttl>`
 feature behaves differently.
 
 
