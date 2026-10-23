@@ -39,6 +39,7 @@
 #include "tombstone_gc_options.hh"
 #include "types/types.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/error_injection.hh"
 #include "utils/hash.hh"
 #include "utils/log.hh"
 
@@ -338,6 +339,9 @@ uint64_t object_storage_page_cache_table::limit() const noexcept {
 
 future<> object_storage_page_cache_table::put_page(sstables::sstable_id sst, sstables::component_type component,
         uint64_t offset, temporary_buffer<char> data) {
+    utils::get_local_injector().inject("object_storage_page_cache_put_page", [] {
+        throw std::runtime_error("object_storage_page_cache_put_page: injected error");
+    });
     auto component_name = fmt::to_string(component);
     hand_position key{this_shard(), sst.uuid(), component_name, int64_t(offset)};
     if (_page_being_evicted == key) {
@@ -379,6 +383,9 @@ future<> object_storage_page_cache_table::put_page(sstables::sstable_id sst, sst
 future<std::vector<sstables::object_storage_page_cache::page>>
 object_storage_page_cache_table::get_pages(sstables::sstable_id sst, sstables::component_type component,
         uint64_t from, uint64_t to, size_t max_pages, sstables::populate_disk_cache populate) {
+    utils::get_local_injector().inject("object_storage_page_cache_get_pages", [] {
+        throw std::runtime_error("object_storage_page_cache_get_pages: injected error");
+    });
     // The pages are read from the table directly, not with an internal CQL
     // query. The sstable read which looks them up holds a permit of the
     // reader concurrency semaphore of its scheduling group, and a CQL query
@@ -434,16 +441,23 @@ object_storage_page_cache_table::get_pages(sstables::sstable_id sst, sstables::c
     if (populate && !pages.empty()) {
         auto now = db_clock::now();
         auto max_remembered = _max_remembered_hits();
-        co_await coroutine::parallel_for_each(pages, [&] (const page& p) -> future<> {
-            page_key key{sst.uuid(), component, p.offset};
-            if (max_remembered && _hit_in_pass.contains(key)) {
-                co_return;
-            }
-            if (_hit_in_pass.size() < max_remembered) {
-                _hit_in_pass.insert(key);
-            }
-            co_await apply(hits_mutation(this_shard(), sst.uuid(), component_name, int64_t(p.offset), std::nullopt, now));
-        });
+        // Recording the hits is only for choosing which pages to evict, so a
+        // failure to record them doesn't fail the read of the pages.
+        try {
+            co_await coroutine::parallel_for_each(pages, [&] (const page& p) -> future<> {
+                page_key key{sst.uuid(), component, p.offset};
+                if (max_remembered && _hit_in_pass.contains(key)) {
+                    co_return;
+                }
+                if (_hit_in_pass.size() < max_remembered) {
+                    _hit_in_pass.insert(key);
+                }
+                co_await apply(hits_mutation(this_shard(), sst.uuid(), component_name, int64_t(p.offset), std::nullopt, now));
+            });
+        } catch (...) {
+            static thread_local logging::logger::rate_limit rate_limit{std::chrono::minutes(1)};
+            pclogger.log(log_level::warn, rate_limit, "Failed to record hits in the disk page cache: {}", std::current_exception());
+        }
     }
     co_return pages;
 }

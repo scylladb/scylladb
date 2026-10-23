@@ -1422,6 +1422,9 @@ public:
     int reads = 0;
     // How many hits get_pages() recorded.
     size_t hits = 0;
+    // Make get_pages() or put_page() fail, as a broken cache might.
+    bool fail_gets = false;
+    bool fail_puts = false;
 
     // The cached Data page at the given offset, or an empty string.
     sstring data_page(uint64_t offset) const {
@@ -1431,12 +1434,18 @@ public:
 
     virtual future<> put_page(sstables::sstable_id, sstables::component_type component,
             uint64_t offset, temporary_buffer<char> data) override {
+        if (fail_puts) {
+            return make_exception_future<>(std::runtime_error("fake_page_cache: put_page failed"));
+        }
         pages[{component, offset}] = sstring(data.get(), data.size());
         return make_ready_future<>();
     }
     virtual future<std::vector<page>> get_pages(sstables::sstable_id, sstables::component_type component,
             uint64_t from, uint64_t to, size_t max_pages, sstables::populate_disk_cache populate) override {
         reads++;
+        if (fail_gets) {
+            return make_exception_future<std::vector<page>>(std::runtime_error("fake_page_cache: get_pages failed"));
+        }
         std::vector<page> ret;
         for (auto it = pages.lower_bound({component, from});
                 it != pages.end() && it->first.first == component && it->first.second < to && ret.size() < max_pages; ++it) {
@@ -1614,6 +1623,33 @@ SEASTAR_THREAD_TEST_CASE(test_page_cached_source_hits) {
     BOOST_REQUIRE_EQUAL(cache.hits, 0);
     read_cached(cache, object, geometry, 0, 10000);
     BOOST_REQUIRE_EQUAL(cache.hits, 3);
+}
+
+// A failure to read the cache doesn't fail the read: the source reads the
+// range from the object store, as if it wasn't cached.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_cache_read_fails) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+    read_cached(cache, object, geometry, 0, 10000);
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 1);
+
+    cache.fail_gets = true;
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 0, 10000), object.bytes(0, 10000));
+    BOOST_REQUIRE(object.requests.back() == request(0, 10000));
+    BOOST_REQUIRE_EQUAL(object.requests.size(), 2);
+}
+
+// A failure to write the cache doesn't fail the read either: the source
+// returns the data it read from the object store, and stops caching pages.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_cache_write_fails) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+    cache.fail_puts = true;
+    BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 0, 10000), object.bytes(0, 10000));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{0, 10000}}));
+    BOOST_REQUIRE(cache.pages.empty());
 }
 
 // A long cached range is read from the cache in several reads, each of a
@@ -2004,6 +2040,18 @@ SEASTAR_THREAD_TEST_CASE(test_page_cached_file_no_populate) {
     BOOST_REQUIRE_EQUAL(cache->pages.size(), 1);
     f.close().get();
     f_no_populate.close().get();
+}
+
+// A file reading through a cache which fails reads from the object store.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_file_cache_fails) {
+    auto cache = make_shared<fake_page_cache>();
+    fake_object object(10000);
+    auto f = cached_file_of(cache, object);
+    cache->fail_gets = true;
+    cache->fail_puts = true;
+    BOOST_REQUIRE_EQUAL(bulk_read(f, 4096, 4096), object.bytes(4096, 4096));
+    BOOST_REQUIRE(object.requests == std::vector<request>({{4096, 4096}}));
+    f.close().get();
 }
 
 // A read of several pages, e.g., with read-ahead, of which only the first is
