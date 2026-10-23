@@ -235,8 +235,6 @@ private:
         return result;
     }
 
-    using sst_classification_info = std::vector<std::vector<minimal_sst_info>>;
-
     future<> attach_sstable(shard_id from_shard, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info) const {
         llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}, submitted from shard {}", min_info.generation, _table.schema()->ks_name(), _table.schema()->cf_name(), this_shard_id(), from_shard);
         auto& db = _db.local();
@@ -276,7 +274,7 @@ private:
             co_return co_await stream_sstables(pr, std::move(sstables), std::move(progress), defer_unlinking::no);
         }
         llog.debug("Directly downloading {} fully contained SSTables to local node from object storage.", sstables.size());
-        auto downloaded_ssts = co_await download_fully_contained_sstables(std::move(sstables));
+        auto downloaded_ssts = co_await download_sstables(_table, sstables, {}, llog);
 
         co_await smp::invoke_on_all(
             [this, &downloaded_ssts, from = this_shard_id(), ks = _table.schema()->ks_name(), cf = _table.schema()->cf_name()] -> future<> {
@@ -288,18 +286,6 @@ private:
         if (progress) {
             progress->advance(std::accumulate(downloaded_ssts.cbegin(), downloaded_ssts.cend(), 0., [](float acc, const auto& v) { return acc + v.size(); }));
         }
-    }
-
-    future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables) const {
-        sst_classification_info downloaded_sstables(this_smp_shard_count());
-        for (const auto& sstable : sstables) {
-            // For now, tablet-aware restore doesn't need to mutate sstable level to 0
-            // since we support only restoring to empty tables and so we can keep the sstable levels on backup.
-            // Once we support restoring onto live tables we may want to mutate the ingested sstables' level to 0.
-            auto min_info = co_await download_sstable(_table, sstable, {}, llog);
-            downloaded_sstables[min_info.shard].emplace_back(min_info);
-        }
-        co_return downloaded_sstables;
     }
 
     future<> unlink_marked_sstables() {
@@ -1141,14 +1127,9 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                         sst_chunk.push_back(std::move(sst));
                     }
                 }
-                std::vector<std::vector<minimal_sst_info>> local_min_infos(this_smp_shard_count());
                 auto& table = loader._db.local().find_column_family(tid.table);
                 auto stream_guard = table.stream_in_progress();
-                co_await max_concurrent_for_each(sst_chunk, 16, [&table, &local_min_infos, &snapshot_name](const auto& sst) -> future<> {
-                    auto min_info = co_await download_sstable(table, sst, snapshot_name, llog);
-                    local_min_infos[min_info.shard].emplace_back(std::move(min_info));
-                });
-                co_return local_min_infos;
+                co_return co_await download_sstables(table, sst_chunk, snapshot_name, llog);
             },
             std::vector<std::vector<minimal_sst_info>>(this_smp_shard_count()),
             [](auto init, auto&& item) -> std::vector<std::vector<minimal_sst_info>> {

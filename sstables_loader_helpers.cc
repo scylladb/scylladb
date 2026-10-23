@@ -8,6 +8,8 @@
 
 #include "sstables_loader_helpers.hh"
 
+#include <seastar/core/loop.hh>
+#include <seastar/core/smp.hh>
 #include "gms/feature_service.hh"
 #include "replica/database.hh"
 #include "sstables/shared_sstable.hh"
@@ -18,7 +20,7 @@
 // Restores the backup sstable `sstable` into `table`. A table on object storage clones
 // the components inside the object storage: they do not go through this node. A table
 // on filesystem has nothing to clone there, so the components are streamed down.
-future<minimal_sst_info> download_sstable(replica::table& table, const sstables::shared_sstable& sstable, std::string_view snapshot_tag, logging::logger& logger) {
+static future<minimal_sst_info> download_sstable(replica::table& table, const sstables::shared_sstable& sstable, std::string_view snapshot_tag, logging::logger& logger) {
     // sstable::load() always sets the sstable_id: from Scylla.db, or from the
     // generation. So the backup sstable has an sstable_id here.
     auto source_sid = sstable->sstable_identifier();
@@ -42,4 +44,16 @@ future<minimal_sst_info> download_sstable(replica::table& table, const sstables:
     });
     logger.debug("SSTable gen={} sid={} restored from sid={}: shard {}", gen, desc.sid, *source_sid, shards.front());
     co_return minimal_sst_info{shards.front(), gen, desc.version, desc.format, desc.sid, *source_sid};
+}
+
+future<std::vector<std::vector<minimal_sst_info>>> download_sstables(replica::table& table, const std::vector<sstables::shared_sstable>& sstables, std::string_view snapshot_tag, logging::logger& logger) {
+    std::vector<std::vector<minimal_sst_info>> downloaded(this_smp_shard_count());
+    // For now, tablet-aware restore doesn't need to mutate sstable level to 0
+    // since we support only restoring to empty tables and so we can keep the sstable levels on backup.
+    // Once we support restoring onto live tables we may want to mutate the ingested sstables' level to 0.
+    co_await max_concurrent_for_each(sstables, 16, [&] (const sstables::shared_sstable& sstable) -> future<> {
+        auto min_info = co_await download_sstable(table, sstable, snapshot_tag, logger);
+        downloaded[min_info.shard].emplace_back(std::move(min_info));
+    });
+    co_return downloaded;
 }
