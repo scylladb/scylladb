@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <algorithm>
+
 #include "incremental_backlog_tracker.hh"
 #include "compaction.hh"
 #include "sstables/sstables.hh"
@@ -46,11 +48,16 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
         }
     }
 
+    size_t tiers = 0;
+    utils::rate<utils::units::bytes> ingestion_rate_from_sstables;
     if (!all.empty()) {
-      for (auto& bucket : incremental_compaction_strategy::get_buckets(all, options)) {
+      auto buckets = incremental_compaction_strategy::get_buckets(all, options);
+      tiers = buckets.size();
+      for (auto& bucket : buckets) {
         if (!incremental_compaction_strategy::is_bucket_interesting(bucket, threshold)) {
             continue;
         }
+        ingestion_rate_from_sstables = ingestion_rate_from_sstables + compaction::ingestion_rate_from_sstables(bucket, min_ingestion_span);
         for (const sstables::frozen_sstable_run& run_ptr : bucket) {
             auto& run = *run_ptr;
             auto data_size = run.data_size();
@@ -70,20 +77,69 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
         .total_backlog_bytes = total_backlog_bytes,
         .sstables_backlog_contribution = sstables_backlog_contribution,
         .sstable_runs_contributing_backlog = std::move(sstable_runs_contributing_backlog),
+        .runs = all.size(),
+        .tiers = tiers,
+        .ingestion_rate_from_sstables = ingestion_rate_from_sstables,
+    };
+}
+
+void incremental_backlog_tracker::refresh(const compaction_backlog_source& src) const {
+    if (!_backlog_dirty) {
+        return;
+    }
+    auto result = calculate_sstables_backlog_contribution(src, _options);
+    _total_bytes = result.total_bytes;
+    _total_backlog_bytes = result.total_backlog_bytes;
+    _sstables_backlog_contribution = result.sstables_backlog_contribution;
+    _sstable_runs_contributing_backlog = std::move(result.sstable_runs_contributing_backlog);
+    _runs = result.runs;
+    _tiers = result.tiers;
+    _ingestion_rate_from_sstables = result.ingestion_rate_from_sstables;
+    _backlog_dirty = false;
+}
+
+double incremental_backlog_tracker::urgency_factor(const read_amplification_stats& read_amplification, double threshold) const {
+    // The most runs the tree holds when no tier is overdue.
+    auto expected_runs = (double(_tiers) - 1) * (threshold - 1) + threshold;
+    auto urgency = std::max(_runs / expected_runs, read_amplification.mean_sstables_read() / expected_runs);
+    urgency = std::clamp(urgency, min_urgency_factor, max_urgency_factor);
+    if (urgency >= _urgency_factor * urgency_hysteresis || urgency <= _urgency_factor / urgency_hysteresis
+            || urgency == min_urgency_factor || urgency == max_urgency_factor) {
+        _urgency_factor = urgency;
+    }
+    return _urgency_factor;
+}
+
+compaction_rates incremental_backlog_tracker::rates(const compaction_backlog_source& src) const {
+    refresh(src);
+    auto stats = src.stats();
+    double threshold = src.schema()->min_compaction_threshold();
+
+    // Compaction has to process each ingested byte once per rewrite, e.g. at the rate of
+    // ingestion when data is rewritten once (WA = 2), as achieved counts its input bytes.
+    //
+    // T reflects how much of the data survives overwrites, deletes and expiration, so the
+    // number of rewrites follows the actual depth of the tree. But it assumes every ingested
+    // byte reaches every tier, while each merge keeps only part of its inputs, so the target
+    // is too high when little survives: by a factor of rewrites / (1 + s + ... + s^(rewrites - 1))
+    // for a fraction s surviving each merge.
+    // FIXME: correct by the ratio of output to input bytes of regular compaction, should
+    // overwrite-heavy or short-TTL workloads turn out to be compacted too eagerly.
+    auto flush_size = std::max(stats.rates.mean_flush_size, double(_options.min_sstable_size));
+    auto rewrites = _total_bytes > flush_size ? std::log(_total_bytes / flush_size) / std::log(threshold) : 0;
+    auto from_ingestion = stats.rates.flushed_bytes * rewrites;
+    auto target = from_ingestion.per_second() >= _ingestion_rate_from_sstables.per_second() ? from_ingestion : _ingestion_rate_from_sstables;
+
+    return compaction_rates{
+        .target = target * urgency_factor(stats.read_amplification, threshold),
+        .achieved = stats.rates.compacted_bytes,
     };
 }
 
 incremental_backlog_tracker::incremental_backlog_tracker(incremental_compaction_strategy_options options) : _options(std::move(options)) {}
 
 double incremental_backlog_tracker::backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
-    if (_backlog_dirty) {
-        auto result = calculate_sstables_backlog_contribution(src, _options);
-        _total_bytes = result.total_bytes;
-        _total_backlog_bytes = result.total_backlog_bytes;
-        _sstables_backlog_contribution = result.sstables_backlog_contribution;
-        _sstable_runs_contributing_backlog = std::move(result.sstable_runs_contributing_backlog);
-        _backlog_dirty = false;
-    }
+    refresh(src);
 
     inflight_component compacted = compacted_backlog(oc);
 

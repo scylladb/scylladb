@@ -5190,6 +5190,114 @@ BOOST_AUTO_TEST_CASE(compaction_backlog_manager_sums_rates) {
     BOOST_REQUIRE(rates.target.interval() == 10s);
 }
 
+namespace {
+// A compaction group made of the given sstables, measuring the given stats.
+struct fixed_backlog_source : public compaction::compaction_backlog_source {
+    schema_ptr s;
+    lw_shared_ptr<sstables::sstable_set> set;
+    compaction::compaction_group_stats group_stats;
+    const schema_ptr& schema() const noexcept override { return s; }
+    lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override { return set; }
+    compaction::compaction_group_stats stats() const override { return group_stats; }
+};
+}
+
+// The ICS target: max(ingestion_rate * (WA - 1), ingestion_rate_from_sstables) * URGENCY_FACTOR.
+SEASTAR_TEST_CASE(incremental_backlog_tracker_rates_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        using rate = utils::rate<utils::units::bytes>;
+        using namespace std::chrono_literals;
+        constexpr double MB = 1 << 20;
+        // min_threshold is 4.
+        auto s = schema_builder(this_smp_shard_count(), "tests", "incremental_backlog_tracker_rates")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type)
+                .build();
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::incremental, {});
+        auto keys = tests::generate_partition_keys(2, s, local_shard_only::yes);
+
+        struct run_spec {
+            double size;
+            // Minutes the run's data was ingested over, if it was flushed.
+            std::optional<std::pair<int64_t, int64_t>> ingested;
+        };
+        auto make_source = [&] (std::vector<run_spec> runs, compaction::compaction_group_stats stats) {
+            fixed_backlog_source src;
+            src.s = s;
+            src.set = make_lw_shared<sstables::sstable_set>(env.make_sstable_set(cs, s));
+            src.group_stats = stats;
+            for (const auto& run : runs) {
+                auto sst = sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key());
+                sstables::test(sst).set_data_file_size(run.size);
+                sstables::test(sst).set_run_identifier(sstables::run_id::create_random_id());
+                if (run.ingested) {
+                    sstables::test(sst).set_ingestion_metadata({
+                        .fraction = 1,
+                        .min_timestamp = run.ingested->first * 60'000,
+                        .max_timestamp = run.ingested->second * 60'000,
+                    });
+                }
+                src.set->insert(sst);
+            }
+            return src;
+        };
+        auto rates_of = [] (const fixed_backlog_source& src) {
+            return compaction::incremental_backlog_tracker({}).rates(src);
+        };
+        auto flushing = [] (double flushed_per_second, double mean_flush_size) {
+            return compaction::compaction_group_stats{.rates = {
+                .flushed_bytes = rate(flushed_per_second * 600, 600s),
+                .mean_flush_size = mean_flush_size,
+                .compacted_bytes = rate(5 * MB * 600, 600s),
+            }};
+        };
+
+        // Three tiers, of a run each, none ready to be compacted. Compaction rewrites ingested data
+        // log4(T / F) times, and the tree holds 3 runs where it would hold up to 2 * 3 + 4 = 10.
+        auto ingestion = rates_of(make_source({{1600 * MB}, {400 * MB}, {100 * MB}}, flushing(10 * MB, 100 * MB)));
+        BOOST_REQUIRE_CLOSE(ingestion.target.per_second(), 10 * MB * std::log(21.0) / std::log(4.0) * 0.3, 1e-6);
+        BOOST_REQUIRE(ingestion.target.interval() == 600s);
+        BOOST_REQUIRE_EQUAL(ingestion.achieved.per_second(), 5 * MB);
+
+        // The flush size is no smaller than min_sstable_size, 50MB.
+        auto small_flushes = rates_of(make_source({{1600 * MB}, {400 * MB}, {100 * MB}}, flushing(10 * MB, 10 * MB)));
+        BOOST_REQUIRE_CLOSE(small_flushes.target.per_second(), 10 * MB * std::log(42.0) / std::log(4.0) * 0.3, 1e-6);
+
+        // A tier ready to be compacted, whose data was ingested over 40 minutes, while nothing was
+        // flushed lately, e.g. after a restart. It holds as many runs as expected.
+        std::vector<run_spec> ready_tier = {{100 * MB, {{0, 10}}}, {100 * MB, {{10, 20}}}, {100 * MB, {{20, 30}}}, {100 * MB, {{30, 40}}}};
+        auto from_sstables = rates_of(make_source(ready_tier, {}));
+        BOOST_REQUIRE_CLOSE(from_sstables.target.per_second(), 400 * MB / 2400, 1e-6);
+        BOOST_REQUIRE(from_sstables.target.interval() == 2400s);
+
+        // Data ingested in a burst is considered ingested over at least 10 minutes.
+        auto burst = rates_of(make_source({{100 * MB, {{0, 1}}}, {100 * MB, {{0, 1}}}, {100 * MB, {{0, 1}}}, {100 * MB, {{0, 1}}}}, {}));
+        BOOST_REQUIRE_CLOSE(burst.target.per_second(), 400 * MB / 600, 1e-6);
+
+        // Data that wasn't flushed, e.g. written by repair, has no ingestion time.
+        auto repaired = rates_of(make_source({{100 * MB, {{0, 10}}}, {100 * MB, {{10, 20}}}, {100 * MB, {{20, 30}}}, {100 * MB}}, {}));
+        BOOST_REQUIRE_CLOSE(repaired.target.per_second(), 300 * MB / 1800, 1e-6);
+
+        // Point reads that read more sstables than the tree is expected to hold runs, 4, make
+        // compaction more urgent. URGENCY_FACTOR only moves once it moved by more than 25%.
+        auto src = make_source(ready_tier, {});
+        compaction::incremental_backlog_tracker tracker({});
+        auto urgency_with_reads = [&] (double mean_sstables_read) {
+            src.group_stats.read_amplification = {
+                .point_reads = utils::rate<utils::units::reads>(100, 10s),
+                .sstables_read = utils::rate<utils::units::sstables>(100 * mean_sstables_read, 10s),
+            };
+            return tracker.rates(src).target.per_second() / (400 * MB / 2400);
+        };
+        BOOST_REQUIRE_CLOSE(urgency_with_reads(0), 1, 1e-6);
+        BOOST_REQUIRE_CLOSE(urgency_with_reads(4.4), 1, 1e-6);
+        BOOST_REQUIRE_CLOSE(urgency_with_reads(6), 1.5, 1e-6);
+        BOOST_REQUIRE_CLOSE(urgency_with_reads(5.2), 1.5, 1e-6);
+        BOOST_REQUIRE_CLOSE(urgency_with_reads(4.4), 1.1, 1e-6);
+        BOOST_REQUIRE_CLOSE(urgency_with_reads(40), 4, 1e-6);
+    });
+}
+
 void test_major_does_not_miss_data_in_memtable_fn(test_env& env) {
     auto builder = schema_builder(this_smp_shard_count(), "tests", "test_major_does_not_miss_data_in_memtable")
             .with_column("id", utf8_type, column_kind::partition_key)

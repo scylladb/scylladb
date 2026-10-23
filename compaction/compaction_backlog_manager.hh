@@ -17,6 +17,7 @@
 
 namespace sstables {
 class sstable_set;
+class sstable_run;
 }
 
 namespace compaction {
@@ -124,6 +125,16 @@ static constexpr uint64_t sstable_backlog_fixed_cost = 1UL * 1024 * 1024;
 static inline uint64_t effective_backlog_size(uint64_t data_size, size_t sstables = 1) {
     return data_size == 0 ? 0 : data_size + sstables * sstable_backlog_fixed_cost;
 }
+
+// The rate at which the data of the given sstables, or of the sstables of the given runs,
+// was ingested: the bytes that came from memtable flushes, over the period they were
+// flushed in, from the sstables' ingestion metadata. Data written otherwise, e.g. by
+// repair, has no ingestion time. The period is no shorter than min_span, which keeps
+// data ingested in a burst from demanding to be compacted at an arbitrary rate.
+utils::rate<utils::units::bytes> ingestion_rate_from_sstables(const std::vector<sstables::shared_sstable>& sstables,
+        std::chrono::duration<double> min_span);
+utils::rate<utils::units::bytes> ingestion_rate_from_sstables(const std::vector<lw_shared_ptr<const sstables::sstable_run>>& runs,
+        std::chrono::duration<double> min_span);
 
 // Read and write progress are provided by structures present in progress_manager.hh
 // However, we don't want to be tied to their lifetimes and for that reason we will not

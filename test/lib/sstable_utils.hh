@@ -125,6 +125,13 @@ public:
         _sst->_run_identifier = identifier;
     }
 
+    void set_ingestion_metadata(ingestion_metadata ingestion) {
+        if (!_sst->_components->scylla_metadata) {
+            _sst->_components->scylla_metadata.emplace();
+        }
+        _sst->_components->scylla_metadata->data.set<scylla_metadata_type::IngestionMetadata>(std::move(ingestion));
+    }
+
     future<sstable_ptr> store(sstring dir, sstables::generation_type generation) {
         _sst->_generation = generation;
         co_await _sst->_storage->change_dir_for_test(dir);
