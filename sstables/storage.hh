@@ -41,6 +41,7 @@ namespace sstables {
 enum class sstable_state;
 class delayed_commit_changes;
 class object_storage_client;
+class object_name;
 class sstable;
 class sstables_manager;
 class atomic_deletion;
@@ -186,6 +187,12 @@ sstring object_storage_prefix(const std::optional<sstring>& location);
 // of the format for storage::snapshot(), the helpers below,
 // has_own_snapshot_ref() and db/snapshot/cluster_backup.cc.
 sstring object_storage_snapshot_ref_name(std::string_view tag, generation_type gen);
+
+// Deletes one snapshot reference object by its full object name. A missing
+// reference is not an error. Only for references on sstables known to be
+// alive. A reference that may be the sstable's last claim must go
+// through release_object_storage_snapshot_ref() instead.
+future<> delete_object_storage_snapshot_ref(object_storage_client& client, object_name ref_name);
 
 // A snapshot tag names bucket reference objects (refs/snapshot-<tag>/...), so
 // it must be non-empty and must not contain '/'.
