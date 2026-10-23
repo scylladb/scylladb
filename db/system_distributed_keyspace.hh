@@ -165,6 +165,22 @@ public:
     /* Retrieves download progress for a given snapshot, keyspace, table, datacenter, and rack */
     future<snapshot_sstables_progress> get_snapshot_sstables_progress(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl = db::consistency_level::QUORUM) const;
 
+    /* Retrieves, for one (snapshot, keyspace, table, datacenter, rack) partition, the
+     * information needed to clean up the residue of a crashed or failed snapshot
+     * attempt. */
+    future<utils::chunked_vector<snapshot_sstable_cleanup_entry>> get_snapshot_sstables_for_cleanup(
+            std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc, std::string_view rack,
+            db::consistency_level cl = db::consistency_level::QUORUM) const;
+
+    /* Deletes a single snapshot_sstables row, tombstone pinned at the row's
+     * observed write timestamp, thus deleting exactly the observed write and
+     * it cannot shadow a later re-insert by a snapshot retry. */
+    future<> delete_snapshot_sstable_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc, std::string_view rack,
+            dht::token first_token, sstables::sstable_id sstable_id, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
     future<> update_sstable_download_status(sstring snapshot_name,
                                             sstring ks,
                                             sstring table,
