@@ -34,6 +34,8 @@ async def test_data_survives_crash(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
     ]
     server = await manager.server_add(config=config, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
@@ -83,6 +85,8 @@ async def test_schema_upgrade_during_replay(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
     ]
     server = await manager.server_add(config=config, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
@@ -135,6 +139,8 @@ async def test_double_crash_recovery(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
     ]
     server = await manager.server_add(config=config, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
@@ -191,6 +197,8 @@ async def test_crash_with_multiple_commitlog_segments(manager: ScyllaClusterMana
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
     ]
     server = await manager.server_add(config=config, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
@@ -235,6 +243,8 @@ async def test_crash_recovery_multi_tablet(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
     ]
     server = await manager.server_add(config=config, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
@@ -278,6 +288,8 @@ async def test_crash_recovery_after_flush(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
     ]
     server = await manager.server_add(config=config, cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
@@ -327,6 +339,7 @@ async def test_unapplied_entry_survives_aborted_apply(manager: ScyllaClusterMana
     }
     cmdline = [
         "--logger-log-level", "sc_state_machine=debug",
+        "--logger-log-level", "raft_groups_storage=debug",
         # The injected failure reaches the raft server as a background error of the
         # applier fiber, which a strongly consistent group reports through
         # on_internal_error. The node is started with --abort-on-internal-error,

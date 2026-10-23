@@ -35,7 +35,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG = {'experimental_features': ['strongly-consistent-tables']}
 DEFAULT_CMDLINE = [
         '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug'
+        '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug'
     ]
 
 
@@ -698,7 +700,7 @@ async def test_forward_cql_prepared_with_bound_values(manager: ScyllaClusterMana
     Then, we execute it again and check that we used the cache
     on the leader side and that it updated the value correctly again.
     """
-    cmdline = [
+    cmdline = DEFAULT_CMDLINE + [
         '--logger-log-level', 'cql_server=trace',
         '--experimental-features', 'strongly-consistent-tables',
     ]
@@ -734,7 +736,7 @@ async def test_forward_cql_cache_invalidation(manager: ScyllaClusterManager):
     """
     Test that cql forwarding works after invalidation of prepared statement cache on schema changes.
     """
-    cmdline = [
+    cmdline = DEFAULT_CMDLINE + [
         '--logger-log-level', 'cql_server=trace',
         '--experimental-features', 'strongly-consistent-tables',
     ]
@@ -776,7 +778,7 @@ async def test_forward_cql_exception_passthrough(manager: ScyllaClusterManager):
     """
     Verify that coordinator exception returned on the target replica is correctly returned to the client.
     """
-    cmdline = [
+    cmdline = DEFAULT_CMDLINE + [
         '--logger-log-level', 'cql_server=trace',
         '--experimental-features', 'strongly-consistent-tables',
     ]
@@ -890,8 +892,7 @@ async def test_drop_table_during_insert(manager: ScyllaClusterManager):
     in acquire_server and abort the node."""
 
     config = {"experimental_features": ["strongly-consistent-tables"]}
-    cmdline = ["--logger-log-level", "sc_groups_manager=debug"]
-    server = await manager.server_add(config=config, cmdline=cmdline)
+    server = await manager.server_add(config=config, cmdline=DEFAULT_CMDLINE)
     (cql, hosts) = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(
@@ -1409,7 +1410,7 @@ async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
     We verify this via the scylla_transport_requests_forwarded_redirected metric
     on the non-replica node.
     """
-    cmdline = [
+    cmdline = DEFAULT_CMDLINE + [
         '--logger-log-level', 'cql_server=trace',
         '--experimental-features', 'strongly-consistent-tables',
     ]
@@ -1805,6 +1806,8 @@ async def test_tablet_migration(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'raft=debug'
     ]
@@ -1907,6 +1910,8 @@ async def test_tablet_migration_rf1(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'raft=debug'
     ]
@@ -2018,6 +2023,8 @@ async def test_tablet_migration_rollback(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'raft=debug',
         '--logger-log-level', 'debug_error_injection=debug'
@@ -2141,6 +2148,8 @@ async def test_rf_change(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
     ]
     servers = await manager.servers_add(3, config=config, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
