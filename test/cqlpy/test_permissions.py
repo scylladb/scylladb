@@ -32,10 +32,10 @@ def get_roles_table(cql):
 # This case does not include functions, because due to differences in implementation
 # the tests will diverge between Scylla and Cassandra (e.g. there's no common language)
 # to create a user-defined function in.
-# Marked cassandra_bug, because Cassandra allows granting a DESCRIBE permission
-# to a specific ROLE, in contradiction to its own documentation:
-# https://cassandra.apache.org/doc/latest/cassandra/cql/security.html#cql-permissions
-def test_grant_applicable_data_and_role_permissions(cql, test_keyspace, cassandra_bug):
+# DESCRIBE on a specific ROLE allows listing its permissions. Cassandra added
+# it in version 4.1 (CASSANDRA-16902), although its documentation still
+# lists DESCRIBE only for ALL ROLES. Scylla added it in SCYLLADB-5232.
+def test_grant_applicable_data_and_role_permissions(cql, test_keyspace):
     schema = "a int primary key"
     user = "cassandra"
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -46,7 +46,7 @@ def test_grant_applicable_data_and_role_permissions(cql, test_keyspace, cassandr
             f'keyspace {test_keyspace}': ['create', 'alter', 'drop', 'select', 'modify', 'authorize'],
             f'table {table}': ['alter', 'drop', 'select', 'modify', 'authorize'],
             'all roles': ['create', 'alter', 'drop', 'authorize', 'describe'],
-            f'role {user}': ['alter', 'drop', 'authorize'],
+            f'role {user}': ['alter', 'drop', 'authorize', 'describe'],
         }
         for resource, permissions in applicable_permissions.items():
             # Applicable permissions can be legally granted
@@ -105,6 +105,267 @@ def check_enforced(cql, username, permission, resource, function):
     eventually_authorized(function)
     revoke(cql, permission, resource, username)
     eventually_unauthorized(function)
+
+# A user with DESCRIBE permission on a specific role can list that role's
+# permissions, but not the permissions of other roles. The creator of a role
+# gets this permission automatically (see the translated Cassandra test
+# cassandra_authorizer_test.py::testListPermissionsOfChildByParent), but here
+# we check a DESCRIBE permission which was explicitly granted.
+# Reproduces SCYLLADB-5232.
+def test_describe_permission_on_role(cql):
+    with new_user(cql) as user, new_user(cql) as role1, new_user(cql) as role2:
+        grant(cql, 'DESCRIBE', f'ROLE {role1}', user)
+        with new_session(cql, user) as session:
+            session.execute(f'LIST ALL PERMISSIONS OF {role1}')
+            with pytest.raises(Unauthorized):
+                session.execute(f'LIST ALL PERMISSIONS OF {role2}')
+            with pytest.raises(Unauthorized):
+                session.execute('LIST ALL PERMISSIONS')
+            # DESCRIBE on a specific role is not enough for LIST ROLES OF
+            # it, which requires DESCRIBE on all roles.
+            with pytest.raises(Unauthorized):
+                session.execute(f'LIST ROLES OF {role1}')
+
+# A user with DESCRIBE permission on all roles can list the permissions of
+# any role, and of everyone.
+# Reproduces SCYLLADB-5232.
+def test_describe_permission_on_all_roles(cql):
+    with new_user(cql) as user, new_user(cql) as role1:
+        grant(cql, 'DESCRIBE', 'ALL ROLES', user)
+        with new_session(cql, user) as session:
+            session.execute(f'LIST ALL PERMISSIONS OF {role1}')
+            session.execute('LIST ALL PERMISSIONS')
+            session.execute(f'LIST ROLES OF {role1}')
+
+# The creator of a role gets DESCRIBE permission on it, so it can list the
+# role's permissions - but not the roles granted to it (LIST ROLES OF), which
+# requires DESCRIBE on all roles.
+# Reproduces SCYLLADB-5232.
+def test_role_creator_describe_permission(cql):
+    with new_user(cql) as parent:
+        grant(cql, 'CREATE', 'ALL ROLES', parent)
+        child = unique_name()
+        with new_session(cql, parent) as session:
+            session.execute(f'CREATE ROLE {child}')
+            try:
+                session.execute(f'LIST ALL PERMISSIONS OF {child}')
+                with pytest.raises(Unauthorized):
+                    session.execute(f'LIST ROLES OF {child}')
+            finally:
+                cql.execute(f'DROP ROLE {child}')
+
+# A user without AUTHORIZE permission on a resource can list its own
+# permissions on the resource, but not everyone's permissions or those of
+# another role - unless it has DESCRIBE permission on that role or on all
+# roles, the same as for LIST PERMISSIONS without ON.
+# Scylla, unlike Cassandra, also lets a user with AUTHORIZE permission on the
+# resource list the permissions of all roles on it - see
+# test_list_permissions_on_resource_with_authorize below.
+# Reproduces SCYLLADB-5331.
+def test_list_permissions_on_resource(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table, new_user(cql) as user, new_user(cql) as describer, new_user(cql) as other:
+        grant(cql, 'SELECT', table, user)
+        grant(cql, 'SELECT', table, other)
+        grant(cql, 'DESCRIBE', f'ROLE {other}', describer)
+        with new_session(cql, user) as session:
+            session.execute(f'LIST ALL PERMISSIONS ON {table} OF {user}')
+            with pytest.raises(Unauthorized):
+                session.execute(f'LIST ALL PERMISSIONS ON {table}')
+            with pytest.raises(Unauthorized):
+                session.execute(f'LIST ALL PERMISSIONS ON {table} OF {other}')
+        with new_session(cql, describer) as session:
+            session.execute(f'LIST ALL PERMISSIONS ON {table} OF {other}')
+
+# A user with AUTHORIZE permission on a resource can grant and revoke any
+# role's permissions on it, so Scylla also lets it list all roles' permissions
+# on that resource (LIST PERMISSIONS ON). This includes the creator of a table,
+# which automatically gets all permissions on it, and a user with all
+# permissions on the table's keyspace. Such a user sees only the permissions it
+# could revoke, so the table's creator doesn't see the permissions on the
+# keyspace, while a user with all permissions on the keyspace does.
+# Cassandra doesn't allow any of this - it lets such a user list only its own
+# permissions, like a user without AUTHORIZE (see
+# test_list_permissions_on_resource above) - so this test is scylla_only.
+# AUTHORIZE on a resource doesn't let a user list permissions on other
+# resources, without ON, or OF a specific role (see
+# test_list_permissions_on_resource_with_authorize_hides_membership).
+# Reproduces SCYLLADB-5331.
+def test_list_permissions_on_resource_with_authorize(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as other_table, new_user(cql) as owner, new_user(cql) as ks_authorizer, new_user(cql) as other:
+        grant(cql, 'CREATE', f'KEYSPACE {test_keyspace}', owner)
+        grant(cql, 'ALL', f'KEYSPACE {test_keyspace}', ks_authorizer)
+        grant(cql, 'MODIFY', f'KEYSPACE {test_keyspace}', other)
+        ks_row = (other, f'<keyspace {test_keyspace}>', 'MODIFY')
+        table = f'{test_keyspace}.{unique_name()}'
+        with new_session(cql, owner) as session:
+            session.execute(f'CREATE TABLE {table} (p int PRIMARY KEY)')
+            try:
+                session.execute(f'GRANT SELECT ON {table} TO {other}')
+                table_row = (other, f'<table {table}>', 'SELECT')
+                rows = [(r.role, r.resource, r.permission) for r in session.execute(f'LIST ALL PERMISSIONS ON {table}')]
+                assert table_row in rows
+                # The owner doesn't have AUTHORIZE on the keyspace, so it
+                # doesn't see the permissions on it (see
+                # test_list_permissions_on_resource_with_authorize_hides_unauthorized)
+                assert ks_row not in rows
+                with pytest.raises(Unauthorized):
+                    session.execute(f'LIST ALL PERMISSIONS ON {table} OF {other}')
+                with pytest.raises(Unauthorized):
+                    session.execute(f'LIST ALL PERMISSIONS ON {other_table}')
+                with pytest.raises(Unauthorized):
+                    session.execute(f'LIST ALL PERMISSIONS OF {other}')
+                with pytest.raises(Unauthorized):
+                    session.execute('LIST ALL PERMISSIONS')
+                # A user with all permissions on the keyspace sees the
+                # permissions on both the table and the keyspace.
+                with new_session(cql, ks_authorizer) as session2:
+                    rows = [(r.role, r.resource, r.permission) for r in session2.execute(f'LIST ALL PERMISSIONS ON {table}')]
+                    assert table_row in rows
+                    assert ks_row in rows
+            finally:
+                cql.execute(f'DROP TABLE {table}')
+
+# A user with AUTHORIZE only on a table must not see who has permissions on
+# the table's keyspace. LIST PERMISSIONS ON a table normally also lists the
+# permissions on the resources above it, such as its keyspace. Scylla lets a
+# user with AUTHORIZE on the table list everyone's permissions on it (see
+# test_list_permissions_on_resource_with_authorize), but leaves out those on
+# resources it doesn't have AUTHORIZE on, while Cassandra refuses the listing
+# altogether - so we accept both. Either way, the user can see all its own
+# permissions, including those on the keyspace.
+# Reproduces SCYLLADB-5331.
+def test_list_permissions_on_resource_with_authorize_hides_unauthorized(cql, test_keyspace):
+    with new_user(cql) as owner, new_user(cql) as other:
+        grant(cql, 'CREATE', f'KEYSPACE {test_keyspace}', owner)
+        grant(cql, 'MODIFY', f'KEYSPACE {test_keyspace}', other)
+        table = f'{test_keyspace}.{unique_name()}'
+        ks_row = (other, f'<keyspace {test_keyspace}>', 'MODIFY')
+        def listing(session, stmt):
+            return [(r.role, r.resource, r.permission) for r in session.execute(stmt)]
+        with new_session(cql, owner) as session:
+            session.execute(f'CREATE TABLE {table} (p int PRIMARY KEY)')
+            try:
+                session.execute(f'GRANT SELECT ON {table} TO {other}')
+                for stmt in [f'LIST ALL PERMISSIONS ON {table}', f'LIST ALL PERMISSIONS ON {table} OF {other}']:
+                    try:
+                        assert ks_row not in listing(session, stmt)
+                    except Unauthorized:
+                        pass
+                assert (owner, f'<keyspace {test_keyspace}>', 'CREATE') in listing(session, f'LIST ALL PERMISSIONS ON {table} OF {owner}')
+            finally:
+                cql.execute(f'DROP TABLE {table}')
+
+# A user with AUTHORIZE on a table must not learn which roles another role
+# inherits, since it may not LIST ROLES OF that role. LIST PERMISSIONS OF a
+# role also lists the permissions of the roles it inherits, and the table's
+# creator may grant permissions on its table to any role, so if it could list
+# them OF any role, it could check whether any role is a member of any other.
+# Cassandra refuses the listing, so we accept both that and leaving the
+# inherited permissions out.
+# Reproduces SCYLLADB-5331.
+def test_list_permissions_on_resource_with_authorize_hides_membership(cql, test_keyspace):
+    with new_user(cql) as owner, new_user(cql) as member, new_user(cql) as group:
+        grant(cql, 'CREATE', f'KEYSPACE {test_keyspace}', owner)
+        cql.execute(f'GRANT {group} TO {member}')
+        table = f'{test_keyspace}.{unique_name()}'
+        with new_session(cql, owner) as session:
+            session.execute(f'CREATE TABLE {table} (p int PRIMARY KEY)')
+            try:
+                session.execute(f'GRANT SELECT ON {table} TO {group}')
+                with pytest.raises(Unauthorized):
+                    session.execute(f'LIST ROLES OF {member}')
+                try:
+                    rows = [(r.role, r.resource, r.permission) for r in session.execute(f'LIST ALL PERMISSIONS ON {table} OF {member}')]
+                    assert (group, f'<table {table}>', 'SELECT') not in rows
+                except Unauthorized:
+                    pass
+            finally:
+                cql.execute(f'DROP TABLE {table}')
+
+# A user with AUTHORIZE on a table may list everyone's permissions on it, but
+# sees only the permissions it could revoke. Revoking a permission requires
+# that permission too, so a user with only AUTHORIZE must not see another
+# role's SELECT on the table. Cassandra refuses the listing, so we accept
+# both.
+# Reproduces SCYLLADB-5331.
+def test_list_permissions_on_resource_with_only_authorize(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table, new_user(cql) as delegate, new_user(cql) as other:
+        grant(cql, 'AUTHORIZE', table, delegate)
+        grant(cql, 'SELECT', table, other)
+        with new_session(cql, delegate) as session:
+            with pytest.raises(Unauthorized):
+                session.execute(f'REVOKE SELECT ON {table} FROM {other}')
+            try:
+                rows = [(r.role, r.resource, r.permission) for r in session.execute(f'LIST ALL PERMISSIONS ON {table}')]
+                assert (other, f'<table {table}>', 'SELECT') not in rows
+            except Unauthorized:
+                pass
+
+# A user who may not view a role must not be able to find out whether it
+# exists: LIST PERMISSIONS ON ROLE for a role which doesn't exist must fail
+# the same way as for an existing role the user may not view. A superuser
+# still gets a "doesn't exist" error. The translated Cassandra test
+# cassandra_authorizer_test.py::testListDoesNotLeakRoleExistenceToUnauthorizedUsers
+# checks the same for LIST ROLES OF and LIST PERMISSIONS OF.
+# Cassandra had the same bug, CASSANDRA-21560, which is already fixed, but
+# the Cassandra releases we test against (5.0.9, 6.0-alpha2) don't have the
+# fix yet and fail this test, so it is marked cassandra_bug. Future Cassandra
+# releases will pass it.
+# Reproduces SCYLLADB-5233.
+def test_list_permissions_on_nonexistent_role(cql, cassandra_bug):
+    nonexistent_role = unique_name()
+    with new_user(cql) as user, new_user(cql) as other:
+        with new_session(cql, user) as session:
+            for role in [nonexistent_role, other]:
+                with pytest.raises(Unauthorized):
+                    session.execute(f'LIST ALL PERMISSIONS ON ROLE {role}')
+        with pytest.raises(InvalidRequest, match='exist'):
+            cql.execute(f'LIST ALL PERMISSIONS ON ROLE {nonexistent_role}')
+
+# Any user may list its own permissions on any resource, including ON ROLE r
+# for any role r, so the result must not tell it whether r exists: For a role
+# which doesn't exist, the listing is empty, the same as for an existing role
+# on which the user has no permissions. Cassandra 5.0.9 and 6.0-alpha2 report
+# that the role doesn't exist, and so does Cassandra's current source even
+# with the CASSANDRA-21560 fix - this is CASSANDRA-21768 - so this test is
+# marked cassandra_bug.
+# Reproduces SCYLLADB-5233.
+def test_list_permissions_on_nonexistent_role_of_self(cql, cassandra_bug):
+    nonexistent_role = unique_name()
+    with new_user(cql) as user, new_user(cql) as other:
+        with new_session(cql, user) as session:
+            for role in [nonexistent_role, other]:
+                assert list(session.execute(f'LIST ALL PERMISSIONS ON ROLE {role} OF {user}')) == []
+
+# A user who may view all roles (has DESCRIBE on all roles), even if it isn't
+# a superuser, gets a "doesn't exist" error when listing the roles or the
+# permissions of a role which doesn't exist.
+def test_list_nonexistent_role_with_describe(cql):
+    nonexistent_role = unique_name()
+    with new_user(cql) as user:
+        grant(cql, 'DESCRIBE', 'ALL ROLES', user)
+        with new_session(cql, user) as session:
+            for stmt in [f'LIST ROLES OF {nonexistent_role}', f'LIST ALL PERMISSIONS OF {nonexistent_role}']:
+                with pytest.raises(InvalidRequest, match='exist'):
+                    session.execute(stmt)
+
+# A user who may not grant or revoke permissions on a role must not be able to
+# find out whether the role exists: GRANT and REVOKE ... ON ROLE of a role
+# which doesn't exist must fail the same way as for an existing role on which
+# the user doesn't have AUTHORIZE permission. A superuser still gets a
+# "doesn't exist" error.
+# Reproduces SCYLLADB-5332.
+def test_grant_on_nonexistent_role(cql):
+    nonexistent_role = unique_name()
+    with new_user(cql) as user, new_user(cql) as other:
+        with new_session(cql, user) as session:
+            for role in [nonexistent_role, other]:
+                with pytest.raises(Unauthorized):
+                    session.execute(f'GRANT ALTER ON ROLE {role} TO {user}')
+                with pytest.raises(Unauthorized):
+                    session.execute(f'REVOKE ALTER ON ROLE {role} FROM {user}')
+        with pytest.raises(InvalidRequest, match='exist'):
+            cql.execute(f'GRANT ALTER ON ROLE {nonexistent_role} TO {user}')
 
 def test_user_displays_as_authenticated(cql):
     with new_session(cql, "cassandra") as user_session_1:
