@@ -103,7 +103,6 @@ def testPrimaryKeyIsNotNullNonCompositePartitionKey(cql, test_keyspace):
 
 # Reproduces SCYLLADB-5141 (snake_case names of native functions - here,
 # from_json()).
-@pytest.mark.xfail(reason="SCYLLADB-5141")
 def testCompoundPartitionKey(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(" +
                       "k int, " +

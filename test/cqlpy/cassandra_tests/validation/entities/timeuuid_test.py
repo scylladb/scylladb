@@ -33,11 +33,6 @@ def testTimeuuid(cql, test_keyspace):
 
         assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k = 0 AND t = ?", rows[0][1]), 1)
 
-        # Cassandra's test uses the new function names min_timeuuid(),
-        # to_timestamp(), to_unix_timestamp() and max_timeuuid(), which
-        # Scylla doesn't support yet (SCYLLADB-5141). Cassandra still
-        # supports the old names minTimeuuid(), toTimestamp(), etc., so we
-        # use those, to keep testing the rest of this test on Scylla.
         assert_invalid_message(cql, table, "k cannot be passed as argument 0 of function",
                                "SELECT minTimeuuid(k) FROM %s WHERE k = 0 AND t = ?", rows[0][1])
 

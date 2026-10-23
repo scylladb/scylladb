@@ -274,7 +274,6 @@ def testMVCreationSelectRestrictions(cql, test_keyspace):
 
 # The last statement of goodStatements in the Java testMVCreationSelectRestrictions
 # Reproduces SCYLLADB-5141 (snake_case names of native functions).
-@pytest.mark.xfail(reason="SCYLLADB-5141")
 def testMVCreationSelectRestrictionsWithFunction(cql, test_keyspace):
     mvCreationSelectRestrictions(cql, test_keyspace, [
         "CREATE MATERIALIZED VIEW %s AS SELECT * FROM %s WHERE a = blob_as_int(int_as_blob(1)) AND b = 1 AND c = 1 AND d = 1 PRIMARY KEY ((a, b), c, d)"
@@ -329,7 +328,6 @@ def filterTest(cql, test_keyspace, viewQuery):
                         row(1, 1, 3))
 
 # Reproduces SCYLLADB-5141 (snake_case names of native functions).
-@pytest.mark.xfail(reason="SCYLLADB-5141")
 def testFilterWithFunction(cql, test_keyspace):
     filterTest(cql, test_keyspace, "CREATE MATERIALIZED VIEW %s AS SELECT * FROM %s " +
                                    "WHERE a = blob_as_int(int_as_blob(1)) AND b IS NOT NULL " +

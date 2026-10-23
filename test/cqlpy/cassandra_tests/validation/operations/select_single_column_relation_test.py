@@ -655,9 +655,6 @@ def testFunctionCallWithUnset(cql, test_keyspace):
         # different.
         assert_invalid_message(cql, table, "unset",
                              "SELECT * FROM %s WHERE token(k) >= token(?)", UNSET_VALUE)
-        # Cassandra now uses the snake_case name blob_as_int(), which
-        # Scylla doesn't support yet (SCYLLADB-5141). Since Cassandra still
-        # supports the old name blobAsInt(), we keep using it.
         assert_invalid_message(cql, table, "unset",
                              "SELECT * FROM %s WHERE k = blobAsInt(?)", UNSET_VALUE)
 

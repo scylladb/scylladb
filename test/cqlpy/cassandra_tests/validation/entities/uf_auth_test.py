@@ -398,11 +398,9 @@ def testfunctionInCollectionElementCondition(t):
         cql = f"UPDATE {t.table} SET v1 = 0 WHERE k = 0 IF m_val[{functionCall(functionName)}] = {functionCall(functionName)}"
         t.assertPermissionsOnFunction(cql, functionName)
 
-# Reproduces SCYLLADB-5141 (snake_case names of native functions) and #13746
-# (user-defined functions can only be used in SELECT's selection clause).
-# Today, this test fails early on blob_as_int (SCYLLADB-5141), but once that
-# is fixed it will reach the UDF in the WHERE clause, which can abort
-# Scylla like in the tests above - so it is skipped, not xfail.
+# Reproduces #13746 (user-defined functions can only be used in SELECT's
+# selection clause): this test reaches the UDF in the WHERE clause, which can
+# abort Scylla like in the tests above - so it is skipped, not xfail.
 @pytest.mark.skip_bug(
     link="https://github.com/scylladb/scylladb/issues/13746",
     reason="UDF can only be used in SELECT, and abort when used in WHERE, or in INSERT/UPDATE/DELETE commands",

@@ -15,6 +15,7 @@
 #include "exceptions/exceptions.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/log.hh>
+#include "utils/on_internal_error.hh"
 
 namespace cql3 {
 namespace functions {
@@ -32,6 +33,11 @@ public:
     virtual bool is_aggregate() const override {
         return false;
     }
+    // Returns a copy of this function, with a different name. Used for
+    // declaring a native function under an additional name.
+    virtual shared_ptr<function> renamed(sstring name) const {
+        utils::on_internal_error(fmt::format("function {} cannot be renamed", this->name()));
+    }
 };
 
 template <typename Func, bool Pure>
@@ -47,6 +53,9 @@ public:
     }
     virtual bool is_pure() const override {
         return Pure;
+    }
+    virtual shared_ptr<function> renamed(sstring name) const override {
+        return ::make_shared<native_scalar_function_for>(std::move(name), return_type(), arg_types(), Func(_func));
     }
     virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
         try {

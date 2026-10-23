@@ -455,7 +455,6 @@ def testReversedType(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT max(c), min(c), avg(c) FROM %s WHERE a = 1 AND b > 1"), row(9, 7, 8))
 
 # Reproduces SCYLLADB-5141 (snake_case names of native functions).
-@pytest.mark.xfail(reason="SCYLLADB-5141")
 def testNestedFunctions(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int primary key, b timeuuid, c double, d double)") as table:
         with create_function(cql, test_keyspace, "(magnitude double, sign double) " +
