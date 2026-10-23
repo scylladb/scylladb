@@ -134,6 +134,13 @@ async def read_requests(manager: ScyllaClusterManager, server, object_storage):
     return metrics.get('scylla_object_storage_total_read_requests', {'type': object_storage.type.lower()}) or 0
 
 
+async def page_cache_metric(manager: ScyllaClusterManager, server, name, labels={}):
+    '''The value of the page cache's metric with the given name (after its
+    prefix), summed over the shards of the server.'''
+    metrics = await manager.metrics.query(server.ip_addr)
+    return metrics.get(f'scylla_object_storage_page_cache_{name}', labels) or 0
+
+
 def range_read_requests(object_storage):
     '''The number of requests to read a range (of up to 8 MiB) of an object:
     a single request on S3, while on GCS there is also a request for the
@@ -783,16 +790,18 @@ async def test_compaction_reads_cache(manager: ScyllaClusterManager, s3_storage)
             await manager.api.drop_sstable_caches(server.ip_addr)
             if scan_first:
                 assert scan(cql, ks) == data
-            requests_before = await read_requests(manager, server, s3_storage)
+            # Count only the requests of reads through the cache: deleting
+            # the compacted sstables lists their objects' references (a GET),
+            # maybe after the compaction completes.
+            requests_before = await page_cache_metric(manager, server, 'object_reads')
             await manager.api.keyspace_compaction(server.ip_addr, ks)
-            requests = await read_requests(manager, server, s3_storage) - requests_before
+            requests = await page_cache_metric(manager, server, 'object_reads') - requests_before
             assert scan(cql, ks) == data
             return requests
 
-    # Compaction also reads things which are never cached, such as the small
-    # Digest component, and the sstables which it wrote itself (when it
-    # compacts in several rounds), so it does send some requests even when
-    # its input is cached. Check that it sends fewer.
+    # Compaction also reads the sstables which it wrote itself (when it
+    # compacts in several rounds), which aren't cached, so it may send some
+    # requests even when its input is cached. Check that it sends fewer.
     uncached_requests = await compaction_requests(scan_first=False)
     cached_requests = await compaction_requests(scan_first=True)
     assert cached_requests < uncached_requests
@@ -956,10 +965,13 @@ async def test_intranode_migration_copies_pages(manager: ScyllaClusterManager, s
                                                    for _, sstable, component, offset, last_hit in hits)
 
         # Check that a scan, on the new shard, reads everything from the cache.
+        # The old shard's sstable may still be deleted meanwhile, and list its
+        # objects' references (a GET), so count only the requests of reads
+        # through the cache.
         await manager.api.drop_sstable_caches(server.ip_addr)
-        requests_before = await read_requests(manager, server, s3_storage)
+        requests_before = await page_cache_metric(manager, server, 'object_reads')
         assert scan(cql, ks) == data
-        assert await read_requests(manager, server, s3_storage) == requests_before
+        assert await page_cache_metric(manager, server, 'object_reads') == requests_before
 
 
 async def test_migration_to_another_node_evicts_pages(manager: ScyllaClusterManager, s3_storage):
@@ -1066,6 +1078,8 @@ async def test_cache_size_limit(manager: ScyllaClusterManager, s3_storage):
         async def within_limit():
             return True if cached_bytes(cql) <= 1024 * 1024 else None
         await wait_for(within_limit, time.time() + 60)
+        assert await page_cache_metric(manager, server, 'evictions', {'reason': 'capacity'}) > 0
+        assert await page_cache_metric(manager, server, 'capacity_bytes') == 1024 * 1024
 
         # Read many partitions, each only once, which fills the cache again
         # with pages which aren't hit - but read one partition again and
@@ -1128,6 +1142,7 @@ async def test_cache_errors(manager: ScyllaClusterManager, s3_storage):
         await manager.api.drop_sstable_caches(server.ip_addr)
         assert scan(cql, ks) == data
         assert cached_pages(cql) == []
+        assert await page_cache_metric(manager, server, 'errors', {'operation': 'write'}) > 0
         await manager.api.disable_injection(server.ip_addr, 'object_storage_page_cache_put_page')
 
         # Cache the table. Check that a scan, when reading the cache fails,
@@ -1140,6 +1155,7 @@ async def test_cache_errors(manager: ScyllaClusterManager, s3_storage):
         requests_before = await read_requests(manager, server, s3_storage)
         assert scan(cql, ks) == data
         assert await read_requests(manager, server, s3_storage) > requests_before
+        assert await page_cache_metric(manager, server, 'errors', {'operation': 'read'}) > 0
         await manager.api.disable_injection(server.ip_addr, 'object_storage_page_cache_get_pages')
 
         # Check that the cache works again, when its errors are gone.
@@ -1147,6 +1163,52 @@ async def test_cache_errors(manager: ScyllaClusterManager, s3_storage):
         requests_before = await read_requests(manager, server, s3_storage)
         assert scan(cql, ks) == data
         assert await read_requests(manager, server, s3_storage) == requests_before
+
+
+async def test_metrics(manager: ScyllaClusterManager, s3_storage):
+    '''The page cache's metrics count its hits and misses - separately for
+    reads which may populate the cache, and reads which must not - the bytes
+    in it, its requests to the object store, and its evictions.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        populating = {'reads': 'populating'}
+        non_populating = {'reads': 'non_populating'}
+
+        # Check that a scan which misses the cache counts misses, but no hits,
+        # and the requests it sent to the object store.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert scan(cql, ks) == data
+        requests = await read_requests(manager, server, s3_storage) - requests_before
+        assert await page_cache_metric(manager, server, 'misses', populating) > 0
+        assert await page_cache_metric(manager, server, 'hits', populating) == 0
+        assert await page_cache_metric(manager, server, 'object_reads') == requests
+        assert await page_cache_metric(manager, server, 'object_read_bytes') > 0
+        # Check that the gauge of the cache's bytes shows its size. The cache
+        # counts its bytes in memory, which may count a page which was cached
+        # twice twice, until it recounts them.
+        gauge = await page_cache_metric(manager, server, 'bytes')
+        assert cached_bytes(cql) <= gauge <= cached_bytes(cql) * 1.1
+
+        # Check that scans which hit the cache count hits, of the right kind.
+        misses = await page_cache_metric(manager, server, 'misses', populating)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        assert await page_cache_metric(manager, server, 'hits', populating) > 0
+        assert await page_cache_metric(manager, server, 'misses', populating) == misses
+        assert await page_cache_metric(manager, server, 'hits', non_populating) == 0
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert {row.p: row.v for row in cql.execute(f'SELECT p, v FROM {ks}.test BYPASS CACHE')} == data
+        assert await page_cache_metric(manager, server, 'hits', non_populating) > 0
+
+        # Check that dropping the table counts the evictions of its pages.
+        sstables = cached_sstables(cql)
+        await cql.run_async(f'DROP TABLE {ks}.test')
+        await wait_for_eviction(cql, sstables)
+        assert await page_cache_metric(manager, server, 'evictions', {'reason': 'sstable_deleted'}) > 0
+        assert await page_cache_metric(manager, server, 'evictions', {'reason': 'capacity'}) == 0
 
 
 async def test_lwt_populates_cache(manager: ScyllaClusterManager, s3_storage):

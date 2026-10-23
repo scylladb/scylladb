@@ -44,6 +44,8 @@ class page_cached_source_impl : public data_source_impl {
     shared_ptr<const page_geometry> _geometry;
     object_storage_range_reader _read_range;
     populate_disk_cache _populate;
+    // The statistics of hits and misses of this kind of read.
+    object_storage_page_cache_read_stats& _read_stats;
     // The next byte to return, and the end of the requested range.
     uint64_t _pos;
     uint64_t _end;
@@ -68,6 +70,7 @@ public:
         , _geometry(std::move(geometry))
         , _read_range(std::move(read_range))
         , _populate(populate)
+        , _read_stats(populate ? cache.get_stats().populating : cache.get_stats().non_populating)
         , _pos(offset)
         , _end(offset + length)
         , _pages_end(length ? _geometry->pages_covering(offset, offset + length).end : _end)
@@ -90,8 +93,12 @@ public:
             data = co_await get_cached_page(page);
             if (data.empty()) {
                 _cached.clear();
+                _cache.get_stats().object_reads++;
+                _cache.get_stats().object_read_bytes += _pages_end - page.start;
                 _object = input_stream<char>(co_await _read_range(page.start, _pages_end - page.start));
                 _object_pos = page.start;
+            } else {
+                _read_stats.hits++;
             }
         }
         if (_object) {
@@ -142,6 +149,7 @@ private:
             try {
                 pages = co_await _cache.get_pages(_sst, _component, page.start, _pages_end, _pages_per_read, _populate);
             } catch (...) {
+                _cache.get_stats().read_errors++;
                 sstlog.log(log_level::warn, cache_error_rate_limit,
                         "Failed to read the disk page cache of {} component of sstable {}, reading from the object store: {}",
                         _component, _sst, std::current_exception());
@@ -169,12 +177,14 @@ private:
                     _component, _sst, page.start + data.size(), page.start, page.end));
         }
         _object_pos = page.end;
+        _read_stats.misses++;
         if (_populate) {
             // A failure to cache the page doesn't fail the read, which has the
             // page anyway - but this source stops caching pages.
             try {
                 co_await _cache.put_page(_sst, _component, page.start, data.share());
             } catch (...) {
+                _cache.get_stats().write_errors++;
                 _populate = populate_disk_cache::no;
                 sstlog.log(log_level::warn, cache_error_rate_limit,
                         "Failed to write the disk page cache of {} component of sstable {}: {}",

@@ -551,6 +551,7 @@ SEASTAR_TEST_CASE(test_page_cache_bytes) {
 
         cache.evict_sstable(sst1).get();
         BOOST_REQUIRE_EQUAL(cache.cached_bytes(), 4096);
+        BOOST_REQUIRE_EQUAL(cache.get_stats().sstable_evictions, 2);
         cache.count_bytes().get();
         BOOST_REQUIRE_EQUAL(cache.cached_bytes(), 4096);
     }, page_cache_config());
@@ -584,6 +585,7 @@ SEASTAR_TEST_CASE(test_page_cache_evicts_pages_never_hit) {
         cache.evict_if_needed().get();
         // Check that the cache is now within its limit, a little smaller.
         BOOST_REQUIRE_LE(cache.cached_bytes(), limit / 10 * 9);
+        BOOST_REQUIRE_GT(cache.get_stats().capacity_evictions, 0);
         // Check that the pages which were hit all stay, while some of the
         // pages which were never hit were evicted.
         BOOST_REQUIRE_EQUAL(cached_page_count(cache, hit_sst), hit_pages);
@@ -622,6 +624,7 @@ SEASTAR_TEST_CASE(test_page_cache_pass_recounts_bytes) {
         cache.evict_if_needed().get();
         BOOST_REQUIRE_EQUAL(cached_page_count(cache, sst), pages);
         BOOST_REQUIRE_EQUAL(cache.cached_bytes(), pages * 4096);
+        BOOST_REQUIRE_EQUAL(cache.get_stats().capacity_evictions, 0);
     }, page_cache_config());
 }
 
@@ -655,6 +658,7 @@ SEASTAR_TEST_CASE(test_page_cache_pass_recounts_bytes_changed_during_it) {
         // "old" - and stops in the middle of it, when the cache is small
         // enough.
         cache.evict_if_needed().get();
+        auto evictions = cache.get_stats().capacity_evictions;
         const size_t old_remaining = cached_page_count(cache, old);
         BOOST_REQUIRE_GT(old_remaining, 0);
         BOOST_REQUIRE_LT(old_remaining, old_pages);
@@ -682,6 +686,7 @@ SEASTAR_TEST_CASE(test_page_cache_pass_recounts_bytes_changed_during_it) {
         // didn't start another pass, which would evict the pages of "hit2",
         // hit before the first pass started.
         cache.evict_if_needed().get();
+        BOOST_REQUIRE_EQUAL(cache.get_stats().capacity_evictions, evictions);
         BOOST_REQUIRE_EQUAL(cached_page_count(cache, hit2), limit_pages / 4);
         BOOST_REQUIRE_EQUAL(cached_page_count(cache, old), old_remaining);
         const uint64_t expected = (limit_pages / 4 + old_remaining + 3 * new_pages) * 4096;
@@ -887,6 +892,7 @@ SEASTAR_TEST_CASE(test_page_cache_pass_recounts_pages_cached_in_its_batch) {
 
         // Check that the hand's recount is the cache's real size.
         auto recount = cache.cached_bytes();
+        BOOST_REQUIRE_EQUAL(cache.get_stats().capacity_evictions, 0);
         cache.count_bytes().get();
         BOOST_REQUIRE_EQUAL(recount, cache.cached_bytes());
         BOOST_REQUIRE_EQUAL(recount, (8 * (limit_pages / 16) + 8 * (limit_pages / 32)) * 4096);
@@ -1638,6 +1644,7 @@ SEASTAR_THREAD_TEST_CASE(test_page_cached_source_cache_read_fails) {
     BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 0, 10000), object.bytes(0, 10000));
     BOOST_REQUIRE(object.requests.back() == request(0, 10000));
     BOOST_REQUIRE_EQUAL(object.requests.size(), 2);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().read_errors, 1);
 }
 
 // A failure to write the cache doesn't fail the read either: the source
@@ -1650,6 +1657,34 @@ SEASTAR_THREAD_TEST_CASE(test_page_cached_source_cache_write_fails) {
     BOOST_REQUIRE_EQUAL(read_cached(cache, object, geometry, 0, 10000), object.bytes(0, 10000));
     BOOST_REQUIRE(object.requests == std::vector<request>({{0, 10000}}));
     BOOST_REQUIRE(cache.pages.empty());
+    // Check that the source stopped caching after the first failure.
+    BOOST_REQUIRE_EQUAL(cache.get_stats().write_errors, 1);
+}
+
+// The source counts the pages which it reads from the cache (hits) and from
+// the object store (misses) - separately for reads which may populate the
+// cache and for those which must not - and its requests to the object
+// store, and the bytes they requested.
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_stats) {
+    fake_page_cache cache;
+    fake_object object(10000);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10000);
+    auto& stats = cache.get_stats();
+    read_cached(cache, object, geometry, 0, 10000);
+    BOOST_REQUIRE_EQUAL(stats.populating.hits, 0);
+    BOOST_REQUIRE_EQUAL(stats.populating.misses, 3);
+    BOOST_REQUIRE_EQUAL(stats.object_reads, 1);
+    BOOST_REQUIRE_EQUAL(stats.object_read_bytes, 10000);
+
+    read_cached(cache, object, geometry, 0, 10000);
+    BOOST_REQUIRE_EQUAL(stats.populating.hits, 3);
+    BOOST_REQUIRE_EQUAL(stats.populating.misses, 3);
+    BOOST_REQUIRE_EQUAL(stats.object_reads, 1);
+
+    read_cached(cache, object, geometry, 0, 10000, sstables::populate_disk_cache::no);
+    BOOST_REQUIRE_EQUAL(stats.non_populating.hits, 3);
+    BOOST_REQUIRE_EQUAL(stats.non_populating.misses, 0);
+    BOOST_REQUIRE_EQUAL(stats.populating.hits, 3);
 }
 
 // A long cached range is read from the cache in several reads, each of a
@@ -2117,6 +2152,8 @@ SEASTAR_THREAD_TEST_CASE(test_page_cached_file_dup) {
     BOOST_REQUIRE_EQUAL(bulk_read(dup, 4096, 4096), object.bytes(4096, 4096));
     BOOST_REQUIRE(object.requests == std::vector<request>({{4096, 4096}}));
     BOOST_REQUIRE(cache->pages.empty());
+    // Check that the duplication was counted as a bypass of the cache.
+    BOOST_REQUIRE_EQUAL(cache->get_stats().dup_bypasses, 1);
     dup.close().get();
     f.close().get();
 }

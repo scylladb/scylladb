@@ -20,8 +20,11 @@
 #include "sstables/object_storage_page_cache_file.hh"
 #include "sstables/object_storage_page_cache_geometry.hh"
 #include "sstables/object_storage_page_cache_source.hh"
+#include "utils/log.hh"
 
 namespace sstables {
+
+extern logging::logger sstlog;
 
 namespace {
 
@@ -128,6 +131,11 @@ public:
     // reads the sstable once to rewrite it, which should not be cached, and
     // the cache of another shard is out of reach anyway.
     virtual std::unique_ptr<file_handle_impl> dup() override {
+        // Count and log it, in case the duplicate is ever used for reads which
+        // should use the cache.
+        _cache->get_stats().dup_bypasses++;
+        sstlog.debug("{} component of sstable {} is duplicated for another shard, which will read it without the disk page cache",
+                _component, _sst);
         return get_file_impl(_underlying_file)->dup();
     }
     virtual subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override {

@@ -1014,6 +1014,7 @@ future<> object_storage_base::evict_from_disk_page_cache(const sstable& sst) con
         // sstable are on the shard which owns it - this one.
         co_await cache->evict_sstable(get_sstable_identifier(sst));
     } catch (...) {
+        cache->get_stats().eviction_errors++;
         sstlog.warn("Failed to evict {} from the disk page cache: {}", sst.toc_filename(), std::current_exception());
     }
 }
@@ -1113,6 +1114,7 @@ object_storage_base::maybe_make_page_cached_source(const sstable& sst, component
         if (!ext->get_attributes(sst).empty()) {
             if (transformer) {
                 // Two transformations of the same sstable are not supported.
+                cache->get_stats().transform_bypasses++;
                 co_return std::nullopt;
             }
             transformer = ext;
@@ -1134,11 +1136,17 @@ object_storage_base::maybe_make_page_cached_source(const sstable& sst, component
         // transform (not encrypted) is read as requested, and stored as it is
         // read, so its geometry ends at "size", like that of the file which
         // reads its index (see open_component()).
-        co_return co_await transformer->wrap_ranged_source(sst, type, offset, len, size,
+        auto src = co_await transformer->wrap_ranged_source(sst, type, offset, len, size,
                 [cache, sid, type, client = _client, name = make_object_name(sst, type), as = abort_source(), populate, size] (uint64_t offset, uint64_t length) {
             return make_ready_future<data_source>(make_cached_object_source(cache, sid, type,
                     make_shared<fixed_size_page_geometry>(std::max(offset + length, size)), offset, length, client, name, as, populate));
         });
+        if (!src) {
+            // The extension can't read a range of the component through the
+            // cache, so the component is read without it.
+            cache->get_stats().transform_bypasses++;
+        }
+        co_return src;
     }
     shared_ptr<const page_geometry> geometry;
     if (type == component_type::Index) {

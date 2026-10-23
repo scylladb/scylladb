@@ -22,6 +22,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/core/metrics.hh>
 #include "db/object_storage_page_cache_table.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
@@ -456,6 +457,7 @@ object_storage_page_cache_table::get_pages(sstables::sstable_id sst, sstables::c
             });
         } catch (...) {
             static thread_local logging::logger::rate_limit rate_limit{std::chrono::minutes(1)};
+            _stats.hit_recording_errors++;
             pclogger.log(log_level::warn, rate_limit, "Failed to record hits in the disk page cache: {}", std::current_exception());
         }
     }
@@ -505,11 +507,13 @@ future<> object_storage_page_cache_table::evict_sstable(sstables::sstable_id sst
     // page which it is evicting, are subtracted by the hand - and it never
     // counted them on its current pass.
     const auto& evicted_by_hand = _sstables_being_evicted[sst.uuid()];
+    size_t evicted_here = 0;
     for (const auto& row : rows) {
         if (evicted_by_hand.contains({row.key.component, row.key.offset}) || _page_being_evicted == row.key) {
             continue;
         }
         bytes += row.size;
+        evicted_here++;
         if (!end || !at_or_before(*end, end_partitions, row.key.component, row.key.offset)
                 || in_batch.contains({row.key.component, row.key.offset})) {
             continue;
@@ -525,6 +529,7 @@ future<> object_storage_page_cache_table::evict_sstable(sstables::sstable_id sst
     std::erase_if(_window, evicted);
     std::erase_if(_written_during_fetch, evicted);
     _bytes -= std::min(_bytes, bytes);
+    _stats.sstable_evictions += evicted_here;
 }
 
 future<> object_storage_page_cache_table::evict_other_sstables(const std::unordered_set<sstables::sstable_id>& live) {
@@ -700,10 +705,53 @@ db_clock::time_point object_storage_page_cache_table::eviction_cutoff(uint64_t t
 }
 
 void object_storage_page_cache_table::start(scheduling_group sg) {
+    register_metrics();
     _evictor = with_scheduling_group(sg, [this] { return evict_in_background(); });
 }
 
+void object_storage_page_cache_table::register_metrics() {
+    namespace sm = seastar::metrics;
+    auto reads = sm::label("reads");
+    auto reason = sm::label("reason");
+    auto operation = sm::label("operation");
+    _metrics.add_group("object_storage", {
+        sm::make_counter("page_cache_hits", [this] { return _stats.populating.hits; },
+                sm::description("Pages read from the disk page cache, by reads which may populate it"), {reads("populating")}),
+        sm::make_counter("page_cache_hits", [this] { return _stats.non_populating.hits; },
+                sm::description("Pages read from the disk page cache, by reads with BYPASS CACHE and background reads"), {reads("non_populating")}),
+        sm::make_counter("page_cache_misses", [this] { return _stats.populating.misses; },
+                sm::description("Pages read from the object store through the disk page cache, by reads which may populate it"), {reads("populating")}),
+        sm::make_counter("page_cache_misses", [this] { return _stats.non_populating.misses; },
+                sm::description("Pages read from the object store through the disk page cache, by reads with BYPASS CACHE and background reads"), {reads("non_populating")}),
+        sm::make_gauge("page_cache_bytes", [this] { return _bytes; },
+                sm::description("Bytes in the disk page cache")),
+        sm::make_gauge("page_cache_capacity_bytes", [this] { return limit(); },
+                sm::description("The size limit of the disk page cache, or 0 if unlimited")),
+        sm::make_counter("page_cache_object_reads", [this] { return _stats.object_reads; },
+                sm::description("Requests which reads through the disk page cache sent to the object store")),
+        sm::make_counter("page_cache_object_read_bytes", [this] { return _stats.object_read_bytes; },
+                sm::description("Bytes which reads through the disk page cache requested from the object store")),
+        sm::make_counter("page_cache_evictions", [this] { return _stats.capacity_evictions; },
+                sm::description("Pages evicted from the disk page cache because it was full"), {reason("capacity")}),
+        sm::make_counter("page_cache_evictions", [this] { return _stats.sstable_evictions; },
+                sm::description("Pages evicted from the disk page cache because their sstable was deleted"), {reason("sstable_deleted")}),
+        sm::make_counter("page_cache_errors", [this] { return _stats.read_errors; },
+                sm::description("Failures to read the disk page cache, after which the object store was read instead"), {operation("read")}),
+        sm::make_counter("page_cache_errors", [this] { return _stats.write_errors; },
+                sm::description("Failures to write pages to the disk page cache"), {operation("write")}),
+        sm::make_counter("page_cache_errors", [this] { return _stats.hit_recording_errors; },
+                sm::description("Failures to record hits of pages of the disk page cache"), {operation("record_hits")}),
+        sm::make_counter("page_cache_errors", [this] { return _stats.eviction_errors; },
+                sm::description("Failures to evict pages from the disk page cache"), {operation("evict")}),
+        sm::make_counter("page_cache_bypasses", [this] { return _stats.dup_bypasses; },
+                sm::description("Index files of sstables which use the disk page cache, duplicated for resharding, which read without it"), {reason("dup")}),
+        sm::make_counter("page_cache_bypasses", [this] { return _stats.transform_bypasses; },
+                sm::description("Reads of sstables which use the disk page cache, transformed by a file I/O extension in a way which prevents it"), {reason("transform")}),
+    });
+}
+
 future<> object_storage_page_cache_table::stop() noexcept {
+    _metrics.clear();
     _stopping = true;
     _eviction_needed.broken();
     if (_evictor) {
@@ -748,6 +796,7 @@ future<> object_storage_page_cache_table::evict_in_background() {
         } catch (const broken_condition_variable&) {
             break;
         } catch (...) {
+            _stats.eviction_errors++;
             pclogger.warn("Failed to evict pages from the disk page cache: {}", std::current_exception());
             failed = true;
         }
@@ -1015,6 +1064,7 @@ future<> object_storage_page_cache_table::evict_page(int16_t shard, utils::UUID 
             utils::wait_for_message(std::chrono::minutes(5)), false);
     co_await apply(page_deletion(hits_schema(), shard, sstable, component, offset));
     _bytes -= std::min(_bytes, uint64_t(size));
+    _stats.capacity_evictions++;
     if (auto it = _sstables_being_evicted.find(sstable); it != _sstables_being_evicted.end() && shard == this_shard()) {
         it->second.emplace(component, offset);
     }
