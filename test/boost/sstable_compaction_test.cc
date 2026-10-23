@@ -6375,6 +6375,59 @@ SEASTAR_TEST_CASE(cleanup_samples_sstables_requiring_cleanup_once_test) {
     });
 }
 
+// A quarantined sstable is never eligible for compaction, so a cleanup that
+// needs to clean it up cannot make progress. It must fail right away, naming
+// the sstable, rather than wait for the idle timeout. A quarantined sstable
+// whose data is all owned must not get in the way.
+SEASTAR_TEST_CASE(cleanup_fails_fast_on_quarantined_sstable_requiring_cleanup_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(2); // in ring order
+
+        auto make_mut = [&] (const dht::decorated_key& pk) {
+            auto m = mutation(s, pk);
+            m.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+            return m;
+        };
+
+        auto t = env.make_table_for_tests(s);
+        auto close_t = deferred_stop(t);
+        t->disable_auto_compaction().get();
+        auto& cm = t->get_compaction_manager();
+        auto& view = t->try_get_compaction_group_view_with_static_sharding();
+        auto sst_gen = env.make_sst_factory(s);
+
+        // Only pks[0] is owned.
+        auto owned_ranges = make_lw_shared<const dht::token_range_vector>(dht::token_range_vector{
+            dht::token_range::make_singular(pks[0].token())
+        });
+
+        auto quarantined_owned = make_sstable_containing(sst_gen, {make_mut(pks[0])}).get();
+        quarantined_owned->change_state(sstable_state::quarantine).get();
+        BOOST_REQUIRE(quarantined_owned->is_quarantined());
+        t->add_sstable_and_update_cache(quarantined_owned).get();
+
+        // Nothing to clean up: the quarantined sstable holds only owned data.
+        t->perform_cleanup_compaction(owned_ranges, tasks::make_empty_task_info()).get();
+        BOOST_REQUIRE(cm.sstables_requiring_cleanup(view).empty());
+
+        auto quarantined_unowned = make_sstable_containing(sst_gen, {make_mut(pks[0]), make_mut(pks[1])}).get();
+        quarantined_unowned->change_state(sstable_state::quarantine).get();
+        t->add_sstable_and_update_cache(quarantined_unowned).get();
+
+        BOOST_REQUIRE_EXCEPTION(t->perform_cleanup_compaction(owned_ranges, tasks::make_empty_task_info()).get(), std::runtime_error, [&] (const std::runtime_error& e) {
+            std::string msg = e.what();
+            return msg.contains("quarantined sstables requiring cleanup") && msg.contains(fmt::format("{}", quarantined_unowned->get_filename()));
+        });
+        // Failing fast means nothing was sampled or touched.
+        BOOST_REQUIRE(cm.sstables_requiring_cleanup(view).empty());
+        auto sstables = t->get_sstables();
+        BOOST_REQUIRE(std::ranges::find(*sstables, quarantined_owned) != sstables->end());
+        BOOST_REQUIRE(std::ranges::find(*sstables, quarantined_unowned) != sstables->end());
+    });
+}
+
 // Reproducer for https://github.com/scylladb/scylladb/issues/15726.
 
 void produces_optimal_filter_by_estimating_correctly_partitions_per_sstable_fn(test_env& env) {
