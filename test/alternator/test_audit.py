@@ -413,6 +413,9 @@ def test_audit_batch_write_item_respects_table_filter(dynamodb, cql, alternator_
     with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_a:
         with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table_b:
             ks_a = f"alternator_{table_a.name}"
+            # Get table_a's ARN, for batch 4 below, before auditing table_a,
+            # so that this DescribeTable isn't itself audited.
+            arn_a = table_a.meta.client.describe_table(TableName=table_a.name)['Table']['TableArn']
             # Only audit table_a via audit_tables.
             cql.execute("UPDATE system.config SET value=%s WHERE name='audit_tables'",
                         (f"alternator.{table_a.name}",))
@@ -459,6 +462,22 @@ def test_audit_batch_write_item_respects_table_filter(dynamodb, cql, alternator_
             _assert_no_audit_entries_for(new_rows, table_name=table_b.name, category="DML")
             _assert_audit_operation_excludes(new_rows[0], [table_b.name, "pk_b"])
 
+            # --- Batch 4: like batch 3, but naming table_a by its ARN ---
+            # The filter must recognize the ARN as naming the audited table_a,
+            # and keep it in the logged request.
+            before_rows = _get_audit_log_rows(cql)
+            client.batch_write_item(RequestItems={
+                arn_a: [{"PutRequest": {"Item": {"p": "pk_a"}}}],
+                table_b.name: [{"PutRequest": {"Item": {"p": "pk_b"}}}],
+            })
+            new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+            _assert_audit_entries(new_rows, [
+                ("DML", "LOCAL_QUORUM", False, "", table_a.name,
+                 ["BatchWriteItem", arn_a, "pk_a"]),
+            ], table_name=table_a.name)
+            _assert_no_audit_entries_for(new_rows, table_name=table_b.name, category="DML")
+            _assert_audit_operation_excludes(new_rows[0], [table_b.name, "pk_b"])
+
 
 # Test that BatchGetItem respects audit_tables filtering.
 # This mirrors test_audit_batch_write_item_respects_table_filter for QUERY
@@ -471,6 +490,9 @@ def test_audit_batch_get_item_respects_table_filter(dynamodb, cql, alternator_au
             table_b.put_item(Item={"p": "pk_b"})
 
             ks_a = f"alternator_{table_a.name}"
+            # Get table_a's ARN, for batch 4 below, before auditing table_a,
+            # so that this DescribeTable isn't itself audited.
+            arn_a = table_a.meta.client.describe_table(TableName=table_a.name)['Table']['TableArn']
             # Only audit table_a via audit_tables.
             cql.execute("UPDATE system.config SET value=%s WHERE name='audit_tables'",
                         (f"alternator.{table_a.name}",))
@@ -513,6 +535,22 @@ def test_audit_batch_get_item_respects_table_filter(dynamodb, cql, alternator_au
             _assert_audit_entries(new_rows, [
                 ("QUERY", "ANY", False, "", table_a.name,
                  ["BatchGetItem", "pk_a"]),
+            ], table_name=table_a.name)
+            _assert_no_audit_entries_for(new_rows, table_name=table_b.name, category="QUERY")
+            _assert_audit_operation_excludes(new_rows[0], [table_b.name, "pk_b"])
+
+            # --- Batch 4: like batch 3, but naming table_a by its ARN ---
+            # The filter must recognize the ARN as naming the audited table_a,
+            # and keep it in the logged request.
+            before_rows = _get_audit_log_rows(cql)
+            client.batch_get_item(RequestItems={
+                arn_a: {"Keys": [{"p": "pk_a"}]},
+                table_b.name: {"Keys": [{"p": "pk_b"}]},
+            })
+            new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=1)
+            _assert_audit_entries(new_rows, [
+                ("QUERY", "ANY", False, "", table_a.name,
+                 ["BatchGetItem", arn_a, "pk_a"]),
             ], table_name=table_a.name)
             _assert_no_audit_entries_for(new_rows, table_name=table_b.name, category="QUERY")
             _assert_audit_operation_excludes(new_rows[0], [table_b.name, "pk_b"])

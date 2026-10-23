@@ -213,6 +213,40 @@ def test_lsi_1(test_table_lsi_1):
         KeyConditions={'p': {'AttributeValueList': [p2], 'ComparisonOperator': 'EQ'},
                        'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}})
 
+# DynamoDB's "TableName" documentation specifies that besides the obvious
+# possibility of giving the table's name, "You can also provide the Amazon
+# Resource Name (ARN) of the table in this parameter.". test_query.py checks
+# this for a Query of the base table, test_gsi.py for a Query of a GSI, and
+# here we check it for a Query of an LSI.
+# Reproduces SCYLLADB-4683.
+def test_lsi_query_table_name_arn(test_table_lsi_1):
+    client = test_table_lsi_1.meta.client
+    arn = client.describe_table(TableName=test_table_lsi_1.name)['Table']['TableArn']
+    p = random_string()
+    b = random_string()
+    items = [{'p': p, 'c': random_string(), 'b': b} for i in range(3)]
+    with test_table_lsi_1.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Unlike a GSI, an LSI can be read with ConsistentRead, so no retry is
+    # needed.
+    got = client.query(TableName=arn, IndexName='hello', ConsistentRead=True,
+        KeyConditionExpression='p=:p AND b=:b',
+        ExpressionAttributeValues={':p': p, ':b': b})['Items']
+    assert multiset(got) == multiset(items)
+
+# Although TableName accepts the table's ARN, IndexName does not accept the
+# index's ARN (which DescribeTable reports as IndexArn): IndexName must be the
+# index's name, whether TableName is the table's name or its ARN.
+def test_lsi_query_index_name_arn(test_table_lsi_1):
+    client = test_table_lsi_1.meta.client
+    desc = client.describe_table(TableName=test_table_lsi_1.name)['Table']
+    index_arn = desc['LocalSecondaryIndexes'][0]['IndexArn']
+    for table_name in [test_table_lsi_1.name, desc['TableArn']]:
+        with pytest.raises(ClientError, match='ValidationException'):
+            client.query(TableName=table_name, IndexName=index_arn,
+                KeyConditionExpression='p=:p', ExpressionAttributeValues={':p': 'x'})
+
 # The same as test_table_lsi_1, but with a clustering key of type bytes
 @pytest.fixture(scope="module")
 def test_table_lsi_2(dynamodb):

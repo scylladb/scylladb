@@ -211,6 +211,14 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     auto limit = rjson::get_opt<int>(request, "Limit").value_or(100);
     auto streams_start = rjson::get_opt<stream_arn>(request, "ExclusiveStartStreamArn");
 
+    // The TableName parameters of DynamoDB's API also accept a table's ARN,
+    // and find_table() below resolves one. But ListStreams belongs to the
+    // separate DynamoDB Streams API, whose TableName only accepts a real
+    // table name - DynamoDB rejects an ARN there with a ValidationException.
+    if (const rjson::value* table_name = rjson::find(request, "TableName");
+            table_name && table_name->IsString() && rjson::to_string_view(*table_name).starts_with("arn:")) {
+        throw api_error::validation("ListStreams's TableName must be a table name, not an ARN");
+    }
     auto table = find_table(_proxy, request);
     auto db = _proxy.data_dictionary();
 

@@ -157,6 +157,43 @@ def test_gsi_missing_table(dynamodb):
     with pytest.raises(ClientError, match='ResourceNotFoundException'):
         dynamodb.meta.client.scan(TableName='nonexistent_table', IndexName='any_name')
 
+# DynamoDB's "TableName" documentation specifies that besides the obvious
+# possibility of giving the table's name, "You can also provide the Amazon
+# Resource Name (ARN) of the table in this parameter.". test_query.py checks
+# this for a Query of the base table, and here we check it for a Query of a
+# GSI, which names the table by TableName and its index by IndexName.
+# Reproduces SCYLLADB-4683.
+def test_gsi_query_table_name_arn(test_table_gsi_1):
+    client = test_table_gsi_1.meta.client
+    arn = client.describe_table(TableName=test_table_gsi_1.name)['Table']['TableArn']
+    c = random_string()
+    items = [{'p': random_string(), 'c': c, 'x': random_string()} for i in range(3)]
+    with test_table_gsi_1.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Like assert_index_query(), retry because the GSI is updated
+    # asynchronously. We don't use assert_index_query() itself because it
+    # names the table by its name, not by its ARN.
+    for i in range(5):
+        got = client.query(TableName=arn, IndexName='hello',
+            KeyConditionExpression='c=:c', ExpressionAttributeValues={':c': c})['Items']
+        if multiset(got) == multiset(items):
+            break
+        time.sleep(1)
+    assert multiset(got) == multiset(items)
+
+# Although TableName accepts the table's ARN, IndexName does not accept the
+# index's ARN (which DescribeTable reports as IndexArn): IndexName must be the
+# index's name, whether TableName is the table's name or its ARN.
+def test_gsi_query_index_name_arn(test_table_gsi_1):
+    client = test_table_gsi_1.meta.client
+    desc = client.describe_table(TableName=test_table_gsi_1.name)['Table']
+    index_arn = desc['GlobalSecondaryIndexes'][0]['IndexArn']
+    for table_name in [test_table_gsi_1.name, desc['TableArn']]:
+        with pytest.raises(ClientError, match='ValidationException'):
+            client.query(TableName=table_name, IndexName=index_arn,
+                KeyConditionExpression='c=:c', ExpressionAttributeValues={':c': 'x'})
+
 # Verify that strongly-consistent reads on GSI are *not* allowed.
 def test_gsi_strong_consistency(test_table_gsi_1):
     with pytest.raises(ClientError, match='ValidationException.*Consistent'):
