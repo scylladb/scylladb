@@ -89,6 +89,20 @@ schema_ptr object_storage_page_cache_table::schema() {
             // would cost CPU on every write, read and compaction, and save
             // almost nothing.
             .set_compressor_params(compression_parameters::no_compression())
+            // When the cache is full, each page cached is matched by a page
+            // evicted, so the table's live data stays about the size of the
+            // cache while all of it is replaced - as in an overwrite
+            // workload. With size-tiered compaction, the largest tier, which
+            // holds most of the cache, could become mostly deleted pages
+            // before it is compacted, so the table could take several times
+            // the cache's size on disk. With a space amplification goal,
+            // incremental compaction compacts the two largest tiers together
+            // when they are more than 1.5 times the largest one, which keeps
+            // the table's disk usage near 1.5 times its live data - at the
+            // cost of rewriting the largest tier about twice each time the
+            // cache's contents are replaced.
+            .set_compaction_strategy(compaction::compaction_strategy_type::incremental)
+            .set_compaction_strategy_options({{"space_amplification_goal", "1.5"}})
             // The table is local, so it has no other replicas which a
             // tombstone needs to reach before it may be dropped.
             .with_tombstone_gc_options(tombstone_gc_options(tombstone_gc_mode::immediate))
@@ -128,6 +142,18 @@ schema_ptr object_storage_page_cache_table::hits_schema() {
             // The table is written much more than it is read, so caching it
             // in memory would be a waste.
             .set_caching_options(caching_options::get_disabled_caching_options())
+            // The table is small, so its space amplification costs little
+            // disk space, and it is only read by scans of a shard's whole
+            // table, on each pass of the hand which evicts pages - so its
+            // space amplification costs only the reading of the garbage in
+            // each scan. Reducing it would cost compaction, which reads the
+            // garbage too, and writes the live rows again - and much of the
+            // table changes in each pass, so compacting more, to scan less,
+            // would cost at least as much as it saves. So the table uses the
+            // default incremental compaction, without a space amplification
+            // goal, which compacts the least; leveled compaction, which
+            // compacts the most, would be the worst choice.
+            .set_compaction_strategy(compaction::compaction_strategy_type::incremental)
             // The table is flushed every minute. Without a commitlog, a crash
             // loses what the memtables hold, and when memtables take too much
             // memory, the largest is flushed - almost always pagecache's, so

@@ -506,10 +506,8 @@ Both options are live-updateable.
   of the node's cache. Each shard's cache is limited to its share of this size,
   and when it grows beyond it, the shard evicts the pages which were least
   recently read, approximately. ``0`` means no limit.
-  Evicting pages writes tombstones to the cache's tables, so the disk space is
-  only freed after they are compacted, and the cache may temporarily use more
-  disk space than its configured size. The cache shares the node's data
-  directory, so leave room for it there.
+  The cache takes more disk space than this: see
+  :ref:`Disk usage <admin-object-storage-disk-cache-disk-usage>`.
 * ``object_storage_page_cache_max_remembered_hits`` (default 100000): the cache
   records, for choosing which pages to evict, when its pages are read - but to
   save writes, each shard records each page's read only once in a round of
@@ -535,6 +533,56 @@ object store - but the pages which are already cached stay on disk, still
 using its space, and are used again when the feature is enabled again. The
 pages of SSTables which were deleted meanwhile are evicted when the node
 starts with the feature enabled.
+
+.. _admin-object-storage-disk-cache-disk-usage:
+
+Disk usage
+----------
+
+The cache is stored in two tables of the ``system_cache`` keyspace:
+``pagecache``, which holds the pages, and ``pagecache_hits``, a small table
+which records when each page was last read. The disk space of an evicted page
+is only freed when its table is compacted, so the cache takes more disk space
+than its configured size. The cache shares the node's data directory, so leave
+room for it there.
+
+When the cache is full, each page which it caches is matched by a page which it
+evicts, so its tables are rewritten all the time, while their live data stays
+about the same size. The ``pagecache`` table uses incremental compaction (ICS)
+with a space amplification goal of 1.5: when the two largest tiers of its
+SSTables are together more than 1.5 times the size of the largest one, they are
+compacted together. This keeps the cache's disk usage near 1.5 times its
+configured size - and more for short periods, when many pages are cached
+quickly. The ``pagecache_hits`` table is small, so its space amplification
+costs little disk space, and it is only read by full scans, which the cache
+does to choose which pages to evict; reducing its space amplification would
+cost more compaction than it would save scanning. So it uses ICS without a
+space amplification goal, which compacts the least.
+
+For the ``pagecache`` table, leveled compaction (LCS) would keep the disk usage
+lower, near 1.1 times the configured size, but it would rewrite each cached
+page about three times as often as ICS does - and the cache writes a page
+whenever a read misses it. So ICS is the better choice for most workloads,
+which miss the cache often: it saves CPU, disk bandwidth, and wear of the disk.
+LCS would be the better choice for a cache which is read with a very high hit
+ratio, so it writes little, on a node whose disk space is tight.
+
+The compaction strategy of the cache's tables is not configurable yet: the
+tables of the ``system_cache`` keyspace cannot be altered.
+
+A crash of the node may also leave behind pages which the cache doesn't count,
+and doesn't evict until their SSTable is deleted: the pages cached in about the
+last minute before the crash, whose rows in ``pagecache_hits`` - which is
+flushed to disk every minute - were lost while the pages were not.
+
+So choose the cache's size with care. The size counts the pages in the cache,
+but the cache takes about 1.5 times as much disk space, and more for short
+periods. For example, if the data directory has 1 TB of free space, a cache of
+1 TB - or even of 900 GB - would fill the disk; a cache of about 500 GB leaves
+room for the cache's space amplification, and for some growth of the other
+data on the disk. The cache doesn't adapt its size to the free disk space yet:
+it doesn't evict pages, or compact its tables sooner, when the disk is nearly
+full.
 
 Metrics
 -------
