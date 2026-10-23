@@ -13,6 +13,7 @@ import socket
 import struct
 from unittest import mock
 from test.cqlpy import nodetool
+from test.cqlpy.cql_frames import recv_frame, send_frame
 from test.cqlpy.util import cql_session
 from test.pylib.skip_types import skip_env
 
@@ -131,22 +132,6 @@ def test_protocol_version_mismatch(scylla_only, debug_exceptions_logging, reques
     cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
     assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase after the test"
 
-def _build_frame(*, opcode: int, stream: int, body: bytes) -> bytearray:
-    frame = bytearray()
-    frame += struct.pack("!B", 0x04)         # version 4
-    frame += struct.pack("!B", 0x00)         # flags
-    frame += struct.pack("!H", stream)       # stream
-    frame += struct.pack("!B", opcode)       # opcode
-    frame += struct.pack("!I", len(body))  # body length
-    frame += body
-    return frame
-
-def _send_frame(sock: socket.socket, *, opcode: int, stream: int, body: bytes) -> None:
-    sock.send(_build_frame(opcode=opcode, stream=stream, body=body))
-
-def _recv_frame(sock: socket.socket) -> bytes:
-    return sock.recv(4096)
-
 # Many protocol errors are caused by sending malformed messages.
 # It is not possible to reproduce them with the Python driver,
 # so we use a low-level socket connection to send the messages.
@@ -171,8 +156,8 @@ def _protocol_error_impl(
             # STARTUP opcode = 0x01.
             # Body: map count = 1 (uint16), but no entries -> truncated
             body = b'\x00\x01'
-            _send_frame(s, opcode=0x01, stream=1, body=body)
-            _recv_frame(s)
+            send_frame(s, opcode=0x01, stream=1, body=body)
+            recv_frame(s)
             return
 
         if trigger_unknown_compression:
@@ -183,14 +168,14 @@ def _protocol_error_impl(
                 b'\x00\x0bCQL_VERSION\x00\x053.0.0'
                 b'\x00\x0bCOMPRESSION\x00\x07invalid_compression_algorithm'
             )
-            _send_frame(s, opcode=0x01, stream=1, body=body)
-            _recv_frame(s)
+            send_frame(s, opcode=0x01, stream=1, body=body)
+            recv_frame(s)
             return
 
         # STARTUP
         body = b'\x00\x01\x00\x0bCQL_VERSION\x00\x053.0.0'
-        _send_frame(s, opcode=0x01, stream=1, body=body)
-        frame = _recv_frame(s)
+        send_frame(s, opcode=0x01, stream=1, body=body)
+        frame = recv_frame(s)
 
         # READY or AUTHENTICATE?
         op = frame[4]
@@ -204,15 +189,15 @@ def _protocol_error_impl(
             # AUTHENTICATE path
             if trigger_unexpected_auth:
                 # send OPTIONS to trigger auth‐state exception
-                _send_frame(s, opcode=0x05, stream=2, body=b'')
-                _recv_frame(s)
+                send_frame(s, opcode=0x05, stream=2, body=b'')
+                recv_frame(s)
                 return
 
             # send correct AUTH_RESPONSE
             body = b'\x00cassandra\x00cassandra'
-            _send_frame(s, opcode=0x0F, stream=2, body=body)
+            send_frame(s, opcode=0x0F, stream=2, body=body)
             # wait for AUTH_SUCCESS (0x10)
-            resp = _recv_frame(s)
+            resp = recv_frame(s)
             assert resp[4] == 0x10, f"expected AUTH_SUCCESS, got {hex(resp[4])}"
 
         if trigger_bad_batch:
@@ -223,8 +208,8 @@ def _protocol_error_impl(
             body += struct.pack("!H", 0x01)      # 1 statement
             body += struct.pack("!B", 0xFF)      # INVALID kind = 255
             # BATCH opcode 0x0D
-            _send_frame(s, opcode=0x0D, stream=3, body=body)
-            _recv_frame(s)
+            send_frame(s, opcode=0x0D, stream=3, body=body)
+            recv_frame(s)
             return
         
         if trigger_process_query_internal_malformed_query:
@@ -232,8 +217,8 @@ def _protocol_error_impl(
             # Body: long-string length (uint32) = 100, but send only 2 bytes -> truncated
             long_string_len = 100
             body = struct.pack("!I", long_string_len) + b"AB"
-            _send_frame(s, opcode=0x07, stream=2, body=body)
-            resp = _recv_frame(s)
+            send_frame(s, opcode=0x07, stream=2, body=body)
+            resp = recv_frame(s)
             # Expect ERROR frame (opcode 0x00)
             assert bool(resp) and resp[4] == 0x00
             return
@@ -246,8 +231,8 @@ def _protocol_error_impl(
             # options: consistency (uint16) + flags (byte with PAGE_SIZE bit = 0x04) + truncated page_size (2 bytes only)
             options = struct.pack("!H", 0x0001) + struct.pack("!B", 0x04) + b'\x00\x10'  # only 2 bytes instead of 4
             body = long_len + query + options
-            _send_frame(s, opcode=0x07, stream=2, body=body)
-            resp = _recv_frame(s)
+            send_frame(s, opcode=0x07, stream=2, body=body)
+            resp = recv_frame(s)
             # Expect ERROR frame (opcode 0x00)
             assert bool(resp) and resp[4] == 0x00
             return
@@ -257,8 +242,8 @@ def _protocol_error_impl(
             # Body: long-string length (uint32) = 100, but send only 2 bytes -> truncated
             long_string_len = 100
             body = struct.pack("!I", long_string_len) + b"AB" 
-            _send_frame(s, opcode=0x09, stream=2, body=body)
-            resp = _recv_frame(s)
+            send_frame(s, opcode=0x09, stream=2, body=body)
+            resp = recv_frame(s)
             # Expect ERROR frame (opcode 0x00)
             assert bool(resp) and resp[4] == 0x00
             return
@@ -268,8 +253,8 @@ def _protocol_error_impl(
             # Body: short-bytes length (uint16) = 5, but send only 3 bytes -> truncated id
             declared_len = 5
             body = struct.pack("!H", declared_len) + b'ABC'  # actual = 2 + 3 = 5 bytes
-            _send_frame(s, opcode=0x0A, stream=2, body=body)
-            resp = _recv_frame(s)
+            send_frame(s, opcode=0x0A, stream=2, body=body)
+            resp = recv_frame(s)
             # Expect ERROR frame (opcode 0x00)
             assert bool(resp) and resp[4] == 0x00
             return
@@ -278,8 +263,8 @@ def _protocol_error_impl(
             # REGISTER opcode = 0x0B
             # Body: string list count = 1 (uint16) then a string with declared length = 5 but only 3 bytes provided -> truncated
             body = b'\x00\x01' + b'\x00\x05' + b'ABC'
-            _send_frame(s, opcode=0x0B, stream=2, body=body)
-            resp = _recv_frame(s)
+            send_frame(s, opcode=0x0B, stream=2, body=body)
+            resp = recv_frame(s)
             # Expect ERROR frame (opcode 0x00)
             assert bool(resp) and resp[4] == 0x00
 
