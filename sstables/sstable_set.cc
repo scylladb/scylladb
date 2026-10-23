@@ -457,6 +457,7 @@ time_series_sstable_set::time_series_sstable_set(schema_ptr schema, bool enable_
     , _enable_optimized_twcs_queries(enable_optimized_twcs_queries)
     , _sstables(make_lw_shared<container_t>(position_in_partition::less_compare(*_schema)))
     , _sstables_reversed(make_lw_shared<container_t>(position_in_partition::less_compare(*_reversed_schema)))
+    , _token_index(std::make_unique<partitioned_sstable_set>(_schema))
 {}
 
 time_series_sstable_set::time_series_sstable_set(const time_series_sstable_set& s)
@@ -466,6 +467,7 @@ time_series_sstable_set::time_series_sstable_set(const time_series_sstable_set& 
     , _enable_optimized_twcs_queries(s._enable_optimized_twcs_queries)
     , _sstables(make_lw_shared(*s._sstables))
     , _sstables_reversed(make_lw_shared(*s._sstables_reversed))
+    , _token_index(static_cast<partitioned_sstable_set*>(s._token_index->clone().release()))
 {}
 
 std::unique_ptr<sstable_set_impl> time_series_sstable_set::clone() const {
@@ -473,11 +475,15 @@ std::unique_ptr<sstable_set_impl> time_series_sstable_set::clone() const {
 }
 
 std::vector<shared_sstable> time_series_sstable_set::select(const dht::partition_range& range) const {
-    return *_sstables | std::views::values | std::ranges::to<std::vector>();
+    return _token_index->select(range);
+}
+
+std::vector<frozen_sstable_run> time_series_sstable_set::all_sstable_runs() const {
+    return _token_index->all_sstable_runs();
 }
 
 lw_shared_ptr<const sstable_list> time_series_sstable_set::all() const {
-    return make_lw_shared<const sstable_list>(*_sstables | std::views::values | std::ranges::to<sstable_list>());
+    return _token_index->all();
 }
 
 size_t
@@ -506,6 +512,10 @@ future<stop_iteration> time_series_sstable_set::for_each_sstable_gently_until(st
 
 // O(log n)
 bool time_series_sstable_set::insert(shared_sstable sst) {
+    // The token index tells whether the sstable is already in the set.
+    if (!_token_index->insert(sst)) {
+        return false;
+    }
   try {
     auto min_pos = sst->min_position();
     auto max_pos_reversed = sst->max_position().reversed();
@@ -539,22 +549,12 @@ bool time_series_sstable_set::erase(shared_sstable sst) {
     if (it != last) {
         _sstables_reversed->erase(it);
     }
+    _token_index->erase(sst);
     return found;
 }
 
 sstable_set_impl::selector_and_schema_t time_series_sstable_set::make_incremental_selector() const {
-    struct selector : public incremental_selector_impl {
-        const time_series_sstable_set& _set;
-
-        selector(const time_series_sstable_set& set) : _set(set) {}
-
-        virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext>
-        select(const selector_pos&) override {
-            return std::make_tuple(dht::partition_range::make_open_ended_both_sides(), _set.select(), dht::ring_position_view::max());
-        }
-    };
-
-    return std::make_tuple(std::make_unique<selector>(*this), std::cref(*_schema));
+    return _token_index->make_incremental_selector();
 }
 
 // Queue of readers of sstables in a time_series_sstable_set,
