@@ -16,6 +16,10 @@ namespace cql3 {
 
 namespace statements {
 
+namespace raw {
+class insert_json_statement;
+}
+
 /**
  * An <code>INSERT</code> statement parsed from a CQL query statement.
  *
@@ -84,6 +88,8 @@ public:
         , _default_unset(default_unset) {
     }
 private:
+    friend class raw::insert_json_statement;
+
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const override;
 
     virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const override;
