@@ -1620,7 +1620,7 @@ future<> sstable::read_partitions_db_footer() {
             _partitions_file_size = co_await _partitions_file.size();
         }
         // Opening an sstable isn't a user's read, so it doesn't populate the
-        // disk page cache (see populate_disk_cache).
+        // object storage page cache (see populate_disk_cache).
         co_await open_non_populating_index_files();
         _partitions_db_footer = co_await trie::read_bti_partitions_db_footer(*_schema, _version,
                 _non_populating_partitions_file ? _non_populating_partitions_file : _partitions_file, _partitions_file_size);

@@ -475,18 +475,18 @@ all keyspaces.
 
 .. _admin-object-storage-disk-cache:
 
-Disk page cache
-===============
+Object storage page cache
+=========================
 
 An object-storage keyspace created with the ``'disk_cache': 'pages'`` storage
 option caches, on the node's local disk, the byte ranges ("pages") of its
 SSTables which it reads from the object store - both their data and their
-indexes - so that reading them again doesn't need another request to the
-object store. See :ref:`Disk page cache <cql-keyspace-disk-cache>` for the CQL
-syntax and for which reads populate the cache.
+indexes - so that reading them again doesn't need another request to the object
+store. See :ref:`Object storage page cache <cql-keyspace-disk-cache>` for the
+CQL syntax and for which reads populate the cache.
 
-The disk page cache is **experimental**, and requires the experimental feature
-``object-storage-page-cache``:
+The object storage page cache is **experimental**, and requires the experimental
+feature ``object-storage-page-cache``:
 
 .. code-block:: yaml
 
@@ -588,7 +588,7 @@ full.
 Metrics
 -------
 
-The disk page cache reports these metrics, per shard:
+The object storage page cache reports these metrics, per shard:
 
 .. list-table::
    :widths: 40 60
@@ -619,10 +619,11 @@ The disk page cache reports these metrics, per shard:
      - Failures of the cache, which didn't fail any read, by ``operation``:
        ``read``, ``write``, ``record_hits`` and ``evict``.
    * - ``scylla_object_storage_page_cache_bypasses``
-     - Reads of SSTables of keyspaces with the disk page cache which didn't use
-       it, by ``reason``: of a duplicate of an SSTable's index for resharding
-       (``dup``), and of an SSTable transformed by a file I/O extension in a way
-       which prevents it (``transform``). They are expected to be rare.
+     - Reads of SSTables of keyspaces with the object storage page cache which
+       didn't use it, by ``reason``: of a duplicate of an SSTable's index for
+       resharding (``dup``), and of an SSTable transformed by a file I/O
+       extension in a way which prevents it (``transform``). They are expected
+       to be rare.
 
 When per-table metrics are enabled (``enable_keyspace_column_family_metrics``),
 each table also reports its own ``scylla_column_family_page_cache_hits``,
@@ -649,9 +650,9 @@ without an error, and their behavior there is undefined and untested.
 Object-storage keyspaces target archival workloads: data that is queried
 infrequently and benefits from object-storage pricing. Read latency is
 substantially higher than on local disks, and unless the experimental
-:ref:`disk page cache <admin-object-storage-disk-cache>` is enabled, there is
-no local disk cache, so the cost of a read scales with the number of SSTables
-it touches.
+:ref:`object storage page cache <admin-object-storage-disk-cache>` is enabled,
+there is no local disk cache, so the cost of a read scales with the number of
+SSTables it touches.
 
 Supported
 =========

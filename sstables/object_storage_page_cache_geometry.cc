@@ -6,10 +6,9 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// This file is part of the disk page cache of sstables on object storage
-// (the 'disk_cache': 'pages' keyspace storage option): how the cache splits
-// an sstable component into pages. See
-// sstables/object_storage_page_cache_geometry.hh.
+// This file is part of the object storage page cache (the 'disk_cache': 'pages'
+// keyspace storage option): how the cache splits an sstable component into
+// pages. See sstables/object_storage_page_cache_geometry.hh.
 
 #include <algorithm>
 #include <stdexcept>

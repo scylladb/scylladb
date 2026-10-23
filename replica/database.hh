@@ -591,11 +591,11 @@ private:
     db::rate_limiter::label _rate_limiter_label_for_reads;
 
     void set_metrics();
-    // The statistics of this table's reads through the disk page cache of
-    // sstables on object storage, if its keyspace has the 'disk_cache' option.
-    // The reads which are still running hold them too, so they outlive the
-    // table if it is dropped while they run. They are declared before
-    // _metrics, which reports them, so that _metrics is destroyed first.
+    // The statistics of this table's reads through the object storage page
+    // cache, if its keyspace has the 'disk_cache' option. The reads which are
+    // still running hold them too, so they outlive the table if it is dropped
+    // while they run. They are declared before _metrics, which reports them, so
+    // that _metrics is destroyed first.
     lw_shared_ptr<sstables::object_storage_page_cache_table_stats> _page_cache_stats;
     seastar::metrics::metric_groups _metrics;
 
@@ -1860,8 +1860,8 @@ private:
     std::unique_ptr<db::nop_corrupt_data_handler> _nop_corrupt_data_handler;
 
     std::unique_ptr<sstables::sstables_manager> _user_sstables_manager;
-    // The disk page cache of sstables on object storage, which the user
-    // sstables manager uses, if its experimental feature is enabled.
+    // The object storage page cache, which the user sstables manager uses, if
+    // its experimental feature is enabled.
     shared_ptr<db::object_storage_page_cache_table> _object_storage_page_cache;
     std::unique_ptr<sstables::sstables_manager> _system_sstables_manager;
 

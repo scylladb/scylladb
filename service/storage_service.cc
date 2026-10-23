@@ -5847,7 +5847,7 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
                 sids.push_back(*sst_desc.sid);
             }
         }
-        co_await sstm.copy_disk_cached_pages(table.get_storage_options(), sids, leaving.shard);
+        co_await sstm.copy_cached_pages(table.get_storage_options(), sids, leaving.shard);
 
         std::unordered_set<sstables::shared_sstable> ssts;
         for (auto&& sst_desc : d) {

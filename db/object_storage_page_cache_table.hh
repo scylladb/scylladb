@@ -6,10 +6,10 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// This file is part of the disk page cache of sstables on object storage
-// (the 'disk_cache': 'pages' keyspace storage option). It defines the
-// system_cache.pagecache table, which stores the cache, and implements the
-// cache's interface (sstables/object_storage_page_cache.hh) over it.
+// This file is part of the object storage page cache (the 'disk_cache': 'pages'
+// keyspace storage option). It defines the system_cache.pagecache table, which
+// stores the cache, and implements the cache's interface
+// (sstables/object_storage_page_cache.hh) over it.
 
 #pragma once
 
@@ -40,9 +40,9 @@ class query_processor;
 
 namespace db {
 
-// The disk page cache of sstables on object storage, which is stored in
-// the system_cache.pagecache table - and in the system_cache.pagecache_hits
-// table, which records when each cached page was last hit.
+// The object storage page cache, which is stored in the system_cache.pagecache
+// table - and in the system_cache.pagecache_hits table, which records when each
+// cached page was last hit.
 //
 // Each shard's cache is limited to its share of the configured size of the
 // node's cache. When it grows beyond it, a background fiber evicts the

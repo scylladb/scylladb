@@ -6,11 +6,10 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// This file is part of the disk page cache of sstables on object storage
-// (the 'disk_cache': 'pages' keyspace storage option). It defines a
-// data_source which reads a byte range of an sstable component through the
-// cache (object_storage_page_cache.hh), split into pages as defined in
-// object_storage_page_cache_geometry.hh.
+// This file is part of the object storage page cache (the 'disk_cache': 'pages'
+// keyspace storage option). It defines a data_source which reads a byte range
+// of an sstable component through the cache (object_storage_page_cache.hh),
+// split into pages as defined in object_storage_page_cache_geometry.hh.
 
 #pragma once
 
@@ -44,7 +43,7 @@ using object_storage_range_reader = noncopyable_function<future<data_source>(uin
 constexpr uint64_t max_read_through_skip = 1024 * 1024;
 
 // Returns a data_source of the bytes [offset, offset + length) of an sstable
-// component, which reads them through the disk page cache:
+// component, which reads them through the object storage page cache:
 //
 // * The source reads whole pages, in order. The first pages of the range
 //   which are cached are read from the cache, in batches of consecutive

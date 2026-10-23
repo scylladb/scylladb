@@ -191,8 +191,8 @@ private:
     // A shared pointer, so that sstable readers which still use the cache when
     // it is unplugged (on shutdown) can keep it alive until they are done.
     shared_ptr<sstables::object_storage_page_cache> _object_storage_page_cache;
-    // The statistics of the reads of each table through the disk page cache,
-    // which the tables register, and report as metrics.
+    // The statistics of the reads of each table through the object storage page
+    // cache, which the tables register, and report as metrics.
     std::unordered_map<table_id, lw_shared_ptr<object_storage_page_cache_table_stats>> _page_cache_table_stats;
     // This function is bound to token_metadata.get_my_id() in the database constructor,
     // it can return unset value (bool(host_id) == false) until host_id is loaded
@@ -310,16 +310,16 @@ public:
         return bool(_sstables_registry);
     }
 
-    // The disk page cache of sstables on object storage is plugged only when
-    // its experimental feature is enabled.
+    // The object storage page cache is plugged only when its experimental
+    // feature is enabled.
     void plug_object_storage_page_cache(shared_ptr<sstables::object_storage_page_cache>) noexcept;
     void unplug_object_storage_page_cache() noexcept;
-    // The statistics of the reads of a table through the disk page cache: the
-    // table registers them, when it is created, and unregisters them when it
-    // is destroyed. The sstables code that reads through the cache counts its
-    // hits and misses in the statistics of the sstable's table, if it has -
-    // and holds them while it reads, so they outlive the table if it is
-    // dropped meanwhile. A table unregisters only its own statistics, in
+    // The statistics of the reads of a table through the object storage page
+    // cache: the table registers them, when it is created, and unregisters them
+    // when it is destroyed. The sstables code that reads through the cache
+    // counts its hits and misses in the statistics of the sstable's table, if
+    // it has - and holds them while it reads, so they outlive the table if it
+    // is dropped meanwhile. A table unregisters only its own statistics, in
     // case another table object with the same id registered since.
     void register_page_cache_table_stats(table_id id, lw_shared_ptr<object_storage_page_cache_table_stats> stats) {
         _page_cache_table_stats[id] = std::move(stats);
@@ -333,24 +333,24 @@ public:
         auto it = _page_cache_table_stats.find(id);
         return it == _page_cache_table_stats.end() ? nullptr : it->second;
     }
-    // The disk page cache, or a null pointer if it is not plugged.
+    // The object storage page cache, or a null pointer if it is not plugged.
     shared_ptr<sstables::object_storage_page_cache> get_object_storage_page_cache() const noexcept {
         return _object_storage_page_cache;
     }
-    // Drops from this shard's disk page cache the pages of the sstables which
-    // no longer exist on this shard. A deleted sstable's pages are dropped
-    // when it is deleted, but they may be left behind: when the node shut
-    // down, or crashed, before the sstable was deleted, or after its table
-    // was dropped while the node was down. Called on startup, after all the
-    // sstables are loaded, and before reads start.
-    future<> evict_orphans_from_disk_page_cache() noexcept;
-    // Copies to this shard's disk page cache the pages which another shard
-    // cached for the given sstables of a table with the given storage
+    // Drops from this shard's object storage page cache the pages of the
+    // sstables which no longer exist on this shard. A deleted sstable's pages
+    // are dropped when it is deleted, but they may be left behind: when the
+    // node shut down, or crashed, before the sstable was deleted, or after its
+    // table was dropped while the node was down. Called on startup, after all
+    // the sstables are loaded, and before reads start.
+    future<> evict_orphans_from_page_cache() noexcept;
+    // Copies to this shard's object storage page cache the pages which another
+    // shard cached for the given sstables of a table with the given storage
     // options, which moved from that shard to this one, keeping their
     // sstable_id - in an intra-node tablet migration. Reading the pages from
     // the other shard's cache is cheaper than reading them again from the
     // object store.
-    future<> copy_disk_cached_pages(const data_dictionary::storage_options& so,
+    future<> copy_cached_pages(const data_dictionary::storage_options& so,
             const std::vector<sstable_id>& ssts, shard_id from) noexcept;
 
     // Only for sstable::storage usage

@@ -6,9 +6,9 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// This file is part of the disk page cache of sstables on object storage
-// (the 'disk_cache': 'pages' keyspace storage option). It defines how the
-// cache splits an sstable component into pages.
+// This file is part of the object storage page cache (the 'disk_cache': 'pages'
+// keyspace storage option). It defines how the cache splits an sstable
+// component into pages.
 
 #pragma once
 
@@ -18,11 +18,10 @@ namespace sstables {
 
 struct compression;
 
-// How the disk page cache (see object_storage_page_cache.hh) splits an
-// sstable component into pages, the units in which the component's byte
-// ranges are cached. Positions are in the component's file as it is stored
-// on the object store - for a compressed Data component, in the compressed
-// file.
+// How the object storage page cache (see object_storage_page_cache.hh) splits
+// an sstable component into pages, the units in which the component's byte
+// ranges are cached. Positions are in the component's file as it is stored on
+// the object store - for a compressed Data component, in the compressed file.
 //
 // All the readers of a component must split it into the same pages, so that
 // a page cached by one reader is found by another. For example, a scan must

@@ -317,8 +317,8 @@ table::make_mutation_reader(schema_ptr s,
             readers.emplace_back(std::move(*reader_opt));
         }
     } else {
-        // This is a user's read, so unless it has BYPASS CACHE, it may use
-        // the disk page cache.
+        // This is a user's read, so unless it has BYPASS CACHE, it may use the
+        // object storage page cache.
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, std::move(trace_state), fwd, fwd_mr,
                 sstables::default_sstable_predicate(), sstables::integrity_check::no, sstables::populate_disk_cache(!bypass_cache)));
     }
@@ -2397,8 +2397,9 @@ void table::set_metrics() {
     auto cf = column_family_label(_schema->cf_name());
     auto ks = keyspace_label(_schema->ks_name());
     namespace ms = seastar::metrics;
-    // The reads of this table through the disk page cache count their hits
-    // and misses in these statistics, which the sstables manager gives them.
+    // The reads of this table through the object storage page cache count their
+    // hits and misses in these statistics, which the sstables manager gives
+    // them.
     if (auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&_storage_opts->value);
             os && os->disk_cache == data_dictionary::storage_options::disk_cache_mode::pages) {
         _page_cache_stats = make_lw_shared<sstables::object_storage_page_cache_table_stats>();
@@ -2430,17 +2431,17 @@ void table::set_metrics() {
             auto reads = ms::label("reads");
             auto& st = *_page_cache_stats;
             _metrics.add_group("column_family", {
-                    ms::make_counter("page_cache_hits", ms::description("Pages read from the disk page cache, by reads which may populate it"),
+                    ms::make_counter("page_cache_hits", ms::description("Pages read from the object storage page cache, by reads which may populate it"),
                             st.populating.hits)(cf)(ks)(reads("populating")),
-                    ms::make_counter("page_cache_hits", ms::description("Pages read from the disk page cache, by reads with BYPASS CACHE and background reads"),
+                    ms::make_counter("page_cache_hits", ms::description("Pages read from the object storage page cache, by reads with BYPASS CACHE and background reads"),
                             st.non_populating.hits)(cf)(ks)(reads("non_populating")),
-                    ms::make_counter("page_cache_misses", ms::description("Pages read from the object store through the disk page cache, by reads which may populate it"),
+                    ms::make_counter("page_cache_misses", ms::description("Pages read from the object store through the object storage page cache, by reads which may populate it"),
                             st.populating.misses)(cf)(ks)(reads("populating")),
-                    ms::make_counter("page_cache_misses", ms::description("Pages read from the object store through the disk page cache, by reads with BYPASS CACHE and background reads"),
+                    ms::make_counter("page_cache_misses", ms::description("Pages read from the object store through the object storage page cache, by reads with BYPASS CACHE and background reads"),
                             st.non_populating.misses)(cf)(ks)(reads("non_populating")),
-                    ms::make_counter("page_cache_object_reads", ms::description("Requests which reads through the disk page cache sent to the object store"),
+                    ms::make_counter("page_cache_object_reads", ms::description("Requests which reads through the object storage page cache sent to the object store"),
                             st.object_reads)(cf)(ks),
-                    ms::make_counter("page_cache_object_read_bytes", ms::description("Bytes which reads through the disk page cache requested from the object store"),
+                    ms::make_counter("page_cache_object_read_bytes", ms::description("Bytes which reads through the object storage page cache requested from the object store"),
                             st.object_read_bytes)(cf)(ks),
             });
         }
@@ -4277,8 +4278,8 @@ table::sstables_as_snapshot_source() {
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding fwd_mr) {
-            // The row cache reads the sstables only for the user's reads,
-            // so they may use the disk page cache.
+            // The row cache reads the sstables only for the user's reads, so
+            // they may use the object storage page cache.
             auto reader = make_sstable_reader(std::move(s), std::move(permit), sst_set, r, slice, std::move(trace_state), fwd, fwd_mr,
                     sstables::default_sstable_predicate(), sstables::integrity_check::no, sstables::populate_disk_cache::yes);
             return make_compacting_reader(
