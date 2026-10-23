@@ -79,6 +79,7 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
 }
 
 std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+    validate_name("Aggregate");
     return std::make_unique<prepared_statement>(audit_info(), make_shared<create_aggregate_statement>(*this));
 }
 
