@@ -35,6 +35,11 @@ bool consumed_capacity_counter::should_add_capacity(const rjson::value& request)
         throw api_error::validation("Non-string ReturnConsumedCapacity field in request");
     }
     std::string_view consumed = rjson::to_string_view(*return_consumed);
+    if (consumed == "NONE") {
+        // "NONE" asks not to report the consumed capacity - exactly what a
+        // missing ReturnConsumedCapacity does.
+        return false;
+    }
     if (consumed == "INDEXES") {
         throw api_error::validation("INDEXES consumed capacity is not supported");
     }
