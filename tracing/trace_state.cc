@@ -100,7 +100,7 @@ void trace_state::add_prepared_query_options(const cql3::query_options& prepared
     for (size_t i = 0; i < _params_ptr->prepared_statements.size(); ++i) {
         const cql3::query_options& opts = prepared_options_ptr.for_statement(i);
         _params_ptr->prepared_statements[i].query_option_names = opts.get_names();
-        _params_ptr->prepared_statements[i].query_option_values = opts.get_values();
+        _params_ptr->prepared_statements[i].query_option_values = cql3::raw_value_view_vector_with_unset(opts.get_values(), opts.get_unset());
     }
 }
 
