@@ -23,6 +23,8 @@
 
 #include <ranges>
 
+#include <seastar/coroutine/exception.hh>
+
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
 
@@ -112,7 +114,7 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
     auto cl_for_learn = options.get_consistency();
     utils::result_with_exception_ptr<db::consistency_level> cl_for_paxos = options.check_serial_consistency();
     if (!cl_for_paxos) [[unlikely]] {
-        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(std::move(cl_for_paxos).assume_error());
+        co_await coroutine::return_exception_ptr(std::move(cl_for_paxos).assume_error());
     }
     std::unique_ptr<cas_request> request;
     schema_ptr schema;
@@ -153,23 +155,19 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
 
     auto cas_shard = service::cas_shard(*statements[0].statement->s, request->key()[0].start()->value().as_decorated_key().token());
     if (!cas_shard.this_shard()) {
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                qp.bounce_to_shard(cas_shard.shard(), std::move(cached_fn_calls))
-            );
+        co_return qp.bounce_to_shard(cas_shard.shard(), std::move(cached_fn_calls));
     }
 
-    auto* request_ptr = request.get();
-    return qp.proxy().cas(schema, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
+    service::storage_proxy::cas_result cas_result = co_await qp.proxy().cas(schema, std::move(cas_shard), *request, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout).then([&batch, request = std::move(request)] (service::storage_proxy::cas_result cas_result) {
+            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout);
         auto result = request->build_cas_result_set(batch.cas_result_metadata(), batch.columns_of_cas_result_set(), cas_result.is_applied);
         // Surface any coordinator-side large data guardrail soft limit violations
         // detected during the LWT to the client as a CQL warning.
         if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
             result->add_warning(std::move(warning));
         }
-        return result;
-    });
+        co_return result;
 }
 
 } // namespace
