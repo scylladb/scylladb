@@ -33,6 +33,9 @@ struct rate_stats {
     // Byte-weighted mean size of the flushed sstables, in bytes, or 0 when nothing
     // was flushed in the interval.
     double mean_flush_size = 0;
+    // Bytes compacted by regular compaction, the one the compaction controller drives,
+    // counted from its input sstables. Other kinds run with maintenance shares.
+    utils::rate<utils::units::bytes> compacted_bytes;
 };
 
 // What a backlog tracker needs to know about the data it accounts for: the sstables

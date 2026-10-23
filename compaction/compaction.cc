@@ -163,6 +163,20 @@ compaction_type to_compaction_type(sstring type_name) {
     throw std::runtime_error("Invalid Compaction Type Name");
 }
 
+// The origin of the sstables a compaction writes, see make_sstable_writer_config().
+static sstring compaction_origin(compaction_type type) {
+    auto s = compaction_name(type);
+    std::transform(s.begin(), s.end(), s.begin(), [] (char c) {
+        return std::tolower(c);
+    });
+    return s;
+}
+
+bool has_regular_compaction_origin(const sstables::shared_sstable& sst) noexcept {
+    static const sstring regular_compaction_origin = compaction_origin(compaction_type::Compaction);
+    return sst->get_origin() == regular_compaction_origin;
+}
+
 std::string_view to_string(compaction_type type) {
     auto ret = compaction_types.find(type);
     if (ret != compaction_types.end()) {
@@ -700,11 +714,7 @@ protected:
     }
 
     sstables::sstable_writer_config make_sstable_writer_config(compaction_type type) {
-        auto s = compaction_name(type);
-        std::transform(s.begin(), s.end(), s.begin(), [] (char c) {
-            return std::tolower(c);
-        });
-        sstables::sstable_writer_config cfg = _table_s.configure_writer(std::move(s));
+        sstables::sstable_writer_config cfg = _table_s.configure_writer(compaction_origin(type));
         cfg.max_sstable_size = _max_sstable_size;
         cfg.monitor = &sstables::default_write_monitor();
         cfg.run_identifier = _run_identifier;

@@ -33,6 +33,10 @@ bool is_eligible_for_compaction(const sstables::shared_sstable& sst) noexcept;
 // A run is eligible when every sstable of it is: a run is compacted as a whole.
 bool is_eligible_for_compaction(const sstables::frozen_sstable_run& run) noexcept;
 
+// Whether the sstable was written by regular compaction, as opposed to other
+// kinds of compaction, like cleanup or major, or to a memtable flush.
+bool has_regular_compaction_origin(const sstables::shared_sstable& sst) noexcept;
+
 // Return the name of the compaction type
 // as used over the REST api, e.g. "COMPACTION" or "CLEANUP".
 sstring compaction_name(compaction_type type);

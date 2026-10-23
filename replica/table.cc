@@ -47,6 +47,7 @@
 #include "view_info.hh"
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
+#include "compaction/compaction.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/compaction_group_view.hh"
 #include "sstables/sstable_directory.hh"
@@ -2907,12 +2908,24 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
     // (finish() already moved them out of the compaction, and they are sealed so ~sstable()
     // won't unlink them either), so a failure here would otherwise leak them on disk forever.
     auto new_sstables = desc.all_new_sstables();
+    // The bytes compacted are those of the input sstables being replaced. Only regular
+    // compaction is driven by the compaction controller; other kinds, whose outputs carry
+    // their own origin, run with maintenance shares.
+    uint64_t compacted_bytes = 0;
+    if (std::ranges::any_of(new_sstables, compaction::has_regular_compaction_origin)) {
+        for (const auto& sst : desc.old_sstables) {
+            compacted_bytes += sst->data_size();
+        }
+    }
     bool attached = false;
     std::exception_ptr ex;
     try {
         co_await do_update_sstable_sets_on_compaction_completion(std::move(desc), attached);
     } catch (...) {
         ex = std::current_exception();
+    }
+    if (!ex) {
+        _compacted_bytes.add(compacted_bytes);
     }
     if (!attached && !new_sstables.empty()) {
         table::sstable_list_builder builder(_t, co_await _t.get_sstable_list_permit());
@@ -4719,6 +4732,7 @@ compaction::rate_stats compaction_group::rates() const {
     return {
         .flushed_bytes = flushed_bytes,
         .mean_flush_size = flushed_bytes.amount() > 0 ? std::exp(flushed_bytes_log_size.per(flushed_bytes)) : 0,
+        .compacted_bytes = _compacted_bytes.rate(now),
     };
 }
 
