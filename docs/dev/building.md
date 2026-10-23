@@ -10,6 +10,7 @@ However, `dbuild` is optional and you can also build on your host machine by run
 * [Getting Started](#getting-started)
 * [Configuring](#configuring)
 * [Building](#building)
+* [Switching between branches](#switching-between-branches)
 * [Packaging](#packaging)
 * [Artifacts](#artifacts)
 
@@ -92,6 +93,64 @@ Alternatively, if you did not specify a build mode in the `configure.py` step, y
 ```console
 ./tools/toolchain/dbuild ninja <mode>-build
 ```
+
+## Switching between branches
+
+A checkout is often reused for several branches, for example `master` and
+one or more release branches (`branch-X.Y`). After switching, the build tree
+still carries the previous branch's configuration, so before building:
+
+1. Sync the submodules with the new baseline:
+
+   ```console
+   git submodule sync --recursive
+   git submodule update --init --recursive
+   ```
+
+2. Remove `build/<mode>/seastar/CMakeCache.txt`. It caches where Seastar found
+   fmt, and that differs between branches: `master` builds fmt from the `fmt/`
+   submodule, while older release branches use the system fmt. A stale cache
+   breaks the build in both directions: compile errors such as
+   `explicit specialization of fmt::formatter<...> after instantiation` or
+   `redefinition of formatter<exception_ptr>` when building a release branch
+   after `master`, or a link error `undefined symbol: ... fmt::v12 ...` when
+   building `master` after a release branch.
+
+3. Re-run `configure.py` with the arguments recorded on the first line of
+   `build.ninja` (`configure_args = ...`), in the same environment as the
+   original build: under `./tools/toolchain/dbuild` for a Docker build, on
+   the host for a native one. Configuring on the host records host compiler
+   paths that a later container build cannot use. `build.ninja` is generated
+   per branch: source lists, include paths and which test files form their
+   own binary differ.
+
+4. Build, then confirm that the binary is the one you think it is before
+   trusting any test result, again in the environment it was built in:
+
+   ```console
+   ./tools/toolchain/dbuild ./build/<mode>/scylla --version   # Docker build
+   ./build/<mode>/scylla --version                            # native build
+   git rev-parse HEAD
+   ```
+
+Untracked leftovers from other branches, such as a `fmt/` or `c-ares/`
+directory, are harmless once the cache is reset and need not be deleted.
+
+Some notes specific to `dbuild`:
+
+* `dbuild` selects its toolchain image from the `image` file next to it, so
+  always use the `dbuild` of the tree you are building. A sibling checkout on
+  another branch has another toolchain.
+* Run the built binaries under `dbuild` as well, including the perf
+  microbenchmarks; the host usually lacks the toolchain's library versions.
+* Older toolchain images (e.g. the `branch-2025.1` one) may fail every compile
+  with `ccache: error: Permission denied`, because `ccache` defaults to a
+  directory that is not mounted into the container. Either disable it for the
+  build with `dbuild -e CCACHE_DISABLE=1 -- ninja ...`, or mount a ccache
+  directory via `SCYLLADB_DBUILD` (see `dbuild --help`).
+* `dbuild` runs with the host network, so a `dbuild` in another checkout can
+  own the sccache server port. If hashing fails with sccache errors, pass
+  `-e SCCACHE_SERVER_PORT=<free port>` to `dbuild`.
 
 ## Testing
 
