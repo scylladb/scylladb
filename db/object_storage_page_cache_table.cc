@@ -38,6 +38,7 @@
 #include "sstables/compressor.hh"
 #include "tombstone_gc_options.hh"
 #include "types/types.hh"
+#include "utils/hash.hh"
 #include "utils/log.hh"
 
 namespace db {
@@ -216,10 +217,16 @@ static mutation page_deletion(schema_ptr s, int16_t shard, utils::UUID sstable, 
     return m;
 }
 
-object_storage_page_cache_table::object_storage_page_cache_table(cql3::query_processor& qp, utils::updateable_value<uint64_t> size_in_mb)
+object_storage_page_cache_table::object_storage_page_cache_table(cql3::query_processor& qp, utils::updateable_value<uint64_t> size_in_mb,
+        utils::updateable_value<uint64_t> max_remembered_hits)
     : _qp(qp)
     , _size_in_mb(std::move(size_in_mb))
+    , _max_remembered_hits(std::move(max_remembered_hits))
 {}
+
+size_t object_storage_page_cache_table::page_key_hash::operator()(const page_key& k) const noexcept {
+    return utils::hash_combine(std::hash<utils::UUID>()(k.sstable), utils::hash_combine(size_t(k.component), std::hash<uint64_t>()(k.offset)));
+}
 
 size_t object_storage_page_cache_table::hand_position_hash::operator()(const hand_position& k) const noexcept {
     return utils::hash_combine(std::hash<utils::UUID>()(k.sstable),
@@ -231,10 +238,10 @@ size_t object_storage_page_cache_table::hand_position_hash::operator()(const han
 // execution, and of the coordinator's write path - in a benchmark, writing
 // directly cut a write's instructions by a third - and the cache writes
 // often: a page for each page which a read misses, a hit for each page
-// which is hit, and a deletion for each evicted page. The mutations are of
-// this shard's partitions (or of shards which no longer exist, which are
-// stored on the last shard - see this_shard_token_range()), so they are
-// applied on this shard.
+// which is hit (at most once in each pass of the hand), and a deletion for
+// each evicted page. The mutations are of this shard's partitions (or of
+// shards which no longer exist, which are stored on the last shard - see
+// this_shard_token_range()), so they are applied on this shard.
 future<> object_storage_page_cache_table::apply(mutation m) {
     auto s = m.schema();
     co_await _qp.proxy().local_db().apply(std::move(s), freeze(m), {}, db::commitlog_force_sync::no, db::no_timeout);
@@ -325,6 +332,9 @@ future<> object_storage_page_cache_table::put_page(sstables::sstable_id sst, sst
             utils::wait_for_message(std::chrono::minutes(5)), false);
     co_await apply(page_mutation(this_shard(), sst.uuid(), component_name, int64_t(offset),
             bytes(reinterpret_cast<const int8_t*>(data.get()), data.size())));
+    // The page may have been evicted and cached again, so its next hit must
+    // be recorded.
+    _hit_in_pass.erase(page_key{sst.uuid(), component, offset});
     count_written_page(this_shard(), sst.uuid(), component_name, int64_t(offset), int32_t(data.size()), std::nullopt);
     // A page which was already cached is counted twice, until the bytes are
     // recounted.
@@ -382,7 +392,15 @@ object_storage_page_cache_table::get_pages(sstables::sstable_id sst, sstables::c
     // when it reaches it.
     if (populate && !pages.empty()) {
         auto now = db_clock::now();
+        auto max_remembered = _max_remembered_hits();
         co_await coroutine::parallel_for_each(pages, [&] (const page& p) -> future<> {
+            page_key key{sst.uuid(), component, p.offset};
+            if (max_remembered && _hit_in_pass.contains(key)) {
+                co_return;
+            }
+            if (_hit_in_pass.size() < max_remembered) {
+                _hit_in_pass.insert(key);
+            }
             co_await apply(hits_mutation(this_shard(), sst.uuid(), component_name, int64_t(p.offset), std::nullopt, now));
         });
     }
@@ -750,6 +768,8 @@ future<> object_storage_page_cache_table::sweep(uint64_t target) {
     // hit all the time.
     for (int passes = 0; _bytes > target && !_stopping && passes < 3;) {
         if (!_hand) {
+            // A hit of a page on this pass is recorded again.
+            _hit_in_pass.clear();
             ++passes;
             // Lets tests hit pages after the histogram, from which this
             // pass's cutoff is chosen, was built.

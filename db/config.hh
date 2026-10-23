@@ -638,6 +638,7 @@ public:
     named_value<unsigned> object_storage_connections_per_shard;
     named_value<double> object_storage_clients_memory_fraction;
     named_value<uint64_t> object_storage_page_cache_size_in_mb;
+    named_value<uint64_t> object_storage_page_cache_max_remembered_hits;
 
     named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;
     named_value<double> topology_barrier_stall_detector_threshold_seconds;

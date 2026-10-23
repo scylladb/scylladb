@@ -112,6 +112,27 @@ class object_storage_page_cache_table : public sstables::object_storage_page_cac
     // and those last hit before this time (see sweep()).
     db_clock::time_point _cutoff = db_clock::time_point::min();
 
+    // The pages whose hits were recorded since the hand started its current
+    // pass. Another hit of such a page isn't recorded, to save writes: a
+    // page which is read many times is written at most once per pass of the
+    // hand. So a page's recorded last hit is its first hit in the last pass
+    // in which it was hit, which makes the order in which the hand evicts
+    // pages accurate only to within a pass.
+    struct page_key {
+        utils::UUID sstable;
+        sstables::component_type component;
+        uint64_t offset;
+        bool operator==(const page_key&) const = default;
+    };
+    struct page_key_hash {
+        size_t operator()(const page_key& k) const noexcept;
+    };
+    std::unordered_set<page_key, page_key_hash> _hit_in_pass;
+    // The most pages which _hit_in_pass remembers, to limit its memory. The
+    // hits of the pages beyond it are recorded every time. 0 means to record
+    // every hit.
+    utils::updateable_value<uint64_t> _max_remembered_hits;
+
     // The keys of the pages which put_page() is writing, with how many writes
     // of each are in progress, and the key of the page which the hand is
     // evicting. put_page() writes a page's row in pagecache_hits and then the
@@ -139,7 +160,8 @@ public:
     // How often the memtable of pagecache_hits is flushed (see hits_schema()).
     static constexpr int32_t hits_flush_period_ms = 60 * 1000;
 
-    object_storage_page_cache_table(cql3::query_processor& qp, utils::updateable_value<uint64_t> size_in_mb);
+    object_storage_page_cache_table(cql3::query_processor& qp, utils::updateable_value<uint64_t> size_in_mb,
+            utils::updateable_value<uint64_t> max_remembered_hits);
 
     // Starts and stops the background fiber which evicts pages when this
     // shard's cache is too large, which runs in the given scheduling group.

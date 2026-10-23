@@ -974,10 +974,11 @@ async def test_migration_to_another_node_evicts_pages(manager: ScyllaClusterMana
 
 async def test_hits(manager: ScyllaClusterManager, s3_storage):
     '''The page cache records when each cached page was last hit - read from
-    the cache by a read which may populate it. Caching a page isn't a hit, so
-    a page which was read only once looks old. A read with BYPASS CACHE reads
-    the cached pages, but doesn't record their hits: a scan with BYPASS CACHE
-    would otherwise make all of a table's pages look recently used.'''
+    the cache by a read which may populate it - but only once in each pass of
+    the hand which evicts pages. Caching a page isn't a hit, so a page which
+    was read only once looks old. A read with BYPASS CACHE reads the cached
+    pages, but doesn't record their hits: a scan with BYPASS CACHE would
+    otherwise make all of a table's pages look recently used.'''
     server = await manager.server_add(config=page_cache_config(s3_storage))
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
@@ -1000,20 +1001,20 @@ async def test_hits(manager: ScyllaClusterManager, s3_storage):
         first_hits = page_hits(cql)
         assert sorted(first_hits) == pages
 
-        # Check that the next read records later hits. The clock has
-        # millisecond resolution, so wait for it to advance.
+        # Check that the next read doesn't record their hits again: the cache
+        # is far from full, so the hand which evicts pages didn't start a new
+        # pass, and the pages were already hit in its current pass. The clock
+        # has millisecond resolution, so wait for it to advance.
         await asyncio.sleep(0.002)
         await manager.api.drop_sstable_caches(server.ip_addr)
         point_read()
-        second_hits = page_hits(cql)
-        assert sorted(second_hits) == pages
-        assert all(second_hits[page] > first_hits[page] for page in pages)
+        assert page_hits(cql) == first_hits
 
         # Check that a read with BYPASS CACHE records no hits.
         await asyncio.sleep(0.002)
         await manager.api.drop_sstable_caches(server.ip_addr)
         point_read('BYPASS CACHE')
-        assert page_hits(cql) == second_hits
+        assert page_hits(cql) == first_hits
 
 
 def cached_bytes(cql):
