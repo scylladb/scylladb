@@ -165,7 +165,6 @@ def testSelectInStatementWithTuples(cql, test_keyspace):
 #                             "INSERT INTO %s (pk, t) VALUES (?, ?)", 1, Long.MAX_VALUE);
 #    }
 
-@pytest.mark.xfail(reason="Cassandra 3.10's += syntax not yet supported. Issue #7735")
 def testTupleModification(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int PRIMARY KEY, value tuple<int, int>)") as table:
         assert_invalid_message(cql, table, "Invalid operation (value = value + (1, 1)) for tuple column value",
