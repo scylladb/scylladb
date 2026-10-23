@@ -183,6 +183,62 @@ schema table:
 is no `LOCAL` value: a keyspace on local disk has a null `storage_type`, and not
 every keyspace has a row in this table, so it is not a list of all keyspaces.
 
+(cql-keyspace-disk-cache)=
+### Disk page cache
+
+An object-storage keyspace can cache, on the node's local disk, the parts of
+its SSTables which it reads from the object store, so that reading them again
+doesn't need another request to the object store. This is enabled with the
+`disk_cache` storage option:
+
+```cql
+CREATE KEYSPACE ks
+    WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }
+    AND STORAGE = { 'type' : 'S3',
+                    'endpoint' : 'https://s3.us-east-1.amazonaws.com',
+                    'bucket' : 'my-bucket',
+                    'disk_cache' : 'pages' } ;
+```
+
+| Value | Description |
+|---|---|
+| `none` (the default) | Every read of an SSTable reads from the object store. |
+| `pages` | Byte ranges ("pages") read from the object store are cached on the node's disk. |
+
+All the `disk_cache` keyspaces of a node share one cache, in the node's data
+directory. Its size is set by the `object_storage_page_cache_size_in_mb`
+option in `scylla.yaml` - by default 10240 (10 GiB) per node - and can be
+changed without a restart. When the cache is full, the pages which were least
+recently read are evicted, approximately. Make sure the data directory has
+room for the cache, in addition to the node's other data.
+
+```{note}
+The disk page cache is **experimental**: it requires the experimental feature
+`object-storage-page-cache` (`experimental_features: [object-storage-page-cache]`
+in `scylla.yaml`) on all nodes. The `disk_cache` option is accepted only for
+object-storage keyspaces which use tablets, and it cannot be changed with
+`ALTER KEYSPACE` after the keyspace is created.
+```
+
+The object store holds every byte of every SSTable either way: the cache only
+holds copies, so losing it - for example, after a crash, or when its disk
+fails - loses no data. It caches both the SSTables' data and their indexes,
+exactly as they are stored in the object store - so the data of an encrypted
+keyspace stays encrypted in the cache too.
+
+Only the user's reads add pages to the cache. A `SELECT` with
+[`BYPASS CACHE`](../cql/dml/select.rst), and background reads - such as
+compaction, repair, tablet migration and view building - read the pages which
+are already in the cache, but don't add pages to it: they typically read whole
+SSTables once, so caching their pages would only replace the pages which other
+reads need. Note that this makes `BYPASS CACHE` behave differently for the disk
+page cache than for the in-memory row cache, which a `SELECT` with
+`BYPASS CACHE` neither reads nor populates. Reading pages which are already in
+the disk page cache is never worse than reading them from the object store.
+
+See {ref}`Disk page cache <admin-object-storage-disk-cache>` for more about
+configuring the cache, and for the metrics which monitor it.
+
 ## PRUNE MATERIALIZED VIEW statements
 
 A special statement is dedicated for pruning ghost rows from materialized views.

@@ -148,6 +148,156 @@ CREATE KEYSPACE ks
   };
 ```
 
+## Disk page cache
+
+A keyspace created with the `'disk_cache': 'pages'` storage option (which
+requires the experimental feature `object-storage-page-cache`) caches, on the
+node's local disk, the byte ranges of its sstables which it reads from the
+object store. See the [CQL extensions](../cql/cql-extensions.md) for the
+option, and the [administration guide](../operating-scylla/admin.rst) for its
+configuration and metrics. The code is in the files named
+`*object_storage_page_cache*`, each of which starts with a comment explaining
+its part. This section explains how the parts fit together.
+
+### The tables
+
+The cache is stored in two tables of the node-local `system_cache` keyspace,
+whose writes skip the commitlog (`durable_writes = false`): the cache only
+holds copies of what the object store holds, so losing recent writes in a
+crash is harmless.
+
+* `system_cache.pagecache`: the cached pages, with the key
+  `((shard, sstable), component, offset)` and the page as a blob. All the
+  pages of an sstable are in one partition, so dropping them takes a single
+  partition tombstone.
+* `system_cache.pagecache_hits`: a small row for each cached page, with the
+  same key, recording the page's size and when it was last hit. It is a
+  separate table because it is rewritten on every hit, while the pages are
+  written once; and choosing which pages to evict reads only this table.
+
+Eviction and the count of the cache's bytes find pages only through their
+rows in `pagecache_hits`, so a page left without one would stay, uncounted,
+until its sstable is deleted. So a page's row in `pagecache_hits` is written
+before the page itself - a failure between the two writes leaves a row
+without a page, which is harmless - and `pagecache_hits` is flushed every
+minute: when memtables take too much memory, the largest is flushed, which is
+almost always `pagecache`'s, so without the periodic flush, the rows of
+`pagecache_hits` could stay in memory for long, and a crash would lose them,
+while their pages were flushed. And the eviction of a page must not come
+between the two writes which cache it: the hand doesn't evict a page which
+is being cached, and a page isn't cached while the hand is evicting it.
+
+Both tables use the `fixed_shard_partitioner`, which puts the `shard` column
+in the high bits of the token, so each shard's cache - the cache of the
+sstables it owns - is stored on that shard, and is a contiguous range of
+tokens. Each shard reads and writes only its own cache. Their row cache is
+disabled (the pages are cached in memory by the user tables' own caches), and
+their tombstones are dropped immediately.
+
+The cache is reached through `sstables::object_storage_page_cache` (an
+interface, so the sstables code doesn't depend on the code which reads and
+writes tables), implemented by `db::object_storage_page_cache_table`. It
+reads and writes the tables directly, rather than with internal CQL, for
+the lookups and writes which reads of sstables make - an internal CQL query
+made while a read holds its permit could deadlock, waiting for admission on
+the same reader concurrency semaphore - and uses internal CQL queries only
+for its scans of whole tables or sstables.
+
+### Pages
+
+The cache holds an sstable component's bytes exactly as they are stored in
+the object store - below the file I/O extensions, so the pages of an
+encrypted sstable stay encrypted. A component is split into pages
+(`object_storage_page_cache_geometry.hh`):
+
+* a compressed Data component, in its compressed chunks;
+* an encrypted Data component, in the encryption's 4 KiB blocks, because
+  decryption needs whole blocks anyway;
+* any other component - an uncompressed Data component, and the index
+  components - in fixed 4 KiB pages.
+
+The Data component is read through a `data_source`
+(`object_storage_page_cache_source.hh`), and the index components through a
+`seastar::file` (`object_storage_page_cache_file.hh`) which uses the same
+`data_source`. It reads the cached pages of its range, in batches, and at the
+first page which isn't cached, reads all the rest of its range from the
+object store with a single request - even if some of it is cached - and
+caches the pages it reads. This minimizes the number of requests, assuming
+that a request costs the same regardless of its size. A read may skip
+forward - for example, between rows far apart in a wide partition. A skip of
+up to a megabyte (`max_read_through_skip`) continues with the same request,
+and caches the skipped pages too; after a longer skip, the source closes the
+request, rather than download pages which the read doesn't need, and
+continues from the cache, and with a new request at the next page which
+isn't cached.
+
+### Which reads populate the cache
+
+Every read of an sstable of a `disk_cache` keyspace reads the cached pages,
+but only the user's reads (`table::make_mutation_reader()`, directly or
+through the row cache) without `BYPASS CACHE` add pages to the cache, and
+record hits. This is the `sstables::populate_disk_cache` flag, which defaults
+to `no`, so background reads - compaction, streaming, view building, and
+opening an sstable - don't need to set it. A read which must not populate the
+cache reads the index through a second set of index files, which don't
+populate it, and doesn't use the in-memory caches of the index, which read
+their misses through the populating files.
+
+### Eviction
+
+* When an sstable is deleted, its pages are evicted
+  (`object_storage_base::destroy()`), before its objects are deleted.
+* When the node starts, after loading the sstables, each shard evicts the
+  pages of sstables which no longer exist on it - for example, after a crash
+  between deleting an sstable and evicting its pages
+  (`sstables_manager::evict_orphans_from_disk_page_cache()`).
+* When a shard's cache grows beyond its share of
+  `object_storage_page_cache_size_in_mb`, a background fiber evicts the
+  pages which were least recently hit, approximately, until the cache is
+  10% under its limit. A hand moves over the shard's rows of
+  `pagecache_hits`, in the order of their keys, and evicts every page which
+  was never hit since it was cached, or was last hit before a cutoff time.
+  When the hand starts a pass, it chooses the cutoff from a histogram of how
+  long ago the cache's pages were last hit, so that the pages which it
+  evicts add up to at least a quarter of the cache - first the pages which
+  were never hit. So pages are evicted in the order of their last hits, not
+  of their keys; and one pass, with one cutoff, serves several evictions.
+  If pages are hit during a pass - after the histogram from which its
+  cutoff was chosen - a pass may evict too little; so if two passes didn't
+  evict enough, the third evicts pages regardless of their hits, which
+  keeps the cache within its limit even if all of its pages are hit all the
+  time.
+
+  To save writes, each shard remembers which pages it recorded a hit of in
+  the hand's current pass, and doesn't write their hits again - so a page's
+  last hit is known only to within a pass.
+
+  Each shard counts the bytes in its cache in memory, adding a page's size
+  when it is cached and subtracting it when it is evicted. Caching a page
+  which was already cached - for example, when a long read which missed the
+  cache fetches the rest of its range, including pages which were cached -
+  counts it again. So as the hand passes the pages, it recounts their bytes,
+  and builds the histogram for its next pass, and when it completes a pass,
+  the recount replaces the count. The hand reads `pagecache_hits` in batches,
+  so it knows which pages cached during the pass it won't see - those up to
+  the end of its batch - and these are counted when they are cached. Only when the node starts are the bytes,
+  and the first histogram, counted by a scan of the table.
+
+### Migrating tablets
+
+When a tablet moves between shards of the same node, its sstables are cloned
+by reference, keeping their sstable id, so the pages which the old shard
+cached are copied to the new shard's cache, before the clones are loaded
+(`storage_service::clone_locally_tablet_storage()`). When a tablet moves to
+another node, the new node starts with an empty cache, and the old node
+evicts its pages when it deletes its sstables.
+
+### Errors
+
+A failure of the cache never fails a read: a failure to read pages from the
+cache is treated as a miss, and a failure to cache a page or to record a hit
+is logged and ignored.
+
 # Copying sstables on S3/GS (backup)
 
 It's possible to upload sstables from data/ directory on S3 via API. This is good
