@@ -27,6 +27,11 @@ on:
       - "scripts/get_description.py"
       - "scripts/metrics-config.yml"
       - ".github/workflows/docs-pr.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
