@@ -1350,6 +1350,10 @@ public:
     // Use in case this instance and p share the same schema.
     // Same guarantees and constraints as for other variants of apply().
     void apply(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats);
+    // Like the const& overload above, but avoids cloning p: p is upgraded in place if schemas differ, then moved from.
+    // On exception, p is left in a valid but unspecified state (may no longer conform to p_schema);
+    // it must only be destroyed or reassigned, not read from or reused.
+    void apply(const schema& this_schema, mutation_partition&& p, const schema& p_schema, mutation_application_stats& app_stats);
 
     // Applies p to this instance.
     //
