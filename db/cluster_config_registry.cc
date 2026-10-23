@@ -47,7 +47,7 @@ static_assert(std::variant_size_v<config_value> == 4);
 // to both sets; an option that wants only part of a chain spells its scopes out.
 constexpr scope_set table_oriented_scopes = scope_set::of<scope::cluster, scope::keyspace, scope::table>();
 // Unused until the first node-oriented option ships.
-[[maybe_unused]] constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
+constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
 
 // The scopes that place an option in one domain or the other, i.e. each set without CLUSTER.
 constexpr scope_set table_only_scopes = scope_set::of<scope::keyspace, scope::table>();
@@ -62,6 +62,7 @@ constexpr bool is_single_domain(scope_set scopes) {
 // Defined below, with the other parsers and validators.
 // Declared here so that the automatic scrub period option may take their address.
 config_value parse_auto_scrub_period_seconds(std::string_view value);
+config_value parse_compaction_controller(std::string_view value);
 
 // The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
 // When no scope stores an override it falls back to the deprecated yaml options
@@ -108,6 +109,19 @@ constexpr std::array registry_options = {
         .default_value = int64_t(100),
         .kind = option_kind::db_config,
         .valid_range = integer_range{.min = 1, .max = std::numeric_limits<uint32_t>::max()},
+    },
+    // Migrated from the db::config option of the same name, which selects the controller of
+    // the shares of regular compaction on each node. A node can be switched on its own, e.g.
+    // to move a cluster to another controller one node at a time.
+    option{
+        .name = "compaction_controller",
+        .description = "The controller of the shares of regular compaction: 'backlog_proportional' sets them from the compaction backlog, "
+                "'rate_matching' matches compaction to the work ingestion produces",
+        .scopes = node_oriented_scopes,
+        .default_value = std::string_view("backlog_proportional"),
+        .custom_parser = parse_compaction_controller,
+        .custom_expected_description = "'backlog_proportional' or 'rate_matching'",
+        .kind = option_kind::db_config,
     },
     option{
         .name = option_name::repair_hints_batchlog_flush_timeout_in_seconds,
@@ -250,6 +264,13 @@ config_value parse_auto_scrub_period_seconds(std::string_view value) {
         throw marshal_exception("expected 0 or an integer between 3600 and 4294967295");
     }
     return parsed;
+}
+
+config_value parse_compaction_controller(std::string_view value) {
+    if (value != "backlog_proportional" && value != "rate_matching") {
+        throw marshal_exception("expected 'backlog_proportional' or 'rate_matching'");
+    }
+    return value;
 }
 
 static std::optional<seastar::sstring> validate_with_custom_parser(const option& opt, std::string_view value) {

@@ -259,3 +259,11 @@ node's own value on every node it applies to:
      - The goal for the maximum number of tablet replicas per shard that the tablet load balancer
        tries to keep; see :doc:`Tablets </architecture/tablets>`. Range: 1 to 4294967295. Without
        a stored value, each node uses its ``scylla.yaml`` value (default ``100``).
+   * - ``compaction_controller``
+     - text
+     - ``CLUSTER``, ``DATACENTER``, ``RACK``, ``NODE``
+     - The controller of the shares of regular compaction: ``backlog_proportional`` sets them
+       from the compaction backlog, ``rate_matching`` matches compaction to the work ingestion
+       produces. A node switches as soon as its value changes, so a cluster can move to the
+       other controller one node at a time. Without a stored value, each node uses its
+       ``scylla.yaml`` value (default ``backlog_proportional``).

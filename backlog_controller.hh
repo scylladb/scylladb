@@ -152,13 +152,14 @@ public:
     static inline const std::vector<backlog_controller::control_point> default_control_points = {
             backlog_controller::control_point{0.0, 50}, {1.5, 100}, {normalization_factor, default_compaction_maximum_shares}};
     backlog_proportional_compaction_controller(backlog_controller::scheduling_group sg, float static_shares, std::optional<float> max_shares,
-        std::chrono::milliseconds interval, std::function<float()> current_backlog)
+        float normalization_factor, std::chrono::milliseconds interval, std::function<float()> current_backlog)
         : backlog_controller(std::move(sg), std::move(interval),
           default_control_points,
           std::move(current_backlog),
           static_shares
         )
     {
+        _control_points.back().input = normalization_factor;
         if (max_shares) {
             set_max_shares(*max_shares);
         }

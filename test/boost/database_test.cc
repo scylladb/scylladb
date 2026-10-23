@@ -2942,4 +2942,35 @@ SEASTAR_TEST_CASE(test_lowering_dirty_memory_threshold_triggers_flush) {
     });
 }
 
+// The compaction_controller option selects the compaction controller, the backlog-based
+// one by default, and can switch between them at runtime, either way.
+SEASTAR_TEST_CASE(compaction_controller_is_selected_by_config_test) {
+    co_await do_with_cql_env_thread([] (cql_test_env& e) {
+        auto controller_is = [&] <typename Controller> () {
+            return e.db().map_reduce0([] (replica::database& db) {
+                return bool(dynamic_cast<const Controller*>(&db.get_compaction_manager().get_compaction_controller()));
+            }, true, std::logical_and<bool>()).get();
+        };
+        BOOST_REQUIRE(controller_is.template operator()<backlog_proportional_compaction_controller>());
+        // A db::config value is per shard: set it on every one.
+        auto set = [&] (sstring controller) {
+            smp::invoke_on_all([&cfg = e.db_config(), controller] {
+                cfg.compaction_controller.set(sstring(controller));
+            }).get();
+        };
+        set("rate_matching");
+        BOOST_REQUIRE(controller_is.template operator()<rate_matching_compaction_controller>());
+        set("backlog_proportional");
+        BOOST_REQUIRE(controller_is.template operator()<backlog_proportional_compaction_controller>());
+    });
+    cql_test_config cfg;
+    cfg.db_config->compaction_controller.set("rate_matching");
+    co_await do_with_cql_env_thread([] (cql_test_env& e) {
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& controller = db.get_compaction_manager().get_compaction_controller();
+            BOOST_REQUIRE(dynamic_cast<const rate_matching_compaction_controller*>(&controller));
+        }).get();
+    }, cfg);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

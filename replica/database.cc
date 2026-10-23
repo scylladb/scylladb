@@ -59,6 +59,7 @@
 #include "view_info.hh"
 #include "db/schema_tables.hh"
 #include "compaction/compaction_manager.hh"
+#include "compaction/compaction_backlog_manager.hh"
 #include "gms/feature_service.hh"
 #include "timeout_config.hh"
 #include "service/storage_proxy.hh"
@@ -507,6 +508,9 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _stop_barrier(std::move(barrier))
     , _update_memtable_flush_static_shares_action([this, &cfg] { return _memtable_controller.update_static_shares(cfg.memtable_flush_static_shares()); })
     , _memtable_flush_static_shares_observer(cfg.memtable_flush_static_shares.observe(_update_memtable_flush_static_shares_action.make_observer()))
+    , _compaction_controller_observer(cfg.compaction_controller.observe([this] (const sstring& controller) {
+        use_compaction_controller(controller);
+    }))
 {
     SCYLLA_ASSERT(dbcfg.available_memory != 0); // Detect misconfigured unit tests, see #7544
 
@@ -515,7 +519,17 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
 
     _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);
 
+    use_compaction_controller(_cfg.compaction_controller());
+
     setup_scylla_memory_diagnostics_producer();
+}
+
+void database::use_compaction_controller(std::string_view controller) {
+    if (controller == "rate_matching") {
+        _compaction_manager.use_rate_matching_compaction_controller();
+        return;
+    }
+    _compaction_manager.use_backlog_proportional_compaction_controller();
 }
 
 const db::extensions& database::extensions() const {

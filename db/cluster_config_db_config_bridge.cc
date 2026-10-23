@@ -181,6 +181,7 @@ cluster_config_db_config_bridge::cluster_config_db_config_bridge(sharded<cluster
     };
 
     bind_entry(cfg.tablets_per_shard_goal);
+    bind_entry(cfg.compaction_controller);
 
     // Every db_config option needs a binding above, or an accepted ALTER would do nothing.
     for (const auto& opt : cluster_config_registry::options()) {
