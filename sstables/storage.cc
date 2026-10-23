@@ -95,7 +95,7 @@ public:
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring name) const override;
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
-    virtual future<entry_descriptor> clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const override;
+    virtual future<entry_descriptor> clone_from(sstable& src, generation_type gen, clone_from_cfg cfg) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -474,7 +474,7 @@ future<entry_descriptor> filesystem_storage::clone(sstable& sst, generation_type
     co_return desc;
 }
 
-future<entry_descriptor> filesystem_storage::clone_from(sstable& src, generation_type, bool, std::string_view) const {
+future<entry_descriptor> filesystem_storage::clone_from(sstable& src, generation_type, clone_from_cfg) const {
     // A backup sstable is never on the filesystem of the restored table, so there is
     // nothing to clone. For a table on filesystem, restore downloads the components.
     on_internal_error(sstlog, fmt::format("Cannot clone {} into filesystem storage {}", src.get_filename(), _dir.path().native()));
@@ -739,7 +739,7 @@ public:
     future<> seal(const sstable& sst) override;
     future<> snapshot(const sstable& sst, sstring name) const override;
     future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
-    future<entry_descriptor> clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const override;
+    future<entry_descriptor> clone_from(sstable& src, generation_type gen, clone_from_cfg cfg) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
@@ -1266,7 +1266,7 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
     co_return desc;
 }
 
-future<entry_descriptor> object_storage_base::clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const {
+future<entry_descriptor> object_storage_base::clone_from(sstable& src, generation_type gen, clone_from_cfg cfg) const {
     auto* src_storage = dynamic_cast<const object_storage_base*>(&src.get_storage());
     if (!src_storage) {
         on_internal_error(sstlog, fmt::format("Cannot clone {} into {} storage: the source is not on object storage", src.get_filename(), _type));
@@ -1286,7 +1286,7 @@ future<entry_descriptor> object_storage_base::clone_from(sstable& src, generatio
     // this storage uses for `src_sid`, in the same bucket. This is true only for a
     // backup in the unified layout, in the location of this table.
     const auto& toc = sstable_version_constants::TOC_SUFFIX;
-    auto share_components = may_use_reference_sharing
+    auto share_components = cfg.may_use_reference_sharing
             && src_storage->_bucket == _bucket
             && src_storage->make_object_name(src, toc, src.generation()).str()
                     == object_name(_bucket, prefix(), src_sid, toc).str();
@@ -1316,11 +1316,11 @@ future<entry_descriptor> object_storage_base::clone_from(sstable& src, generatio
         // So check that the snapshot still has its reference. If not, undo the clone:
         // remove the node reference with remove_by_registry_entry(), which deletes the
         // components when no reference is left, remove the registry entry, and fail.
-        if (!co_await _client->object_exists(make_snapshot_ref_object_name(sid, src.generation(), snapshot_tag), as)) {
+        if (!co_await _client->object_exists(make_snapshot_ref_object_name(sid, src.generation(), cfg.snapshot_tag), as)) {
             co_await remove_by_registry_entry(desc, node_owner);
             co_await src.manager().sstables_registry().delete_entry(owner(), node_owner, gen);
             co_await coroutine::return_exception(std::runtime_error(fmt::format("Cannot restore {}: snapshot {} does not hold the components of sstable_id={}",
-                    src.get_filename(), snapshot_tag, sid)));
+                    src.get_filename(), cfg.snapshot_tag, sid)));
         }
     } else {
         utils::get_local_injector().inject("fail_clone_from_before_copy", [] { throw std::runtime_error("Failing sstable clone"); });
