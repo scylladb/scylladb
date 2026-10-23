@@ -53,14 +53,7 @@ void commitlog_raft_log_entry_writer::write(ostream& out) const {
 
 namespace {
 auto read_variant_commitlog_entry(const fragmented_temporary_buffer& buffer) {
-    // XXX this is copying of the data, but since this is not critical path, only used during replay from commitlog,
-    // we can tolerate this for now. Should be fixed when we fix IDL generator to support deserialization directly from
-    // fragmented buffers.
-    bytes_ostream bo;
-    for (bytes_view frag : fragment_range(fragmented_temporary_buffer::view(buffer))) {
-        bo.write(reinterpret_cast<const char*>(frag.data()), frag.size());
-    }
-    auto in = ser::as_input_stream(bo);
+    auto in = seastar::fragmented_memory_input_stream(fragmented_temporary_buffer::view(buffer).begin(), buffer.size_bytes());
 
     // Note: we use the 'view' deserializer here because calling
     // `ser::deserialize(in, std::type_identity<ser::commitlog_entry>())`
@@ -69,16 +62,15 @@ auto read_variant_commitlog_entry(const fragmented_temporary_buffer& buffer) {
     // See issue: https://scylladb.atlassian.net/browse/SCYLLADB-1029
     //
     // For the same reason, we cannot rely on the implicit conversion from
-    // `ser::commitlog_entry_view` to `commitlog_entry` using
+    // `ser::commitlog_entry_fragmented_view` to `commitlog_entry` using
     // `operator commitlog_entry()` since that conversion
     // is also implemented using the "manual" deserializer.
-    auto view = ser::deserialize(in, std::type_identity<ser::commitlog_entry_view>());
-    return seastar::visit(
-            view.item(),
+    auto view = ser::deserialize(in, std::type_identity<ser::commitlog_entry_fragmented_view>());
+    return seastar::visit(view.item(),
             [](raft_commitlog_entry raft_log_entry) {
                 return commitlog_entry{.item = std::move(raft_log_entry)};
             },
-            [](const ser::mutation_entry_view& entry_view) {
+            [](const ser::mutation_entry_fragmented_view& entry_view) {
                 return commitlog_entry{.item = mutation_entry(entry_view.mapping(), entry_view.mutation())};
             },
             [](ser::unknown_variant_type) -> commitlog_entry {
