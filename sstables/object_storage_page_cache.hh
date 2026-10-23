@@ -21,6 +21,7 @@
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include "sstables/component_type.hh"
+#include "sstables/object_storage_page_cache_stats.hh"
 #include "sstables/types.hh"
 #include "sstables/types_fwd.hh"
 #include "seastarx.hh"
@@ -94,6 +95,13 @@ public:
     // the sstable - which moved from that shard to this one, keeping its
     // sstable_id (see sstables_manager::copy_disk_cached_pages()).
     virtual future<> copy_sstable_from_shard(sstable_id sst, shard_id from) = 0;
+
+    // The cache's statistics (see object_storage_page_cache_stats.hh).
+    object_storage_page_cache_stats& get_stats() noexcept {
+        return _stats;
+    }
+protected:
+    object_storage_page_cache_stats _stats;
 };
 
 } // namespace sstables
