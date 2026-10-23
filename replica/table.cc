@@ -2381,12 +2381,24 @@ table::stop() noexcept {
         co_await _logstor_index->drain_cache();
     }
     _cache.refresh_snapshot();
+    // Not in the destructor: the database destroys its sstables managers
+    // before the tables which it still holds.
+    if (_page_cache_stats) {
+        _sstables_manager.unregister_page_cache_table_stats(_schema->id(), _page_cache_stats);
+    }
 }
 static seastar::metrics::label_instance node_table_metrics("__per_table", "node");
 void table::set_metrics() {
     auto cf = column_family_label(_schema->cf_name());
     auto ks = keyspace_label(_schema->ks_name());
     namespace ms = seastar::metrics;
+    // The reads of this table through the disk page cache count their hits
+    // and misses in these statistics, which the sstables manager gives them.
+    if (auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&_storage_opts->value);
+            os && os->disk_cache == data_dictionary::storage_options::disk_cache_mode::pages) {
+        _page_cache_stats = make_lw_shared<sstables::object_storage_page_cache_table_stats>();
+        _sstables_manager.register_page_cache_table_stats(_schema->id(), _page_cache_stats);
+    }
     if (_config.enable_metrics_reporting) {
         _metrics.add_group("column_family", {
                 ms::make_counter("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks).set_skip_when_empty(),
@@ -2408,6 +2420,25 @@ void table::set_metrics() {
                         ms::description("Number of tasks waiting to delete sstables from a table"),
                         [this] { return _stats.pending_sstable_deletions; })(cf)(ks)
         });
+
+        if (_page_cache_stats) {
+            auto reads = ms::label("reads");
+            auto& st = *_page_cache_stats;
+            _metrics.add_group("column_family", {
+                    ms::make_counter("page_cache_hits", ms::description("Pages read from the disk page cache, by reads which may populate it"),
+                            st.populating.hits)(cf)(ks)(reads("populating")),
+                    ms::make_counter("page_cache_hits", ms::description("Pages read from the disk page cache, by reads with BYPASS CACHE and background reads"),
+                            st.non_populating.hits)(cf)(ks)(reads("non_populating")),
+                    ms::make_counter("page_cache_misses", ms::description("Pages read from the object store through the disk page cache, by reads which may populate it"),
+                            st.populating.misses)(cf)(ks)(reads("populating")),
+                    ms::make_counter("page_cache_misses", ms::description("Pages read from the object store through the disk page cache, by reads with BYPASS CACHE and background reads"),
+                            st.non_populating.misses)(cf)(ks)(reads("non_populating")),
+                    ms::make_counter("page_cache_object_reads", ms::description("Requests which reads through the disk page cache sent to the object store"),
+                            st.object_reads)(cf)(ks),
+                    ms::make_counter("page_cache_object_read_bytes", ms::description("Bytes which reads through the disk page cache requested from the object store"),
+                            st.object_read_bytes)(cf)(ks),
+            });
+        }
 
         if (uses_logstor()) {
             _metrics.add_group("column_family", {

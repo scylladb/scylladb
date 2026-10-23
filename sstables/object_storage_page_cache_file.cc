@@ -33,16 +33,18 @@ class page_cached_file_impl : public layered_file_impl {
     sstable_id _sst;
     component_type _component;
     populate_disk_cache _populate;
+    lw_shared_ptr<object_storage_page_cache_table_stats> _table_stats;
     // Created on the first read, from the size of the underlying file.
     shared_ptr<const page_geometry> _geometry;
 public:
     page_cached_file_impl(shared_ptr<object_storage_page_cache> cache, sstable_id sst, component_type component, file underlying,
-            populate_disk_cache populate)
+            populate_disk_cache populate, lw_shared_ptr<object_storage_page_cache_table_stats> table_stats)
         : layered_file_impl(std::move(underlying))
         , _cache(std::move(cache))
         , _sst(sst)
         , _component(component)
         , _populate(populate)
+        , _table_stats(std::move(table_stats))
     {}
 
     virtual future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent*) override {
@@ -59,7 +61,7 @@ public:
             std::vector<temporary_buffer<char>> bufs;
             bufs.push_back(std::move(buf));
             co_return data_source(std::make_unique<util::memory_data_source>(std::move(bufs)));
-        }, _populate);
+        }, _populate, _table_stats);
         std::exception_ptr ex;
         temporary_buffer<uint8_t> result;
         try {
@@ -173,8 +175,9 @@ private:
 } // anonymous namespace
 
 file make_page_cached_file(shared_ptr<object_storage_page_cache> cache, sstable_id sst, component_type component, file underlying,
-        populate_disk_cache populate) {
-    return file(make_shared<page_cached_file_impl>(std::move(cache), sst, component, std::move(underlying), populate));
+        populate_disk_cache populate, lw_shared_ptr<object_storage_page_cache_table_stats> table_stats) {
+    return file(make_shared<page_cached_file_impl>(std::move(cache), sst, component, std::move(underlying), populate,
+            std::move(table_stats)));
 }
 
 } // namespace sstables
