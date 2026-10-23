@@ -612,6 +612,92 @@ void backlog_proportional_compaction_controller::set_max_shares(float max_shares
     _control_points.back().output = max_shares;
 }
 
+rate_matching_compaction_controller::rate_matching_compaction_controller(scheduling_group sg, float static_shares, std::optional<float> max_shares,
+        std::chrono::milliseconds interval, std::function<compaction::compaction_rates()> current_rates)
+    : _scheduling_group(std::move(sg))
+    , _current_rates(std::move(current_rates))
+    , _static_shares(static_shares)
+    , _update_timer([this] { adjust(); })
+{
+    if (max_shares) {
+        set_max_shares(*max_shares);
+    }
+    _update_timer.arm_periodic(interval);
+}
+
+future<> rate_matching_compaction_controller::shutdown() {
+    _update_timer.cancel();
+    return make_ready_future<>();
+}
+
+future<> rate_matching_compaction_controller::update_static_shares(float static_shares) {
+    _static_shares = static_shares;
+    return make_ready_future<>();
+}
+
+void rate_matching_compaction_controller::set_max_shares(float max_shares) {
+    if (max_shares < min_shares) {
+        dblog.warn("The maximum compaction shares of {} is too low and can degrade performance. Increasing it to the minimum {}",
+                   max_shares, min_shares);
+        max_shares = min_shares;
+    }
+    _max_shares = max_shares;
+    _shares = std::min(_shares, _max_shares);
+}
+
+float rate_matching_compaction_controller::next_shares(float shares, const compaction::compaction_rates& rates, float max_shares) {
+    auto target = rates.target.per_second();
+    auto achieved = rates.achieved.per_second();
+    auto achieved_long = rates.achieved_long.per_second();
+    double step = 1;
+    if (std::isinf(target)) {
+        // The work pending is unknown, as a tracker failed: as the backlog controller
+        // does for an unknown backlog.
+        return max_shares;
+    } else if (target <= 0) {
+        // Nothing pending.
+        step = 1 / max_step;
+    } else if (achieved <= 0) {
+        // Nothing running, for the shares to speed up.
+        step = 1;
+    } else if (target > std::max(achieved, achieved_long)) {
+        // Behind now and over the rate window.
+        step = std::min(std::pow(target / std::max(achieved, achieved_long), alpha), max_step);
+    } else if (target < std::min(achieved, achieved_long)) {
+        // Ahead now and over the rate window.
+        step = std::max(std::pow(target / std::min(achieved, achieved_long), alpha), 1 / max_step);
+    }
+    // Otherwise the windows disagree, and the shares stay.
+    return std::clamp(float(shares * step), min_shares, max_shares);
+}
+
+void rate_matching_compaction_controller::adjust() {
+    if (_static_shares > 0) {
+        _scheduling_group.set_shares(_static_shares);
+        return;
+    }
+    compaction::compaction_rates rates;
+    auto previous_shares = _shares;
+    try {
+        rates = _current_rates();
+        _shares = next_shares(_shares, rates, _max_shares);
+    } catch (...) {
+        // The shares are left as they are.
+        dblog.warn("Failed to compute the compaction rates, leaving compaction shares at {}: {}", _shares, std::current_exception());
+    }
+    // What the shares were derived from: the ratio the step is a power of, so the
+    // logs tell a step held back by the limits from no error.
+    auto ratio = rates.achieved.per_second() > 0 ? rates.target.per_second() / rates.achieved.per_second() : std::numeric_limits<double>::infinity();
+    // On the rates' logger, so that enabling it shows the decision with its inputs.
+    compaction::compaction_rates_logger.debug("rate-matching compaction controller: setting shares from {:.1f} to {:.1f}; "
+            "target {:.0f} bytes/s over {:.0f}s, achieved {:.0f} bytes/s over {:.0f}s and {:.0f} bytes/s over {:.0f}s, target/achieved {:.2f}",
+            previous_shares, _shares,
+            rates.target.per_second(), rates.target.interval().count(),
+            rates.achieved.per_second(), rates.achieved.interval().count(),
+            rates.achieved_long.per_second(), rates.achieved_long.interval().count(), ratio);
+    _scheduling_group.set_shares(_shares);
+}
+
 namespace replica {
 
 static const metrics::label class_label("class");

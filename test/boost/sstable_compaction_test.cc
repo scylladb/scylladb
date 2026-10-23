@@ -5520,6 +5520,51 @@ SEASTAR_TEST_CASE(incremental_backlog_tracker_rates_test) {
     });
 }
 
+// rate_matching_compaction_controller scales the shares by (target / achieved)^alpha, by up to x2 either
+// way, within the bounds, and lowers them while nothing is pending. It raises them only while
+// compaction is behind over both the achieved window and the rate window, and lowers them only
+// while it is ahead over both, stepping to the nearer of the two.
+BOOST_AUTO_TEST_CASE(rate_matching_compaction_controller_next_shares) {
+    using rate = utils::rate<utils::units::bytes>;
+    using namespace std::chrono_literals;
+    auto next = [] (float shares, double target, double achieved, std::optional<double> achieved_long = {}, float max_shares = 1000) {
+        return rate_matching_compaction_controller::next_shares(shares, {.target = rate(target, 10s), .achieved = rate(achieved, 10s),
+                .achieved_long = rate(achieved_long.value_or(achieved), 10s)}, max_shares);
+    };
+    const auto alpha = rate_matching_compaction_controller::alpha;
+    // Behind the target, or ahead of it.
+    BOOST_REQUIRE_CLOSE(next(200, 1500, 1000), 200 * std::pow(1.5, alpha), 1e-4);
+    BOOST_REQUIRE_CLOSE(next(200, 1000, 1500), 200 * std::pow(1 / 1.5, alpha), 1e-4);
+    // Keeping up.
+    BOOST_REQUIRE_CLOSE(next(200, 1000, 1000), 200, 1e-4);
+    // Far behind or far ahead.
+    BOOST_REQUIRE_CLOSE(next(200, 1e9, 1), 400, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(200, 1, 1e9), 100, 1e-4);
+    // Nothing running: the shares have nothing to speed up.
+    BOOST_REQUIRE_CLOSE(next(200, 1000, 0), 200, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(200, 1000, 0, 500), 200, 1e-4);
+    // Nothing pending, whatever was compacted lately: the shares come down.
+    BOOST_REQUIRE_CLOSE(next(200, 0, 1000), 100, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(200, 0, 0), 100, 1e-4);
+    // A pause in compaction after keeping up over the rate window, or catching up on what
+    // compaction fell behind by over it: the shares stay.
+    BOOST_REQUIRE_CLOSE(next(200, 1000, 500, 1500), 200, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(200, 1000, 1500, 500), 200, 1e-4);
+    // Behind or ahead over both: the step is to the nearer.
+    BOOST_REQUIRE_CLOSE(next(200, 2000, 500, 1000), 200 * std::pow(2, alpha), 1e-4);
+    BOOST_REQUIRE_CLOSE(next(200, 500, 2000, 1000), 200 * std::pow(0.5, alpha), 1e-4);
+    // Within the bounds.
+    BOOST_REQUIRE_CLOSE(next(800, 1e9, 1), 1000, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(800, 1e9, 1, {}, 1200), 1200, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(60, 0, 1000), rate_matching_compaction_controller::min_shares, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(60, 0, 0), rate_matching_compaction_controller::min_shares, 1e-4);
+    // The work pending is unknown, as a tracker failed: the maximum, whatever compaction achieves.
+    const auto unknown = std::numeric_limits<double>::infinity();
+    BOOST_REQUIRE_CLOSE(next(60, unknown, 1000), 1000, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(60, unknown, 0), 1000, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(60, unknown, 1000, {}, 1200), 1200, 1e-4);
+}
+
 void test_major_does_not_miss_data_in_memtable_fn(test_env& env) {
     auto builder = schema_builder(this_smp_shard_count(), "tests", "test_major_does_not_miss_data_in_memtable")
             .with_column("id", utf8_type, column_kind::partition_key)

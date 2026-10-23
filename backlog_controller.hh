@@ -9,13 +9,16 @@
 #pragma once
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/timer.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/file.hh>
 #include <chrono>
+#include <optional>
 #include <cmath>
 
 #include "seastarx.hh"
 #include "backlog_controller_fwd.hh"
+#include "compaction/compaction_backlog_manager.hh"
 
 // Simple proportional controller to adjust shares for processes for which a backlog can be clearly
 // defined.
@@ -169,4 +172,60 @@ public:
     }
     // Updates the maximum output value for control points.
     void set_max_shares(float max_shares) override;
+};
+
+// Sets the shares so that compaction keeps up with the work ingestion produces, by
+// comparing the rate compaction has to run at, the target, with the rate it achieves,
+// both summed over all compaction groups:
+//
+//   shares = shares * (target / achieved)^alpha
+//
+// alpha and the step limit keep each update to a part of the way, as the rates are
+// averaged over minutes and respond slowly to the shares.
+//
+// What compaction achieves is taken over two windows: the achieved window, what it
+// delivers now, and the rate window the target is based on, what it delivered over the
+// same time. The shares are raised only while compaction is behind over both, and
+// lowered only while it is ahead over both. When they disagree, they stay: a pause in
+// compaction after keeping up over the rate window isn't falling behind, and catching
+// up for a few minutes doesn't repay what compaction fell behind by over it.
+class rate_matching_compaction_controller final : public compaction_controller {
+public:
+    using scheduling_group = seastar::scheduling_group;
+
+    static constexpr float min_shares = 50;
+    static constexpr double alpha = 0.3;
+    // An update changes the shares by up to this factor, either way.
+    static constexpr double max_step = 2;
+private:
+    scheduling_group _scheduling_group;
+    std::function<compaction::compaction_rates()> _current_rates;
+    float _static_shares;
+    // FIXME: the maximum is the backlog controller's by default, but this one doesn't
+    // have to stop there. Lift the default once tested; compaction_max_shares can raise
+    // it meanwhile.
+    float _max_shares = default_compaction_maximum_shares;
+    // Start at the minimum and rise as the rates show compaction falls behind, rather than
+    // from the scheduling group's shares: until a controller sets them, they are the
+    // group's default, the maximum, e.g. when the node switches to this controller, early
+    // at startup.
+    float _shares = min_shares;
+    timer<> _update_timer;
+
+    void adjust();
+public:
+    rate_matching_compaction_controller(scheduling_group sg, float static_shares, std::optional<float> max_shares, std::chrono::milliseconds interval,
+            std::function<compaction::compaction_rates()> current_rates);
+
+    future<> shutdown() override;
+    future<> update_static_shares(float static_shares) override;
+    void set_max_shares(float max_shares) override;
+
+    // The shares after an update from `shares`, given the rates. A target above what
+    // compaction achieves over both windows raises them, by the step to the nearer of the
+    // two; a target below both lowers them, by the step to the nearer. With no target, i.e.
+    // nothing pending, they are lowered whatever compaction achieved lately; with nothing
+    // compacted over the achieved window, i.e. nothing running, they stay. The shares only
+    // matter for compaction that competes for CPU.
+    static float next_shares(float shares, const compaction::compaction_rates& rates, float max_shares);
 };
