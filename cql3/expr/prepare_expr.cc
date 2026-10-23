@@ -1488,6 +1488,14 @@ prepare_function_call(const expr::function_call& fc, data_dictionary::database d
         // reuse path coerces explicitly.
         expr::expression e = [&] () -> expr::expression {
             if (!partially_prepared_args[i].prepared) {
+                if (expr::is<collection_constructor>(fc.args[i])) {
+                    // A function argument isn't a column, so an empty collection
+                    // literal passed to it is an empty collection, not null as it
+                    // would be for a non-frozen collection column. So prepare the
+                    // literal as a frozen value.
+                    auto frozen_spec = make_lw_shared<column_specification>(arg_spec->ks_name, arg_spec->cf_name, arg_spec->name, arg_spec->type->freeze());
+                    return coerce_to(prepare_expression(fc.args[i], db, keyspace, schema_opt, frozen_spec, memo), arg_spec->type, db, keyspace);
+                }
                 return prepare_expression(fc.args[i], db, keyspace, schema_opt, arg_spec, memo);
             } else {
                 expr::expression prepared = std::move(*partially_prepared_args[i].prepared);
