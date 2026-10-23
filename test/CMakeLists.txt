@@ -56,8 +56,10 @@ function(add_scylla_test name)
   set_target_properties(${target} PROPERTIES OUTPUT_NAME ${name})
   add_dependencies(tests ${target})
 
-  list(APPEND scylla_tests "${dirname}/${name}")
-  set(scylla_tests "${scylla_tests}" PARENT_SCOPE)
+  # A global property, not a variable: add_scylla_test() is called from the
+  # suite subdirectories, so PARENT_SCOPE would only reach the scope of the
+  # suite that called it, leaving the list empty here in test/.
+  set_property(GLOBAL APPEND PROPERTY scylla_tests "${dirname}/${name}")
 
   target_include_directories(${target}
     PRIVATE
@@ -135,6 +137,7 @@ endif()
 if(CMAKE_CONFIGURATION_TYPES)
   set(by_products_option BYPRODUCTS test-list.phony.stamp)
 endif()
+get_property(scylla_tests GLOBAL PROPERTY scylla_tests)
 add_custom_target(unit_test_list
   COMMAND echo -e "'$<LIST:JOIN,${scylla_tests},\\n>'"
   COMMENT "List configured unit tests"
