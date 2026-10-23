@@ -56,7 +56,7 @@ target_parser::target_info target_parser::parse(schema_ptr schema, const sstring
         return info;
     }
 
-    std::optional<rjson::value> json_value = rjson::try_parse(target);
+    auto json_value = rjson::try_parse(target);
     if (json_value && json_value->IsObject()) {
         rjson::value* pk = rjson::find(*json_value, PK_TARGET_KEY);
         rjson::value* ck = rjson::find(*json_value, CK_TARGET_KEY);
@@ -78,7 +78,7 @@ target_parser::target_info target_parser::parse(schema_ptr schema, const sstring
 }
 
 bool target_parser::is_local(sstring target_string) {
-    std::optional<rjson::value> json_value = rjson::try_parse(target_string);
+    auto json_value = rjson::try_parse(target_string);
     if (!json_value || !json_value->IsObject()) {
         return false;
     }
@@ -88,7 +88,7 @@ bool target_parser::is_local(sstring target_string) {
 }
 
 sstring target_parser::get_target_column_name_from_string(const sstring& targets) {
-    std::optional<rjson::value> json_value = rjson::try_parse(targets);
+    auto json_value = rjson::try_parse(targets);
     if (!json_value || !json_value->IsObject()) {
         return targets;
     }

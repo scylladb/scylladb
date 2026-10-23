@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<!--
+    Copyright (C) 2026-present ScyllaDB
+
+    SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+-->
+<html lang="en">
+<head>
+    <title>ScyllaDB Web Shell</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="favicon.ico">
+    <link rel="stylesheet" href="webshell.css">
+</head>
+<body>
+    <header class="bar bar--top">
+        <span class="brand">ScyllaDB<span> Web Shell</span></span>
+        <span class="identity" id="identity"></span>
+        <button class="signout" id="signout" type="button" hidden>Sign out</button>
+    </header>
+
+    <!-- tabindex so focus has somewhere to go while the input row is hidden:
+         see hideRow() in webshell.js. -->
+    <main id="screen" tabindex="-1">
+        <div id="scrollback"></div>
+        <div class="block" id="row">
+            <span class="mark" id="row-mark"></span>
+            <span class="prompt" id="prompt"></span>
+            <textarea class="input" id="input" rows="1" spellcheck="false" autocapitalize="off"
+                      autocomplete="off" autocorrect="off" aria-label="Query input"></textarea>
+            <input class="input" id="password" type="password" autocomplete="current-password"
+                   aria-label="Password" hidden>
+        </div>
+    </main>
+
+    <footer class="bar bar--status">
+        <div class="opts" id="status"></div>
+    </footer>
+
+    <script src="webshell.js"></script>
+</body>
+</html>
