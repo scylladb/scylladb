@@ -19,8 +19,15 @@
 #include <seastar/core/coroutine.hh>
 #include "sstables/object_storage_page_cache_source.hh"
 #include "sstables/sstables_manager.hh"
+#include "utils/log.hh"
 
 namespace sstables {
+
+extern logging::logger sstlog;
+
+// A cache which fails - say, because its disk is full or broken - might
+// fail every read, so its errors are logged at most once a minute.
+static thread_local logging::logger::rate_limit cache_error_rate_limit{std::chrono::minutes(1)};
 
 namespace {
 
@@ -122,12 +129,23 @@ private:
     // Returns the given page from the cache, or an empty buffer if it is not
     // cached. Reads from the cache only when the pages it returned last time
     // are used up, and then reads a batch of pages from this one onward.
+    //
+    // The object store holds all the pages, so a failure to read the cache
+    // doesn't fail the read: the page is read from the object store, as if
+    // it wasn't cached.
     future<temporary_buffer<char>> get_cached_page(page_geometry::page_bounds page) {
         while (!_cached.empty() && _cached.front().offset < page.start) {
             _cached.pop_front();
         }
         if (_cached.empty()) {
-            auto pages = co_await _cache.get_pages(_sst, _component, page.start, _pages_end, _pages_per_read, _populate);
+            std::vector<object_storage_page_cache::page> pages;
+            try {
+                pages = co_await _cache.get_pages(_sst, _component, page.start, _pages_end, _pages_per_read, _populate);
+            } catch (...) {
+                sstlog.log(log_level::warn, cache_error_rate_limit,
+                        "Failed to read the disk page cache of {} component of sstable {}, reading from the object store: {}",
+                        _component, _sst, std::current_exception());
+            }
             _cached.assign(std::make_move_iterator(pages.begin()), std::make_move_iterator(pages.end()));
         }
         // A cached page of the wrong size cannot be a page of this component,
@@ -152,7 +170,16 @@ private:
         }
         _object_pos = page.end;
         if (_populate) {
-            co_await _cache.put_page(_sst, _component, page.start, data.share());
+            // A failure to cache the page doesn't fail the read, which has the
+            // page anyway - but this source stops caching pages.
+            try {
+                co_await _cache.put_page(_sst, _component, page.start, data.share());
+            } catch (...) {
+                _populate = populate_disk_cache::no;
+                sstlog.log(log_level::warn, cache_error_rate_limit,
+                        "Failed to write the disk page cache of {} component of sstable {}: {}",
+                        _component, _sst, std::current_exception());
+            }
         }
         co_return data;
     }

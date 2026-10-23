@@ -1061,6 +1061,42 @@ async def test_cache_size_limit(manager: ScyllaClusterManager, s3_storage):
         assert await read_requests(manager, server, s3_storage) == requests_before
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_cache_errors(manager: ScyllaClusterManager, s3_storage):
+    '''A failure to write or read the page cache - for example, because the
+    node's disk is full, or broken - doesn't fail the read, which reads from
+    the object store instead.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+
+        # Check that a scan, when writing the cache fails, caches nothing.
+        await manager.api.enable_injection(server.ip_addr, 'object_storage_page_cache_put_page', one_shot=False)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        assert cached_pages(cql) == []
+        await manager.api.disable_injection(server.ip_addr, 'object_storage_page_cache_put_page')
+
+        # Cache the table. Check that a scan, when reading the cache fails,
+        # reads from the object store.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        assert cached_pages(cql)
+        await manager.api.enable_injection(server.ip_addr, 'object_storage_page_cache_get_pages', one_shot=False)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert scan(cql, ks) == data
+        assert await read_requests(manager, server, s3_storage) > requests_before
+        await manager.api.disable_injection(server.ip_addr, 'object_storage_page_cache_get_pages')
+
+        # Check that the cache works again, when its errors are gone.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert scan(cql, ks) == data
+        assert await read_requests(manager, server, s3_storage) == requests_before
+
+
 async def test_lwt_populates_cache(manager: ScyllaClusterManager, s3_storage):
     '''The read of a conditional update (LWT) is a user read, which reads
     through the page cache, and populates it.'''
