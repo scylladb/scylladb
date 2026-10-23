@@ -141,8 +141,11 @@ future<minimal_sst_info> download_sstable(replica::table& table, sstables::share
         on_internal_error(logger, "Fully-contained sstable must belong to one shard only");
     }
 
+    auto storage = sstables::make_storage(table.get_sstables_manager(), table.schema(), table.get_storage_options(), sstables::sstable_state::normal);
     auto gen = table.get_sstable_generation_generator()();
-    auto desc = co_await stream_remote_sstable(*sstable, gen, table.schema(), table.get_storage_options(), logger);
+    auto desc = co_await storage->clone_from(*sstable, gen, sstables::clone_from_cfg{
+        .schema = table.schema(),
+    });
     logger.debug("SSTable gen={} sid={} downloaded from sid={}: shard {}", gen, desc.sid, *source_sid, shards.front());
     co_return minimal_sst_info{shards.front(), gen, desc.version, desc.format, desc.sid, *source_sid};
 }

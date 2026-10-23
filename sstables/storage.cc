@@ -33,6 +33,7 @@
 #include "sstables/sstable_version.hh"
 #include "sstables/integrity_checked_file_impl.hh"
 #include "sstables/writer.hh"
+#include "sstables_loader_helpers.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/lister.hh"
@@ -95,7 +96,7 @@ public:
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring name) const override;
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
-    virtual future<entry_descriptor> clone_from(sstable& src, generation_type gen, clone_from_cfg cfg) const override;
+    virtual future<entry_descriptor> clone_from(sstable& remote, generation_type gen, clone_from_cfg cfg) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -474,10 +475,10 @@ future<entry_descriptor> filesystem_storage::clone(sstable& sst, generation_type
     co_return desc;
 }
 
-future<entry_descriptor> filesystem_storage::clone_from(sstable& src, generation_type, clone_from_cfg) const {
+future<entry_descriptor> filesystem_storage::clone_from(sstable& remote, generation_type gen, clone_from_cfg cfg) const {
     // A backup sstable is never on the filesystem of the restored table, so there is
-    // nothing to clone. For a table on filesystem, restore downloads the components.
-    on_internal_error(sstlog, fmt::format("Cannot clone {} into filesystem storage {}", src.get_filename(), _dir.path().native()));
+    // nothing to clone inside this storage. Stream the components down instead.
+    return stream_remote_sstable(remote, gen, cfg.schema, data_dictionary::make_local_options(_base_dir.path()), sstlog);
 }
 
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {

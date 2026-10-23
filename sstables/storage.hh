@@ -106,6 +106,9 @@ struct clone_from_cfg {
     bool may_use_reference_sharing = false;
     // The tag of the snapshot which holds the source sstable. Object storage only.
     std::string_view snapshot_tag = {};
+    // The schema of the destination table. Filesystem storage only: it creates the
+    // sstable it streams the components into. Object storage has the schema already.
+    schema_ptr schema = {};
 };
 
 class storage {
@@ -136,11 +139,12 @@ public:
     // `may_use_reference_sharing` is a hint: storage backends may ignore it
     // and use their natural clone method.
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const = 0;
-    // Clones the backup sstable `src` into this storage. clone_from() creates the
-    // registry entry and the node reference, and puts the components under the object
-    // names of this storage. clone() works inside one storage. clone_from() takes the
-    // object names of `src` from the storage of `src`, so `src` can be in another
-    // bucket and use another layout.
+    // Clones the backup sstable `src` into this storage. clone() works inside one
+    // storage, clone_from() takes the components of `src` from the storage of `src`,
+    // so `src` can live in another bucket and use another layout.
+    // Object storage copies the components inside the storage, or shares them with
+    // `src`, and creates the registry entry and the node reference. Filesystem storage
+    // has nothing to copy inside itself, so it streams the components through this node.
     // The clone is not sealed, so the next boot removes the clone of an interrupted
     // restore. The caller seals the clone.
     virtual future<entry_descriptor> clone_from(sstable& src, generation_type gen, clone_from_cfg cfg) const = 0;
