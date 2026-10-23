@@ -121,6 +121,17 @@ ninja build/<mode>/scylla
 - When rebasing onto a new baseline, run `git submodule sync --recursive` and
   `git submodule update --init --recursive` afterwards so the submodules match the new baseline.
 
+## External Communication
+- When an AI agent posts a comment on GitHub or Jira, it says so and names the model, and
+  states on whose behalf it comments, e.g. `(<model name>, on behalf of @<user>)`.
+- In Jira issues and comments, reference commits and other issues by their full URLs, e.g.
+  `https://github.com/scylladb/scylladb/commit/<sha>` and
+  `https://scylladb.atlassian.net/browse/SCYLLADB-1234`. Jira renders them as inline smart
+  cards showing the commit title or the issue title and status, so do not spell those out by
+  hand. A bare key such as `SCYLLADB-1234` is not linked. In markdown a bare URL becomes a
+  smart card automatically; in HTML an `<a>` needs `data-card-appearance="inline"`, otherwise
+  it stays a plain hyperlink.
+
 ## New Files
 - Include `LicenseRef-ScyllaDB-Source-Available-1.1` in the SPDX header
 - Use the current year for new files; for existing code keep the year as is
