@@ -286,6 +286,7 @@ tablet_info::tablet_info(const tablet_info& o)
     , repair_task_info(o.repair_task_info ? std::make_unique<tablet_task_info>(*o.repair_task_info) : nullptr)
     , migration_task_info(o.migration_task_info ? std::make_unique<tablet_task_info>(*o.migration_task_info) : nullptr)
     , sstables_repaired_at(o.sstables_repaired_at)
+    , pending_repair_request(o.pending_repair_request ? std::make_unique<tablet_task_info>(*o.pending_repair_request) : nullptr)
 {}
 
 tablet_info& tablet_info::operator=(const tablet_info& o) {
@@ -295,6 +296,7 @@ tablet_info& tablet_info::operator=(const tablet_info& o) {
         repair_task_info = o.repair_task_info ? std::make_unique<tablet_task_info>(*o.repair_task_info) : nullptr;
         migration_task_info = o.migration_task_info ? std::make_unique<tablet_task_info>(*o.migration_task_info) : nullptr;
         sstables_repaired_at = o.sstables_repaired_at;
+        pending_repair_request = o.pending_repair_request ? std::make_unique<tablet_task_info>(*o.pending_repair_request) : nullptr;
     }
     return *this;
 }
@@ -307,7 +309,8 @@ bool tablet_info::operator==(const tablet_info& o) const {
         && repair_time == o.repair_time
         && eq(repair_task_info, o.repair_task_info)
         && eq(migration_task_info, o.migration_task_info)
-        && sstables_repaired_at == o.sstables_repaired_at;
+        && sstables_repaired_at == o.sstables_repaired_at
+        && eq(pending_repair_request, o.pending_repair_request);
 }
 
 std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
@@ -316,6 +319,18 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
         a.repair_task_info ? *a.repair_task_info : empty_task_info,
         b.repair_task_info ? *b.repair_task_info : empty_task_info);
     if (!repair_task_info) {
+        return {};
+    }
+    auto pending_repair_request = tablet_task_info::merge_repair_tasks(
+        a.pending_repair_request ? *a.pending_repair_request : empty_task_info,
+        b.pending_repair_request ? *b.pending_repair_request : empty_task_info);
+    if (!pending_repair_request) {
+        return {};
+    }
+    // A user request may be in repair_task_info of one sibling and pending
+    // on the other, but two different user requests cannot share a tablet.
+    if (repair_task_info->is_user_repair_request() && pending_repair_request->is_valid()
+            && pending_repair_request->tablet_task_id != repair_task_info->tablet_task_id) {
         return {};
     }
 
@@ -331,6 +346,9 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
     int64_t sstables_repaired_at = std::max(a.sstables_repaired_at, b.sstables_repaired_at);
     auto info = tablet_info(std::move(a.replicas), repair_time, std::make_unique<tablet_task_info>(*repair_task_info),
         a.migration_task_info ? std::make_unique<tablet_task_info>(*a.migration_task_info) : nullptr, sstables_repaired_at);
+    if (pending_repair_request->is_valid()) {
+        info.pending_repair_request = std::make_unique<tablet_task_info>(*pending_repair_request);
+    }
     return info;
 }
 

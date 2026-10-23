@@ -318,6 +318,11 @@ struct tablet_info {
     std::unique_ptr<tablet_task_info> repair_task_info;
     std::unique_ptr<tablet_task_info> migration_task_info;
     int64_t sstables_repaired_at;
+    // A user repair request waiting to be scheduled. The repair request API
+    // stores it here whatever the tablet is doing, and the topology
+    // coordinator moves it to repair_task_info when it starts the repair
+    // transition of the tablet.
+    std::unique_ptr<tablet_task_info> pending_repair_request;
 
     tablet_info() = default;
     tablet_info(tablet_replica_set, db_clock::time_point, std::unique_ptr<tablet_task_info> repair_task_info, std::unique_ptr<tablet_task_info> migration_task_info, int64_t sstables_repaired_at);
@@ -339,7 +344,7 @@ struct tablet_raft_info {
 };
 
 // Merges tablet_info b into a, but with following constraints:
-//  - they cannot have active repair task, since each task has a different id
+//  - they cannot have different repair tasks, running or pending, since each task has a different id
 //  - their replicas must be all co-located.
 // If tablet infos are mergeable, merged info is returned. Otherwise, nullopt.
 std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b);

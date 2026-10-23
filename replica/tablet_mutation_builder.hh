@@ -44,6 +44,8 @@ public:
     tablet_mutation_builder& set_sstables_repair_at(dht::token last_token, int64_t sstables_repaired_at);
     tablet_mutation_builder& set_repair_task_info(dht::token last_token, locator::tablet_task_info info, const gms::feature_service& features);
     tablet_mutation_builder& del_repair_task_info(dht::token last_token, const gms::feature_service& features);
+    tablet_mutation_builder& set_pending_repair_request(dht::token last_token, locator::tablet_task_info info, const gms::feature_service& features);
+    tablet_mutation_builder& del_pending_repair_request(dht::token last_token, const gms::feature_service& features);
     tablet_mutation_builder& set_migration_task_info(dht::token last_token, locator::tablet_task_info info, const gms::feature_service& features);
     tablet_mutation_builder& del_migration_task_info(dht::token last_token, const gms::feature_service& features);
     tablet_mutation_builder& set_resize_task_info(locator::tablet_task_info info, const gms::feature_service& features);
