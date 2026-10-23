@@ -329,7 +329,7 @@ void service::client_state::set_keyspace(replica::database& db, std::string_view
     // Skip keyspace validation for non-authenticated users. Apparently, some client libraries
     // call set_keyspace() before calling login(), and we have to handle that.
     if (_user && !db.has_keyspace(keyspace)) {
-        throw exceptions::invalid_request_exception(seastar::format("Keyspace '{}' does not exist", keyspace));
+        throw exceptions::keyspace_not_defined_exception(keyspace);
     }
     _keyspace = sstring(keyspace);
 }
