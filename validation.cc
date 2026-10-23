@@ -73,7 +73,7 @@ void validate_keyspace(data_dictionary::database db, const sstring& keyspace_nam
     }
 
     if (!db.has_keyspace(keyspace_name)) {
-        throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace_name));
+        throw exceptions::keyspace_not_defined_exception(keyspace_name);
     }
 }
 

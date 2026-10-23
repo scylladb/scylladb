@@ -37,7 +37,6 @@ def test_insert_into_missing_table(cql, test_keyspace):
         assert f"Table '{test_keyspace}.no_such_table' does not exist" in str(error.value)
 
 
-@pytest.mark.xfail(reason="SCYLLADB-5624")
 def test_select_from_missing_keyspace(cql):
     with pytest.raises(InvalidRequest) as error:
         cql.execute("SELECT * FROM no_such_keyspace.no_such_table")
@@ -45,7 +44,6 @@ def test_select_from_missing_keyspace(cql):
         assert "Keyspace 'no_such_keyspace' does not exist" in str(error.value)
 
 
-@pytest.mark.xfail(reason="SCYLLADB-5624")
 def test_drop_index_in_missing_keyspace(cql):
     with pytest.raises(InvalidRequest) as error:
         cql.execute("DROP INDEX no_such_keyspace.no_such_index")
