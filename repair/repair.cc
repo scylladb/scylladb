@@ -2721,7 +2721,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                 }
 
                 co_await utils::get_local_injector().inject("repair_tablet_repair_task_impl_run",
-                        utils::wait_for_message(10s, &rs.get_repair_module().abort_source()));
+                        utils::wait_for_message(2min, &rs.get_repair_module().abort_source()));
 
                 std::unordered_map<dht::token_range, repair_neighbors> neighbors;
                 neighbors[m.range] = m.neighbors;
