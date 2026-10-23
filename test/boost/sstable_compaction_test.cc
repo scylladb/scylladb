@@ -6375,6 +6375,74 @@ SEASTAR_TEST_CASE(cleanup_samples_sstables_requiring_cleanup_once_test) {
     });
 }
 
+// perform_cleanup() must reject a concurrent cleanup request on the same table
+// for its whole duration, including while it waits for staging sstables between
+// compaction tasks, when no cleanup task is registered with the compaction
+// manager. Otherwise the second request re-samples the sstables requiring
+// cleanup and replaces the owned ranges the first one is still using.
+SEASTAR_TEST_CASE(cleanup_rejects_concurrent_cleanup_while_waiting_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(2); // in ring order
+
+        auto make_mut = [&] (const dht::decorated_key& pk) {
+            auto m = mutation(s, pk);
+            m.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+            return m;
+        };
+
+        auto t = env.make_table_for_tests(s);
+        auto close_t = deferred_stop(t);
+        t->disable_auto_compaction().get();
+        auto& cm = t->get_compaction_manager();
+        auto& view = t->try_get_compaction_group_view_with_static_sharding();
+        auto sst_gen = env.make_sst_factory(s);
+
+        // Only pks[0] is owned.
+        auto owned_ranges = make_lw_shared<const dht::token_range_vector>(dht::token_range_vector{
+            dht::token_range::make_singular(pks[0].token())
+        });
+
+        // A staging sstable requires cleanup but is not eligible for compaction
+        // until it is moved out of staging, so perform_cleanup() has to wait for it.
+        auto owned_mut = make_mut(pks[0]);
+        auto staging_sst = make_sstable_containing(sst_gen, {owned_mut, make_mut(pks[1])}).get();
+        staging_sst->change_state(sstable_state::staging).get();
+        t->add_sstable_and_update_cache(staging_sst).get();
+
+        auto cleanup = t->perform_cleanup_compaction(owned_ranges, tasks::make_empty_task_info());
+
+        // Wait for perform_cleanup() to take its sample and start waiting.
+        while (!cm.requires_cleanup(view, staging_sst)) {
+            BOOST_REQUIRE(!cleanup.available());
+            yield().get();
+        }
+        BOOST_REQUIRE(!cleanup.available());
+
+        // A second cleanup on the same table must be rejected while the first
+        // one is waiting, and must leave the first one's state alone.
+        BOOST_REQUIRE_EXCEPTION(t->perform_cleanup_compaction(owned_ranges, tasks::make_empty_task_info()).get(), std::runtime_error, [] (const std::runtime_error& e) {
+            return std::string_view(e.what()).contains("ongoing cleanup");
+        });
+        BOOST_REQUIRE(!cleanup.available());
+        BOOST_REQUIRE(cm.requires_cleanup(view, staging_sst));
+
+        // Let the staging sstable become eligible; this wakes perform_cleanup() up.
+        t->move_sstables_from_staging({staging_sst}).get();
+        cleanup.get();
+        BOOST_REQUIRE(cm.sstables_requiring_cleanup(view).empty());
+
+        // Once the first cleanup is done, a new one is accepted again.
+        t->perform_cleanup_compaction(owned_ranges, tasks::make_empty_task_info()).get();
+        auto sstables = t->get_sstables();
+        BOOST_REQUIRE(std::ranges::find(*sstables, staging_sst) == sstables->end());
+        assert_that(t->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range))
+                .produces(owned_mut)
+                .produces_end_of_stream();
+    });
+}
+
 // A quarantined sstable is never eligible for compaction, so a cleanup that
 // needs to clean it up cannot make progress. It must fail right away, naming
 // the sstable, rather than wait for the idle timeout. A quarantined sstable
