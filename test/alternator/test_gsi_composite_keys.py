@@ -2214,6 +2214,39 @@ def test_gsi_composite_query_projection_expression(test_table_gsi_2h2r):
     expected = [{"r2": item["r2"], "z": item["z"]} for item in items]
     assert sorted(got, key=lambda i: i["r2"]) == expected
 
+# Pagination of a Query with a condition on the composite range key - on a
+# prefix of its attributes, or on all of them. Each LastEvaluatedKey has all
+# the GSI's key attributes and the base table's key, and must be accepted as
+# the next page's ExclusiveStartKey. Several items have the same range key,
+# so pages also end in the middle, and at the end, of the items matching the
+# condition. The test also checks reversed queries.
+def test_gsi_composite_query_pagination_range_condition(test_table_gsi_2h2r):
+    table = test_table_gsi_2h2r
+    h1_val, h2_val = random_string(), random_string()
+    items = [{"p": random_string(), "h1": h1_val, "h2": h2_val,
+              "r1": r1, "r2": r2} for r1 in ["a", "b", "c"] for r2 in ["x", "y", "z"] for _ in range(2)]
+    with table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    for condition, values, match in [
+            ("r1 = :r1", {":r1": "b"}, lambda i: i["r1"] == "b"),
+            ("r1 > :r1", {":r1": "a"}, lambda i: i["r1"] > "a"),
+            ("r1 = :r1 AND r2 = :r2", {":r1": "b", ":r2": "y"}, lambda i: i["r1"] == "b" and i["r2"] == "y"),
+            ("r1 = :r1 AND r2 BETWEEN :lo AND :hi", {":r1": "b", ":lo": "x", ":hi": "y"},
+                lambda i: i["r1"] == "b" and "x" <= i["r2"] <= "y")]:
+        expected_items = [item for item in items if match(item)]
+        for forward in [True, False]:
+            for limit in [1, 2, 3]:
+                assert_index_query(
+                    table,
+                    "idx_2h2r",
+                    expected_items,
+                    KeyConditionExpression=f"h1 = :h1 AND h2 = :h2 AND {condition}",
+                    ExpressionAttributeValues={":h1": h1_val, ":h2": h2_val, **values},
+                    ScanIndexForward=forward,
+                    Limit=limit,
+                )
+
 
 # Scan pagination on composite GSI.
 @pytest.mark.parametrize("limit", [1, 2, 5, 8])
@@ -2305,7 +2338,6 @@ def test_gsi_composite_exclusivestartkey_missing_column_rejected(test_table_gsi_
 
 # ExclusiveStartKey with a spurious extra attr beyond the base table key and
 # composite GSI key attrs - should fail.
-@pytest.mark.xfail(reason="issue #26988")
 def test_gsi_composite_exclusivestartkey_spurious_column_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
     query_args = {

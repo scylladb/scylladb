@@ -16,7 +16,7 @@ import pytest
 import time
 import itertools
 from botocore.exceptions import ClientError
-from .util import create_test_table, random_string, random_bytes, full_scan, full_query, multiset, list_tables, new_test_table, wait_for_gsi, unique_table_name
+from .util import create_test_table, random_string, random_bytes, full_scan, full_query, multiset, list_tables, new_test_table, wait_for_gsi, unique_table_name, scylla_config_temporary
 
 # GSIs only support eventually consistent reads, so tests that involve
 # writing to a table and then expect to read something from it cannot be
@@ -2318,6 +2318,146 @@ def test_gsi_query_paging(test_table_gsi_5):
             time.sleep(0.1)
         assert multiset(items) == multiset(got_items)
 
+# A table without a sort key, with a GSI whose key is just the table's
+# partition key. The GSI has no sort key either, so a Query on it returns at
+# most one item.
+@pytest.fixture(scope="module")
+def test_table_gsi_on_partition_key(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'hello',
+                'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'}
+            }
+        ]) as table:
+        yield table
+
+# As in test_query.py::test_query_no_sort_key_paging, a page of a Query on
+# a GSI which has at most one item per partition key shouldn't have a
+# LastEvaluatedKey, even if the page reached its Limit, so paging such a
+# query must not fail.
+def test_gsi_query_no_sort_key_paging(test_table_gsi_on_partition_key):
+    table = test_table_gsi_on_partition_key
+    p = random_string()
+    item = {'p': p, 'x': 'dog'}
+    table.put_item(Item=item)
+    key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+    assert_index_query(table, 'hello', [item], KeyConditions=key_conditions, Limit=1)
+    response = table.query(IndexName='hello', KeyConditions=key_conditions, Limit=1)
+    assert response['Items'] == [item]
+    assert 'LastEvaluatedKey' not in response
+
+# As in test_query.py::test_query_no_sort_key_exclusive_start_key, a Query
+# of a GSI which has at most one item per partition key doesn't allow an
+# ExclusiveStartKey. Reproduces issue #26988.
+def test_gsi_query_no_sort_key_exclusive_start_key(test_table_gsi_on_partition_key):
+    p = random_string()
+    with pytest.raises(ClientError, match='ValidationException.*exclusive start key'):
+        test_table_gsi_on_partition_key.query(IndexName='hello',
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            ExclusiveStartKey={'p': p})
+
+# test_table_gsi_2 has a table without a sort key, with a GSI without a sort
+# key on a non-key attribute x. Unlike the table, the GSI can have many items
+# with the same partition key (x), so a Query on it may need several pages,
+# and it must accept the LastEvaluatedKey (which has x and the table's key p)
+# as the next page's ExclusiveStartKey. In Alternator, the view backing this
+# GSI has a clustering key (p), unlike the base table.
+def test_gsi_without_sort_key_query_paging(test_table_gsi_2):
+    x = random_string()
+    items = [{'p': random_string(), 'x': x} for i in range(10)]
+    with test_table_gsi_2.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    for limit in [1, 2, 3]:
+        assert_index_query(test_table_gsi_2, 'hello', items, Limit=limit,
+            KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+
+# Like test_gsi_without_sort_key_query_paging, but paging through a long run
+# of deleted items: A page may end on a deleted item - the GSI has a long run
+# of tombstones although the base table has just one tombstone per partition.
+# The test is scylla_only because it lowers Scylla's query_tombstone_page_limit.
+def test_gsi_without_sort_key_query_paging_deleted_items(dynamodb, test_table_gsi_2, scylla_only):
+    x = random_string()
+    prefix = random_string()
+    items = [{'p': f'{prefix}{i:02d}', 'x': x} for i in range(60)]
+    live_items = items[::10]
+    with test_table_gsi_2.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    with test_table_gsi_2.batch_writer() as batch:
+        for item in items:
+            if item not in live_items:
+                batch.delete_item(Key={'p': item['p']})
+    key_conditions = {'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}}
+    with scylla_config_temporary(dynamodb, 'query_tombstone_page_limit', '5'):
+        # Wait for the GSI to be updated, and check the result.
+        assert_index_query(test_table_gsi_2, 'hello', live_items, KeyConditions=key_conditions)
+        # Check that the test really did what it intended: Some pages
+        # ended on a deleted item.
+        response = test_table_gsi_2.query(IndexName='hello', KeyConditions=key_conditions)
+        start_keys = []
+        while 'LastEvaluatedKey' in response:
+            start_keys.append(response['LastEvaluatedKey']['p'])
+            response = test_table_gsi_2.query(IndexName='hello', KeyConditions=key_conditions,
+                ExclusiveStartKey=response['LastEvaluatedKey'])
+        assert any({'p': p, 'x': x} not in live_items for p in start_keys)
+
+# In a table without a sort key, deleting an item (or its expiration by TTL)
+# writes a partition tombstone. Usually, a GSI gets row tombstones instead,
+# because a partition of the table is spread over many partitions of the GSI.
+# But if the GSI's partition key is the table's partition key (here, gsi_ss of
+# test_table_gsi_6 - even though it also has a sort key), each partition of
+# the GSI has only the items of the same partition of the table, so the GSI
+# gets a partition tombstone too. When a page ends after such a partition
+# tombstone (after reading query_tombstone_page_limit tombstones), there is no
+# item at the position where it ended, so its LastEvaluatedKey has just the
+# partition key, not the GSI's sort key - and it isn't accepted as the next
+# page's ExclusiveStartKey ("Key column s not found"). The test is
+# scylla_only because it lowers Scylla's query_tombstone_page_limit, to end a
+# page after a single tombstone. Reproduces SCYLLADB-5293.
+@pytest.mark.xfail(reason='SCYLLADB-5293')
+def test_gsi_query_paging_after_partition_tombstone(dynamodb, test_table_gsi_6, scylla_only):
+    p = random_string()
+    item = {'p': p, 's': random_string()}
+    key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+    test_table_gsi_6.put_item(Item=item)
+    # Wait for the item to appear in the GSI, delete it, and wait for it to
+    # disappear from the GSI.
+    assert_index_query(test_table_gsi_6, 'gsi_ss', [item], KeyConditions=key_conditions)
+    test_table_gsi_6.delete_item(Key={'p': p})
+    assert_index_query(test_table_gsi_6, 'gsi_ss', [], KeyConditions=key_conditions)
+    with scylla_config_temporary(dynamodb, 'query_tombstone_page_limit', '1'):
+        assert full_query(test_table_gsi_6, IndexName='gsi_ss', ConsistentRead=False,
+            KeyConditions=key_conditions) == []
+
+# Like test_gsi_query_paging, but the query also has a condition on the GSI's
+# range key. Each page's LastEvaluatedKey has the base table's key as well as
+# the GSI's key, and must be accepted as the next page's ExclusiveStartKey,
+# although the condition is only on the GSI's range key. Several items have
+# the same range key, so pages also end in the middle, and at the end, of the
+# items matching the condition. The test also checks reversed queries.
+def test_gsi_query_paging_sort_key_condition(test_table_gsi_5):
+    p = random_string()
+    items = [{'p': p, 'c': str(i), 'x': str(i % 4)} for i in range(16)]
+    with test_table_gsi_5.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    for condition, match in [
+            ({'AttributeValueList': ['1'], 'ComparisonOperator': 'EQ'}, lambda x: x == '1'),
+            ({'AttributeValueList': ['1', '2'], 'ComparisonOperator': 'BETWEEN'}, lambda x: '1' <= x <= '2'),
+            ({'AttributeValueList': ['1'], 'ComparisonOperator': 'GT'}, lambda x: x > '1'),
+            ({'AttributeValueList': ['2'], 'ComparisonOperator': 'BEGINS_WITH'}, lambda x: x.startswith('2'))]:
+        expected_items = [item for item in items if match(item['x'])]
+        for forward in [True, False]:
+            for limit in [1, 2, 3, 4]:
+                assert_index_query(test_table_gsi_5, 'hello', expected_items,
+                    KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                                   'x': condition},
+                    ScanIndexForward=forward, Limit=limit)
+
 # The previous test (test_gsi_query_paging) showed that paging a Query
 # on a GSI works correctly. In particular it means that each page returned an
 # ExclusiveStartKey that was successfully used to read the next page.
@@ -2417,7 +2557,6 @@ def test_gsi_query_exclusivestartkey_missing_column(test_table_gsi_5):
 # When Query'ing on a certain GSI partition key and/or sort key,
 # ExclusiveStartKey must have the same partition/sort key value.
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
 def test_gsi_query_exclusivestartkey_wrong_partition(test_table_gsi_5):
     # The error that DynamoDB reports if the wrong partition is mentioned
     # in ExclusiveStartKey is "The provided starting key is outside query
@@ -2468,7 +2607,6 @@ def test_gsi_query_exclusivestartkey_wrong_partition(test_table_gsi_5):
 # Check that ExclusiveStartKey cannot contain any spurious column names
 # beyond the actual primary key columns of the base and the GSI.
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
 def test_gsi_query_exclusivestartkey_spurious_column(test_table_gsi_5):
     query_args = {
         'ConsistentRead': False,
