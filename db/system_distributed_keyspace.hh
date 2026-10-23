@@ -173,6 +173,36 @@ public:
             std::string_view dc, std::string_view rack,
             db::consistency_level cl = db::consistency_level::QUORUM) const;
 
+    /* Retrieves, for one (snapshot, keyspace, table, datacenter) partition,
+     * each snapshot_tablets row's clustering key and write timestamp, for
+     * collecting a failed attempt's rows. */
+    future<utils::chunked_vector<snapshot_tablet_cleanup_entry>> get_snapshot_tablets_for_cleanup(
+            std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc,
+            db::consistency_level cl = db::consistency_level::QUORUM) const;
+
+    /* Deletes a single snapshot_tablets row, tombstone pinned at the row's
+     * observed write timestamp */
+    future<> delete_snapshot_tablet_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc, dht::token first_token, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* Returns the (keyspace, table) names on the snapshot_tables rows of one
+     * name, for finding the tables of a failed attempt, dropped ones included. */
+    future<utils::chunked_vector<std::pair<sstring, sstring>>> get_snapshot_schema_rows_for_cleanup(std::string_view snapshot_name,
+            db::consistency_level cl = db::consistency_level::QUORUM) const;
+
+    /* Deletes one name's snapshot_keyspaces and snapshot_tables partitions
+     * with a tombstone at the given timestamp. */
+    future<> delete_snapshot_schema_rows(std::string_view snapshot_name, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* Deletes one name's snapshot_nodes partition with a tombstone at the
+     * given timestamp. The rows have no regular column to read a write
+     * timestamp from, so the caller picks it; nothing writes under a failed
+     * attempt's name again, so a fresh timestamp is safe. */
+    future<> delete_snapshot_nodes_rows(std::string_view snapshot_name, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
     /* Deletes a single snapshot_sstables row, tombstone pinned at the row's
      * observed write timestamp, so exactly the observed write dies. */
     future<> delete_snapshot_sstable_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
