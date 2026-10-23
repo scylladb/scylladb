@@ -298,6 +298,34 @@ def test_invalid_numbers(test_table_s):
                 UpdateExpression='SET a = :val',
                 ExpressionAttributeValues={':val': {'N': s}})
 
+# Test that a number nested in a list, a map or a number set is validated
+# exactly like a top-level number: for each of many valid, invalid and
+# unusual number strings, check that it is accepted in a nested value if and
+# only if it is accepted as a top-level number. Reproduces issue #8070, where
+# nested numbers were not validated at all.
+def test_nested_numbers(test_table_s):
+    p = random_string()
+    with client_no_transform(test_table_s.meta.client) as client:
+        def accepted(value):
+            try:
+                client.update_item(TableName=test_table_s.name,
+                    Key={'p': {'S': p}},
+                    UpdateExpression='SET a = :val',
+                    ExpressionAttributeValues={':val': value})
+                return True
+            except ClientError as e:
+                assert e.response['Error']['Code'] in ('ValidationException', 'SerializationException')
+                return False
+        for s in ['3', '-7.1234', '-17e5', '-17.4E37', '+3', '.123', '0001.23',
+                  '1e+5', '1.', '0', '-0', '0e9999', '0e99999', '1e125', '1e126',
+                  '1e-130', '1e-131', '1' * 38, '1' * 39, '0.' + '0' * 50 + '1',
+                  'NaN', 'Infinity', 'dog', ' 1', '1 ', '', '-', '.', '1e', 'e1',
+                  '1e1.5', '1.2.3', '0x10', '1-2', '--1', '.-5', '1e99999']:
+            expected = accepted({'N': s})
+            assert accepted({'L': [{'N': s}]}) == expected, s
+            assert accepted({'M': {'x': {'N': s}}}) == expected, s
+            assert accepted({'NS': [s]}) == expected, s
+
 # In DynamoDB's JSON format, a number value is represented as map with key
 # "N" and the value is a *string* containing the number. E.g., {"N": "123"}.
 # Using a string instead of a number in the JSON is important to guarantee
