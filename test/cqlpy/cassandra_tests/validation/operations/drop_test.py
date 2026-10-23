@@ -26,7 +26,6 @@ from ...porting import *
 
 # Reproduces SCYLLADB-5200 (Scylla's CQL lexer reads the unquoted
 # identifier P as a duration literal, so it can't be used as a name).
-@pytest.mark.xfail(reason="SCYLLADB-5200")
 def testDropTableWithNameCapitalPAndColumnDuration(cql, test_keyspace):
     # CASSANDRA-17919
     # The Java test creates the table with the fixed name P, so this name

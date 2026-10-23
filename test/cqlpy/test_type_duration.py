@@ -7,7 +7,7 @@
 # Test involving the "duration" column type.
 #############################################################################
 
-from .util import unique_name, unique_key_int
+from .util import unique_name, unique_key_int, new_test_table
 
 import pytest
 
@@ -210,3 +210,17 @@ def test_type_duration_iso_8601_case_sensitive(cql, table1):
         cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, P0001-03-00t02:10:00)")
     with pytest.raises(SyntaxException):
         cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, p0001-03-00T02:10:00)")
+
+# The ISO 8601 format must have at least one component after the "P" (and
+# after the "T", if there is one), so a bare P or PT is not a duration.
+# Instead, an unquoted P or PT is an ordinary identifier, so it can be the
+# name of a column. Here, the VALUES list refers to the column name P instead
+# of a value, which is a syntax error.
+# Reproduces SCYLLADB-5200.
+def test_type_duration_iso_8601_no_components(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, pt duration") as table:
+        cql.execute(f"INSERT INTO {table} (P, PT) VALUES (1, PT1S)")
+        assert list(cql.execute(f"SELECT P, PT FROM {table} WHERE P = 1")) == [(1, Duration(0, 0, s))]
+        for bad in ['P', 'PT', '-P', '-PT', 'P1YT']:
+            with pytest.raises(SyntaxException):
+                cql.execute(f"INSERT INTO {table} (p, pt) VALUES (2, {bad})")
