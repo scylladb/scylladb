@@ -473,7 +473,7 @@ auto coordinator::mutate(schema_ptr schema,
             if (!_db.column_family_exists(schema->id())) {
                 return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
             }
-            logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
+            logger.debug("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             ++_stats.write_errors_timeout;
             return std::make_exception_ptr(write_timeout(schema->ks_name(), schema->cf_name()));
@@ -494,7 +494,7 @@ auto coordinator::mutate(schema_ptr schema,
                 "Strongly consistent write of {} bytes exceeds the limit of {} bytes", too_big->command_size, too_big->limit)));
         } else {
             ++_stats.write_errors_other;
-            logger.trace("mutate(): unknown exception {}, table {}.{}, token {}, {}",
+            logger.debug("mutate(): unknown exception {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
             return ex;
@@ -587,7 +587,7 @@ auto coordinator::mutate(schema_ptr schema,
         write_mutation write {
             .mutation{mutation_gen(ts_with_term->timestamp)}
         };
-        logger.debug("mutate(): add_entry({}), {}",
+        logger.trace("mutate(): add_entry({}), {}",
             write.mutation.pretty_printer(schema), state_fmt);
 
         raft::command raft_cmd;
@@ -661,12 +661,12 @@ auto coordinator::query(schema_ptr schema,
             if (!_db.column_family_exists(schema->id())) {
                 return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
             }
-            logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
+            logger.debug("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_timeout;
             return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name()));
         } else {
-            logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
+            logger.debug("query(): unknown exception {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_other;
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
