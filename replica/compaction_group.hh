@@ -114,6 +114,12 @@ class compaction_group : public compaction::compaction_backlog_source {
     // Bytes flushed from memtables into this group, which the compaction controller
     // will use to match compaction to ingestion.
     utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _flushed_bytes{rate_window, _rates_start};
+    // Sum of bytes * ln(sstable size) over the same flushes. Divided by _flushed_bytes, it gives
+    // the byte-weighted mean of ln(flush size), the flush size the write amplification estimate
+    // is based on. Weighting by bytes keeps a storm of small flushes, which carry few bytes, from
+    // dragging the flush size down.
+    struct bytes_log_size;
+    utils::moving_average_rate<bytes_log_size, double, lowres_db_clock> _flushed_bytes_log_size{rate_window, _rates_start};
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();

@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <cmath>
+
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/coroutine.hh>
@@ -4700,7 +4702,12 @@ lw_shared_ptr<memtable_list>& compaction_group::memtables() noexcept {
 
 void compaction_group::on_memtable_flushed(const std::vector<sstables::shared_sstable>& ssts) noexcept {
     for (const auto& sst : ssts) {
-        _flushed_bytes.add(sst->data_size());
+        auto size = sst->data_size();
+        if (size == 0) {
+            continue;
+        }
+        _flushed_bytes.add(size);
+        _flushed_bytes_log_size.add(size * std::log(double(size)));
     }
 }
 
