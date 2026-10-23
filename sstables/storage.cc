@@ -882,6 +882,10 @@ sstring object_storage_prefix(const std::optional<sstring>& location) {
     return location ? *location : sstring(object_storage_default_prefix);
 }
 
+sstring object_storage_prefix(const data_dictionary::storage_options::object_storage& os) {
+    return object_storage_prefix(os.location);
+}
+
 future<size_t> object_storage_base::num_references(sstable_id sid) const {
     auto refs = co_await list_object_storage_references(*_client, _bucket, prefix(), sid);
     co_return refs.size();
@@ -928,6 +932,11 @@ static std::vector<sstring> all_possible_components(sstable_version_types versio
 
 sstring object_storage_snapshot_ref_name(std::string_view tag, generation_type gen) {
     return fmt::format("refs/snapshot-{}/{}", tag, gen);
+}
+
+future<> delete_object_storage_snapshot_ref(object_storage_client& client, object_name ref_name) {
+    co_await client.delete_object(ref_name);
+    sstlog.debug("Deleted snapshot reference {}", ref_name.str());
 }
 
 void object_storage_base::open(sstable& sst) {
