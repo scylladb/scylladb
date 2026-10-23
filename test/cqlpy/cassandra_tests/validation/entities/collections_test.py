@@ -13,7 +13,6 @@ from cassandra.query import UNSET_VALUE, BoundStatement
 
 from uuid import UUID
 import uuid
-from test.pylib.skip_types import skip_bug
 import random
 import struct
 import time
@@ -1682,18 +1681,11 @@ def testSelectingSetDataWithParameterizedQueriesIsKeyOrderIndependent(cql, test_
             assert_rows(execute(cql, table, "SELECT k, c from %s where k='0' and c=?", [uuid2, uuid1]), row("0", {uuid1, uuid2}))
 # End tests for CASSANDRA-17623
 
-# Selecting an element of a frozen collection which is a clustering column
-# with descending order (CLUSTERING ORDER BY (c DESC)) crashes Scylla - see
-# SCYLLADB-5210 - so the following two tests are skipped on Scylla. When
-# that is fixed, they will still fail on Scylla because they also select
-# slices of a collection, which Scylla doesn't support (#22075).
-def skip_reversed_collection_crash(cql):
-    if is_scylla(cql):
-        skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-5210",
-                 reason="Selecting an element of a reversed frozen collection crashes Scylla")
-
+# The following two tests also reproduce SCYLLADB-5210 (selecting an element
+# of a frozen collection clustering column with descending order crashed
+# Scylla).
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
 def testMapReversed(cql, test_keyspace):
-    skip_reversed_collection_crash(cql)
     with create_table(cql, test_keyspace, "(" +
                       "   k int, " +
                       "   c frozen<map<text, int>>, " +
@@ -1710,8 +1702,8 @@ def testMapReversed(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT c['t3'..] FROM %s"), row({"t3": 3, "t4": 4}))
         assert_rows(execute(cql, table, "SELECT c[..'t5'] FROM %s"), row({"t1": 1, "t2": 2, "t3": 3, "t4": 4}))
 
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a set slice not yet supported. Issue #22075")
 def testSetReversed(cql, test_keyspace):
-    skip_reversed_collection_crash(cql)
     with create_table(cql, test_keyspace, "(" +
                       "   k int, " +
                       "   c frozen<set<text>>, " +
