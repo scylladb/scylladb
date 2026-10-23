@@ -547,3 +547,57 @@ SEASTAR_TEST_CASE(flush_rate_matches_ingestion_metadata_test) {
         check_rates_match("after more flushes");
     });
 }
+
+// Single-partition reads served from sstables are accounted to the compaction group
+// owning their key, with the sstables they actually read after bloom filters.
+SEASTAR_TEST_CASE(compaction_group_point_read_amplification_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        // Without the row cache, every read goes to the sstables.
+        auto s = schema_builder(make_rates_test_schema("compaction_group_point_read_amplification"))
+                .set_caching_options(caching_options::get_disabled_caching_options())
+                .build();
+        auto t = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(t);
+        t->start();
+        t->disable_auto_compaction().get();
+        auto restore_clocks = defer([offset = get_clocks_offset()] () noexcept { set_clocks_offset(offset); });
+
+        // Key a is in three sstables, key b only in the first. The other two contain only a,
+        // so their key range doesn't cover b, and bloom filters have no say in it.
+        auto keys = tests::generate_partition_keys(2, s);
+        const auto& a = keys[0];
+        const auto& b = keys[1];
+        t->apply(make_partition(s, a, 10));
+        t->apply(make_partition(s, b, 10));
+        t->flush().get();
+        for (int i = 0; i < 2; ++i) {
+            t->apply(make_partition(s, a, 10));
+            t->flush().get();
+        }
+        BOOST_REQUIRE_EQUAL(t->sstables_count(), 3);
+
+        auto read = [&] (const dht::decorated_key& key) {
+            auto pr = dht::partition_range::make_singular(key);
+            auto reader = t->make_mutation_reader(s, env.make_reader_permit(), pr);
+            auto close_reader = deferred_close(reader);
+            read_mutation_from_mutation_reader(reader).get();
+        };
+        for (int i = 0; i < 10; ++i) {
+            read(a);
+            read(b);
+        }
+        // Rates are measured in time, so let some pass.
+        forward_jump_clocks(std::chrono::seconds(10));
+
+        auto stats = t.as_compaction_backlog_source().stats();
+        auto read_amplification = stats.read_amplification;
+        BOOST_REQUIRE_EQUAL(read_amplification.point_reads.amount(), 20);
+        // Reads of a read three sstables, reads of b one.
+        BOOST_REQUIRE_EQUAL(read_amplification.sstables_read.amount(), 40);
+        BOOST_REQUIRE_EQUAL(read_amplification.mean_sstables_read(), 2.0);
+        // Over the same interval as the other rates of the group: the 10 seconds, and the
+        // real time the test takes.
+        BOOST_REQUIRE(read_amplification.point_reads.interval() == stats.rates.flushed_bytes.interval());
+        BOOST_REQUIRE_GE(read_amplification.point_reads.interval().count(), 10);
+    });
+}

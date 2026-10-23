@@ -1149,7 +1149,7 @@ public:
             replica::column_family*,
             schema_ptr,
             reader_permit,
-            utils::estimated_histogram&,
+            const sstables::read_stats&,
             const dht::partition_range&,
             const query::partition_slice&,
             tracing::trace_state_ptr,
@@ -1387,7 +1387,7 @@ tablet_sstable_set::create_single_key_sstable_reader(
         replica::column_family* cf,
         schema_ptr schema,
         reader_permit permit,
-        utils::estimated_histogram& sstable_histogram,
+        const sstables::read_stats& sstable_read_stats,
         const dht::partition_range& pr,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
@@ -1398,7 +1398,7 @@ tablet_sstable_set::create_single_key_sstable_reader(
     // The singular partition_range start bound must be engaged.
     auto idx = group_of(pr.start()->value().token());
     const auto& set = find_sstable_set(idx);
-    return set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate);
+    return set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_read_stats, pr, slice, trace_state, fwd, fwd_mr, predicate);
 }
 
 sstables::sstable_set_impl::selector_and_schema_t tablet_sstable_set::make_incremental_selector() const {

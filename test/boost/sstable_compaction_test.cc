@@ -4638,7 +4638,7 @@ void test_twcs_single_key_reader_filtering_fn(test_env& env) {
                 }).build();
 
     auto reader = set.create_single_key_sstable_reader(
-            &*cf, s, permit, eh, pr, slice,
+            &*cf, s, permit, sstables::read_stats{eh}, pr, slice,
             tracing::trace_state_ptr(), ::streamed_mutation::forwarding::no,
             ::mutation_reader::forwarding::no);
     auto close_reader = deferred_close(reader);
@@ -4988,7 +4988,7 @@ void twcs_single_key_reader_through_compound_set_fn(test_env& env) {
     utils::estimated_histogram eh;
     auto pr = dht::partition_range::make_singular(dkey);
 
-    auto reader = compound.create_single_key_sstable_reader(&*cf, s, permit, eh, pr, s->full_slice(),
+    auto reader = compound.create_single_key_sstable_reader(&*cf, s, permit, sstables::read_stats{eh}, pr, s->full_slice(),
                                                             tracing::trace_state_ptr(), ::streamed_mutation::forwarding::no,
                                                             ::mutation_reader::forwarding::no);
     auto close_reader = deferred_close(reader);

@@ -115,11 +115,21 @@ table::make_sstable_reader(schema_ptr s,
     // regardless of what the fwd_mr parameter says.
     if (pr.is_singular() && pr.start()->value().has_key()) {
         return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
-                _stats.estimated_sstable_per_read, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
+                get_read_stats(pr.start()->value().token()), pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
     } else {
         return sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice,
                 std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), predicate, nullptr, integrity);
     }
+}
+
+sstables::read_stats table::get_read_stats(dht::token token) const noexcept {
+    sstables::read_amplification_tracker* read_amplification = nullptr;
+    try {
+        read_amplification = &compaction_group_for_token(token).point_read_amplification();
+    } catch (...) {
+        // Losing a sample is harmless; failing the read over it isn't.
+    }
+    return sstables::read_stats{_stats.estimated_sstable_per_read, read_amplification};
 }
 
 lw_shared_ptr<sstables::sstable_set> compaction_group::make_sstable_set() const {
@@ -4741,6 +4751,10 @@ compaction::compaction_group_stats compaction_group::stats() const {
             .flushed_bytes = flushed_bytes,
             .mean_flush_size = flushed_bytes.amount() > 0 ? std::exp(flushed_bytes_log_size.per(flushed_bytes)) : 0,
             .compacted_bytes = _compacted_bytes.rate(now),
+        },
+        .read_amplification = {
+            .point_reads = _point_read_amplification.reads(now),
+            .sstables_read = _point_read_amplification.sstables_read(now),
         },
     };
 }

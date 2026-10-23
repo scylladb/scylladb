@@ -123,6 +123,8 @@ class compaction_group : public compaction::compaction_backlog_source {
     // Bytes regular compaction compacted in this group. Accounted when compactions complete,
     // which with tablets and incremental compaction happens every few GB at most.
     utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _compacted_bytes{rate_window, _rates_start};
+    // Single-partition reads served from this group's sstables, and the sstables they read.
+    sstables::read_amplification_tracker _point_read_amplification{rate_window, _rates_start};
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();
@@ -268,6 +270,10 @@ public:
     lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override;
     // compaction_backlog_source: what the group measures
     compaction::compaction_group_stats stats() const override;
+    // Where single-partition reads served from the group's sstables report how many they read.
+    sstables::read_amplification_tracker& point_read_amplification() noexcept {
+        return _point_read_amplification;
+    }
     sstables::sstable_set make_main_sstable_set() const;
     void set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables);
 

@@ -18,6 +18,8 @@ namespace utils {
 /// Tags naming what a rate counts.
 namespace units {
 struct bytes;
+struct reads;
+struct sstables;
 }
 
 /// How much of something accumulated over an interval of time, e.g. the bytes

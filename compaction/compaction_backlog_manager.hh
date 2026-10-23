@@ -38,9 +38,24 @@ struct rate_stats {
     utils::rate<utils::units::bytes> compacted_bytes;
 };
 
+// Read amplification of the single-partition reads served from a compaction
+// group's sstables, which the compaction controller will use to tell how urgent
+// compaction is. Covers the same interval as the group's rate_stats.
+struct read_amplification_stats {
+    utils::rate<utils::units::reads> point_reads;
+    // The sstables the point reads actually read, after bloom filters.
+    utils::rate<utils::units::sstables> sstables_read;
+
+    // Mean number of sstables a point read read, or 0 when there were no reads.
+    double mean_sstables_read() const {
+        return sstables_read.per(point_reads);
+    }
+};
+
 // What a compaction group measures for the compaction controller.
 struct compaction_group_stats {
     rate_stats rates;
+    read_amplification_stats read_amplification;
 };
 
 // What a backlog tracker needs to know about the data it accounts for: the sstables

@@ -3620,7 +3620,7 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
             auto t = env.make_table_for_tests(s);
             auto close_t = deferred_stop(t);
             utils::estimated_histogram eh;
-            return set.create_single_key_sstable_reader(&*t, s, env.make_reader_permit(), eh,
+            return set.create_single_key_sstable_reader(&*t, s, env.make_reader_permit(), sstables::read_stats{eh},
                                                        first_key_pr,
                                                        s->full_slice(),
                                                        tracing::trace_state_ptr(),

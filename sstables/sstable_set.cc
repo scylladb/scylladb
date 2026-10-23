@@ -920,7 +920,7 @@ sstable_set_impl::create_single_key_sstable_reader(
         replica::column_family* cf,
         schema_ptr schema,
         reader_permit permit,
-        utils::estimated_histogram& sstable_histogram,
+        const read_stats& sstable_read_stats,
         const dht::partition_range& pr,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
@@ -934,6 +934,9 @@ sstable_set_impl::create_single_key_sstable_reader(
     auto selected_sstables = filter_sstable_for_reader(select(pr), *schema, pos, hash, predicate);
     auto num_sstables = selected_sstables.size();
     if (!num_sstables) {
+        if (sstable_read_stats.read_amplification) {
+            sstable_read_stats.read_amplification->add(0);
+        }
         return make_empty_mutation_reader(schema, permit);
     }
     auto readers = filter_sstable_for_reader_by_ck(std::move(selected_sstables), *cf, schema, slice)
@@ -956,7 +959,10 @@ sstable_set_impl::create_single_key_sstable_reader(
     if (num_readers != num_sstables) {
         readers.push_back(make_mutation_reader_from_mutations(schema, permit, mutation(schema, *pos.key()), slice, fwd));
     }
-    sstable_histogram.add(num_readers);
+    sstable_read_stats.sstables_per_read.add(num_readers);
+    if (sstable_read_stats.read_amplification) {
+        sstable_read_stats.read_amplification->add(num_readers);
+    }
     return make_combined_reader(schema, std::move(permit), std::move(readers), fwd, fwd_mr);
 }
 
@@ -965,7 +971,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
         replica::column_family* cf,
         schema_ptr schema,
         reader_permit permit,
-        utils::estimated_histogram& sstable_histogram,
+        const read_stats& sstable_read_stats,
         const dht::partition_range& pr,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
@@ -993,7 +999,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
     })) {
         // Some of the conditions were not satisfied so we use the standard query path.
         return sstable_set_impl::create_single_key_sstable_reader(
-                cf, std::move(schema), std::move(permit), sstable_histogram,
+                cf, std::move(schema), std::move(permit), sstable_read_stats,
                 pr, slice, std::move(trace_state), fwd_sm, fwd_mr, predicate, integrity);
     }
 
@@ -1221,7 +1227,7 @@ compound_sstable_set::create_single_key_sstable_reader(
         replica::column_family* cf,
         schema_ptr schema,
         reader_permit permit,
-        utils::estimated_histogram& sstable_histogram,
+        const read_stats& sstable_read_stats,
         const dht::partition_range& pr,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
@@ -1239,12 +1245,12 @@ compound_sstable_set::create_single_key_sstable_reader(
     // optimize for common case where only 1 set is populated, avoiding the expensive combined reader
     if (non_empty_set_count == 1) {
         const auto& non_empty_set = *std::begin(sets);
-        return non_empty_set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate, integrity);
+        return non_empty_set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_read_stats, pr, slice, trace_state, fwd, fwd_mr, predicate, integrity);
     }
 
     auto readers = std::ranges::subrange(sets.begin(), it)
         | std::views::transform([&] (const lw_shared_ptr<sstable_set>& non_empty_set) {
-            return non_empty_set->create_single_key_sstable_reader(cf, schema, permit, sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate, integrity);
+            return non_empty_set->create_single_key_sstable_reader(cf, schema, permit, sstable_read_stats, pr, slice, trace_state, fwd, fwd_mr, predicate, integrity);
           })
         | std::ranges::to<std::vector<mutation_reader>>();
     return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
@@ -1255,7 +1261,7 @@ sstable_set::create_single_key_sstable_reader(
         replica::column_family* cf,
         schema_ptr schema,
         reader_permit permit,
-        utils::estimated_histogram& sstable_histogram,
+        const read_stats& sstable_read_stats,
         const dht::partition_range& pr,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
@@ -1265,7 +1271,7 @@ sstable_set::create_single_key_sstable_reader(
         sstables::integrity_check integrity) const {
     SCYLLA_ASSERT(pr.is_singular() && pr.start()->value().has_key());
     return _impl->create_single_key_sstable_reader(cf, std::move(schema),
-            std::move(permit), sstable_histogram, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
+            std::move(permit), sstable_read_stats, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
 }
 
 class auto_closed_sstable_reader final : public mutation_reader::impl {

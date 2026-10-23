@@ -15,6 +15,8 @@
 #include "utils/file_size_stats.hh"
 #include "shared_sstable.hh"
 #include "dht/ring_position.hh"
+#include "utils/moving_average_rate.hh"
+#include "db_clock.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <type_traits>
 #include <vector>
@@ -79,6 +81,38 @@ using sstable_predicate = noncopyable_function<bool(const sstable&)>;
 // Default predicate includes everything
 const sstable_predicate& default_sstable_predicate();
 
+// Read amplification of single-partition reads, averaged over a window: how many reads
+// there were and how many sstables they read, after bloom filters.
+class read_amplification_tracker {
+    utils::moving_average_rate<utils::units::reads, uint64_t, lowres_db_clock> _reads;
+    utils::moving_average_rate<utils::units::sstables, uint64_t, lowres_db_clock> _sstables_read;
+public:
+    read_amplification_tracker(lowres_db_clock::duration window, lowres_db_clock::time_point start)
+        : _reads(window, start)
+        , _sstables_read(window, start) {
+    }
+
+    void add(size_t sstables_read, lowres_db_clock::time_point now = lowres_db_clock::now()) noexcept {
+        _reads.add(1, now);
+        _sstables_read.add(sstables_read, now);
+    }
+
+    utils::rate<utils::units::reads> reads(lowres_db_clock::time_point now = lowres_db_clock::now()) const noexcept {
+        return _reads.rate(now);
+    }
+
+    utils::rate<utils::units::sstables> sstables_read(lowres_db_clock::time_point now = lowres_db_clock::now()) const noexcept {
+        return _sstables_read.rate(now);
+    }
+};
+
+// Where a single-partition read reports how many sstables it read.
+struct read_stats {
+    utils::estimated_histogram& sstables_per_read;
+    // Of the compaction group owning the key, when known.
+    read_amplification_tracker* read_amplification = nullptr;
+};
+
 class sstable_set_impl {
 protected:
     utils::file_size_stats _file_size_stats;
@@ -119,7 +153,7 @@ public:
         replica::column_family*,
         schema_ptr,
         reader_permit,
-        utils::estimated_histogram&,
+        const read_stats&,
         const dht::partition_range&,
         const query::partition_slice&,
         tracing::trace_state_ptr,
@@ -218,7 +252,7 @@ public:
         replica::column_family*,
         schema_ptr,
         reader_permit,
-        utils::estimated_histogram&,
+        const read_stats&,
         const dht::partition_range&, // must be singular and contain a key
         const query::partition_slice&,
         tracing::trace_state_ptr,
