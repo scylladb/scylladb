@@ -781,8 +781,10 @@ static future<> test_json_udt(bool frozen) {
 
         e.execute_cql("INSERT INTO t2 (id, v) VALUES (1, (7));").get();
         msg = e.execute_cql("SELECT JSON * FROM t2 WHERE id = 1;").get();
+        // A field name with uppercase letters is case-sensitive, so SELECT
+        // JSON prints it in (escaped) quotes, which INSERT JSON can read back.
         assert_that(msg).is_rows().with_rows({{
-            utf8_type->decompose(sstring("{\"id\": 1, \"v\": {\"WeirdNameThatNeedsEscaping\\\\n,)\": 7}}"))
+            utf8_type->decompose(sstring("{\"id\": 1, \"v\": {\"\\\"WeirdNameThatNeedsEscaping\\\\n,)\\\"\": 7}}"))
         }});
     });
 }

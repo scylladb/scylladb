@@ -263,26 +263,42 @@ static bytes from_json_object_aux(const user_type_impl& ut, const rjson::value& 
         throw marshal_exception("user_type must be represented as JSON Object");
     }
 
-    std::unordered_set<std::string_view> remaining_names;
+    // As with column names in INSERT JSON, a field name in quotes (e.g.,
+    // "\"Foo\"") is case-sensitive, and other field names are case-insensitive
+    // (i.e., converted to lowercase). So two different names may refer to the
+    // same field (e.g., "a" and "A"); this, like a repeated name, is an error,
+    // rather than silently ignoring one of the values.
+    std::unordered_map<sstring, const rjson::value*> fields;
     for (auto vi = value.MemberBegin(); vi != value.MemberEnd(); ++vi) {
-        remaining_names.insert(rjson::to_string_view(vi->name));
+        sstring name(rjson::to_string_view(vi->name));
+        if (name.size() > 1 && name.front() == '"' && name.back() == '"') {
+            name = name.substr(1, name.size() - 2);
+        } else {
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+        }
+        if (!fields.emplace(name, &vi->value).second) {
+            throw marshal_exception(fmt::format(
+                    "Duplicate field {} for user type {}", name, ut.get_name_as_string()));
+        }
     }
 
     std::vector<bytes_opt> raw_tuple;
     for (unsigned i = 0; i < ut.field_names().size(); ++i) {
         auto t = ut.all_types()[i];
-        const rjson::value* v = rjson::find(value, std::string_view(ut.field_name_as_string(i)));
-        if (!v || v->IsNull()) {
+        auto it = fields.find(ut.field_name_as_string(i));
+        if (it == fields.end() || it->second->IsNull()) {
             raw_tuple.push_back(bytes_opt{});
         } else {
-            raw_tuple.push_back(from_json_object(*t, *v));
+            raw_tuple.push_back(from_json_object(*t, *it->second));
         }
-        remaining_names.erase(std::string_view(ut.field_name_as_string(i)));
+        if (it != fields.end()) {
+            fields.erase(it);
+        }
     }
 
-    if (!remaining_names.empty()) {
+    if (!fields.empty()) {
         throw marshal_exception(seastar::format(
-                "Extraneous field definition for user type {}: {}", ut.get_name_as_string(), *remaining_names.begin()));
+                "Extraneous field definition for user type {}: {}", ut.get_name_as_string(), fields.begin()->first));
     }
     return ut.build_value(std::move(raw_tuple));
 }
@@ -519,27 +535,37 @@ static sstring to_json_string_aux(const vector_type_impl& t, bytes_view bv) {
     return std::move(out).str();
 }
 
+sstring json_key_for_name(std::string_view name) {
+    if (std::ranges::any_of(name, [] (unsigned char c) { return std::isupper(c); }) ||
+            (name.size() > 1 && name.front() == '"' && name.back() == '"')) {
+        return quote_json_string(fmt::format("\"{}\"", name));
+    }
+    return quote_json_string(sstring(name));
+}
+
 static sstring to_json_string_aux(const user_type_impl& t, bytes_view bv) {
     std::ostringstream out;
     out << '{';
 
-    auto ti = t.all_types().begin();
     auto vi = tuple_deserializing_iterator::start(bv);
-    int i = 0;
-    while (ti != t.all_types().end() && vi != tuple_deserializing_iterator::finish(bv)) {
-        if (ti != t.all_types().begin()) {
+    auto vend = tuple_deserializing_iterator::finish(bv);
+    for (size_t i = 0; i < t.size(); ++i) {
+        if (i > 0) {
             out << ", ";
         }
-        out << quote_json_string(t.field_name_as_string(i)) << ": ";
-        if (*vi) {
+        out << json_key_for_name(t.field_name_as_string(i)) << ": ";
+        // A value may have fewer fields than its type, if fields were added
+        // to the type (with ALTER TYPE) after the value was written. These
+        // missing fields are null.
+        if (vi != vend && *vi) {
             //TODO(sarna): We can avoid copying if to_json_string accepted bytes_view
-            out << to_json_string(**ti, **vi);
+            out << to_json_string(*t.all_types()[i], **vi);
         } else {
             out << "null";
         }
-        ++ti;
-        ++i;
-        ++vi;
+        if (vi != vend) {
+            ++vi;
+        }
     }
 
     out << '}';
