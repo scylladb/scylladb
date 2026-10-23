@@ -614,6 +614,51 @@ def test_partial_update_on_sc_table(cql, sc_keyspace):
         assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 1")) == [(1, 11, None, 8)]
 
 
+# Each case: the DELETE run on partition 1, and the clustering rows of that
+# partition it leaves behind.
+@pytest.mark.parametrize("where,surviving", [
+    ("pk = 1 AND ck = 2", [1, 3, 4]),
+    ("pk = 1 AND ck >= 2 AND ck < 4", [1, 4]),
+    ("pk = 1", []),
+], ids=["row", "range", "partition"])
+def test_delete_and_reinsert_on_sc_table(cql, sc_keyspace, where, surviving):
+    """
+    A strongly consistent row, range or partition delete removes exactly what
+    it covers - a partition delete takes the static column along - and leaves
+    the rest of the partition and the neighbouring partition alone.
+
+    Re-inserting the deleted rows afterwards brings back only the cells the
+    re-insert writes: none of the deleted cells resurrect. User timestamps
+    are rejected on these tables, so the re-insert shadows the tombstone only
+    because the leader keeps its write timestamps increasing.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, w int, s int static, PRIMARY KEY (pk, ck)") as table:
+        for pk in (1, 2):
+            for ck in (1, 2, 3, 4):
+                cql.execute(f"INSERT INTO {table} (pk, ck, v, w, s) VALUES ({pk}, {ck}, {ck}, {10 * ck}, {pk})")
+        untouched = list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 2"))
+        assert len(untouched) == 4
+
+        cql.execute(f"DELETE FROM {table} WHERE {where}")
+
+        # A partition left with only its static row would still come back as
+        # one row with a null ck, so an empty result also shows s is gone.
+        static = 1 if surviving else None
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 1")) == \
+            [(ck, ck, 10 * ck, static) for ck in surviving]
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 2")) == untouched
+
+        deleted = [ck for ck in (1, 2, 3, 4) if ck not in surviving]
+        for ck in deleted:
+            cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, {ck}, {100 + ck})")
+
+        expected = {ck: (ck, ck, 10 * ck, static) for ck in surviving}
+        expected.update({ck: (ck, 100 + ck, None, static) for ck in deleted})
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 1")) == \
+            [expected[ck] for ck in (1, 2, 3, 4)]
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 2")) == untouched
+
+
 def test_oversized_write_on_sc_table(cql, sc_keyspace):
     """
     A write whose raft command exceeds the command size limit of the
