@@ -205,6 +205,49 @@ auto inject_text_test_option(cql_test_env& e) {
 
 }
 
+// A numeric option can declare inclusive bounds, which validate_value() enforces for every
+// option alike rather than by naming options in the validator. auto_repair_threshold_size_fraction
+// is compared against an unrepaired-to-total ratio that cannot exceed 1, so a larger threshold
+// could never fire; rejecting it at the door beats storing a value that silently does nothing.
+SEASTAR_TEST_CASE(test_cluster_config_registry_enforces_numeric_bounds) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto* fraction = db::cluster_config_registry::find(
+                db::cluster_config_registry::option_name::auto_repair_threshold_size_fraction);
+        BOOST_REQUIRE(fraction != nullptr);
+        for (const auto& ok : {"0", "0.5", "1"}) {
+            BOOST_REQUIRE(!db::cluster_config_registry::validate_value(*fraction, ok));
+        }
+        // NaN compares false against both bounds, so it would pass a bounds check that only
+        // asks whether the value is below the minimum or above the maximum.
+        for (const auto& bad : {"-0.1", "1.5", "2", "NaN", "Infinity", "-Infinity"}) {
+            BOOST_REQUIRE(db::cluster_config_registry::validate_value(*fraction, bad));
+        }
+
+        const auto* min_size = db::cluster_config_registry::find(
+                db::cluster_config_registry::option_name::auto_repair_threshold_min_size_in_bytes);
+        BOOST_REQUIRE(min_size != nullptr);
+        BOOST_REQUIRE(!db::cluster_config_registry::validate_value(*min_size, "0"));
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(*min_size, "-1"));
+
+        // An out-of-range value is refused on the write path, with the bounds in the message.
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_size_fraction = 1.5").get(),
+            exceptions::invalid_request_exception, [] (const exceptions::invalid_request_exception& ex) {
+            return std::string_view(ex.what()).find(
+                    "Invalid value for cluster config 'auto_repair_threshold_size_fraction': "
+                    "expected a value between 0 and 1, got 1.5") != std::string_view::npos;
+        });
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_size_fraction = NaN").get(),
+            exceptions::invalid_request_exception, [] (const exceptions::invalid_request_exception& ex) {
+            return std::string_view(ex.what()).find(
+                    "Invalid value for cluster config 'auto_repair_threshold_size_fraction': "
+                    "expected a floating-point number, got NaN") != std::string_view::npos;
+        });
+        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_size_fraction = 0.3").get());
+    });
+}
+
 // DESCRIBE echoes every effective value back both as a property right-hand side and inside
 // a "-- from <scope> (...)" provenance comment, and it wraps a described CDC log or paxos
 // table in a /* ... */ block. A CQL string literal has no escape for a line break or for

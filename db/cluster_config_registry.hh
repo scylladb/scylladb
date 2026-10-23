@@ -76,6 +76,12 @@ struct option {
     // The value a consumer gets when no scope stores an override. Its alternative also
     // defines the option's type. Read it through the to_* converters, not directly.
     config_value default_value;
+    // Inclusive bounds for a numeric option; unset means unbounded on that side. An option
+    // that only makes sense over a range declares it here, and validate_value() enforces it
+    // for every option alike, rather than the validator growing a case per option name.
+    // A bound must hold the same alternative as default_value.
+    std::optional<config_value> min_value;
+    std::optional<config_value> max_value;
 
     constexpr value_type type() const {
         return static_cast<value_type>(default_value.index());
@@ -110,7 +116,9 @@ bool is_supported(const option& opt, const gms::feature_service& features);
 constexpr bool auto_repair_enabled_default = false;
 constexpr int64_t auto_repair_threshold_default_seconds = 24 * 3600;
 
-// Returns nullopt on success. On failure, returns a human-readable reason.
+// Returns nullopt on success. On failure, returns a human-readable reason. Checks that the
+// value parses as the option's type and, for a numeric option that declares them, that it
+// falls within the option's inclusive bounds.
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value);
 
 // Converts a resolved value to the option's native type, applying the option's registered
