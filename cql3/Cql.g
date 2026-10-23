@@ -61,6 +61,7 @@ options {
 #include "cql3/statements/list_service_level_statement.hh"
 #include "cql3/statements/list_service_level_attachments_statement.hh"
 #include "cql3/statements/list_effective_service_level_statement.hh"
+#include "cql3/statements/execute_statement.hh"
 #include "cql3/statements/grant_role_statement.hh"
 #include "cql3/statements/revoke_role_statement.hh"
 #include "cql3/statements/drop_role_statement.hh"
@@ -390,6 +391,7 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st49=describeStatement           { $stmt = std::move(st49); }
     | st50=listEffectiveServiceLevelStatement { $stmt = std::move(st50); }
     | st51=alterClusterStatement       { $stmt = std::move(st51); }
+    | st52=executeStatement            { $stmt = std::move(st52); }
     ;
 
 /*
@@ -1565,6 +1567,19 @@ listEffectiveServiceLevelStatement returns [std::unique_ptr<list_effective_servi
     ;
 
 /**
+ * EXECUTE COMMAND <name> [WITH <param> = <term> AND ...]
+ */
+executeStatement returns [std::unique_ptr<cql3::statements::raw::execute_statement> stmt]
+    @init {
+        std::vector<std::pair<sstring, expression>> args;
+    }
+    : K_EXECUTE K_COMMAND cmd=ident
+      ( K_WITH k1=ident '=' v1=term { args.emplace_back(k1->to_string(), std::move(v1)); }
+        ( K_AND kn=ident '=' vn=term { args.emplace_back(kn->to_string(), std::move(vn)); } )* )?
+      { $stmt = std::make_unique<cql3::statements::raw::execute_statement>(cmd->to_string(), std::move(args)); }
+    ;
+
+/**
  * (DESCRIBE | DESC) (
  *    CLUSTER
  *    [FULL] SCHEMA
@@ -2306,6 +2321,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_DESCRIBE
         | K_DESC
         | K_EXECUTE
+        | K_COMMAND
         | K_MUTATION_FRAGMENTS
         | K_EFFECTIVE
         ) { $str = $k.text; }
@@ -2526,6 +2542,7 @@ K_PRUNE:       P R U N E;
 K_CONCURRENCY: C O N C U R R E N C Y;
 
 K_EXECUTE:     E X E C U T E;
+K_COMMAND:     C O M M A N D;
 
 K_MUTATION_FRAGMENTS:    M U T A T I O N '_' F R A G M E N T S;
 
