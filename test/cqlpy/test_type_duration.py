@@ -41,7 +41,6 @@ def table1(cql, test_keyspace):
 # Test each of the units which are supposed to be allowed, separately -
 # y, mo, w, d, h, m, s, ms, us *or* µs, ns:
 # Reproduces issue #8001
-@pytest.mark.xfail(reason="issue #8001")
 def test_type_duration_human_readable_input_units(cql, table1):
     # Map of allowed units and their expected meaning.
     units = {
@@ -64,6 +63,15 @@ def test_type_duration_human_readable_input_units(cql, table1):
         cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, 1{unit})")
         assert list(cql.execute(f"SELECT d FROM {table1} where p = {p}")) == [(duration,)]
 
+# The "µs" unit must be written with the micro sign (U+00B5). The Greek
+# letter mu (U+03BC), which looks the same, isn't accepted - in Cassandra too.
+def test_type_duration_greek_mu(cql, table1):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p, d) VALUES ({p}, 1µs)')
+    assert list(cql.execute(f'SELECT d FROM {table1} where p = {p}')) == [(Duration(0, 0, 1000),)]
+    with pytest.raises(SyntaxException):
+        cql.execute(f'INSERT INTO {table1} (p, d) VALUES ({p}, 1μs)')
+
 # Test that various combinations of units (e.g., 1d12h30m) work
 def test_type_duration_combine_units(cql, table1):
     # Map of example duration strings and their expected meaning.
@@ -76,6 +84,10 @@ def test_type_duration_combine_units(cql, table1):
         '-1y2h': Duration(-12, 0, -2*h),
         # Unit names are case insensitive
         '1Y2mO': Duration(14, 0, 0),
+        # The "µs" unit (with a micro sign) can also be combined with other
+        # units, and be written with an uppercase S. Reproduces issue #8001.
+        '1s2µs3ns': Duration(0, 0, 1*s + 2000 + 3),
+        '5µS': Duration(0, 0, 5000),
         '2d10h': Duration(0, 2, 10*h),
         # Units of months, days and nanoseconds are inherently separate and
         # do not "overflow" into larger units: 40 days is 40 days, not one
