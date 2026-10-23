@@ -2601,6 +2601,12 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
 
     gc_clock::time_point flush_time = gc_clock::time_point();
     bool should_flush_and_flush_failed = false;
+    // An auto repair is background work, not a user task: its repair task is
+    // internal, so the default task listing (which Scylla Manager checks
+    // before starting a repair) does not show it, and it is dropped once done.
+    bool auto_repair = stage == locator::tablet_transition_stage::repair
+            && info.repair_task_info
+            && info.repair_task_info->request_type == locator::tablet_task_type::auto_repair;
     tasks::task_manager::task_builder task_builder{_repair_module, format("{}", streaming::stream_reason::repair), id.uuid()};
     task_builder.set_sequence_number(id.id)
                 .set_scope("keyspace")
@@ -2608,7 +2614,8 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
                 .set_keyspace(keyspace_name)
                 .set_parent_info(global_tablet_repair_task_info)
                 .set_is_abortable(tasks::is_abortable::yes)
-                .set_is_user_task(tasks::is_user_task::yes)
+                .set_is_internal(tasks::is_internal(auto_repair))
+                .set_is_user_task(tasks::is_user_task(!auto_repair))
                 .set_workload_fn([metas_size = task_metas.size()] () { return make_ready_future<std::optional<double>>(metas_size); });
     auto task = co_await std::move(task_builder).build([module = _repair_module, id, keyspace_name, table_names, metas = std::move(task_metas), ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, sched_info = std::move(sched_info), skip_flush = rebuild_replicas.has_value()] (tasks::task_manager::task::impl& self) mutable -> future<> {
         auto& rs = module->get_repair_service();
