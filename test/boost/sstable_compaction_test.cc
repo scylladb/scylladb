@@ -200,7 +200,7 @@ static void assert_table_sstable_count(table_for_tests& t, size_t expected_count
     BOOST_REQUIRE(uint64_t(t->get_stats().live_sstable_count) == expected_count);
 }
 
-void compaction_manager_basic(test_env& env) {
+static table_for_tests compaction_manager_basic_prepare(test_env& env) {
     BOOST_REQUIRE(this_smp_shard_count() == 1);
     auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                 .with_column("p1", utf8_type, column_kind::partition_key)
@@ -208,7 +208,6 @@ void compaction_manager_basic(test_env& env) {
                 .with_column("r1", int32_type)
                 .build();
     auto cf = env.make_table_for_tests(s);
-    auto& cm = cf->get_compaction_manager();
     auto close_cf = deferred_stop(cf);
     cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
     auto sst_gen = env.make_sst_factory(s);
@@ -231,6 +230,14 @@ void compaction_manager_basic(test_env& env) {
     }
 
     BOOST_REQUIRE(cf->sstables_count() == idx.size());
+    close_cf.cancel();
+    return cf;
+}
+
+void compaction_manager_basic(test_env& env) {
+    table_for_tests cf = compaction_manager_basic_prepare(env);
+    auto close_cf = deferred_stop(cf);
+    auto& cm = cf->get_compaction_manager();
     cf->trigger_compaction();
     // wait for submitted job to finish and there is no pending tasks
     do_until([&cm] {
@@ -266,21 +273,6 @@ SEASTAR_FIXTURE_TEST_CASE(compaction_manager_basic_gcs_test, gcs_fixture, *tests
                                    test_env_config{
                                        .storage = make_test_object_storage_options("GS"),
                                    });
-}
-
-// Adds count same-size sstables to cf, so STCS puts them in one bucket.
-static std::vector<shared_sstable> add_same_size_sstables(test_env& env, table_for_tests& cf, simple_schema& ss, sstable_version_types version,
-        uint32_t count) {
-    auto s = cf.schema();
-    std::vector<shared_sstable> ssts;
-    for (uint32_t i = 0; i < count; ++i) {
-        mutation m(s, ss.make_pkey(i));
-        ss.add_row(m, ss.make_ckey(0), "v");
-        auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
-        column_family_test(cf).add_sstable(sst).get();
-        ssts.push_back(std::move(sst));
-    }
-    return ssts;
 }
 
 static void regular_compaction_quarantines_malformed_sstable(test_env& env, sstable_version_types version, compress_sstable compress) {
@@ -387,6 +379,51 @@ SEASTAR_TEST_CASE(regular_compaction_quarantine_failure_test) {
             BOOST_REQUIRE(!sst->is_quarantined());
             BOOST_REQUIRE(cf->get_sstables()->contains(sst));
         }
+    });
+}
+
+void regular_compaction_validate_test(test_env& env, bool auto_scrub_enabled) {
+    table_for_tests cf = compaction_manager_basic_prepare(env);
+    auto close_cf = deferred_stop(cf);
+    auto& cm = cf->get_compaction_manager();
+
+    auto ssts = cf->get_sstables();
+    BOOST_REQUIRE(!ssts->empty());
+    auto sst = ssts->begin()->get()->shared_from_this();
+    sst->set_scrub_time(db_clock::from_time_t(0));
+    slightly_corrupt_sstable(sst, component_type::TOC);
+
+    if (auto_scrub_enabled) {
+        cf->set_scrub_period(std::chrono::hours(1));
+    }
+
+    cf->trigger_compaction();
+    // wait for submitted job to finish and there is no pending tasks
+    do_until([&cm, auto_scrub_enabled] {
+        if (auto_scrub_enabled) {
+            return cm.get_stats().errors > 0 && cm.get_stats().pending_tasks == 0;
+        }
+        return cm.get_stats().completed_tasks > 0 && cm.get_stats().pending_tasks == 0;
+    }, [] {
+        return sleep(std::chrono::milliseconds(100));
+    }).wait();
+
+    if (auto_scrub_enabled) {
+        BOOST_REQUIRE(sst->is_quarantined());
+    } else {
+        BOOST_REQUIRE(!sst->is_quarantined());
+    }
+}
+
+SEASTAR_TEST_CASE(regular_compaction_validates_sstables_which_should_be_scrubbed_auto_scrub_enabled) {
+    return test_env::do_with_async([] (test_env& env) {
+         regular_compaction_validate_test(env, true);
+    });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_validates_sstables_which_should_be_scrubbed_auto_scrub_disabled) {
+    return test_env::do_with_async([] (test_env& env) {
+         regular_compaction_validate_test(env, false);
     });
 }
 

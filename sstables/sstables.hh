@@ -795,18 +795,18 @@ private:
     void validate_max_local_deletion_time();
     void validate_partitioner();
     // Read component data and validate the digest.
-    future<> compute_and_validate_component_digest(component_type type);
+    future<> compute_and_validate_component_digest(component_type type, std::optional<abort_source&> as = std::nullopt);
     future<> validate_scylla_digest_value();
 public:
     void validate_component_digest(component_type type, uint32_t computed_digest) const;
     using skip_data_digest = bool_class<struct skip_data_digest_tag>;
-    future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no);
+    future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no, std::optional<abort_source&> as = std::nullopt);
 private:
     // Read the Scylla component self-digest from file.
     // Should only be called by sstables which have a Scylla file digest.
     future<uint32_t> read_scylla_file_digest() const;
-    future<uint32_t> compute_component_file_digest(component_type type) const;
-    future<uint32_t> compute_component_file_digest(file f, size_t size) const;
+    future<uint32_t> compute_component_file_digest(component_type type, std::optional<abort_source&> as = std::nullopt) const;
+    future<uint32_t> compute_component_file_digest(file f, size_t size, std::optional<abort_source&> as = std::nullopt) const;
 
     // Loads first and last partition keys from appropriate components into `_first` and `_last`.
     void set_first_and_last_keys();
@@ -1127,6 +1127,9 @@ public:
 
     std::optional<uint32_t> get_component_digest(component_type c) const;
 
+    std::optional<db_clock::time_point> get_scrub_time() const;
+    void set_scrub_time(db_clock::time_point scrub_time);
+
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which
     // is the point before which expiring data can be purged.
@@ -1278,7 +1281,7 @@ public:
             std::function<void(sstable&)> modifier,
             update_sstable_id);
     // Must be called in a seastar thread
-    void write_component_with_metadata(component_type type);
+    void write_component_with_metadata_and_modifier(component_type type, std::function<void(sstable&)> modifier);
 private:
     future<uint64_t> component_filesize(component_type type) const noexcept;
 };
@@ -1431,6 +1434,7 @@ public:
 struct sstable_stream_sink_cfg {
     bool last_component = false;
     bool leave_unsealed = false;
+    bool update_scrub_time = false;
 };
 
 // Creates a sink object which can receive a component file sourced from above source object data.
