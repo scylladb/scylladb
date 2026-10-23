@@ -22,16 +22,12 @@ namespace audit {
 const sstring audit_cf_storage_helper::KEYSPACE_NAME("audit");
 const sstring audit_cf_storage_helper::TABLE_NAME("audit_log");
 
-static service::client_state& audit_client_state() {
+static timeout_config audit_timeout_config(const db::config& cfg) {
     using namespace std::chrono_literals;
-    // Same bounded timeout as tracing_client_state(). With the one-hour timeout of
-    // client_state::for_internal_calls(), a stuck audit write blocks the audited statement
-    // and pins its effective_replication_map, which topology barriers wait on.
-    static timeout_config audit_db_timeout_config {
-        5s, 5s, 5s, 5s, 5s, 5s, 5s,
-    };
-    static thread_local service::client_state s(service::client_state::internal_tag{}, audit_db_timeout_config);
-    return s;
+    // Bounded because a stuck audit write blocks the audited statement and pins its
+    // effective_replication_map; never shorter than tracing's 5s or a client write's timeout.
+    const auto timeout = std::max<db::timeout_clock::duration>(5s, std::chrono::milliseconds(cfg.write_request_timeout_in_ms()));
+    return timeout_config{timeout, timeout, timeout, timeout, timeout, timeout, timeout};
 }
 
 audit_cf_storage_helper::audit_cf_storage_helper(cql3::query_processor& qp, service::migration_manager& mm)
@@ -66,7 +62,8 @@ audit_cf_storage_helper::audit_cf_storage_helper(cql3::query_processor& qp, serv
                        "username,"
                        "error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                        KEYSPACE_NAME, TABLE_NAME))
-    , _dummy_query_state(audit_client_state(), empty_service_permit())
+    , _client_state(service::client_state::internal_tag{}, audit_timeout_config(qp.db().get_config()))
+    , _dummy_query_state(_client_state, empty_service_permit())
 {
 }
 
