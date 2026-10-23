@@ -17,8 +17,6 @@
 #include "utils/log.hh"
 #include "utils/rate.hh"
 
-class compaction_controller;
-
 namespace sstables {
 class sstable_set;
 }
@@ -211,11 +209,9 @@ private:
 class compaction_backlog_manager {
     std::unordered_map<compaction_backlog_tracker*, const compaction_backlog_source*> _backlog_trackers;
     void remove_backlog_tracker(compaction_backlog_tracker* tracker);
-    compaction_controller* _compaction_controller;
     friend class compaction_backlog_tracker;
 public:
     ~compaction_backlog_manager();
-    compaction_backlog_manager(compaction_controller& controller) : _compaction_controller(&controller) {}
     double backlog() const;
     // The tracker's backlog is calculated on the sstables the source it is registered
     // with provides.
