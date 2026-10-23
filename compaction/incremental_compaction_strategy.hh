@@ -49,6 +49,7 @@ public:
     }
 
     friend class incremental_compaction_strategy;
+    friend class incremental_backlog_tracker;
 };
 
 using sstable_run_and_length = std::pair<sstables::frozen_sstable_run, uint64_t>;
