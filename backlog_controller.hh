@@ -125,14 +125,30 @@ public:
     {}
 };
 
-class compaction_controller : public backlog_controller {
+// Sets the shares of the compaction scheduling group.
+class compaction_controller {
 public:
-    static constexpr unsigned normalization_factor = 30;
+    // The backlog a tracker reports when it can't compute one, e.g. for a strategy
+    // without a backlog model. A controller then gives compaction its maximum shares.
     static constexpr float disable_backlog = std::numeric_limits<double>::infinity();
     static constexpr float backlog_disabled(float backlog) { return std::isinf(backlog); }
+
+    virtual ~compaction_controller() = default;
+    virtual future<> shutdown() = 0;
+    // Static shares, when positive, replace the controller's own.
+    virtual future<> update_static_shares(float static_shares) = 0;
+    // Caps the shares the controller gives compaction.
+    virtual void set_max_shares(float max_shares) = 0;
+};
+
+// Sets the shares from the backlog, normalized by the available memory, through a
+// piecewise-linear curve.
+class compaction_controller_v1 final : public compaction_controller, public backlog_controller {
+public:
+    static constexpr unsigned normalization_factor = 30;
     static inline const std::vector<backlog_controller::control_point> default_control_points = {
             backlog_controller::control_point{0.0, 50}, {1.5, 100}, {normalization_factor, default_compaction_maximum_shares}};
-    compaction_controller(backlog_controller::scheduling_group sg, float static_shares, std::optional<float> max_shares,
+    compaction_controller_v1(backlog_controller::scheduling_group sg, float static_shares, std::optional<float> max_shares,
         std::chrono::milliseconds interval, std::function<float()> current_backlog)
         : backlog_controller(std::move(sg), std::move(interval),
           default_control_points,
@@ -145,6 +161,12 @@ public:
         }
     }
 
+    future<> shutdown() override {
+        return backlog_controller::shutdown();
+    }
+    future<> update_static_shares(float static_shares) override {
+        return backlog_controller::update_static_shares(static_shares);
+    }
     // Updates the maximum output value for control points.
-    void set_max_shares(float max_shares);
+    void set_max_shares(float max_shares) override;
 };

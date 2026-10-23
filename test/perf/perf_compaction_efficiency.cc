@@ -1233,8 +1233,8 @@ void do_concurrent_compaction_test(cql_test_env& env, test_config& cfg) {
     auto observed_flush_kb = sstables_created > 0 ? total_flush_bytes / double(sstables_created) / 1024.0 : 0.0;
     // The first control point's output is the shares the controller assigns at zero
     // backlog, i.e. the floor it sits at when it sees nothing to do.
-    auto shares_floor = compaction_controller::default_control_points.front().output;
-    auto shares_ceiling = compaction_controller::default_control_points.back().output;
+    auto shares_floor = compaction_controller_v1::default_control_points.front().output;
+    auto shares_ceiling = compaction_controller_v1::default_control_points.back().output;
 
     fmt::print("\n=== Flush, controller reaction and read amplification ===\n");
     // Triggers are the controlled input; flushes and skips are how the system responded.

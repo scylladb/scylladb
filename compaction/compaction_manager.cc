@@ -764,7 +764,7 @@ future<> compaction_manager::run_custom_job(compaction_group_view& t, compaction
 
 future<> compaction_manager::update_static_shares(float static_shares) {
     cmlog.info("Updating static shares to {}", static_shares);
-    return _compaction_controller.update_static_shares(static_shares);
+    return _compaction_controller->update_static_shares(static_shares);
 }
 
 compaction_reenabler::compaction_reenabler(compaction_manager& cm, compaction_group_view& t)
@@ -933,8 +933,8 @@ auto fmt::formatter<compaction::compaction_task_executor>::format(const compacti
 
 namespace compaction {
 
-inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, uint64_t static_shares, std::optional<float> max_shares, std::function<double()> fn) {
-    return compaction_controller(csg, static_shares, max_shares, 250ms, std::move(fn));
+inline std::unique_ptr<compaction_controller> make_compaction_controller(const compaction_manager::scheduling_group& csg, uint64_t static_shares, std::optional<float> max_shares, std::function<double()> fn) {
+    return std::make_unique<compaction_controller_v1>(csg, static_shares, max_shares, 250ms, std::move(fn));
 }
 
 compaction::compaction_state::~compaction_state() {
@@ -1148,11 +1148,10 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
             // returning the normalization factor means that we'll return the maximum
             // output in the _control_points. We can get rid of this when we implement
             // all strategies.
-            return compaction_controller::normalization_factor;
+            return compaction_controller_v1::normalization_factor;
         }
         return b;
     }))
-    , _backlog_manager(_compaction_controller)
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))
@@ -1160,7 +1159,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _compaction_max_shares_observer(_cfg.max_shares.observe([this] (const float& max_shares) {
         cmlog.info("Updating max shares to {}", max_shares);
-        _compaction_controller.set_max_shares(max_shares);
+        _compaction_controller->set_max_shares(max_shares);
     }))
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
@@ -1174,7 +1173,6 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     , _cfg(config{ .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, std::nullopt, [] () -> float { return 1.0; }))
-    , _backlog_manager(_compaction_controller)
     , _update_compaction_static_shares_action([] { return make_ready_future<>(); })
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _compaction_max_shares_observer(_cfg.max_shares.observe([] (const float& max_shares) {}))
@@ -1427,7 +1425,7 @@ future<> compaction_manager::really_do_stop() noexcept {
     co_await _sys_ks.close();
     _weight_tracker.clear();
     _compaction_submission_timer.cancel();
-    co_await _compaction_controller.shutdown();
+    co_await _compaction_controller->shutdown();
     co_await _update_compaction_static_shares_action.join();
     cmlog.info("Stopped");
 }
@@ -2875,7 +2873,8 @@ double compaction_backlog_manager::backlog() const {
             return backlog;
         }
     } catch (...) {
-        return _compaction_controller->backlog_of_shares(1000);
+        // Like a disabled tracker: the controller gives compaction its maximum shares.
+        return compaction_controller::disable_backlog;
     }
 }
 

@@ -591,7 +591,7 @@ void backlog_controller::update_controller(float shares) {
     _scheduling_group.set_shares(shares);
 }
 
-void compaction_controller::set_max_shares(float max_shares) {
+void compaction_controller_v1::set_max_shares(float max_shares) {
     // second-last control point dictates the minimum max shares, since the config
     // should only cap the output of the last control point (i.e. the max shares).
     float minimum_max_shares = (_control_points.rbegin() + 1)->output;
