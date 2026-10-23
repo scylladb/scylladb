@@ -2818,12 +2818,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             break;
                         }
                     }
-                    // The barrier lets every node see the pending replica's new storage
-                    // before the next stage writes to it. A strongly consistent tablet
-                    // takes writes only through raft, and raft reaches the pending replica
-                    // only through its raft server, which the pending replica starts only
-                    // once it has applied this stage. So this stage does nothing for it,
-                    // and is kept for uniformity with the eventually consistent migration.
+                    // The barrier makes the pending replica apply this stage, and so
+                    // allocate the tablet's storage, before coordinators of the next stage
+                    // write to it: the pending replica counts towards a write's acks. A
+                    // strongly consistent tablet takes writes only through raft, which
+                    // reaches the pending replica only through its raft server. The pending
+                    // replica allocates the storage and starts the server in the same token
+                    // metadata update, whichever stage it sees first, and the server's start
+                    // suspends before it can apply anything. So nothing needs every node to
+                    // see this stage, which is kept for uniformity with the eventually
+                    // consistent migration.
                     if (is_strong_consistency || do_barrier()) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
                         auto leaving_replica = get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);

@@ -305,7 +305,10 @@ The "stage" serves two major purposes:
    Replica selectors are stored in tablet_transition_info::writes and tablet_transition_info::reads,
    which are directly derived from the stage stored in system tables.
 
-The invariants of stages, which hold as soon as the stage is committed to group0:
+The invariants of stages of an eventually-consistent tablet, which hold as soon as the stage is committed
+to group0, are listed below. A strongly-consistent tablet reuses some of these stages under other names,
+but these invariants don't apply to it; its own are in
+[Strongly-consistent tablets](#strongly-consistent-tablets).
 
 1. allow_write_both_read_old
 
@@ -620,7 +623,9 @@ C is the current replica set and next the new one; L is the leaving replica and 
 A request's *view* is the stage in the effective replication map it pinned. A request is *inside* m's raft
 server from its call to acquire_server() on m until it drops the returned handle.
 
-Correctness is argued with two facts, never with "the barrier ran":
+These facts and invariants take the place of the stage invariants of eventually-consistent tablets in
+[Tablet transitions](#tablet-transitions). Correctness is argued with two facts, never with "the barrier
+ran":
 
 - **drained(h, K, S)**: on host h, nothing of kind K with a view older than S runs, and nothing can start
   with one. K is either requests (inside the group's server, or holding a map and about to enter it) or
@@ -637,6 +642,15 @@ Invariants:
 - **I3, storage.** Nothing reads or applies to m's tablet storage after its cleanup.
 - **I4, nesting.** Of any two live views, one's serving set contains the other's, so a request is served
   within two routing hops.
+- **I5, storage under the server.** A replica runs the group's raft server only while it has the tablet's
+  storage. It holds on each replica by itself, with no barrier, because the replica derives both from
+  its current tablet map, as described below.
+
+A replica derives its local state for a tablet, such as its storage and its raft server, from its current
+tablet map, on every update and at boot, never from having seen a particular stage. A replica that lags
+in group0 applies several stage changes at once and sees only the newest. Code that reacts to seeing a
+stage works only if every replica sees that stage, which only a barrier at the stage guarantees, and that
+barrier then does a job no precondition states.
 
 A stage S may be published only if every voter the group has, or is being changed to, and every leader a
 node of serving(S) may name, is in serving(S), and serving(S) nests with every live serving set.
@@ -658,6 +672,13 @@ sync is sc_rollback's, after sc_become_voter: sc_add_nonvoter's sync is the firs
 replica it targets the configuration the group already has.
 
 Every barrier in the table serves one of these needs; the others were dropped.
+
+For example, start_migration runs no barrier. For an eventually-consistent tablet, that barrier satisfies
+the precondition of write_both_read_old that P is prepared for writes: coordinators send writes to P as
+soon as they see that stage. A strongly-consistent tablet takes writes only through raft, which reaches P
+only through P's raft server, and by I5 P has the storage whenever it runs that server. Until P starts
+the server, the leader's appends to P fail and are retried. No request is routed to P before
+sc_become_voter, so P needn't see the transition info either.
 
 Consequences:
 

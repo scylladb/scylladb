@@ -9,8 +9,8 @@ from datetime import datetime
 from typing import Tuple
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.util import gather_safely, wait_for, Host
-from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
+from test.pylib.util import gather_safely, unique_name, wait_for, Host
+from test.cluster.util import ensure_raft_group_leader_on, get_topology_coordinator, new_test_keyspace, new_test_table
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
@@ -2700,6 +2700,100 @@ async def test_tablet_migration_during_insert(manager: ScyllaClusterManager):
             assert [host for host, _ in tablets[0].replicas] == [dst_host_id]
             rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 1")
             assert len(rows) == 1 and rows[0].v == 1
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_pending_replica_skips_start_migration(manager: ScyllaClusterManager):
+    """A pending replica that applies start_migration together with the next stages, in one
+    group0 apply, has the tablet's storage before its raft server applies anything
+    (SCYLLADB-5638).
+
+    No barrier makes every node see start_migration of a strongly consistent tablet, so a
+    pending replica that lags in group0 may never see it. The test holds the pending
+    replica's group0 applier on an unrelated command until the migration has moved past
+    start_migration, so the stage changes queued behind it are applied together.
+    """
+    cmdline = DEFAULT_CMDLINE + [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'group0_raft_sm=trace',
+        '--logger-log-level', 'debug_error_injection=debug',
+    ]
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=cmdline)
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            table_name = table.split('.')[-1]
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            tablet_token = tablets[0].last_token
+            [(src_host_id, src_shard)] = tablets[0].replicas
+
+            # The pending replica must not be the topology coordinator: the coordinator's group0
+            # operations would wait for the held applier.
+            coordinator_host_id = await get_topology_coordinator(manager)
+            dst_idx = next(i for i, h in enumerate(host_ids) if h not in (src_host_id, coordinator_host_id))
+            dst_server, dst_host_id = servers[dst_idx], host_ids[dst_idx]
+            other_idx = next(i for i in range(len(servers)) if i != dst_idx)
+            other_server, other_host = servers[other_idx], hosts[other_idx]
+
+            # Entries in the group's log, which the pending replica applies once it joins.
+            for pk in range(10):
+                await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES ({pk}, {pk})")
+
+            # Hold the pending replica's applier on a group0 command that involves neither the
+            # schema nor the topology. The command completes only once every node has applied it,
+            # so it is awaited after the release.
+            dst_log = await manager.server_open_log(dst_server.server_id)
+            mark = await dst_log.mark()
+            await manager.api.enable_injection(dst_server.ip_addr, "group0_state_machine::block_apply", one_shot=True)
+            held_command = cql.run_async(f"CREATE SERVICE LEVEL {unique_name('sl_')}", host=other_host)
+            await dst_log.wait_for("group0_state_machine::block_apply: waiting for message", from_mark=mark, timeout=60)
+
+            logger.info(f"Migrating the tablet from {src_host_id}:{src_shard} to {dst_host_id}:0")
+            move_task = asyncio.create_task(
+                manager.api.move_tablet(other_server.ip_addr, ks, table_name,
+                                        src_host_id, src_shard, dst_host_id, 0, tablet_token))
+
+            # The snapshot transfer runs a group0 read barrier on the pending replica, so the
+            # migration stops at sc_snapshot_transfer until the applier is released.
+            async def at_snapshot_transfer():
+                tablet_info = await get_tablet_info(manager, other_server, ks, table_name, tablet_token)
+                return (tablet_info and tablet_info.stage == "streaming") or None
+            await wait_for(at_snapshot_transfer, time.time() + 60)
+
+            mark = await dst_log.mark()
+            await manager.api.message_injection(dst_server.ip_addr, "group0_state_machine::block_apply")
+            await held_command
+
+            # A pending replica without storage aborts on its first raft apply, and the migration
+            # then waits for it, so watch its log alongside.
+            storage_missing = asyncio.create_task(
+                    dst_log.wait_for("Storage wasn't found for tablet", from_mark=mark, timeout=120))
+            await asyncio.wait([move_task, storage_missing], return_when=asyncio.FIRST_COMPLETED)
+            if storage_missing.done() and not storage_missing.exception():
+                move_task.cancel()
+                pytest.fail("The pending replica applied raft entries without the tablet's storage")
+            storage_missing.cancel()
+            await move_task
+
+            # Without a batch the test would pass without exercising the bug. The held apply logged
+            # its command count before the mark, so the first apply after it is the one that took
+            # the stage changes queued behind the held command.
+            applies = await dst_log.grep(r"apply\(\) is called with (\d+) commands", from_mark=mark, max_count=1)
+            assert applies and int(applies[0][1].group(1)) >= 2, \
+                f"The pending replica didn't apply the stage changes in one batch: {applies}"
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert [host for host, _ in tablets[0].replicas] == [dst_host_id]
+            for pk in range(10):
+                rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {pk}")
+                assert len(rows) == 1 and rows[0].v == pk
 
 
 async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaClusterManager):
