@@ -10,6 +10,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <chrono>
+#include <cmath>
 #include <stdexcept>
 
 #include <seastar/core/manual_clock.hh>
@@ -164,6 +165,68 @@ BOOST_AUTO_TEST_CASE(test_per_rejects_different_intervals) {
     BOOST_REQUIRE_EQUAL(a.per(utils::rate<utils::units::bytes>(50, 10s)), 2);
     BOOST_REQUIRE_EQUAL(a.per(utils::rate<utils::units::bytes>(0, 10s)), 0);
     BOOST_REQUIRE_THROW(a.per(b), std::runtime_error);
+}
+
+// How compaction_group derives the mean flush size: a second rate accumulates the
+// squared sizes, and dividing it by the bytes rate gives the average flush size,
+// weighted by size. Both share the window and the start, so they
+// cover the same interval and their amounts can be divided.
+namespace {
+
+struct squared_bytes_unit;
+
+struct flush_size_tracker {
+    rate_type bytes = make_rate();
+    utils::moving_average_rate<squared_bytes_unit, double, clock_type, 4> squared_bytes{window, at(0s)};
+
+    void flush(uint64_t size, clock_type::time_point now) {
+        bytes.add(size, now);
+        squared_bytes.add(double(size) * size, now);
+    }
+
+    double mean_flush_size(clock_type::time_point now) {
+        return squared_bytes.rate(now).per(bytes.rate(now));
+    }
+};
+
+constexpr uint64_t MB = 1 << 20;
+
+}
+
+BOOST_AUTO_TEST_CASE(test_mean_flush_size_of_equal_flushes) {
+    flush_size_tracker t;
+    for (auto s = 0s; s < 4min; s += 10s) {
+        t.flush(64 * MB, at(s));
+    }
+    BOOST_REQUIRE_CLOSE(t.mean_flush_size(at(4min)), 64.0 * MB, 1e-6);
+}
+
+BOOST_AUTO_TEST_CASE(test_mean_flush_size_is_weighted_by_bytes) {
+    flush_size_tracker t;
+    // 10 regular flushes of 1 GB and a storm of 90 flushes of 10 MB. The mean of the
+    // sizes would be ~110 MB; weighted by size, the small flushes barely count.
+    for (int i = 0; i < 10; ++i) {
+        t.flush(1024 * MB, at(i * 10s));
+    }
+    for (int i = 0; i < 90; ++i) {
+        t.flush(10 * MB, at(100s + i * 1s));
+    }
+    auto expected = (10 * 1024.0 * 1024.0 * MB + 90 * 10.0 * 10.0 * MB) / (10 * 1024.0 + 90 * 10.0);
+    auto mean = t.mean_flush_size(at(4min));
+    BOOST_REQUIRE_CLOSE(mean, expected, 1e-6);
+    BOOST_REQUIRE_GT(mean, 600.0 * MB);
+}
+
+BOOST_AUTO_TEST_CASE(test_mean_flush_size_follows_the_window) {
+    flush_size_tracker t;
+    for (auto s = 0s; s < 4min; s += 10s) {
+        t.flush(1024 * MB, at(s));
+    }
+    for (std::chrono::seconds s = 4min; s < 8min; s += 10s) {
+        t.flush(64 * MB, at(s));
+    }
+    // The 1 GB flushes have left the window.
+    BOOST_REQUIRE_CLOSE(t.mean_flush_size(at(8min)), 64.0 * MB, 1e-6);
 }
 
 BOOST_AUTO_TEST_CASE(test_window) {

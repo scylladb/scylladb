@@ -117,6 +117,11 @@ class compaction_group : public compaction::compaction_backlog_source {
     // Bytes flushed from memtables into this group, which the compaction controller
     // will use to match compaction to ingestion.
     utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _flushed_bytes{rate_window, _rates_start};
+    // Sum of the squared sizes of the flushed sstables, over the same flushes. Divided by
+    // _flushed_bytes, the sum of their sizes, it gives their average size weighted by size,
+    // which a storm of small flushes barely moves.
+    struct squared_bytes;
+    utils::moving_average_rate<squared_bytes, double, lowres_db_clock> _flushed_squared_bytes{rate_window, _rates_start};
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();

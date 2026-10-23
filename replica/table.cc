@@ -4885,7 +4885,12 @@ lw_shared_ptr<memtable_list>& compaction_group::memtables() noexcept {
 
 void compaction_group::on_memtable_flushed(const std::vector<sstables::shared_sstable>& ssts) noexcept {
     for (const auto& sst : ssts) {
-        _flushed_bytes.add(sst->data_size());
+        auto size = sst->data_size();
+        if (size == 0) {
+            continue;
+        }
+        _flushed_bytes.add(size);
+        _flushed_squared_bytes.add(double(size) * size);
     }
 }
 
