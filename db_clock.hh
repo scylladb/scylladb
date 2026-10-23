@@ -39,6 +39,23 @@ public:
     }
 };
 
+// Like db_clock, but read from seastar::lowres_system_clock, which the reactor
+// refreshes every task quota: cheap enough for hot paths, accurate to about a
+// task quota. Tests move it forward with forward_jump_clocks(), like db_clock.
+class lowres_db_clock final {
+public:
+    using base = seastar::lowres_system_clock;
+    using rep = db_clock::rep;
+    using period = db_clock::period; // milliseconds
+    using duration = db_clock::duration;
+    using time_point = std::chrono::time_point<lowres_db_clock, duration>;
+
+    static constexpr bool is_steady = base::is_steady;
+    static time_point now() noexcept {
+        return time_point(std::chrono::duration_cast<duration>(base::now().time_since_epoch())) + get_clocks_offset();
+    }
+};
+
 inline
 gc_clock::time_point to_gc_clock(db_clock::time_point tp) noexcept {
     // Converting time points through `std::time_t` means that we don't have to make any assumptions about the epochs
