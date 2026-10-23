@@ -149,16 +149,17 @@ def marker_in(pages):
     return any(PLAINTEXT_MARKER.encode() in page for page in pages)
 
 
-async def create_table(manager: ScyllaClusterManager, server, ks, table_options=''):
+async def create_table(manager: ScyllaClusterManager, server, ks, table_options='', rows=400):
     '''Creates the table ks.test with some data, flushed to sstables, and
     returns the data as a dict. The data does not compress well, so its
     sstables are larger than the sstable reader's 128 KiB read buffer, but
-    the whole table fits in one page of query results.'''
+    with the default number of rows, the whole table fits in one page of
+    query results.'''
     cql = manager.get_cql()
     await cql.run_async(f'CREATE TABLE {ks}.test (p int PRIMARY KEY, v text) {table_options}')
     insert = cql.prepare(f'INSERT INTO {ks}.test (p, v) VALUES (?, ?)')
     rand = random.Random(1)
-    data = {p: rand.randbytes(500).hex() for p in range(400)}
+    data = {p: rand.randbytes(500).hex() for p in range(rows)}
     # A value whose bytes can be looked for in the sstables, to check if they
     # hold it as plaintext.
     data[400] = PLAINTEXT_MARKER
@@ -768,6 +769,9 @@ async def test_compaction_reads_cache(manager: ScyllaClusterManager, s3_storage)
     async def compaction_requests(scan_first):
         async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
             data = await create_table(manager, server, ks)
+            # Automatic compaction mustn't replace the sstables which the
+            # scan cached before the compaction which the test measures.
+            await manager.api.disable_autocompaction(server.ip_addr, ks)
             # Write a second sstable, overwriting some of the rows.
             update = cql.prepare(f'UPDATE {ks}.test SET v = ? WHERE p = ?')
             for p in range(0, 400, 10):
@@ -831,6 +835,9 @@ async def test_compaction_evicts_compacted_sstables(manager: ScyllaClusterManage
     cql = manager.get_cql()
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
         data = await create_table(manager, server, ks)
+        # The test checks which sstables are cached before compaction, so
+        # automatic compaction mustn't replace them earlier.
+        await manager.api.disable_autocompaction(server.ip_addr, ks)
         update = cql.prepare(f'UPDATE {ks}.test SET v = ? WHERE p = ?')
         for p in range(0, 400, 10):
             data[p] = f'updated {p}'
@@ -1007,6 +1014,50 @@ async def test_hits(manager: ScyllaClusterManager, s3_storage):
         await manager.api.drop_sstable_caches(server.ip_addr)
         point_read('BYPASS CACHE')
         assert page_hits(cql) == second_hits
+
+
+def cached_bytes(cql):
+    '''The number of bytes in the page cache. A row of the hits table may
+    have no size, if a hit of a page was recorded after it was evicted.'''
+    return sum(row.size or 0 for row in cql.execute('SELECT size FROM system_cache.pagecache_hits'))
+
+
+async def test_cache_size_limit(manager: ScyllaClusterManager, s3_storage):
+    '''The page cache is limited to the configured size: when it grows beyond
+    it, it evicts pages - first the pages which weren't hit recently - so the
+    pages which are read repeatedly stay in the cache, while it fills with
+    pages which are read only once.'''
+    config = page_cache_config(s3_storage) | {'object_storage_page_cache_size_in_mb': 1}
+    server = await manager.server_add(config=config)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        # A table of a few MiB, larger than the cache.
+        data = await create_table(manager, server, ks, rows=4000)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        # Check that the cache evicts pages, until it is within its limit. The
+        # eviction runs in the background, so wait for it.
+        async def within_limit():
+            return True if cached_bytes(cql) <= 1024 * 1024 else None
+        await wait_for(within_limit, time.time() + 60)
+
+        # Read many partitions, each only once, which fills the cache again
+        # with pages which aren't hit - but read one partition again and
+        # again, so its pages are hit. Drop the row cache before each read of
+        # that partition, so it reads its pages from the page cache.
+        select = cql.prepare(f'SELECT v FROM {ks}.test WHERE p = ?')
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        for i, p in enumerate(range(100, 1100)):
+            assert cql.execute(select, [p]).one().v == data[p]
+            if i % 5 == 0:
+                await manager.api.drop_sstable_caches(server.ip_addr)
+                assert cql.execute(select, [17]).one().v == data[17]
+        await wait_for(within_limit, time.time() + 60)
+        # Check that the partition which was read repeatedly is still cached.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        assert cql.execute(select, [17]).one().v == data[17]
+        assert await read_requests(manager, server, s3_storage) == requests_before
 
 
 async def test_lwt_populates_cache(manager: ScyllaClusterManager, s3_storage):
