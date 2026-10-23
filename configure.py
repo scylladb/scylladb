@@ -1762,6 +1762,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/external_search_test.cc',
     'test/boost/extensions_test.cc',
     'test/boost/filtering_test.cc',
+    'test/boost/gossiper_test.cc',
     'test/boost/group0_cmd_merge_test.cc',
     'test/boost/group0_test.cc',
     'test/boost/group0_voter_calculator_test.cc',

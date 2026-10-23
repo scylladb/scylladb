@@ -47,6 +47,9 @@ custom_args:
         - '-c1 -m256M'
     commitlog_cleanup_test:
         - '-c1 -m2G'
+    # Captures the seastar log, which other shards would write concurrently.
+    gossiper_test:
+        - '-c1 -m2G'
     bloom_filter_test:
         - '-c1'
     s3_test:

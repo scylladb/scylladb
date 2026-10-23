@@ -378,6 +378,7 @@ add_scylla_test(combined_tests
     external_search_test.cc
     extensions_test.cc
     filtering_test.cc
+    gossiper_test.cc
     group0_cmd_merge_test.cc
     group0_test.cc
     group0_voter_calculator_test.cc
