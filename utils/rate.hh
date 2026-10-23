@@ -15,7 +15,8 @@
 
 namespace utils {
 
-/// Tags naming what a rate counts.
+/// Tags naming what a rate counts. Higher-level modules define their own, e.g.
+/// sstables::units::reads.
 namespace units {
 struct bytes;
 }

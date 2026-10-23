@@ -116,7 +116,7 @@ table::make_sstable_reader(schema_ptr s,
     // regardless of what the fwd_mr parameter says.
     if (pr.is_singular() && pr.start()->value().has_key()) {
         return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
-                _stats.estimated_sstable_per_read, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
+                sstables::read_stats{_stats.estimated_sstable_per_read}, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
     } else {
         return sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice,
                 std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), predicate, nullptr, integrity);
@@ -628,7 +628,9 @@ const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() co
 sstables::sstable_set compaction_group::make_main_sstable_set() const {
     // Uses view for unrepaired data, but doesn't really matter since this is only building an empty set,
     // and will get through the view info like group id and token range.
-    return _t._compaction_strategy.make_sstable_set(view_for_unrepaired_data());
+    auto set = _t._compaction_strategy.make_sstable_set(view_for_unrepaired_data());
+    // The reads of keys owned by this group are served from its main set.
+    return sstables::sstable_set(std::move(set), _point_read_amplification);
 }
 
 void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables) {
@@ -3605,13 +3607,14 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _token_range(std::move(token_range))
     , _compaction_strategy_state(compaction::compaction_strategy_state::make(_t._compaction_strategy))
     , _memtables(_t._config.enable_disk_writes ? _t.make_memtable_list(*this) : _t.make_memory_only_memtable_list())
-    , _main_sstables(make_lw_shared<sstables::sstable_set>(make_main_sstable_set()))
     , _maintenance_sstables(make_maintenance_sstable_set())
     , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
     , _repair_sstable_classifier(std::move(repair_classifier))
     , _logstor_state(t.uses_logstor() ? std::make_unique<compaction_group_logstor_state>(*this) : nullptr)
     , _lowest_rp(db::replay_position::max)
 {
+    // Once the group's read amplification tracker exists, for the set to report to.
+    _main_sstables = make_lw_shared<sstables::sstable_set>(make_main_sstable_set());
     // Must go through register_backlog_tracker(), otherwise this group's backlog would
     // be tracked but never accounted by the compaction backlog manager. Groups created
     // after the table was started (tablet split, migration or merge) are not covered by
@@ -4923,6 +4926,10 @@ compaction::compaction_group_stats compaction_group::stats() const {
             .compacted_bytes_long = _compacted_bytes_long.rate(now),
             .completed_input_bytes = _completed_input_bytes.rate(now),
             .completed_output_bytes = _completed_output_bytes.rate(now),
+        },
+        .read_amplification = {
+            .point_reads = _point_read_amplification->reads(now),
+            .sstables_read = _point_read_amplification->sstables_read(now),
         },
     };
 }

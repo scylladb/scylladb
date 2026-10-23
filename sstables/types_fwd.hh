@@ -18,4 +18,11 @@ using run_id = utils::tagged_uuid<struct run_id_tag>;
 using integrity_check = bool_class<class integrity_check_tag>;
 using update_sstable_id = bool_class<struct update_sstable_id_tag>;
 
+// What the rates of single-partition reads count, for utils::rate: the reads, and
+// the sstables they read.
+namespace units {
+struct reads;
+struct sstables;
+}
+
 } // namespace sstables

@@ -138,6 +138,13 @@ class compaction_group : public compaction::compaction_backlog_source {
     // The data regular compactions read and wrote, as each ends.
     utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _completed_input_bytes{completed_window, _rates_start};
     utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _completed_output_bytes{completed_window, _rates_start};
+    // Single-partition reads served from this group's sstables, and the sstables they read.
+    // Over the achieved window, like the compacted rate: the controller discounts its target
+    // by what the reads touch now, and reads starting or stopping, as a bulk load ends or
+    // begins, should move it within a few updates, not a flush window. The group's main
+    // set, which serves the reads of the keys the group owns, reports them to it, so no
+    // read has to look the group up.
+    lw_shared_ptr<sstables::read_amplification_tracker> _point_read_amplification = make_lw_shared<sstables::read_amplification_tracker>(achieved_window, _rates_start);
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();
