@@ -204,6 +204,11 @@ tokens. Each shard reads and writes only its own cache. Their row cache is
 disabled (the pages are cached in memory by the user tables' own caches), and
 their tombstones are dropped immediately.
 
+Both tables use incremental compaction - `pagecache` with a space
+amplification goal of 1.5, and `pagecache_hits` without one. The
+[administration guide](../operating-scylla/admin.rst) explains these choices,
+and the disk space which the cache takes.
+
 The cache is reached through `sstables::object_storage_page_cache` (an
 interface, so the sstables code doesn't depend on the code which reads and
 writes tables), implemented by `db::object_storage_page_cache_table`. It
