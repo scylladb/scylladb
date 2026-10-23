@@ -89,6 +89,7 @@ public:
         size_t available_memory = 0;
         utils::updateable_value<float> static_shares = utils::updateable_value<float>(0);
         utils::updateable_value<float> max_shares = utils::updateable_value<float>(0);
+        float normalization_factor = backlog_proportional_compaction_controller::normalization_factor;
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
         std::chrono::seconds flush_all_tables_before_major = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(1));
     };
@@ -192,8 +193,13 @@ private:
     timer<lowres_clock> _automatic_scrub_submission_timer;
 
     std::unique_ptr<compaction_controller> _compaction_controller;
+    // The shutdown of the controller _compaction_controller replaced, if any.
+    future<> _replaced_compaction_controller_shutdown = make_ready_future<>();
+    std::unique_ptr<compaction_controller> make_backlog_proportional_compaction_controller();
+    std::unique_ptr<rate_matching_compaction_controller> make_rate_matching_compaction_controller();
     // The time regular compaction was busy, i.e. at least one ran, so far.
     seastar::lowres_clock::duration regular_compaction_busy_time() const noexcept;
+    void stop_compaction_controller(std::unique_ptr<compaction_controller> controller);
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
     future<> update_history(compaction_group_view& t, compaction_result&& res, const compaction_data& cdata);
@@ -363,6 +369,15 @@ public:
 
     float max_shares() const noexcept {
         return _cfg.max_shares.get();
+    }
+
+    // Replace the compaction controller with backlog_proportional_compaction_controller or
+    // rate_matching_compaction_controller. The replaced one stops setting the shares at once.
+    void use_backlog_proportional_compaction_controller();
+    void use_rate_matching_compaction_controller();
+
+    const compaction_controller& get_compaction_controller() const noexcept {
+        return *_compaction_controller;
     }
 
     uint32_t throughput_mbs() const noexcept {
@@ -723,6 +738,10 @@ public:
     // Credits the compaction group with the bytes regular compaction compacted since the
     // last credit, so that its rate follows compaction in flight.
     uint64_t credit_compaction_progress() noexcept;
+    // Bytes of the input sstables the compaction has processed so far.
+    uint64_t compaction_progress() const noexcept {
+        return _progress_monitor.get_progress();
+    }
 
     const ::compaction::compaction_data& compaction_data() const noexcept {
         return _compaction_data;

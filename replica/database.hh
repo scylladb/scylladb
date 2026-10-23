@@ -1908,6 +1908,8 @@ private:
 
     serialized_action _update_memtable_flush_static_shares_action;
     utils::observer<float> _memtable_flush_static_shares_observer;
+    // The compaction_controller option, which can change at runtime.
+    utils::observer<sstring> _compaction_controller_observer;
 
     db_clock::time_point _all_tables_flushed_at;
 
@@ -1953,6 +1955,8 @@ private:
     future<std::unique_ptr<keyspace>> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, const locator::token_metadata_ptr& token_metadata, system_keyspace system);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
+    // Switches to the compaction controller named by the compaction_controller option.
+    void use_compaction_controller(std::string_view controller);
     reader_concurrency_semaphore& read_concurrency_sem();
     reader_concurrency_semaphore& view_update_read_concurrency_sem();
     auto sum_read_concurrency_sem_var(std::invocable<reader_concurrency_semaphore&> auto member);

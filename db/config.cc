@@ -1892,6 +1892,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
     , compaction_max_shares(this, "compaction_max_shares", liveness::LiveUpdate, value_status::Used, default_compaction_maximum_shares,
         "Set the maximum shares of regular compaction to the specific value. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
+    , compaction_controller(this, "compaction_controller", liveness::LiveUpdate, value_status::Used, "backlog",
+        "The controller of the shares of regular compaction. Can be changed at runtime either way, e.g. with ALTER CLUSTER or ALTER NODE; "
+        "each node uses its own. Can be set to the following values:\n"
+        "\tbacklog: Sets the shares from the compaction backlog.\n"
+        "\trate_matching: Matches compaction to the work ingestion produces.",
+        {"backlog", "rate_matching"})
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold.")
     , compaction_flush_all_tables_before_major_seconds(this, "compaction_flush_all_tables_before_major_seconds", value_status::Used, 86400,
