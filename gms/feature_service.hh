@@ -204,6 +204,9 @@ public:
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+    // Gates the compaction controller that matches compaction to ingestion, so that the
+    // nodes of a cluster switch to it together, once all of them have it.
+    gms::feature compaction_controller_v2 { *this, "COMPACTION_CONTROLLER_V2"sv };
 
     // Features created at run time rather than declared above: one per cluster config
     // option, from the registry at construction, plus any a test adds. Node-based, so a
