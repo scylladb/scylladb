@@ -359,9 +359,9 @@ stateDiagram-v2
     [*] --> repair
     repair --> end_repair
     end_repair --> [*]
-    allow_write_both_read_old --> cleanup_target: error
-    write_both_read_old --> cleanup_target: error
-    streaming --> cleanup_target: error
+    allow_write_both_read_old --> cleanup_target: error / cancel
+    write_both_read_old --> cleanup_target: error / cancel
+    streaming --> cleanup_target: error / cancel
     write_both_read_new --> if_state: error
     if_state --> use_new: more new replicas
     if_state --> cleanup_target: more old replicas
@@ -385,10 +385,10 @@ stateDiagram-v2
     use_new --> cleanup
     cleanup --> end_migration
     end_migration --> [*]
-    allow_write_both_read_old --> cleanup_target: error
-    write_both_read_old --> cleanup_target: error
-    rebuild_repair --> cleanup_target: error
-    streaming --> cleanup_target: error
+    allow_write_both_read_old --> cleanup_target: error / cancel
+    write_both_read_old --> cleanup_target: error / cancel
+    rebuild_repair --> cleanup_target: error / cancel
+    streaming --> cleanup_target: error / cancel
     write_both_read_new --> if_state: error
     if_state --> use_new: more new replicas
     if_state --> cleanup_target: more old replicas
@@ -414,6 +414,82 @@ Invariants:
 2. [INV-TABL-2] There is at most one transition per tablet happening at a time in the cluster. Operations started
    on behalf of previous transitions can still run in the cluster, but they can have no side effects. This is ensured
    by the proper use of the topology guard mechanism (see the "Topology guards" section).
+
+### Cancelling tablet transitions
+
+A tablet transition can be cancelled, which makes the coordinator roll it back instead of running
+it to completion. `tablet_mutation_builder::cancel_transition()` clears the transition's session,
+which aborts whatever the replicas started for the current stage, and marks the transition
+cancelled. `locator::can_cancel_tablet_transition()` lists the stages which can be cancelled: the
+migration stages up to and including `streaming`, where writes still go to the leaving replica so
+rolling back loses nothing, and `repair`. Later migration stages roll forward, and `restore` cannot
+be cancelled.
+
+A migration is marked with the `cancel` flag. Writing it is gated on the `TABLET_TRANSITION_CANCEL`
+cluster feature, since an old coordinator would not understand why the session was cleared. The
+replicas' `tablet_metadata_guard` aborts on the flag too, which is what stops the raft config syncs
+of a strongly-consistent tablet. The coordinator rolls the transition back once the actions it
+started for the stage have finished, onto the track a failed transition takes: `cleanup_target`,
+or `sc_remove_pending` first for a strongly-consistent tablet, which also gets a fresh session,
+since its migration keeps one to the end. `del_transition()` clears the flag with the rest of the
+transition.
+
+A repair is marked the way `del_repair_tablet_request()` cancels one, by clearing the tablet's
+`repair_task_info`; the coordinator then skips the repair and ends the transition. Only the
+tablets in a repair transition are cancelled; the rest of the repair request is left alone.
+Clearing `repair_task_info` is also how a repair request decides a tablet is finished, so a
+cancelled tablet is dropped from the request rather than failed: a caller awaiting the request is
+told it completed, and the tablet is counted neither as repaired nor as failed. Tracked in
+[SCYLLADB-4581](https://scylladb.atlassian.net/browse/SCYLLADB-4581).
+
+#### Unblocking a request to disable balancing
+
+Global topology requests are serviced only once no tablet is in transition, and nothing bounds how
+long a transition takes. Disabling tablet balancing is such a request, and Scylla Manager disables
+balancing before taking a backup.
+
+`set_tablet_balancing_enabled()` therefore waits for its request only for a grace period, and then
+cancels whatever is still in flight and can be cancelled, so that the coordinator can service the
+request. The grace period is a parameter of the call, defaulting to
+`tablet_transition_abort_grace_period_in_seconds`, which defaults to 0: wait and cancel nothing.
+
+One cancelling pass is enough: the queued request makes the coordinator preempt balancing, so the
+balancer schedules no new transitions while the call waits. Transitions started through the tablet
+api, or by a global request queued ahead of this one, can still appear and are waited for. Since
+the request is queued whether or not balancing is already disabled, an operator can also use this
+to recover from stuck transitions.
+
+What cannot be cancelled is waited for:
+
+- `restore` transitions, and transitions past the `streaming` stage.
+- the migrations of a node drain. Disabling balancing doesn't stop a drain, so a cancelled drain
+  migration would only be scheduled again. With `PARALLEL_TABLET_DRAINING` the migrations leaving
+  a node whose request is paused are skipped; without it a drain has its own transition state, and
+  nothing is cancelled.
+- everything, on a cluster which does not support `TABLET_TRANSITION_CANCEL` yet. The call logs a
+  warning.
+- on object storage, the copy of the sstable already in flight, and
+  `clone_locally_tablet_storage()` on the intra-node migration path: neither takes an abort source.
+
+`keyspace_rf_change` completes its request once it has created the `rebuild` transitions, so a
+later request can cancel them. `maybe_retry_failed_rf_change_tablet_rebuilds()`, which re-drives
+them, returns early while balancing is disabled, so such tablets stay below the keyspace's
+replication factor until balancing is enabled again. Tracked in
+[SCYLLADB-3948](https://scylladb.atlassian.net/browse/SCYLLADB-3948).
+
+#### Aborting a single migration
+
+Tablet migration tasks are abortable through the task manager, and aborting one cancels that
+tablet's transition (`storage_service::cancel_tablet_transition()`), which the coordinator then
+rolls back. The balancer may schedule the tablet again; to stop migrations, disable tablet
+balancing.
+
+Unlike the bulk path, a transition which is draining a node is not exempt here: the caller named
+the tablet, and restarting a stuck drain stream is a legitimate reason to ask.
+
+Only transitions which have a task id can be aborted this way. `rebuild` transitions created by
+an RF change, and by `add_tablet_replica` / `del_tablet_replica`, carry no `migration_task_info`,
+so they have no task and can only be cancelled in bulk.
 
 ## File-based streaming
 
@@ -500,9 +576,9 @@ stateDiagram-v2
     use_new --> cleanup
     cleanup --> end_migration
     end_migration --> [*]
-    start_migration --> sc_remove_pending: error
-    sc_add_nonvoter --> sc_remove_pending: error
-    sc_snapshot_transfer --> sc_remove_pending: error
+    start_migration --> sc_remove_pending: error / cancel
+    sc_add_nonvoter --> sc_remove_pending: error / cancel
+    sc_snapshot_transfer --> sc_remove_pending: error / cancel
     sc_become_voter --> sc_rollback: error
     sc_rollback --> sc_remove_pending
     sc_remove_pending --> cleanup_target
