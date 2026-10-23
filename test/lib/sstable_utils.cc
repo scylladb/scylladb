@@ -258,18 +258,31 @@ void slightly_corrupt_sstable(sstables::shared_sstable sst, component_type compo
     auto f = open_file_dma(path, open_flags::rw).get();
     auto close_f = deferred_close(f);
     const auto mem_align = f.memory_dma_alignment();
-    const auto dma_align = f.disk_write_dma_alignment();
-    auto block_offset = align_down(size - 1, dma_align);
+    // Use an alignment valid for both dma_read() and dma_write().
+    const auto dma_align = std::max(f.disk_read_dma_alignment(), f.disk_write_dma_alignment());
+    // For most components we corrupt the last byte. The TOC is special: it is a
+    // newline-separated list of component names, and its last byte is the trailing
+    // newline of the last entry. write_toc() emits entries via for_each_component(),
+    // i.e. in ascending component_type order, so for me-format sstables the last
+    // entry is always "Scylla.db". Flipping its trailing newline turns it into an
+    // unrecognized entry and drops the Scylla component, and read_scylla_metadata()
+    // then skips TOC digest validation altogether (it is gated on
+    // has_component(Scylla)) -- so the corruption would go undetected.
+    // Corrupt the first byte instead: that renames the first entry (the lowest
+    // component_type, never Scylla, and only needed after TOC validation) while
+    // keeping the Scylla component recognized, so the TOC digest mismatch is caught.
+    const auto corrupt_offset = component == component_type::TOC ? uint64_t(0) : size - 1;
+    auto block_offset = align_down(corrupt_offset, uint64_t(dma_align));
     auto buf = seastar::temporary_buffer<char>::aligned(mem_align, dma_align);
     f.dma_read(block_offset, buf.get_write(), dma_align).get();
     if (component == component_type::Scylla && sst->get_component_digest(component_type::Scylla)) {
         // Modify the last bit of the data itself, not the digest.
         buf.get_write()[size - 1 - sizeof(uint32_t) - block_offset] ^= 1u;
     } else {
-        // Flip one bit in the last byte of the file to corrupt it minimally.
+        // Flip one bit in the corrupted byte to corrupt the file minimally.
         // Using a single-bit flip avoids creating values that overflow
         // during parsing.
-        buf.get_write()[size - 1 - block_offset] += 1;
+        buf.get_write()[corrupt_offset - block_offset] += 1;
     }
     f.dma_write(block_offset, buf.get(), dma_align).get();
     f.truncate(size).get();
