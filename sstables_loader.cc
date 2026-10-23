@@ -1142,9 +1142,9 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                     }
                 }
                 std::vector<std::vector<minimal_sst_info>> local_min_infos(this_smp_shard_count());
-                co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos, &snapshot_name](const auto& sst) -> future<> {
-                    auto& table = loader._db.local().find_column_family(tid.table);
-                    auto stream_guard = table.stream_in_progress();
+                auto& table = loader._db.local().find_column_family(tid.table);
+                auto stream_guard = table.stream_in_progress();
+                co_await max_concurrent_for_each(sst_chunk, 16, [&table, &local_min_infos, &snapshot_name](const auto& sst) -> future<> {
                     auto min_info = table.get_storage_options().is_object_storage_type()
                             ? co_await clone_backup_sstable(table, sst, snapshot_name, llog)
                             : co_await download_sstable(table, sst, llog);
