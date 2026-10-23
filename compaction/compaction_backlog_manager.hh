@@ -38,6 +38,11 @@ struct rate_stats {
     utils::rate<utils::units::bytes> compacted_bytes;
 };
 
+// What a compaction group measures for the compaction controller.
+struct compaction_group_stats {
+    rate_stats rates;
+};
+
 // What a backlog tracker needs to know about the data it accounts for: the sstables
 // of a compaction group -- all of them, across every repair state -- and the schema
 // they belong to.
@@ -50,8 +55,9 @@ public:
     virtual ~compaction_backlog_source() = default;
     virtual const schema_ptr& schema() const noexcept = 0;
     virtual lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const = 0;
-    // The group's rates, for matching compaction to ingestion.
-    virtual rate_stats rates() const = 0;
+    // What the group measures, for matching compaction to ingestion and telling how
+    // urgent it is.
+    virtual compaction_group_stats stats() const = 0;
 };
 
 // Fixed cost, in bytes, that each sstable adds to the backlog on top of its own size.

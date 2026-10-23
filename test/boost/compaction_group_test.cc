@@ -307,7 +307,7 @@ SEASTAR_TEST_CASE(compaction_group_rates_test) {
         t->start();
         // Nothing gets compacted until the test says so.
         t->disable_auto_compaction().get();
-        auto rates = [&] { return t.as_compaction_backlog_source().rates(); };
+        auto rates = [&] { return t.as_compaction_backlog_source().stats().rates; };
 
         auto initial = rates();
         BOOST_REQUIRE_EQUAL(initial.flushed_bytes.amount(), 0);
@@ -356,7 +356,7 @@ SEASTAR_TEST_CASE(compaction_group_rates_ignore_non_regular_compaction_test) {
         t->start();
         // Keeps regular compaction from merging the flushed sstables before major does.
         t->disable_auto_compaction().get();
-        auto rates = [&] { return t.as_compaction_backlog_source().rates(); };
+        auto rates = [&] { return t.as_compaction_backlog_source().stats().rates; };
 
         auto keys = tests::generate_partition_keys(2, s);
         for (const auto& key : keys) {
@@ -522,7 +522,7 @@ SEASTAR_TEST_CASE(flush_rate_matches_ingestion_metadata_test) {
         // created, the ingestion metadata from when its first memtable was, right after. They
         // differ only by the real time the test takes.
         auto check_rates_match = [&] (std::string_view when) {
-            auto reported = t.as_compaction_backlog_source().rates().flushed_bytes.per_second();
+            auto reported = t.as_compaction_backlog_source().stats().rates.flushed_bytes.per_second();
             auto derived = derive_from_sstables().rate;
             testlog.info("{}: reported flush rate {} bytes/s, derived from ingestion metadata {} bytes/s", when, reported, derived);
             BOOST_REQUIRE_CLOSE(reported, derived, 1);
