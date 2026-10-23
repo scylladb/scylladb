@@ -109,6 +109,18 @@ ninja build/<mode>/scylla
 - Tests should strive to be repeatable, and not use random input that will make their results unpredictable.
 - Tests should consume as little resources as possible. Prefer running tests on a single node if it is sufficient, for example.
 
+## Git and GitHub Workflow
+- Never push a branch, open a pull request or force-push without being asked to.
+- Push to the contributor's fork, never to `scylladb/scylladb` directly. Pull requests
+  target `master`; backport pull requests target the release branch (`branch-X.Y`).
+- Backport pull requests opened by the bot have their branch on the `scylladbbot` fork
+  (`backport/<parent PR>/to-<version>`). To fix such a pull request, for example to resolve
+  conflicts, update that branch in place rather than opening a new pull request.
+- After a force-push, comment on the pull request describing what changed since the previous
+  push and what verification was run locally.
+- When rebasing onto a new baseline, run `git submodule sync --recursive` and
+  `git submodule update --init --recursive` afterwards so the submodules match the new baseline.
+
 ## New Files
 - Include `LicenseRef-ScyllaDB-Source-Available-1.1` in the SPDX header
 - Use the current year for new files; for existing code keep the year as is
