@@ -23,6 +23,7 @@
 #include <vector>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/shared_mutex.hh>
 #include "db_clock.hh"
@@ -230,6 +231,8 @@ class object_storage_page_cache_table : public sstables::object_storage_page_cac
     bool _pages_written = false;
     bool _pages_evicted = false;
     lowres_clock::time_point _last_flush = lowres_clock::now();
+
+    seastar::metrics::metric_groups _metrics;
 public:
     // A node-local keyspace for caches. Unlike the system keyspace, writes
     // to it skip the commitlog, and it may grow very large.
@@ -319,6 +322,7 @@ public:
 private:
     // This shard's limit, in bytes, or 0 if the cache is unlimited.
     uint64_t limit() const noexcept;
+    void register_metrics();
     future<> evict_in_background();
     // Moves the hand, evicting pages, until the cache holds at most "target"
     // bytes.
