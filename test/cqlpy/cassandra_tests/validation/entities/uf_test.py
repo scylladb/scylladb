@@ -183,7 +183,6 @@ def sin(x):
 
 # Reproduces SCYLLADB-5169 (CREATE OR REPLACE FUNCTION should not change the
 # return type or null-input behavior)
-@pytest.mark.xfail(reason="SCYLLADB-5169")
 def testFunctionCreationAndDrop(cql, test_keyspace):
     with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int PRIMARY KEY, d double)") as table:
         execute(cql, table, "INSERT INTO %s(key, d) VALUES (?, ?)", 1, 1.0)
@@ -581,7 +580,6 @@ def testDuplicateArgNames(cql, test_keyspace):
 
 # Reproduces SCYLLADB-5169 (CREATE OR REPLACE FUNCTION should not change the
 # return type or null-input behavior)
-@pytest.mark.xfail(reason="SCYLLADB-5169")
 def testReplaceAllowNulls(cql):
     with create_keyspace(cql, REPLICATION) as KEYSPACE:
         fNulls = createFunction(cql, KEYSPACE,
