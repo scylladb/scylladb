@@ -86,19 +86,34 @@ def table1(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int, b int, PRIMARY KEY (a)") as table:
         yield table
 
-# Although the "!=" operator exists in the parser and might be allowed in
-# other places (e.g., LWT), it is *NOT* supported in WHERE clauses - not
-# for filtering, and also not in relations that don't need filtering
-# (on partition keys or tokens). It is not supported in either Cassandra or
-# Scylla, and there are no plans to add this support, so for now the test
-# verifies that at least we get the expected error.
-def test_operator_ne_not_supported(cql, table1):
-    with pytest.raises(InvalidRequest, match='Unsupported.*!='):
-        cql.execute(f'SELECT a FROM {table1} WHERE b != 0 ALLOW FILTERING')
-    with pytest.raises(InvalidRequest, match='Unsupported.*!='):
-        cql.execute(f'SELECT a FROM {table1} WHERE a != 0')
+# Cassandra 6 added support for the "!=" operator in WHERE clauses, for
+# filtering (CASSANDRA-18584). Before that, neither Cassandra nor Scylla
+# supported "!=" in WHERE (although it exists in the parser, and is allowed
+# in other places such as LWT conditions).
+# A "!=" restriction always requires filtering, even on a partition key
+# column. A row in which the column is null doesn't match "!=".
+# Reproduces #12911.
+@pytest.mark.xfail(reason="#12911")
+def test_operator_ne(cql, test_keyspace, new_to_cassandra_6):
+    with new_test_table(cql, test_keyspace, "a int, b int, PRIMARY KEY (a)") as table:
+        cql.execute(f'INSERT INTO {table} (a, b) VALUES (1, 1)')
+        cql.execute(f'INSERT INTO {table} (a, b) VALUES (2, 2)')
+        cql.execute(f'INSERT INTO {table} (a) VALUES (3)')
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f'SELECT a FROM {table} WHERE b != 0')
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f'SELECT a FROM {table} WHERE a != 0')
+        assert sorted(cql.execute(f'SELECT a FROM {table} WHERE b != 0 ALLOW FILTERING')) == [(1,), (2,)]
+        assert sorted(cql.execute(f'SELECT a FROM {table} WHERE b != 1 ALLOW FILTERING')) == [(2,)]
+        assert sorted(cql.execute(f'SELECT a FROM {table} WHERE a != 1 ALLOW FILTERING')) == [(2,), (3,)]
+
+# Even in Cassandra 6, which supports the "!=" operator in WHERE (see
+# test_operator_ne above), it is not supported on the token.
+def test_operator_ne_token_not_supported(cql, table1):
     with pytest.raises(InvalidRequest, match='Unsupported.*!='):
         cql.execute(f'SELECT a FROM {table1} WHERE token(a) != 0')
+    with pytest.raises(InvalidRequest, match='Unsupported.*!='):
+        cql.execute(f'SELECT a FROM {table1} WHERE token(a) != 0 ALLOW FILTERING')
 
 # Test that LIKE operator works fine as a filter when the filtered column
 # has descending order. Regression test for issue #10183, when it was

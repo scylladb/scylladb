@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -159,6 +159,10 @@ def testShouldRecognizeAlteredOrDeletedMapEntries(cql, simple_table_and_index):
 def testShouldTreatQueriesAgainstFrozenMapIndexesAsInvalid(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k TEXT PRIMARY KEY, v FROZEN<MAP<TEXT, TEXT>>)") as table:
         execute(cql, table, "CREATE INDEX ON %s(FULL(V))")
-        assert_invalid_message(cql, table,
-            "Map-entry equality predicates on frozen map column v are not supported",
+        # Cassandra's message is "Map-entry predicates on frozen map column v
+        # are not supported", Scylla's (like older versions of Cassandra)
+        # "Map-entry equality predicates on frozen map column v are not
+        # supported".
+        assert_invalid_message_re(cql, table,
+            "Map-entry (equality )?predicates on frozen map column v are not supported",
             "SELECT * FROM %s WHERE v['somekey'] = 'somevalue'")

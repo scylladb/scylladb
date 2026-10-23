@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 6ca34f81386dc8f6020cdf2ea4246bca2a0896c5
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -721,10 +721,12 @@ def testSecondaryIndex(cql, test_keyspace):
 
         # normal indexes on frozen collections don't support CONTAINS or CONTAINS KEY
         # Cassandra's and Scylla's messages are different: Cassandra has
-        # "Clustering columns can only be restricted with CONTAINS with a
-        # secondary index or filtering", Scylla "Cannot restrict clustering
-        # columns by a CONTAINS relation without a secondary index or filtering"
-        with pytest.raises(InvalidRequest, match="CONTAINS.* secondary index or filtering"):
+        # "Clustering column restrictions require the use of secondary indices
+        # or filtering for map-element restrictions and for the following
+        # operators: CONTAINS, CONTAINS KEY, LIKE, ANN", Scylla "Cannot
+        # restrict clustering columns by a CONTAINS relation without a
+        # secondary index or filtering"
+        with pytest.raises(InvalidRequest, match="CONTAINS.* secondary index or filtering|secondary indices or filtering.*CONTAINS"):
             execute(cql, table, "SELECT * FROM %s WHERE b CONTAINS ?", 1)
 
         assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s WHERE b CONTAINS ? ALLOW FILTERING", 1),

@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit a87055d56a33a9b17606f14535f48eb461965b82
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -239,7 +239,7 @@ def testSetContainsWithIndex(cql, test_keyspace):
 
             # Scylla does not consider "= null" an error, it just matches nothing.
             # See issue #4776.
-            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #assert_invalid_message(cql, table, "Invalid null value for column categories",
             #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "unset value",
@@ -268,7 +268,7 @@ def testListContainsWithIndex(cql, test_keyspace):
 
             # Scylla does not consider "= null" an error, it just matches nothing.
             # See issue #4776.
-            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #assert_invalid_message(cql, table, "Invalid null value for column categories",
             #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "unset value",
@@ -312,7 +312,7 @@ def testMapKeyContainsWithIndex(cql, test_keyspace):
 
             # Scylla does not consider "= null" an error, it just matches nothing.
             # See issue #4776.
-            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #assert_invalid_message(cql, table, "Invalid null value for column categories",
             #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS KEY ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "unset value",
@@ -348,7 +348,7 @@ def testMapValueContainsWithIndex(cql, test_keyspace):
 
             # Scylla does not consider "= null" an error, it just matches nothing.
             # See issue #4776.
-            #assert_invalid_message(cql, table, "Unsupported null value for column categories",
+            #assert_invalid_message(cql, table, "Invalid null value for column categories",
             #                     "SELECT * FROM %s WHERE account = ? AND id = ? AND categories CONTAINS ?", "test", 5, None)
 
             assert_invalid_message(cql, table, "unset value",
@@ -673,7 +673,7 @@ def testFunctionsWithClusteringDesc(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, t timeuuid, PRIMARY KEY (k, t) ) WITH CLUSTERING ORDER BY (t DESC)") as table:
         for i in range(5):
             execute(cql, table, "INSERT INTO %s (k, t) VALUES (?, now())", i)
-        execute(cql, table, "SELECT dateOf(t) FROM %s")
+        execute(cql, table, "SELECT toTimestamp(t) FROM %s")
 
 # Migrated from cql_tests.py:TestCQL.select_with_alias_test()
 def testSelectWithAlias(cql, test_keyspace):
@@ -955,13 +955,12 @@ def testFilteringWithoutIndices(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE s = 1 AND d = 12 ALLOW FILTERING"),
                        [1, 3, 1, 6, 12])
 
-            # The first call fails differently in Scylla and Cassandra, and
-            # the second call passes on Scylla - see discussion why, and why
-            # we don't consider this a bug, in #5545.
-            #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (c) is not yet supported",
-            #                     "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7)")
-            #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (c) is not yet supported",
-            #                     "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7) ALLOW FILTERING")
+            assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
+                                 "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7)")
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7) ALLOW FILTERING"),
+                       [1, 3, 1, 6, 12],
+                       [2, 3, 2, 7, 12])
 
             assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                                  "SELECT * FROM %s WHERE c > 4")
@@ -1000,19 +999,19 @@ def testFilteringWithoutIndices(cql, test_keyspace):
                              "SELECT * FROM %s WHERE c = null")
         # Scylla does not consider "= null" an error, rather it just matches
         # nothing. See discussion in test_null.py::test_filtering_eq_null
-        #assert_invalid_message(cql, table, "Unsupported null value for column c",
+        #assert_invalid_message(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c = null ALLOW FILTERING")
         assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c > null")
         # Scylla does not consider "> null" an error, rather it just matches
         # nothing. See discussion in test_null.py::test_filtering_inequality_null
-        #assert_invalid_message(cql, table, "Unsupported null value for column c",
+        #assert_invalid_message(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c > null ALLOW FILTERING")
         assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE s > null")
         # Scylla does not consider "> null" an error, rather it just matches
         # nothing. See discussion in test_null.py::test_filtering_inequality_null
-        #assert_invalid_message(cql, table, "Unsupported null value for column s",
+        #assert_invalid_message(cql, table, "Invalid null value for column s",
         #                     "SELECT * FROM %s WHERE s > null ALLOW FILTERING")
 
         # Checks filtering with unset
@@ -1073,6 +1072,8 @@ def testFilteringWithoutIndicesWithCollections(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE e[1] = 6 ALLOW FILTERING"),
                        [1, 2, [1, 6], {2, 12}, {1: 6}])
 
+            assert_empty(execute(cql, table, "SELECT * FROM %s WHERE e[1] = 6 AND e[3] = 2 ALLOW FILTERING"))
+
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE e CONTAINS KEY 1 AND e CONTAINS 2 ALLOW FILTERING"),
                        [1, 4, [1, 2], {2, 4}, {1: 2}])
 
@@ -1082,21 +1083,21 @@ def testFilteringWithoutIndicesWithCollections(cql, test_keyspace):
         # Checks filtering with null
         # Scylla does not consider "CONTAINS null" an error, rather should
         # just matches nothing. See issue #10359.
-        #assert_invalid_message(cql, table, "Unsupported null value for column c",
+        #assert_invalid_message(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c CONTAINS null ALLOW FILTERING")
-        #assert_invalid_message(cql, table, "Unsupported null value for column d",
+        #assert_invalid_message(cql, table, "Invalid null value for column d",
         #                     "SELECT * FROM %s WHERE d CONTAINS null ALLOW FILTERING")
-        #assert_invalid_message(cql, table, "Unsupported null value for column e",
+        #assert_invalid_message(cql, table, "Invalid null value for column e",
         #                     "SELECT * FROM %s WHERE e CONTAINS null ALLOW FILTERING")
-        #assert_invalid_message(cql, table, "Unsupported null value for column e",
+        #assert_invalid_message(cql, table, "Invalid null value for column e",
         #                     "SELECT * FROM %s WHERE e CONTAINS KEY null ALLOW FILTERING")
         # Scylla does not consider "e[null]" an error, it just returns NULL.
         # See issue #10361.
-        #assert_invalid_message(cql, table, "Unsupported null map key for column e",
+        #assert_invalid_message(cql, table, "Invalid null map key for column e",
         #                     "SELECT * FROM %s WHERE e[null] = 2 ALLOW FILTERING")
         # Scylla does not consider "= null" an error, it just matches nothing.
         # See issue #4776.
-        #assert_invalid_message(cql, table, "Unsupported null map value for column e",
+        #assert_invalid_message(cql, table, "Invalid null value for e[1]",
         #                     "SELECT * FROM %s WHERE e[1] = null ALLOW FILTERING")
 
         # Checks filtering with unset
@@ -1118,6 +1119,121 @@ def testFilteringWithoutIndicesWithCollections(cql, test_keyspace):
                              UNSET_VALUE)
         assert_invalid_message(cql, table, "unset",
                              "SELECT * FROM %s WHERE e[1] = ? ALLOW FILTERING",
+                             UNSET_VALUE)
+
+# The steps that Cassandra 6 added to testFilteringWithoutIndicesWithCollections
+# for its new NOT CONTAINS, NOT CONTAINS KEY and map-element "!=" operators
+# (CASSANDRA-18584). They are in a separate test so the original test keeps
+# running on older Cassandra and on Scylla.
+# Reproduces #12911 (NOT CONTAINS, NOT CONTAINS KEY, map element !=)
+@pytest.mark.xfail(reason="#12911")
+def testFilteringWithoutIndicesWithCollectionsWithNot(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(a int, b int, c list<int>, d set<int>, e map<int, int>, PRIMARY KEY (a, b))") as table:
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, [1, 6], {2, 12}, {1: 6})")
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 3, [3, 2], {6, 4}, {3: 2})")
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 4, [1, 2], {2, 4}, {1: 2})")
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (2, 3, [3, 6], {6, 12}, {3: 6})")
+
+        for _ in before_and_after_flush(cql, table):
+            # Checks filtering for lists
+            assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
+                                 "SELECT * FROM %s WHERE c NOT CONTAINS 2")
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE c NOT CONTAINS 2 ALLOW FILTERING"),
+                       [1, 2, [1, 6], {2, 12}, {1: 6}],
+                       [2, 3, [3, 6], {6, 12}, {3: 6}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE c NOT CONTAINS 2 AND c NOT CONTAINS 3 ALLOW FILTERING"),
+                       [1, 2, [1, 6], {2, 12}, {1: 6}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE c CONTAINS 2 AND c NOT CONTAINS 3 ALLOW FILTERING"),
+                       [1, 4, [1, 2], {2, 4}, {1: 2}])
+
+            # Checks filtering for sets
+            assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
+                                 "SELECT * FROM %s WHERE d NOT CONTAINS 4")
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE d NOT CONTAINS 4 ALLOW FILTERING"),
+                       [1, 2, [1, 6], {2, 12}, {1: 6}],
+                       [2, 3, [3, 6], {6, 12}, {3: 6}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE d NOT CONTAINS 4 AND d NOT CONTAINS 6 ALLOW FILTERING"),
+                       [1, 2, [1, 6], {2, 12}, {1: 6}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE d CONTAINS 4 AND d NOT CONTAINS 6 ALLOW FILTERING"),
+                       [1, 4, [1, 2], {2, 4}, {1: 2}])
+
+            # Checks filtering for maps
+            assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
+                                 "SELECT * FROM %s WHERE e NOT CONTAINS 2")
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE e NOT CONTAINS 2 ALLOW FILTERING"),
+                       [1, 2, [1, 6], {2, 12}, {1: 6}],
+                       [2, 3, [3, 6], {6, 12}, {3: 6}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE e NOT CONTAINS KEY 1 ALLOW FILTERING"),
+                       [1, 3, [3, 2], {6, 4}, {3: 2}],
+                       [2, 3, [3, 6], {6, 12}, {3: 6}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE e CONTAINS 2 AND e NOT CONTAINS KEY 1 ALLOW FILTERING"),
+                       [1, 3, [3, 2], {6, 4}, {3: 2}])
+
+            execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, [1, 6], {2, 12}, {1: 6})")
+            execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 3, [3, 2], {6, 4}, {3: 2})")
+            execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 4, [1, 2], {2, 4}, {1: 2})")
+            execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (2, 3, [3, 6], {6, 12}, {3: 6})")
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE e[1] != 6 ALLOW FILTERING"),
+                       [1, 4, [1, 2], {2, 4}, {1: 2}])
+
+            assert_empty(execute(cql, table, "SELECT * FROM %s WHERE e[1] != 6 AND e[3] != 2 ALLOW FILTERING"))
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE e CONTAINS KEY 1 AND e[1] != 6 ALLOW FILTERING"),
+                       [1, 4, [1, 2], {2, 4}, {1: 2}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE e CONTAINS KEY 1 AND e NOT CONTAINS 2 ALLOW FILTERING"),
+                       [1, 2, [1, 6], {2, 12}, {1: 6}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE c CONTAINS 2 AND d CONTAINS 4 AND e NOT CONTAINS KEY 1 ALLOW FILTERING"),
+                       [1, 3, [3, 2], {6, 4}, {3: 2}])
+
+        # Checks filtering with null
+        # Scylla does not consider "CONTAINS null" an error, rather should
+        # just matches nothing. See issue #10359.
+        #assert_invalid_message(cql, table, "Invalid null value for column c",
+        #                     "SELECT * FROM %s WHERE c NOT CONTAINS null ALLOW FILTERING")
+        #assert_invalid_message(cql, table, "Invalid null value for column d",
+        #                     "SELECT * FROM %s WHERE d NOT CONTAINS null ALLOW FILTERING")
+        #assert_invalid_message(cql, table, "Invalid null value for column e",
+        #                     "SELECT * FROM %s WHERE e NOT CONTAINS null ALLOW FILTERING")
+        #assert_invalid_message(cql, table, "Invalid null value for column e",
+        #                     "SELECT * FROM %s WHERE e NOT CONTAINS KEY null ALLOW FILTERING")
+        # Scylla does not consider "e[null]" an error, it just returns NULL.
+        # See issue #10361.
+        #assert_invalid_message(cql, table, "Invalid null map key for column e",
+        #                     "SELECT * FROM %s WHERE e[null] != 2 ALLOW FILTERING")
+        # Scylla does not consider comparing to null an error. See issue #4776.
+        #assert_invalid_message(cql, table, "Invalid null value for e[1]",
+        #                     "SELECT * FROM %s WHERE e[1] != null ALLOW FILTERING")
+
+        # Checks filtering with unset
+        assert_invalid_message(cql, table, "unset value",
+                             "SELECT * FROM %s WHERE c NOT CONTAINS ? ALLOW FILTERING",
+                             UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value",
+                             "SELECT * FROM %s WHERE d NOT CONTAINS ? ALLOW FILTERING",
+                             UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value",
+                             "SELECT * FROM %s WHERE e NOT CONTAINS ? ALLOW FILTERING",
+                             UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value",
+                             "SELECT * FROM %s WHERE e NOT CONTAINS KEY ? ALLOW FILTERING",
+                             UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset",
+                             "SELECT * FROM %s WHERE e[?] != 2 ALLOW FILTERING",
+                             UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset",
+                             "SELECT * FROM %s WHERE e[1] != ? ALLOW FILTERING",
                              UNSET_VALUE)
 
 def testFilteringWithoutIndicesWithFrozenCollections(cql, test_keyspace):
@@ -1212,8 +1328,9 @@ def testFilteringWithoutIndicesWithFrozenCollections(cql, test_keyspace):
                        [1, 2, [1, 6], {2, 12}, {1: 6}],
                        [1, 4, [1, 2], {2, 4}, {1: 2}])
 
-            assert_invalid_message(cql, table, "Map-entry equality predicates on frozen map column e are not supported",
-                                 "SELECT * FROM %s WHERE e[1] = 6 ALLOW FILTERING")
+            # A check that "e[1] = 6" is rejected used to be here. Cassandra 6
+            # allows it (CASSANDRA-18492), so it was replaced by a check that
+            # it works, in testFilteringWithoutIndicesWithFrozenMapElement.
 
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE e CONTAINS KEY 1 AND e CONTAINS 2 ALLOW FILTERING"),
                        [1, 4, [1, 2], {2, 4}, {1: 2}])
@@ -1224,30 +1341,22 @@ def testFilteringWithoutIndicesWithFrozenCollections(cql, test_keyspace):
         # Checks filtering with null
         # Scylla does not consider "= null" an error, rather it just matches
         # nothing. See discussion in test_null.py::test_filtering_eq_null
-        #assert_invalid_message(cql, table, "Unsupported null value for column c",
+        #assert_invalid_message(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c = null ALLOW FILTERING")
         # Scylla does not consider "CONTAINS null" an error, rather should
         # just matches nothing. See issue #10359.
-        #assert_invalid_message(cql, table, "Unsupported null value for column c",
+        #assert_invalid_message(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c CONTAINS null ALLOW FILTERING")
-        #assert_invalid_message(cql, table, "Unsupported null value for column d",
+        #assert_invalid_message(cql, table, "Invalid null value for column d",
         #                     "SELECT * FROM %s WHERE d = null ALLOW FILTERING")
-        #assert_invalid_message(cql, table, "Unsupported null value for column d",
+        #assert_invalid_message(cql, table, "Invalid null value for column d",
         #                     "SELECT * FROM %s WHERE d CONTAINS null ALLOW FILTERING")
-        #assert_invalid_message(cql, table, "Unsupported null value for column e",
+        #assert_invalid_message(cql, table, "Invalid null value for column e",
         #                     "SELECT * FROM %s WHERE e = null ALLOW FILTERING")
-        #assert_invalid_message(cql, table, "Unsupported null value for column e",
+        #assert_invalid_message(cql, table, "Invalid null value for column e",
         #                     "SELECT * FROM %s WHERE e CONTAINS null ALLOW FILTERING")
-        #assert_invalid_message(cql, table, "Unsupported null value for column e",
+        #assert_invalid_message(cql, table, "Invalid null value for column e",
         #                     "SELECT * FROM %s WHERE e CONTAINS KEY null ALLOW FILTERING")
-        # Scylla does not consider "e[null]" an error, it just returns NULL.
-        # See issue #10361.
-        #assert_invalid_message(cql, table, "Map-entry equality predicates on frozen map column e are not supported",
-        #                     "SELECT * FROM %s WHERE e[null] = 2 ALLOW FILTERING")
-        # Scylla does not consider "= null" an error, it just matches nothing.
-        # See issue #4776.
-        #assert_invalid_message(cql, table, "Map-entry equality predicates on frozen map column e are not supported",
-        #                     "SELECT * FROM %s WHERE e[1] = null ALLOW FILTERING")
 
         # Checks filtering with unset
         # Reproduces #10358:
@@ -1272,12 +1381,47 @@ def testFilteringWithoutIndicesWithFrozenCollections(cql, test_keyspace):
         assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE e CONTAINS KEY ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Map-entry equality predicates on frozen map column e are not supported",
+
+# The steps of testFilteringWithoutIndicesWithFrozenCollections that filter
+# on an element of a frozen map. Before Cassandra 6, they checked that this
+# filtering is rejected. CASSANDRA-18492 (in Cassandra 6) allowed it, and
+# then Cassandra 6 also added a "!=" step (CASSANDRA-18584).
+# Reproduces #9777 (filtering on an element of a frozen map) and #12911
+# (NOT CONTAINS, NOT CONTAINS KEY, map element !=)
+@pytest.mark.xfail(reason="#9777, #12911")
+def testFilteringWithoutIndicesWithFrozenMapElement(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(a int, b int, c frozen<list<int>>, d frozen<set<int>>, e frozen<map<int, int>>, PRIMARY KEY (a, b))") as table:
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, [1, 6], {2, 12}, {1: 6})")
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 3, [3, 2], {6, 4}, {3: 2})")
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 4, [1, 2], {2, 4}, {1: 2})")
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (2, 3, [3, 6], {6, 12}, {3: 6})")
+
+        for _ in before_and_after_flush(cql, table):
+            # CASSANDRA-18492: Allow filtering works with frozen map[key]
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE e[1] = 6 ALLOW FILTERING"),
+                       [1, 2, [1, 6], {2, 12}, {1: 6}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE e[1] != 6 ALLOW FILTERING"),
+                       [1, 4, [1, 2], {2, 4}, {1: 2}])
+
+        # Checks filtering with null
+        # Scylla does not consider "e[null]" an error, it just returns NULL.
+        # See issue #10361.
+        #assert_invalid_message(cql, table, "Invalid null map key for column e",
+        #                     "SELECT * FROM %s WHERE e[null] = 2 ALLOW FILTERING")
+        # Scylla does not consider "= null" an error, it just matches nothing.
+        # See issue #4776.
+        #assert_invalid_message(cql, table, "Invalid null value for e[1]",
+        #                     "SELECT * FROM %s WHERE e[1] = null ALLOW FILTERING")
+
+        # Checks filtering with unset
+        assert_invalid_message(cql, table, "unset",
                              "SELECT * FROM %s WHERE e[?] = 2 ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Map-entry equality predicates on frozen map column e are not supported",
+        assert_invalid_message(cql, table, "unset",
                              "SELECT * FROM %s WHERE e[1] = ? ALLOW FILTERING",
                              UNSET_VALUE)
+
 # Reproduces #8627
 @pytest.mark.xfail(reason="#8627")
 def testIndexQueryWithValueOver64K(cql, test_keyspace):
@@ -1349,10 +1493,8 @@ def testAllowFilteringOnPartitionKey(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a,b,c,d) VALUES (31, 32, 33, 34)")
 
         for _ in before_and_after_flush(cql, table):
-            # IN restrictions *are* allowed in Scylla (the correctness of them
-            # is tested in test_filtering.py::test_filtering_with_in_relation
-            #assert_invalid_message(cql, table, "IN restrictions are not supported when the query involves filtering",
-            #        "SELECT * FROM %s WHERE b in (11,12) ALLOW FILTERING")
+            assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
+                    "SELECT * FROM %s WHERE b in (11,12)")
 
             assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                     "SELECT * FROM %s WHERE a = 11")
@@ -1423,10 +1565,8 @@ def testAllowFilteringOnPartitionKey(cql, test_keyspace):
         execute(cql, table, "INSERT INTO %s (a,b,c,d) VALUES (31, 32, 33, 34)")
 
         for _ in before_and_after_flush(cql, table):
-            # IN restrictions *are* allowed in Scylla (the correctness of them
-            # is tested in test_filtering.py::test_filtering_with_in_relation
-            #assert_invalid_message(cql, table, "IN restrictions are not supported when the query involves filtering",
-            #        "SELECT * FROM %s WHERE b in (11,12) ALLOW FILTERING")
+            assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
+                    "SELECT * FROM %s WHERE b in (11,12)")
 
             assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                     "SELECT * FROM %s WHERE a = 11")
@@ -1548,7 +1688,8 @@ def testAllowFilteringOnPartitionAndClusteringKey(cql, test_keyspace):
                                     [21, 12, 25, 24, 25],
                                     [21, 12, 26, 34, 35])
 
-@pytest.mark.xfail(reason="#10358")
+# Reproduces SCYLLADB-5213 (UNSET_VALUE not detected when no row reaches the filter)
+@pytest.mark.xfail(reason="SCYLLADB-5213")
 def testAllowFilteringOnPartitionKeyWithoutIndicesWithCollections(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c list<int>, d set<int>, e map<int, int>, PRIMARY KEY ((a, b)))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, [1, 6], {2, 12}, {1: 6})")
@@ -1561,9 +1702,9 @@ def testAllowFilteringOnPartitionKeyWithoutIndicesWithCollections(cql, test_keys
             # The error message is different in Scylla and Cassandra - Cassandra
             # prints the generic REQUIRES_ALLOW_FILTERING_MESSAGE, while Scylla
             # prints the more specific "Only EQ and IN relation are supported
-            # on the partition key (unless you use the token() function or allow
-            # filtering)".
-            assert_invalid_message(cql, table, "filtering",
+            # on the partition key (unless you use the token() function or ALLOW
+            # FILTERING)".
+            assert_invalid_message(cql, table, "ALLOW FILTERING",
                     "SELECT * FROM %s WHERE b < 0 AND c CONTAINS 2")
 
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE b >= 4 AND c CONTAINS 2 ALLOW FILTERING"),
@@ -1608,25 +1749,26 @@ def testAllowFilteringOnPartitionKeyWithoutIndicesWithCollections(cql, test_keys
         # Checks filtering with null
         # Scylla does not consider "CONTAINS null" an error, rather should
         # just matches nothing. See issue #10359.
-        #assert_invalid_message(cql, table, "Unsupported null value for column c",
+        #assert_invalid_message(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE a > 1 AND c CONTAINS null ALLOW FILTERING")
-        #assert_invalid_message(cql, table, "Unsupported null value for column d",
+        #assert_invalid_message(cql, table, "Invalid null value for column d",
         #                     "SELECT * FROM %s WHERE b < 1 AND d CONTAINS null ALLOW FILTERING")
-        #assert_invalid_message(cql, table, "Unsupported null value for column e",
+        #assert_invalid_message(cql, table, "Invalid null value for column e",
         #                     "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e CONTAINS null ALLOW FILTERING")
-        #assert_invalid_message(cql, table, "Unsupported null value for column e",
+        #assert_invalid_message(cql, table, "Invalid null value for column e",
         #                     "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e CONTAINS KEY null ALLOW FILTERING")
         # Scylla does not consider "e[null]" an error, it just returns NULL.
         # See issue #10361.
-        #assert_invalid_message(cql, table, "Unsupported null map key for column e",
+        #assert_invalid_message(cql, table, "Invalid null map key for column e",
         #                     "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e[null] = 2 ALLOW FILTERING")
         # Scylla does not consider "= null" an error, it just matches nothing.
         # See issue #4776.
-        #assert_invalid_message(cql, table, "Unsupported null map value for column e",
+        #assert_invalid_message(cql, table, "Invalid null value for e[1]",
         #                     "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e[1] = null ALLOW FILTERING")
 
         # Checks filtering with unset
-        # Reproduces #10358
+        # Reproduces SCYLLADB-5213: "b < 1" matches no row, so Scylla doesn't
+        # notice the UNSET_VALUE in the filter.
         assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND c CONTAINS ? ALLOW FILTERING",
                              UNSET_VALUE)
@@ -1639,11 +1781,109 @@ def testAllowFilteringOnPartitionKeyWithoutIndicesWithCollections(cql, test_keys
         assert_invalid_message(cql, table, "unset value",
                              "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e CONTAINS KEY ? ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset map key for column e",
+        assert_invalid_message(cql, table, "unset",
                              "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e[?] = 2 ALLOW FILTERING",
                              UNSET_VALUE)
-        assert_invalid_message(cql, table, "Unsupported unset map value for column e",
+        assert_invalid_message(cql, table, "unset",
                              "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e[1] = ? ALLOW FILTERING",
+                             UNSET_VALUE)
+
+# The steps that Cassandra 6 added to
+# testAllowFilteringOnPartitionKeyWithoutIndicesWithCollections for its new
+# NOT CONTAINS, NOT CONTAINS KEY and map-element "!=" operators
+# (CASSANDRA-18584). They are in a separate test so the original test keeps
+# running on older Cassandra and on Scylla.
+# Reproduces #12911 (NOT CONTAINS, NOT CONTAINS KEY, map element !=)
+# and SCYLLADB-5213 (UNSET_VALUE not detected when no row reaches the filter)
+@pytest.mark.xfail(reason="#12911, SCYLLADB-5213")
+def testAllowFilteringOnPartitionKeyWithoutIndicesWithCollectionsWithNot(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(a int, b int, c list<int>, d set<int>, e map<int, int>, PRIMARY KEY ((a, b)))") as table:
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 2, [1, 6], {2, 12}, {1: 6})")
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 3, [3, 2], {6, 4}, {3: 2})")
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (1, 4, [1, 2], {2, 4}, {1: 2})")
+        execute(cql, table, "INSERT INTO %s (a, b, c, d, e) VALUES (2, 3, [3, 6], {6, 12}, {3: 6})")
+
+        for _ in before_and_after_flush(cql, table):
+            # Checks filtering for lists
+            # As in testAllowFilteringOnPartitionKeyWithoutIndicesWithCollections,
+            # Scylla's error message is more specific than Cassandra's.
+            assert_invalid_message(cql, table, "ALLOW FILTERING",
+                    "SELECT * FROM %s WHERE b < 0 AND c NOT CONTAINS 2")
+
+            assert_rows(
+                    execute(cql, table, "SELECT * FROM %s WHERE a > 0 AND b <= 3 AND c NOT CONTAINS 1 AND c NOT CONTAINS 6 ALLOW FILTERING"),
+                    [1, 3, [3, 2], {6, 4}, {3: 2}])
+
+            # Checks filtering for sets
+            assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
+                    "SELECT * FROM %s WHERE a = 1 AND d NOT CONTAINS 4")
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE d NOT CONTAINS 4 ALLOW FILTERING"),
+                       [2, 3, [3, 6], {6, 12}, {3: 6}],
+                       [1, 2, [1, 6], {2, 12}, {1: 6}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE d NOT CONTAINS 4 AND d NOT CONTAINS 6 ALLOW FILTERING"),
+                       [1, 2, [1, 6], {2, 12}, {1: 6}])
+
+            # Checks filtering for maps
+            assert_invalid_message(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
+                                 "SELECT * FROM %s WHERE e NOT CONTAINS 2")
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a < 2 AND b >= 3 AND e NOT CONTAINS 6 ALLOW FILTERING"),
+                       [1, 3, [3, 2], {6, 4}, {3: 2}],
+                       [1, 4, [1, 2], {2, 4}, {1: 2}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 1 AND e NOT CONTAINS KEY 3 ALLOW FILTERING"),
+                       [1, 4, [1, 2], {2, 4}, {1: 2}],
+                       [1, 2, [1, 6], {2, 12}, {1: 6}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a in (1) AND b in (2) AND e[1] != 2 ALLOW FILTERING"),
+                       [1, 2, [1, 6], {2, 12}, {1: 6}])
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 1 AND e CONTAINS KEY 1 AND e NOT CONTAINS 6 ALLOW FILTERING"),
+                       [1, 4, [1, 2], {2, 4}, {1: 2}])
+
+            assert_rows(
+                    execute(cql, table, "SELECT * FROM %s WHERE a >= 1 AND b in (3) AND c CONTAINS 2 AND d CONTAINS 4 AND e NOT CONTAINS KEY 1 ALLOW FILTERING"),
+                    [1, 3, [3, 2], {6, 4}, {3: 2}])
+
+        # Checks filtering with null
+        # Scylla does not consider "CONTAINS null" an error, rather should
+        # just matches nothing. See issue #10359.
+        #assert_invalid_message(cql, table, "Invalid null value for column c",
+        #                     "SELECT * FROM %s WHERE a > 1 AND c NOT CONTAINS null ALLOW FILTERING")
+        #assert_invalid_message(cql, table, "Invalid null value for column d",
+        #                     "SELECT * FROM %s WHERE b < 1 AND d NOT CONTAINS null ALLOW FILTERING")
+        #assert_invalid_message(cql, table, "Invalid null value for column e",
+        #                     "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e NOT CONTAINS null ALLOW FILTERING")
+        #assert_invalid_message(cql, table, "Invalid null value for column e",
+        #                     "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e NOT CONTAINS KEY null ALLOW FILTERING")
+        # Scylla does not consider "e[null]" an error, it just returns NULL.
+        # See issue #10361.
+        #assert_invalid_message(cql, table, "Invalid null map key for column e",
+        #                     "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e[null] != 2 ALLOW FILTERING")
+        # Scylla does not consider comparing to null an error. See issue #4776.
+        #assert_invalid_message(cql, table, "Invalid null value for e[1]",
+        #                     "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e[1] != null ALLOW FILTERING")
+
+        # Checks filtering with unset
+        assert_invalid_message(cql, table, "unset value",
+                             "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND c NOT CONTAINS ? ALLOW FILTERING",
+                             UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value",
+                             "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND d NOT CONTAINS ? ALLOW FILTERING",
+                             UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value",
+                             "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e NOT CONTAINS ? ALLOW FILTERING",
+                             UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset value",
+                             "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e NOT CONTAINS KEY ? ALLOW FILTERING",
+                             UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset",
+                             "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e[?] != 2 ALLOW FILTERING",
+                             UNSET_VALUE)
+        assert_invalid_message(cql, table, "unset",
+                             "SELECT * FROM %s WHERE a >= 1 AND b < 1 AND e[1] != ? ALLOW FILTERING",
                              UNSET_VALUE)
 
 def executeFilteringOnly(cql, table, statement):
@@ -1844,6 +2084,73 @@ def testContainsFilteringForClusteringKeys(cql, test_keyspace):
             assert_invalid_message(cql, table, "Clustering column \"c\" cannot be restricted (preceding column \"b\" is restricted by a non-EQ relation)",
                                  "SELECT * FROM %s WHERE b > 20 AND c CONTAINS KEY '2'")
 
+# The steps that Cassandra 6 added to testContainsFilteringForClusteringKeys
+# for its new NOT CONTAINS and NOT CONTAINS KEY operators (CASSANDRA-18584).
+# They are in a separate test so the original test keeps running on older
+# Cassandra and on Scylla.
+# Reproduces #12911 (NOT CONTAINS, NOT CONTAINS KEY, map element !=)
+@pytest.mark.xfail(reason="#12911")
+def testContainsFilteringForClusteringKeysWithNot(cql, test_keyspace, new_to_cassandra_6):
+    #/-------------------------------------------------
+    #/ Frozen collections filtering for clustering keys
+    #/-------------------------------------------------
+    # first clustering column
+    with create_table(cql, test_keyspace, "(a int, b frozen<list<int>>, c int, PRIMARY KEY (a, b, c))") as table:
+
+        execute(cql, table, "INSERT INTO %s (a,b,c) VALUES (?, ?, ?)", 11, [1, 3], 14)
+        execute(cql, table, "INSERT INTO %s (a,b,c) VALUES (?, ?, ?)", 21, [2, 3], 24)
+        execute(cql, table, "INSERT INTO %s (a,b,c) VALUES (?, ?, ?)", 21, [3, 3], 34)
+
+        for _ in before_and_after_flush(cql, table):
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 21 AND b NOT CONTAINS 2 ALLOW FILTERING"),
+                       [21, [3, 3], 34])
+
+            # The wording of the error message in Cassandra and Scylla is a
+            # bit different.
+            assert_invalid_message(cql, table, "CONTAINS",
+                                 "SELECT * FROM %s WHERE b NOT CONTAINS 2")
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE b NOT CONTAINS 2 ALLOW FILTERING"),
+                       [11, [1, 3], 14],
+                       [21, [3, 3], 34])
+
+            assert_empty(execute(cql, table, "SELECT * FROM %s WHERE b NOT CONTAINS 3 ALLOW FILTERING"))
+
+    # non-first clustering column
+    with create_table(cql, test_keyspace, "(a int, b int, c frozen<list<int>>, d int, PRIMARY KEY (a, b, c))") as table:
+
+        execute(cql, table, "INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 11, 12, [1, 3], 14)
+        execute(cql, table, "INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 21, 22, [2, 3], 24)
+        execute(cql, table, "INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 21, 22, [3, 3], 34)
+
+        for _ in before_and_after_flush(cql, table):
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 21 AND c NOT CONTAINS 2 ALLOW FILTERING"),
+                       [21, 22, [3, 3], 34])
+
+            assert_invalid_message(cql, table, "CONTAINS",
+                                 "SELECT * FROM %s WHERE a = 21 AND c NOT CONTAINS 2")
+
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE b > 20 AND c NOT CONTAINS 2 ALLOW FILTERING"),
+                       [21, 22, [3, 3], 34])
+
+            assert_invalid_message(cql, table, "Clustering column \"c\" cannot be restricted (preceding column \"b\" is restricted by a non-EQ relation)",
+                                 "SELECT * FROM %s WHERE b > 20 AND c NOT CONTAINS 2")
+
+            assert_empty(execute(cql, table, "SELECT * FROM %s WHERE c NOT CONTAINS 3 ALLOW FILTERING"))
+
+    with create_table(cql, test_keyspace, "(a int, b int, c frozen<map<text, text>>, d int, PRIMARY KEY (a, b, c))") as table:
+
+        execute(cql, table, "INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 11, 12, {"1": "3"}, 14)
+        execute(cql, table, "INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 21, 22, {"2": "3"}, 24)
+        execute(cql, table, "INSERT INTO %s (a,b,c,d) VALUES (?, ?, ?, ?)", 21, 22, {"3": "3"}, 34)
+
+        for _ in before_and_after_flush(cql, table):
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE b > 20 AND c NOT CONTAINS KEY '2' ALLOW FILTERING"),
+                       [21, 22, {"3": "3"}, 34])
+
+            assert_invalid_message(cql, table, "Clustering column \"c\" cannot be restricted (preceding column \"b\" is restricted by a non-EQ relation)",
+                                 "SELECT * FROM %s WHERE b > 20 AND c NOT CONTAINS KEY '2'")
+
 def dotestContainsOnPartitionKey(cql, test_keyspace, schema):
     with create_table(cql, test_keyspace, schema) as table:
         execute(cql, table, "INSERT INTO %s (pk, ck, v) VALUES (?, ?, ?)", {1: 2}, 1, 1)
@@ -1886,6 +2193,52 @@ def testContainsOnPartitionKey(cql, test_keyspace):
 
 def testContainsOnPartitionKeyPart(cql, test_keyspace):
     dotestContainsOnPartitionKey(cql, test_keyspace, "(pk frozen<map<int, int>>, ck int, v int, PRIMARY KEY ((pk, ck)))")
+
+# The steps that Cassandra 6 added to testContainsOnPartitionKey and
+# testContainsOnPartitionKeyPart for its new NOT CONTAINS and NOT CONTAINS KEY
+# operators (CASSANDRA-18584). They are in separate tests so the original
+# tests keep running on older Cassandra and on Scylla.
+def dotestNotContainsOnPartitionKey(cql, test_keyspace, schema):
+    with create_table(cql, test_keyspace, schema) as table:
+        execute(cql, table, "INSERT INTO %s (pk, ck, v) VALUES (?, ?, ?)", {1: 2}, 1, 1)
+        execute(cql, table, "INSERT INTO %s (pk, ck, v) VALUES (?, ?, ?)", {1: 2}, 2, 2)
+
+        execute(cql, table, "INSERT INTO %s (pk, ck, v) VALUES (?, ?, ?)", {1: 2, 3: 4}, 1, 3)
+        execute(cql, table, "INSERT INTO %s (pk, ck, v) VALUES (?, ?, ?)", {1: 2, 3: 4}, 2, 3)
+
+        execute(cql, table, "INSERT INTO %s (pk, ck, v) VALUES (?, ?, ?)", {5: 6}, 5, 5)
+        execute(cql, table, "INSERT INTO %s (pk, ck, v) VALUES (?, ?, ?)", {7: 8}, 6, 6)
+
+        assert_invalid_message(cql, table, 'ALLOW FILTERING',
+                             "SELECT * FROM %s WHERE pk NOT CONTAINS KEY 1")
+
+        for _ in before_and_after_flush(cql, table):
+            assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s WHERE pk NOT CONTAINS KEY 1 ALLOW FILTERING"),
+                                    [{5: 6}, 5, 5],
+                                    [{7: 8}, 6, 6])
+
+            assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s WHERE pk CONTAINS KEY 1 AND pk NOT CONTAINS 4 ALLOW FILTERING"),
+                                    [{1: 2}, 1, 1],
+                                    [{1: 2}, 2, 2])
+
+            assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s WHERE pk NOT CONTAINS KEY 1 AND pk CONTAINS 8 ALLOW FILTERING"),
+                                    [{7: 8}, 6, 6])
+
+            assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s WHERE pk NOT CONTAINS KEY 1 AND pk NOT CONTAINS 8 ALLOW FILTERING"),
+                                    [{5: 6}, 5, 5])
+
+            assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s WHERE pk NOT CONTAINS KEY 1 AND v = 5 ALLOW FILTERING"),
+                                    [{5: 6}, 5, 5])
+
+# Reproduces #12911 (NOT CONTAINS, NOT CONTAINS KEY, map element !=)
+@pytest.mark.xfail(reason="#12911")
+def testContainsOnPartitionKeyWithNot(cql, test_keyspace, new_to_cassandra_6):
+    dotestNotContainsOnPartitionKey(cql, test_keyspace, "(pk frozen<map<int, int>>, ck int, v int, PRIMARY KEY (pk, ck))")
+
+# Reproduces #12911 (NOT CONTAINS, NOT CONTAINS KEY, map element !=)
+@pytest.mark.xfail(reason="#12911")
+def testContainsOnPartitionKeyPartWithNot(cql, test_keyspace, new_to_cassandra_6):
+    dotestNotContainsOnPartitionKey(cql, test_keyspace, "(pk frozen<map<int, int>>, ck int, v int, PRIMARY KEY ((pk, ck)))")
 
 @pytest.mark.xfail(reason="#10443")
 def testFilteringWithOrderClause(cql, test_keyspace):
@@ -1939,6 +2292,30 @@ def testfilteringOnStaticColumnTest(cql, test_keyspace):
                        [21, 26, 27, 28, 29],
                        [31, 32, 33, 34, 35])
 
+def testfilteringOnDeletedStaticColumnValue(cql, test_keyspace):
+    # Create table with int-only columns
+    with create_table(cql, test_keyspace, "(pk0 int, pk1 int, ck0 int, ck1 int, s0 tinyint static, v0 int, v1 int, PRIMARY KEY ((pk0, pk1), ck0, ck1))") as table:
+
+        # Insert rows
+        execute(cql, table, "INSERT INTO %s (pk0, pk1, s0, ck0, ck1, v0, v1) VALUES (?, ?, ?, ?, ?, ?, ?)", 1000, 2000, 126, 100, 1, 20, 30)
+        execute(cql, table, "INSERT INTO %s (pk0, pk1, s0, ck0, ck1, v0, v1) VALUES (?, ?, ?, ?, ?, ?, ?)", 1000, 2000, 125, 200, 2, 40, 50)
+        execute(cql, table, "INSERT INTO %s (pk0, pk1, s0, ck0, ck1, v0, v1) VALUES (?, ?, ?, ?, ?, ?, ?)", 1000, 3000, 122, 300, 3, 60, 70)
+        execute(cql, table, "DELETE s0,v0,v1 FROM %s WHERE pk0=1000 AND pk1=2000 and ck0=100 and ck1=1")
+
+        for _ in before_and_after_flush(cql, table):
+            # Verify the columns are deleted
+            assert_rows(execute(cql, table, "SELECT pk0, pk1, s0, ck0, ck1, v0, v1 FROM %s WHERE s0=? ALLOW FILTERING", 122),
+                       [1000, 3000, 122, 300, 3, 60, 70])
+
+        execute(cql, table, "DELETE v0 FROM %s WHERE pk0=1000 AND pk1=3000 AND ck0=300 AND ck1=3")
+
+        for _ in before_and_after_flush(cql, table):
+            assert_rows(execute(cql, table, "SELECT pk0, pk1, s0, ck0, ck1, v0, v1 FROM %s WHERE s0=? ALLOW FILTERING", 122),
+                       [1000, 3000, 122, 300, 3, None, 70])
+
+            assert_rows(execute(cql, table, "SELECT pk0, pk1, s0, ck0, ck1, v0, v1 FROM %s WHERE pk0=1000 AND pk1=3000 AND ck0=300 AND ck1=3"),
+                       [1000, 3000, 122, 300, 3, None, 70])
+
 def testcontainsFilteringOnNonClusteringColumn(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d list<int>, PRIMARY KEY (a, b, c))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 11, 12, 13, [1,4])
@@ -1951,8 +2328,29 @@ def testcontainsFilteringOnNonClusteringColumn(cql, test_keyspace):
                        [21, 22, 23, [2, 4]],
                        [21, 25, 26, [2, 7]])
 
-            assert_rows(executeFilteringOnly(cql, table, "SELECT a, b, c, d FROM %s WHERE b > 20 AND d CONTAINS 2 AND d contains 4"),
+            assert_rows(executeFilteringOnly(cql, table, "SELECT a, b, c, d FROM %s WHERE b > 20 AND d CONTAINS 2 AND d CONTAINS 4"),
                        [21, 22, 23, [2, 4]])
+
+# The steps that Cassandra 6 added to testcontainsFilteringOnNonClusteringColumn
+# for its new NOT CONTAINS operator (CASSANDRA-18584). They are in a separate
+# test so the original test keeps running on older Cassandra and on Scylla.
+# Reproduces #12911 (NOT CONTAINS, NOT CONTAINS KEY, map element !=)
+@pytest.mark.xfail(reason="#12911")
+def testcontainsFilteringOnNonClusteringColumnWithNot(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(a int, b int, c int, d list<int>, PRIMARY KEY (a, b, c))") as table:
+        execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 11, 12, 13, [1,4])
+        execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 21, 22, 23, [2,4])
+        execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 21, 25, 26, [2,7])
+        execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (?, ?, ?, ?)", 31, 32, 33, [3,4])
+
+        for _ in before_and_after_flush(cql, table):
+            assert_rows(executeFilteringOnly(cql, table, "SELECT a, b, c, d FROM %s WHERE b > 20 AND d NOT CONTAINS 2"),
+                       [31, 32, 33, [3, 4]])
+
+            assert_rows(executeFilteringOnly(cql, table, "SELECT a, b, c, d FROM %s WHERE b > 20 AND d NOT CONTAINS 2 AND d CONTAINS 4"),
+                       [31, 32, 33, [3, 4]])
+
+            assert_empty(executeFilteringOnly(cql, table, "SELECT a, b, c, d FROM %s WHERE b > 20 AND d NOT CONTAINS 2 AND d NOT CONTAINS 4"))
 
 # Test for CASSANDRA-11310 compatibility with 2i
 def testCustomIndexWithFiltering(cql, test_keyspace):
@@ -2401,10 +2799,9 @@ def testFilteringOnDurationColumn(cql, test_keyspace):
                    [0, Duration(0, 0, 1000000000)],
                    [2, Duration(0, 0, 1000000000)])
 
-        # Scylla does support this case - see
-        #  test_filtering.py::test_filtering_with_in_relation
-        #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (d) is not yet supported",
-        #                     "SELECT * FROM %s WHERE d IN (1s, 2s) ALLOW FILTERING")
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE d IN (1s, 3s) ALLOW FILTERING"),
+                   [0, Duration(0, 0, 1000000000)],
+                   [2, Duration(0, 0, 1000000000)])
 
         assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                              "SELECT * FROM %s WHERE d > 1s ALLOW FILTERING")
@@ -2429,10 +2826,12 @@ def testFilteringOnListContainingDurations(cql, test_keyspace):
                 assert_rows(execute(cql, table, "SELECT * FROM %s WHERE l = [1s, 2s] ALLOW FILTERING"),
                            [0, [Duration(0, 0, 1000000000), Duration(0, 0, 2000000000)]])
 
-            # Scylla does support this case - see
-            #  test_filtering.py::test_filtering_with_in_relation
-            #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (l) is not yet supported",
-            #                     "SELECT * FROM %s WHERE l IN ([1s, 2s], [2s, 3s]) ALLOW FILTERING")
+                assert_rows(execute(cql, table, "SELECT * FROM %s WHERE l IN ([1s, 2s], [2s, 3s]) ALLOW FILTERING"),
+                           [1, [Duration(0, 0, 2000000000), Duration(0, 0, 3000000000)]],
+                           [0, [Duration(0, 0, 1000000000), Duration(0, 0, 2000000000)]])
+            else:
+                assert_invalid_message(cql, table, "Collection column 'l' (list<duration>) cannot be restricted by a 'IN' relation",
+                        "SELECT * FROM %s WHERE l IN ([1s, 2s], [2s, 3s]) ALLOW FILTERING")
 
             assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                                  "SELECT * FROM %s WHERE l > [2s, 3s] ALLOW FILTERING")
@@ -2462,10 +2861,17 @@ def testFilteringOnMapContainingDurations(cql, test_keyspace):
                 assert_rows(execute(cql, table, "SELECT * FROM %s WHERE m = {1:1s, 2:2s} ALLOW FILTERING"),
                            [0, {1: Duration(0, 0, 1000000000), 2: Duration(0, 0, 2000000000)}])
 
-            # Scylla does support this case - see
-            #  test_filtering.py::test_filtering_with_in_relation
-            #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (m) is not yet supported",
-            #        "SELECT * FROM %s WHERE m IN ({1:1s, 2:2s}, {1:1s, 3:3s}) ALLOW FILTERING")
+                assert_rows(execute(cql, table, "SELECT * FROM %s WHERE m IN ({1:1s, 2:2s}, {1:1s, 3:3s}) ALLOW FILTERING"),
+                        [0, {1: Duration(0, 0, 1000000000), 2: Duration(0, 0, 2000000000)}],
+                        [2, {1: Duration(0, 0, 1000000000), 3: Duration(0, 0, 3000000000)}])
+
+                # Cassandra 6 also checks "m NOT CONTAINS 1s" here. This
+                # check is in testFilteringOnMapContainingDurationsWithNot
+                # below, so this test keeps running on older Cassandra and
+                # on Scylla.
+            else:
+                assert_invalid_message(cql, table, "Collection column 'm' (map<int, duration>) cannot be restricted by a 'IN' relation",
+                        "SELECT * FROM %s WHERE m IN ({1:1s, 2:2s}, {1:1s, 3:3s}) ALLOW FILTERING")
 
             assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                     "SELECT * FROM %s WHERE m > {1:1s, 3:3s} ALLOW FILTERING")
@@ -2483,6 +2889,19 @@ def testFilteringOnMapContainingDurations(cql, test_keyspace):
                        [0, {1: Duration(0, 0, 1000000000), 2: Duration(0, 0, 2000000000)}],
                        [2, {1: Duration(0, 0, 1000000000), 3: Duration(0, 0, 3000000000)}])
 
+# The NOT CONTAINS step that Cassandra 6 (CASSANDRA-18584) added to
+# testFilteringOnMapContainingDurations
+# Reproduces #12911 (NOT CONTAINS, NOT CONTAINS KEY, map element !=)
+@pytest.mark.xfail(reason="#12911")
+def testFilteringOnMapContainingDurationsWithNot(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, m frozen<map<int, duration>>)") as table:
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (0, {1:1s, 2:2s})")
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (1, {2:2s, 3:3s})")
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (2, {1:1s, 3:3s})")
+
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE m NOT CONTAINS 1s ALLOW FILTERING"),
+                   [1, {2: Duration(0, 0, 2000000000), 3: Duration(0, 0, 3000000000)}])
+
 def testFilteringOnTupleContainingDurations(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, t tuple<int, duration>)") as table:
         execute(cql, table, "INSERT INTO %s (k, t) VALUES (0, (1, 2s))")
@@ -2492,10 +2911,9 @@ def testFilteringOnTupleContainingDurations(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT * FROM %s WHERE t = (1, 2s) ALLOW FILTERING"),
                    [0, (1, Duration(0, 0, 2000000000))])
 
-        # Scylla does support this case - see
-        #  test_filtering.py::test_filtering_with_in_relation
-        #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (t) is not yet supported",
-        #        "SELECT * FROM %s WHERE t IN ((1, 2s), (1, 3s)) ALLOW FILTERING")
+        assert_rows(execute(cql, table, "SELECT * FROM %s WHERE t IN ((1, 2s), (1, 3s)) ALLOW FILTERING"),
+                   [0, (1, Duration(0, 0, 2000000000))],
+                   [2, (1, Duration(0, 0, 3000000000))])
 
         assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                 "SELECT * FROM %s WHERE t > (1, 2s) ALLOW FILTERING")
@@ -2522,10 +2940,19 @@ def testFilteringOnUdtContainingDurations(cql, test_keyspace):
                     assert_rows(execute(cql, table, "SELECT * FROM %s WHERE u = {i: 1, d:2s} ALLOW FILTERING"),
                            [0, user_type("i", 1, "d", Duration(0, 0, 2000000000))])
 
-                # Scylla does support this case - see
-                #  test_filtering.py::test_filtering_with_in_relation
-                #assert_invalid_message(cql, table, "IN predicates on non-primary-key columns (u) is not yet supported",
-                #    "SELECT * FROM %s WHERE u IN ({i: 2, d:3s}, {i: 1, d:3s}) ALLOW FILTERING")
+                    assert_rows(execute(cql, table, "SELECT * FROM %s WHERE u IN ({i: 2, d:3s}, {i: 1, d:3s}) ALLOW FILTERING"),
+                           [1, user_type("i", 2, "d", Duration(0, 0, 3000000000))],
+                           [2, user_type("i", 1, "d", Duration(0, 0, 3000000000))])
+                # As decided in CASSANDRA-13247, Cassandra does not allow
+                # restrictions on non-frozen UDTs. Scylla does allow them (see
+                # test_filtering.py::test_filter_UDT_restriction_nonfrozen),
+                # so the checks below are not relevant.
+                #else:
+                #    assert_invalid_message(cql, table, "Non-frozen UDT column 'u' (" + udt + ") cannot be restricted by any relation",
+                #            "SELECT * FROM %s WHERE u = {i: 1, d:2s} ALLOW FILTERING")
+                #
+                #    assert_invalid_message(cql, table, "Non-frozen UDT column 'u' (" + udt + ") cannot be restricted by any relation",
+                #            "SELECT * FROM %s WHERE u IN ({i: 2, d:3s}, {i: 1, d:3s}) ALLOW FILTERING")
 
                 assert_invalid_message_re(cql, table, ".*[dD]uration.*",
                     "SELECT * FROM %s WHERE u > {i: 1, d:3s} ALLOW FILTERING")
@@ -2574,6 +3001,44 @@ def testFilteringOnCollectionsWithNull(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE m CONTAINS KEY 'a' ALLOW FILTERING"), [1, 1], [0, 0], [0, 1])
             assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE k = 0 AND m CONTAINS KEY 'a' ALLOW FILTERING"), [0, 0], [0, 1])
             assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE k = 0 AND m CONTAINS KEY 'c' ALLOW FILTERING"), [0, 2])
+
+# The steps that Cassandra 6 added to testFilteringOnCollectionsWithNull for
+# its new NOT CONTAINS and NOT CONTAINS KEY operators (CASSANDRA-18584). They
+# are in a separate test so the original test keeps running on older
+# Cassandra and on Scylla.
+# Reproduces #12911 (NOT CONTAINS, NOT CONTAINS KEY, map element !=)
+@pytest.mark.xfail(reason="#12911")
+def testFilteringOnCollectionsWithNullWithNot(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, f"(k int, v int, l list<int>, s set<text>, m map<text, int>, PRIMARY KEY (k, v))") as table:
+        execute(cql, table, "CREATE INDEX ON %s (v)")
+        execute(cql, table, "CREATE INDEX ON %s (s)")
+        execute(cql, table, "CREATE INDEX ON %s (m)")
+
+        execute(cql, table, "INSERT INTO %s (k, v, l, s, m) VALUES (0, 0, [1, 2],    {'a'},      {'a' : 1})")
+        execute(cql, table, "INSERT INTO %s (k, v, l, s, m) VALUES (0, 1, [3, 4],    {'b', 'c'}, {'a' : 1, 'b' : 2})")
+        execute(cql, table, "INSERT INTO %s (k, v, l, s, m) VALUES (0, 2, [1],       {'a', 'c'}, {'c' : 3})")
+        execute(cql, table, "INSERT INTO %s (k, v, l, s, m) VALUES (1, 0, [1, 2, 4], {},         {'b' : 1})")
+        execute(cql, table, "INSERT INTO %s (k, v, l, s, m) VALUES (1, 1, [4, 5],    {'d'},      {'a' : 1, 'b' : 3})")
+        execute(cql, table, "INSERT INTO %s (k, v, l, s, m) VALUES (1, 2, null,      null,       null)")
+
+        for _ in before_and_after_flush(cql, table):
+            # lists
+            assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE l NOT CONTAINS 4 ALLOW FILTERING"), [0, 0], [0, 2])
+            assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE k = 0 AND l NOT CONTAINS 4 ALLOW FILTERING"), [0, 0], [0, 2])
+
+            # sets
+            assert_rows_ignoring_order(execute(cql, table, "SELECT k, v FROM %s WHERE s NOT CONTAINS 'a' ALLOW FILTERING" ), [0, 1], [1, 1])
+            assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE k = 0 AND s NOT CONTAINS 'a' ALLOW FILTERING" ), [0, 1])
+            assert_rows(execute(cql, table, "SELECT k, v FROM %s  WHERE s NOT CONTAINS 'a' AND s NOT CONTAINS 'c' ALLOW FILTERING"), [1, 1])
+
+            # maps
+            assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE m NOT CONTAINS 1 ALLOW FILTERING"), [0, 2])
+            assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE k = 0 AND m NOT CONTAINS 1 ALLOW FILTERING"), [0, 2])
+            assert_empty(execute(cql, table, "SELECT k, v FROM %s  WHERE m NOT CONTAINS 1 AND m NOT CONTAINS 3 ALLOW FILTERING"))
+
+            assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE m NOT CONTAINS KEY 'a' ALLOW FILTERING"), [1, 0], [0, 2])
+            assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE k = 0 AND m NOT CONTAINS KEY 'a' ALLOW FILTERING"), [0, 2])
+            assert_rows(execute(cql, table, "SELECT k, v FROM %s WHERE k = 0 AND m NOT CONTAINS KEY 'c' ALLOW FILTERING"), [0, 0], [0, 1])
 
 def testMixedTTLOnColumns(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, i int)") as table:
@@ -2680,3 +3145,54 @@ def testCreatingUDFWithSameNameAsBuiltin_FullyQualifiedFunctionNameWorks_SystemK
                                "CREATE FUNCTION %s (val double) RETURNS null ON null INPUT RETURNS double LANGUAGE java AS 'return 10.0d;'")
         execute(cql, table, "INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')")
         assertRowCount(execute(cql, table, "SELECT system.token(k1, k2) FROM %s"), 1)
+
+def testQuotedMapTextData(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(id int, data text, PRIMARY KEY (id))") as t1:
+        with create_table(cql, test_keyspace, "(id int, data map<int, text>, PRIMARY KEY (id))") as t2:
+            execute(cql, t1, "INSERT INTO %s (id, data) VALUES (1, 'I''m newb')")
+            execute(cql, t2, "INSERT INTO %s (id, data) VALUES (1, {1:'I''m newb'})")
+
+            assert_rows(execute(cql, t1, "SELECT data FROM %s"), ["I'm newb"])
+            assert_rows(execute(cql, t2, "SELECT data FROM %s"), [{1: "I'm newb"}])
+
+def testQuotedSimpleCollectionsData(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(id int, set_data set<text>, list_data list<text>, tuple_data tuple<int, text>, PRIMARY KEY (id))") as t3:
+        execute(cql, t3, "INSERT INTO %s (id, set_data, list_data, tuple_data) values(1, {'I''m newb'}, ['I''m newb'], (1, 'I''m newb'))")
+
+        assert_rows(execute(cql, t3, "SELECT set_data FROM %s"), [{"I'm newb"}])
+        assert_rows(execute(cql, t3, "SELECT list_data FROM %s"), [["I'm newb"]])
+        assert_rows(execute(cql, t3, "SELECT tuple_data FROM %s"), [(1, "I'm newb")])
+
+def testQuotedUDTData(cql, test_keyspace):
+    with create_type(cql, test_keyspace, "(data text)") as random:
+        with create_table(cql, test_keyspace, f"(id int, udt_data frozen<{random}>, PRIMARY KEY (id))") as t4:
+            execute(cql, t4, "INSERT INTO %s (id, udt_data) values(1, {data: 'I''m newb'})")
+
+            assert_rows(execute(cql, t4, "SELECT udt_data FROM %s"), [user_type("data", "I'm newb")])
+
+def testUseOfOtherOperatorOnSameColumnsAsContainsKeyAndContains(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk text, c int, m map<text,text>, fm frozen<map<text,text>>, PRIMARY KEY (pk, c))") as table:
+        assert_invalid_message(cql, table, "Collection column 'm' (map<text, text>) cannot be restricted by a '>' relation",
+                             "SELECT * FROM %s WHERE m > {'lmn' : 'f'} AND m CONTAINS 'foo'")
+
+        assert_invalid_message(cql, table, "Collection column 'm' (map<text, text>) cannot be restricted by a '>' relation",
+                             "SELECT * FROM %s WHERE m > {'lmn' : 'f'} AND m CONTAINS KEY 'lmn'")
+
+        assert_invalid_message(cql, table, "Collection column 'm' (map<text, text>) cannot be restricted by a '>' relation",
+                             "SELECT * FROM %s WHERE m > {'lmn' : 'f'} AND m['lmn'] = 'foo2'")
+
+        # Scylla does allow multiple restrictions on the same column (with
+        # ALLOW FILTERING), and their correctness is tested in
+        # test_filtering.py::test_multiple_restrictions_on_same_column
+        # So Scylla only complains that ALLOW FILTERING is missing, and
+        # the Cassandra-specific checks below are not relevant.
+        #assert_invalid_message(cql, table, "Collection column fm can only be restricted by CONTAINS, CONTAINS KEY, NOT_CONTAINS, " +
+        #                     "NOT_CONTAINS_KEY or map-entry equality if it already restricted by one of those",
+        #                     "SELECT * FROM %s WHERE fm > {'lmn' : 'f'} AND fm CONTAINS 'foo'")
+        #
+        #assert_invalid_message(cql, table, "Collection column fm can only be restricted by CONTAINS, CONTAINS KEY, NOT_CONTAINS, " +
+        #                     "NOT_CONTAINS_KEY or map-entry equality if it already restricted by one of those",
+        #                     "SELECT * FROM %s WHERE fm > {'lmn' : 'f'} AND fm CONTAINS KEY 'lmn'")
+        #
+        #assert_invalid_message(cql, table, "Map-entry predicates on frozen map column fm are not supported",
+        #                     "SELECT * FROM %s WHERE fm > {'lmn' : 'f'} AND fm['lmn'] = 'foo2'")

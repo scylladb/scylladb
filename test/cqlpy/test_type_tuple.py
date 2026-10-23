@@ -58,3 +58,28 @@ def test_ttl_on_tuple(cql, table1):
     ret = list(cql.execute(f"SELECT TTL(t) FROM {table1} WHERE p={p}"))
     # TTL() returns the remaining TTL, which may be slightly less than 1000 by the time we read it, so we check that it's between 900 and 1000.
     assert len(ret) == 1 and len(ret[0]) == 1 and 900 <= ret[0][0] <= 1000
+
+# In CQL, "(x)" can be either a parenthesized term or a one-element tuple,
+# and the parser can't tell them apart. Cassandra decides by the type of the
+# value's receiver: For a tuple receiver it is a one-element tuple, but for
+# any other type it is just x. So "(3)" can be written into an int column,
+# and compared to one.
+# Reproduces SCYLLADB-5192 (a parenthesized value is treated as a one-element
+# tuple even where a non-tuple value is expected).
+@pytest.mark.xfail(reason="SCYLLADB-5192")
+def test_parenthesized_value_not_tuple(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int, l list<int>') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table}(p, v, l) VALUES ({p}, (3), [3])")
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE p = ({p})")) == [(3,)]
+        assert list(cql.execute(f"SELECT p FROM {table} WHERE p = {p} AND v = (3) ALLOW FILTERING")) == [(p,)]
+        assert list(cql.execute(f"SELECT p FROM {table} WHERE p = {p} AND l CONTAINS (3) ALLOW FILTERING")) == [(p,)]
+
+# Same as test_parenthesized_value_not_tuple, but for a tuple receiver,
+# "(x)" is a one-element tuple, on both Cassandra and Scylla.
+def test_parenthesized_value_is_tuple(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, t tuple<int>') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table}(p, t) VALUES ({p}, (3))")
+        assert list(cql.execute(f"SELECT t FROM {table} WHERE p = {p}")) == [((3,),)]
+        assert list(cql.execute(f"SELECT p FROM {table} WHERE p = {p} AND t = (3) ALLOW FILTERING")) == [(p,)]

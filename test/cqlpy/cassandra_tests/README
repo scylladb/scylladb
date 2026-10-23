@@ -1,6 +1,12 @@
 All tests in this directory and its subdirectories were translated from
 Apache Cassandra's unit tests - the test/unit/org/apache/cassandra/cql3
-directory in the Apache Cassandra source code repository.
+directory in the Apache Cassandra source code repository. The exceptions
+are the vector search tests vector_*_test.py (and their helper,
+vector_tester.py), which were translated from Cassandra's
+test/unit/org/apache/cassandra/index/sai/cql directory, and the tests in
+the auth/, db/, index/ and schema/ subdirectories, which were translated
+from the same-named directories under test/unit/org/apache/cassandra -
+see below.
 
 The organization of this directory mirrors that of the Cassandra directory,
 with test files renamed from SomeThingTest.java to some_thing_test.py.
@@ -13,3 +19,130 @@ with the differences).
 Please avoid adding new tests, not translated from Cassandra, in this
 directory. Instead, place new tests written from scratch for Scylla,
 or improved tests, in the directory above.
+
+The following test files in Cassandra's test/unit/org/apache/cassandra/cql3
+directory itself were not translated. Most of them test Cassandra's internal
+implementation through Java APIs instead of testing CQL, or test features
+which Scylla doesn't have:
+
+* AlterSchemaStatementTest.java and AlterSchemaStatementNoOpTest.java: test
+  how Cassandra's schema statements are serialized into (or omitted from)
+  the log of its transactional cluster metadata (TCM).
+* AssignmentTestableTest.java, ColumnIdentifierTest.java, CqlParserTest.java,
+  ErrorCollectorTest.java, QueryOptionsFlagsTest.java, RelationTest.java,
+  StatementSourceTest.java and UntypedResultSetTest.java: test internal Java
+  classes of Cassandra's CQL implementation directly.
+* CDCStatementTest.java: checks Cassandra's "cdc = true" table option,
+  through Cassandra's internal table metadata. Scylla's CDC has a different
+  option syntax, and is tested in test_cdc.py.
+* CIDRTest.java: tests Cassandra's internal CIDR class, used by its CIDR
+  authorizer, which Scylla doesn't have.
+* ColumnSpecificationTest.java: tests columns which have both a dynamic data
+  masking specification (MASKED WITH) and a CHECK constraint. Scylla doesn't
+  have data masking (see functions/masking/README).
+* CommentAndSecurityLabelClientTest.java: checks the schema change events
+  that a client receives for COMMENT ON and SECURITY LABEL ON, using a
+  low-level protocol client. COMMENT ON and SECURITY LABEL ON themselves
+  are tested in validation/miscellaneous/comment_and_security_label_test.py.
+* CQLTesterTest.java: tests CQLTester, Cassandra's Java test framework.
+* CustomNowInSecondsTest.java: tests the "now_in_seconds" query option of
+  protocol version 5, which Scylla doesn't support.
+* DecoratedKeyPrefixesTest.java, EarlyOpenCompactionTest.java,
+  GcCompactionTest.java, KeyCacheCqlTest.java, OutOfSpaceTest.java and
+  SecondaryIndexSSTableExportTest.java: test Cassandra's sstables,
+  compaction, key cache and disk failure handling through internal Java
+  APIs.
+* DurationTest.java: tests Cassandra's internal Duration class. The duration
+  type is tested through CQL in many other tests.
+* NodeLocalConsistencyTest.java: tests Cassandra's NODE_LOCAL consistency
+  level, through internal Java APIs.
+* PasswordObfuscatorTest.java: tests Cassandra's internal class which hides
+  passwords in logged statements.
+* PstmtPersistenceTest.java: tests how Cassandra persists prepared
+  statements in a system table, which Scylla doesn't do.
+* QueryEventsTest.java: tests Cassandra's internal query event listeners.
+* RandomSchemaTest.java: a randomized test of Cassandra's internal schema
+  and data generators.
+* SimpleCASTest.java: a regression test for a Cassandra crash in an LWT
+  write to a system table (system.peers), which Scylla doesn't allow.
+* SystemKeyspaceQueryTest.java and SystemKeyspaceTablesNamesTest.java: test
+  Cassandra's system tables, which are different in Scylla.
+* ViewAbstractTest.java and ViewAbstractParameterizedTest.java are not tests
+  but base classes of the View*Test.java tests.
+
+The following subdirectories of Cassandra's cql3 directory were not
+translated at all, because their tests test internal Java classes directly:
+
+* ast/: Cassandra's CQL abstract syntax tree and its formatter, used in
+  Cassandra's randomized tests.
+* conditions/: Cassandra's internal ColumnCondition class (LWT conditions,
+  which are tested through CQL in validation/operations/).
+* restrictions/: Cassandra's internal restriction classes and its LIKE
+  pattern class.
+* terms/: Cassandra's internal classes for lists and IN markers.
+
+The vector search tests vector_*_test.py were translated from Cassandra's
+test/unit/org/apache/cassandra/index/sai/cql directory, which tests
+Cassandra's storage-attached indexes (SAI). Scylla doesn't have SAI, but it
+accepts SAI's syntax for creating an index on a vector column, so we
+translated the tests of vector search, Vector*Test.java. The differences
+between Cassandra's and Scylla's vector search, and which tests could and
+could not be translated, are explained in vector_tester.py. Most of these
+tests need a vector store - see the "--vs" option of test/cqlpy/run.
+Individual tests which were not translated are listed, with the reason, in
+comments in the translated files. The following files in that directory
+were not translated:
+
+* The test files not named Vector*Test.java, and the subdirectories
+  intersection/ and types/, which test SAI on non-vector columns. Scylla
+  doesn't support SAI on non-vector columns, and has its own secondary
+  indexes instead.
+* VectorSegmentationTest.java: tests how the vector index is split into
+  segments, by changing SAI's internal segment size
+  (SegmentBuilder.updateLastValidSegmentRowId()).
+* VectorSiftSmallTest.java: measures the recall of vector search on the
+  standard "SIFT small" benchmark data set, which would need to be copied
+  into Scylla's repository (5 MB). Its second test also creates an SAI
+  index on a non-vector column.
+
+Outside its cql3 directory, Cassandra has a few hundred more tests which
+use its CQL test framework. Almost all of them test Cassandra's internal
+implementation (e.g., its compaction, sstables, commitlog, memtables,
+repair, streaming, hints, and nodetool), or Cassandra features which
+Scylla doesn't have and isn't likely to have (e.g., guardrails, SASI,
+Accord transactions, audit and full query logging, Cassandra's virtual
+tables, the CIDR authorizer, mTLS identities, and the unified compaction
+strategy). The few test files which mostly test CQL features which Scylla
+has, or should have, were translated:
+
+* auth/: BatchAuthTest, CassandraAuthorizerTest, CreateAndAlterRoleTest
+  and GrantAndRevokeTest.
+* db/: MultiKeyspaceTest, RemoveCellTest, RowCacheCQLTest and
+  TimeSortTest.
+* index/internal/: CassandraIndexTest.
+* schema/: CreateTableValidationTest, and createlike/ (CreateLikeTest,
+  CreateLikeCqlParseTest and CreateLikeWithSessionTest).
+* constraints/: AlterTableWithTableConstraintValidationTest,
+  CreateTableWithColumnCqlConstraintValidationTest,
+  CreateTableWithColumnNotNullConstraintInvalidTest,
+  CreateTableWithColumnNotNullConstraintValidTest and
+  CreateTableWithColumnOctetLengthConstraintValidationTest. These test
+  Cassandra 6's column constraints (CHECK and NOT NULL, CEP-42,
+  CASSANDRA-19947) through CQL. Scylla doesn't support constraints yet
+  (SCYLLADB-5234), so these tests are xfail. The other tests in that
+  directory test the constraints' Java classes directly.
+
+Some other test files outside cql3 test CQL features, but were not
+translated, because:
+
+* db/filter/IndexHintsTest.java tests Cassandra 6's index hints
+  (SELECT ... WITH included_indexes, CASSANDRA-18112), which Scylla doesn't
+  have (SCYLLADB-5235). Its tests either test Cassandra's internal
+  IndexHints class and its serialization, or check which index was picked
+  by inspecting Cassandra's internal index query plan (mostly with SAI).
+* db/guardrails/ tests Cassandra's guardrails, which are configured
+  differently from Scylla's few guardrails.
+* index/CustomIndexTest.java tests custom index implementations written
+  in Java.
+* service/ClientWarningsTest.java and schema/SchemaStatementWarningsTest.java
+  test warnings which they enable or inject through Cassandra's internals.
