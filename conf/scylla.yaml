@@ -45,14 +45,10 @@ num_tokens: 256
 # commitlog_sync may be either "periodic" or "batch."
 #
 # When in batch mode, Scylla won't ack writes until the commit log
-# has been fsynced to disk.  It will wait
-# commitlog_sync_batch_window_in_ms milliseconds between fsyncs.
-# This window should be kept short because the writer threads will
-# be unable to do extra work while waiting.  (You may need to increase
-# concurrent_writes for the same reason.)
+# has been fsynced to disk.  A sync starts as soon as the previous one
+# finishes, and writers that arrive meanwhile share the next sync.
 #
 # commitlog_sync: batch
-# commitlog_sync_batch_window_in_ms: 2
 #
 # the other option is "periodic" where writes may be acked immediately
 # and the CommitLog is simply synced every commitlog_sync_period_in_ms

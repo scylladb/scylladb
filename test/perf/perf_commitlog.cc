@@ -166,7 +166,6 @@ int main(int argc, char** argv) {
         ("commitlog-total-space-in-mb", bpo::value<unsigned>(), "total commitlog size")
         ("commitlog-sync-period-in-ms", bpo::value<unsigned>(), "how long the system waits for other writes before performing a sync in \"periodic\" mode")
         ("commitlog-use-o-dsync", bpo::value<bool>()->default_value(true), "whether or not to use O_DSYNC mode for commitlog segments io")
-        ("commitlog-use-hard-size-limit", bpo::value<bool>()->default_value(true), "whether or not to use a hard size limit for commitlog disk usage")
 
         ("min-data-size", bpo::value<size_t>()->default_value(200), "minimum size of data element added")
         ("max-data-size", bpo::value<size_t>()->default_value(32/2 * 1024 * 1024 - 1), "maximum size of data element added")
@@ -206,9 +205,6 @@ int main(int argc, char** argv) {
         }
         if (app.configuration().contains("commitlog-use-o-dsync")) {
             db_cfg->commitlog_use_o_dsync(app.configuration()["commitlog-use-o-dsync"].as<bool>());
-        }
-        if (app.configuration().contains("commitlog-use-hard-size-limit")) {
-            db_cfg->commitlog_use_hard_size_limit(app.configuration()["commitlog-use-hard-size-limit"].as<bool>());
         }
 
         auto cfg = test_config();
