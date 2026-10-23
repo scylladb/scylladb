@@ -611,11 +611,11 @@ SEASTAR_TEST_CASE(test_statement_prepared_before_table_recreation_is_rejected) {
         BOOST_REQUIRE_EXCEPTION(
                 select_stmt->execute(qp, qs, options, std::nullopt).get(),
                 exceptions::invalid_request_exception,
-                exception_predicate::message_contains("unconfigured table tbl"));
+                exception_predicate::message_contains("Table 'ks.tbl' does not exist"));
         BOOST_REQUIRE_EXCEPTION(
                 insert_stmt->execute(qp, qs, options, std::nullopt).get(),
                 exceptions::invalid_request_exception,
-                exception_predicate::message_contains("unconfigured table tbl"));
+                exception_predicate::message_contains("Table 'ks.tbl' does not exist"));
     });
 }
 

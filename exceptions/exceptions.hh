@@ -272,6 +272,11 @@ public:
     keyspace_not_defined_exception(std::string_view keyspace) noexcept;
 };
 
+class table_not_defined_exception : public invalid_request_exception {
+public:
+    table_not_defined_exception(std::string_view keyspace, std::string_view table) noexcept;
+};
+
 class overflow_error_exception : public invalid_request_exception {
 public:
     overflow_error_exception(std::string msg) noexcept

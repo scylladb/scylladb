@@ -218,8 +218,8 @@ modification_executor::commit(const modification_statement& stmt, query_processo
         const query_options& options) const {
     if (!qp.db().try_find_table(stmt.s->id())) {
         co_return coroutine::exception(
-                std::make_exception_ptr(exceptions::invalid_request_exception(
-                        format("unconfigured table {}", stmt.column_family()))));
+                std::make_exception_ptr(exceptions::table_not_defined_exception(
+                        stmt.keyspace(), stmt.column_family())));
     }
 
     tracing::add_table_name(qs.get_trace_state(), stmt.keyspace(), stmt.column_family());

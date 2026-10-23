@@ -17,13 +17,11 @@ from cassandra.protocol import InvalidRequest
 from .util import new_cql
 
 
-@pytest.mark.xfail(reason="SCYLLADB-5624")
 def test_select_from_missing_table(scylla_only, cql, test_keyspace):
     with pytest.raises(InvalidRequest, match=re.escape(f"Table '{test_keyspace}.no_such_table' does not exist")):
         cql.execute(f"SELECT * FROM {test_keyspace}.no_such_table")
 
 
-@pytest.mark.xfail(reason="SCYLLADB-5624")
 def test_insert_into_missing_table(scylla_only, cql, test_keyspace):
     with pytest.raises(InvalidRequest, match=re.escape(f"Table '{test_keyspace}.no_such_table' does not exist")):
         cql.execute(f"INSERT INTO {test_keyspace}.no_such_table (p) VALUES (1)")
