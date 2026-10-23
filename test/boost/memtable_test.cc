@@ -1071,6 +1071,49 @@ SEASTAR_TEST_CASE(memtable_flush_period, *check_has_error_injection()) {
 #endif
 }
 
+// SCYLLADB-4974: the period timer must not re-flush a table that was flushed less than a period ago.
+SEASTAR_TEST_CASE(memtable_flush_period_skips_recently_flushed_table) {
+    auto db_config = make_shared<db::config>();
+    db_config->enable_cache.set(false);
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        env.execute_cql("CREATE TABLE ks.t (pk int, ck int, id int, PRIMARY KEY(pk, ck));").get();
+
+        replica::table& t = env.local_db().find_column_family("ks", "t");
+        auto s = t.schema();
+        // Compaction would merge the flushed sstables and break the counts below.
+        t.disable_auto_compaction().get();
+        auto make_mutation = [&] (int ck) {
+            mutation m(s, dht::decorate_key(*s, partition_key::from_single_value(*s, serialized(1))));
+            m.set_clustered_cell(clustering_key::from_single_value(*s, serialized(ck)), to_bytes("id"), data_value(ck), api::new_timestamp());
+            return m;
+        };
+
+        // It is impossible to set a period below 60000ms using ALTER TABLE.
+        schema_builder b(s);
+        b.set_memtable_flush_period(1000);
+        t.set_schema(b.build());
+
+        // Flush at ~500ms, so the timer firing at 1000ms finds a memtable younger than the period.
+        seastar::sleep(500ms).get();
+        t.apply(make_mutation(1));
+        // The replacement memtable is created during the flush, so anchor the wait to before it.
+        const auto flush_start = seastar::lowres_clock::now();
+        t.flush().get();
+        BOOST_REQUIRE_EQUAL(t.sstables_count(), 1);
+        t.apply(make_mutation(2));
+
+        seastar::sleep(flush_start + 750ms - seastar::lowres_clock::now()).get();
+        BOOST_REQUIRE_EQUAL(t.sstables_count(), 1);
+
+        // Once the memtable is a full period old, the timer flushes it.
+        BOOST_REQUIRE(eventually_true([&] { return t.sstables_count() == 2; }));
+
+        // The timer keeps flushing a cold table, one flush per period.
+        t.apply(make_mutation(3));
+        BOOST_REQUIRE(eventually_true([&] { return t.sstables_count() == 3; }));
+    }, db_config);
+}
+
 SEASTAR_TEST_CASE(sstable_compaction_does_not_resurrect_data) {
     auto db_config = make_shared<db::config>();
     db_config->enable_cache.set(false);
