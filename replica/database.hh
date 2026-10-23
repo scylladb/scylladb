@@ -161,6 +161,7 @@ class large_data_handler;
 class system_table_corrupt_data_handler;
 class nop_corrupt_data_handler;
 class system_keyspace;
+class object_storage_page_cache_table;
 
 struct snapshot_entries;
 
@@ -1852,6 +1853,9 @@ private:
     std::unique_ptr<db::nop_corrupt_data_handler> _nop_corrupt_data_handler;
 
     std::unique_ptr<sstables::sstables_manager> _user_sstables_manager;
+    // The disk page cache of sstables on object storage, which the user
+    // sstables manager uses, if its experimental feature is enabled.
+    shared_ptr<db::object_storage_page_cache_table> _object_storage_page_cache;
     std::unique_ptr<sstables::sstables_manager> _system_sstables_manager;
 
     query::result_memory_limiter _result_memory_limiter;
