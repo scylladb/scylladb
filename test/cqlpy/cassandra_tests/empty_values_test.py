@@ -68,112 +68,96 @@ def verifyJsonInsert(cql, table, typ, emptyValue):
 # rejects an empty value of these types as invalid. Scylla does accept an
 # empty value of these types, as it does for the other types tested here.
 
+# Scylla rejects an empty string in INSERT JSON for a non-string type
+# (see #7944 and #10625), while Cassandra accepts it as the type's empty
+# value, which we consider a Cassandra bug (CASSANDRA-21745).
+def verifyJsonInsertRejected(cql, table):
+    with pytest.raises(InvalidRequest):
+        execute(cql, table, "INSERT INTO %s JSON '{\"id\":\"1\",\"v\":\"\"}'")
+
 # Each of the original Java tests checks an empty value written both with
 # INSERT JSON with an empty string, and with a plain INSERT. Cassandra accepts
 # an empty string in INSERT JSON as an empty value of any type, but issue
 # #7944 considers this a Cassandra bug for non-string types, which Scylla
 # shouldn't copy. So we split each test into two: test<Type> with the plain
-# INSERT, and test<Type>Json with the INSERT JSON. If #7944 is fixed as
-# proposed (rejecting the empty string), the test<Type>Json tests of
-# non-string types should be changed to expect an error, and be marked
-# cassandra_bug.
+# INSERT, and test<Type>Json with the INSERT JSON. For the non-string types
+# for which Scylla rejects the empty string (#7944, #10625), the
+# test<Type>Json tests expect an error, and are marked cassandra_bug.
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyInt(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v INT)") as table:
         verifyPlainInsert(cql, table, "int", "")
 
-# Reproduces #7944 (Scylla rejects the empty string in INSERT JSON for this
-# type, but with a server error) and SCYLLADB-5185 (SELECT JSON of an empty
-# value fails)
-@pytest.mark.xfail(reason="#7944, SCYLLADB-5185")
-def testEmptyIntJson(cql, test_keyspace):
+def testEmptyIntJson(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v INT)") as table:
-        verifyJsonInsert(cql, table, "int", "")
+        verifyJsonInsertRejected(cql, table)
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyTimestamp(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIMESTAMP)") as table:
         verifyPlainInsert(cql, table, "timestamp", "")
 
-# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
-def testEmptyTimestampJson(cql, test_keyspace):
+def testEmptyTimestampJson(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIMESTAMP)") as table:
-        verifyJsonInsert(cql, table, "timestamp", "")
+        verifyJsonInsertRejected(cql, table)
 
 def testEmptyUUID(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v UUID)") as table:
         verifyPlainInsert(cql, table, "uuid", "")
 
-def testEmptyUUIDJson(cql, test_keyspace):
+def testEmptyUUIDJson(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v UUID)") as table:
-        verifyJsonInsert(cql, table, "uuid", "")
+        verifyJsonInsertRejected(cql, table)
 
 def testEmptyInetAddress(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v INET)") as table:
         verifyPlainInsert(cql, table, "inet", "")
 
-def testEmptyInetAddressJson(cql, test_keyspace):
+def testEmptyInetAddressJson(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v INET)") as table:
-        verifyJsonInsert(cql, table, "inet", "")
+        verifyJsonInsertRejected(cql, table)
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyLong(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v BIGINT)") as table:
         verifyPlainInsert(cql, table, "bigint", "")
 
-# Reproduces #7944 (Scylla rejects the empty string in INSERT JSON for this
-# type, but with a server error) and SCYLLADB-5185 (SELECT JSON of an empty
-# value fails)
-@pytest.mark.xfail(reason="#7944, SCYLLADB-5185")
-def testEmptyLongJson(cql, test_keyspace):
+def testEmptyLongJson(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v BIGINT)") as table:
-        verifyJsonInsert(cql, table, "bigint", "")
+        verifyJsonInsertRejected(cql, table)
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyDecimal(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DECIMAL)") as table:
         verifyPlainInsert(cql, table, "decimal", "")
 
-# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
-def testEmptyDecimalJson(cql, test_keyspace):
+def testEmptyDecimalJson(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DECIMAL)") as table:
-        verifyJsonInsert(cql, table, "decimal", "")
+        verifyJsonInsertRejected(cql, table)
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyDouble(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DOUBLE)") as table:
         verifyPlainInsert(cql, table, "double", "")
 
-# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
-def testEmptyDoubleJson(cql, test_keyspace):
+def testEmptyDoubleJson(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v DOUBLE)") as table:
-        verifyJsonInsert(cql, table, "double", "")
+        verifyJsonInsertRejected(cql, table)
 
 # Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
 def testEmptyFloat(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v FLOAT)") as table:
         verifyPlainInsert(cql, table, "float", "")
 
-# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value fails)
-@pytest.mark.xfail(reason="SCYLLADB-5185")
-def testEmptyFloatJson(cql, test_keyspace):
+def testEmptyFloatJson(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v FLOAT)") as table:
-        verifyJsonInsert(cql, table, "float", "")
+        verifyJsonInsertRejected(cql, table)
 
 def testEmptyTimeUUID(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIMEUUID)") as table:
         verifyPlainInsert(cql, table, "timeuuid", "")
 
-def testEmptyTimeUUIDJson(cql, test_keyspace):
+def testEmptyTimeUUIDJson(cql, test_keyspace, cassandra_bug):
     with create_table(cql, test_keyspace, "(id INT PRIMARY KEY, v TIMEUUID)") as table:
-        verifyJsonInsert(cql, table, "timeuuid", "")
+        verifyJsonInsertRejected(cql, table)

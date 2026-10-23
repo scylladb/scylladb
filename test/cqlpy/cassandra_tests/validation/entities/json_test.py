@@ -136,8 +136,7 @@ def testSelectJsonWithPagingWithFrozenUDT(cql, test_keyspace):
                           ["{\"a\": 1, \"b\": 2, \"c\": [\"1\", \"2\"]}", "[\"" + str(uuid) + "\", 3]", "3"],
                           ["{\"a\": 1, \"b\": 2, \"c\": [\"1\", \"2\"]}", "[\"" + str(uuid) + "\", 4]", "4"])
 
-# Reproduces issue #7911, #7912, #7914, #7915, #7944, #7954
-@pytest.mark.xfail(reason="issues #7944, #7954")
+# Reproduces issue #7911, #7912, #7914, #7915, #7944, #7954, SCYLLADB-5260
 def testFromJsonFct(cql, test_keyspace):
     abc_tuple = collections.namedtuple('abc_tuple', ['a', 'b', 'c'])
     with create_type(cql, test_keyspace, "(a int, b uuid, c set<text>)") as type_name:
@@ -602,6 +601,7 @@ def testFromJsonFct(cql, test_keyspace):
                 "INSERT INTO %s (k, tupleval) VALUES (?, fromJson(?))",
                 0, "[1, \"foobar\", \"6bddc89a-5644-11e4-97fc-56847afe9799\", 1, 2, 3]")
 
+            # Reproduces SCYLLADB-5260:
             assert_invalid_throw(cql, table, FunctionFailure,
                 "INSERT INTO %s (k, tupleval) VALUES (?, fromJson(?))",
                 0, "[1, \"foobar\"]")

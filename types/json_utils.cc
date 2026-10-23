@@ -223,11 +223,21 @@ static bytes from_json_object_aux(const tuple_type_impl& t, const rjson::value& 
         throw marshal_exception(
                 format("Too many values ({}) for tuple with size {}", value.Size(), t.all_types().size()));
     }
+    if (value.Size() < t.all_types().size()) {
+        throw marshal_exception(
+                format("Too few values ({}) for tuple with size {}", value.Size(), t.all_types().size()));
+    }
     std::vector<bytes_opt> raw_tuple;
     raw_tuple.reserve(value.Size());
     auto ti = t.all_types().begin();
     for (auto vi = value.Begin(); vi != value.End(); ++vi, ++ti) {
-        raw_tuple.emplace_back(from_json_object(**ti, *vi));
+        // A JSON null sets this component to null, as in a user type (but
+        // unlike in a list or set, whose elements cannot be null).
+        if (vi->IsNull()) {
+            raw_tuple.emplace_back(std::nullopt);
+        } else {
+            raw_tuple.emplace_back(from_json_object(**ti, *vi));
+        }
     }
     return t.build_value(std::move(raw_tuple));
 }
@@ -287,6 +297,16 @@ static bytes from_json_object_aux(const user_type_impl& ut, const rjson::value& 
     return ut.build_value(std::move(raw_tuple));
 }
 
+// The from_string() of many non-string types (e.g., numbers and UUIDs)
+// accepts an empty string, as the type's "empty value". But in JSON, an
+// empty string isn't a valid number, UUID, etc., so reject it.
+static std::string_view reject_empty_string(std::string_view s, const abstract_type& t) {
+    if (s.empty()) {
+        throw marshal_exception(seastar::format("An empty string is not a valid value of type {}", t.cql3_type_name()));
+    }
+    return s;
+}
+
 namespace {
 struct from_json_object_visitor {
     const rjson::value& value;
@@ -337,16 +357,16 @@ struct from_json_object_visitor {
         if (value.IsNumber()) {
             return long_type->decompose(to_int<int64_t>(value));
         }
-        return to_bytes(t.from_string(rjson::to_string_view(value)));
+        return to_bytes(t.from_string(reject_empty_string(rjson::to_string_view(value), t)));
     }
-    bytes operator()(const timeuuid_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "timeuuid_type"))); }
-    bytes operator()(const simple_date_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "simple_date_type"))); }
-    bytes operator()(const time_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "time_type"))); }
-    bytes operator()(const uuid_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "uuid_type"))); }
-    bytes operator()(const inet_addr_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "inet_addr_type"))); }
+    bytes operator()(const timeuuid_type_impl& t) { return to_bytes(t.from_string(reject_empty_string(validated_to_string_view(value, "timeuuid_type"), t))); }
+    bytes operator()(const simple_date_type_impl& t) { return to_bytes(t.from_string(reject_empty_string(validated_to_string_view(value, "simple_date_type"), t))); }
+    bytes operator()(const time_type_impl& t) { return to_bytes(t.from_string(reject_empty_string(validated_to_string_view(value, "time_type"), t))); }
+    bytes operator()(const uuid_type_impl& t) { return to_bytes(t.from_string(reject_empty_string(validated_to_string_view(value, "uuid_type"), t))); }
+    bytes operator()(const inet_addr_type_impl& t) { return to_bytes(t.from_string(reject_empty_string(validated_to_string_view(value, "inet_addr_type"), t))); }
     template <typename T> bytes operator()(const floating_type_impl<T>& t) {
         if (value.IsString()) {
-            return to_bytes(t.from_string(rjson::to_string_view(value)));
+            return to_bytes(t.from_string(reject_empty_string(rjson::to_string_view(value), t)));
         }
         if (!value.IsNumber()) {
             throw marshal_exception("JSON value must be represented as double or string");
@@ -361,13 +381,13 @@ struct from_json_object_visitor {
     }
     bytes operator()(const varint_type_impl& t) {
         if (value.IsString()) {
-            return to_bytes(t.from_string(rjson::to_string_view(value)));
+            return to_bytes(t.from_string(reject_empty_string(rjson::to_string_view(value), t)));
         }
         return to_bytes(t.from_string(rjson::print(value)));
     }
     bytes operator()(const decimal_type_impl& t) {
         if (value.IsString()) {
-            return to_bytes(t.from_string(rjson::to_string_view(value)));
+            return to_bytes(t.from_string(reject_empty_string(rjson::to_string_view(value), t)));
         } else if (!value.IsNumber()) {
             throw marshal_exception(
                     format("{} must be represented as numeric or string in JSON", value));
@@ -381,7 +401,7 @@ struct from_json_object_visitor {
         }
         return counter_cell_view::total_value_type()->decompose(to_int<int64_t>(value));
     }
-    bytes operator()(const duration_type_impl& t) { return to_bytes(t.from_string(validated_to_string_view(value, "duration_type"))); }
+    bytes operator()(const duration_type_impl& t) { return to_bytes(t.from_string(reject_empty_string(validated_to_string_view(value, "duration_type"), t))); }
     bytes operator()(const empty_type_impl& t) { return bytes(); }
     bytes operator()(const map_type_impl& t) { return from_json_object_aux(t, value); }
     bytes operator()(const set_type_impl& t) { return from_json_object_aux(t, value); }
@@ -496,6 +516,15 @@ static sstring to_json_string_aux(const tuple_type_impl& t, bytes_view bv) {
         ++ti;
         ++vi;
     }
+    // A tuple value may be serialized with fewer components than its type
+    // has (e.g., when written as the CQL literal (1) for a tuple<int, text>).
+    // The missing components are null, so print them as such.
+    for (; ti != t.all_types().end(); ++ti) {
+        if (ti != t.all_types().begin()) {
+            out << ", ";
+        }
+        out << "null";
+    }
 
     out << ']';
     return std::move(out).str();
@@ -547,13 +576,22 @@ static sstring to_json_string_aux(const user_type_impl& t, bytes_view bv) {
 }
 
 namespace {
+// Most types allow an "empty" value (for historical reasons), which is not
+// the same as null. In JSON, such an empty value is printed as an empty string.
+const sstring empty_json_string = "\"\"";
+
 struct to_json_string_visitor {
     bytes_view bv;
     sstring operator()(const reversed_type_impl& t) { return to_json_string(*t.underlying_type(), bv); }
-    template <typename T> sstring operator()(const integer_type_impl<T>& t) { return to_sstring(compose_value(t, bv)); }
+    template <typename T> sstring operator()(const integer_type_impl<T>& t) {
+        if (bv.empty()) {
+            return empty_json_string;
+        }
+        return to_sstring(compose_value(t, bv));
+    }
     template <typename T> sstring operator()(const floating_type_impl<T>& t) {
         if (bv.empty()) {
-            throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
+            return empty_json_string;
         }
         auto v = t.deserialize(bv);
         T d = value_cast<T>(v);
@@ -566,8 +604,13 @@ struct to_json_string_visitor {
     sstring operator()(const inet_addr_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const string_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const bytes_type_impl& t) { return quote_json_string("0x" + t.to_string(bv)); }
-    sstring operator()(const boolean_type_impl& t) { return t.to_string(bv); }
-    sstring operator()(const timestamp_date_base_class& t) { return quote_json_string(timestamp_to_json_string(t, bv)); }
+    sstring operator()(const boolean_type_impl& t) { return bv.empty() ? empty_json_string : t.to_string(bv); }
+    sstring operator()(const timestamp_date_base_class& t) {
+        if (bv.empty()) {
+            return empty_json_string;
+        }
+        return quote_json_string(timestamp_to_json_string(t, bv));
+    }
     sstring operator()(const timeuuid_type_impl& t) { return quote_json_string(t.to_string(bv)); }
     sstring operator()(const map_type_impl& t) { return to_json_string_aux(t, bv); }
     sstring operator()(const set_type_impl& t) { return to_json_string_aux(t, bv); }
@@ -591,14 +634,14 @@ struct to_json_string_visitor {
     }
     sstring operator()(const decimal_type_impl& t) {
         if (bv.empty()) {
-            throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
+            return empty_json_string;
         }
         auto v = t.deserialize(bv);
         return value_cast<big_decimal>(v).to_string();
     }
     sstring operator()(const varint_type_impl& t) {
         if (bv.empty()) {
-            throw exceptions::invalid_request_exception("Cannot create JSON string - deserialization error");
+            return empty_json_string;
         }
         auto v = t.deserialize(bv);
         return value_cast<utils::multiprecision_int>(v).str();
