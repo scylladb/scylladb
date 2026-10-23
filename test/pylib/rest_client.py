@@ -367,9 +367,12 @@ class ScyllaRESTAPIClient:
     async def keyspace_upgrade_sstables(self, node_ip: str, ks: str) -> None:
         await self.client.get(f"/storage_service/keyspace_upgrade_sstables/{ks}", host=node_ip)
 
-    async def keyspace_scrub_sstables(self, node_ip: str, ks: str, scrub_mode: str, table: str = "") -> None:
+    async def keyspace_scrub_sstables(self, node_ip: str, ks: str, scrub_mode: str, table: str = "") -> int:
+        """Scrub the keyspace (or one of its tables) and return the scrub status: 0 means successful"""
         params = {"scrub_mode": scrub_mode, **({"cf": table} if table else {})}
-        await self.client.get(f"/storage_service/keyspace_scrub/{ks}", host=node_ip, params=params)
+        status = await self.client.get_json(f"/storage_service/keyspace_scrub/{ks}", host=node_ip, params=params)
+        assert isinstance(status, int)
+        return status
 
     async def disable_injection(self, node_ip: str, injection: str) -> None:
         await self.client.delete(f"/v2/error_injection/injection/{quote(injection, safe='')}", host=node_ip)
