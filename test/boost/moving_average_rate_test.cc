@@ -163,6 +163,24 @@ BOOST_AUTO_TEST_CASE(test_per_rejects_different_intervals) {
     BOOST_REQUIRE_THROW(a.per(b), std::runtime_error);
 }
 
+// Rates of the same thing add up per second, over the interval both cover.
+BOOST_AUTO_TEST_CASE(test_sum) {
+    using rate = utils::rate<utils::units::bytes>;
+    auto same = rate(100, 10s) + rate(50, 10s);
+    BOOST_REQUIRE_EQUAL(same.amount(), 150);
+    BOOST_REQUIRE(same.interval() == 10s);
+    // 10/s and 30/s.
+    auto different = rate(100, 10s) + rate(600, 20s);
+    BOOST_REQUIRE_EQUAL(different.per_second(), 40);
+    BOOST_REQUIRE(different.interval() == 10s);
+    BOOST_REQUIRE((rate(600, 20s) + rate(100, 10s)).interval() == 10s);
+    // A rate over an empty interval measured nothing.
+    auto with_empty = rate() + rate(100, 10s);
+    BOOST_REQUIRE_EQUAL(with_empty.amount(), 100);
+    BOOST_REQUIRE(with_empty.interval() == 10s);
+    BOOST_REQUIRE((rate(100, 10s) + rate()).interval() == 10s);
+}
+
 // How compaction_group derives the flush size for write amplification: a second
 // rate accumulates bytes * ln(size), and dividing it by the bytes rate gives the
 // byte-weighted mean of ln(size). Both share the window and the start, so they

@@ -2891,6 +2891,14 @@ double compaction_backlog_manager::backlog() const {
     }
 }
 
+compaction_rates compaction_backlog_manager::rates() const {
+    compaction_rates rates;
+    for (auto& [tracker, src] : _backlog_trackers) {
+        rates = rates + tracker->rates(*src);
+    }
+    return rates;
+}
+
 void compaction_backlog_manager::register_backlog_tracker(compaction_backlog_tracker& tracker, const compaction_backlog_source& src) {
     tracker._manager = this;
     _backlog_trackers.insert_or_assign(&tracker, &src);

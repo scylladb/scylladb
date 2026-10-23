@@ -5149,6 +5149,47 @@ BOOST_AUTO_TEST_CASE(compaction_backlog_tracker_isolates_backlog_exception) {
     tracker.replace_sstables({}, {});
 }
 
+namespace {
+// Test double whose rates() returns the given ones, or throws when there are none.
+struct fixed_rates_backlog_tracker_impl : public compaction::compaction_backlog_tracker::impl {
+    std::optional<compaction::compaction_rates> fixed;
+    explicit fixed_rates_backlog_tracker_impl(std::optional<compaction::compaction_rates> r) : fixed(r) {}
+    void replace_sstables(const std::vector<sstables::shared_sstable>&, const std::vector<sstables::shared_sstable>&) override {}
+    double backlog(const compaction::compaction_backlog_source&, const compaction::compaction_backlog_tracker::ongoing_writes&, const compaction::compaction_backlog_tracker::ongoing_compactions&) const override {
+        return 0;
+    }
+    compaction::compaction_rates rates(const compaction::compaction_backlog_source&) const override {
+        if (!fixed) {
+            throw std::runtime_error("injected rates computation failure");
+        }
+        return *fixed;
+    }
+};
+}
+
+// The manager sums the rates of the groups of its trackers, which the controller compares
+// for the whole shard. A tracker that fails adds nothing.
+BOOST_AUTO_TEST_CASE(compaction_backlog_manager_sums_rates) {
+    using rate = utils::rate<utils::units::bytes>;
+    using namespace std::chrono_literals;
+    compaction::compaction_backlog_manager manager;
+    dummy_backlog_source src;
+    auto make_tracker = [] (std::optional<compaction::compaction_rates> r) {
+        return compaction::compaction_backlog_tracker(std::make_unique<fixed_rates_backlog_tracker_impl>(r));
+    };
+    auto a = make_tracker(compaction::compaction_rates{.target = rate(1000, 10s), .achieved = rate(500, 10s)});
+    auto b = make_tracker(compaction::compaction_rates{.target = rate(2000, 10s), .achieved = rate(2000, 10s)});
+    auto failing = make_tracker(std::nullopt);
+    for (auto* t : {&a, &b, &failing}) {
+        manager.register_backlog_tracker(*t, src);
+    }
+
+    auto rates = manager.rates();
+    BOOST_REQUIRE_EQUAL(rates.target.per_second(), 300);
+    BOOST_REQUIRE_EQUAL(rates.achieved.per_second(), 250);
+    BOOST_REQUIRE(rates.target.interval() == 10s);
+}
+
 void test_major_does_not_miss_data_in_memtable_fn(test_env& env) {
     auto builder = schema_builder(this_smp_shard_count(), "tests", "test_major_does_not_miss_data_in_memtable")
             .with_column("id", utf8_type, column_kind::partition_key)

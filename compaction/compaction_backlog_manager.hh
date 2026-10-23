@@ -88,6 +88,11 @@ struct compaction_rates {
     utils::rate<utils::units::bytes> target;
     // The bytes regular compaction compacted, from the group's stats.
     utils::rate<utils::units::bytes> achieved;
+
+    // The rates of two groups together, e.g. of all the groups of a shard.
+    friend compaction_rates operator+(const compaction_rates& a, const compaction_rates& b) noexcept {
+        return compaction_rates{.target = a.target + b.target, .achieved = a.achieved + b.achieved};
+    }
 };
 
 // The rates of a group whose strategy has no model for the target: the target is
@@ -232,6 +237,8 @@ class compaction_backlog_manager {
 public:
     ~compaction_backlog_manager();
     double backlog() const;
+    // The compaction rates of all the registered trackers' groups together.
+    compaction_rates rates() const;
     // The tracker's backlog is calculated on the sstables the source it is registered
     // with provides.
     void register_backlog_tracker(compaction_backlog_tracker& tracker, const compaction_backlog_source& src);
