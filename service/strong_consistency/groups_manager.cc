@@ -288,6 +288,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 
 void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
     if (state.gate->is_closed()) {
+        logger.debug("The deletion of raft group {} is already scheduled, skipping another one.", id);
         return;
     }
     logger.info("schedule_raft_group_deletion(): group id {}: scheduling", id);
@@ -304,7 +305,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     // already destroyed their servers). Aborting the raft server releases those
     // holders by making the stuck operations throw raft::stopped_error.
     auto gate_fut = state.gate->close();
-    logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated", id);
+    logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated, {} requests in flight", id, state.gate->get_count());
 
     chain_control_op(state, id, [this, &state, id, g = state.gate, gate_fut = std::move(gate_fut)] () mutable -> future<> {
         logger.debug("schedule_raft_group_deletion(): group id {}: starting", id);
@@ -385,6 +386,8 @@ void groups_manager::schedule_raft_groups_deletion(bool all) {
         const auto next = std::next(it);
         auto& [group_id, group_state] = *it;
         if (all || !group_state.has_tablet) {
+            logger.debug("Deleting raft group {} because {}.", group_id,
+                    all ? "the node is shutting down" : "its tablet left this shard or its table was dropped");
             schedule_raft_group_deletion(group_id, group_state);
         }
         it = next;
@@ -1016,7 +1019,7 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
 
     const auto it = _raft_groups.find(group_id);
     if (it == _raft_groups.end()) {
-        on_internal_error(logger, format("raft group {} not found", group_id));
+        on_internal_error(logger, format("raft group {} of table {} not found", group_id, table_id));
     }
     auto& state = it->second;
     auto h = state.gate->try_hold();
