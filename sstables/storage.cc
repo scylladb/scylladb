@@ -729,17 +729,18 @@ protected:
     seastar::abort_source* abort_source() const {
         return _as;
     }
-    // The disk page cache through which open_component() reads the given
-    // component, or nullptr if it reads it without the cache.
+    // The object storage page cache through which open_component() reads the
+    // given component, or nullptr if it reads it without the cache.
     shared_ptr<object_storage_page_cache> index_page_cache(const sstable& sst, component_type type) const;
-    // The disk page cache of the sstable's pages, or nullptr if its keyspace
-    // doesn't have the 'disk_cache' option, or the cache isn't plugged.
-    shared_ptr<object_storage_page_cache> disk_page_cache(const sstable& sst) const;
-    // Drops the pages of a deleted sstable from the disk page cache.
-    future<> evict_from_disk_page_cache(const sstable& sst) const noexcept;
+    // The object storage page cache of the sstable's pages, or nullptr if its
+    // keyspace doesn't have the 'disk_cache' option, or the cache isn't
+    // plugged.
+    shared_ptr<object_storage_page_cache> page_cache(const sstable& sst) const;
+    // Drops the pages of a deleted sstable from the object storage page cache.
+    future<> evict_from_page_cache(const sstable& sst) const noexcept;
     // A source of the given range of the sstable's component, which reads it
-    // through the disk page cache - or nothing, if it should not be read
-    // through the cache.
+    // through the object storage page cache - or nothing, if it should not be
+    // read through the cache.
     future<std::optional<data_source>> maybe_make_page_cached_source(const sstable& sst, component_type type, uint64_t offset, uint64_t len,
             populate_disk_cache populate) const;
 public:
@@ -975,10 +976,10 @@ future<file> object_storage_base::open_component(const sstable& sst, component_t
         type = component_type::TOC;
     }
     auto f = make_readable_file(make_object_name(sst, type));
-    // The sstable index readers read the index components through this file,
-    // so read them through the disk page cache. The cache is below any file
-    // I/O extension (such as encryption), so it holds the bytes as they are
-    // stored in the object store.
+    // The sstable index readers read the index components through this file, so
+    // read them through the object storage page cache. The cache is below any
+    // file I/O extension (such as encryption), so it holds the bytes as they
+    // are stored in the object store.
     if (auto cache = index_page_cache(sst, type)) {
         f = make_page_cached_file(std::move(cache), get_sstable_identifier(sst), type, std::move(f), populate_disk_cache::yes,
                 sst.manager().get_page_cache_table_stats(sst.get_schema()->id()));
@@ -990,10 +991,10 @@ shared_ptr<object_storage_page_cache> object_storage_base::index_page_cache(cons
     if (type != component_type::Index && type != component_type::Partitions && type != component_type::Rows) {
         return nullptr;
     }
-    return disk_page_cache(sst);
+    return page_cache(sst);
 }
 
-shared_ptr<object_storage_page_cache> object_storage_base::disk_page_cache(const sstable& sst) const {
+shared_ptr<object_storage_page_cache> object_storage_base::page_cache(const sstable& sst) const {
     if (_disk_cache != data_dictionary::storage_options::disk_cache_mode::pages) {
         return nullptr;
     }
@@ -1002,12 +1003,12 @@ shared_ptr<object_storage_page_cache> object_storage_base::disk_page_cache(const
     return sst.manager().get_object_storage_page_cache();
 }
 
-future<> object_storage_base::evict_from_disk_page_cache(const sstable& sst) const noexcept {
-    auto cache = disk_page_cache(sst);
+future<> object_storage_base::evict_from_page_cache(const sstable& sst) const noexcept {
+    auto cache = page_cache(sst);
     if (!cache) {
         // If the cache was unplugged on shutdown before the sstable was
         // destroyed, its pages stay in the cache until the next startup (see
-        // sstables_manager::evict_orphans_from_disk_page_cache()).
+        // sstables_manager::evict_orphans_from_page_cache()).
         co_return;
     }
     try {
@@ -1016,7 +1017,7 @@ future<> object_storage_base::evict_from_disk_page_cache(const sstable& sst) con
         co_await cache->evict_sstable(get_sstable_identifier(sst));
     } catch (...) {
         cache->get_stats().eviction_errors++;
-        sstlog.warn("Failed to evict {} from the disk page cache: {}", sst.toc_filename(), std::current_exception());
+        sstlog.warn("Failed to evict {} from the object storage page cache: {}", sst.toc_filename(), std::current_exception());
     }
 }
 
@@ -1076,8 +1077,9 @@ future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, com
 }
 
 // A source of the byte range [offset, offset + len) of an sstable component's
-// object, which reads it through the disk page cache, in pages of the given
-// geometry, and reads any pages which are not cached from the object store.
+// object, which reads it through the object storage page cache, in pages of the
+// given geometry, and reads any pages which are not cached from the object
+// store.
 static data_source make_cached_object_source(shared_ptr<object_storage_page_cache> cache, sstable_id sid, component_type type,
         shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t len,
         shared_ptr<object_storage_client> client, object_name name, seastar::abort_source* as, populate_disk_cache populate,
@@ -1271,7 +1273,7 @@ future<> object_storage_base::destroy(const sstable& sst) {
     // references to the objects remain, such as a snapshot's, only a clone of
     // this sstable on this shard could have used these pages: it loses them,
     // which costs only performance.
-    co_await evict_from_disk_page_cache(sst);
+    co_await evict_from_page_cache(sst);
 
     auto node_owner = sst.manager().get_local_host_id();
     auto sid = get_sstable_identifier(sst);

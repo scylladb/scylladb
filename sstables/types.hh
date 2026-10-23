@@ -44,8 +44,8 @@ namespace sstables {
 // use_caching::no for a read with BYPASS CACHE, or when the configuration
 // option 'cache_index_pages' is disabled. It applies only to that in-memory
 // cache of the index - not to the row cache, which the table uses or bypasses
-// before it reads sstables at all, and not to the disk page cache of sstables
-// on object storage (see populate_disk_cache).
+// before it reads sstables at all, and not to the object storage page cache
+// (see populate_disk_cache).
 using use_caching = bool_class<struct use_caching_tag>;
 
 template<typename T>

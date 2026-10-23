@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// Tests for the disk page cache of sstables on object storage.
+// Tests for the object storage page cache.
 
 #include <boost/test/unit_test.hpp>
 

@@ -894,12 +894,12 @@ The clause is placed immediately after the optional ALLOW FILTERING clause.
 ``BYPASS CACHE`` is a ScyllaDB CQL extension and not part of Apache Cassandra CQL.
 
 For a keyspace on object storage with the experimental
-:ref:`disk page cache <cql-keyspace-disk-cache>`, ``BYPASS CACHE`` means
-something slightly different for that cache: the query doesn't add data to the
-disk page cache, but it does read the data which is already in it, because
-reading it from the local disk is never worse than reading it from the object
-store. The query neither reads nor populates the in-memory row cache, as for
-any other keyspace.
+:ref:`object storage page cache <cql-keyspace-disk-cache>`, ``BYPASS CACHE``
+means something slightly different for that cache: the query doesn't add data to
+the object storage page cache, but it does read the data which is already in it,
+because reading it from the local disk is never worse than reading it from the
+object store. The query neither reads nor populates the in-memory row cache, as
+for any other keyspace.
 
 For example::
   

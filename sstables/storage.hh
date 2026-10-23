@@ -146,18 +146,18 @@ public:
     // returned, so the atomic deletion keeps its record of the batch.
     virtual future<> wipe(sstable& sst, const atomic_deletion* deletion = nullptr) noexcept = 0;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) = 0;
-    // Opens an index component for reading like open_component() does, but
-    // with a disk page cache layer which doesn't populate the cache, for the
-    // reads which must not populate it (see populate_disk_cache). Returns
-    // nothing if open_component() opens the component without the disk page
-    // cache.
+    // Opens an index component for reading like open_component() does, but with
+    // an object storage page cache layer which doesn't populate the cache, for
+    // the reads which must not populate it (see populate_disk_cache). Returns
+    // nothing if open_component() opens the component without the object
+    // storage page cache.
     virtual future<std::optional<file>> open_non_populating_component(const sstable& sst, component_type type) {
         return make_ready_future<std::optional<file>>();
     }
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) = 0;
     // Reads the byte range [offset, offset + len) of the component - through
-    // the disk page cache, for a keyspace with the 'disk_cache' storage
-    // option, which it populates only with populate_disk_cache::yes.
+    // the object storage page cache, for a keyspace with the 'disk_cache'
+    // storage option, which it populates only with populate_disk_cache::yes.
     virtual future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt,
             populate_disk_cache populate) const = 0;
     virtual future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const = 0;

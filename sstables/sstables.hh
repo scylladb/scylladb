@@ -405,13 +405,14 @@ public:
         return _index_file;
     }
     // The index files without the in-memory cache of index pages - and with
-    // populate_disk_cache::no, files which don't populate the disk page cache.
+    // populate_disk_cache::no, files which don't populate the object storage
+    // page cache.
     file uncached_index_file(populate_disk_cache populate);
     file uncached_partitions_file(populate_disk_cache populate);
     file uncached_rows_file(populate_disk_cache populate);
-    // The use_caching of a read of the index, given the read's use_caching
-    // and populate_disk_cache: the in-memory caches of the index read their
-    // misses through the index files, which populate the disk page cache, so
+    // The use_caching of a read of the index, given the read's use_caching and
+    // populate_disk_cache: the in-memory caches of the index read their misses
+    // through the index files, which populate the object storage page cache, so
     // a read which must not populate it can't use them.
     use_caching index_caching(use_caching caching, populate_disk_cache populate) const;
     // Returns size of bloom filter data.
@@ -590,9 +591,9 @@ private:
     std::optional<trie::bti_partitions_db_footer> _partitions_db_footer;
     file _rows_file;
     seastar::shared_ptr<cached_file> _cached_rows_file;
-    // If the index files above read through the disk page cache, the same
-    // index files, but without populating the disk page cache, for the reads
-    // which must not populate it (see populate_disk_cache).
+    // If the index files above read through the object storage page cache, the
+    // same index files, but without populating the object storage page cache,
+    // for the reads which must not populate it (see populate_disk_cache).
     file _non_populating_index_file;
     file _non_populating_partitions_file;
     file _non_populating_rows_file;
@@ -878,8 +879,8 @@ public:
     // of the underlying data streams will be enabled.
     //
     // If the sstable is on object storage in a keyspace with the 'disk_cache'
-    // option, the data is read through the disk page cache, which the read
-    // populates only with `populate_disk_cache::yes` (see the comment on
+    // option, the data is read through the object storage page cache, which the
+    // read populates only with `populate_disk_cache::yes` (see the comment on
     // populate_disk_cache).
     //
     // The `error_handler` parameter allows to customize the error handling

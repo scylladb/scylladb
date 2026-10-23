@@ -1812,7 +1812,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "pages, but the cache takes more disk space than that - about 1.5 times as much, and more for short periods - so choose a "
         "size well below the free disk space. 0 means no limit. Requires the experimental feature 'object-storage-page-cache'.")
     , object_storage_page_cache_max_remembered_hits(this, "object_storage_page_cache_max_remembered_hits", liveness::LiveUpdate, value_status::Used, 100000,
-        "The disk page cache of sstables on object storage records the hits of its pages, for choosing which pages to evict. "
+        "The object storage page cache records the hits of its pages, for choosing which pages to evict. "
         "Each shard remembers in memory up to this many pages whose hits it recorded recently, and doesn't record their "
         "hits again until it starts a new round of eviction. 0 means to record every hit.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")

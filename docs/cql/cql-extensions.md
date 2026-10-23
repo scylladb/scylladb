@@ -184,7 +184,7 @@ is no `LOCAL` value: a keyspace on local disk has a null `storage_type`, and not
 every keyspace has a row in this table, so it is not a list of all keyspaces.
 
 (cql-keyspace-disk-cache)=
-### Disk page cache
+### Object storage page cache
 
 An object-storage keyspace can cache, on the node's local disk, the parts of
 its SSTables which it reads from the object store, so that reading them again
@@ -213,11 +213,12 @@ recently read are evicted, approximately. Make sure the data directory has
 room for the cache, in addition to the node's other data.
 
 ```{note}
-The disk page cache is **experimental**: it requires the experimental feature
-`object-storage-page-cache` (`experimental_features: [object-storage-page-cache]`
-in `scylla.yaml`) on all nodes. The `disk_cache` option is accepted only for
-object-storage keyspaces which use tablets, and it cannot be changed with
-`ALTER KEYSPACE` after the keyspace is created.
+The object storage page cache is **experimental**: it requires the experimental
+feature `object-storage-page-cache`
+(`experimental_features: [object-storage-page-cache]` in `scylla.yaml`) on all
+nodes. The `disk_cache` option is accepted only for object-storage keyspaces
+which use tablets, and it cannot be changed with `ALTER KEYSPACE` after the
+keyspace is created.
 ```
 
 The object store holds every byte of every SSTable either way: the cache only
@@ -231,13 +232,14 @@ Only the user's reads add pages to the cache. A `SELECT` with
 compaction, repair, tablet migration and view building - read the pages which
 are already in the cache, but don't add pages to it: they typically read whole
 SSTables once, so caching their pages would only replace the pages which other
-reads need. Note that this makes `BYPASS CACHE` behave differently for the disk
-page cache than for the in-memory row cache, which a `SELECT` with
-`BYPASS CACHE` neither reads nor populates. Reading pages which are already in
-the disk page cache is never worse than reading them from the object store.
+reads need. Note that this makes `BYPASS CACHE` behave differently for the
+object storage page cache than for the in-memory row cache, which a `SELECT`
+with `BYPASS CACHE` neither reads nor populates. Reading pages which are already
+in the object storage page cache is never worse than reading them from the
+object store.
 
-See {ref}`Disk page cache <admin-object-storage-disk-cache>` for more about
-configuring the cache, and for the metrics which monitor it.
+See {ref}`Object storage page cache <admin-object-storage-disk-cache>` for more
+about configuring the cache, and for the metrics which monitor it.
 
 ## PRUNE MATERIALIZED VIEW statements
 

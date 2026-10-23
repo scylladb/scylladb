@@ -6,12 +6,12 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// This file is part of the disk page cache of sstables on object storage
-// (the 'disk_cache': 'pages' keyspace storage option). It defines the
-// cache's statistics, which object_storage_page_cache.hh counts and the
-// cache's implementation reports as metrics - in a small header of their
-// own, so that replica/database.hh, which reports the per-table statistics,
-// doesn't need to include the cache's interface.
+// This file is part of the object storage page cache (the 'disk_cache': 'pages'
+// keyspace storage option). It defines the cache's statistics, which
+// object_storage_page_cache.hh counts and the cache's implementation reports as
+// metrics - in a small header of their own, so that replica/database.hh, which
+// reports the per-table statistics, doesn't need to include the cache's
+// interface.
 
 #pragma once
 
