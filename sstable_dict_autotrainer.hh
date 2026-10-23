@@ -17,11 +17,14 @@
 // As of this writing, it works like this:
 // every $tick_period (15 minutes), if we are the current Raft leader,
 // we check for dict-aware tables which have no dict, or a dict older
-// than $retrain_period.
+// than $retrain_period (and which weren't confirmed by a ratio check
+// in the last $retrain_period to have an up-to-date dict).
 // For those tables, if they have enough data (>1GiB) for a training,
 // we train a new dict and check if it's significantly better
 // than the current one (provides ratio smaller than 95% of current ratio),
 // and if so, we update the dict.
+// If not, we remember that the current dict was confirmed to be up to date,
+// and we don't attempt to retrain it until $retrain_period passes.
 class sstable_dict_autotrainer {
 public:
     struct config {
@@ -35,6 +38,10 @@ private:
     service::raft_group0_client& _group0_client;
     config _cfg;
     abort_source _as;
+    // Time of the last ratio check which confirmed that the table's current dict
+    // is up to date (i.e. which didn't result in a dict update).
+    // Kept only in memory, so it's lost on restarts and leader changes.
+    std::unordered_map<table_id, db_clock::time_point> _last_confirmation;
     future<> _fiber;
 
     future<> tick();
