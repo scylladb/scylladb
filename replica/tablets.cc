@@ -13,6 +13,7 @@
 #include "types/tuple.hh"
 #include "types/list.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "schema/schema_builder.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
@@ -26,6 +27,7 @@
 #include "mutation/async_utils.hh"
 #include "compaction/compaction_manager.hh"
 #include "dht/fixed_shard.hh"
+#include "replica/compaction_group.hh"
 
 namespace replica {
 

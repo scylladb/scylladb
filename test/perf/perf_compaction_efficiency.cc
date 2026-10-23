@@ -34,6 +34,7 @@
 #include "schema/schema_registry.hh"
 #include "utils/estimated_histogram.hh"
 #include "backlog_controller.hh"
+#include "types/map.hh"
 
 namespace {
 

@@ -19,6 +19,7 @@
 #include "view_info.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
+#include "db/config.hh"
 
 namespace cql3 {
 

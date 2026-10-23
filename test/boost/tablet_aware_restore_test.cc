@@ -42,6 +42,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "test/boost/database_test.hh"
+#include "service/storage_service.hh"
 
 using namespace std::string_literals;
 

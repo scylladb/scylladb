@@ -20,6 +20,9 @@
 #include "mutation/mutation_fragment.hh"
 #include "schema/schema_builder.hh"
 #include "readers/forwardable.hh"
+#include "readers/mutation_reader.hh"
+#include "readers/mutation_reader_fwd.hh"
+#include "replica/database.hh"
 
 class enormous_table_reader final : public mutation_reader::impl {
 // Reader for a table with 4.5 billion rows, all with partition key 0 and an incrementing clustering key

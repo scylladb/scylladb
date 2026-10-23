@@ -20,6 +20,7 @@
 
 #include "schema/schema_registry.hh"
 #include "readers/forwardable.hh"
+#include "replica/memtable.hh"
 
 BOOST_AUTO_TEST_SUITE(multishard_combining_reader_as_mutation_source_test)
 

@@ -28,6 +28,7 @@
 
 #include "readers/from_mutations.hh"
 #include "readers/empty.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(querier_cache_test)
 

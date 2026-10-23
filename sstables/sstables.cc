@@ -95,6 +95,7 @@
 #include "utils/io-wrappers.hh"
 
 #include <charconv>
+#include "db/system_keyspace.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;

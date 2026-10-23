@@ -18,6 +18,7 @@
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/future.hh>
@@ -33,6 +34,7 @@
 #include <seastar/core/reactor.hh>
 #include "utils/managed_string.hh"
 #include "utils/labels.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace qos {
 static logging::logger sl_logger("service_level_controller");
@@ -40,6 +42,10 @@ static const seastar::metrics::label service_level_label("service_level");
 static const seastar::metrics::label workload_type_label("workload_type");
 
 sstring service_level_controller::default_service_level_name = "default";
+
+future<> service_level_controller::commit_mutations(::service::group0_batch&& mc) {
+    return _sl_data_accessor->commit_mutations(std::move(mc), _global_controller_db->group0_aborter);
+}
 constexpr const char* scheduling_group_name_pattern = "sl:{}";
 constexpr const char* deleted_scheduling_group_name_pattern = "sl_deleted:{}";
 constexpr const char* temp_scheduling_group_name_pattern = "sl_temp:{}";

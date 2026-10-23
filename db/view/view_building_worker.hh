@@ -15,9 +15,10 @@
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
-#include "locator/abstract_replication_strategy.hh"
-#include "locator/tablets.hh"
-#include "raft/raft.hh"
+#include "locator/abstract_replication_strategy_fwd.hh"
+#include "locator/tablet_types.hh"
+#include "raft/raft_fwd.hh"
+#include "dht/i_partitioner_fwd.hh"
 #include <seastar/core/gate.hh>
 #include "db/view/view_building_state.hh"
 #include "sstables/shared_sstable.hh"

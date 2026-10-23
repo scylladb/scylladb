@@ -48,6 +48,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/all.hh>
 #include <seastar/coroutine/as_future.hh>
+#include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "db/batchlog_manager.hh"
@@ -68,6 +70,8 @@
 #include "utils/error_injection.hh"
 #include "locator/tablets.hh"
 #include "gms/feature_service.hh"
+
+using namespace std::chrono_literals;
 
 extern logging::logger rlogger;
 

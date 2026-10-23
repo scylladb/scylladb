@@ -24,6 +24,7 @@
 #include "mutation/mutation.hh"
 #include "sstables/exceptions.hh"
 #include "test/lib/sstable_utils.hh"
+#include "db/commitlog/commitlog.hh"
 
 BOOST_AUTO_TEST_SUITE(table_streaming_reader_test)
 

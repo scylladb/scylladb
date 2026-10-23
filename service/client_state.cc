@@ -21,6 +21,7 @@
 #include "utils/overloaded_functor.hh"
 #include <seastar/core/coroutine.hh>
 #include "service/paxos/paxos_state.hh"
+#include "service/qos/service_level_controller.hh"
 
 thread_local api::timestamp_type service::client_state::_last_timestamp_micros = 0;
 
@@ -416,3 +417,9 @@ service::forwarded_client_state::forwarded_client_state(const client_state& cs)
     , remote_address(cs.get_client_address())
     , remote_port(cs.get_client_port())
 { }
+
+service::client_state::client_state_for_another_shard service::client_state::move_to_other_shard() const {
+    return client_state_for_another_shard(this,
+        _auth_service ? &_auth_service->container() : nullptr,
+        _sl_controller ? &_sl_controller->container() : nullptr);
+}

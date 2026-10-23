@@ -62,6 +62,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/gcs_fixture.hh"
 #include "sstables/exceptions.hh"
+#include "db/config.hh"
 
 namespace fs = std::filesystem;
 

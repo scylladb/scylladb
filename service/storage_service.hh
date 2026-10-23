@@ -18,6 +18,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "schema/schema_fwd.hh"
 #include "service/client_routes.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/task_manager_module.hh"
@@ -31,6 +32,7 @@
 #include <seastar/core/condition-variable.hh>
 #include "dht/token_range_endpoints.hh"
 #include "gms/application_state.hh"
+#include "gms/gossip_address_map.hh"
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/gate.hh>
 #include "replica/database_fwd.hh"

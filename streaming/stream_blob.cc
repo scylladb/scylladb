@@ -39,6 +39,7 @@
 #include <filesystem>
 #include <fmt/ranges.h>
 #include "replica/exceptions.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 namespace streaming {
 

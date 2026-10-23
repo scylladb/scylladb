@@ -15,6 +15,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(commitlog_cleanup_test)
 

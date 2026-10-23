@@ -10,6 +10,7 @@
 
 #include "../../reader_concurrency_semaphore.hh"
 #include "schema/schema.hh"
+#include "tracing/trace_state.hh"
 
 namespace tests {
 

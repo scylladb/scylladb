@@ -15,6 +15,7 @@
 #include "schema_fwd.hh"
 #include "frozen_schema.hh"
 #include "replica/database_fwd.hh"
+#include <seastar/core/weak_ptr.hh>
 
 namespace db {
 class schema_ctxt;

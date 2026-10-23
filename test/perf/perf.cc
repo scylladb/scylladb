@@ -20,6 +20,7 @@
 #include <boost/algorithm/string.hpp>
 #include <fstream>
 #include <stdexcept>
+#include "tracing/trace_state.hh"
 
 
 uint64_t perf_mallocs() {

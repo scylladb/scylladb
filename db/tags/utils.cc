@@ -13,6 +13,7 @@
 #include "schema/schema_registry.hh"
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"
+#include "service/raft/raft_group0_client.hh"
 
 static logging::logger tlogger("tags");
 

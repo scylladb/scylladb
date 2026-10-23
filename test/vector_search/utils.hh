@@ -21,6 +21,7 @@
 #include <seastar/util/tmp_file.hh>
 #include <functional>
 #include <chrono>
+#include "replica/database.hh"
 
 namespace test::vector_search {
 

@@ -45,6 +45,7 @@
 #include "readers/delegating_impl.hh"
 #include "readers/empty.hh"
 #include <seastar/testing/thread_test_case.hh>
+#include "service/raft/raft_group0_client.hh"
 
 using namespace std::chrono_literals;
 

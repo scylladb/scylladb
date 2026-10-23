@@ -44,6 +44,11 @@ using namespace cql_transport::messages;
 
 logging::logger log("query_processor");
 logging::logger prep_cache_log("prepared_statements_cache");
+
+seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
+cql_statement::execute_without_checking_exception_message(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
+    return execute(qp, state, options, std::move(guard));
+}
 logging::logger authorized_prepared_statements_cache_log("authorized_prepared_statements_cache");
 
 const sstring query_processor::CQL_VERSION = "3.3.1";
