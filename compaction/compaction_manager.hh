@@ -340,6 +340,11 @@ public:
         return _cfg.maintenance_sched_group;
     }
 
+    // Credits the groups with what the regular compactions running, those in the compaction
+    // scheduling group, compacted so far, so the rates read next see it.
+    // Returns the bytes credited.
+    uint64_t credit_compaction_progress() noexcept;
+
     size_t available_memory() const noexcept {
         return _cfg.available_memory;
     }
@@ -709,6 +714,9 @@ public:
     seastar::scheduling_group scheduling_group() const noexcept {
         return _scheduling_group;
     }
+    // Credits the compaction group with the bytes regular compaction compacted since the
+    // last credit, so that its rate follows compaction in flight.
+    uint64_t credit_compaction_progress() noexcept;
 
     const ::compaction::compaction_data& compaction_data() const noexcept {
         return _compaction_data;

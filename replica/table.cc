@@ -47,6 +47,7 @@
 #include "view_info.hh"
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
+#include "compaction/compaction.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/compaction_group_view.hh"
 #include "sstables/sstable_directory.hh"
@@ -3530,6 +3531,10 @@ public:
             _cg.trigger_compaction();
         }
     }
+    void add_compacted_bytes(uint64_t bytes) noexcept override {
+        _cg._compacted_bytes.add(bytes);
+        _cg._compacted_bytes_long.add(bytes);
+    }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();
     }
@@ -4902,6 +4907,8 @@ compaction::rate_stats compaction_group::rates() const {
     return {
         .flushed_bytes = flushed_bytes,
         .mean_flush_size = flushed_bytes.amount() > 0 ? flushed_squared_bytes.per(flushed_bytes) : 0,
+        .compacted_bytes = _compacted_bytes.rate(now),
+        .compacted_bytes_long = _compacted_bytes_long.rate(now),
     };
 }
 

@@ -26,14 +26,20 @@ namespace compaction {
 class compaction_backlog_manager;
 
 // Rates of a compaction group, which the compaction controller compares to match
-// compaction to ingestion. They cover the same interval: a window of minutes, or
-// the time since the group was created while it is younger than that.
+// compaction to ingestion. Each covers its window of minutes, or the time since the
+// group was created while it is younger than that; the flushed rates share one
+// window, the compacted rate is kept over a shorter one of its own and over that one.
 struct rate_stats {
     utils::rate<utils::units::bytes> flushed_bytes;
     // The size of the flushed sstables as a weighted average, each weighted by its size:
     // sum(size^2) / sum(size); or 0 when nothing was flushed in the interval. A storm of
     // small flushes barely moves it, unlike a plain average.
     double mean_flush_size = 0;
+    // Bytes compacted by regular compaction, the one the compaction controller drives,
+    // counted from its input sstables. Other kinds run with maintenance shares.
+    utils::rate<utils::units::bytes> compacted_bytes;
+    // The same over the flushed rates' window, so that it covers the interval they do.
+    utils::rate<utils::units::bytes> compacted_bytes_long;
 };
 
 // What a backlog tracker needs to know about the data it accounts for: the sstables

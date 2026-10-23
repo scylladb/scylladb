@@ -549,6 +549,14 @@ private:
 
 void compaction_progress_monitor::set_generator(std::unique_ptr<sstables::read_monitor_generator> generator) {
     _generator = std::move(generator);
+    _credited = 0;
+}
+
+uint64_t compaction_progress_monitor::credit_up_to(uint64_t bytes) noexcept {
+    if (bytes <= _credited) {
+        return 0;
+    }
+    return bytes - std::exchange(_credited, bytes);
 }
 
 void compaction_progress_monitor::reset_generator() {
