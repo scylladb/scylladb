@@ -6303,6 +6303,78 @@ SEASTAR_FIXTURE_TEST_CASE(test_sstables_excluding_staging_correctness_gs, gcs_fi
     return test_sstables_excluding_staging_correctness({ .storage = make_test_object_storage_options("GS") });
 }
 
+// Reproducer for https://github.com/scylladb/scylladb/issues/27935.
+//
+// perform_cleanup() samples the sstables requiring cleanup once, up front,
+// and then waits for the staging sstables in that sample to become eligible
+// for compaction. An sstable added to the table while it waits must not be
+// pulled into this cleanup, or cleanup can go on for as long as new sstables
+// keep arriving.
+SEASTAR_TEST_CASE(cleanup_samples_sstables_requiring_cleanup_once_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(3); // in ring order
+
+        auto make_mut = [&] (const dht::decorated_key& pk) {
+            auto m = mutation(s, pk);
+            m.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+            return m;
+        };
+        std::vector<mutation> muts;
+        for (const auto& pk : pks) {
+            muts.push_back(make_mut(pk));
+        }
+
+        auto t = env.make_table_for_tests(s);
+        auto close_t = deferred_stop(t);
+        t->disable_auto_compaction().get();
+        auto& cm = t->get_compaction_manager();
+        auto& view = t->try_get_compaction_group_view_with_static_sharding();
+        auto sst_gen = env.make_sst_factory(s);
+
+        // Only pks[0] is owned, so any sstable reaching pks[1] or pks[2] needs cleanup.
+        auto owned_ranges = make_lw_shared<const dht::token_range_vector>(dht::token_range_vector{
+            dht::token_range::make_singular(pks[0].token())
+        });
+
+        // A staging sstable requires cleanup but is not eligible for compaction
+        // until it is moved out of staging, so perform_cleanup() has to wait for it.
+        auto staging_sst = make_sstable_containing(sst_gen, {muts[0], muts[1]}).get();
+        staging_sst->change_state(sstable_state::staging).get();
+        BOOST_REQUIRE(staging_sst->requires_view_building());
+        t->add_sstable_and_update_cache(staging_sst).get();
+
+        auto cleanup = t->perform_cleanup_compaction(owned_ranges, tasks::make_empty_task_info());
+
+        // Wait for perform_cleanup() to take its sample of the sstables requiring cleanup.
+        while (!cm.requires_cleanup(view, staging_sst)) {
+            BOOST_REQUIRE(!cleanup.available());
+            yield().get();
+        }
+
+        // Now add an sstable that the sample did not see. It contains only
+        // unowned data, so a cleanup that re-sampled would compact it away.
+        auto late_sst = make_sstable_containing(sst_gen, {muts[2]}).get();
+        t->add_sstable_and_update_cache(late_sst).get();
+        BOOST_REQUIRE(!cm.requires_cleanup(view, late_sst));
+
+        // Let the staging sstable become eligible; this wakes perform_cleanup() up.
+        t->move_sstables_from_staging({staging_sst}).get();
+        cleanup.get();
+
+        BOOST_REQUIRE(cm.sstables_requiring_cleanup(view).empty());
+        // The late sstable is left alone: it is still in the table, with its data.
+        auto sstables = t->get_sstables();
+        BOOST_REQUIRE(std::ranges::find(*sstables, late_sst) != sstables->end());
+        BOOST_REQUIRE(std::ranges::find(*sstables, staging_sst) == sstables->end());
+        assert_that(t->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range))
+                .produces(muts[0])
+                .produces(muts[2])
+                .produces_end_of_stream();
+    });
+}
+
 // Reproducer for https://github.com/scylladb/scylladb/issues/15726.
 
 void produces_optimal_filter_by_estimating_correctly_partitions_per_sstable_fn(test_env& env) {
