@@ -11,7 +11,7 @@ from . import rest_api
 from .util import new_test_table, unique_name, new_materialized_view, new_secondary_index, new_type, new_function, is_scylla
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.cluster import ConsistencyLevel
-from cassandra.query import SimpleStatement
+from cassandra.query import SimpleStatement, BoundStatement
 from .rest_api import scylla_inject_error, wait_for_injection_enter, message_injection
 
 from . import nodetool
@@ -1955,3 +1955,18 @@ def test_mv_where_case_sensitive_function_name(cql, test_keyspace):
                 ks, view = mv.split('.')
                 [where_clause] = [r[0] for r in cql.execute(f"SELECT where_clause FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{view}'")]
                 assert f'{name}()' in where_clause
+
+# PRUNE MATERIALIZED VIEW is a Scylla extension. An empty (zero-length) value
+# bound to its USING CONCURRENCY ? should be rejected with InvalidRequest,
+# like a null one.
+# Reproduces SCYLLADB-5208 (an empty value bound to USING TIMESTAMP ? or
+# USING TTL ? caused a server error - and so did USING CONCURRENCY ?).
+def test_prune_empty_concurrency(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        with new_materialized_view(cql, table, '*', 'v, p', 'v is not null and p is not null') as mv:
+            bound = BoundStatement(cql.prepare(f'PRUNE MATERIALIZED VIEW {mv} USING CONCURRENCY ?'))
+            # The Python driver can't send an empty value for an int bind
+            # variable, so we send the raw serialized value ourselves.
+            bound.values = [b'']
+            with pytest.raises(InvalidRequest, match='empty'):
+                cql.execute(bound)
