@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG = {'experimental_features': ['strongly-consistent-tables']}
 DEFAULT_CMDLINE = [
         '--logger-log-level', 'sc_groups_manager=debug',
-        '--logger-log-level', 'sc_coordinator=debug'
+        '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug'
     ]
 
 
@@ -1737,6 +1739,8 @@ async def test_tablet_migration(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'raft=debug'
     ]
@@ -1839,6 +1843,8 @@ async def test_tablet_migration_rf1(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'raft=debug'
     ]
@@ -1950,6 +1956,8 @@ async def test_tablet_migration_rollback(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'raft=debug',
         '--logger-log-level', 'debug_error_injection=debug'
@@ -2073,6 +2081,8 @@ async def test_rf_change(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
+        '--logger-log-level', 'sc_state_machine=debug',
+        '--logger-log-level', 'raft_groups_storage=debug',
     ]
     servers = await manager.servers_add(3, config=config, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
