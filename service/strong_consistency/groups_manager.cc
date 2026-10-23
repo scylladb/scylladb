@@ -1037,10 +1037,14 @@ future<> groups_manager::wait_for_first_leader(global_tablet_id tablet, raft::gr
         if (!w) {
             co_return;
         }
+        logger.debug("The raft group of tablet {}, group id {}, waits for its first leader: {}.", tablet, id,
+                srv.server().current_leader() ? "its leader state isn't ready yet" : "no leader is known");
         auto f = co_await coroutine::as_future(std::move(w->future));
         if (f.failed()) {
-            logger.warn("update(): waiting for leader timed out for tablet {}, group id {}: {}",
-                    tablet, id, f.get_exception());
+            const auto conf = srv.server().get_configuration();
+            logger.warn("update(): waiting for leader timed out for tablet {}, group id {}: {}, this replica is {} of "
+                    "the group's configuration {}", tablet, id, f.get_exception(),
+                    conf.contains(srv.server().id()) ? "a member" : "not a member", conf);
             co_return;
         }
     }
