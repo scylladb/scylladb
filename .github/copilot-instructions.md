@@ -89,6 +89,16 @@ ninja build/<mode>/scylla
 - Question requests: don't blindly implement requests - evaluate trade-offs, identify issues, and suggest better alternatives when appropriate
 - Consider different approaches, weigh pros and cons, and recommend the best fit for the specific context
 
+## Making Changes
+- Make only the functional changes the task needs, and motivate each one in the patch
+  description.
+- Keep the existing logic intact unless the change requires otherwise. Do not reorder statements,
+  restructure code or rename things that work, as this hides the real change and risks regressions.
+- Do not reformat or restyle code you are not otherwise changing. Cosmetic changes are made only
+  when asked for, and then as separate patches (see "Patch organization" in
+  `docs/dev/review-checklist.md`).
+- Adding or updating comments that explain the change is welcome.
+
 ## Test Philosophy
 - Performance matters. Tests should run as quickly as possible. Sleeps in the code are highly discouraged and should be avoided, to reduce run time and flakiness.
 - Stability matters. Tests should be stable. New tests should be executed 100 times at least to ensure they pass 100 out of 100 times. (use --repeat 100 --max-failures 1 when running it)
