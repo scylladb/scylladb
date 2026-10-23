@@ -69,6 +69,7 @@
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/object_storage_page_cache_stats.hh"
 #include "db/rate_limiter.hh"
 #include "db/operation_type.hh"
 #include "locator/tablet_types.hh"
@@ -590,6 +591,12 @@ private:
     db::rate_limiter::label _rate_limiter_label_for_reads;
 
     void set_metrics();
+    // The statistics of this table's reads through the disk page cache of
+    // sstables on object storage, if its keyspace has the 'disk_cache' option.
+    // The reads which are still running hold them too, so they outlive the
+    // table if it is dropped while they run. They are declared before
+    // _metrics, which reports them, so that _metrics is destroyed first.
+    lw_shared_ptr<sstables::object_storage_page_cache_table_stats> _page_cache_stats;
     seastar::metrics::metric_groups _metrics;
 
     // holds average cache hit rate of all shards
