@@ -21,7 +21,6 @@ from cassandra.protocol import InvalidRequest
 from .util import is_scylla, new_cql
 
 
-@pytest.mark.xfail(reason="SCYLLADB-5624")
 def test_select_from_missing_table(cql, test_keyspace):
     with pytest.raises(InvalidRequest) as error:
         cql.execute(f"SELECT * FROM {test_keyspace}.no_such_table")
@@ -29,7 +28,6 @@ def test_select_from_missing_table(cql, test_keyspace):
         assert f"Table '{test_keyspace}.no_such_table' does not exist" in str(error.value)
 
 
-@pytest.mark.xfail(reason="SCYLLADB-5624")
 def test_insert_into_missing_table(cql, test_keyspace):
     with pytest.raises(InvalidRequest) as error:
         cql.execute(f"INSERT INTO {test_keyspace}.no_such_table (p) VALUES (1)")
