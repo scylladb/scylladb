@@ -1339,6 +1339,32 @@ async def test_failed_tablet_rebuild_is_retried_on_alter(manager: ScyllaClusterM
     for r in tablet_replicas:
         assert len(r.replicas) == 2
 
+# ALTER waits for an idle topology, which endless rebuild retries rarely leave.
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-5156", reason="ALTER KEYSPACE on a non-coordinator is starved by endless failed-rebuild retries")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_alter_keyspace_not_starved_by_rebuild_retries(manager: ScyllaClusterManager) -> None:
+    injection = "rebuild_repair_stage_fail"
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [injection]}
+    cmdline = ['--smp=2']
+    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': f'rack1{r}'}) for r in 'abc']
+
+    cql = manager.get_cql()
+    await cql.run_async("create keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']} and tablets = {'initial': 4};")
+    await cql.run_async("create table ks1.t (pk int primary key);")
+
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
+    follower = next(s for s in servers if s.server_id != coord_serv.server_id)
+    host = (await wait_for_cql_and_get_hosts(cql, [follower], time.time() + 60))[0]
+
+    start = time.monotonic()
+    alter = cql.run_async("alter keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b']};", host=host)
+    try:
+        await asyncio.wait_for(alter, timeout=10)
+    except asyncio.TimeoutError:
+        pytest.fail("ALTER KEYSPACE took over 10s, starved by failed-rebuild retries")
+    logger.info(f"ALTER KEYSPACE on a non-coordinator took {time.monotonic() - start:.1f}s")
+
 # Regression test: when the target rack in a rack_list colocation has no
 # available nodes (all excluded), the ALTER KEYSPACE must fail promptly
 # instead of livelocking with the request endlessly bouncing between
