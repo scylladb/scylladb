@@ -146,6 +146,7 @@ static std::unordered_map<topology::transition_state, sstring> transition_state_
     {topology::transition_state::rollback_to_normal, "rollback to normal"},
     {topology::transition_state::truncate_table, "truncate table"},
     {topology::transition_state::snapshot_tables, "snapshot tables"},
+    {topology::transition_state::backup_snapshot, "backup_snapshot"},
     {topology::transition_state::lock, "lock"},
 };
 
@@ -213,6 +214,7 @@ static std::unordered_map<global_topology_request, sstring> global_topology_requ
     {global_topology_request::finalize_migration, "finalize_migration"},
     {global_topology_request::quiesce, "quiesce"},
     {global_topology_request::restore_tablets, "restore_tablets"},
+    {global_topology_request::backup_snapshot, "backup_snapshot"},
 };
 
 global_topology_request global_topology_request_from_string(const sstring& s) {
@@ -276,14 +278,18 @@ validate_removing_node(replica::database& db, locator::host_id host_id) {
 }
 
 future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks,
-        raft_group0_client& group0_client, abort_source& as, utils::UUID id, bool require_entry) {
+        raft_group0_client& group0_client, abort_source& as, utils::UUID id, bool require_entry, completion_callback cc) {
     if (this_shard_id() != 0) {
         on_internal_error(tsmlogger, "wait_for_request_completion() must run on shard 0");
     }
     tsmlogger.debug("Start waiting for topology request completion (request id {})", id);
     while (true) {
         auto c = reload_count;
-        auto [done, error] = co_await sys_ks.get_topology_request_state(id, require_entry);
+        auto [done, error, pc] = co_await sys_ks.get_topology_request_state(id, require_entry);
+        if (cc) {
+            tsmlogger.debug("Request with id {} is {} percent complete", id, pc);
+            cc(pc); // maybe report progress
+        }
         if (done) {
             // The group0 command that marks the request done also carries its effects.
             // Applying it writes the mutations first and rebuilds the in-memory state
@@ -390,6 +396,10 @@ future<> topology_state_machine::abort_request(service::raft_group0& group0,
             tsmlogger.info("aborting {} request {} for node {}", req, request_id, node);
             generate_cancel_request_update(muts, features, guard, node, "aborted on user request");
             break;
+        }
+
+        if (muts.empty() && request_id == _topology.session.uuid()) {
+            muts.push_back(topology_mutation_builder(guard.write_timestamp()).del_session().build());
         }
 
         if (muts.empty()) {

@@ -47,6 +47,13 @@ using is_user_task = bool_class<struct user_task_tag>;
 
 extern logging::logger tmlogger;
 
+class progress_sink {
+public:
+    virtual ~progress_sink() = default;
+    virtual void set_total(double) {}; // default - nothing
+    virtual void add_progress(double) {}; // default - nothing
+};
+
 struct task_identity;
 struct task_status;
 struct task_stats;
