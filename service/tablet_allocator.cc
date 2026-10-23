@@ -1417,7 +1417,8 @@ public:
 
                 // Time since the last repair; orders the plans and is printed by the plan dump.
                 auto diff = now - info.repair_time;
-                auto is_user_request = info.repair_task_info && info.repair_task_info->is_user_repair_request();
+                auto is_user_request = bool(info.pending_repair_request)
+                        || (info.repair_task_info && info.repair_task_info->is_user_repair_request());
                 if (is_user_request) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {

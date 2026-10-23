@@ -2215,17 +2215,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             return;
         }
         auto& info = tmap.get_tablet_info(gid.tablet);
-        auto repair_task_info = (info.repair_task_info && info.repair_task_info->is_user_repair_request())
-            ? *info.repair_task_info
+        // A user request already attempted keeps its slot. Otherwise a
+        // pending user request moves to repair_task_info here, replacing the
+        // task info of a failed auto repair if there is one.
+        bool user_attempt = info.repair_task_info && info.repair_task_info->is_user_repair_request();
+        auto repair_task_info = user_attempt ? *info.repair_task_info
+            : info.pending_repair_request ? *info.pending_repair_request
             : locator::tablet_task_info::make_auto_repair_request();
         repair_task_info.sched_nr++;
         repair_task_info.sched_time = db_clock::now();
-        get_tablet_builder(builders, guard, gid.table)
+        auto& builder = get_tablet_builder(builders, guard, gid.table)
             .set_new_replicas(last_token, tmap.get_tablet_info(gid.tablet).replicas)
             .set_stage(last_token, locator::tablet_transition_stage::repair)
             .set_transition(last_token, locator::tablet_transition_kind::repair)
             .set_repair_task_info(last_token, repair_task_info, _feature_service)
             .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()));
+        if (info.pending_repair_request && info.pending_repair_request->tablet_task_id == repair_task_info.tablet_task_id) {
+            builder.del_pending_repair_request(last_token, _feature_service);
+        }
     }
 
     void generate_resize_update(group0_update_collector& out, const group0_guard& guard, table_id table_id, locator::resize_decision resize_decision) {
