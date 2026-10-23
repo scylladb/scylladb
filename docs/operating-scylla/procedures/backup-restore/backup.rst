@@ -22,8 +22,8 @@ You can choose one of the following:
 Full Backup - Snapshots
 =======================
 
-Snapshots are taken using :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>`. First, the command flushes the MemTables from memory to SSTables on disk, and afterward, it creates a hard link for each SSTable in each keyspace.
-With time, SSTables are compacted, but the hard link keeps a copy of each file. This takes up an increasing amount of disk space. It is important to clear space by :doc:`clean unnecessary snapshots </operating-scylla/procedures/backup-restore/delete-snapshot>`.
+Snapshots are taken using :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>`. First, the command flushes the MemTables from memory to SSTables on disk, and afterward, it creates a hard link for each SSTable in each keyspace and table.
+Over time, as SSTables are compacted, the original files remain hard-linked from the snapshot directories, so snapshots hold an increasing amount of disk space. It is important to clear space by :doc:`cleaning unnecessary snapshots </operating-scylla/procedures/backup-restore/delete-snapshot>`.
 
 **Procedure**
 
@@ -61,7 +61,20 @@ See :doc:`the relevant article to learn more </cql/describe-schema>`.
 | For example:
 | ``/mykeyspace/team_roster-91cd2060f99d11e6a47a000000000000/snapshots/1487847672222``
 
-From one of the nodes, recreate the schema. Repeat these steps for each node in the cluster.
+.. note::
+
+   By default, nodetool names the snapshot after the current time, in milliseconds since the Unix epoch.
+   To choose the name (a.k.a. tag), list the keyspaces to snapshot, or set a TTL after which the snapshot
+   is deleted automatically, see :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>`.
+   ``nodetool cluster snapshot`` takes the snapshot on all nodes of the cluster with one command.
+
+.. note::
+
+   Each snapshot directory also contains a ``schema.cql`` file with the ``CREATE`` statement of its table,
+   including the table's dropped columns. It describes that one table only, and does not include the keyspace,
+   roles, permissions, or service levels, so it does not replace step 1.
+
+Repeat these steps on each node in the cluster.
 
 .. _backup-incremental-backup:
 
