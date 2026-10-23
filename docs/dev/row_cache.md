@@ -10,7 +10,27 @@ Cache is always paired with its underlying mutation source which it mirrors. Tha
 
 Eviction is about removing parts of the data from memory and recording the fact that information about those parts is missing. Eviction doesn't change the set of writes represented by cache as part of its `mutation_source` interface.
 
-The smallest object which can be evicted, called eviction unit, is currently a single row (`rows_entry`). Eviction units are linked in an LRU owned by a `cache_tracker`. The LRU determines eviction order. The LRU is shared among many tables. Currently, there is one per `database`.
+The smallest object which can be evicted, called eviction unit, is currently a single row (`rows_entry`). Eviction units are managed by a W-TinyLFU policy owned by a `cache_tracker`. The W-TinyLFU policy determines eviction order. It is shared among many tables. Currently, there is one per `database`.
+
+### W-TinyLFU Eviction Policy
+
+The cache uses a W-TinyLFU (Window Tiny Least Frequently Used) eviction policy,
+which combines recency and frequency information for better hit rates than plain LRU.
+
+The policy organizes entries into three segments:
+
+- **Window** (~1% of cache): A small LRU that admits all new entries. This allows
+  new entries to build up frequency information before competing for main cache space.
+- **Probation** (~19% of cache): Part of the main SLRU cache. Entries from the window
+  compete with probation victims for admission using a TinyLFU frequency filter.
+- **Protected** (~80% of cache): The other part of the main SLRU cache. Entries are
+  promoted here from probation when accessed again.
+
+The TinyLFU frequency filter uses a Count-Min Sketch to compactly estimate access
+frequency. When eviction is needed, the window victim competes with the probation
+victim: the entry with higher estimated frequency survives in probation while the
+other is evicted. The sketch is periodically aged (all counts halved) to adapt to
+changing access patterns.
 
 All `rows_entry` objects which are owned by a `cache_tracker` are assumed to be either contained in a cache (in some `row_cache::partitions_type`) or
 be owned by a (detached) `partition_snapshot`. When the last row from a `partition_entry` is evicted, the containing `cache_entry` is evicted from the cache.
