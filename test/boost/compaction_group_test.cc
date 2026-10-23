@@ -7,11 +7,13 @@
  */
 
 #include <cmath>
+#include <limits>
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/defer.hh>
 
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_services.hh"
@@ -20,6 +22,8 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/eventually.hh"
+
+#include "clocks-impl.hh"
 
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
@@ -449,5 +453,97 @@ SEASTAR_TEST_CASE(compaction_propagates_ingestion_metadata_test) {
         for (const auto& sst : compact({make_input(20, 30, std::nullopt)})) {
             BOOST_REQUIRE(!sst->get_ingestion_metadata());
         }
+    });
+}
+
+// The flush rate a compaction group reports, from its moving average, is close to the
+// rate derived from the ingestion metadata of its sstables, which is what the controller
+// can rely on when the moving average doesn't cover the data, e.g. after a restart. That
+// holds through rewrites: a major compaction keeps the period its data was ingested over,
+// so the rate derived from its output doesn't change.
+SEASTAR_TEST_CASE(flush_rate_matches_ingestion_metadata_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = schema_builder(this_smp_shard_count(), "tests", "flush_rate_matches_ingestion_metadata")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("cl", int32_type, column_kind::clustering_key)
+                .with_column("value", bytes_type)
+                .build();
+        auto t = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(t);
+        t->start();
+        t->disable_auto_compaction().get();
+
+        // Flush at a steady pace, moving the clock forward between flushes rather than
+        // waiting. The jumps move both lowres_db_clock, which the rates use, and db_clock,
+        // which the ingestion metadata uses. The offset is process-wide, so it's restored
+        // for the other tests.
+        auto restore_clocks = defer([offset = get_clocks_offset()] () noexcept { set_clocks_offset(offset); });
+        constexpr int flushes_per_batch = 20;
+        auto keys = tests::generate_partition_keys(2 * flushes_per_batch, s);
+        size_t next_key = 0;
+        auto flush_batch = [&] {
+            for (int i = 0; i < flushes_per_batch; ++i) {
+                if (next_key) {
+                    forward_jump_clocks(std::chrono::seconds(10));
+                }
+                // Values of 1KiB, so that the per-row overhead, which a compaction can encode
+                // differently than the flush did, e.g. timestamps as deltas from a different
+                // minimum, is a small share of the bytes.
+                mutation m(s, keys[next_key++]);
+                for (int row = 0; row < 100; ++row) {
+                    auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(row)});
+                    m.set_clustered_cell(c_key, bytes("value"), data_value(bytes(1024, 'x')), api::new_timestamp());
+                }
+                t->apply(m);
+                t->flush().get();
+            }
+        };
+
+        struct derived_ingestion {
+            double rate;
+            int64_t min_timestamp;
+            int64_t max_timestamp;
+        };
+        auto derive_from_sstables = [&] {
+            double ingested_bytes = 0;
+            auto min_timestamp = std::numeric_limits<int64_t>::max();
+            auto max_timestamp = std::numeric_limits<int64_t>::min();
+            for (const auto& sst : *t->get_sstables()) {
+                auto ingestion = sst->get_ingestion_metadata();
+                BOOST_REQUIRE(ingestion);
+                ingested_bytes += ingestion->fraction * sst->data_size();
+                min_timestamp = std::min(min_timestamp, ingestion->min_timestamp);
+                max_timestamp = std::max(max_timestamp, ingestion->max_timestamp);
+            }
+            return derived_ingestion{ingested_bytes / ((max_timestamp - min_timestamp) / 1000.0), min_timestamp, max_timestamp};
+        };
+
+        // Both cover the time up to the last flush: the moving average from when the group was
+        // created, the ingestion metadata from when its first memtable was, right after. They
+        // differ only by the real time the test takes.
+        auto check_rates_match = [&] (std::string_view when) {
+            auto reported = t.as_compaction_backlog_source().rates().flushed_bytes.per_second();
+            auto derived = derive_from_sstables().rate;
+            testlog.info("{}: reported flush rate {} bytes/s, derived from ingestion metadata {} bytes/s", when, reported, derived);
+            BOOST_REQUIRE_CLOSE(reported, derived, 1);
+        };
+
+        flush_batch();
+        check_rates_match("after the first flushes");
+        auto before_major = derive_from_sstables();
+
+        // Major compaction merges the flushed sstables into one, which keeps the period their
+        // data was ingested over.
+        t->compact_all_sstables(tasks::make_empty_task_info(), replica::table::do_flush::no).get();
+        BOOST_REQUIRE_EQUAL(t->sstables_count(), 1);
+        auto major_output = (*t->get_sstables()->begin())->get_ingestion_metadata();
+        BOOST_REQUIRE(major_output);
+        BOOST_REQUIRE_EQUAL(major_output->fraction, 1.0);
+        BOOST_REQUIRE_EQUAL(major_output->min_timestamp, before_major.min_timestamp);
+        BOOST_REQUIRE_EQUAL(major_output->max_timestamp, before_major.max_timestamp);
+        check_rates_match("after major compaction");
+
+        flush_batch();
+        check_rates_match("after more flushes");
     });
 }
