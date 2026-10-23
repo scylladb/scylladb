@@ -32,7 +32,8 @@ only those columns are deleted from the row indicated by the ``WHERE`` clause. O
 The ``WHERE`` clause specifies which rows are to be deleted. Multiple rows may be deleted with one statement by using an
 ``IN`` operator. A range of rows may be deleted using an inequality operator (such as ``>=``).
 
-``DELETE`` supports the ``TIMESTAMP`` option with the same semantics as the TIMESTAMP parameter used in the ``UPDATE`` statement.
+``DELETE`` supports the ``TIMESTAMP`` option with the same semantics as the TIMESTAMP parameter used in the ``UPDATE`` statement
+(see also :ref:`synthetic write timestamps <synthetic-timestamps>`).
 The ``DELETE`` statement deletes data written with :ref:`INSERT <insert-statement>` or :ref:`UPDATE <update-statement>` (or :ref:`BATCH <batch_statement>`)
 using a timestamp that is less than or equal to the ``DELETE`` timestamp.
 For more information on the :token:`update_parameter` refer to the :ref:`UPDATE <update-parameters>` section.
