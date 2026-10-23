@@ -116,6 +116,8 @@ functions::init() noexcept {
     declare(make_bm25_rank_function());
     declare(make_bm25_highlight_function());
 
+    add_math_functions(ret);
+
     // also needed for smp:
 #if 0
     MigrationManager.instance.register(new FunctionsMigrationListener());
