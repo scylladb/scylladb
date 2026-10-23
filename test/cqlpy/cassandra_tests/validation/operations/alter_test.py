@@ -454,8 +454,9 @@ def testAlterByAddingColumnToCompactTableShouldFail(cql, test_keyspace, compact_
 
 def testAlterTableWithoutCreateTableOrIfExistsClause(cql, test_keyspace):
     tbl1 = test_keyspace + "." + unique_name()
-    # Scylla's message is "unconfigured table ...".
-    assert_invalid_message_re(cql, tbl1, f"Table '{tbl1}' doesn't exist|unconfigured table",
+    # Scylla's message is "Table '...' does not exist", and older Scylla
+    # versions say "unconfigured table ...".
+    assert_invalid_message_re(cql, tbl1, f"Table '{tbl1}' doesn't exist|Table '{tbl1}' does not exist|unconfigured table",
                               "ALTER TABLE %s ADD myCollection list<text>;")
 
 # Reproduces SCYLLADB-5144 (IF EXISTS / IF NOT EXISTS in ALTER statements)
