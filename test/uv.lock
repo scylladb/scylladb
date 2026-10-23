@@ -101,6 +101,19 @@ wheels = [
 ]
 
 [[package]]
+name = "alternator-client"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "boto3" },
+    { name = "botocore" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5b/f3/a5df353b55369481a8b85bc9d1074b6de4a0a450cd626e864bff695eb489/alternator_client-2.0.0.tar.gz", hash = "sha256:2700144a7f3e3c97f547dab64261a24fd737177b0aaa47f5bf564ff0600082a7", size = 72311, upload-time = "2026-09-10T02:36:49.649Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ab/4c/a19313313fe9df8a5cbda97bd91dd02a1549cda7559d741dcac7e406636f/alternator_client-2.0.0-py3-none-any.whl", hash = "sha256:9b4bf4723f315556b7ad273b890000ad869f13ca3423d166f1c74181b508a340", size = 80949, upload-time = "2026-09-10T02:36:48.179Z" },
+]
+
+[[package]]
 name = "attrs"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -897,6 +910,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "allure-pytest" },
+    { name = "alternator-client" },
     { name = "boto3" },
     { name = "colorama" },
     { name = "cryptography" },
@@ -930,6 +944,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = "==3.13.5" },
     { name = "allure-pytest", specifier = "==2.16.0" },
+    { name = "alternator-client", specifier = "==2.0.0" },
     { name = "boto3", specifier = "==1.43.88" },
     { name = "colorama", specifier = "==0.4.6" },
     { name = "cryptography", specifier = "==50.0.1" },
