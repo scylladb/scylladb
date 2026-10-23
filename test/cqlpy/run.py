@@ -7,6 +7,8 @@ import time
 import shutil
 import signal
 import atexit
+import subprocess
+import json
 import requests
 
 # run_with_temporary_dir() is a utility function for running a process, such
@@ -222,7 +224,9 @@ import ssl
 # Find a Scylla executable. By default, we take the build/*/scylla
 # executable next to the location of this script, provided it's the
 # only one that matches this wildcard, but this can be overridden
-# by setting a SCYLLA environment variable:
+# by setting a SCYLLA environment variable. find_scylla() also decides
+# whether this executable needs dbuild's libraries and sets the global
+# dbuild_libs accordingly.
 source_path = os.path.realpath(os.path.join(__file__, '../../..'))
 if source_path not in sys.path:
     sys.path.append(source_path)
@@ -249,7 +253,156 @@ def find_scylla():
     if not os.access(scylla, os.X_OK):
         print("Cannot execute '{}'.\nPlease set SCYLLA to the path of a Scylla executable.".format(scylla))
         exit(1)
+    global dbuild_libs
+    if needs_dbuild_libs(scylla):
+        dbuild_libs = find_dbuild_libs(scylla)
     return scylla
+
+# A Scylla executable built with the frozen toolchain (tools/toolchain/dbuild)
+# may need shared libraries, or versions of them, which this host doesn't
+# have. In that case we run Scylla - still on the host, not in a container -
+# with the dynamic linker and shared libraries of dbuild's image, the same
+# way a relocatable package runs with the libraries it bundles.
+# find_scylla() decides if this is needed by trying to run "scylla --version"
+# on the host. Setting the environment variable SCYLLA_DBUILD_LIBS to 1 or 0
+# overrides this decision.
+dbuild = os.path.join(source_path, 'tools/toolchain/dbuild')
+# A (dynamic linker, library directory) pair, or None to run Scylla normally.
+dbuild_libs = None
+
+# Try to run "exe --version", optionally with libs - a (dynamic linker,
+# library directory) pair like dbuild_libs. LD_BIND_NOW makes the dynamic
+# linker resolve all symbols on startup, so a missing symbol is noticed now,
+# and not in the middle of some test. Returns a subprocess.CompletedProcess,
+# whose returncode is 0 on success, and whose stderr explains a failure.
+def try_running(exe, libs=None):
+    cmd = [libs[0], '--library-path', libs[1], exe] if libs else [exe]
+    return subprocess.run(cmd + ['--version'], env=dict(os.environ, LD_BIND_NOW='1'),
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+
+def needs_dbuild_libs(exe):
+    override = os.getenv('SCYLLA_DBUILD_LIBS')
+    if override:
+        return override != '0'
+    if try_running(exe).returncode == 0:
+        return False
+    if not container_tool():
+        # We can't get dbuild's libraries. Scylla will fail to boot, and its
+        # log will show why.
+        return False
+    print("Scylla cannot run with this host's libraries, so using dbuild's.")
+    return True
+
+# The container tool which tools/toolchain/dbuild uses: DBUILD_TOOL if set,
+# otherwise podman if installed, otherwise docker. None if there is none.
+def container_tool():
+    if os.getenv('DBUILD_TOOL'):
+        return os.getenv('DBUILD_TOOL')
+    for tool in ['podman', 'docker']:
+        if shutil.which(tool):
+            return tool
+    return None
+
+# Return the (dynamic linker, library directory) pair for the libraries in
+# directory dir, or None if there is no dynamic linker there.
+def libs_in(dir):
+    loaders = glob.glob(os.path.join(dir, 'ld-linux-*.so.*'))
+    return (loaders[0], dir) if loaders else None
+
+def find_dbuild_libs(exe):
+    tool = container_tool()
+    if not tool:
+        print("Scylla needs dbuild's libraries, but neither podman nor docker is installed.")
+        exit(1)
+    # dbuild uses the image in tools/toolchain/image, unless it was given a
+    # different one with "--image". SCYLLA_DBUILD_IMAGE can tell us about it.
+    image = os.getenv('SCYLLA_DBUILD_IMAGE')
+    if not image:
+        with open(os.path.join(source_path, 'tools/toolchain/image')) as f:
+            image = f.read().strip()
+    # We don't pull the image if it's missing: Scylla was built with dbuild,
+    # which pulled the image it used. So a missing image most likely means
+    # tools/toolchain/image changed since Scylla was built, and the new image
+    # is not the one Scylla needs.
+    inspect = subprocess.run([tool, 'image', 'inspect', image],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    if inspect.returncode != 0:
+        print(f"Scylla needs dbuild's libraries, but dbuild's image {image} is missing.\n"
+              f"Please rebuild Scylla with dbuild. Or, if Scylla was built with this image, get it with:\n"
+              f"    {tool} pull {image}")
+        exit(1)
+    info = json.loads(inspect.stdout)[0]
+    # If the image has a single layer, and it is readable to us (as happens
+    # with rootless podman), we can use its library directory directly.
+    layers = info.get('GraphDriver', {}).get('Data') or {}
+    if layers.get('UpperDir') and not layers.get('LowerDir'):
+        libs = libs_in(os.path.join(layers['UpperDir'], 'usr/lib64'))
+        if libs and try_running(exe, libs).returncode == 0:
+            return libs
+    # Otherwise, copy the libraries that Scylla needs out of the image, to
+    # build/dbuild-libs. The image-id file there remembers which image they
+    # came from, and if it's a different image now, we start over. Deleting
+    # the old files doesn't hurt a concurrent test run which is still using
+    # them - it keeps them until it exits.
+    dir = os.path.join(source_path, 'build/dbuild-libs')
+    id_file = os.path.join(dir, 'image-id')
+    try:
+        with open(id_file) as f:
+            copied_id = f.read().strip()
+    except FileNotFoundError:
+        copied_id = None
+    if copied_id != info['Id']:
+        shutil.rmtree(dir, ignore_errors=True)
+    os.makedirs(dir, exist_ok=True)
+    libs = libs_in(dir)
+    if not libs or try_running(exe, libs).returncode != 0:
+        print(f"Copying Scylla's libraries from {image} to {dir}...")
+        copied = copy_dbuild_libs(exe, image, dir)
+        libs = libs_in(dir)
+        if not copied or not libs:
+            print(f"Failed to copy Scylla's libraries from {image}.")
+            exit(1)
+        probe = try_running(exe, libs)
+        if probe.returncode != 0:
+            print(f"Cannot run Scylla with dbuild's libraries either:\n{probe.stderr.strip()}")
+            exit(1)
+        # Only remember the image once its libraries are known to work, so
+        # after a failure, the next run starts over.
+        with open(id_file, 'w') as f:
+            f.write(info['Id'])
+    return libs
+
+# Copy the shared libraries which exe needs inside the given dbuild image,
+# the dynamic linker, and OpenSSL's provider modules (which ldd doesn't list
+# because they are loaded at run time), to dir. Libraries outside the system
+# directories are not copied: In debug and dev builds, Seastar and fmt are
+# shared libraries in the build directory, which Scylla finds via its
+# RUNPATH. --library-path takes precedence over RUNPATH, so if we copied
+# them, Scylla would keep using these copies even after they are rebuilt.
+# Each file is first copied to a temporary directory and then renamed into
+# dir, without overwriting existing files - because overwriting a library in
+# place would crash a concurrent test run that is using it.
+# Returns whether the copy succeeded.
+def copy_dbuild_libs(exe, image, dir):
+    exe = os.path.realpath(exe)
+    exe_dir = os.path.dirname(exe)
+    # dbuild mounts the source directory, but not the executable if it is
+    # elsewhere.
+    volume = []
+    if os.path.commonpath([exe_dir, source_path]) != source_path:
+        volume = [f'--volume={exe_dir}:{exe_dir}']
+    script = r'''
+        tmp=$(mktemp -d -p "$2") || exit 1
+        # Also removes the files which mv -n below skips because they
+        # already exist
+        trap 'rm -rf "$tmp"' EXIT
+        ldd "$1" | awk '/=> \// {print $3} /^[[:space:]]*\// {print $1}' |
+            grep -E '^/+(usr|lib)' | sed 's|^/*|/|' | sort -u | xargs cp -L -t "$tmp" || exit 1
+        cp -rL /usr/lib64/ossl-modules "$tmp" || exit 1
+        mv -n "$tmp"/* "$2"
+    '''
+    return subprocess.run([dbuild, '--image', image] + volume + ['--', 'sh', '-c', script, 'sh', exe, dir],
+        stdin=subprocess.DEVNULL).returncode == 0
 
 def run_scylla_cmd(pid, dir):
     ip = pid_to_ip(pid)
@@ -262,16 +415,18 @@ def run_scylla_cmd(pid, dir):
     # execve() to change just argv[0] isn't good enough - because killall
     # inspects the actual executable filename in /proc/<pid>/stat. So we
     # need to name the executable differently. Luckily, using a symbolic
-    # link is good enough.
+    # link is good enough. When Scylla needs dbuild's libraries, we link to
+    # dbuild's dynamic linker, and it runs Scylla (see below).
+    exe = dbuild_libs[0] if dbuild_libs else scylla
     scylla_link = os.path.join(dir, 'test_scylla')
-    os.symlink(scylla, scylla_link)
+    os.symlink(exe, scylla_link)
     # When running a Scylla build with sanitizers enabled, we should
     # configure them to fail on real errors, and ignore spurious errors.
     env = {
         'UBSAN_OPTIONS': ubsan_options(),
         'ASAN_OPTIONS': asan_options(),
     }
-    return ([scylla_link,
+    cmd = [scylla_link,
         '--options-file',  source_path + '/conf/scylla.yaml',
         # api_doc_dir defaults to a path relative to the current directory,
         # which is wherever this script happened to be started from, so spell
@@ -350,7 +505,13 @@ def run_scylla_cmd(pid, dir):
         '--logstor-file-size-in-mb=4',
         # Don't waste disk space and I/O on formatting logstor files
         '--logstor-sparse-files=true',
-        ], env)
+        ]
+    if dbuild_libs:
+        cmd[1:1] = ['--library-path', dbuild_libs[1], scylla]
+        # OpenSSL loads its provider modules from a hard-coded directory,
+        # which would be the host's. Use the image's.
+        env['OPENSSL_MODULES'] = os.path.join(dbuild_libs[1], 'ossl-modules')
+    return (cmd, env)
 
 # Same as run_scylla_cmd, just use SSL encryption for the CQL port (same
 # port number as default - replacing the unencrypted server)
