@@ -739,6 +739,32 @@ const functions& instance() {
     return f;
 }
 
+static thread_local used_functions_recorder* current_used_functions_recorder = nullptr;
+
+used_functions_recorder::used_functions_recorder(std::vector<function_name>& names)
+    : _previous(std::exchange(current_used_functions_recorder, this))
+    , _names(names) {
+}
+
+used_functions_recorder::~used_functions_recorder() {
+    current_used_functions_recorder = _previous;
+}
+
+void used_functions_recorder::record_used_function(const function& func) {
+    if (!current_used_functions_recorder || func.is_native()) {
+        return;
+    }
+    auto& names = current_used_functions_recorder->_names;
+    names.push_back(func.name());
+    if (auto aggregate = dynamic_cast<const user_aggregate*>(&func)) {
+        for (const auto& f : {aggregate->sfunc(), aggregate->reducefunc(), aggregate->finalfunc()}) {
+            if (f) {
+                names.push_back(f->name());
+            }
+        }
+    }
+}
+
 void change_batch::commit() {
     if (_declared.empty()) {
         return;

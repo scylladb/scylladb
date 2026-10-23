@@ -371,6 +371,26 @@ future<> migration_notifier::update_user_type(user_type type) {
     });
 }
 
+future<> migration_notifier::update_function(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types) {
+    auto&& ks_name = fun_name.keyspace;
+    auto&& sig = auth::encode_signature(fun_name.name, arg_types);
+    co_await on_schema_change([&] (migration_listener* listener) {
+        listener->on_update_function(ks_name, sig);
+    }, [&] (std::exception_ptr ex) {
+        return fmt::format("Update function notification failed {}.{}: {}", ks_name, sig, ex);
+    });
+}
+
+future<> migration_notifier::update_aggregate(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types) {
+    auto&& ks_name = fun_name.keyspace;
+    auto&& sig = auth::encode_signature(fun_name.name, arg_types);
+    co_await on_schema_change([&] (migration_listener* listener) {
+        listener->on_update_aggregate(ks_name, sig);
+    }, [&] (std::exception_ptr ex) {
+        return fmt::format("Update aggregate notification failed {}.{}: {}", ks_name, sig, ex);
+    });
+}
+
 future<> migration_notifier::update_view(view_ptr view, bool columns_changed) {
     const auto& ks_name = view->ks_name();
     const auto& view_name = view->cf_name();

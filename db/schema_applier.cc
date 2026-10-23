@@ -46,6 +46,7 @@
 #include "system_keyspace.hh"
 #include "query/query-result-set.hh"
 #include "query/query-result-writer.hh"
+#include "db/cql_type_parser.hh"
 #include "utils/map_difference.hh"
 #include <seastar/coroutine/all.hh>
 #include "utils/log.hh"
@@ -304,11 +305,13 @@ static std::vector<bytes> get_primary_key(const std::vector<column_definition>& 
     return key;
 }
 
+using row_map = std::map<std::vector<bytes>, const query::result_set_row*>;
+
 // Build a map from primary keys to rows.
-static std::map<std::vector<bytes>, const query::result_set_row*> build_row_map(const query::result_set& result) {
+static row_map build_row_map(const query::result_set& result) {
     const auto& rows = result.rows();
     auto primary_key = get_primary_key_definition(result.schema());
-    std::map<std::vector<bytes>, const query::result_set_row*> ret;
+    row_map ret;
     for (const auto& row: rows) {
         auto key = get_primary_key(primary_key, &row);
         ret.insert(std::pair(std::move(key), &row));
@@ -354,12 +357,11 @@ static row_diff diff_rows(const schema_result& before, const schema_result& afte
 
 // User-defined aggregate stores its information in two tables: aggregates and scylla_aggregates
 // The difference has to be joined to properly create an UDA.
-//
-// FIXME: Since UDA cannot be altered now, set of differing rows should be empty and those rows are
-// ignored in calculating the diff.
+// An aggregate is altered (by CREATE OR REPLACE AGGREGATE) if its row in either table changed.
 struct aggregate_diff {
     std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> created;
     std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> dropped;
+    std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> altered;
 };
 
 static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, const schema_result& aggr_after,
@@ -369,6 +371,7 @@ static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, con
 
     std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> created;
     std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> dropped;
+    std::vector<std::pair<const query::result_set_row*, const query::result_set_row*>> altered;
 
     // Primary key for `aggregates` and `scylla_aggregates` tables
     auto primary_key = get_primary_key_definition(aggregates());
@@ -395,7 +398,11 @@ static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, con
             created.push_back({&row, (entry != scylla_aggr_rows.end()) ? entry->second : nullptr});
         }
     }
-    for (const auto& key : aggr_diff.entries_differing) {
+    // A keyspace whose aggregates rows didn't change may still have an altered
+    // aggregate, whose scylla_aggregates row changed.
+    auto keyspaces = aggr_diff.entries_differing;
+    keyspaces.insert(aggr_diff.entries_in_common.begin(), aggr_diff.entries_in_common.end());
+    for (const auto& key : keyspaces) {
         auto aggr_before_rows = build_row_map(*aggr_before.find(key)->second);
         auto aggr_after_rows = build_row_map(*aggr_after.find(key)->second);
         auto diff = difference(aggr_before_rows, aggr_after_rows, indirect_equal_to<const query::result_set_row*>());
@@ -417,9 +424,23 @@ static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, con
                 aggr_after_rows.find(k)->second, (entry != scylla_aggr_rows_after.end()) ? entry->second : nullptr
             });
         }
+        auto find_scylla_row = [] (const map& rows, const std::vector<bytes>& k) -> const query::result_set_row* {
+            auto entry = rows.find(k);
+            return (entry != rows.end()) ? entry->second : nullptr;
+        };
+        for (const auto& k : diff.entries_differing) {
+            altered.push_back({aggr_after_rows.find(k)->second, find_scylla_row(scylla_aggr_rows_after, k)});
+        }
+        for (const auto& k : diff.entries_in_common) {
+            auto scylla_before = find_scylla_row(scylla_aggr_rows_before, k);
+            auto scylla_after = find_scylla_row(scylla_aggr_rows_after, k);
+            if (scylla_before != scylla_after && !(scylla_before && scylla_after && *scylla_before == *scylla_after)) {
+                altered.push_back({aggr_after_rows.find(k)->second, scylla_after});
+            }
+        }
     }
 
-    return {std::move(created), std::move(dropped)};
+    return {std::move(created), std::move(dropped), std::move(altered)};
 }
 
 // see the comments for merge_keyspaces()
@@ -754,6 +775,30 @@ static void drop_cached_func(replica::database& db, const query::result_set_row&
     }
 }
 
+// Check if any of the types in the given columns of a function's or
+// aggregate's schema row is different when parsed with the user types before
+// and after this schema change, i.e., it refers to a user type which this
+// change altered.
+static bool types_changed(const query::result_set_row& row, const sstring& keyspace, std::initializer_list<const char*> type_columns,
+        const data_dictionary::user_types_storage& before, const data_dictionary::user_types_storage& after) {
+    return std::ranges::any_of(type_columns, [&] (const char* column) {
+        auto type = row.get_nonnull<sstring>(column);
+        return db::cql_type_parser::parse(keyspace, type, before) != db::cql_type_parser::parse(keyspace, type, after);
+    });
+}
+
+// Replace a function or aggregate by a new version created from its schema
+// row. If its argument types refer to a user type altered by this schema
+// change, the old version is registered under the old argument types.
+static void replace_function(cql3::functions::change_batch& batch, const std::vector<data_type>& old_arg_types, shared_ptr<cql3::functions::function> func) {
+    batch.replaced_functions.emplace_back(func->name(), func->arg_types(), func->is_aggregate());
+    if (func->arg_types() == old_arg_types) {
+        batch.replace_function(std::move(func));
+    } else {
+        batch.replace_function_with_new_arg_types(old_arg_types, std::move(func));
+    }
+}
+
 future<> schema_applier::merge_functions() {
     auto diff = diff_rows(_before.functions, _after.functions);
     co_await _functions_batch.start();
@@ -772,15 +817,56 @@ future<> schema_applier::merge_functions() {
             drop_cached_func(db, *val);
             batch.remove_function(name, arg_types);
         }
+        auto committed_storage = _types_storage.local().committed_storage();
         for (const auto& val : diff.altered) {
+            auto old_arg_types = read_arg_types(*val, val->get_nonnull<sstring>("keyspace_name"), *committed_storage);
             drop_cached_func(db, *val);
-            batch.replace_function(co_await create_func(db, *val, _types_storage.local()));
+            replace_function(batch, old_arg_types, co_await create_func(db, *val, _types_storage.local()));
+        }
+        // A function whose schema row didn't change, but which refers to a
+        // user type altered by this change, still holds the old version of
+        // the type. Re-create it with the new version. If only its return
+        // type changed, replace_function() also updates the aggregates using
+        // it. Otherwise, these aggregates refer to the altered type too, and
+        // are re-created by merge_aggregates().
+        if (_affected_user_types.local().altered.empty()) {
+            co_return;
+        }
+        std::unordered_set<const query::result_set_row*> changed(diff.created.begin(), diff.created.end());
+        changed.insert(diff.altered.begin(), diff.altered.end());
+        for (const auto& [keyspace, rows] : _after.functions) {
+            for (const auto& row : rows->rows()) {
+                if (changed.contains(&row)) {
+                    continue;
+                }
+                auto old_arg_types = read_arg_types(row, keyspace, *committed_storage);
+                if (old_arg_types == read_arg_types(row, keyspace, _types_storage.local()) &&
+                        !types_changed(row, keyspace, {"return_type"}, *committed_storage, _types_storage.local())) {
+                    continue;
+                }
+                auto func = co_await create_func(db, row, _types_storage.local());
+                // Drop the cached old version only after creating the new
+                // one (which yields), so it can't be cached again meanwhile.
+                drop_cached_func(db, row);
+                replace_function(batch, old_arg_types, std::move(func));
+            }
         }
     }));
 }
 
 future<> schema_applier::merge_aggregates() {
     auto diff = diff_aggregates_rows(_before.aggregates, _after.aggregates, _before.scylla_aggregates, _after.scylla_aggregates);
+    // The scylla_aggregates rows of each keyspace, by primary key, for
+    // re-creating the aggregates which refer to an altered user type (see
+    // below). Built here, on this shard, because build_row_map() copies the
+    // column definitions of the result set's schema, which belongs to this
+    // shard; the other shards only read the map.
+    std::unordered_map<sstring, row_map> scylla_rows_after;
+    if (!_affected_user_types.local().altered.empty()) {
+        for (const auto& [keyspace, rows] : _after.scylla_aggregates) {
+            scylla_rows_after.emplace(keyspace, build_row_map(*rows));
+        }
+    }
 
     co_await _functions_batch.invoke_on_all([&] (cql3::functions::change_batch& batch)-> future<> {
         auto& db = _proxy.local().get_db().local();
@@ -793,6 +879,50 @@ future<> schema_applier::merge_aggregates() {
             auto commited_storage = _types_storage.local().committed_storage();
             auto arg_types = read_arg_types(*val.first, name.keyspace, *commited_storage);
             batch.remove_aggregate(name, arg_types);
+        }
+        auto committed_storage = _types_storage.local().committed_storage();
+        for (const auto& val : diff.altered) {
+            auto old_arg_types = read_arg_types(*val.first, val.first->get_nonnull<sstring>("keyspace_name"), *committed_storage);
+            replace_function(batch, old_arg_types, create_aggregate(db, *val.first, val.second, batch, _types_storage.local()));
+        }
+        // An aggregate whose schema rows didn't change, but which refers to a
+        // user type altered by this change, still holds the old version of the
+        // type, and of the functions re-created by merge_functions(). Re-create
+        // it with the new versions. Its initial condition is taken from the old
+        // version: The CQL literal saved in its row names fields of the old
+        // version of the type. ALTER TYPE refuses to rename such fields, but a
+        // node running an older version may have done it.
+        if (_affected_user_types.local().altered.empty()) {
+            co_return;
+        }
+        std::unordered_set<const query::result_set_row*> changed;
+        for (const auto& val : std::views::concat(diff.created, diff.altered)) {
+            changed.insert(val.first);
+        }
+        auto primary_key = get_primary_key_definition(aggregates());
+        for (const auto& [keyspace, rows] : _after.aggregates) {
+            auto scylla_entry = scylla_rows_after.find(keyspace);
+            for (const auto& row : rows->rows()) {
+                if (changed.contains(&row)) {
+                    continue;
+                }
+                auto old_arg_types = read_arg_types(row, keyspace, *committed_storage);
+                if (old_arg_types == read_arg_types(row, keyspace, _types_storage.local()) &&
+                        !types_changed(row, keyspace, {"state_type", "return_type"}, *committed_storage, _types_storage.local())) {
+                    continue;
+                }
+                cql3::functions::function_name name{keyspace, row.get_nonnull<sstring>("aggregate_name")};
+                auto old_aggregate = dynamic_pointer_cast<cql3::functions::user_aggregate>(batch.find(name, old_arg_types));
+                const query::result_set_row* scylla_row = nullptr;
+                if (scylla_entry != scylla_rows_after.end()) {
+                    auto it = scylla_entry->second.find(get_primary_key(primary_key, &row));
+                    if (it != scylla_entry->second.end()) {
+                        scylla_row = it->second;
+                    }
+                }
+                replace_function(batch, old_arg_types, create_aggregate(db, row, scylla_row,
+                        batch, _types_storage.local(), old_aggregate ? &old_aggregate->initcond() : nullptr));
+            }
         }
         co_return;
     });
@@ -1192,6 +1322,13 @@ future<> schema_applier::post_commit() {
                 co_await notifier.drop_aggregate(func.name, func.arg_types);
             } else {
                 co_await notifier.drop_function(func.name, func.arg_types);
+            }
+        }
+        for (const auto& func : _functions_batch.local().replaced_functions) {
+            if (func.aggregate) {
+                co_await notifier.update_aggregate(func.name, func.arg_types);
+            } else {
+                co_await notifier.update_function(func.name, func.arg_types);
             }
         }
 

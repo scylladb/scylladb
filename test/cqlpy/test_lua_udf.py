@@ -15,14 +15,10 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
-from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import FunctionFailure, InvalidRequest, SyntaxException, Unauthorized
 from cassandra.util import Date, Duration
 
 from .util import new_test_table, new_type, new_function, unique_name
-
-# Some errors (e.g., marshaling errors) are returned by the server as a
-# SERVER_ERROR, which the driver converts to NoHostAvailable.
 
 # Create a Lua function with the given signature (argument list, null
 # handling and return type) and body, call it with the given arguments
@@ -34,14 +30,14 @@ def call_lua(cql, keyspace, table, signature, body, args="val"):
 def test_lua_out_of_memory(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', null)")
-        with pytest.raises(InvalidRequest, match="lua execution failed: not enough memory"):
+        with pytest.raises(FunctionFailure, match="lua execution failed: not enough memory"):
             call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int",
                      'a = "foo" while true do a = a .. a end')
 
 def test_lua_use_null(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', null)")
-        with pytest.raises(InvalidRequest, match="attempt to perform arithmetic on a nil value"):
+        with pytest.raises(FunctionFailure, match="attempt to perform arithmetic on a nil value"):
             call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return val + 1")
         assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return val") == [None]
         assert [row.val for row in cql.execute(f"SELECT val FROM {table}")] == [None]
@@ -49,13 +45,13 @@ def test_lua_use_null(cql, test_keyspace, scylla_only):
 def test_lua_wrong_return_type(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', null)")
-        with pytest.raises(InvalidRequest, match="value is not an integer"):
+        with pytest.raises(FunctionFailure, match="value is not an integer"):
             call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return 1.2")
 
 def test_lua_too_many_return_values(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', null)")
-        with pytest.raises(InvalidRequest, match="2 values returned, expected 1"):
+        with pytest.raises(FunctionFailure, match="2 values returned, expected 1"):
             call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return 1,2")
 
 def test_lua_reversed_argument(cql, test_keyspace, scylla_only):
@@ -173,7 +169,7 @@ def test_lua_decimal_return(cql, test_keyspace, scylla_only):
                         "return a", args="val1") == [Decimal(42)]
         assert call_lua(cql, test_keyspace, table, "(a decimal) CALLED ON NULL INPUT RETURNS decimal",
                         "return a", args="val2") == [Decimal("42.2")]
-        with pytest.raises(InvalidRequest, match="value is not a decimal"):
+        with pytest.raises(FunctionFailure, match="value is not a decimal"):
             call_lua(cql, test_keyspace, table, "(a varint) CALLED ON NULL INPUT RETURNS decimal",
                      "return 4.2", args="val1")
         assert call_lua(cql, test_keyspace, table, "(a varint) CALLED ON NULL INPUT RETURNS decimal",
@@ -235,15 +231,15 @@ def test_lua_int_return(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 4)")
         assert call_lua(cql, test_keyspace, table, sig, "return val") == [4]
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 4.2)")
-        with pytest.raises(InvalidRequest, match="value is not an integer"):
+        with pytest.raises(FunctionFailure, match="value is not an integer"):
             call_lua(cql, test_keyspace, table, sig, "return val")
-        with pytest.raises(InvalidRequest, match="value is not a number"):
+        with pytest.raises(FunctionFailure, match="value is not a number"):
             call_lua(cql, test_keyspace, table, sig, 'return "foo"')
         assert call_lua(cql, test_keyspace, table, sig, 'return "123"') == [123]
         assert call_lua(cql, test_keyspace, table, sig, 'return "0x123p+1"') == [0x246]
-        with pytest.raises(InvalidRequest, match="unexpected value"):
+        with pytest.raises(FunctionFailure, match="unexpected value"):
             call_lua(cql, test_keyspace, table, sig, "return false")
-        with pytest.raises(InvalidRequest, match="value is not a number"):
+        with pytest.raises(FunctionFailure, match="value is not a number"):
             call_lua(cql, test_keyspace, table, sig, 'return ""')
 
 def test_lua_date_return(cql, test_keyspace, scylla_only):
@@ -254,24 +250,24 @@ def test_lua_date_return(cql, test_keyspace, scylla_only):
         # plus 2^31, so an integer 3 is a date long before the epoch.
         assert call_lua(cql, test_keyspace, table, sig, "return val") == [Date(3 - 2**31)]
         assert call_lua(cql, test_keyspace, table, sig, 'return "2019-10-01"') == [Date("2019-10-01")]
-        with pytest.raises(InvalidRequest, match="date value must fit in 32 bits"):
+        with pytest.raises(FunctionFailure, match="date value must fit in 32 bits"):
             call_lua(cql, test_keyspace, table, sig, "return 4294967296")
         assert call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 10, day = 1}") == [Date("2019-10-01")]
-        with pytest.raises(InvalidRequest, match="year is too large: '2147483648'"):
+        with pytest.raises(FunctionFailure, match="year is too large: '2147483648'"):
             call_lua(cql, test_keyspace, table, sig, "return {year = 2147483648, month = 10, day = 1}")
-        with pytest.raises(InvalidRequest, match="month is too large: '256'"):
+        with pytest.raises(FunctionFailure, match="month is too large: '256'"):
             call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 256, day = 1}")
-        with pytest.raises(InvalidRequest, match="day is too large: '256'"):
+        with pytest.raises(FunctionFailure, match="day is too large: '256'"):
             call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 10, day = 256}")
-        with pytest.raises(InvalidRequest, match="invalid date table field: 'abc'"):
+        with pytest.raises(FunctionFailure, match="invalid date table field: 'abc'"):
             call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 10, day = 1, abc = 42}")
-        with pytest.raises(InvalidRequest, match="date table must have year, month and day"):
+        with pytest.raises(FunctionFailure, match="date table must have year, month and day"):
             call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 10}")
-        with pytest.raises(InvalidRequest, match="date value must fit in 32 bits"):
+        with pytest.raises(FunctionFailure, match="date value must fit in 32 bits"):
             call_lua(cql, test_keyspace, table, sig, "return {year = 2147483647, month = 10, day = 1}")
-        with pytest.raises(InvalidRequest, match="date must be a string, integer or date table"):
+        with pytest.raises(FunctionFailure, match="date must be a string, integer or date table"):
             call_lua(cql, test_keyspace, table, sig, "return 42.2")
-        with pytest.raises(InvalidRequest, match="date type has no hour, minute or second"):
+        with pytest.raises(FunctionFailure, match="date type has no hour, minute or second"):
             call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 10, day = 1, hour = 4}")
 
 def test_lua_inet_return(cql, test_keyspace, scylla_only):
@@ -279,9 +275,9 @@ def test_lua_inet_return(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
         sig = "(val int) CALLED ON NULL INPUT RETURNS inet"
         assert call_lua(cql, test_keyspace, table, sig, 'return "1.2.3.4"') == ["1.2.3.4"]
-        with pytest.raises(NoHostAvailable, match="marshaling error: Failed to parse inet_addr from 'abc'"):
+        with pytest.raises(FunctionFailure, match="marshaling error: Failed to parse inet_addr from 'abc'"):
             call_lua(cql, test_keyspace, table, sig, 'return "abc"')
-        with pytest.raises(NoHostAvailable, match="marshaling error: Failed to parse inet_addr from ''"):
+        with pytest.raises(FunctionFailure, match="marshaling error: Failed to parse inet_addr from ''"):
             call_lua(cql, test_keyspace, table, sig, 'return ""')
 
 def test_lua_boolean_return(cql, test_keyspace, scylla_only):
@@ -294,7 +290,7 @@ def test_lua_ascii_return(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
         sig = "(val int) CALLED ON NULL INPUT RETURNS ascii"
         assert call_lua(cql, test_keyspace, table, sig, 'return "foo"') == ["foo"]
-        with pytest.raises(InvalidRequest, match="value is not valid ascii"):
+        with pytest.raises(FunctionFailure, match="value is not valid ascii"):
             call_lua(cql, test_keyspace, table, sig, 'return "foó"')
 
 def test_lua_utf8_return(cql, test_keyspace, scylla_only):
@@ -303,7 +299,7 @@ def test_lua_utf8_return(cql, test_keyspace, scylla_only):
         sig = "(val varint) CALLED ON NULL INPUT RETURNS text"
         assert call_lua(cql, test_keyspace, table, sig, 'return "foó"') == ["foó"]
         assert call_lua(cql, test_keyspace, table, sig, "return val") == ["3"]
-        with pytest.raises(InvalidRequest, match="value is not valid utf8, invalid character at byte offset 0"):
+        with pytest.raises(FunctionFailure, match="value is not valid utf8, invalid character at byte offset 0"):
             call_lua(cql, test_keyspace, table, sig, r'return "\xFF"')
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val decimal") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 4.2)")
@@ -331,12 +327,12 @@ def test_lua_time_return(cql, test_keyspace, scylla_only):
             assert cql.execute(query).one()[0] == 9223372036854775807
             with new_function(cql, test_keyspace, f"""{sig} LANGUAGE lua AS 'return "08:12:54.123"'""") as f2:
                 assert cql.execute(f"SELECT blobasbigint(timeasblob({test_keyspace}.{f2}(val))) FROM {table}").one()[0] == 29574123000000
-            with pytest.raises(NoHostAvailable, match=re.escape("marshaling error: Timestamp format must be hh:mm:ss[.fffffffff]")):
+            with pytest.raises(FunctionFailure, match=re.escape("marshaling error: Timestamp format must be hh:mm:ss[.fffffffff]")):
                 call_lua(cql, test_keyspace, table, sig, 'return "abc"')
             cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 9223372036854775808)")
-            with pytest.raises(InvalidRequest, match="time value must fit in signed 64 bits"):
+            with pytest.raises(FunctionFailure, match="time value must fit in signed 64 bits"):
                 cql.execute(query)
-        with pytest.raises(InvalidRequest, match="time must be a string or an integer"):
+        with pytest.raises(FunctionFailure, match="time must be a string or an integer"):
             call_lua(cql, test_keyspace, table, sig, "return 42.2")
 
 # The Python driver can't represent all timestamp values, so we convert
@@ -354,15 +350,15 @@ def test_lua_timestamp_return(cql, test_keyspace, scylla_only):
             assert call('return "2011-02-03 04:05:06+0000"') == 0x12de9b1e550
             assert call("return {year = 2011, month = 2, day = 3, hour = 4, min = 5, sec = 6 }") == 0x12de9b1e550
             # Different boost versions support different year ranges, but no version supports year 10001.
-            with pytest.raises(NoHostAvailable, match="Year is out of valid range:"):
+            with pytest.raises(FunctionFailure, match="Year is out of valid range:"):
                 call("return {year = 10001, month = 2, day = 3, hour = 4, min = 5, sec = 6 }")
             # FIXME: the exception message is redundant.
-            with pytest.raises(NoHostAvailable, match="marshaling error: unable to parse date 'abc': marshaling error: Unable to parse timestamp from 'abc'"):
+            with pytest.raises(FunctionFailure, match="marshaling error: unable to parse date 'abc': marshaling error: Unable to parse timestamp from 'abc'"):
                 call('return "abc"')
             cql.execute(f"INSERT INTO {table} (key, val) VALUES ('bar', 9223372036854775808)")
-            with pytest.raises(InvalidRequest, match="timestamp value must fit in signed 64 bits"):
+            with pytest.raises(FunctionFailure, match="timestamp value must fit in signed 64 bits"):
                 cql.execute(query)
-        with pytest.raises(InvalidRequest, match="timestamp must be a string, integer or date table"):
+        with pytest.raises(FunctionFailure, match="timestamp must be a string, integer or date table"):
             call("return 42.2")
 
 def test_lua_uuid_return(cql, test_keyspace, scylla_only):
@@ -377,7 +373,7 @@ def test_lua_timeuuid_return(cql, test_keyspace, scylla_only):
         sig = "(val int) CALLED ON NULL INPUT RETURNS timeuuid"
         assert call_lua(cql, test_keyspace, table, sig, 'return "d18648bc-cf83-11e9-9820-107b4493b787"') == [
             UUID("d18648bc-cf83-11e9-9820-107b4493b787")]
-        with pytest.raises(NoHostAvailable, match=re.escape("marshaling error: Unsupported UUID version (2)")):
+        with pytest.raises(FunctionFailure, match=re.escape("marshaling error: Unsupported UUID version (2)")):
             call_lua(cql, test_keyspace, table, sig, 'return "d18648bc-cf83-21e9-9820-107b4493b787"')
 
 def test_lua_tuple_return(cql, test_keyspace, scylla_only):
@@ -385,11 +381,11 @@ def test_lua_tuple_return(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
         sig = "(val int) CALLED ON NULL INPUT RETURNS tuple<int, double, text>"
         assert call_lua(cql, test_keyspace, table, sig, 'return {1,2.4,"foo"}') == [(1, 2.4, "foo")]
-        with pytest.raises(InvalidRequest, match="value is not an integer"):
+        with pytest.raises(FunctionFailure, match="value is not an integer"):
             call_lua(cql, test_keyspace, table, sig, 'return {1.2, 1.2, "foo"}')
-        with pytest.raises(InvalidRequest, match="key 4 is not valid for a sequence of size 3"):
+        with pytest.raises(FunctionFailure, match="key 4 is not valid for a sequence of size 3"):
             call_lua(cql, test_keyspace, table, sig, 'return {1,2.4,"foo", 42}')
-        with pytest.raises(InvalidRequest, match="key 2 missing in sequence of size 3"):
+        with pytest.raises(FunctionFailure, match="key 2 missing in sequence of size 3"):
             call_lua(cql, test_keyspace, table, sig, 'return {[1] = 1, [3] = "foo"}')
 
 def test_lua_vector_return(cql, test_keyspace, scylla_only):
@@ -397,11 +393,11 @@ def test_lua_vector_return(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
         sig = "(val int) CALLED ON NULL INPUT RETURNS vector<int, 3>"
         assert call_lua(cql, test_keyspace, table, sig, "return {1,2,3}") == [[1, 2, 3]]
-        with pytest.raises(InvalidRequest, match="value is not an integer"):
+        with pytest.raises(FunctionFailure, match="value is not an integer"):
             call_lua(cql, test_keyspace, table, sig, "return {1, 2.1, 3}")
-        with pytest.raises(InvalidRequest, match="key 4 is not valid for a sequence of size 3"):
+        with pytest.raises(FunctionFailure, match="key 4 is not valid for a sequence of size 3"):
             call_lua(cql, test_keyspace, table, sig, "return {1, 2, 3, 4}")
-        with pytest.raises(InvalidRequest, match="key 2 missing in sequence of size 3"):
+        with pytest.raises(FunctionFailure, match="key 2 missing in sequence of size 3"):
             call_lua(cql, test_keyspace, table, sig, "return {[1] = 1, [3] = 3}")
 
 def test_lua_list_return(cql, test_keyspace, scylla_only):
@@ -409,13 +405,13 @@ def test_lua_list_return(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
         sig = "(val int) CALLED ON NULL INPUT RETURNS list<int>"
         assert call_lua(cql, test_keyspace, table, sig, "return {1,2,3}") == [[1, 2, 3]]
-        with pytest.raises(InvalidRequest, match="value is not an integer"):
+        with pytest.raises(FunctionFailure, match="value is not an integer"):
             call_lua(cql, test_keyspace, table, sig, "return {1.2}")
-        with pytest.raises(InvalidRequest, match="value is not a table"):
+        with pytest.raises(FunctionFailure, match="value is not a table"):
             call_lua(cql, test_keyspace, table, sig, 'return "foo"')
-        with pytest.raises(InvalidRequest, match="value is not a number"):
+        with pytest.raises(FunctionFailure, match="value is not a number"):
             call_lua(cql, test_keyspace, table, sig, "return {foo = 42}")
-        with pytest.raises(InvalidRequest, match="table is not a sequence"):
+        with pytest.raises(FunctionFailure, match="table is not a sequence"):
             call_lua(cql, test_keyspace, table, sig, "return {[1] = 42, [3] = 43}")
 
 def test_lua_set_return(cql, test_keyspace, scylla_only):
@@ -423,7 +419,7 @@ def test_lua_set_return(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
         sig = "(val int) CALLED ON NULL INPUT RETURNS set<int>"
         assert call_lua(cql, test_keyspace, table, sig, "return {[1] = true, [42] = true}") == [{1, 42}]
-        with pytest.raises(InvalidRequest, match="sets are represented with tables with true values"):
+        with pytest.raises(FunctionFailure, match="sets are represented with tables with true values"):
             call_lua(cql, test_keyspace, table, sig, "return {[1] = false}")
 
 # The Python driver's representation of nested collections is awkward
@@ -443,16 +439,16 @@ def test_lua_duration_return(cql, test_keyspace, scylla_only):
         sig = "(val int) CALLED ON NULL INPUT RETURNS duration"
         assert call_lua(cql, test_keyspace, table, sig, "return {months = 1, days = 2147483647, nanoseconds = 3}") == [
             Duration(1, 2147483647, 3)]
-        with pytest.raises(InvalidRequest, match="2147483648 days doesn't fit in a 32 bit integer"):
+        with pytest.raises(FunctionFailure, match="2147483648 days doesn't fit in a 32 bit integer"):
             call_lua(cql, test_keyspace, table, sig, "return {months = 1, days = 2147483648, nanoseconds = 3}")
-        with pytest.raises(InvalidRequest, match="2147483648 months doesn't fit in a 32 bit integer"):
+        with pytest.raises(FunctionFailure, match="2147483648 months doesn't fit in a 32 bit integer"):
             call_lua(cql, test_keyspace, table, sig, "return {months = 2147483648, days = 2, nanoseconds = 3}")
-        with pytest.raises(InvalidRequest, match="9223372036854775808 nanoseconds doesn't fit in a 64 bit integer"):
+        with pytest.raises(FunctionFailure, match="9223372036854775808 nanoseconds doesn't fit in a 64 bit integer"):
             call_lua(cql, test_keyspace, table, sig, 'return {months = 1, days = 2, nanoseconds = "9223372036854775808"}')
         assert call_lua(cql, test_keyspace, table, sig, 'return "1mo2d3ns"') == [Duration(1, 2, 3)]
-        with pytest.raises(InvalidRequest, match=re.escape("a duration must be of the form { months = v1, days = v2, nanoseconds = v3 }")):
+        with pytest.raises(FunctionFailure, match=re.escape("a duration must be of the form { months = v1, days = v2, nanoseconds = v3 }")):
             call_lua(cql, test_keyspace, table, sig, "return 42.2")
-        with pytest.raises(InvalidRequest, match="invalid duration field: 'foo'"):
+        with pytest.raises(FunctionFailure, match="invalid duration field: 'foo'"):
             call_lua(cql, test_keyspace, table, sig, "return {foo = 42}")
 
 def test_lua_map_return(cql, test_keyspace, scylla_only):
@@ -479,11 +475,11 @@ def test_lua_udt_return(cql, test_keyspace, scylla_only):
 
             [res] = call_lua(cql, test_keyspace, table, sig, "return {my_int = 1, my_double = 2.5}")
             assert (res.my_int, res.my_double) == (1, 2.5)
-            with pytest.raises(InvalidRequest, match="invalid UDT field 'my_float'"):
+            with pytest.raises(FunctionFailure, match="invalid UDT field 'my_float'"):
                 call_lua(cql, test_keyspace, table, sig, "return {my_int = 1, my_float = 2.5}")
-            with pytest.raises(InvalidRequest, match="unexpected value"):
+            with pytest.raises(FunctionFailure, match="unexpected value"):
                 call_lua(cql, test_keyspace, table, sig, "return {[true] = 2.5}")
-            with pytest.raises(InvalidRequest, match=f"key my_double missing in udt {udt.split('.')[1]}"):
+            with pytest.raises(FunctionFailure, match=f"key my_double missing in udt {udt.split('.')[1]}"):
                 call_lua(cql, test_keyspace, table, sig, "return {my_int = 1}")
 
 def test_lua_called_on_null(cql, test_keyspace, scylla_only):
@@ -499,7 +495,7 @@ def test_lua_return_null_on_null(cql, test_keyspace, scylla_only):
 def test_lua_error(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 42)")
-        with pytest.raises(InvalidRequest, match=re.escape("attempt to perform arithmetic on a nil value (field 'bar')")):
+        with pytest.raises(FunctionFailure, match=re.escape("attempt to perform arithmetic on a nil value (field 'bar')")):
             call_lua(cql, test_keyspace, table, "(val int) RETURNS NULL ON NULL INPUT RETURNS int", "return 2 * bar")
 
 # A Lua function may raise an error whose value isn't a string or a number,
@@ -527,7 +523,7 @@ def test_lua_error_not_string(cql, test_keyspace, scylla_only, error, descriptio
 def test_lua_timeout(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 42)")
-        with pytest.raises(InvalidRequest, match="lua execution timeout: "):
+        with pytest.raises(FunctionFailure, match="lua execution timeout: "):
             call_lua(cql, test_keyspace, table, "(val int) RETURNS NULL ON NULL INPUT RETURNS int", "while true do end")
 
 def test_lua_compilation_error(cql, test_keyspace, scylla_only):

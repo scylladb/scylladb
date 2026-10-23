@@ -875,7 +875,6 @@ def testJavaAggregateNonExistingFuncs(cql, cassandra_bug):
 FAILING_FUNCTION_MESSAGE = "java.lang.RuntimeException|thrown to unit test - not a bug"
 
 # Reproduces SCYLLADB-5159 (wrong error code for a failing function)
-@pytest.mark.xfail(reason="SCYLLADB-5159")
 def testJavaAggregateFailingFuncs(cql):
     with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int primary key, b int)") as table:
         execute(cql, table, "INSERT INTO %s (a, b) VALUES (1, 1)")
@@ -1672,7 +1671,7 @@ def testEmptyListAndNullInitcond(cql):
 
 # Reproduces #14404 (empty collection INITCOND) and SCYLLADB-5162
 # (CREATE OR REPLACE AGGREGATE doesn't remove FINALFUNC or INITCOND)
-@pytest.mark.xfail(reason="#14404, SCYLLADB-5162")
+@pytest.mark.xfail(reason="#14404")
 def testOrReplaceOptionals(cql):
     with create_keyspace(cql, REPLICATION) as ks:
         fState = createFunction(cql, ks,

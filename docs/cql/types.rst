@@ -589,6 +589,9 @@ You can:
   of the type created before the addition.
 - Rename the fields of the type (``ALTER TYPE address RENAME zip TO zipcode``).
 
+Fields can't be renamed, nor can their types be changed, while the type is used in the state type of a user-defined
+aggregate with an ``INITCOND``, because the initial condition is saved as a CQL literal which names the fields.
+
 Dropping a UDT
 ~~~~~~~~~~~~~~
 
