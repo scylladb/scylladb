@@ -161,13 +161,13 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
     service::storage_proxy::cas_result cas_result = co_await qp.proxy().cas(schema, std::move(cas_shard), *request, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout);
-        auto result = request->build_cas_result_set(batch.cas_result_metadata(), batch.columns_of_cas_result_set(), cas_result.is_applied);
-        // Surface any coordinator-side large data guardrail soft limit violations
-        // detected during the LWT to the client as a CQL warning.
-        if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
-            result->add_warning(std::move(warning));
-        }
-        co_return result;
+    auto result = request->build_cas_result_set(batch.cas_result_metadata(), batch.columns_of_cas_result_set(), cas_result.is_applied);
+    // Surface any coordinator-side large data guardrail soft limit violations
+    // detected during the LWT to the client as a CQL warning.
+    if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
+        result->add_warning(std::move(warning));
+    }
+    co_return result;
 }
 
 } // namespace
@@ -259,11 +259,11 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
         ++batch.stats().cas_batches;
         batch.stats().statements_in_cas_batches += statements.size();
         auto result = co_await execute_with_conditions(batch, qp, options, query_state);
-            if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-                result->add_warning(format("Using write consistency level {} listed on the "
-                                           "write_consistency_levels_warned is not recommended.", cl));
-            }
-            co_return result;
+        if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+            result->add_warning(format("Using write consistency level {} listed on the "
+                                       "write_consistency_levels_warned is not recommended.", cl));
+        }
+        co_return result;
     }
 
     ++batch.stats().batches;
@@ -274,18 +274,18 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
 
     utils::chunked_vector<mutation> ms = co_await get_mutations(batch, qp, options, timeout, local, now, query_state);
     coordinator_result<> res = co_await execute_without_conditions(batch, qp, std::move(ms), cl, timeout, query_state.get_trace_state(), query_state.get_permit(), &violations);
-        if (!res) {
-            co_return seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error());
-        }
-        auto result = make_shared<cql_transport::messages::result_message::void_message>();
-        if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-            result->add_warning(format("Using write consistency level {} listed on the "
-                                       "write_consistency_levels_warned is not recommended.", cl));
-        }
-        if (auto warning = db::large_data_soft_violation_warning(violations); !warning.empty()) [[unlikely]] {
-            result->add_warning(std::move(warning));
-        }
-        co_return result;
+    if (!res) {
+        co_return seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error());
+    }
+    auto result = make_shared<cql_transport::messages::result_message::void_message>();
+    if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+        result->add_warning(format("Using write consistency level {} listed on the "
+                                   "write_consistency_levels_warned is not recommended.", cl));
+    }
+    if (auto warning = db::large_data_soft_violation_warning(violations); !warning.empty()) [[unlikely]] {
+        result->add_warning(std::move(warning));
+    }
+    co_return result;
 }
 
 const batch_executor& batch_executor::instance() {
