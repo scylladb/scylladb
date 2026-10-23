@@ -14,6 +14,7 @@
 #include <memory>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -44,6 +45,9 @@
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
+#include "sstables/open_info.hh"
+#include "sstables/sstables_manager.hh"
+#include "sstables/storage.hh"
 #include "db/config.hh"
 #include "db/view/view_builder.hh"
 #include "service/qos/service_level_controller.hh"
@@ -3702,6 +3706,115 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         );
     }
 
+    // Cleanup before (re)taking a snapshot tag.
+    // Rows under an uncommitted tag are residue of a crashed or failed
+    // attempt. Runs before the snapshot RPCs, so every row and reference
+    // under the tag is residue, whoever wrote it. The snapshot_nodes rows
+    // name the (dc, rack) partitions the previous attempt wrote.
+    // A node that stopped being a replica since the
+    // crashed attempt would leave its rows behind, and the retake's commit
+    // marker would sneak them into the committed snapshot.
+    // Important to note here that we release, not plain delete, a ref may be a
+    // compacted-away sstable's last claim, and its components must go away
+    // too. The registry is node-local, so a peer's retained snapshot_owned
+    // entry is left to that peer's boot GC.
+    // Local tables have no references, their residue is the rows alone.
+    future<> cleanup_snapshot_residue(const std::set<std::pair<sstring, sstring>>& tables, const sstring& tag, db::snapshot_table_helper& sth) {
+        auto nodes = co_await sth.get_snapshot_nodes(tag, {}, {}, db::consistency_level::QUORUM);
+        std::set<std::pair<std::string, std::string>> partitions;
+        for (const auto& n : nodes) {
+            partitions.emplace(n.datacenter, n.rack);
+        }
+        if (partitions.empty()) {
+            co_return;
+        }
+        // The guard is released, a successor coordinator may be running this
+        // same request concurrently, we want to avoid cleaning up its fresh rows.
+        // FIXME: even with this check, there is still a chance we can end up with a bad snapshot
+        // but the edge case needs a quite a few planets to align: a crashed snapshot and a new re-attempt
+        // plus a failover in the middle of the cleanup phase of the retake, plus a failedover coordinator
+        // that falls behind and doesnt notice the reelection.
+        auto bail_on_failover = [this] {
+            _as.check();
+            if (_term != _raft.get_current_term()) {
+                throw term_changed_error{};
+            }
+        };
+        const auto me = locator::host_id(_raft.id().uuid());
+        for (const auto& [ks_name, cf_name] : tables) {
+            auto tp = _db.get_tables_metadata().get_table_if_exists(
+                    _db.get_tables_metadata().get_table_id_if_exists({std::string_view(ks_name), std::string_view(cf_name)}));
+            if (!tp) {
+                rtlogger.warn("Snapshot '{}': table {}.{} no longer exists, deleting its catalog rows,"
+                        " its leftover references can only be reclaimed by bucket healing", tag, ks_name, cf_name);
+            }
+            const bool remote_table = tp && tp->get_storage_options().is_object_storage_type();
+            std::optional<data_dictionary::storage_options::s3> os;
+            shared_ptr<sstables::object_storage_client> client;
+            sstables::sstables_registry* registry = nullptr;
+            if (remote_table) {
+                os = std::get<data_dictionary::storage_options::s3>(tp->get_storage_options().value);
+                try {
+                    client = tp->get_sstables_manager().get_endpoint_client(os->endpoint);
+                } catch (const std::invalid_argument&) {
+                    throw std::runtime_error(fmt::format("Snapshot '{}' of {}.{}: object-storage endpoint '{}' is not configured on this node,"
+                            " cannot release the previous attempt's references", tag, ks_name, cf_name, os->endpoint));
+                }
+                // There should always be a registry here, but in case it's missing, the cleanup will proceed without it, deleting the
+                // ref and the components if it was the last ref. Next reboot will delete the registry entry.
+                registry = tp->get_sstables_manager().has_sstables_registry() ? &tp->get_sstables_manager().sstables_registry() : nullptr;
+            }
+            for (const auto& [dc, rack] : partitions) {
+                if ((co_await sth.get_snapshot(tag)).has_value()) {
+                    // Only a successor of this very request can have written
+                    // the marker mid-sweep, the local raft just has not seen
+                    // the election yet.
+                    throw term_changed_error{};
+                }
+                auto residue = co_await sth.get_snapshot_sstables_for_cleanup(tag, ks_name, cf_name, dc, rack);
+                if (residue.empty()) {
+                    continue;
+                }
+                rtlogger.warn("Snapshot '{}' of {}.{} left {} catalog rows in ({}, {}) from a previous crashed or failed attempt,"
+                        " cleaning them up", tag, ks_name, cf_name, residue.size(), dc, rack);
+                co_await max_concurrent_for_each(residue, 16, [&] (const db::snapshot_sstable_cleanup_entry& e) -> future<> {
+                    bail_on_failover();
+                    if (remote_table) {
+                        // The reference goes first
+                        bool released = false;
+                        if (!e.toc_name.empty()) {
+                            auto desc = sstables::parse_path(std::filesystem::path(std::string_view(e.toc_name)), ks_name, cf_name);
+                            if (desc) {
+                                desc->sid = e.sstable_id;
+                                // The row's writer owns the node reference and the registry
+                                // entry, so the release checks the claims of e.node, not ours.
+                                co_await sstables::release_object_storage_snapshot_ref(*client, *os, e.node == me ? registry : nullptr, tp->schema()->id(), e.node, tag, *desc);
+                                released = true;
+                            } else {
+                                rtlogger.warn("Snapshot '{}' of {}.{}: cannot derive the snapshot reference of {} from toc_name '{}': {}",
+                                        tag, ks_name, cf_name, e.sstable_id, e.toc_name, desc.error());
+                            }
+                        }
+                        if (!released) {
+                            // The row cannot name its reference, but we can do it with the
+                            // sstable_id and a list op. Deleting every reference of the tag
+                            // is safe behind the deposition checks above: residue is all
+                            // these refs can be. Next boot GC will check if refs exist, if it sees
+                            // a) none and then deletes the components
+                            // and registry entry if sstable was compacted in the meantime.
+                            // b) node refs, does nothing, sstable needs to keep chilling
+                            co_await sstables::release_object_storage_snapshot_refs_by_listing(*client, *os, e.sstable_id, tag);
+                        }
+                    }
+
+                    auto ts = e.write_timestamp ? e.write_timestamp : api::new_timestamp();
+                    co_await sth.delete_snapshot_sstable_entry(tag, ks_name, cf_name, dc, rack,
+                            e.first_token, e.sstable_id, ts);
+                });
+            }
+        }
+    }
+
     // Called from within handle_snapshot_tables before the RPCs are sent out.
     // Rejects duplicate tags, cleans up the catalog residue of a prior crashed attempt for
     // this tag, and writes the snapshot's schema rows so a later failure
@@ -3731,6 +3844,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         for (const auto& t : cleanup_schema_rows.tables) {
             prune_targets.insert(t);
         }
+
+        // Release the previous attempt's references and delete its sstable
+        // rows. Must run before the snapshot_nodes prune below, the nodes
+        // rows name the partitions holding the residue.
+        co_await cleanup_snapshot_residue(prune_targets, tag, sth);
+
         const auto tmptr = get_token_metadata_ptr();
         const auto& dcs = tmptr->get_topology().get_datacenters();
         for (const auto& [ks_name, table_name] : prune_targets) {
@@ -3741,7 +3860,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
             }
         }
-        // Cleanup the previous attempt's snapshot_nodes rows
+        // Cleanup the previous attempt's snapshot_nodes rows.
+        // Prevent a failedover coordinator to delete the rows of the newly elected one.
+        _as.check();
+        if (_term != _raft.get_current_term() || (co_await sth.get_snapshot(tag)).has_value()) {
+            throw term_changed_error{};
+        }
         co_await sth.delete_snapshot_nodes_rows(tag, api::new_timestamp());
 
         // Delete-then-rewrite the schema partitions so stale rows die with
