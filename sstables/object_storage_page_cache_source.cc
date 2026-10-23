@@ -6,9 +6,9 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// This file is part of the disk page cache of sstables on object storage
-// (the 'disk_cache': 'pages' keyspace storage option): a data_source which
-// reads a byte range of an sstable component through the cache. See
+// This file is part of the object storage page cache (the 'disk_cache': 'pages'
+// keyspace storage option): a data_source which reads a byte range of an
+// sstable component through the cache. See
 // sstables/object_storage_page_cache_source.hh.
 
 #include <algorithm>
@@ -166,7 +166,7 @@ private:
             } catch (...) {
                 _cache.get_stats().read_errors++;
                 sstlog.log(log_level::warn, cache_error_rate_limit,
-                        "Failed to read the disk page cache of {} component of sstable {}, reading from the object store: {}",
+                        "Failed to read the object storage page cache of {} component of sstable {}, reading from the object store: {}",
                         _component, _sst, std::current_exception());
             }
             _cached.assign(std::make_move_iterator(pages.begin()), std::make_move_iterator(pages.end()));
@@ -205,7 +205,7 @@ private:
                 _cache.get_stats().write_errors++;
                 _populate = populate_disk_cache::no;
                 sstlog.log(log_level::warn, cache_error_rate_limit,
-                        "Failed to write the disk page cache of {} component of sstable {}: {}",
+                        "Failed to write the object storage page cache of {} component of sstable {}: {}",
                         _component, _sst, std::current_exception());
             }
         }

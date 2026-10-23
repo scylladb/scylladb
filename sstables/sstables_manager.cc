@@ -522,7 +522,7 @@ void sstables_manager::unplug_object_storage_page_cache() noexcept {
     _object_storage_page_cache = nullptr;
 }
 
-future<> sstables_manager::evict_orphans_from_disk_page_cache() noexcept {
+future<> sstables_manager::evict_orphans_from_page_cache() noexcept {
     auto cache = _object_storage_page_cache;
     if (!cache) {
         co_return;
@@ -541,11 +541,11 @@ future<> sstables_manager::evict_orphans_from_disk_page_cache() noexcept {
     } catch (...) {
         // The orphan pages only waste disk space, so failing to drop them
         // shouldn't fail the startup.
-        smlogger.warn("Failed to evict orphan pages from the disk page cache: {}", std::current_exception());
+        smlogger.warn("Failed to evict orphan pages from the object storage page cache: {}", std::current_exception());
     }
 }
 
-future<> sstables_manager::copy_disk_cached_pages(const data_dictionary::storage_options& so,
+future<> sstables_manager::copy_cached_pages(const data_dictionary::storage_options& so,
         const std::vector<sstable_id>& ssts, shard_id from) noexcept {
     auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&so.value);
     auto cache = _object_storage_page_cache;
@@ -559,7 +559,7 @@ future<> sstables_manager::copy_disk_cached_pages(const data_dictionary::storage
     } catch (...) {
         // The pages which weren't copied will be read again from the object
         // store, so failing to copy them shouldn't fail the migration.
-        smlogger.warn("Failed to copy pages from shard {} in the disk page cache: {}", from, std::current_exception());
+        smlogger.warn("Failed to copy pages from shard {} in the object storage page cache: {}", from, std::current_exception());
     }
 }
 

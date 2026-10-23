@@ -6,12 +6,11 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// This file is part of the disk page cache of sstables on object storage
-// (the 'disk_cache': 'pages' keyspace storage option): a seastar::file
-// implementation which reads an sstable component through the cache. It is
-// used for the index components, which the sstable index readers read
-// through a seastar::file rather than a data_source. See
-// sstables/object_storage_page_cache_file.hh.
+// This file is part of the object storage page cache (the 'disk_cache': 'pages'
+// keyspace storage option): a seastar::file implementation which reads an
+// sstable component through the cache. It is used for the index components,
+// which the sstable index readers read through a seastar::file rather than a
+// data_source. See sstables/object_storage_page_cache_file.hh.
 
 #include <algorithm>
 #include <seastar/core/coroutine.hh>
@@ -136,7 +135,7 @@ public:
         // Count and log it, in case the duplicate is ever used for reads which
         // should use the cache.
         _cache->get_stats().dup_bypasses++;
-        sstlog.debug("{} component of sstable {} is duplicated for another shard, which will read it without the disk page cache",
+        sstlog.debug("{} component of sstable {} is duplicated for another shard, which will read it without the object storage page cache",
                 _component, _sst);
         return get_file_impl(_underlying_file)->dup();
     }

@@ -6,11 +6,10 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// This file is part of the disk page cache of sstables on object storage
-// (the 'disk_cache': 'pages' keyspace storage option): the schema of the
-// system_cache.pagecache table, which stores the cache, and the
-// implementation of the cache's interface over it. See
-// db/object_storage_page_cache_table.hh.
+// This file is part of the object storage page cache (the 'disk_cache': 'pages'
+// keyspace storage option): the schema of the system_cache.pagecache table,
+// which stores the cache, and the implementation of the cache's interface over
+// it. See db/object_storage_page_cache_table.hh.
 
 #include <algorithm>
 #include <array>
@@ -48,8 +47,8 @@ namespace db {
 
 static logging::logger pclogger("object_storage_page_cache");
 
-// The disk page cache of sstables on object storage: byte ranges ("pages")
-// of sstable components, which were read from the object store.
+// The object storage page cache: byte ranges ("pages") of sstable components,
+// which were read from the object store.
 //
 // The table is in the system_cache keyspace, not in the system keyspace:
 // the cache may fill most of the node's disk, while the system keyspace
@@ -75,7 +74,7 @@ schema_ptr object_storage_page_cache_table::schema() {
             // range of consecutive pages is a sequential scan.
             .with_column("offset", long_type, column_kind::clustering_key)
             .with_column("page", bytes_type)
-            .set_comment("Disk page cache of sstables on object storage")
+            .set_comment("The object storage page cache: pages of sstables on object storage, cached on the local disk")
             .with_hash_version()
             .with_partitioner(dht::fixed_shard_partitioner::classname)
             .with_sharder(dht::fixed_shard_sharder::instance())
@@ -136,7 +135,7 @@ schema_ptr object_storage_page_cache_table::hits_schema() {
             .with_column("offset", long_type, column_kind::clustering_key)
             .with_column("last_hit", timestamp_type)
             .with_column("size", int32_type)
-            .set_comment("When the pages of the disk page cache of sstables on object storage were last hit")
+            .set_comment("When the pages of the object storage page cache were last hit")
             .with_hash_version()
             .with_partitioner(dht::fixed_shard_partitioner::classname)
             .with_sharder(dht::fixed_shard_sharder::instance())
@@ -484,7 +483,7 @@ object_storage_page_cache_table::get_pages(sstables::sstable_id sst, sstables::c
         } catch (...) {
             static thread_local logging::logger::rate_limit rate_limit{std::chrono::minutes(1)};
             _stats.hit_recording_errors++;
-            pclogger.log(log_level::warn, rate_limit, "Failed to record hits in the disk page cache: {}", std::current_exception());
+            pclogger.log(log_level::warn, rate_limit, "Failed to record hits in the object storage page cache: {}", std::current_exception());
         }
     }
     co_return pages;
@@ -742,37 +741,37 @@ void object_storage_page_cache_table::register_metrics() {
     auto operation = sm::label("operation");
     _metrics.add_group("object_storage", {
         sm::make_counter("page_cache_hits", [this] { return _stats.populating.hits; },
-                sm::description("Pages read from the disk page cache, by reads which may populate it"), {reads("populating")}),
+                sm::description("Pages read from the object storage page cache, by reads which may populate it"), {reads("populating")}),
         sm::make_counter("page_cache_hits", [this] { return _stats.non_populating.hits; },
-                sm::description("Pages read from the disk page cache, by reads with BYPASS CACHE and background reads"), {reads("non_populating")}),
+                sm::description("Pages read from the object storage page cache, by reads with BYPASS CACHE and background reads"), {reads("non_populating")}),
         sm::make_counter("page_cache_misses", [this] { return _stats.populating.misses; },
-                sm::description("Pages read from the object store through the disk page cache, by reads which may populate it"), {reads("populating")}),
+                sm::description("Pages read from the object store through the object storage page cache, by reads which may populate it"), {reads("populating")}),
         sm::make_counter("page_cache_misses", [this] { return _stats.non_populating.misses; },
-                sm::description("Pages read from the object store through the disk page cache, by reads with BYPASS CACHE and background reads"), {reads("non_populating")}),
+                sm::description("Pages read from the object store through the object storage page cache, by reads with BYPASS CACHE and background reads"), {reads("non_populating")}),
         sm::make_gauge("page_cache_bytes", [this] { return _bytes; },
-                sm::description("Bytes in the disk page cache")),
+                sm::description("Bytes in the object storage page cache")),
         sm::make_gauge("page_cache_capacity_bytes", [this] { return limit(); },
-                sm::description("The size limit of the disk page cache, or 0 if unlimited")),
+                sm::description("The size limit of the object storage page cache, or 0 if unlimited")),
         sm::make_counter("page_cache_object_reads", [this] { return _stats.object_reads; },
-                sm::description("Requests which reads through the disk page cache sent to the object store")),
+                sm::description("Requests which reads through the object storage page cache sent to the object store")),
         sm::make_counter("page_cache_object_read_bytes", [this] { return _stats.object_read_bytes; },
-                sm::description("Bytes which reads through the disk page cache requested from the object store")),
+                sm::description("Bytes which reads through the object storage page cache requested from the object store")),
         sm::make_counter("page_cache_evictions", [this] { return _stats.capacity_evictions; },
-                sm::description("Pages evicted from the disk page cache because it was full"), {reason("capacity")}),
+                sm::description("Pages evicted from the object storage page cache because it was full"), {reason("capacity")}),
         sm::make_counter("page_cache_evictions", [this] { return _stats.sstable_evictions; },
-                sm::description("Pages evicted from the disk page cache because their sstable was deleted"), {reason("sstable_deleted")}),
+                sm::description("Pages evicted from the object storage page cache because their sstable was deleted"), {reason("sstable_deleted")}),
         sm::make_counter("page_cache_errors", [this] { return _stats.read_errors; },
-                sm::description("Failures to read the disk page cache, after which the object store was read instead"), {operation("read")}),
+                sm::description("Failures to read the object storage page cache, after which the object store was read instead"), {operation("read")}),
         sm::make_counter("page_cache_errors", [this] { return _stats.write_errors; },
-                sm::description("Failures to write pages to the disk page cache"), {operation("write")}),
+                sm::description("Failures to write pages to the object storage page cache"), {operation("write")}),
         sm::make_counter("page_cache_errors", [this] { return _stats.hit_recording_errors; },
-                sm::description("Failures to record hits of pages of the disk page cache"), {operation("record_hits")}),
+                sm::description("Failures to record hits of pages of the object storage page cache"), {operation("record_hits")}),
         sm::make_counter("page_cache_errors", [this] { return _stats.eviction_errors; },
-                sm::description("Failures to evict pages from the disk page cache"), {operation("evict")}),
+                sm::description("Failures to evict pages from the object storage page cache"), {operation("evict")}),
         sm::make_counter("page_cache_bypasses", [this] { return _stats.dup_bypasses; },
-                sm::description("Index files of sstables which use the disk page cache, duplicated for resharding, which read without it"), {reason("dup")}),
+                sm::description("Index files of sstables which use the object storage page cache, duplicated for resharding, which read without it"), {reason("dup")}),
         sm::make_counter("page_cache_bypasses", [this] { return _stats.transform_bypasses; },
-                sm::description("Reads of sstables which use the disk page cache, transformed by a file I/O extension in a way which prevents it"), {reason("transform")}),
+                sm::description("Reads of sstables which use the object storage page cache, transformed by a file I/O extension in a way which prevents it"), {reason("transform")}),
     });
 }
 
@@ -794,7 +793,7 @@ future<> object_storage_page_cache_table::evict_in_background() {
             co_await count_bytes();
             counted = true;
         } catch (...) {
-            pclogger.debug("Failed to count the bytes in the disk page cache, will retry: {}", std::current_exception());
+            pclogger.debug("Failed to count the bytes in the object storage page cache, will retry: {}", std::current_exception());
         }
         if (counted) {
             break;
@@ -823,7 +822,7 @@ future<> object_storage_page_cache_table::evict_in_background() {
             break;
         } catch (...) {
             _stats.eviction_errors++;
-            pclogger.warn("Failed to evict pages from the disk page cache: {}", std::current_exception());
+            pclogger.warn("Failed to evict pages from the object storage page cache: {}", std::current_exception());
             failed = true;
         }
         if (failed) {

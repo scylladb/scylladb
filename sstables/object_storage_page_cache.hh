@@ -6,11 +6,11 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-// This file is part of the disk page cache of sstables on object storage
-// (the 'disk_cache': 'pages' keyspace storage option). It defines the
-// interface through which the sstables code uses the cache, which is
-// implemented in db/object_storage_page_cache_table.hh. How the cache splits
-// sstable components into pages is in object_storage_page_cache_geometry.hh.
+// This file is part of the object storage page cache (the 'disk_cache': 'pages'
+// keyspace storage option). It defines the interface through which the sstables
+// code uses the cache, which is implemented in
+// db/object_storage_page_cache_table.hh. How the cache splits sstable
+// components into pages is in object_storage_page_cache_geometry.hh.
 
 #pragma once
 
@@ -28,10 +28,10 @@
 
 namespace sstables {
 
-// An abstract interface to the disk page cache of sstables on object
-// storage: byte ranges ("pages") of sstable components, which were read from
-// the object store and are kept on the node's disk, so that reading them
-// again does not need another request to the object store.
+// An abstract interface to the object storage page cache: byte ranges ("pages")
+// of sstable components, which were read from the object store and are kept on
+// the node's disk, so that reading them again does not need another request to
+// the object store.
 //
 // The only implementation is db::object_storage_page_cache_table (in
 // db/object_storage_page_cache_table.hh), which stores the pages in the
@@ -88,12 +88,12 @@ public:
 
     // Drops all the cached pages of all the sstables except those in "live" -
     // the pages left in the cache by sstables which no longer exist on this
-    // shard (see sstables_manager::evict_orphans_from_disk_page_cache()).
+    // shard (see sstables_manager::evict_orphans_from_page_cache()).
     virtual future<> evict_other_sstables(const std::unordered_set<sstable_id>& live) = 0;
 
     // Copies to this shard's cache the pages which another shard cached for
     // the sstable - which moved from that shard to this one, keeping its
-    // sstable_id (see sstables_manager::copy_disk_cached_pages()).
+    // sstable_id (see sstables_manager::copy_cached_pages()).
     virtual future<> copy_sstable_from_shard(sstable_id sst, shard_id from) = 0;
 
     // The cache's statistics (see object_storage_page_cache_stats.hh).
