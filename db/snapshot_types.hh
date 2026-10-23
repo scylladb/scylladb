@@ -124,6 +124,11 @@ struct snapshot_table_entry {
     constexpr bool operator==(const snapshot_table_entry& o) const noexcept = default;
 };
 
+struct snapshot_tablet_cleanup_entry {
+    dht::token first_token;
+    int64_t write_timestamp;
+};
+
 // Tablet as of the time of snapshot
 struct snapshot_tablet_entry {
     size_t tablet_id;
