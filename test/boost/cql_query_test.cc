@@ -1488,6 +1488,216 @@ SEASTAR_TEST_CASE(test_tablets_routing_v2_conditional_statements) {
     }, std::move(cfg));
 }
 
+// Executes a statement, given as query text or as the ID of a prepared
+// statement, and tells whether the response carries tablets-routing-v1
+// information. A statement that has to run on another shard, like LWT, bounces
+// there. It's then executed there the way the transport does: with the client
+// state moved there, which remembers the shard the request came to.
+static bool returns_tablets_routing_v1(cql_test_env& e,
+        const std::variant<sstring, cql3::prepared_cache_key_type>& statement,
+        const std::vector<cql3::raw_value>& values,
+        db::consistency_level cl) {
+    const auto make_options = [&] {
+        return std::make_unique<cql3::query_options>(cl,
+                cql3::raw_value_vector_with_unset(values),
+                cql3::query_options::specific_options::DEFAULT);
+    };
+    const auto* query = std::get_if<sstring>(&statement);
+    const auto* id = std::get_if<cql3::prepared_cache_key_type>(&statement);
+
+    const auto result = query
+            ? e.execute_cql(*query, make_options()).get()
+            : e.execute_prepared_with_qo(*id, make_options()).get();
+    if (!result->as_bounce()) {
+        return has_tablet_routing(result);
+    }
+
+    const auto moved_client_state = e.local_client_state().move_to_other_shard();
+    return smp::submit_to(result->as_bounce()->target_shard(), [&] {
+        return seastar::async([&] {
+            auto client_state = moved_client_state.get();
+            service::query_state query_state(client_state, empty_service_permit());
+            auto& qp = e.local_qp();
+            const auto options = make_options();
+            ::shared_ptr<cql_transport::messages::result_message> result;
+
+            if (query) {
+                result = qp.execute_direct_without_checking_exception_message(
+                        std::string_view(*query), query_state,
+                        cql3::dialect{}, *options).get();
+            } else {
+                auto prepared = qp.get_prepared(*id);
+                BOOST_REQUIRE(prepared);
+                options->prepare(prepared->bound_names);
+                auto stmt = prepared->statement;
+                result = qp.execute_prepared_without_checking_exception_message(
+                        query_state, std::move(stmt),
+                        *options, std::move(prepared),
+                        *id, false).get();
+            }
+
+            return has_tablet_routing(cql_transport::messages::propagate_exception_as_future(
+                    std::move(result)).get());
+        });
+    }).get();
+}
+
+// Executes a prepared statement on this shard with tablets-routing-v2
+// negotiated, once with each of two blocks that differ only in their value
+// nibble. They can't both match the tablet's version, so if the server checks
+// the version, at least one of the responses carries routing information.
+// Tells whether one does. The client state of the shard negotiates what it did
+// before afterwards.
+static bool returns_tablets_routing_v2(cql_test_env& e,
+        const cql3::prepared_cache_key_type& id,
+        const std::vector<cql3::raw_value>& values,
+        db::consistency_level cl) {
+    const auto original_exts = e.local_client_state().get_protocol_extensions();
+    auto exts = original_exts;
+    exts.remove(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1);
+    exts.set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL);
+    e.local_client_state().set_protocol_extensions(std::move(exts));
+
+    bool routing_information = false;
+    for (const auto block : {locator::tablet_version_block{0x00}, locator::tablet_version_block{0x01}}) {
+        auto options = std::make_unique<cql3::query_options>(cl,
+                cql3::raw_value_vector_with_unset(values),
+                cql3::query_options::specific_options::DEFAULT);
+        options->set_tablet_version_block(block);
+        const auto result = e.execute_prepared_with_qo(id, std::move(options)).get();
+        routing_information |= has_tablets_routing_v2(result);
+    }
+
+    e.local_client_state().set_protocol_extensions(original_exts);
+    return routing_information;
+}
+
+// On an eventually consistent table, the query text of a statement gets no
+// routing information, even on the wrong shard. Once prepared, the statement
+// gets tablets-routing-v1 information on the wrong shard, and tablets-routing-v2
+// information if its tablet version block doesn't match. `shard` is the shard
+// of the partition the statement accesses.
+static void check_eventually_consistent_routing(cql_test_env& e,
+        const sstring& stmt,
+        const std::vector<cql3::raw_value>& values,
+        db::consistency_level cl,
+        unsigned shard) {
+    const auto id = e.prepare(stmt).get();
+
+    smp::submit_to((shard + 1) % this_smp_shard_count(), [&] {
+        return seastar::async([&] {
+            BOOST_REQUIRE_MESSAGE(!returns_tablets_routing_v1(e, stmt, values, cl),
+                    seastar::format("{} at {}: unexpected tablets-routing-v1 payload for query text", stmt, cl));
+            BOOST_REQUIRE_MESSAGE(returns_tablets_routing_v1(e, id, values, cl),
+                    seastar::format("{} at {}: expected tablets-routing-v1 payload", stmt, cl));
+        });
+    }).get();
+
+    // On the shard of the partition, so that the statement doesn't bounce.
+    smp::submit_to(shard, [&] {
+        return seastar::async([&] {
+            BOOST_REQUIRE_MESSAGE(returns_tablets_routing_v2(e, id, values, cl), seastar::format(
+                    "{} at {}: expected tablets-routing-v2 payload", stmt, cl));
+        });
+    }).get();
+}
+
+// On a strongly consistent table, a prepared statement gets tablets-routing-v2
+// information if its tablet version block doesn't match. `shard` is the shard
+// of the partition the statement accesses.
+static void check_strongly_consistent_routing(cql_test_env& e,
+        const sstring& stmt,
+        const std::vector<cql3::raw_value>& values,
+        db::consistency_level cl,
+        unsigned shard) {
+    const auto id = e.prepare(stmt).get();
+
+    smp::submit_to(shard, [&] {
+        return seastar::async([&] {
+            BOOST_REQUIRE_MESSAGE(returns_tablets_routing_v2(e, id, values, cl), seastar::format(
+                    "{} at {}: expected tablets-routing-v2 payload", stmt, cl));
+        });
+    }).get();
+}
+
+// Reproducer of SCYLLADB-5658.
+//
+// The driver computes the token of a statement from the partition key bind
+// indices it got in the PREPARED metadata of the statement. Query text has no
+// such metadata, even if it binds the partition key, so it must not get routing
+// information, even on the wrong shard. Prepared statements of every kind must
+// still get it.
+SEASTAR_TEST_CASE(test_sending_tablet_info_only_for_prepared_statements) {
+    // The statements have to hit the wrong shard.
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
+        return make_ready_future<>();
+    }
+
+    auto cfg = tablet_v2_cql_test_config();
+    // Paxos needs storage_proxy::remote.
+    cfg.need_remote_proxy = true;
+
+    // A statement of each kind the server returns routing information for, binding
+    // the partition key. The statements are on a table (pk int, ck int, v int,
+    // PRIMARY KEY (pk, ck)), which {} stands for, and all their bind markers are
+    // ints.
+    struct routable_statement {
+        std::string_view cql;
+        db::consistency_level cl;
+        // Whether strongly consistent tables support the statement.
+        bool strongly_consistent;
+    };
+    static constexpr std::array<routable_statement, 8> routable_statements = {{
+        {"INSERT INTO {} (pk, ck, v) VALUES (?, ?, ?)",               db::consistency_level::QUORUM, true},
+        {"UPDATE {} SET v = ? WHERE pk = ? AND ck = ?",               db::consistency_level::QUORUM, true},
+        {"DELETE FROM {} WHERE pk = ? AND ck = ?",                    db::consistency_level::QUORUM, true},
+        {"SELECT v FROM {} WHERE pk = ?",                             db::consistency_level::QUORUM, true},
+        {"INSERT INTO {} (pk, ck, v) VALUES (?, ?, ?) IF NOT EXISTS", db::consistency_level::QUORUM, false},
+        {"UPDATE {} SET v = ? WHERE pk = ? AND ck = ? IF v = ?",      db::consistency_level::QUORUM, false},
+        {"DELETE FROM {} WHERE pk = ? AND ck = ? IF EXISTS",          db::consistency_level::QUORUM, false},
+        {"SELECT v FROM {} WHERE pk = ?",                             db::consistency_level::SERIAL, false},
+    }};
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // The shard of a partition mustn't change once the test has picked it.
+        e.get_storage_service().local().set_tablet_balancing_enabled(false).get();
+
+        // Creates a table in a new keyspace, and returns the shard of the
+        // partition pk = 1.
+        const auto create_table = [&e] (std::string_view ks, bool strongly_consistent) {
+            e.execute_cql(seastar::format(
+                "CREATE KEYSPACE {} WITH replication = "
+                "{{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'initial': 1}} "
+                "{}",
+                ks, strongly_consistent ? "AND consistency = 'global'" : "")).get();
+            e.execute_cql(seastar::format(
+                "CREATE TABLE {}.tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))", ks)).get();
+
+            const auto schema = e.local_db().find_schema(sstring(ks), "tbl");
+            const auto pk = partition_key::from_singular(*schema, int32_t{1});
+            return schema->table().shard_for_reads(dht::get_token(*schema, pk.view()));
+        };
+        const unsigned ec_shard = create_table("ks_ec", false);
+        const unsigned sc_shard = create_table("ks_sc", true);
+
+        // Every statement targets pk = 1.
+        const auto value = cql3::raw_value::make_value(int32_type->decompose(int32_t{1}));
+        for (const auto& s : routable_statements) {
+            const size_t marker_count = std::ranges::count(s.cql, '?');
+            const std::vector<cql3::raw_value> values(marker_count, value);
+            const auto ec_stmt = seastar::format(fmt::runtime(s.cql), "ks_ec.tbl");
+            const auto sc_stmt = seastar::format(fmt::runtime(s.cql), "ks_sc.tbl");
+
+            check_eventually_consistent_routing(e, ec_stmt, values, s.cl, ec_shard);
+            if (s.strongly_consistent) {
+                check_strongly_consistent_routing(e, sc_stmt, values, s.cl, sc_shard);
+            }
+        }
+    }, std::move(cfg));
+}
+
 // The parser counts markers for one statement at a time, but used to hand
 // every statement of a multi-statement parse all the markers it had seen so
 // far, so a later statement inherited the markers of the ones before it.

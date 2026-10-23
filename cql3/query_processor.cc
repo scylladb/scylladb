@@ -766,6 +766,8 @@ query_processor::prepare(utils::chunked_string query_string, const service::clie
         auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
         auto prep_entry = co_await _prepared_cache.get_pinned(key, [this, &query_string, &client_state, d] {
                 auto prepared = get_statement(query_string, client_state, d);
+                // The driver gets the partition key bind indices in the PREPARED metadata.
+                prepared->statement->set_may_use_token_aware_routing(!prepared->partition_key_bind_indices.empty());
                 prepared->calculate_metadata_id();
                 auto bound_terms = prepared->statement->get_bound_terms();
                 if (bound_terms > std::numeric_limits<uint16_t>::max()) {

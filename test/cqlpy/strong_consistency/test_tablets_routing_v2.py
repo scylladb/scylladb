@@ -24,13 +24,18 @@ import pytest
 from test.pylib.skip_types import skip_env
 
 from .. import cql_frames
-from ..util import new_test_table
+from ..util import ScyllaMetrics, new_test_table
 
 EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL"
 PAYLOAD_KEY = "tablets-routing-v2"
 
 CL_QUORUM = 0x0004
 VALUES_FLAG = 0x01
+PAGE_SIZE_FLAG = 0x04
+PAGING_STATE_FLAG = 0x08
+
+ROWS = 0x0002
+HAS_MORE_PAGES_FLAG = 0x0002
 
 PROTOCOL_ERROR = 0x000A
 
@@ -54,12 +59,23 @@ def connect(request, host, scylla_only):
 
 
 # Sends an EXECUTE request of a prepared statement with the given int values.
-# `block` is the tablet version block, or None to leave it out.
-def execute(sock: socket.socket, statement_id: bytes, values: list[int], block: int | None) -> cql_frames.Response:
+# `block` is the tablet version block, or None to leave it out. The result is
+# paged if `page_size` is given, and continues from `paging_state` if given.
+def execute(sock: socket.socket, statement_id: bytes, values: list[int], block: int | None,
+            page_size: int | None = None, paging_state: bytes | None = None) -> cql_frames.Response:
+    flags = VALUES_FLAG
+    if page_size is not None:
+        flags |= PAGE_SIZE_FLAG
+    if paging_state is not None:
+        flags |= PAGING_STATE_FLAG
     body = cql_frames.encode_short_bytes(statement_id)
-    body += cql_frames.encode_short(CL_QUORUM) + cql_frames.encode_byte(VALUES_FLAG)
+    body += cql_frames.encode_short(CL_QUORUM) + cql_frames.encode_byte(flags)
     body += cql_frames.encode_short(len(values))
     body += b''.join(cql_frames.encode_bytes(cql_frames.encode_int(value)) for value in values)
+    if page_size is not None:
+        body += cql_frames.encode_int(page_size)
+    if paging_state is not None:
+        body += cql_frames.encode_bytes(paging_state)
     if block is not None:
         body += cql_frames.encode_byte(block)
     return cql_frames.request(sock, cql_frames.EXECUTE, body)
@@ -100,14 +116,26 @@ def routing_information_of(response: cql_frames.Response) -> RoutingInformation 
     return None if payload is None else RoutingInformation(payload)
 
 
+# The paging state of a Rows result, or None if it's the last page.
+def paging_state_of(response: cql_frames.Response) -> bytes | None:
+    assert response.opcode == cql_frames.RESULT
+    assert response.body.read_int() == ROWS
+    flags = response.body.read_int()
+    response.body.read_int()  # The column count.
+    return response.body.read_bytes() if flags & HAS_MORE_PAGES_FLAG else None
+
+
 # The two blocks differ only in their value nibble, so they can't both match the
 # tablet's version: if the server checks the version, at least one of the
 # responses carries routing information. Returns the routing information of
-# each response, None for none.
-def execute_with_both_blocks(sock: socket.socket, statement_id: bytes, values: list[int]) -> list[RoutingInformation | None]:
+# each response, None for none. The paging arguments are as in execute().
+def execute_with_both_blocks(sock: socket.socket, statement_id: bytes, values: list[int],
+                             page_size: int | None = None,
+                             paging_state: bytes | None = None) -> list[RoutingInformation | None]:
     infos: list[RoutingInformation | None] = []
     for block in (0x00, 0x01):
-        infos.append(routing_information_of(execute(sock, statement_id, values, block)))
+        response = execute(sock, statement_id, values, block, page_size, paging_state)
+        infos.append(routing_information_of(response))
     return infos
 
 
@@ -130,6 +158,12 @@ def tablet_last_tokens(cql, table: str) -> list[int]:
                            f"AND table_name = '{name}'").one().id
     return [row.last_token for row in cql.execute(f"SELECT last_token FROM system.tablets "
                                                   f"WHERE table_id = {table_id}")]
+
+
+# The number of pages so far whose statement was prepared anew with the query
+# plan their paging state pins.
+def paging_plan_rederivations(cql) -> int:
+    return int(ScyllaMetrics.query(cql).get("scylla_cql_select_paging_plan_rederivations") or 0)
 
 
 # Without the extension, an EXECUTE request carries no tablet version block, and
@@ -215,3 +249,29 @@ def test_no_routing_information_for_range_scan(cql, connect, test_keyspace):
 def test_no_routing_information_for_literal_partition_key(cql, connect, test_keyspace):
     assert_no_routing_information(cql, connect, test_keyspace,
                                   "INSERT INTO {} (pk, ck, v) VALUES (1, ?, ?)", [1, 1])
+
+
+# A page continues with the query plan of the first page. If the plan of the
+# prepared statement has changed since, the server prepares the statement anew
+# with the plan of the first page. It's still the statement the driver
+# prepared, so the server still checks the tablet version block.
+def test_routing_information_after_query_plan_change(cql, connect, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table, connect() as sock:
+        for ck in range(2):
+            cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, {ck}, 1)")
+        query = f"SELECT ck FROM {table} WHERE pk = ? AND v = ? ALLOW FILTERING"
+        statement_id = cql.prepare(query).query_id
+        version = routing_information(sock, statement_id, [1, 1]).version
+        first_page = execute(sock, statement_id, [1, 1], tablet_version_block(version, 0), page_size=1)
+        paging_state = paging_state_of(first_page)
+        assert paging_state is not None
+
+        # The paging state pins the base table, while the statement, prepared
+        # anew, reads the index. The server only returns routing information
+        # for reads of the base table.
+        cql.execute(f"CREATE INDEX ON {table} ((pk), v)")
+        assert cql.prepare(query).query_id == statement_id
+        rederivations = paging_plan_rederivations(cql)
+        infos = execute_with_both_blocks(sock, statement_id, [1, 1], page_size=1, paging_state=paging_state)
+        assert paging_plan_rederivations(cql) > rederivations
+        assert any(info is not None for info in infos)
