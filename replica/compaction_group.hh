@@ -108,11 +108,12 @@ class compaction_group : public compaction::compaction_backlog_source {
     // only once the flushed sstables are on disk and in the sstable set, so a
     // mutation of this group at or below it is in an sstable at any moment.
     db::replay_position _highest_flushed_rp;
-    // The rates this group tracks share the window and the start, so rates read from them
-    // at the same time cover the same interval, whether the window has filled or not, and
-    // can be compared and combined.
-    // FIXME: make the window configurable.
+    // The rates this group tracks share the start, so rates read from them at the same
+    // time end together, whether their windows have filled or not. The flushed rates share
+    // the window too, so they can be divided; the compacted rate has its own, shorter one.
+    // FIXME: make the windows configurable.
     static constexpr lowres_db_clock::duration rate_window = std::chrono::minutes(30);
+    static constexpr lowres_db_clock::duration achieved_window = std::chrono::minutes(5);
     lowres_db_clock::time_point _rates_start = lowres_db_clock::now();
     // Bytes flushed from memtables into this group, which the compaction controller
     // will use to match compaction to ingestion.
@@ -122,6 +123,13 @@ class compaction_group : public compaction::compaction_backlog_source {
     // which a storm of small flushes barely moves.
     struct squared_bytes;
     utils::moving_average_rate<squared_bytes, double, lowres_db_clock> _flushed_squared_bytes{rate_window, _rates_start};
+    // Bytes regular compaction compacted in this group, credited from the progress of the
+    // compactions running at every update of the compaction controller, and in full once
+    // they complete, so the rate follows compaction in flight rather than its completion,
+    // which with tablets and incremental compaction happens every few GB at most.
+    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _compacted_bytes{achieved_window, _rates_start};
+    // The same over the rate window.
+    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _compacted_bytes_long{rate_window, _rates_start};
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();

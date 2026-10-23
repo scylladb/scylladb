@@ -63,6 +63,9 @@ public:
     virtual api::timestamp_type min_memtable_live_row_marker_timestamp() const = 0;
     virtual bool memtable_has_key(const dht::decorated_key& key) const = 0;
     virtual future<> on_compaction_completion(compaction_completion_desc desc, sstables::offstrategy offstrategy) = 0;
+    // Bytes regular compaction compacted since it last reported, counted toward the
+    // group's compacted bytes, the rate the compaction controller compares to its target.
+    virtual void add_compacted_bytes(uint64_t bytes) noexcept = 0;
     virtual bool is_auto_compaction_disabled_by_user() const noexcept = 0;
     virtual bool tombstone_gc_enabled() const noexcept = 0;
     virtual tombstone_gc_state get_tombstone_gc_state() const noexcept = 0;

@@ -9,6 +9,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/aligned_buffer.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/util/closeable.hh>
 
 #include "test/lib/scylla_test_case.hh"
@@ -129,6 +130,7 @@ public:
     virtual tombstone_gc_state get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
     virtual compaction::compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
     virtual const std::string get_group_id() const noexcept override { return "0"; }
+    void add_compacted_bytes(uint64_t) noexcept override {}
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
     int64_t get_sstables_repaired_at() const noexcept override { return 0; }
@@ -272,4 +274,80 @@ SEASTAR_TEST_CASE(compactions_dont_cross_group_boundary_test) {
             validate_sstable(sst);
         }
     });
+}
+
+static schema_ptr make_rates_test_schema(const char* name) {
+    return schema_builder(this_smp_shard_count(), "tests", name)
+            .with_column("id", utf8_type, column_kind::partition_key)
+            .with_column("cl", int32_type, column_kind::clustering_key)
+            .with_column("value", int32_type)
+            .build();
+}
+
+static mutation make_partition(schema_ptr s, const dht::decorated_key& key, int rows) {
+    mutation m(s, key);
+    for (int i = 0; i < rows; ++i) {
+        auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(i)});
+        m.set_clustered_cell(c_key, bytes("value"), data_value(int32_t(i)), api::new_timestamp());
+    }
+    return m;
+}
+
+// Scheduling groups of their own for regular compaction and for the other kinds, so that
+// the compaction manager of the test env tells them apart. Must be made in a thread.
+struct compaction_scheduling_groups {
+    seastar::scheduling_group compaction = create_scheduling_group("test_compaction", 1000).get();
+    seastar::scheduling_group maintenance = create_scheduling_group("test_maintenance", 200).get();
+
+    ~compaction_scheduling_groups() {
+        destroy_scheduling_group(maintenance).get();
+        destroy_scheduling_group(compaction).get();
+    }
+    test_env_config config() const {
+        return test_env_config{.compaction_scheduling_group = compaction, .maintenance_scheduling_group = maintenance};
+    }
+};
+
+// The compacted bytes count the input of a regular compaction exactly once: as it runs,
+// from its progress, whenever the compaction manager credits it, and when it ends, for
+// the remainder.
+SEASTAR_THREAD_TEST_CASE(compaction_group_credits_regular_compaction_input_once_test) {
+    compaction_scheduling_groups sgs;
+    test_env::do_with_async([] (test_env& env) {
+        auto s = make_rates_test_schema("compaction_group_credits");
+        auto t = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(t);
+        t->start();
+        t->disable_auto_compaction().get();
+        auto rates = [&] { return t.as_compaction_backlog_source().rates(); };
+
+        // Large enough for the compaction to report progress many times as it reads.
+        for (const auto& key : tests::generate_partition_keys(4, s)) {
+            t->apply(make_partition(s, key, 50000));
+            t->flush().get();
+        }
+        BOOST_REQUIRE_EQUAL(t->sstables_count(), 4);
+        uint64_t input_data_size = 0;
+        for (const auto& sst : *t->get_sstables()) {
+            input_data_size += sst->data_size();
+        }
+
+        // Credits the compaction in flight, as the compaction controller will, until it ends.
+        auto& cm = t->get_compaction_manager();
+        uint64_t credited_in_flight = 0;
+        t->enable_auto_compaction();
+        t->trigger_compaction();
+        while (t->sstables_count() != 1) {
+            credited_in_flight += cm.credit_compaction_progress();
+            seastar::sleep(std::chrono::milliseconds(1)).get();
+        }
+        // It credits the rest of its input once it ends.
+        cm.await_ongoing_compactions(nullptr).get();
+        BOOST_REQUIRE_GT(credited_in_flight, 0);
+        BOOST_REQUIRE_LE(credited_in_flight, input_data_size);
+        BOOST_REQUIRE_EQUAL(rates().compacted_bytes.amount(), input_data_size);
+        // Nothing is left to credit once it ended.
+        BOOST_REQUIRE_EQUAL(cm.credit_compaction_progress(), 0);
+        BOOST_REQUIRE_EQUAL(rates().compacted_bytes.amount(), input_data_size);
+    }, sgs.config()).get();
 }

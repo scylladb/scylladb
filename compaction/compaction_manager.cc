@@ -467,6 +467,12 @@ tombstone_gc_state compaction_task_executor::make_gc_state(const compaction_desc
     return t.get_tombstone_gc_state();
 }
 
+// Whether the task runs compactions the compaction controller drives: regular compaction,
+// in the compaction scheduling group, whose shares the controller sets.
+static bool compaction_driven_by_controller(const compaction_manager& cm, const compaction_task_executor& task) noexcept {
+    return task.scheduling_group() == cm.compaction_sg();
+}
+
 future<compaction_result> compaction_task_executor::compact_sstables(compaction_descriptor descriptor, ::compaction::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
                                                                                sstables::offstrategy offstrategy) {
     compaction_group_view& t = *_compacting_table;
@@ -557,7 +563,33 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
     }
 
     _scheduling_group = current_scheduling_group();
-    co_return co_await ::compaction::compact_sstables(std::move(descriptor), cdata, t, _progress_monitor);
+    auto input_data_size = std::ranges::fold_left(descriptor.sstables | std::views::transform(&sstables::sstable::data_size), uint64_t(0), std::plus());
+    auto res = co_await ::compaction::compact_sstables(std::move(descriptor), cdata, t, _progress_monitor);
+    if (compaction_driven_by_controller(_cm, *this)) {
+        // What the progress didn't credit yet, e.g. as nothing credited it since, is credited
+        // now, so that the input counts in full.
+        t.add_compacted_bytes(_progress_monitor.credit_up_to(input_data_size));
+    }
+    co_return res;
+}
+
+uint64_t compaction_task_executor::credit_compaction_progress() noexcept {
+    if (!_compacting_table) {
+        return 0;
+    }
+    auto credited = _progress_monitor.credit_up_to(_progress_monitor.get_progress());
+    _compacting_table->add_compacted_bytes(credited);
+    return credited;
+}
+
+uint64_t compaction_manager::credit_compaction_progress() noexcept {
+    uint64_t credited = 0;
+    for (auto& task : _tasks) {
+        if (compaction_driven_by_controller(*this, task)) {
+            credited += task.credit_compaction_progress();
+        }
+    }
+    return credited;
 }
 future<> compaction_manager::update_history(compaction_group_view& t, compaction_result&& res, const ::compaction::compaction_data& cdata) {
     auto started_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.started_at.time_since_epoch());

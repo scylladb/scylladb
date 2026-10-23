@@ -147,6 +147,7 @@ public:
     const std::string get_group_id() const noexcept override {
         return _group_id;
     }
+    void add_compacted_bytes(uint64_t) noexcept override {}
     seastar::condition_variable& get_staging_done_condition() noexcept override {
         return _staging_condition;
     }
