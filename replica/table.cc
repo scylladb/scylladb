@@ -3732,6 +3732,35 @@ bool has_size_on_pending (locator::tablet_transition_stage stage) {
     }
 }
 
+// Whether the pending replica of a tablet in transition at `stage` holds the tablet's
+// storage. It does from the first stage it applies, whichever that is, until its cleanup at
+// cleanup_target: a replica that lags in group0 may apply several stage changes at once, and
+// has to end up with the storage it would have had after applying them one by one. From
+// cleanup_target on, a pending replica without storage has either never held data, or had it
+// erased by its cleanup.
+static bool has_storage_on_pending(locator::tablet_transition_stage stage) {
+    switch (stage) {
+        case locator::tablet_transition_stage::allow_write_both_read_old:               [[fallthrough]];
+        case locator::tablet_transition_stage::write_both_read_old:                     [[fallthrough]];
+        case locator::tablet_transition_stage::write_both_read_old_fallback_cleanup:    [[fallthrough]];
+        case locator::tablet_transition_stage::streaming:                               [[fallthrough]];
+        case locator::tablet_transition_stage::write_both_read_new:                     [[fallthrough]];
+        case locator::tablet_transition_stage::use_new:                                 [[fallthrough]];
+        case locator::tablet_transition_stage::cleanup:                                 [[fallthrough]];
+        case locator::tablet_transition_stage::end_migration:                           [[fallthrough]];
+        case locator::tablet_transition_stage::sc_rollback:                             [[fallthrough]];
+        case locator::tablet_transition_stage::sc_remove_pending:                       [[fallthrough]];
+        case locator::tablet_transition_stage::rebuild_repair:                          [[fallthrough]];
+        case locator::tablet_transition_stage::repair:                                  [[fallthrough]];
+        case locator::tablet_transition_stage::end_repair:                              [[fallthrough]];
+        case locator::tablet_transition_stage::restore:
+            return true;
+        case locator::tablet_transition_stage::cleanup_target:                          [[fallthrough]];
+        case locator::tablet_transition_stage::revert_migration:
+            return false;
+    }
+}
+
 locator::combined_load_stats tablet_storage_group_manager::table_load_stats() const {
     locator::table_load_stats table_stats;
     table_stats.split_ready_seq_number = _split_ready_seq_number;
@@ -4046,8 +4075,8 @@ void tablet_storage_group_manager::update_effective_replication_map(
         .host = erm.get_token_metadata().get_my_id(),
         .shard = this_shard_id()
     };
-    auto tablet_migrates_in = [this_replica] (locator::tablet_transition_info& transition_info) {
-        return transition_info.stage == locator::tablet_transition_stage::allow_write_both_read_old && transition_info.pending_replica == this_replica;
+    auto tablet_migrates_in = [this_replica] (const locator::tablet_transition_info& transition_info) {
+        return transition_info.pending_replica == this_replica && has_storage_on_pending(transition_info.stage);
     };
     bool tablet_migrating_in = false;
     for (auto& transition : new_tablet_map->transitions()) {
