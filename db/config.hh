@@ -635,6 +635,7 @@ public:
     named_value<std::vector<object_storage_endpoint_param>> object_storage_endpoints;
     named_value<unsigned> object_storage_connections_per_shard;
     named_value<double> object_storage_clients_memory_fraction;
+    named_value<uint64_t> object_storage_page_cache_size_in_mb;
 
     named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;
     named_value<double> topology_barrier_stall_detector_threshold_seconds;
