@@ -3058,9 +3058,11 @@ future<> database::stop() {
     co_await _querier_cache.stop();
     dblog.info("Closing user sstables manager");
     co_await _user_sstables_manager->close();
-    // Destroyed only now, when all user sstables, and so their readers
-    // which may still use the cache after it was unplugged, were released.
-    _object_storage_page_cache.reset();
+    if (_object_storage_page_cache) {
+        dblog.info("Stopping the object storage page cache");
+        co_await _object_storage_page_cache->stop();
+        _object_storage_page_cache.reset();
+    }
     dblog.info("Closing system sstables manager");
     co_await _system_sstables_manager->close();
     dblog.info("Stopping concurrency semaphores");
@@ -3922,13 +3924,21 @@ void database::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
     _corrupt_data_handler->plug_system_keyspace(sys_ks);
     _user_sstables_manager->plug_sstables_registry(std::make_unique<db::system_keyspace_sstables_registry>(sys_ks));
     if (_cfg.check_experimental(db::experimental_features_t::feature::OBJECT_STORAGE_PAGE_CACHE)) {
-        _object_storage_page_cache = std::make_unique<db::object_storage_page_cache_table>(*this, sys_ks.query_processor());
+        _object_storage_page_cache = std::make_unique<db::object_storage_page_cache_table>(*this, sys_ks.query_processor(),
+                utils::updateable_value<uint64_t>(_cfg.object_storage_page_cache_size_in_mb));
+        _object_storage_page_cache->start(_user_sstables_manager->maintenance_sg());
         _user_sstables_manager->plug_object_storage_page_cache(*_object_storage_page_cache);
     }
 }
 
 future<> database::unplug_system_keyspace() noexcept {
+    // New readers don't use the cache, but those which already do may keep
+    // using it until their sstables are released - so it is only drained
+    // here, before the query processor stops, and stopped in stop().
     _user_sstables_manager->unplug_object_storage_page_cache();
+    if (_object_storage_page_cache) {
+        co_await _object_storage_page_cache->drain();
+    }
     _user_sstables_manager->unplug_sstables_registry();
     co_await _compaction_manager.unplug_system_keyspace();
     co_await _large_data_handler->unplug_system_keyspace();

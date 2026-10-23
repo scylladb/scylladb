@@ -805,6 +805,10 @@ private:
     // view, all sstables matching `filter` (from both the main and maintenance
     // sstable sets) are captured while compaction is disabled on that view,
     // and registered as compacting before re-enabling.  This guarantees:
+    //   1) every captured sstable belongs to the correct compaction group at
+    //      capture time (no cross-CG routing surprises), and
+    //   2) no other operation can move the inputs to a different compaction
+    //      group while the rewrite is in flight.
     future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> perform_component_rewrite(
             storage_group& sg,
             tasks::task_info info,
@@ -989,6 +993,9 @@ public:
     }
 
     // The streaming mutation reader differs from the regular mutation reader in that:
+    //  - Reflects all writes accepted by replica prior to creation of the
+    //    reader and a _bounded_ amount of writes which arrive later.
+    //  - Does not populate the cache
     // Requires ranges to be sorted and disjoint.
     // When compaction_time is engaged, the reader's output will be compacted, with the provided query time.
     // This compaction doesn't do tombstone garbage collection.
@@ -1710,6 +1717,9 @@ struct counter_update_guard {
 class db_user_types_storage;
 
 // Policy for sharded<database>:
+//   broadcast metadata writes
+//   local metadata reads
+//   use table::shard_for_reads()/table::shard_for_writes() for data
 
 class database : public peering_sharded_service<database>, qos::qos_configuration_change_subscriber {
     friend class ::database_test_wrapper;
@@ -1881,10 +1891,11 @@ private:
 
     std::unique_ptr<sstables::sstables_manager> _user_sstables_manager;
     // The object storage page cache, which the user sstables manager uses, if
-    // its experimental feature is enabled. It is created when the system
-    // keyspace is plugged, before any user sstable is loaded, and destroyed in
-    // stop(), after the user sstables manager was closed - so after all user
-    // sstables, and their readers, were released.
+    // its experimental feature is enabled. It is created and started when the
+    // system keyspace is plugged, before any user sstable is loaded; drained
+    // when it is unplugged, before the query processor stops; and stopped and
+    // destroyed in stop(), after the user sstables manager was closed - so
+    // after all user sstables, and their readers, were released.
     std::unique_ptr<db::object_storage_page_cache_table> _object_storage_page_cache;
     std::unique_ptr<sstables::sstables_manager> _system_sstables_manager;
 
@@ -2415,10 +2426,13 @@ public:
     //
     // Result:
     // * throws an std::invalid_argument exception with a relevant message if there is a keyspace that violates RF-rack-validity
+    //   and RF-rack-validity must be enforced for that keyspace.
     // * Otherwise, a warning will be printed for all keyspaces that are not RF-rack-valid but not
+    //   enforced, and no exception should be produced.
     //
     // Preconditions:
     // * the `locator::topology` instance corresponding to the passed `locator::token_metadata_ptr`
+    //   must contain a complete list of racks and data centers in the cluster.
     void check_rf_rack_validity(const locator::token_metadata_ptr) const;
 
     // Verifies whether all keyspaces that require RF-rack-validity (as determined by enforce_rf_rack_validity_for_keyspace)
@@ -2430,13 +2444,16 @@ public:
     //
     // Preconditions:
     // * The provided locator::topology instance (from the passed locator::token_metadata_ptr)
+    //   must contain a complete list of racks and data centers in the cluster.
     bool check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr, locator::rf_rack_topology_operation) const;
 
     // Verify that all tablet keyspaces have a rack list configured.
     //
     // Result:
     // * If `enforce_rack_list`, throws an exception with a relevant message
+    //   if there is a tablet keyspace that uses numeric replication factors.
     // * If not `enforce_rack_list`, a warning will be printed for all keyspaces
+    //   that use numeric replication factors, but no exception should be thrown.
     void check_rack_list_everywhere(const bool enforce_rack_list) const;
 
 private:
