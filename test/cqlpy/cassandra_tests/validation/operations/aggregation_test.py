@@ -1329,7 +1329,7 @@ def testWrongKeyspace(cql):
 # Reproduces #13855 (a frozen collection can't be passed to a function
 # taking a non-frozen collection) and #13866 (functions should reject
 # frozen argument types)
-@pytest.mark.xfail(reason="#13855, #13866")
+@pytest.mark.xfail(reason="#13866")
 def testFunctionWithFrozenSetType(cql):
     with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int PRIMARY KEY, b frozen<set<int>>)") as table:
         execute(cql, table, "CREATE INDEX ON %s (FULL(b))")
@@ -1380,7 +1380,7 @@ def testFunctionWithFrozenSetType(cql):
 # Reproduces #13855 (a frozen collection can't be passed to a function
 # taking a non-frozen collection) and #13866 (functions should reject
 # frozen argument types)
-@pytest.mark.xfail(reason="#13855, #13866")
+@pytest.mark.xfail(reason="#13866")
 def testFunctionWithFrozenListType(cql):
     with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int PRIMARY KEY, b frozen<list<int>>)") as table:
         execute(cql, table, "CREATE INDEX ON %s (FULL(b))")
@@ -1425,7 +1425,7 @@ def testFunctionWithFrozenListType(cql):
 # Reproduces #13855 (a frozen collection can't be passed to a function
 # taking a non-frozen collection) and #13866 (functions should reject
 # frozen argument types)
-@pytest.mark.xfail(reason="#13855, #13866")
+@pytest.mark.xfail(reason="#13866")
 def testFunctionWithFrozenMapType(cql):
     with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int PRIMARY KEY, b frozen<map<int, int>>)") as table:
         execute(cql, table, "CREATE INDEX ON %s (FULL(b))")
