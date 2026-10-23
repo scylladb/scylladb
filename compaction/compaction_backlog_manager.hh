@@ -9,6 +9,7 @@
 #pragma once
 
 #include <unordered_set>
+#include <limits>
 #include <memory>
 #include "sstables/shared_sstable.hh"
 #include "sstables/types_fwd.hh"
@@ -84,6 +85,36 @@ public:
     virtual compaction_group_stats stats() const = 0;
 };
 
+// Compaction rates of a compaction group, which the compaction controller compares
+// to set the shares of compaction.
+struct compaction_rates {
+    // TARGET_COMPACTION_RATE: the bytes the group's data has to be compacted at for
+    // the compactions pending in it to end by the time the next ones are due, as the
+    // group's strategy models it. 0 when nothing is pending.
+    utils::rate<utils::units::bytes> target;
+    // The bytes regular compaction compacted, from the group's stats.
+    utils::rate<utils::units::bytes> achieved;
+    // The same over the window of the rates the target is based on.
+    utils::rate<utils::units::bytes> achieved_long;
+};
+
+// The rates of a group whose strategy has no model for the target: the target is the
+// rate the group flushes at, the least compaction has to keep up with.
+inline compaction_rates achieved_compaction_rates(const compaction_backlog_source& src) {
+    auto rates = src.stats().rates;
+    return compaction_rates{.target = rates.flushed_bytes, .achieved = rates.compacted_bytes, .achieved_long = rates.compacted_bytes_long};
+}
+
+// The rates of a group whose tracker failed: the target is unknown, i.e. infinite, for
+// which the controller gives compaction its maximum shares, as the backlog controller
+// does for the unknown backlog of a failed tracker.
+// FIXME: a failed tracker stays disabled, so compaction keeps its maximum shares until
+// the group's tracker is replaced. The backlog controller is affected the same way. Both
+// should recover, by having the tracker's state reset. See https://github.com/scylladb/scylla/issues/10297.
+inline compaction_rates unknown_compaction_rates() noexcept {
+    return compaction_rates{.target = utils::rate<utils::units::bytes>(std::numeric_limits<double>::infinity(), std::chrono::seconds(1))};
+}
+
 // Fixed cost, in bytes, that each sstable adds to the backlog on top of its own size.
 //
 // The backlog of an sstable is (Si - Ci) * log4(T / Si), so tiny sstables barely move
@@ -152,6 +183,9 @@ public:
         // FIXME: Should provide strong exception safety guarantees
         virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) = 0;
         virtual double backlog(const compaction_backlog_source& src, const ongoing_writes& ow, const ongoing_compactions& oc) const = 0;
+        // The compaction rates of the group, from the strategy's model of how much work
+        // ingestion produces.
+        virtual compaction_rates rates(const compaction_backlog_source& src) const = 0;
         virtual ~impl() { }
     };
 
@@ -162,6 +196,9 @@ public:
     ~compaction_backlog_tracker();
 
     double backlog(const compaction_backlog_source& src);
+    // When the rates can't be computed, the tracker is disabled and they are unknown:
+    // unknown_compaction_rates().
+    compaction_rates rates(const compaction_backlog_source& src);
     // FIXME: Should provide strong exception safety guarantees
     void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts);
     void register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp);
