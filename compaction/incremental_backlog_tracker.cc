@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <algorithm>
+
 #include "incremental_backlog_tracker.hh"
 #include "compaction.hh"
 #include "sstables/sstables.hh"
@@ -34,7 +36,8 @@ unsigned incremental_backlog_tracker::effective_min_threshold(const compaction_b
 
 incremental_backlog_tracker::backlog_calculation_result
 incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compaction_backlog_source& src, const incremental_compaction_strategy_options& options) {
-    auto threshold = effective_min_threshold(src);
+    size_t threshold = effective_min_threshold(src);
+    size_t max_threshold = src.schema()->max_compaction_threshold();
     int64_t total_bytes = 0;
     int64_t total_backlog_bytes = 0;
     float sstables_backlog_contribution = 0.0f;
@@ -50,11 +53,37 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
         }
     }
 
+    size_t eligible_tiers = 0;
+    std::vector<pending_tier> pending_tiers;
+    const double mean_flush_size = src.stats().rates.mean_flush_size;
     if (!all.empty()) {
-      for (auto& [bucket, _] : incremental_compaction_strategy::get_buckets(all, options)) {
+      auto buckets = incremental_compaction_strategy::get_buckets(all, options);
+      // The mean size of the runs of each bucket, ascending, as runs are put in buckets in
+      // ascending order of size.
+      std::vector<double> run_sizes;
+      for (const auto& [bucket, bucket_size] : buckets) {
+          run_sizes.push_back(double(bucket_size) / bucket.size());
+      }
+      // The flush tier, the first whose runs are the size of the flushed sstables or larger,
+      // which every flushed byte passes through. The tiers above it are each a compaction
+      // their data went through on its way up.
+      size_t flush_tier = std::ranges::lower_bound(run_sizes, flush_tier_size(mean_flush_size, options)) - run_sizes.begin();
+      for (size_t i = 0; i < buckets.size(); i++) {
+        auto& bucket = buckets[i].first;
         if (!incremental_compaction_strategy::is_bucket_interesting(bucket, threshold)) {
             continue;
         }
+        eligible_tiers++;
+        // The runs the tier's next compaction reads, at most what one compaction takes.
+        // Runs being compacted are still in the set and count: the tier has work until
+        // the compaction ends.
+        auto runs = std::min(bucket.size(), max_threshold);
+        pending_tiers.push_back(pending_tier{
+            .runs = runs,
+            .run_size = run_sizes[i],
+            .ingestion = compaction::ingestion_rate_from_sstables(bucket, min_ingestion_span),
+            .tiers_below = i > flush_tier ? i - flush_tier : 0,
+        });
         for (const sstables::frozen_sstable_run& run_ptr : bucket) {
             auto& run = *run_ptr;
             auto data_size = run.data_size();
@@ -74,7 +103,10 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
         .total_backlog_bytes = total_backlog_bytes,
         .sstables_backlog_contribution = sstables_backlog_contribution,
         .sstable_runs_contributing_backlog = std::move(sstable_runs_contributing_backlog),
-        .threshold = threshold,
+        .threshold = unsigned(threshold),
+        .eligible_tiers = eligible_tiers,
+        .pending_tiers = std::move(pending_tiers),
+        .mean_flush_size = mean_flush_size,
     };
 }
 
@@ -84,6 +116,105 @@ void incremental_backlog_tracker::refresh(const compaction_backlog_source& src) 
     }
     _last_result = calculate_sstables_backlog_contribution(src, _options);
     _backlog_dirty = false;
+}
+
+double incremental_backlog_tracker::read_discount(double threshold, double sstables_per_read) {
+    return std::clamp(sstables_per_read / threshold, 1 / threshold, 1.0);
+}
+
+compaction_rates incremental_backlog_tracker::rates(const compaction_backlog_source& src) const {
+    refresh(src);
+    auto stats = src.stats();
+    // The threshold the tiers were found eligible by.
+    double threshold = _last_result.threshold;
+
+    // A tier with r runs of size S holds r * S bytes for compaction to read, and is due
+    // again once threshold more runs arrive, threshold * S / inflow seconds later. To end
+    // its compaction by then compaction has to read
+    //
+    //     r * S / (threshold * S / inflow + refill_tax)
+    //
+    // which, but for the tax, is inflow * r / threshold: S cancels, a bigger tier's
+    // compaction is longer, but so is its refill. Summed over the tiers with enough runs
+    // to compact, it is the rate at which each current compaction ends when the next one
+    // of its tier is due: about the inflow per eligible tier, since each holds at least
+    // threshold runs, and more in proportion to the runs past the threshold. The tiers are
+    // the write amplification as it stands, each one more rewrite of what is ingested,
+    // rather than an estimate of it from the size of the table. A tier below the threshold
+    // has nothing to compact and asks for nothing, so a table whose tree is in shape has a
+    // target of 0. A tier holding more than threshold runs asks for a repayment_refills'th
+    // of the excess on top, so that it shrinks by that much every refill:
+    //
+    //     (threshold + (r - threshold) / repayment_refills) * S / (threshold * S / inflow + refill_tax)
+    //
+    // Every flushed byte reaches the tier whose runs are the size of the flushed sstables,
+    // i.e. no smaller than bucket_low times their mean size, as ICS tiers them, so its
+    // inflow is the rate the table flushes at. Less reaches the tiers above it: a
+    // compaction keeps one version of each row, so overwrites and deletions shrink what moves up. In
+    // round 8 write-heavy, the second and third tiers above the flush tier received 54%
+    // and 21% of the flushed bytes; charging them all of it made the target four times
+    // the flush rate, which no shares reached, while compaction kept up with what there
+    // was to compact. A tier above the flush tier is charged the flushed bytes times what
+    // regular compaction kept of what it read, over the last two hours, once per tier below
+    // it. That's one ratio for all tiers, though the higher ones keep less: in round 8
+    // write-heavy it charged the first tier above 63% instead of 86%, the second 40%
+    // instead of 54% and the third 25% instead of 21%. A tier of the tiers below that is
+    // momentarily empty isn't counted, and the tier is charged more. A tier of runs smaller
+    // than the flushed sstables, which tiny flushes build while ICS keeps them apart from
+    // the rest (see tiny_sstables_written_recently), receives only the flushes of its size:
+    // its inflow is the rate its own data was ingested at, from its sstables, which can't
+    // be above the flush rate. Charging it the whole flush rate would ask for its few bytes
+    // to be compacted every fraction of a second. When the window has seen no flush, after
+    // a restart or once writes stopped for longer than it covers, the rate each tier's own
+    // data was ingested at stands in for all of them. Whatever the inflow, refill_tax keeps
+    // a tier from asking for more than its bytes per refill_tax.
+    //
+    // How much of the runs past the threshold the target asks to be gone by then depends
+    // on who pays for them. A point read touches one sstable per run that holds a version
+    // of its key, so the sstables a read touches, over the threshold, is how far the reads
+    // pay for a tier's worth of excess: see read_discount. While a tier is pending the
+    // target never drops below the ingestion rate, whatever the reads: every flushed byte
+    // is compacted at least once, so the number of sstables stays bounded while compaction
+    // is deferred.
+    auto sstables_per_read = stats.read_amplification.mean_sstables_read();
+    auto discount = read_discount(threshold, sstables_per_read);
+    const auto& flushed = stats.rates.flushed_bytes;
+    const bool flushing = flushed.amount() > 0;
+    // What a compaction keeps of what it reads; all of it until a regular compaction ended.
+    const auto& compacted_input = stats.rates.completed_input_bytes;
+    const double kept = compacted_input.amount() > 0 ? std::clamp(stats.rates.completed_output_bytes.amount() / compacted_input.amount(), 0.0, 1.0) : 1.0;
+    utils::rate<utils::units::bytes> needed;
+    for (const auto& tier : _last_result.pending_tiers) {
+        auto inflow = tier.ingestion;
+        if (flushing) {
+            // The flush tier and those above derive their inflow from the flush rate; a tier of smaller runs, from its own ingestion rate, up to the flush rate.
+            // The flush tier is the one the tiers were placed by when last computed, as their tiers_below were.
+            bool inflow_from_flush_rate = tier.run_size >= flush_tier_size(_last_result.mean_flush_size, _options);
+            if (inflow_from_flush_rate || flushed.per_second() < inflow.per_second()) {
+                inflow = flushed;
+            }
+            if (inflow_from_flush_rate) {
+                inflow = inflow * std::pow(kept, tier.tiers_below);
+            }
+        }
+        double per_second = 0;
+        if (inflow.per_second() > 0) {
+            auto refill = threshold * tier.run_size / inflow.per_second() + std::chrono::duration<double>(refill_tax).count();
+            auto runs_for_next_refill = threshold + (tier.runs - threshold) / repayment_refills;
+            per_second = runs_for_next_refill * tier.run_size / refill * discount;
+            needed = needed + utils::rate<utils::units::bytes>(per_second * inflow.interval().count(), inflow.interval());
+        }
+    }
+    auto target = needed;
+    if (flushing) {
+        target = _last_result.eligible_tiers == 0 ? flushed * 0.0 : (needed.per_second() > flushed.per_second() ? needed : flushed);
+    }
+
+    return compaction_rates{
+        .target = target,
+        .achieved = stats.rates.compacted_bytes,
+        .achieved_long = stats.rates.compacted_bytes_long,
+    };
 }
 
 incremental_backlog_tracker::incremental_backlog_tracker(incremental_compaction_strategy_options options) : _options(std::move(options)) {}
