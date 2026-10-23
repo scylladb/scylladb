@@ -90,10 +90,38 @@ public:
     void set_dict(const ZSTD_CDict* dict);
 };
 
+// A read position in the fragments of a snd_buf.
+// It lets a message be compressed as several independent frames.
+// The snd_buf must outlive the cursor.
+class snd_buf_cursor {
+    const seastar::temporary_buffer<char>* _frag;
+    size_t _pos = 0;
+    size_t _remaining;
+public:
+    explicit snd_buf_cursor(const seastar::rpc::snd_buf& data) noexcept;
+    // The number of bytes between the cursor and the end of the snd_buf.
+    size_t remaining() const noexcept { return _remaining; }
+    // Returns the next contiguous piece of data, at most `max_size` bytes long,
+    // and moves the cursor past it.
+    // The piece is empty only if the cursor is at the end, or if `max_size` is 0.
+    std::span<const char> next(size_t max_size) noexcept;
+};
+
+// Compresses the data at `in` as one frame, and moves `in` past the compressed data.
+//
+// The input is fed to the compressor fragment by fragment. If `should_end_frame` is null,
+// the frame contains all the remaining data. Otherwise, before each fragment is compressed,
+// except the last one of the data, `should_end_frame` is called. If it returns true,
+// the frame ends after this fragment, and the rest of the data stays in `in`.
+// So frames end only at fragment boundaries, and each frame has at least one fragment.
+seastar::rpc::snd_buf compress_impl(size_t head_space, snd_buf_cursor& in, stream_compressor& compressor, bool end_of_frame, size_t chunk_size,
+        bool (*should_end_frame)());
 seastar::rpc::snd_buf compress_impl(size_t head_space, const seastar::rpc::snd_buf& data, stream_compressor& compressor, bool end_of_frame, size_t chunk_size);
 seastar::rpc::rcv_buf decompress_impl(const seastar::rpc::rcv_buf& data, stream_decompressor& decompressor, bool end_of_frame, size_t chunk_size);
 uint32_t crc_impl(const seastar::rpc::snd_buf& data) noexcept;
 uint32_t crc_impl(const seastar::rpc::rcv_buf& data) noexcept;
+// Computes the CRC of the `size` bytes which follow `from`.
+uint32_t crc_impl(snd_buf_cursor from, size_t size) noexcept;
 
 // Size of the history buffer maintained by both sides of the compressed connection.
 // Governs the memory usage and effectiveness of streaming LZ4 compression.

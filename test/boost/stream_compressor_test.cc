@@ -111,6 +111,13 @@ void test_compressor_pair_basic_correctness(netw::stream_compressor& compressor,
         auto compressed = netw::compress_impl(0, input, compressor, end_of_frame, chunk_size);
         auto rcv_buf = convert_rpc_buf<rpc::rcv_buf>(std::move(compressed));
         auto decompressed = netw::decompress_impl(rcv_buf, decompressor, end_of_frame, chunk_size);
+        // RPC reads the decompressed message through an input_stream,
+        // which treats an empty fragment as the end of the stream.
+        if (auto* frags = std::get_if<std::vector<temporary_buffer<char>>>(&decompressed.bufs)) {
+            for (const auto& frag : *frags) {
+                BOOST_REQUIRE(!frag.empty());
+            }
+        }
         BOOST_REQUIRE_EQUAL(message, rpc_buf_to_bytes(std::move(decompressed)));
     }
 }
@@ -134,6 +141,120 @@ BOOST_AUTO_TEST_CASE(test_correctness) {
         netw::zstd_dstream dstream{};
         netw::zstd_cstream cstream{};
         test_compressor_pair_basic_correctness(cstream, dstream);
+    }
+}
+
+static std::vector<size_t> fragment_sizes(const rpc::snd_buf& buf) {
+    if (auto frag = std::get_if<temporary_buffer<char>>(&buf.bufs)) {
+        return {frag->size()};
+    }
+    std::vector<size_t> out;
+    for (const auto& frag : std::get<std::vector<temporary_buffer<char>>>(buf.bufs)) {
+        out.push_back(frag.size());
+    }
+    return out;
+}
+
+static bool end_frame_always() {
+    return true;
+}
+
+static bool end_frame_never() {
+    return false;
+}
+
+static unsigned end_frame_every_other_calls = 0;
+
+static bool end_frame_every_other() {
+    return ++end_frame_every_other_calls % 2 == 0;
+}
+
+// Checks that compress_impl() can end frames early, only at fragment boundaries,
+// and that the resulting frames are independent: each of them can be decompressed on its own, in any order.
+void test_compressor_pair_early_frame_end(netw::stream_compressor& compressor, netw::stream_decompressor& decompressor) {
+    const auto message = tests::random::get_bytes(100000) + bytes(size_t(100000), bytes::value_type(0));
+    std::vector<rpc::snd_buf> inputs;
+    // Many small fragments, some of them empty.
+    inputs.push_back(std::move(compute_splits<rpc::snd_buf>(bytes(message.begin(), message.begin() + 3000)).front()));
+    // Fragments of 30000 bytes, and a shorter last one.
+    {
+        constexpr size_t fragment_size = 30000;
+        std::vector<temporary_buffer<char>> frags;
+        for (size_t i = 0; i < message.size(); i += fragment_size) {
+            frags.emplace_back(reinterpret_cast<const char*>(message.data() + i), std::min(fragment_size, message.size() - i));
+        }
+        inputs.emplace_back(std::move(frags), message.size());
+    }
+    // One big fragment.
+    inputs.emplace_back(temporary_buffer<char>(reinterpret_cast<const char*>(message.data()), message.size()));
+    for (const auto& input : inputs)
+    for (const auto& [should_end_frame, fragments_per_frame] : std::initializer_list<std::pair<bool (*)(), size_t>>{
+        {end_frame_always, 1},
+        {end_frame_every_other, 2},
+        {end_frame_never, std::numeric_limits<size_t>::max()},
+    }) {
+        // The predicate is called for every non-empty fragment but the last one,
+        // so a frame ends after every `fragments_per_frame` non-empty fragments, and after the last one.
+        std::vector<size_t> expected_frame_input_sizes;
+        size_t pending = 0;
+        size_t pending_fragments = 0;
+        for (const size_t f : fragment_sizes(input)) {
+            if (f == 0) {
+                continue;
+            }
+            pending += f;
+            if (++pending_fragments == fragments_per_frame) {
+                expected_frame_input_sizes.push_back(pending);
+                pending = 0;
+                pending_fragments = 0;
+            }
+        }
+        if (pending > 0) {
+            expected_frame_input_sizes.push_back(pending);
+        }
+
+        end_frame_every_other_calls = 0;
+        auto in = netw::snd_buf_cursor(input);
+        std::vector<rpc::snd_buf> frames;
+        std::vector<size_t> frame_input_sizes;
+        while (in.remaining() > 0) {
+            const size_t remaining_before = in.remaining();
+            frames.push_back(netw::compress_impl(0, in, compressor, true, 5000, should_end_frame));
+            frame_input_sizes.push_back(remaining_before - in.remaining());
+        }
+        BOOST_REQUIRE(frame_input_sizes == expected_frame_input_sizes);
+        // Decompress in reverse order, to check that the frames don't depend on each other.
+        std::vector<bytes> decompressed(frames.size());
+        for (size_t i = frames.size(); i-- > 0;) {
+            auto rcv_buf = convert_rpc_buf<rpc::rcv_buf>(std::move(frames[i]));
+            decompressed[i] = rpc_buf_to_bytes(netw::decompress_impl(rcv_buf, decompressor, true, 5000));
+            BOOST_REQUIRE_EQUAL(decompressed[i].size(), frame_input_sizes[i]);
+        }
+        bytes joined;
+        for (const auto& d : decompressed) {
+            joined += d;
+        }
+        BOOST_REQUIRE_EQUAL(joined, rpc_buf_to_bytes(input));
+    }
+}
+
+// advanced_rpc_compressor splits a message into segments this way. The receiver decompresses
+// each segment on its own, and the shared contexts serve other connections between segments,
+// so the frames must be independent.
+SEASTAR_THREAD_TEST_CASE(test_early_frame_end) {
+    {
+        netw::raw_stream stream;
+        test_compressor_pair_early_frame_end(stream, stream);
+    }
+    {
+        netw::lz4_dstream dstream{};
+        netw::lz4_cstream cstream{};
+        test_compressor_pair_early_frame_end(cstream, dstream);
+    }
+    {
+        netw::zstd_dstream dstream{};
+        netw::zstd_cstream cstream{};
+        test_compressor_pair_early_frame_end(cstream, dstream);
     }
 }
 
