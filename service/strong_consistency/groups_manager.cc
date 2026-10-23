@@ -736,7 +736,10 @@ future<> groups_manager::handle_migration_rpc(const char* verb, rpc::opt_time_po
         auto sub = utils::chain_abort_source(aoe.abort_source(), guard.get_abort_source());
         const auto server = co_await gm.acquire_server(tablet.table, group_id, aoe.abort_source());
 
-        // Supersedes the migration RPC still running on the group, if any.
+        // Supersedes the migration RPC still running on the group, if any, before `method`
+        // first reads the group's state. A sync that is superseded proposes nothing more,
+        // so a later sync doesn't need a barrier to fence an earlier one; see sc_rollback
+        // in the topology coordinator.
         auto& state = server._state;
         if (state.migration_rpc_as) {
             state.migration_rpc_as->request_abort();
@@ -776,8 +779,10 @@ future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::g
         }
 
         // Checked right before a change is proposed, with no suspension in between, as
-        // modify_config() appends its entry before it first suspends: once the stage has
-        // moved on on this host, this call proposes nothing more.
+        // modify_config() appends its entry before it first suspends. Once the stage has
+        // moved on on this host, or a newer migration RPC superseded this one, this call
+        // proposes nothing more; a change it proposed before that is already in the log,
+        // where the newer call sees it.
         if (as.abort_requested()) {
             const auto msg = fmt::format("sync_raft_group_config({}-{}): raft configuration didn't converge before "
                     "the deadline, the stage moved on, or a newer call superseded this one: missing to_add={}, "
