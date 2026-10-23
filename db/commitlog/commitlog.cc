@@ -13,6 +13,7 @@
 #include <malloc.h>
 #include <boost/regex.hpp>
 #include <filesystem>
+#include <list>
 #include <unordered_map>
 #include <unordered_set>
 #include <exception>
@@ -340,6 +341,17 @@ public:
     std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
     std::vector<std::pair<named_file, dispose_mode>> _files_to_dispose;
 
+    // A segment removed from _segments. Its file is filled in when the
+    // segment object is destroyed.
+    struct released_segment {
+        segment_id_type id;
+        std::optional<std::pair<named_file, dispose_mode>> file;
+    };
+    // Released segments, ordered by id. A file is moved to _files_to_dispose
+    // only once all older segments have been disposed of, so segment files
+    // are deleted in id order.
+    std::list<released_segment> _released_segments;
+
     void account_memory_usage(size_t size) noexcept {
         _request_controller.consume(size);
     }
@@ -473,6 +485,9 @@ public:
     future<> orphan_all();
 
     void add_file_to_dispose(named_file, dispose_mode);
+    void release_segment(segment&) noexcept;
+    void add_released_file(segment_id_type, named_file, dispose_mode) noexcept;
+    void collect_released_files(bool final);
 
     future<> do_pending_deletes();
     future<> delete_segments(std::vector<sstring>);
@@ -763,6 +778,10 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
 
     bool _closed = false;
     bool _terminated = false;
+    // Removed from _segments; the file goes through _released_segments.
+    bool _released = false;
+    // Keep the file on disk even if clean, because an older segment is kept.
+    bool _keep_on_disk = false;
 
     using buffer_type = segment_manager::buffer_type;
     using sseg_ptr = segment_manager::sseg_ptr;
@@ -859,14 +878,14 @@ public:
     ~segment() {
         dispose_mode mode = dispose_mode::Keep;
 
-        if (is_clean()) {
+        if (is_clean() && !_keep_on_disk) {
             clogger.debug("Segment {} is no longer active and will submitted for delete now", *this);
             ++_segment_manager->totals.segments_destroyed;
             _segment_manager->totals.active_size_on_disk -= file_position();
             _segment_manager->totals.bytes_released += file_position();
             _segment_manager->totals.wasted_size_on_disk -= _waste;
             mode = dispose_mode::Delete;
-        } else if (_segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
+        } else if (!is_clean() && _segment_manager->cfg.warn_about_segments_left_on_disk_after_shutdown) {
             clogger.warn("Segment {} is dirty and is left on disk.", *this);
             for (auto& [rp, h] : _extended_segments) {
                 h.release(); // do not clear out sequential seqments either.
@@ -875,7 +894,9 @@ public:
 
         _segment_manager->totals.buffer_list_bytes -= _buffer.size_bytes();
 
-        if (mode != dispose_mode::Keep || _file) {
+        if (_released) {
+            _segment_manager->add_released_file(_desc.id, std::move(_file), mode);
+        } else if (mode != dispose_mode::Keep || _file) {
             _segment_manager->add_file_to_dispose(std::move(_file), mode);
         }
     }
@@ -1959,6 +1980,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
             if (fp == 0) {
                 s->mark_clean();
                 _segments.erase(std::remove(_segments.begin(), _segments.end(), s), _segments.end());
+                release_segment(*s);
             }
         }
     }
@@ -2706,12 +2728,18 @@ void db::commitlog::segment_manager::discard_unused_segments() noexcept {
 
     // #25709 ensure we don't free any segment until after prune.
     {
-        auto tmp = _segments; 
-        std::erase_if(_segments, [=](sseg_ptr s) {
-            if (s->can_delete()) {
-                clogger.debug("Segment {} is unused", *s);
-                return true;
-            }
+        // Only a prefix is removed, so segments are released in id order.
+        auto end = std::ranges::find_if_not(_segments, [] (const sseg_ptr& s) {
+            return s->can_delete();
+        });
+        std::vector<sseg_ptr> tmp(std::make_move_iterator(_segments.begin()), std::make_move_iterator(end));
+        _segments.erase(_segments.begin(), end);
+        for (auto& s : tmp) {
+            clogger.debug("Segment {} is unused", *s);
+            release_segment(*s);
+        }
+        if (!_segments.empty()) {
+            auto& s = _segments.front();
             if (s->is_still_allocating()) {
                 clogger.debug("Not safe to delete segment {}; still allocating.", *s);
             } else if (!s->is_clean()) {
@@ -2719,8 +2747,7 @@ void db::commitlog::segment_manager::discard_unused_segments() noexcept {
             } else {
                 clogger.debug("Not safe to delete segment {}; disk ops pending", *s);
             }
-            return false;
-        });
+        }
     }
 
     // launch in background, but guard with gate so this deletion is
@@ -2738,6 +2765,8 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
     while (!_reserve_segments.empty()) {
         _reserve_segments.pop();
     }
+
+    collect_released_files(true);
 
     for (auto& [f, mode] : _files_to_dispose) {
         if (mode == dispose_mode::Delete) {
@@ -2850,7 +2879,67 @@ void db::commitlog::segment_manager::add_file_to_dispose(named_file f, dispose_m
     _files_to_dispose.emplace_back(std::move(f), mode);
 }
 
+void db::commitlog::segment_manager::release_segment(segment& s) noexcept {
+    if (std::exchange(s._released, true)) {
+        return;
+    }
+    auto it = std::ranges::upper_bound(_released_segments, s._desc.id, std::less<>{}, &released_segment::id);
+    _released_segments.insert(it, released_segment{s._desc.id, std::nullopt});
+}
+
+void db::commitlog::segment_manager::add_released_file(segment_id_type id, named_file f, dispose_mode mode) noexcept {
+    auto it = std::ranges::find(_released_segments, id, &released_segment::id);
+    SCYLLA_ASSERT(it != _released_segments.end());
+    it->file.emplace(std::move(f), mode);
+    // This was the oldest released segment still alive, so the files
+    // queued behind it can now be disposed of.
+    if (it == _released_segments.begin() && !_shutdown && !_gate.is_closed()) {
+        (void)with_gate(_gate, [this] {
+            return do_pending_deletes();
+        });
+    }
+}
+
+// Moves the files of destroyed released segments to _files_to_dispose, stopping
+// at the first segment that is still alive or that is newer than a segment still
+// in _segments. When final is set (shutdown), the files after that point are
+// moved too, but kept on disk.
+void db::commitlog::segment_manager::collect_released_files(bool final) {
+    auto oldest_live = _segments.empty() ? std::numeric_limits<segment_id_type>::max() : _segments.front()->_desc.id;
+    while (!_released_segments.empty()) {
+        auto& r = _released_segments.front();
+        if (!r.file || r.id >= oldest_live) {
+            break;
+        }
+        _files_to_dispose.emplace_back(std::move(*r.file));
+        _released_segments.pop_front();
+    }
+    if (!final) {
+        return;
+    }
+    std::erase_if(_released_segments, [this] (released_segment& r) {
+        if (!r.file) {
+            return false;
+        }
+        clogger.debug("Keeping segment {} on disk, since an older segment is kept", r.file->first.name());
+        _files_to_dispose.emplace_back(std::move(r.file->first), dispose_mode::Keep);
+        return true;
+    });
+}
+
 future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> files) {
+    // Dispose of the files in id order. Names that do not parse go first.
+    auto ids = files | std::views::transform([this] (const sstring& s) -> std::optional<segment_id_type> {
+        try {
+            return descriptor(s, cfg.fname_prefix).id;
+        } catch (...) {
+            return std::nullopt;
+        }
+    }) | std::ranges::to<std::vector>();
+    auto order = std::views::iota(size_t(0), files.size()) | std::ranges::to<std::vector>();
+    std::ranges::stable_sort(order, std::less<>{}, [&] (size_t i) { return ids[i]; });
+    files = order | std::views::transform([&] (size_t i) { return std::move(files[i]); }) | std::ranges::to<std::vector>();
+
     for (auto& s : files) {
         // Note: this is only for replay files. We can decide to
         // recycle these, but they don't count into footprint,
@@ -2925,6 +3014,7 @@ struct fmt::formatter<file_to_dispose_t> {
 };
 
 future<> db::commitlog::segment_manager::do_pending_deletes() {
+    collect_released_files(false);
     auto ftd = std::exchange(_files_to_dispose, {});
 
     if (ftd.empty()) {
@@ -2987,6 +3077,8 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
             clogger.debug("Deleting segment file {}", f.name());
             // last resort.
             co_await f.remove_file();
+            // make the removal durable before disposing of any newer segment.
+            co_await seastar::sync_directory(cfg.commit_log_location);
         } catch (...) {
             clogger.error("Could not delete segment {}: {:t}", f.name(), std::current_exception());
         }
@@ -3013,8 +3105,17 @@ future<> db::commitlog::segment_manager::orphan_all() {
     // #25709. the actual process of destroying the elements here
     // might cause a call into discard_unused_segments.
     // ensure the target vector is empty when we get to destructors
-    auto tmp = std::exchange(_segments, {});
-    return clear_reserve_segments();
+    {
+        auto tmp = std::exchange(_segments, {});
+        // Segments newer than a kept (dirty) one must be kept as well.
+        bool keep = false;
+        for (auto& s : tmp) {
+            keep = keep || !s->is_clean();
+            s->_keep_on_disk = keep;
+            release_segment(*s);
+        }
+    }
+    co_await clear_reserve_segments();
 }
 
 /*
