@@ -160,6 +160,16 @@ struct tablets_mode_t {
     static std::unordered_map<sstring, mode> map(); // for enum_option<>
 };
 
+struct compaction_controller_t {
+    enum class type {
+        // Sets the shares from the compaction backlog.
+        v1,
+        // Matches compaction to the work ingestion produces.
+        v2,
+    };
+    static std::unordered_map<sstring, type> map(); // for enum_option<>
+};
+
 class config final : public utils::config_file {
 public:
     config();
@@ -679,6 +689,7 @@ public:
     named_value<float> memtable_flush_static_shares;
     named_value<float> compaction_static_shares;
     named_value<float> compaction_max_shares;
+    named_value<enum_option<compaction_controller_t>> compaction_controller;
     named_value<bool> compaction_enforce_min_threshold;
     named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
 
@@ -784,6 +795,7 @@ extern template struct utils::config_file::named_value<enum_option<db::experimen
 extern template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
 extern template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
 extern template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
+extern template struct utils::config_file::named_value<enum_option<db::compaction_controller_t>>;
 extern template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
 extern template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
 extern template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;

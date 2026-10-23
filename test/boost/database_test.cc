@@ -2853,4 +2853,22 @@ SEASTAR_TEST_CASE(test_lowering_dirty_memory_threshold_triggers_flush) {
     });
 }
 
+// With compaction_controller set to v2, the node switches to compaction_controller_v2 once the
+// cluster has the feature; by default, it keeps the backlog-based one.
+SEASTAR_TEST_CASE(compaction_controller_is_selected_by_config_test) {
+    co_await do_with_cql_env_thread([] (cql_test_env& e) {
+        auto& controller = e.local_db().get_compaction_manager().get_compaction_controller();
+        BOOST_REQUIRE(dynamic_cast<const compaction_controller_v1*>(&controller));
+    });
+    cql_test_config cfg;
+    cfg.db_config->compaction_controller.set(db::compaction_controller_t::type::v2);
+    co_await do_with_cql_env_thread([] (cql_test_env& e) {
+        BOOST_REQUIRE(e.local_db().features().compaction_controller_v2);
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& controller = db.get_compaction_manager().get_compaction_controller();
+            BOOST_REQUIRE(dynamic_cast<const compaction_controller_v2*>(&controller));
+        }).get();
+    }, cfg);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

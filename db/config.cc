@@ -327,6 +327,13 @@ const config_type& config_type_for<enum_option<db::tablets_mode_t>>() {
 }
 
 template <>
+const config_type& config_type_for<enum_option<db::compaction_controller_t>>() {
+    static config_type ct(
+        "compaction controller", printable_to_json<enum_option<db::compaction_controller_t>>);
+    return ct;
+}
+
+template <>
 const config_type& config_type_for<db::config::hinted_handoff_enabled_type>() {
     static config_type ct("hinted handoff enabled", hinted_handoff_enabled_to_json);
     return ct;
@@ -520,6 +527,23 @@ template <>
 class convert<enum_option<db::tablets_mode_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::tablets_mode_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::compaction_controller_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::compaction_controller_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -1856,6 +1880,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If set to higher than 0, ignore the controller's output and set the compaction shares statically. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
     , compaction_max_shares(this, "compaction_max_shares", liveness::LiveUpdate, value_status::Used, default_compaction_maximum_shares,
         "Set the maximum shares of regular compaction to the specific value. Do not set this unless you know what you are doing and suspect a problem in the controller. This option will be retired when the controller reaches more maturity.")
+    , compaction_controller(this, "compaction_controller", value_status::Used, compaction_controller_t::type::v1,
+        "The controller of the shares of regular compaction. Can be set to the following values:\n"
+        "\tv1: Sets the shares from the compaction backlog.\n"
+        "\tv2: Matches compaction to the work ingestion produces. Takes effect once all nodes of the cluster support it.")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold.")
     , compaction_flush_all_tables_before_major_seconds(this, "compaction_flush_all_tables_before_major_seconds", value_status::Used, 86400,
@@ -2182,6 +2210,11 @@ std::unordered_map<sstring, db::tri_mode_restriction_t::mode> db::tri_mode_restr
             {"warn", db::tri_mode_restriction_t::mode::WARN}};
 }
 
+std::unordered_map<sstring, db::compaction_controller_t::type> db::compaction_controller_t::map() {
+    return {{"v1", db::compaction_controller_t::type::v1},
+            {"v2", db::compaction_controller_t::type::v2}};
+}
+
 std::unordered_map<sstring, db::tablets_mode_t::mode> db::tablets_mode_t::map() {
     return {{"disabled", db::tablets_mode_t::mode::disabled},
             {"0", db::tablets_mode_t::mode::disabled},
@@ -2225,6 +2258,7 @@ template struct utils::config_file::named_value<enum_option<db::experimental_fea
 template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
+template struct utils::config_file::named_value<enum_option<db::compaction_controller_t>>;
 template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
 template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
 template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;

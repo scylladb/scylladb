@@ -74,6 +74,8 @@ public:
         int64_t completed_tasks = 0;
         uint64_t active_tasks = 0; // Number of compaction going on.
         int64_t errors = 0;
+        // Number of regular compactions that started running.
+        uint64_t started_regular_compactions = 0;
     };
     using scheduling_group = backlog_controller::scheduling_group;
     struct config {
@@ -157,6 +159,8 @@ private:
     config _cfg;
     timer<lowres_clock> _compaction_submission_timer;
     std::unique_ptr<compaction_controller> _compaction_controller;
+    // The shutdown of the controller _compaction_controller replaced, if any.
+    future<> _replaced_compaction_controller_shutdown = make_ready_future<>();
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
     future<> update_history(compaction_group_view& t, compaction_result&& res, const compaction_data& cdata);
@@ -319,6 +323,14 @@ public:
 
     float max_shares() const noexcept {
         return _cfg.max_shares.get();
+    }
+
+    // Replaces the compaction controller with compaction_controller_v2, which picks up the
+    // shares where the replaced one left them.
+    void use_compaction_controller_v2();
+
+    const compaction_controller& get_compaction_controller() const noexcept {
+        return *_compaction_controller;
     }
 
     uint32_t throughput_mbs() const noexcept {

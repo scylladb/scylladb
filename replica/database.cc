@@ -511,6 +511,14 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
 
     _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);
 
+    // The nodes of a cluster switch to compaction_controller_v2 together, once all of them
+    // have it.
+    if (_cfg.compaction_controller() == db::compaction_controller_t::type::v2) {
+        _listeners.push_back(_feat.compaction_controller_v2.when_enabled([this] {
+            _compaction_manager.use_compaction_controller_v2();
+        }));
+    }
+
     setup_scylla_memory_diagnostics_producer();
 }
 

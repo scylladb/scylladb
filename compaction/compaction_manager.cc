@@ -941,6 +941,33 @@ inline std::unique_ptr<compaction_controller> make_compaction_controller(const c
     return std::make_unique<compaction_controller_v1>(csg, static_shares, max_shares, 250ms, std::move(fn));
 }
 
+void compaction_manager::use_compaction_controller_v2() {
+    if (dynamic_cast<compaction_controller_v2*>(_compaction_controller.get())) {
+        return;
+    }
+    // Updated every minute: often enough to follow compactions completing, rarely enough
+    // for the rates, averaged over minutes, to respond to the shares.
+    auto controller = std::make_unique<compaction_controller_v2>(compaction_sg(), static_shares(), max_shares(), 1min,
+            [this] { return _backlog_manager.rates(); },
+            // Regular compaction ran since the last update if one is running, or one started
+            // since: most complete well within an update interval.
+            [this, started = _stats.started_regular_compactions] () mutable {
+                auto ran = _stats.started_regular_compactions != started
+                        || std::ranges::any_of(_tasks, [] (const compaction_task_executor& task) {
+                    return task.compaction_type() == compaction_type::Compaction && task.compaction_running();
+                });
+                started = _stats.started_regular_compactions;
+                return ran;
+            });
+    // The replaced controller stops right away, so that it doesn't set the shares anymore.
+    auto replaced = std::exchange(_compaction_controller, std::move(controller));
+    auto shutdown = replaced->shutdown().finally([replaced = std::move(replaced)] {});
+    _replaced_compaction_controller_shutdown = _replaced_compaction_controller_shutdown.then([shutdown = std::move(shutdown)] () mutable {
+        return std::move(shutdown);
+    });
+    cmlog.info("Using compaction controller v2");
+}
+
 compaction::compaction_state::~compaction_state() {
     compaction_done.broken();
 }
@@ -1038,6 +1065,9 @@ compaction_task_executor::state compaction_task_executor::switch_state(state new
         break;
     case state::active:
         ++_cm._stats.active_tasks;
+        if (_type == compaction_type::Compaction) {
+            ++_cm._stats.started_regular_compactions;
+        }
         break;
     case state::done:
         ++_cm._stats.completed_tasks;
@@ -1430,6 +1460,7 @@ future<> compaction_manager::really_do_stop() noexcept {
     _weight_tracker.clear();
     _compaction_submission_timer.cancel();
     co_await _compaction_controller->shutdown();
+    co_await std::move(_replaced_compaction_controller_shutdown);
     co_await _update_compaction_static_shares_action.join();
     cmlog.info("Stopped");
 }
