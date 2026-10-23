@@ -1008,9 +1008,9 @@ time_series_sstable_set::create_single_key_sstable_reader(
     auto& stats = *cf->cf_stats();
     stats.clustering_filter_count++;
 
-    auto create_reader = [schema, permit, &pr, &slice, trace_state, fwd_sm, hash] (sstable& sst) {
+    auto create_reader = [schema, permit, &pr, &slice, trace_state, fwd_sm, hash, integrity] (sstable& sst) {
         return sst.make_reader(schema, permit, pr, slice, trace_state, fwd_sm, mutation_reader::forwarding::yes,
-                default_read_monitor(), integrity_check::no, &hash);
+                default_read_monitor(), integrity, &hash);
     };
 
     auto pk_filter = make_pk_filter(pos, hash, *schema);
