@@ -33,6 +33,10 @@ For example, using CQL::
 
 Once enabled, Scylla will automatically train a dictionary for the table when sufficient data is available.
 
+``LZ4WithDictsCompressor`` is also the default compressor of new user tables, unless the
+:confval:`sstable_compression_user_table_options` configuration parameter sets a different one. For the
+full list of compressors and their options, see :ref:`Compression options <cql-compression-options>`.
+
 Manual Dictionary Training
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
