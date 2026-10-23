@@ -1810,6 +1810,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Connections are distributed proportionally across scheduling groups based on their shares.")
     , object_storage_clients_memory_fraction(this, "object_storage_clients_memory_fraction", value_status::Unused, 0.01,
         "Fraction of shard memory used as the buffer budget shared by all object storage clients.")
+    , object_storage_page_cache_size_in_mb(this, "object_storage_page_cache_size_in_mb", liveness::LiveUpdate, value_status::Used, 10240,
+        "The size, in MiB, of the node's disk page cache of sstables on object storage, of keyspaces with the 'disk_cache': 'pages' "
+        "storage option. Each shard's cache is limited to its share of this size; when it grows beyond it, the pages which were "
+        "used least recently are evicted. 0 means no limit. Requires the experimental feature 'object-storage-page-cache'.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , topology_barrier_stall_detector_threshold_seconds(this, "topology_barrier_stall_detector_threshold_seconds", value_status::Used, 2, "Report sites blocking topology barrier if it takes longer than this.")
     , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces. (deprecated)")
