@@ -12,9 +12,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token.hh"
-#include "data_dictionary/storage_options.hh"
 #include "sstables/generation_type.hh"
-#include "sstables/open_info.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/types.hh"
 #include "sstables/version.hh"
@@ -42,13 +40,6 @@ struct minimal_sst_info {
     // sstables which are already restored.
     sstables::sstable_id source_sid;
 };
-
-// Streams the components of the sstable `remote` into a new sstable described by
-// `dst_schema` and `dst_opts`, with the generation `gen`. A backup is never on the
-// filesystem of the restored table, so, unlike cloning inside one storage, the
-// components go through this node.
-future<sstables::entry_descriptor> stream_remote_sstable(sstables::sstable& remote, sstables::generation_type gen,
-        schema_ptr dst_schema, data_dictionary::storage_options dst_opts, logging::logger& logger);
 
 future<minimal_sst_info> download_sstable(replica::table& table, sstables::shared_sstable sstable, logging::logger& logger);
 future<minimal_sst_info> clone_backup_sstable(replica::table& table, const sstables::shared_sstable& sstable, std::string_view snapshot_tag, logging::logger& logger);
