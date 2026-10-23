@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <fmt/format.h>
 
@@ -55,6 +56,24 @@ public:
     /// Units per second over the interval, or 0 over an empty interval.
     constexpr double per_second() const noexcept {
         return _interval > interval_type::zero() ? _amount / _interval.count() : 0;
+    }
+
+    /// The sum of two rates of the same thing, per second. When they cover different
+    /// intervals, e.g. of compaction groups created at different times, the sum covers
+    /// the shorter one, which both end with. A rate over an empty interval measured
+    /// nothing, so it adds nothing.
+    friend constexpr rate operator+(const rate& a, const rate& b) noexcept {
+        if (a._interval == b._interval) {
+            return rate(a._amount + b._amount, a._interval);
+        }
+        if (a._interval <= interval_type::zero()) {
+            return b;
+        }
+        if (b._interval <= interval_type::zero()) {
+            return a;
+        }
+        auto interval = std::min(a._interval, b._interval);
+        return rate((a.per_second() + b.per_second()) * interval.count(), interval);
     }
 
     /// The amount of this rate per unit of `other`'s amount, e.g. sstables read per read,
