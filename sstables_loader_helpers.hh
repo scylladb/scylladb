@@ -41,8 +41,9 @@ struct minimal_sst_info {
     sstables::sstable_id source_sid;
 };
 
-future<minimal_sst_info> download_sstable(replica::table& table, sstables::shared_sstable sstable, logging::logger& logger);
-future<minimal_sst_info> clone_backup_sstable(replica::table& table, const sstables::shared_sstable& sstable, std::string_view snapshot_tag, logging::logger& logger);
+// `snapshot_tag` names the snapshot which holds the backup sstable, empty if there is
+// none. The new sstable is left unsealed, the caller seals it when attaching it.
+future<minimal_sst_info> download_sstable(replica::table& table, const sstables::shared_sstable& sstable, std::string_view snapshot_tag, logging::logger& logger);
 
 template <std::ranges::input_range Range, typename T = std::ranges::range_value_t<Range>>
 seastar::future<std::tuple<std::vector<T>, std::vector<T>>>
