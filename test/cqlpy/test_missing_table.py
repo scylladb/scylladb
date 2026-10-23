@@ -29,13 +29,11 @@ def test_insert_into_missing_table(scylla_only, cql, test_keyspace):
         cql.execute(f"INSERT INTO {test_keyspace}.no_such_table (p) VALUES (1)")
 
 
-@pytest.mark.xfail(reason="SCYLLADB-5624")
 def test_select_from_missing_keyspace(scylla_only, cql):
     with pytest.raises(InvalidRequest, match=re.escape("Keyspace 'no_such_keyspace' does not exist")):
         cql.execute("SELECT * FROM no_such_keyspace.no_such_table")
 
 
-@pytest.mark.xfail(reason="SCYLLADB-5624")
 def test_drop_index_in_missing_keyspace(scylla_only, cql):
     with pytest.raises(InvalidRequest, match=re.escape("Keyspace 'no_such_keyspace' does not exist")):
         cql.execute("DROP INDEX no_such_keyspace.no_such_index")
