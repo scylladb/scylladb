@@ -39,6 +39,7 @@
 #include "tombstone_gc_options.hh"
 #include "types/types.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/error_injection.hh"
 #include "utils/fragment_range.hh"
 #include "utils/hash.hh"
 #include "utils/log.hh"
@@ -345,6 +346,9 @@ uint64_t object_storage_page_cache_table::limit() const noexcept {
 
 future<> object_storage_page_cache_table::put_page(sstables::sstable_id sst, sstables::component_type component,
         uint64_t offset, temporary_buffer<char> data) {
+    utils::get_local_injector().inject("object_storage_page_cache_put_page", [] {
+        throw std::runtime_error("object_storage_page_cache_put_page: injected error");
+    });
     auto operation = _operations.try_hold();
     if (!operation) {
         // The cache was drained (see drain()). Not caching a page is harmless.
@@ -540,6 +544,9 @@ public:
     {}
 
     virtual future<temporary_buffer<char>> get_page(uint64_t offset) override {
+        utils::get_local_injector().inject("object_storage_page_cache_read_pages", [] {
+            throw std::runtime_error("object_storage_page_cache_read_pages: injected error");
+        });
         if (offset < _from || offset >= _to) {
             co_return temporary_buffer<char>();
         }
@@ -639,14 +646,21 @@ future<> object_storage_page_cache_table::record_hits(sstables::sstable_id sst, 
         co_return;
     }
     auto now = db_clock::now();
-    co_await coroutine::parallel_for_each(offsets, [&] (int64_t offset) -> future<> {
-        page_key key{sst.uuid(), component, uint64_t(offset)};
-        if (hit_in_pass(key)) {
-            co_return;
-        }
-        remember_hit(key);
-        co_await apply(hits_mutation(this_shard(), sst.uuid(), component_name, offset, std::nullopt, now));
-    });
+    // Recording the hits is only for choosing which pages to evict, so a
+    // failure to record them doesn't fail the read of the pages.
+    try {
+        co_await coroutine::parallel_for_each(offsets, [&] (int64_t offset) -> future<> {
+            page_key key{sst.uuid(), component, uint64_t(offset)};
+            if (hit_in_pass(key)) {
+                co_return;
+            }
+            remember_hit(key);
+            co_await apply(hits_mutation(this_shard(), sst.uuid(), component_name, offset, std::nullopt, now));
+        });
+    } catch (...) {
+        static thread_local logging::logger::rate_limit rate_limit{std::chrono::minutes(1)};
+        pclogger.log(log_level::warn, rate_limit, "Failed to record hits in the object storage page cache: {}", std::current_exception());
+    }
 }
 
 // The filter of pages hit in a pass (see _hit_filter) has 10 bits per page,
