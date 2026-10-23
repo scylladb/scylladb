@@ -30,6 +30,7 @@
 #include "schema/schema_fwd.hh"
 #include "sstables/object_storage_page_cache.hh"
 #include "utils/UUID.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/updateable_value.hh"
 
 class mutation;
@@ -151,6 +152,47 @@ class object_storage_page_cache_table : public sstables::object_storage_page_cac
     // and those last hit before this time (see sweep()).
     db_clock::time_point _cutoff = db_clock::time_point::min();
 
+    // The pages whose hits were recorded since the hand started its current
+    // pass. Another hit of such a page isn't recorded, to save writes: a
+    // page which is read many times is written at most once per pass of the
+    // hand. So a page's recorded last hit is its first hit in the last pass
+    // in which it was hit, which makes the order in which the hand evicts
+    // pages accurate only to within a pass.
+    //
+    // They are remembered in a Bloom filter, of 10 bits per page with 7 hash
+    // functions - about 1.2 bytes per page, rather than tens of bytes for a
+    // set of the pages' keys - so it remembers all the pages hit in a pass,
+    // not just a few of them. But about 1% of the pages which it doesn't
+    // hold seem to be in it: the first hit of such a page in a pass isn't
+    // recorded, so the page keeps the last hit it had - from an earlier
+    // pass, or none - and the hand may evict it a pass earlier than it
+    // should. The filter is emptied, with a new seed, when the hand starts a
+    // pass, so the same pages aren't misjudged on every pass. Its bits are
+    // in a chunked_vector, which allocates small chunks, not one large array
+    // - which may fail or stall when memory is fragmented.
+    //
+    // The filter is sized for as many pages as the cache can hold (see
+    // hit_filter_pages()), up to object_storage_page_cache_max_remembered_hits
+    // pages. When it holds that many, more pages aren't added to it, which
+    // would make it misjudge more pages: their hits are recorded every time.
+    // A Bloom filter can't forget a page, so a page which is cached while it
+    // is in the filter - cached again after it was evicted, say - is written
+    // with a hit now (see do_put_page()), rather than with its next hit.
+    struct page_key {
+        utils::UUID sstable;
+        sstables::component_type component;
+        uint64_t offset;
+    };
+    utils::chunked_vector<uint64_t> _hit_filter;
+    // How many pages the filter is sized for, how many it holds, and the
+    // seed of its hash functions.
+    uint64_t _hit_filter_pages = 0;
+    uint64_t _hit_filter_size = 0;
+    uint64_t _hit_filter_seed = 0;
+    // The most pages which the filter remembers, to limit its memory. 0
+    // means to record every hit.
+    utils::updateable_value<uint64_t> _max_remembered_hits;
+
     // The keys of the pages which put_page() is writing, with how many writes
     // of each are in progress, and the key of the page which the hand is
     // evicting. put_page() writes a page's row in pagecache_hits and then the
@@ -208,7 +250,8 @@ public:
     // written or evicted (see flush_if_needed()).
     static constexpr auto flush_period = std::chrono::minutes(1);
 
-    object_storage_page_cache_table(replica::database& db, cql3::query_processor& qp, utils::updateable_value<uint64_t> size_in_mb);
+    object_storage_page_cache_table(replica::database& db, cql3::query_processor& qp, utils::updateable_value<uint64_t> size_in_mb,
+            utils::updateable_value<uint64_t> max_remembered_hits);
 
     // The cache's life cycle: start() starts the background fiber which
     // evicts pages when this shard's cache is too large, which runs in the
@@ -283,8 +326,20 @@ private:
     // Adds a page to a histogram, or removes it.
     static void add_to_histogram(age_histogram& h, std::optional<db_clock::time_point> last_hit, int64_t size);
     future<> evict_page(int16_t shard, utils::UUID sstable, const sstring& component, int64_t offset, int32_t size);
-    // Records that the given pages of an sstable's component were hit.
-    future<> record_hits(sstables::sstable_id sst, const sstring& component_name, std::vector<int64_t> offsets);
+    // Records that the given pages of an sstable's component were hit -
+    // except those whose hits were already recorded in the hand's current
+    // pass.
+    future<> record_hits(sstables::sstable_id sst, sstables::component_type component,
+            const sstring& component_name, std::vector<int64_t> offsets);
+    // How many pages the filter of pages hit in a pass should be sized for.
+    uint64_t hit_filter_pages() const noexcept;
+    // Empties the filter of pages hit in a pass, and sizes it again. The
+    // former yields while it fills the filter's bits; the latter doesn't.
+    future<> reset_hit_filter();
+    void reset_hit_filter_now();
+    // Whether the filter holds the page, and adds it to the filter.
+    bool hit_in_pass(const page_key& key) const noexcept;
+    void remember_hit(const page_key& key) noexcept;
     future<> apply(mutation m);
     // Whether the given page's key is at the given position, or before it,
     // in the order in which the hand passes the pages.

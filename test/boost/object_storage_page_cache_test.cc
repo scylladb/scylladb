@@ -159,15 +159,27 @@ static utils::updateable_value<uint64_t> unlimited() {
     return utils::updateable_value<uint64_t>(0);
 }
 
+// For how many pages, at most, each shard's filter of the pages whose hits
+// it recorded is sized - fewer than by default, to save the tests' memory.
+static utils::updateable_value<uint64_t> remembered_hits(uint64_t n = 100000) {
+    return utils::updateable_value<uint64_t>(n);
+}
+
+// A new sstable id - the same ids, in the same order, in every run. So each
+// test's outcome is the same in every run: which pages the filter of the
+// pages hit in a pass misjudges (see test_page_cache_hit_filter) depends on
+// the pages' keys, and so on their sstables' ids. The tests call this only on
+// one shard, in a fixed order.
 static sstables::sstable_id new_sstable_id() {
-    return sstables::sstable_id(utils::UUID_gen::get_time_UUID());
+    static thread_local int64_t count = 0;
+    return sstables::sstable_id(utils::UUID(0x5a2e7c40c94b11f1, int64_t(0x8000000000000000ull) + ++count));
 }
 
 // get_pages() returns the cached pages which start in the given range, in
 // offset order.
 SEASTAR_TEST_CASE(test_page_cache_get_pages_in_range) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         // The pages are put out of order, so get_pages() has to sort them.
         cache.put_page(sst, Data, 8192, make_page('c')).get();
@@ -203,7 +215,7 @@ SEASTAR_TEST_CASE(test_page_cache_get_pages_when_short_of_memory) {
     cfg.db_config->reader_concurrency_semaphore_kill_limit_multiplier.set(std::numeric_limits<uint32_t>::max() - 1,
             utils::config_file::config_source::CommandLine);
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         cache.put_page(sst, Data, 0, make_page('a')).get();
         // Flush the page to an sstable, which the lookup reads.
@@ -239,7 +251,7 @@ SEASTAR_TEST_CASE(test_page_cache_get_pages_when_short_of_memory) {
 // reading the range after the last page returned.
 SEASTAR_TEST_CASE(test_page_cache_get_pages_max_pages) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         for (int i = 0; i < 5; i++) {
             cache.put_page(sst, Data, i * 4096, make_page('a' + i)).get();
@@ -291,7 +303,7 @@ static replica::table& pagecache_table(cql_test_env& env) {
 // of its sstable's component - and it continues after such an offset.
 SEASTAR_TEST_CASE(test_page_cache_cursor_reads_pages) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         cache.put_page(sst, Data, 0, make_page('a')).get();
         cache.put_page(sst, Data, 4096, make_page('b')).get();
@@ -337,7 +349,7 @@ SEASTAR_TEST_CASE(test_page_cache_cursor_reads_pages) {
 // up anew rather than read the pages before it.
 SEASTAR_TEST_CASE(test_page_cache_cursor_looks_up_once) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         constexpr int pages = 100;
         for (int i = 0; i < pages; i++) {
@@ -391,7 +403,7 @@ SEASTAR_TEST_CASE(test_page_cache_cursor_looks_up_once) {
 // after the tombstone.
 SEASTAR_TEST_CASE(test_page_cache_cursor_skips_deleted_pages) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto s = db::object_storage_page_cache_table::schema();
         auto sst = new_sstable_id();
         auto pk = partition_key::from_exploded(*s, {data_value(int16_t(this_shard_id())).serialize_nonnull(),
@@ -455,7 +467,7 @@ SEASTAR_TEST_CASE(test_page_cache_cursor_skips_deleted_pages) {
 // table was flushed or compacted.
 SEASTAR_TEST_CASE(test_page_cache_cursor_across_flush_and_compaction) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         for (int i = 0; i < 4; i++) {
             cache.put_page(sst, Data, i * 4096, make_page('a' + i)).get();
@@ -486,7 +498,7 @@ SEASTAR_TEST_CASE(test_page_cache_cursor_across_flush_and_compaction) {
 // and so are the cached pages of different sstables.
 SEASTAR_TEST_CASE(test_page_cache_components_and_sstables_are_separate) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst1 = new_sstable_id();
         auto sst2 = new_sstable_id();
         cache.put_page(sst1, Data, 0, make_page('a')).get();
@@ -503,7 +515,7 @@ SEASTAR_TEST_CASE(test_page_cache_components_and_sstables_are_separate) {
 // Putting a page at the offset of a cached page replaces it.
 SEASTAR_TEST_CASE(test_page_cache_put_replaces_page) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         cache.put_page(sst, Data, 0, make_page('a')).get();
         cache.put_page(sst, Data, 0, make_page('b', 100)).get();
@@ -517,7 +529,7 @@ SEASTAR_TEST_CASE(test_page_cache_put_replaces_page) {
 // and longer ones.
 SEASTAR_TEST_CASE(test_page_cache_page_sizes) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         const std::vector<expected_page> pages = {
             {0, 'a', 1}, {1, 'b', 31}, {32, 'c', 32}, {64, 'd', 100000},
@@ -534,7 +546,7 @@ SEASTAR_TEST_CASE(test_page_cache_page_sizes) {
 // sstable, and only of that sstable.
 SEASTAR_TEST_CASE(test_page_cache_evict_sstable) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst1 = new_sstable_id();
         auto sst2 = new_sstable_id();
         cache.put_page(sst1, Data, 0, make_page('a')).get();
@@ -560,14 +572,14 @@ SEASTAR_TEST_CASE(test_page_cache_per_shard) {
         auto sst = new_sstable_id();
         smp::invoke_on_all([&env, sst] {
             return seastar::async([&env, sst] {
-                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited());
+                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited(), remembered_hits());
                 cache.put_page(sst, Data, 0, make_page('a' + this_shard_id())).get();
             });
         }).get();
 
         smp::invoke_on_all([&env, sst] {
             return seastar::async([&env, sst] {
-                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited());
+                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited(), remembered_hits());
                 // Check that this shard sees only the page it put.
                 check_pages(cache.get_pages(sst, Data, 0, 4096, 100, no_hits).get(), {{0, char('a' + this_shard_id())}});
                 // Check that the page was written on this shard: its memtable
@@ -598,13 +610,13 @@ static std::map<std::pair<sstring, int64_t>, std::optional<db_clock::time_point>
 }
 
 // get_pages() records that the pages it returns were hit - only when it is
-// asked to, by a read which may populate the cache - and a later hit
-// replaces the time of the earlier one. Caching a page doesn't count as a
-// hit, but adds a row without a hit for the page, and evict_sstable() drops
-// the sstable's hits too.
+// asked to, by a read which may populate the cache - but only once in each
+// pass of the hand which evicts pages. Caching a page doesn't count as a
+// hit, but adds a row without a hit for the page - unless its hit was
+// recorded in this pass - and evict_sstable() drops the sstable's hits too.
 SEASTAR_TEST_CASE(test_page_cache_hits) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         const std::pair<sstring, int64_t> page0{"Data", 0}, page1{"Data", 4096};
         cache.put_page(sst, Data, 0, make_page('a')).get();
@@ -624,17 +636,20 @@ SEASTAR_TEST_CASE(test_page_cache_hits) {
         BOOST_REQUIRE_EQUAL(first_hits.size(), 2);
         BOOST_REQUIRE(first_hits[page0] && first_hits[page1]);
 
-        // Check that hitting only the first page again updates only its hit.
-        // The clock has millisecond resolution, so wait for it to advance.
+        // Check that hitting the first page again, before the hand which
+        // evicts pages started a new pass, doesn't record its hit again. The
+        // clock has millisecond resolution, so wait for it to advance.
         sleep(std::chrono::milliseconds(2)).get();
         cache.get_pages(sst, Data, 0, 4096, 100, sstables::populate_disk_cache::yes).get();
-        auto second_hits = hits(env, sst);
-        BOOST_REQUIRE(*second_hits[page0] > *first_hits[page0]);
-        BOOST_REQUIRE(second_hits[page1] == first_hits[page1]);
+        BOOST_REQUIRE(hits(env, sst) == first_hits);
 
-        // Check that caching a page which was hit again keeps its hit.
+        // Check that caching again a page whose hit was recorded in this
+        // pass records a hit of it: the page may have been evicted, with its
+        // hit, and its next hit in this pass won't be recorded.
         cache.put_page(sst, Data, 0, make_page('c')).get();
-        BOOST_REQUIRE(hits(env, sst) == second_hits);
+        auto hits_after_put = hits(env, sst);
+        BOOST_REQUIRE(*hits_after_put[page0] > *first_hits[page0]);
+        BOOST_REQUIRE(hits_after_put[page1] == first_hits[page1]);
 
         cache.evict_sstable(sst).get();
         BOOST_REQUIRE(hits(env, sst).empty());
@@ -647,7 +662,7 @@ SEASTAR_TEST_CASE(test_page_cache_hits) {
 // readers can still read the pages which it holds.
 SEASTAR_TEST_CASE(test_page_cache_drained) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         cache.put_page(sst, Data, 0, make_page('a')).get();
         auto hits_before = hits(env, sst);
@@ -673,7 +688,7 @@ SEASTAR_TEST_CASE(test_page_cache_drained) {
 // populate the cache records no hits.
 SEASTAR_TEST_CASE(test_page_cache_cursor_hits) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         for (int i = 0; i < 3; i++) {
             cache.put_page(sst, Data, i * 4096, make_page('a' + i)).get();
@@ -699,7 +714,7 @@ SEASTAR_TEST_CASE(test_page_cache_cursor_hits) {
 // the given ones.
 SEASTAR_TEST_CASE(test_page_cache_evict_other_sstables) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst1 = new_sstable_id();
         auto sst2 = new_sstable_id();
         auto sst3 = new_sstable_id();
@@ -730,17 +745,17 @@ SEASTAR_TEST_CASE(test_page_cache_evict_other_sstables_per_shard) {
         auto sst = new_sstable_id();
         smp::invoke_on_all([&env, sst] {
             return seastar::async([&env, sst] {
-                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited());
+                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited(), remembered_hits());
                 cache.put_page(sst, Data, 0, make_page('a' + this_shard_id())).get();
             });
         }).get();
 
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         cache.evict_other_sstables({}).get();
 
         smp::invoke_on_all([&env, sst] {
             return seastar::async([&env, sst] {
-                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited());
+                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited(), remembered_hits());
                 auto pages = cache.get_pages(sst, Data, 0, 4096, 100, no_hits).get();
                 if (this_shard_id() == 0) {
                     check_pages(std::move(pages), {});
@@ -768,7 +783,7 @@ SEASTAR_TEST_CASE(test_page_cache_evict_other_sstables_removed_shard) {
 
         smp::submit_to(this_smp_shard_count() - 1, [&env, sst] {
             return seastar::async([&env, sst] {
-                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited());
+                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited(), remembered_hits());
                 cache.evict_other_sstables({sst}).get();
             });
         }).get();
@@ -815,7 +830,7 @@ SEASTAR_TEST_CASE(test_page_cache_copy_sstable_from_shard) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         auto sst = new_sstable_id();
         auto other_sst = new_sstable_id();
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         cache.put_page(sst, Data, 0, make_page('a')).get();
         cache.put_page(sst, Data, 4096, make_page('b', 100)).get();
         cache.put_page(sst, Rows, 0, make_page('c')).get();
@@ -827,7 +842,7 @@ SEASTAR_TEST_CASE(test_page_cache_copy_sstable_from_shard) {
 
         smp::submit_to(1, [&env, sst, other_sst, &hits_before] {
             return seastar::async([&env, sst, other_sst, &hits_before] {
-                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited());
+                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited(), remembered_hits());
                 cache.copy_sstable_from_shard(sst, 0).get();
                 // Check that shard 1 now has all of the sstable's pages, and
                 // only of that sstable.
@@ -853,7 +868,7 @@ static size_t cached_page_count(db::object_storage_page_cache_table& cache, ssta
 // and recounting them gives the same number.
 SEASTAR_TEST_CASE(test_page_cache_bytes) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst1 = new_sstable_id();
         auto sst2 = new_sstable_id();
         cache.put_page(sst1, Data, 0, make_page('a')).get();
@@ -880,7 +895,7 @@ static utils::updateable_value<uint64_t> one_mib() {
 // which were hit stay.
 SEASTAR_TEST_CASE(test_page_cache_evicts_pages_never_hit) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         auto hit_sst = new_sstable_id();
         auto unhit_sst = new_sstable_id();
@@ -914,7 +929,7 @@ SEASTAR_TEST_CASE(test_page_cache_evicts_pages_never_hit) {
 // cache.
 SEASTAR_TEST_CASE(test_page_cache_pass_recounts_bytes) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         auto sst = new_sstable_id();
         const size_t pages = limit / 4096 / 2;
@@ -944,7 +959,7 @@ SEASTAR_TEST_CASE(test_page_cache_pass_recounts_bytes) {
 // hand's position - and so it doesn't evict more than needed.
 SEASTAR_TEST_CASE(test_page_cache_pass_recounts_bytes_changed_during_it) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         const size_t limit_pages = limit / 4096;
         auto put_and_hit = [&] (sstables::sstable_id sst, size_t pages) {
@@ -1010,7 +1025,7 @@ SEASTAR_TEST_CASE(test_page_cache_pass_recounts_bytes_changed_during_it) {
 // hit are evicted.
 SEASTAR_TEST_CASE(test_page_cache_evicts_pages_not_hit_recently) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         auto sst = new_sstable_id();
         const size_t pages = limit / 4096 * 3 / 2;
@@ -1048,7 +1063,7 @@ SEASTAR_TEST_CASE(test_page_cache_evicts_pages_not_hit_recently) {
 // the hand reaches them last, because they are last in the order of keys.
 SEASTAR_TEST_CASE(test_page_cache_evicts_least_recently_hit) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         auto sst = new_sstable_id();
         const size_t pages = limit / 4096 * 3 / 2;
@@ -1133,7 +1148,7 @@ BOOST_AUTO_TEST_CASE(test_page_cache_age_buckets) {
 // without their rows in pagecache_hits.
 SEASTAR_TEST_CASE(test_page_cache_flushes_tables_when_needed) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         using cache_table = db::object_storage_page_cache_table;
         auto& pages_table = env.local_db().find_column_family(cache_table::SYSTEM_CACHE, cache_table::PAGECACHE);
         auto& hits_table = env.local_db().find_column_family(cache_table::SYSTEM_CACHE, cache_table::PAGECACHE_HITS);
@@ -1181,7 +1196,7 @@ static void wait_for_injection(const sstring& name) {
 // cached.
 SEASTAR_TEST_CASE(test_page_cache_pass_recounts_pages_cached_in_its_batch) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         const size_t limit_pages = limit / 4096;
         auto put_and_hit = [&] (sstables::sstable_id sst, size_t pages) {
@@ -1241,7 +1256,7 @@ SEASTAR_TEST_CASE(test_page_cache_pass_recounts_pages_cached_in_its_batch) {
 // are counted when the batch arrives, unless it has them.
 SEASTAR_TEST_CASE(test_page_cache_pass_recounts_pages_cached_during_fetch) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         const size_t limit_pages = limit / 4096;
         auto put_and_hit = [&] (sstables::sstable_id sst, size_t pages) {
@@ -1299,7 +1314,7 @@ SEASTAR_TEST_CASE(test_page_cache_pass_recounts_pages_cached_during_fetch) {
 // of the pass includes them.
 SEASTAR_TEST_CASE(test_page_cache_pass_recounts_pages_cached_in_its_batch_and_passed) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         const size_t limit_pages = limit / 4096;
         // Cache pages of an sstable, at even page numbers, beyond the limit.
@@ -1354,7 +1369,7 @@ SEASTAR_TEST_CASE(test_page_cache_pass_recounts_pages_cached_in_its_batch_and_pa
 // didn't evict enough, the third evicts pages regardless of their hits.
 SEASTAR_TEST_CASE(test_page_cache_evicts_pages_hit_all_the_time) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         auto sst = new_sstable_id();
         const size_t pages = limit / 4096 * 3 / 2;
@@ -1399,7 +1414,7 @@ SEASTAR_TEST_CASE(test_page_cache_evicts_pages_hit_all_the_time) {
 // left without its row in pagecache_hits, through which eviction finds it.
 SEASTAR_TEST_CASE(test_page_cache_hand_skips_page_being_cached) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         const size_t limit_pages = limit / 4096;
         // Fill the cache beyond its limit with pages of one sstable, never
@@ -1447,7 +1462,7 @@ SEASTAR_TEST_CASE(test_page_cache_hand_skips_sstable_being_copied) {
         auto sst = new_sstable_id();
         smp::submit_to(1, [&env, sst, copied_pages] {
             return seastar::async([&env, sst, copied_pages] {
-                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited());
+                db::object_storage_page_cache_table cache(env.db().local(), env.qp().local(), unlimited(), remembered_hits());
                 for (size_t i = 0; i < copied_pages; i++) {
                     cache.put_page(sst, Data, i * 4096, make_page('a')).get();
                 }
@@ -1457,7 +1472,7 @@ SEASTAR_TEST_CASE(test_page_cache_hand_skips_sstable_being_copied) {
         // Copy the sstable's pages from shard 1, pausing after their rows in
         // pagecache_hits were copied - beyond this shard's limit - while the
         // hand passes them.
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const auto copy_page = "object_storage_page_cache_copy_page";
         auto& injector = utils::get_local_injector();
         injector.enable(copy_page, false);
@@ -1480,7 +1495,7 @@ SEASTAR_TEST_CASE(test_page_cache_hand_skips_sstable_being_copied) {
 // a page of the sstable which the hand is evicting - which the hand subtracts.
 SEASTAR_TEST_CASE(test_page_cache_evict_sstable_while_hand_evicts_its_page) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         const size_t limit_pages = limit / 4096;
         // Fill the cache beyond its limit with pages of one sstable, never
@@ -1518,7 +1533,7 @@ SEASTAR_TEST_CASE(test_page_cache_evict_sstable_while_hand_evicts_its_page) {
 // counted.
 SEASTAR_TEST_CASE(test_page_cache_recount_waits_for_evictions) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         const size_t limit_pages = limit / 4096;
         const auto counted = "object_storage_page_cache_counted";
@@ -1569,7 +1584,7 @@ SEASTAR_TEST_CASE(test_page_cache_recount_waits_for_evictions) {
 // left without its row in pagecache_hits, through which eviction finds it.
 SEASTAR_TEST_CASE(test_page_cache_page_being_evicted_not_cached) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
         const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
         const size_t limit_pages = limit / 4096;
         // Fill the cache beyond its limit with pages of one sstable, never
@@ -1598,10 +1613,128 @@ SEASTAR_TEST_CASE(test_page_cache_page_being_evicted_not_cached) {
 }
 #endif
 
+// A hit of a page is recorded once in each pass of the hand which evicts
+// pages: a page which was hit is written again when it is hit after the
+// hand started a new pass. A page which is cached again keeps its last hit -
+// unless its hit was recorded in this pass, when it is written with a hit.
+SEASTAR_TEST_CASE(test_page_cache_hit_recorded_once_per_pass) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), one_mib(), remembered_hits());
+        const uint64_t limit = 1024 * 1024 / this_smp_shard_count();
+        auto sst = new_sstable_id();
+        const std::pair<sstring, int64_t> page0{"Data", 0};
+        auto hit_page0 = [&] {
+            // The clock has millisecond resolution, so wait for it to advance.
+            sleep(std::chrono::milliseconds(2)).get();
+            cache.get_pages(sst, Data, 0, 4096, 1, sstables::populate_disk_cache::yes).get();
+            return hits(env, sst)[page0];
+        };
+        cache.put_page(sst, Data, 0, make_page('a')).get();
+        auto first_hit = hit_page0();
+        BOOST_REQUIRE(first_hit);
+        BOOST_REQUIRE(hit_page0() == first_hit);
+
+        // Cache more pages than the limit, which were never hit, so that the
+        // hand evicts some of them, starting a new pass - but keeps page 0.
+        for (size_t i = 1; i < limit / 4096 * 3 / 2; i++) {
+            cache.put_page(sst, Data, i * 4096, make_page('b')).get();
+        }
+        cache.evict_if_needed().get();
+        BOOST_REQUIRE(hits(env, sst).contains(page0));
+        // Check that caching the page again, before its first hit in the new
+        // pass, keeps its last hit.
+        cache.put_page(sst, Data, 0, make_page('a')).get();
+        BOOST_REQUIRE(hits(env, sst)[page0] == first_hit);
+        // Check that a hit after the new pass started is recorded.
+        auto second_hit = hit_page0();
+        BOOST_REQUIRE(*second_hit > *first_hit);
+        BOOST_REQUIRE(hit_page0() == second_hit);
+
+        // Check that caching the page again, after its hit in this pass was
+        // recorded, records a hit of it - and that its next hit isn't.
+        sleep(std::chrono::milliseconds(2)).get();
+        cache.put_page(sst, Data, 0, make_page('a')).get();
+        auto third_hit = hits(env, sst)[page0];
+        BOOST_REQUIRE(*third_hit > *second_hit);
+        BOOST_REQUIRE(hit_page0() == third_hit);
+    }, page_cache_config());
+}
+
+// The pages whose hits were recorded in a pass of the hand are remembered
+// in a Bloom filter, sized for object_storage_page_cache_max_remembered_hits
+// pages here. A page which it holds is never recorded again in the pass, and
+// few pages which it doesn't hold seem to be in it - those aren't recorded.
+// When it is full, other pages aren't added to it: their hits are recorded
+// every time.
+SEASTAR_TEST_CASE(test_page_cache_hit_filter) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        constexpr size_t n = 1000;
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits(n));
+        // Which pages the filter misjudges depends on the pages' keys (and on
+        // the filter's seed, which is the same in every run), so the sstables
+        // have fixed ids, which make the test deterministic.
+        auto hit = sstables::sstable_id(utils::UUID("6d0f6b30-c94b-11f1-8000-000000000001"));
+        auto other = sstables::sstable_id(utils::UUID("6d0f6b30-c94b-11f1-8000-000000000002"));
+        for (size_t i = 0; i < n; i++) {
+            cache.put_page(hit, Data, i * 4096, make_page('a')).get();
+            cache.put_page(other, Data, i * 4096, make_page('b')).get();
+        }
+        auto recorded = [] (const auto& hits) {
+            return std::ranges::count_if(hits, [] (const auto& h) { return bool(h.second); });
+        };
+        auto hit_all = [&] (sstables::sstable_id sst) {
+            // The clock has millisecond resolution, so wait for it to advance.
+            sleep(std::chrono::milliseconds(2)).get();
+            BOOST_REQUIRE_EQUAL(cache.get_pages(sst, Data, 0, n * 4096, n, sstables::populate_disk_cache::yes).get().size(), n);
+            return hits(env, sst);
+        };
+
+        // Check that the hit of each of the first n pages is recorded - few
+        // of them seem to be in the filter while it fills - and that none of
+        // them is recorded again.
+        auto first = hit_all(hit);
+        BOOST_REQUIRE_GE(recorded(first), n - n / 50);
+        BOOST_REQUIRE(hit_all(hit) == first);
+
+        // Check that, when the filter is full, few other pages seem to be in
+        // it (about 0.8%), so their hits aren't recorded.
+        auto other_first = hit_all(other);
+        BOOST_REQUIRE_GE(recorded(other_first), n - n / 50);
+        // Check that the hits of the other pages are recorded every time.
+        auto other_second = hit_all(other);
+        for (const auto& [key, last_hit] : other_first) {
+            if (last_hit) {
+                BOOST_REQUIRE(*other_second[key] > *last_hit);
+            } else {
+                BOOST_REQUIRE(!other_second[key]);
+            }
+        }
+    }, page_cache_config());
+}
+
+// With object_storage_page_cache_max_remembered_hits set to 0, every hit
+// of a page is recorded, even in the same pass of the hand which evicts
+// pages.
+SEASTAR_TEST_CASE(test_page_cache_every_hit_recorded) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits(0));
+        auto sst = new_sstable_id();
+        const std::pair<sstring, int64_t> page0{"Data", 0};
+        cache.put_page(sst, Data, 0, make_page('a')).get();
+        cache.get_pages(sst, Data, 0, 4096, 1, sstables::populate_disk_cache::yes).get();
+        auto first_hit = hits(env, sst)[page0];
+        BOOST_REQUIRE(first_hit);
+        // The clock has millisecond resolution, so wait for it to advance.
+        sleep(std::chrono::milliseconds(2)).get();
+        cache.get_pages(sst, Data, 0, 4096, 1, sstables::populate_disk_cache::yes).get();
+        BOOST_REQUIRE(*hits(env, sst)[page0] > *first_hit);
+    }, page_cache_config());
+}
+
 // A cache without a limit never evicts pages.
 SEASTAR_TEST_CASE(test_page_cache_unlimited) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited());
+        db::object_storage_page_cache_table cache(env.local_db(), env.local_qp(), unlimited(), remembered_hits());
         auto sst = new_sstable_id();
         for (size_t i = 0; i < 300; i++) {
             cache.put_page(sst, Data, i * 4096, make_page('a')).get();

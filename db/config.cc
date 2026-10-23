@@ -1845,6 +1845,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The size, in MiB, of the node's object storage page cache, of keyspaces with the 'disk_cache': 'pages' "
         "storage option. Each shard's cache is limited to its share of this size; when it grows beyond it, the pages which were "
         "used least recently are evicted. 0 means no limit. Requires the experimental feature 'object-storage-page-cache'.")
+    , object_storage_page_cache_max_remembered_hits(this, "object_storage_page_cache_max_remembered_hits", liveness::LiveUpdate, value_status::Used, 10000000,
+        "The object storage page cache records the hits of its pages, for choosing which pages to evict. To save writes, "
+        "each shard records a page's hits only once in each round of eviction: it remembers the pages whose hits it recorded "
+        "in a Bloom filter, of about 1.2 bytes per page, sized for as many pages as its cache can hold - but for at most "
+        "this many pages. The hits of the pages beyond it are recorded every time. 0 means to record every hit.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , topology_barrier_stall_detector_threshold_seconds(this, "topology_barrier_stall_detector_threshold_seconds", value_status::Used, 2, "Report sites blocking topology barrier if it takes longer than this.")
     , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces. (deprecated)")
