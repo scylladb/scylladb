@@ -37,7 +37,10 @@ future<minimal_sst_info> clone_backup_sstable(replica::table& table, const sstab
     auto& sst_manager = table.get_sstables_manager();
     auto storage = sstables::make_storage(sst_manager, table.schema(), table.get_storage_options(), sstables::sstable_state::normal);
     auto gen = table.get_sstable_generation_generator()();
-    auto desc = co_await storage->clone_from(*sstable, gen, sst_manager.get_features().sstable_reference_sharing, snapshot_tag);
+    auto desc = co_await storage->clone_from(*sstable, gen, sstables::clone_from_cfg{
+        .may_use_reference_sharing = sst_manager.get_features().sstable_reference_sharing,
+        .snapshot_tag = snapshot_tag,
+    });
     logger.debug("SSTable gen={} sid={} restored from sid={}: shard {}", gen, desc.sid, *source_sid, shards.front());
     co_return minimal_sst_info{shards.front(), gen, desc.version, desc.format, desc.sid, *source_sid};
 }
