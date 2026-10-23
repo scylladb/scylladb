@@ -24,6 +24,17 @@ ninja build/<mode>/test/boost/<test_name>
 ### Using frozen toolchain (Docker)
 Prefix any build command with `./tools/toolchain/dbuild`.
 
+- `dbuild` picks its toolchain image from the `image` file next to it, so use the `dbuild` of the
+  tree you are building, not a sibling checkout's: another branch has another toolchain.
+- Run everything built in the container under `dbuild` too: the `scylla` binary, `test.py`
+  (which launches the test binaries, e.g. `./tools/toolchain/dbuild ./test.py --mode=dev
+  test/boost/memtable_test.cc`), and the perf microbenchmarks such as
+  `./tools/toolchain/dbuild ./build/release/scylla perf-simple-query` or the binaries under
+  `build/<mode>/test/perf/`. The host usually lacks the toolchain's library versions, and a
+  benchmark that happens to run on the host measures the wrong libraries.
+- When switching a checkout between `master` and a release branch, reset the build tree first:
+  see "Switching between branches" in `docs/dev/building.md`.
+
 ## Running Tests
 
 ### C++ Unit Tests
@@ -49,6 +60,10 @@ Prefix any build command with `./tools/toolchain/dbuild`.
 - Many tests are part of composite binaries (e.g., `combined_tests` in test/boost contains multiple test files)
 - To find which binary contains a test, check `configure.py` in the repository root (primary source) or `test/<suite>/CMakeLists.txt`
 - To rebuild a specific test binary: `ninja build/<mode>/test/<suite>/<binary_name>`
+- Build the stripped binary (e.g. `combined_tests`); that is what test.py runs. The `_g` variant
+  (e.g. `combined_tests_g`) is unstripped and only for debugging with gdb or `seastar-addr2line`
+- Unless told otherwise, build and test in `dev` mode. When fixing a CI failure, note the failing
+  build mode (often `debug`) and verify the fix in that mode as well as in `dev`
 - Examples: 
   - `ninja build/dev/test/boost/combined_tests` (contains group0_voter_calculator_test.cc and others)
   - `ninja build/dev/test/raft/replication_test` (standalone Raft test)
