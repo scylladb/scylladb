@@ -19,6 +19,8 @@
 #include <vector>
 #include <fmt/format.h>
 #include <seastar/core/memory.hh>
+#include <seastar/core/metrics_api.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/format.hh>
@@ -48,6 +50,7 @@
 #include "init.hh"
 #include <seastar/core/simple-stream.hh>
 #include "partition_slice_builder.hh"
+#include "test/lib/eventually.hh"
 #include "test/lib/logstor_test_utils.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
@@ -4367,4 +4370,188 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_serves_a_reversed_read) {
             env.make_reader(query::full_partition_range, bypassing));
     BOOST_REQUIRE_EQUAL(stats.partition_hits, hits + ms.size());
     BOOST_REQUIRE_EQUAL(stats.partition_misses, misses);
+}
+
+// The value of a metric of the segment manager of this shard.
+uint64_t segment_manager_metric(std::string_view name) {
+    uint64_t value = 0;
+    for (const auto& [family_name, family] : seastar::metrics::impl::get_value_map()) {
+        for (const auto& [labels, metric] : family) {
+            if (metric && metric->get_id().group_name() == "logstor_sm" && metric->get_id().name() == name) {
+                value += metric->get_function()().ui();
+            }
+        }
+    }
+    return value;
+}
+
+// Checks that a store whose reserve replenisher keeps failing to allocate a segment still stops.
+// Nothing waits for a segment, so the stop waits only for the replenisher, which it stops as a
+// step of its own, between two of its attempts.
+SEASTAR_THREAD_TEST_CASE(test_logstor_stops_while_segment_allocation_fails) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    // More segments than the reserve holds, so that taking one from it has the replenisher
+    // allocate another, rather than wait for one to be freed.
+    constexpr size_t segment_size = 128 * 1024;
+    constexpr size_t file_size = 32 * segment_size;
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path(), {
+        .segment_size = segment_size,
+        .file_size = file_size,
+        .disk_size = 8 * file_size,
+    }), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    utils::get_local_injector().enable("logstor_allocate_segment_fail");
+    auto disable_injection = seastar::defer([] noexcept {
+        utils::get_local_injector().disable("logstor_allocate_segment_fail");
+    });
+
+    {
+        test_logstor_group cg(schema, ls);
+        write_and_flush_segment(ls, cg, make_kv_mutation(schema, "pk0", "value"));
+    }
+    // The replenisher tries to replace the segments the write took, fails, and waits before the next
+    // attempt. The count grows before that wait, thus the stop starts during it.
+    BOOST_REQUIRE(eventually_true([] { return segment_manager_metric("segment_allocation_failures") > 0; }));
+
+    ls.stop().get();
+}
+
+// Checks that a write that waits for a segment fails when the replenisher cannot allocate one, and
+// does not wait forever. The write gets the error of the failed allocation. When allocation works
+// again, writes succeed again.
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_fails_when_segment_allocation_fails) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    // More segments than the reserve holds, so that the replenisher allocates new segments while
+    // the writes take segments from the reserve.
+    constexpr size_t segment_size = 128 * 1024;
+    constexpr size_t file_size = 32 * segment_size;
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path(), {
+        .segment_size = segment_size,
+        .file_size = file_size,
+        .disk_size = 8 * file_size,
+    }), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_logstor_group cg(schema, ls);
+
+    const auto before = make_kv_mutation(schema, "before", "value");
+    write_and_flush_segment(ls, cg, before);
+
+    utils::get_local_injector().enable("logstor_allocate_segment_fail");
+    auto disable_injection = seastar::defer([] noexcept {
+        utils::get_local_injector().disable("logstor_allocate_segment_fail");
+    });
+
+    // Each write takes most of a segment, so each write takes at least one segment from the
+    // reserve. The replenisher cannot replace them, thus a write must wait for a segment after
+    // some writes. That write gets the error of the failed allocation.
+    const auto value = sstring(segment_size * 5 / 8, 'x');
+    std::exception_ptr write_error;
+    for (size_t i = 0; i < 1000 && !write_error; ++i) {
+        try {
+            write_and_flush_segment(ls, cg, make_kv_mutation(schema, seastar::format("pk{}", i), value));
+        } catch (...) {
+            write_error = std::current_exception();
+        }
+    }
+    BOOST_REQUIRE(write_error);
+    BOOST_REQUIRE_GT(segment_manager_metric("segment_allocation_failures"), 0u);
+    try {
+        std::rethrow_exception(write_error);
+    } catch (const std::runtime_error& e) {
+        BOOST_REQUIRE_EQUAL(std::string_view(e.what()), "segment allocation failed by injection");
+    }
+
+    utils::get_local_injector().disable("logstor_allocate_segment_fail");
+
+    const auto after = make_kv_mutation(schema, "after", "value");
+    write_and_flush_segment(ls, cg, after);
+    for (const auto& expected : {before, after}) {
+        auto actual = read_mutation(ls, schema, cg.logstor_index(), expected.decorated_key(), schema->full_slice()).get();
+        BOOST_REQUIRE(actual);
+        assert_that(*actual).is_equal_to(expected);
+    }
+}
+
+// Checks that the store continues with free segments when it cannot allocate a new segment, because
+// the format of its file failed. The replenisher tries the new segment again on each allocation, but
+// it uses a free segment when the new segment fails. When the format works again, the next
+// allocation of a file after the retry interval formats the file, and the store grows again.
+SEASTAR_THREAD_TEST_CASE(test_logstor_uses_free_segments_when_file_format_fails) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    constexpr size_t segment_size = 128 * 1024;
+    constexpr size_t file_size = 32 * segment_size;
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path(), {
+        .segment_size = segment_size,
+        .file_size = file_size,
+        .disk_size = 8 * file_size,
+        .format_on_startup = false,
+    }), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    auto& sm = ls.get_segment_manager();
+    test_logstor_group cg(schema, ls);
+
+    auto file_path = [&] (uint64_t file_id) {
+        return (dir.path() / fmt::format("ls_{}-{}-Data.db", this_shard_id(), file_id)).string();
+    };
+
+    // The replenisher fills the reserve, which allocates the first files. Wait for the background
+    // format of the next file, and then make each later format fail. The format checks the injection
+    // before it creates the file, thus the format of that file is not affected.
+    BOOST_REQUIRE(eventually_true([&] { return sm.get_usage().disk_usage >= 5 * file_size; }));
+    const auto allocated_files = sm.get_usage().disk_usage / file_size;
+    BOOST_REQUIRE(eventually_true([&] { return seastar::file_exists(file_path(allocated_files)).get(); }));
+    utils::get_local_injector().enable("logstor_format_file_fail");
+    auto disable_injection = seastar::defer([] noexcept {
+        utils::get_local_injector().disable("logstor_format_file_fail");
+    });
+
+    // Each write takes two segments: a mixed segment, which is free again after the separator flush,
+    // and a segment for the group. The reserve and the new segments of the formatted files are not
+    // sufficient for these writes, thus the replenisher must also use free segments.
+    const auto value = sstring(segment_size * 5 / 8, 'x');
+    for (size_t i = 0; i < 150; ++i) {
+        write_and_flush_segment(ls, cg, make_kv_mutation(schema, seastar::format("pk{}", i), value));
+    }
+
+    // The file after the formatted files was not allocated, because its format failed. The count is
+    // exact because the replenisher was idle, with a full reserve, when the injection was enabled.
+    BOOST_REQUIRE_EQUAL(sm.get_usage().disk_usage, (allocated_files + 1) * file_size);
+
+    // When the format works again, the allocation of the next file tries the format again after the
+    // retry interval of the test config. The writes continue until the store allocates that file.
+    utils::get_local_injector().disable("logstor_format_file_fail");
+    for (size_t i = 150; sm.get_usage().disk_usage < (allocated_files + 2) * file_size; ++i) {
+        BOOST_REQUIRE_LT(i, 1000u);
+        write_and_flush_segment(ls, cg, make_kv_mutation(schema, seastar::format("pk{}", i), value));
+    }
 }
