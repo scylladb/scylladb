@@ -1312,18 +1312,23 @@ future<> raft_cluster<Clock>::change_configuration(set_config sc) {
         }
     }
 
-    // Start nodes in new configuration but not in current configuration (re-added)
+    // Start nodes in new configuration but not in current configuration (re-added).
+    // In parallel: the per-node tick-phase sleeps would otherwise add up serially.
+    std::vector<size_t> re_added;
     for (auto s: new_config) {
         if (!_in_configuration.contains(s)) {
-            tlogger.debug("Starting node being re-added to configuration {}", s);
-            co_await reset_server(s, initial_state{.log = {}});
-
-            if (_tick_delays.size()) {
-                co_await seastar::sleep(_tick_delays[s]);
-            }
-            _tickers[s].rearm_periodic(_tick_delta);
+            re_added.push_back(s);
         }
     }
+    co_await coroutine::parallel_for_each(re_added, [this] (size_t s) -> future<> {
+        tlogger.debug("Starting node being re-added to configuration {}", s);
+        co_await reset_server(s, initial_state{.log = {}});
+
+        if (_tick_delays.size()) {
+            co_await seastar::sleep(_tick_delays[s]);
+        }
+        _tickers[s].rearm_periodic(_tick_delta);
+    });
 
     tlogger.debug("Changing configuration on leader {}", _leader);
     co_await _servers[_leader].server->set_configuration(std::move(set), nullptr);
