@@ -399,7 +399,7 @@ insert_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
                     def->column_specification);
             // As operation::set_value::prepare() does for the other columns:
             // evaluate() only knows how to call scalar functions.
-            expr::verify_no_aggregate_functions(prepared, "VALUES clause");
+            expr::verify_no_aggregate_or_search_functions(prepared, "VALUES clause");
             auto reset_processing_pk_column = defer([&ctx] () noexcept { ctx.set_processing_pk_restrictions(false); });
             if (def->is_partition_key()) {
                 // So that a non-pure function under a partition key column is
@@ -440,7 +440,7 @@ insert_json_statement::prepare_internal(data_dictionary::database db, schema_ptr
     throwing_assert(expr::is<cql3::expr::untyped_constant>(_json_value) || expr::is<cql3::expr::bind_variable>(_json_value));
     auto json_column_placeholder = ::make_shared<column_identifier>("", true);
     auto prepared_json_value = prepare_expression(_json_value, db, "", nullptr, make_lw_shared<column_specification>("", "", json_column_placeholder, utf8_type));
-    expr::verify_no_aggregate_functions(prepared_json_value, "JSON clause");
+    expr::verify_no_aggregate_or_search_functions(prepared_json_value, "JSON clause");
     expr::fill_prepare_context(prepared_json_value, ctx);
     auto stmt = ::make_shared<cql3::statements::insert_prepared_json_statement>(audit_info(), ctx.bound_variables_size(), schema, std::move(attrs), stats, executor, std::move(prepared_json_value), _default_unset);
     prepare_conditions(db, *schema, ctx, *stmt);
