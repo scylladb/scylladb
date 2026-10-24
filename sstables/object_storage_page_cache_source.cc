@@ -213,6 +213,27 @@ private:
     }
 };
 
+class permit_tracked_source_impl : public data_source_impl {
+    data_source _source;
+    reader_permit _permit;
+public:
+    permit_tracked_source_impl(data_source source, reader_permit permit)
+        : _source(std::move(source)), _permit(std::move(permit)) {}
+    virtual future<temporary_buffer<char>> get() override {
+        auto buf = co_await _source.get();
+        auto units = _permit.consume_memory(buf.size());
+        co_return make_tracked_temporary_buffer(std::move(buf), std::move(units));
+    }
+    virtual future<temporary_buffer<char>> skip(uint64_t n) override {
+        auto buf = co_await _source.skip(n);
+        auto units = _permit.consume_memory(buf.size());
+        co_return make_tracked_temporary_buffer(std::move(buf), std::move(units));
+    }
+    virtual future<> close() override {
+        return _source.close();
+    }
+};
+
 } // anonymous namespace
 
 data_source make_page_cached_source(object_storage_page_cache& cache, sstable_id sst, component_type component,
@@ -221,6 +242,10 @@ data_source make_page_cached_source(object_storage_page_cache& cache, sstable_id
         lw_shared_ptr<object_storage_page_cache_table_stats> table_stats) {
     return data_source(std::make_unique<page_cached_source_impl>(cache, sst, component, std::move(geometry),
             offset, length, std::move(read_range), populate, std::move(table_stats)));
+}
+
+data_source make_permit_tracked_source(data_source source, reader_permit permit) {
+    return data_source(std::make_unique<permit_tracked_source_impl>(std::move(source), std::move(permit)));
 }
 
 } // namespace sstables
