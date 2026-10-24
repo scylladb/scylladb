@@ -47,6 +47,25 @@ The following steps and notes apply to all restore methods.
 
 .. note::
 
+   Tables using tablets are truncated by timestamp (see :ref:`TRUNCATE <truncate-statement>`): the truncation hides
+   all the data written at or before the truncation timestamp, including the data restored from a backup taken before
+   the truncation, until the truncation is garbage-collected. To restore such tables, either:
+
+   * Drop the table's materialized views and secondary indexes, drop the table, and recreate the table from the backed-up
+     schema, then restore the data, and only then recreate the materialized views and secondary indexes, which are built
+     from the restored data. This is simpler, and recommended.
+   * Or, stop writing to the table, truncate it, run major compaction (``nodetool compact <keyspace_name> <table_name>``)
+     on every node, and repair the table (``nodetool cluster repair <keyspace_name> <table_name>``) if its
+     ``tombstone_gc`` mode is ``repair`` (the default for tables using tablets). Then wait until the truncation is
+     garbage-collected, which is when the ``truncated_at_timestamp`` column of ``system.tablets`` is null for the table:
+
+     ``cqlsh -e "SELECT truncated_at_timestamp FROM system.tablets WHERE table_id = <table_id> LIMIT 1"``
+
+     where ``<table_id>`` is the ``id`` of the table in ``system_schema.tables``. Do the same for each of its materialized
+     views and secondary indexes, or drop them before truncating the table and recreate them after restoring it.
+
+.. note::
+
    If you are restoring :doc:`encrypted backup files </operating-scylla/security/encryption-at-rest>`, make sure ScyllaDB is configured with the same keys that were used to encrypt the data before starting the restore process.
 
 .. _restore-object-storage:

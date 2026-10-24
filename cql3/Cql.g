@@ -1239,14 +1239,14 @@ dropIndexStatement returns [std::unique_ptr<drop_index_statement> expr]
 
 /**
   * TRUNCATE [TABLE] <CF>
-  * [USING TIMEOUT <duration>];
+  * [USING TIMESTAMP <timestamp> [AND TIMEOUT <duration>]];
   */
 truncateStatement returns [std::unique_ptr<raw::truncate_statement> stmt]
     @init {
         auto attrs = std::make_unique<cql3::attributes::raw>();
     }
     : K_TRUNCATE (K_COLUMNFAMILY)? cf=columnFamilyName
-      ( usingTimeoutClause[attrs] )?
+      ( usingTimestampTimeoutClause[attrs] )?
       {
         $stmt = std::make_unique<raw::truncate_statement>(std::move(cf), std::move(attrs));
       }

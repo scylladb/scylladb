@@ -7,7 +7,7 @@ import logging
 import asyncio
 from datetime import datetime, timezone
 
-from test.cluster.util import new_test_keyspace, create_new_test_keyspace
+from test.cluster.util import new_test_keyspace, create_new_test_keyspace, with_physical_truncate
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
@@ -15,8 +15,11 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
+# These tests check the truncation records written by the physical TRUNCATE, which is used for
+# tablet tables until the EVENTUALLY_CONSISTENT_TRUNCATE cluster feature is enabled, so they suppress the feature.
+
 async def test_truncation_on_drop(manager: ScyllaClusterManager):
-    await manager.server_add()
+    await manager.server_add(config=with_physical_truncate({}))
     cql = manager.get_cql()
 
     # Create a keyspace
@@ -40,7 +43,7 @@ async def test_truncation_on_drop(manager: ScyllaClusterManager):
         assert row[0].count == 0
 
 async def test_truncation_records_pruned_on_dirty_restart(manager: ScyllaClusterManager):
-    server = await manager.server_add()
+    server = await manager.server_add(config=with_physical_truncate({}))
     cql = manager.get_cql()
 
     async def restart():
@@ -264,7 +267,8 @@ async def test_drop_keyspace_during_shutdown(manager: ScyllaClusterManager):
     """
     # A single shard, so that the compaction manager closing the gates, which the
     # test waits for, happens on the shard which truncates the tables.
-    server = await manager.server_add(cmdline=['--smp', '1', '--logger-log-level', 'compaction_manager=debug'])
+    server = await manager.server_add(cmdline=['--smp', '1', '--logger-log-level', 'compaction_manager=debug'],
+                                      config=with_physical_truncate({}))
     cql = manager.get_cql()
 
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")

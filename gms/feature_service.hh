@@ -204,6 +204,9 @@ public:
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+    // Gates the eventually-consistent TRUNCATE of tablet tables, which records
+    // a truncation tombstone in system.tablets (see docs/dev/eventually-consistent-truncate.md).
+    gms::feature eventually_consistent_truncate { *this, "EVENTUALLY_CONSISTENT_TRUNCATE"sv };
 
     // Features created at run time rather than declared above: one per cluster config
     // option, from the registry at construction, plus any a test adds. Node-based, so a

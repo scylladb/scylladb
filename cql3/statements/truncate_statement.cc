@@ -16,7 +16,10 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
+#include "service/storage_service.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include <optional>
+#include <seastar/core/with_timeout.hh>
 #include "validation.hh"
 
 namespace cql3 {
@@ -30,8 +33,7 @@ truncate_statement::truncate_statement(cf_name name, std::unique_ptr<attributes:
         , _attrs(std::move(attrs))
 {
     // Validate the attributes.
-    // Currently, TRUNCATE supports only USING TIMEOUT
-    throwing_assert(!_attrs->timestamp.has_value());
+    // TRUNCATE supports USING TIMESTAMP and USING TIMEOUT
     throwing_assert(!_attrs->time_to_live.has_value());
 }
 
@@ -93,15 +95,44 @@ void truncate_statement::validate(query_processor&, const service::client_state&
 future<::shared_ptr<cql_transport::messages::result_message>>
 truncate_statement::execute(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const
 {
-    if (qp.db().find_schema(keyspace(), column_family())->is_view()) {
+    auto schema = qp.db().find_schema(keyspace(), column_family());
+    if (schema->is_view()) {
         throw exceptions::invalid_request_exception("Cannot TRUNCATE materialized view directly; must truncate base table instead");
     }
-    auto timeout_in_ms = std::chrono::duration_cast<std::chrono::milliseconds>(get_timeout(state.get_client_state(), options));
-    return qp.proxy().truncate_blocking(keyspace(), column_family(), timeout_in_ms).handle_exception([](auto ep) {
-        throw exceptions::truncate_exception(ep);
-    }).then([] {
-        return ::shared_ptr<cql_transport::messages::result_message>{};
-    });
+    const auto timeout = get_timeout(state.get_client_state(), options);
+
+    // TRUNCATE of eventually-consistent tablet tables is timestamped, like a DELETE of every partition
+    // (see docs/dev/eventually-consistent-truncate.md). Until the cluster feature is enabled, and for other
+    // tables, it removes the table's data physically.
+    // FIXME: logstor tables do not strip the data covered by the truncation tombstone yet.
+    const bool eventually_consistent = qp.db().find_keyspace(keyspace()).uses_tablets()
+            && !strong_consistency::is_strongly_consistent(qp.db(), keyspace())
+            && schema->storage_engine() != storage_engine_type::logstor
+            && qp.proxy().features().eventually_consistent_truncate;
+    if (eventually_consistent) {
+        // USING TIMESTAMP, else the client-side timestamp, if any, else the coordinator's clock.
+        const auto timestamp = _attrs->get_timestamp(options.get_timestamp(state), options);
+        try {
+            // On timeout, the truncation may still complete in the background.
+            co_await seastar::with_timeout(db::timeout_clock::now() + timeout,
+                    qp.storage_service().truncate_with_timestamp(schema->id(), tombstone(timestamp, gc_clock::now())));
+        } catch (...) {
+            throw exceptions::truncate_exception(std::current_exception());
+        }
+        co_return ::shared_ptr<cql_transport::messages::result_message>{};
+    }
+    if (_attrs->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("TRUNCATE USING TIMESTAMP is supported only for tablet tables, which are not strongly consistent, "
+                "once the EVENTUALLY_CONSISTENT_TRUNCATE cluster feature is enabled");
+    }
+
+    auto timeout_in_ms = std::chrono::duration_cast<std::chrono::milliseconds>(timeout);
+    try {
+        co_await qp.proxy().truncate_blocking(keyspace(), column_family(), timeout_in_ms);
+    } catch (...) {
+        throw exceptions::truncate_exception(std::current_exception());
+    }
+    co_return ::shared_ptr<cql_transport::messages::result_message>{};
 }
 
 audit::statement_category raw::truncate_statement::category() const {
