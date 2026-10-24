@@ -205,7 +205,7 @@ private:
 
     std::optional<tombstone_gc_state_snapshot> _tombstone_gc_snapshot;
 
-    void update(db::rp_handle&&);
+    void update(db::rp_handle&&) noexcept;
     friend class ::row_cache;
     friend class memtable_entry;
     friend class flush_reader;

@@ -765,11 +765,12 @@ memtable::make_flush_reader(schema_ptr s, reader_permit permit) {
 }
 
 void
-memtable::update(db::rp_handle&& h) {
+memtable::update(db::rp_handle&& h) noexcept {
     db::replay_position rp = h;
     if (_replay_position < rp) {
         _replay_position = rp;
     }
+    // Can't throw: apply() reserved this segment, so put() doesn't allocate.
     _rp_set.put(std::move(h));
 }
 
@@ -788,6 +789,8 @@ memtable::apply(memtable& mt, reader_permit permit) {
 
 void
 memtable::apply(const mutation& m, db::large_data_cache_tracker* tracker, db::rp_handle&& h) {
+    // Make sure update() cannot fail after the mutation is applied.
+    _rp_set.reserve(h);
     with_allocator(allocator(), [this, &m, tracker] {
         _table_shared_data.allocating_section(*this, [&, this] {
             auto& p = find_or_create_partition(m.decorated_key());
@@ -802,6 +805,8 @@ void
 memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema,
         const db::large_data_guardrail_base& guardrails, db::large_data_cache_tracker* tracker,
         db::large_data_violation_type* violations_out, db::rp_handle&& h) {
+    // Make sure update() cannot fail after the mutation is applied.
+    _rp_set.reserve(h);
     with_allocator(allocator(), [this, &m, &m_schema, &guardrails, tracker, violations_out] {
         _table_shared_data.allocating_section(*this, [&, this] {
             mutation_partition mp(*m_schema);
