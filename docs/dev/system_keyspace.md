@@ -1559,6 +1559,7 @@ CREATE TABLE system.tablets (
     transition text,
     sstables_repaired_at bigint,
     repair_incremental_mode text,
+    pending_repair_request frozen<map<text, text>>,
     PRIMARY KEY (table_id, last_token)
 ) WITH CLUSTERING ORDER BY (last_token ASC);
 ```
@@ -1613,6 +1614,11 @@ CREATE TYPE system.tablet_task_info (
   - `sched_time`: Time the request was scheduled by the repair scheduler
   - `repair_hosts_filter`: Repair replicas listed in the comma-separated host_id list
   - `repair_dcs_filter`: Repair replicas listed in the comma-separated DC list
+- `pending_repair_request`: A user repair request waiting to be scheduled. The repair request API stores the request here whatever the tablet is doing, and the topology coordinator moves it to `repair_task_info` when it starts the repair transition of the tablet, so a request on a tablet under automatic repair waits for that repair to finish instead of being rejected. A map of text keys, so that keys can be added without a schema change:
+  - `tablet_task_id`: UUID of the task
+  - `request_time`: Time the request was created, in milliseconds since the epoch
+  - `repair_hosts_filter`, `repair_dcs_filter`: As in `repair_task_info`
+  - `repair_incremental_mode`: Incremental repair mode of the request (see below)
 
 **Transition types:**
 - `migration`: One tablet replica is moving from one shard to another

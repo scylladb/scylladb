@@ -6074,16 +6074,30 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
 
         auto ts = db_clock::now();
         auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
+        // With the feature, the request is queued in pending_repair_request
+        // and the topology coordinator moves it to repair_task_info when it
+        // starts the repair, so a tablet under auto repair is accepted and
+        // the request waits for that repair to end. Without the feature the
+        // request goes to repair_task_info directly, which must be free.
+        const bool queue = _feature_service.tablet_pending_repair_request;
         for (const auto& token : tokens) {
             auto tid = tmap.get_tablet_id(token);
             auto& tinfo = tmap.get_tablet_info(tid);
-            if (tinfo.repair_task_info && tinfo.repair_task_info->tablet_task_id) {
-                auto& req_id = tinfo.repair_task_info->tablet_task_id;
+            if (tinfo.pending_repair_request) {
+                throw std::runtime_error(fmt::format("Tablet {} already has a pending repair request tablet_task_id={}",
+                        locator::global_tablet_id{table, tid}, tinfo.pending_repair_request->tablet_task_id));
+            }
+            const auto* other = tinfo.repair_task_info.get();
+            if (other && other->tablet_task_id && (!queue || other->is_user_repair_request())) {
                 throw std::runtime_error(fmt::format("Tablet {} is already in repair by tablet_task_id={}",
-                        locator::global_tablet_id{table, tid}, req_id));
+                        locator::global_tablet_id{table, tid}, other->tablet_task_id));
             }
             auto last_token = tmap.get_last_token(tid);
-            builder.set_repair_task_info(last_token, repair_task_info, _feature_service);
+            if (queue) {
+                builder.set_pending_repair_request(last_token, repair_task_info, _feature_service);
+            } else {
+                builder.set_repair_task_info(last_token, repair_task_info, _feature_service);
+            }
             db::system_keyspace::repair_task_entry entry{
                 .task_uuid   = tasks::task_id(repair_task_info.tablet_task_id.uuid()),
                 .operation   = db::system_keyspace::repair_task_operation::requested,
@@ -6115,9 +6129,11 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     co_await _topology_state_machine.event.wait([&] {
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         return std::all_of(tokens.begin(), tokens.end(), [&] (const dht::token& token) {
-            auto id = tmap.get_tablet_id(token);
-            return tmap.get_tablet_info(id).repair_task_info == nullptr
-                || tmap.get_tablet_info(id).repair_task_info->tablet_task_id != repair_task_info.tablet_task_id;
+            auto& tinfo = tmap.get_tablet_info(tmap.get_tablet_id(token));
+            auto is_ours = [&] (const std::unique_ptr<locator::tablet_task_info>& info) {
+                return info && info->tablet_task_id == repair_task_info.tablet_task_id;
+            };
+            return !is_ours(tinfo.repair_task_info) && !is_ours(tinfo.pending_repair_request);
         });
     });
 
@@ -6165,10 +6181,13 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
         auto builder = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table);
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
             auto& tinfo = tmap.get_tablet_info(tid);
+            auto last_token = tmap.get_last_token(tid);
+            if (tinfo.pending_repair_request && tinfo.pending_repair_request->tablet_task_id == tablet_task_id) {
+                builder.del_pending_repair_request(last_token, _feature_service);
+            }
             if (!tinfo.repair_task_info || tinfo.repair_task_info->tablet_task_id != tablet_task_id) {
                 co_return;
             }
-            auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
             builder.del_repair_task_info(last_token, _feature_service);
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {

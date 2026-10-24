@@ -12,6 +12,7 @@
 #include "types/types.hh"
 #include "types/tuple.hh"
 #include "types/list.hh"
+#include "types/map.hh"
 #include "db/system_keyspace.hh"
 #include "schema/schema_builder.hh"
 #include "cql3/query_processor.hh"
@@ -39,6 +40,8 @@ static thread_local auto repair_scheduler_config_type = user_type_impl::get_inst
 static thread_local auto tablet_task_info_type = user_type_impl::get_instance(
         "system", "tablet_task_info", {"request_type", "tablet_task_id", "request_time", "sched_nr", "sched_time", "repair_hosts_filter", "repair_dcs_filter"},
         {utf8_type, uuid_type, timestamp_type, long_type, timestamp_type, utf8_type, utf8_type}, false);
+// A pending user repair request, see pending_repair_request_to_data_value().
+static thread_local auto pending_repair_request_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
 static thread_local auto replica_type = tuple_type_impl::get_instance({uuid_type, int32_type});
 static thread_local auto replica_set_type = list_type_impl::get_instance(replica_type, false);
 static thread_local auto tablet_info_type = tuple_type_impl::get_instance({long_type, long_type, replica_set_type});
@@ -95,6 +98,7 @@ schema_ptr make_tablets_schema() {
             .with_column("sstables_repaired_at", long_type)
             .with_column("repair_incremental_mode", utf8_type)
             .with_column("migration_task_info", tablet_task_info_type)
+            .with_column("pending_repair_request", pending_repair_request_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
             .with_column("base_table", uuid_type, column_kind::static_column)
             .with_column("snapshot_name", utf8_type);
@@ -231,6 +235,50 @@ data_value tablet_task_info_to_data_value(const locator::tablet_task_info& info)
     return result;
 };
 
+// A pending user repair request is stored as a map of text keys, so that keys
+// can be added without a schema change. The scheduling fields of
+// tablet_task_info are not stored: a pending request is an unscheduled
+// user_repair request.
+data_value pending_repair_request_to_data_value(const locator::tablet_task_info& info) {
+    std::map<sstring, sstring> m{
+        {"tablet_task_id", info.tablet_task_id.to_sstring()},
+        {"request_time", fmt::to_string(info.request_time.time_since_epoch().count())},
+        {"repair_hosts_filter", locator::tablet_task_info::serialize_repair_hosts_filter(info.repair_hosts_filter)},
+        {"repair_dcs_filter", locator::tablet_task_info::serialize_repair_dcs_filter(info.repair_dcs_filter)},
+        {"repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(info.repair_incremental_mode)},
+    };
+    return make_map_value(pending_repair_request_type, map_type_impl::native_type(m.begin(), m.end()));
+}
+
+locator::tablet_task_info deserialize_pending_repair_request(const std::unordered_map<sstring, sstring>& m) {
+    auto get = [&] (const char* key) -> std::optional<sstring> {
+        auto it = m.find(key);
+        return it == m.end() ? std::nullopt : std::make_optional(it->second);
+    };
+    auto require = [&] (const char* key) -> sstring {
+        auto value = get(key);
+        if (!value) {
+            throw std::runtime_error(fmt::format("pending_repair_request has no {} key", key));
+        }
+        return *value;
+    };
+    auto request_time = require("request_time");
+    char* end = nullptr;
+    auto request_time_ms = std::strtoll(request_time.c_str(), &end, 10);
+    if (end == request_time.c_str() || *end != '\0') {
+        throw std::runtime_error(fmt::format("pending_repair_request has a malformed request_time: {}", request_time));
+    }
+    auto mode = get("repair_incremental_mode");
+    return locator::tablet_task_info{
+        .request_type = locator::tablet_task_type::user_repair,
+        .tablet_task_id = locator::tablet_task_id(utils::UUID(require("tablet_task_id"))),
+        .request_time = db_clock::time_point(db_clock::duration(request_time_ms)),
+        .repair_hosts_filter = locator::tablet_task_info::deserialize_repair_hosts_filter(get("repair_hosts_filter").value_or("")),
+        .repair_dcs_filter = locator::tablet_task_info::deserialize_repair_dcs_filter(get("repair_dcs_filter").value_or("")),
+        .repair_incremental_mode = mode ? locator::tablet_repair_incremental_mode_from_string(*mode) : locator::default_tablet_repair_incremental_mode,
+    };
+}
+
 // Based on calibration run measuring 6ms time to freeze
 // mutation with 16K tablets (with 9 replicas each) on a
 // 3.4GHz amd64 cpu, and twice as much for unfreeze.
@@ -308,6 +356,9 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             if (tablet.repair_time != db_clock::time_point{}) {
                 m.set_clustered_cell(ck, "repair_time", data_value(tablet.repair_time), ts);
             }
+        }
+        if (features.tablet_pending_repair_request && tablet.pending_repair_request) {
+            m.set_clustered_cell(ck, "pending_repair_request", pending_repair_request_to_data_value(*tablet.pending_repair_request), ts);
         }
 
         if (features.tablet_incremental_repair) {
@@ -473,6 +524,23 @@ tablet_mutation_builder::del_repair_task_info(dht::token last_token, const gms::
     _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
     if (features.tablet_incremental_repair) {
         auto col = _s->get_column_definition("repair_incremental_mode");
+        _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    }
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_pending_repair_request(dht::token last_token, locator::tablet_task_info info, const gms::feature_service& features) {
+    if (features.tablet_pending_repair_request) {
+        _m.set_clustered_cell(get_ck(last_token), "pending_repair_request", pending_repair_request_to_data_value(info), _ts);
+    }
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::del_pending_repair_request(dht::token last_token, const gms::feature_service& features) {
+    if (features.tablet_pending_repair_request) {
+        auto col = _s->get_column_definition("pending_repair_request");
         _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
     }
     return *this;
@@ -772,6 +840,12 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
         }
     }
 
+    std::unique_ptr<locator::tablet_task_info> pending_repair_request;
+    if (row.has("pending_repair_request")) {
+        pending_repair_request = std::make_unique<locator::tablet_task_info>(
+                deserialize_pending_repair_request(row.get_map<sstring, sstring>("pending_repair_request")));
+    }
+
     sstring snapshot_name;
     if (row.has("snapshot_name")) {
         snapshot_name = row.get_as<sstring>("snapshot_name");
@@ -810,6 +884,7 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
             repair_task_info.is_valid() ? std::make_unique<locator::tablet_task_info>(std::move(repair_task_info)) : nullptr,
             migration_task_info.is_valid() ? std::make_unique<locator::tablet_task_info>(std::move(migration_task_info)) : nullptr,
             sstables_repaired_at};
+    info.pending_repair_request = std::move(pending_repair_request);
     if (is_updating) {
         auto old_last_token = map.get_last_token(tid);
         if (last_token != old_last_token) {

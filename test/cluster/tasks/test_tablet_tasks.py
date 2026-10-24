@@ -17,6 +17,7 @@ from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.util import create_new_test_keyspace, new_test_keyspace, get_topology_coordinator
 from test.cluster.test_incremental_repair import trigger_tablet_merge
 from test.cluster.test_tablets2 import inject_error_on
+from test.cluster.test_tablet_repair_scheduler import config_auto_repair
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.tasks.task_manager_types import TaskStatus, TaskStats
 from test.cluster.tasks import extra_scylla_cmdline_options
@@ -263,6 +264,56 @@ async def test_tablet_repair_task_children(manager: ScyllaClusterManager):
         assert child_status.parent_id == repair_tasks[0].task_id
 
     await asyncio.gather(repair_task(), resume_repair(), check_children())
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_auto_repair_task_is_internal(manager: ScyllaClusterManager):
+    """The repair module task spawned by an auto repair is internal.
+
+    Pause every tablet repair in repair_tablet_repair_task_impl_run and turn
+    on auto repair with a one second threshold. Once an auto_repair task
+    shows up in the tablets module, find its running child in the repair
+    module: it is listed only with internal=true and is missing from the
+    default listing, which Scylla Manager uses to refuse a concurrent repair.
+    """
+    tm = TaskManagerClient(manager.api)
+    injection = "repair_tablet_repair_task_impl_run"
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
+
+    await inject_error_on(manager, injection, servers)
+    await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=True, auto_repair_threshold=1)
+
+    def repair_tasks(tasks: list[TaskStats]) -> list[TaskStats]:
+        return [t for t in tasks if t.type == "repair" and t.keyspace == ks]
+
+    async def find_running_auto_repair_child() -> Optional[TaskStatus]:
+        auto_repairs = [t for t in await tm.list_tasks(servers[0].ip_addr, "tablets")
+                        if t.kind == "cluster" and t.type == "auto_repair" and t.keyspace == ks]
+        auto_repair_ids = {t.task_id for t in auto_repairs}
+        for server in servers:
+            default_ids = {t.task_id for t in repair_tasks(await tm.list_tasks(server.ip_addr, "repair"))}
+            for task in repair_tasks(await tm.list_tasks(server.ip_addr, "repair", internal=True)):
+                # The default listing must not show the child.
+                assert task.task_id not in default_ids
+                try:
+                    status = await tm.get_task_status(server.ip_addr, task.task_id)
+                except Exception:
+                    continue
+                # The child was running while it was absent from the default
+                # listing only if it is still running now.
+                if status.parent_id in auto_repair_ids and status.state == "running":
+                    return status
+        return None
+
+    try:
+        child = await find_running_auto_repair_child()
+        while child is None:
+            await asyncio.sleep(0.1)
+            child = await find_running_auto_repair_child()
+        assert child.type == "repair"
+        assert child.keyspace == ks
+    finally:
+        await config_auto_repair(manager, servers, ks, "test", auto_repair_enabled=False, auto_repair_threshold=1)
+        await disable_injection(manager, servers, injection)
 
 async def prepare_migration_test(manager: ScyllaClusterManager):
     servers = []

@@ -8061,6 +8061,56 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_manual_repair_rf1_auto_repair_on) {
     do_with_cql_env_thread(run_tablet_manual_repair_rf1, std::move(cfg_in)).get();
 }
 
+// A pending user repair request follows the merge rule of repair_task_info:
+// sibling tablets merge when at most one of them has a request or both have
+// the same one, and the merged tablet keeps it.
+SEASTAR_THREAD_TEST_CASE(test_merge_tablet_info_pending_repair_request) {
+    auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto replicas = tablet_replica_set{tablet_replica{h1, 0}};
+    auto request = locator::tablet_task_info::make_user_repair_request();
+    auto other_request = locator::tablet_task_info::make_user_repair_request();
+
+    auto with_pending = [&] (std::optional<locator::tablet_task_info> req) {
+        tablet_info ti{replicas};
+        if (req) {
+            ti.pending_repair_request = std::make_unique<locator::tablet_task_info>(*req);
+        }
+        return ti;
+    };
+    auto pending_id_of = [] (const std::optional<tablet_info>& merged) -> std::optional<locator::tablet_task_id> {
+        BOOST_REQUIRE(merged);
+        if (!merged->pending_repair_request) {
+            return std::nullopt;
+        }
+        return merged->pending_repair_request->tablet_task_id;
+    };
+
+    BOOST_REQUIRE(!pending_id_of(merge_tablet_info(with_pending(std::nullopt), with_pending(std::nullopt))));
+    BOOST_REQUIRE(pending_id_of(merge_tablet_info(with_pending(request), with_pending(std::nullopt))) == request.tablet_task_id);
+    BOOST_REQUIRE(pending_id_of(merge_tablet_info(with_pending(std::nullopt), with_pending(request))) == request.tablet_task_id);
+    BOOST_REQUIRE(pending_id_of(merge_tablet_info(with_pending(request), with_pending(request))) == request.tablet_task_id);
+    BOOST_REQUIRE(!merge_tablet_info(with_pending(request), with_pending(other_request)));
+
+    // Across the slots: a user request already attempted on one sibling and a
+    // different one pending on the other do not merge; the same request, or
+    // an auto repair attempt, does.
+    auto with_task_info = [&] (locator::tablet_task_info req) {
+        tablet_info ti{replicas};
+        ti.repair_task_info = std::make_unique<locator::tablet_task_info>(std::move(req));
+        return ti;
+    };
+    BOOST_REQUIRE(!merge_tablet_info(with_task_info(request), with_pending(other_request)));
+    BOOST_REQUIRE(pending_id_of(merge_tablet_info(with_task_info(request), with_pending(request))) == request.tablet_task_id);
+    BOOST_REQUIRE(pending_id_of(merge_tablet_info(with_task_info(locator::tablet_task_info::make_auto_repair_request()), with_pending(other_request))) == other_request.tablet_task_id);
+
+    // The slot takes part in copies and comparisons.
+    auto a = with_pending(request);
+    tablet_info b = a;
+    BOOST_REQUIRE(b == a);
+    b.pending_repair_request = std::make_unique<locator::tablet_task_info>(other_request);
+    BOOST_REQUIRE(!(b == a));
+}
+
 // Test for tablet_map::get_secondary_replica() and specifically how it
 // relates to get_primary_replica().
 // We never officially documented given a list of replicas, which replica

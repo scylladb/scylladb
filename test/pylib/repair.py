@@ -64,6 +64,11 @@ async def load_tablet_repair_task_infos(cql, host, table_id):
 
     return repair_task_infos
 
+async def load_tablet_pending_repair_requests(cql, host, table_id):
+    """Return the pending user repair request of each tablet that has one, keyed by last token."""
+    rows = await cql.run_async(f"SELECT last_token, pending_repair_request from system.tablets where table_id = {table_id}", host=host)
+    return {str(row.last_token): row.pending_repair_request for row in rows if row.pending_repair_request is not None}
+
 async def create_table_insert_data_for_repair(manager, rf=3, tablets=8, fast_stats_refresh=True, nr_keys=256,
                                               disable_flush_cache_time=False, cmdline=None,
                                               sequential_server_add=False) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
