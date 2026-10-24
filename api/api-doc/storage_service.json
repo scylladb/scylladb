@@ -3783,7 +3783,7 @@
                "description":"The snapshot key"
             },
             "value":{
-               "type":"array",
+               "type":"chunked_array",
                "items":{
                   "type":"snapshot"
                },
