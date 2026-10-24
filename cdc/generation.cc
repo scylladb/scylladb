@@ -36,6 +36,10 @@
 #include "service/migration_listener.hh"
 #include "service/raft/group0_state_machine.hh"
 
+namespace gms::features {
+extern const feature_definition cdc_block_tablet_merges_for_alternator_streams;
+}
+
 extern logging::logger cdc_log;
 
 namespace db {
@@ -784,7 +788,7 @@ future<> generation_service::garbage_collect_cdc_streams(utils::chunked_vector<c
 
 future<utils::chunked_vector<canonical_mutation>> generation_service::maybe_finalize_pending_stream_enables(const locator::token_metadata& tm, api::timestamp_type ts) {
     utils::chunked_vector<canonical_mutation> muts;
-    const bool tablet_merge_block_feature = _db.features().cdc_block_tablet_merges_for_alternator_streams;
+    const bool tablet_merge_block_feature = _db.feature(gms::features::cdc_block_tablet_merges_for_alternator_streams);
 
     if (tablet_merge_block_feature && utils::get_local_injector().enter("delay_cdc_stream_finalization")) {
         co_return std::move(muts);

@@ -19,6 +19,10 @@
 #include "sstables/storage.hh"
 #include "utils/error_injection.hh"
 
+namespace gms::features {
+extern const feature_definition sstable_reference_sharing;
+}
+
 // Restores a backup sstable into a table on object storage. The components do not
 // go through this node: clone_from() copies them inside the object storage, or
 // shares them with the backup sstable.
@@ -37,7 +41,7 @@ future<minimal_sst_info> clone_backup_sstable(replica::table& table, const sstab
     auto& sst_manager = table.get_sstables_manager();
     auto storage = sstables::make_storage(sst_manager, table.schema(), table.get_storage_options(), sstables::sstable_state::normal);
     auto gen = table.get_sstable_generation_generator()();
-    auto desc = co_await storage->clone_from(*sstable, gen, sst_manager.get_features().sstable_reference_sharing, snapshot_tag);
+    auto desc = co_await storage->clone_from(*sstable, gen, sst_manager.feature(gms::features::sstable_reference_sharing), snapshot_tag);
     logger.debug("SSTable gen={} sid={} restored from sid={}: shard {}", gen, desc.sid, *source_sid, shards.front());
     co_return minimal_sst_info{shards.front(), gen, desc.version, desc.format, desc.sid, *source_sid};
 }

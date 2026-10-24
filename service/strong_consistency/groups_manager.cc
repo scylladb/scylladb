@@ -34,6 +34,10 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/util/defer.hh>
 
+namespace gms::features {
+extern const feature_definition strongly_consistent_tables;
+}
+
 namespace service::strong_consistency {
 
 using namespace locator;
@@ -911,7 +915,7 @@ future<> groups_manager::wait_for_first_leader(global_tablet_id tablet, raft::gr
 }
 
 void groups_manager::update(token_metadata_ptr new_tm) {
-    if (!_features.strongly_consistent_tables) {
+    if (!_features[gms::features::strongly_consistent_tables]) {
         return;
     }
 
@@ -968,7 +972,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 }
 
 future<raft_server> groups_manager::acquire_server(table_id table_id, raft::group_id group_id, abort_source& as) {
-    if (!_features.strongly_consistent_tables) {
+    if (!_features[gms::features::strongly_consistent_tables]) {
         on_internal_error(logger, "strongly consistent tables are not enabled on this shard");
     }
 
@@ -1015,7 +1019,7 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
 void groups_manager::start() {
     _started = true;
 
-    if (!_features.strongly_consistent_tables) {
+    if (!_features[gms::features::strongly_consistent_tables]) {
         return;
     }
 
@@ -1025,7 +1029,7 @@ void groups_manager::start() {
 }
 
 future<> groups_manager::stepdown_leaders() {
-    if (!_started || !_features.strongly_consistent_tables) {
+    if (!_started || !_features[gms::features::strongly_consistent_tables]) {
         co_return;
     }
     if (_raft_groups.size() == 0) {

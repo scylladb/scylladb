@@ -149,6 +149,10 @@ namespace fs = std::filesystem;
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/relabel_config.hh>
 
+namespace gms::features {
+extern const feature_definition sstable_compression_dicts;
+}
+
 seastar::metrics::metric_groups app_metrics;
 
 using namespace std::chrono_literals;
@@ -923,7 +927,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // * Needs to be done after the initialization of the configurables
             //   because this particular initializer depends on `db::extensions::is_extension_internal_keyspace()`.
             register_compression_initializer(*cfg, [&feature_service] {
-                return bool(feature_service.local().sstable_compression_dicts);
+                return bool(feature_service.local()[gms::features::sstable_compression_dicts]);
             });
 
             // Register the default speculative_retry value for user tables.
@@ -1939,7 +1943,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     _mn.unregister_listener(this).get();
                 }
                 void on_before_drop_column_family(const schema& s, utils::chunked_vector<mutation>& mutations, api::timestamp_type) override {
-                    if (_feat.sstable_compression_dicts) {
+                    if (_feat[gms::features::sstable_compression_dicts]) {
                         mutations.push_back(db::system_keyspace::get_delete_dict_mutation(fmt::format("sstables/{}", s.id()), api::max_timestamp));
                     }
                 }
@@ -2649,7 +2653,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Semantic validation of sstable compression parameters from config.
             // Adding here (i.e., after `join_cluster`) to ensure that the
             // required SSTABLE_COMPRESSION_DICTS cluster feature has been negotiated.
-            const auto dicts_feature_enabled = bool(feature_service.local().sstable_compression_dicts);
+            const auto dicts_feature_enabled = bool(feature_service.local()[gms::features::sstable_compression_dicts]);
 
             try {
                 cfg->get_sstable_compression_user_table_options(dicts_feature_enabled).validate(

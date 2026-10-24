@@ -34,6 +34,8 @@ class secondary_index_manager;
 }
 
 namespace gms {
+class feature;
+class feature_definition;
 class feature_service;
 }
 
@@ -131,6 +133,7 @@ public:
     schema_ptr get_cdc_base_table(const schema&) const;
     const db::extensions& extensions() const;
     const gms::feature_service& features() const;
+    const gms::feature& feature(const gms::feature_definition& f) const;
     replica::database& real_database() const; // For transition; remove
     replica::database* real_database_ptr() const;
 };

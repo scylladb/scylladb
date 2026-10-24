@@ -50,6 +50,11 @@
 #include "idl/migration_manager.dist.hh"
 #include "build_mode.hh"
 
+namespace gms::features {
+extern const feature_definition cdc_with_tablets;
+extern const feature_definition compression_dicts;
+}
+
 namespace service {
 
 static logging::logger slogger("group0_raft_sm");
@@ -514,11 +519,11 @@ future<> group0_state_machine::reload_state() {
     // persisted state machine into memory so it needs to be protected with it
     co_await _ss.topology_state_load();
     co_await _ss.view_building_state_load();
-    if (_feature_service.compression_dicts) {
+    if (_feature_service[gms::features::compression_dicts]) {
         co_await _ss.compression_dictionary_updated_callback_all();
     }
     co_await _ss.update_service_levels_cache(qos::update_both_cache_levels::yes, qos::query_context::group0);
-    if (_feature_service.cdc_with_tablets) {
+    if (_feature_service[gms::features::cdc_with_tablets]) {
         co_await _ss.load_cdc_streams();
     }
     co_await _ss.auth_cache().load_all();

@@ -32,6 +32,10 @@
 #include "idl/frozen_mutation.dist.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
 
+namespace gms::features {
+extern const feature_definition lwt_with_tablets;
+}
+
 namespace service::paxos {
 
 logging::logger paxos_state::logger("paxos");
@@ -595,7 +599,7 @@ future<schema_ptr> paxos_store::get_paxos_state_schema(const schema& s, db::time
     // Wait for the schema to appear here via read_barrier, or throw 'no_such_column_family'
     // if the base table was dropped (see try_get_paxos_state_schema).
 
-    if (!_features.lwt_with_tablets) {
+    if (!_features[gms::features::lwt_with_tablets]) {
         on_internal_error(paxos_state::logger, "lwt_with_tablets is not supported");
     }
     if (const auto state_schema = try_get_paxos_state_schema(s); state_schema) {

@@ -25,6 +25,11 @@
 #include "replica/database.hh"
 #include "utils/overloaded_functor.hh"
 
+namespace gms::features {
+extern const feature_definition strongly_consistent_tables;
+extern const feature_definition tablets;
+}
+
 namespace data_dictionary {
 
 schema_ptr
@@ -205,6 +210,11 @@ database::features() const {
     return _ops->get_features(*this);
 }
 
+const gms::feature&
+database::feature(const gms::feature_definition& f) const {
+    return features()[f];
+}
+
 const db::config&
 database::get_config() const {
     return _ops->get_config(*this);
@@ -256,7 +266,7 @@ void keyspace_metadata::validate(const gms::feature_service& fs, const locator::
     if (!params.initial_tablets && params.consistency.value_or(data_dictionary::consistency_config_option::eventual) != data_dictionary::consistency_config_option::eventual) {
         throw exceptions::configuration_exception("Only eventual consistency is supported for non-tablet keyspaces");
     }
-    if (params.consistency && !fs.strongly_consistent_tables) {
+    if (params.consistency && !fs[gms::features::strongly_consistent_tables]) {
         throw exceptions::configuration_exception("The strongly_consistent_tables feature must be enabled to use a consistency option");
     }
     if (params.consistency && *params.consistency == data_dictionary::consistency_config_option::local) {
@@ -600,7 +610,7 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
             }
         }
         os << "} AND durable_writes = " << fmt::to_string(_durable_writes);
-        if (db.features().tablets) {
+        if (db.feature(gms::features::tablets)) {
             if (_consistency_option) {
                 os << " AND consistency = " << cql3::util::single_quote(consistency_config_option_to_string(*_consistency_option));
             }

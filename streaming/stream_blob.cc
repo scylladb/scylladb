@@ -40,6 +40,10 @@
 #include <fmt/ranges.h>
 #include "replica/exceptions.hh"
 
+namespace gms::features {
+extern const feature_definition sstable_reference_sharing;
+}
+
 namespace streaming {
 
 static logging::logger blogger("stream_blob");
@@ -945,7 +949,7 @@ future<stream_files_response> clone_sstable_handler(replica::database& db, db::v
     auto table_stream_op = t.stream_in_progress();
     auto& sstm = t.get_sstables_manager();
     auto orig_sst = sstm.make_sstable(t.schema(), t.get_storage_options(), generation, meta.id, state, version, format);
-    bool use_reference_sharing = features.sstable_reference_sharing;
+    bool use_reference_sharing = features[gms::features::sstable_reference_sharing];
     if (!use_reference_sharing) {
         // The copy path only needs the component list (from the TOC) so that
         // clone() knows which objects to copy.  load_metadata() is lighter than

@@ -25,6 +25,150 @@ namespace gms {
 
 static logging::logger logger("features");
 
+// All the definitions, by their index.
+static std::vector<const feature_definition*>& feature_definitions() {
+    static std::vector<const feature_definition*> definitions;
+    return definitions;
+}
+
+feature_definition::feature_definition(std::string_view name)
+        : _name(name)
+        , _index(feature_definitions().size()) {
+    feature_definitions().push_back(this);
+}
+
+// The cluster features. Code that uses one of them declares it with
+// "extern const gms::feature_definition" in namespace gms::features.
+namespace features {
+
+extern const feature_definition user_defined_functions{"UDF"};
+extern const feature_definition alternator_streams{"ALTERNATOR_STREAMS"};
+extern const feature_definition alternator_ttl{"ALTERNATOR_TTL"};
+extern const feature_definition cql_row_ttl{"CQL_ROW_TTL"};
+extern const feature_definition range_scan_data_variant{"RANGE_SCAN_DATA_VARIANT"};
+extern const feature_definition user_defined_aggregates{"UDA"};
+// Historically max_result_size contained only two fields: soft_limit and
+// hard_limit. It was somehow obscure because for normal paged queries both
+// fields were equal and meant page size. For unpaged queries and reversed
+// queries soft_limit was used to warn when the size of the result exceeded
+// the soft_limit and hard_limit was used to throw when the result was
+// bigger than this hard_limit. To clean things up, we introduced the third
+// field into max_result_size. It's name is page_size. Now page_size always
+// means the size of the page while soft and hard limits are just what their
+// names suggest. They are no longer interpreted as page size. This is not
+// a backwards compatible change so this new cluster feature is used to make
+// sure the whole cluster supports the new page_size field and we can safely
+// send it to replicas.
+extern const feature_definition separate_page_size_and_safety_limit{"SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT"};
+// Replica is allowed to send back empty pages to coordinator on queries.
+extern const feature_definition empty_replica_pages{"EMPTY_REPLICA_PAGES"};
+extern const feature_definition empty_replica_mutation_pages{"EMPTY_REPLICA_MUTATION_PAGES"};
+extern const feature_definition supports_raft_cluster_mgmt{"SUPPORTS_RAFT_CLUSTER_MANAGEMENT"};
+extern const feature_definition tombstone_gc_options{"TOMBSTONE_GC_OPTIONS"};
+extern const feature_definition parallelized_aggregation{"PARALLELIZED_AGGREGATION"};
+extern const feature_definition keyspace_storage_options{"KEYSPACE_STORAGE_OPTIONS"};
+extern const feature_definition typed_errors_in_read_rpc{"TYPED_ERRORS_IN_READ_RPC"};
+extern const feature_definition uda_native_parallelized_aggregation{"UDA_NATIVE_PARALLELIZED_AGGREGATION"};
+extern const feature_definition aggregate_storage_options{"AGGREGATE_STORAGE_OPTIONS"};
+extern const feature_definition collection_indexing{"COLLECTION_INDEXING"};
+extern const feature_definition large_collection_detection{"LARGE_COLLECTION_DETECTION"};
+extern const feature_definition range_tombstone_and_dead_rows_detection{"RANGE_TOMBSTONE_AND_DEAD_ROWS_DETECTION"};
+extern const feature_definition truncate_as_topology_operation{"TRUNCATE_AS_TOPOLOGY_OPERATION"};
+extern const feature_definition snapshot_as_topology_operation{"SNAPSHOT_AS_TOPOLOGY_OPERATION"};
+extern const feature_definition secondary_indexes_on_static_columns{"SECONDARY_INDEXES_ON_STATIC_COLUMNS"};
+extern const feature_definition tablets{"TABLETS"};
+extern const feature_definition table_digest_insensitive_to_expiry{"TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"};
+extern const feature_definition supports_consistent_topology_changes{"SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES"};
+extern const feature_definition topology_requests_type_column{"TOPOLOGY_REQUESTS_TYPE_COLUMN"};
+extern const feature_definition topology_requests_target_host_column{"TOPOLOGY_REQUESTS_TARGET_HOST_COLUMN"};
+extern const feature_definition native_reverse_queries{"NATIVE_REVERSE_QUERIES"};
+extern const feature_definition zero_token_nodes{"ZERO_TOKEN_NODES"};
+extern const feature_definition views_with_tablets{"VIEWS_WITH_TABLETS"};
+extern const feature_definition group0_limited_voters{"GROUP0_LIMITED_VOTERS"};
+extern const feature_definition compaction_history_upgrade{"COMPACTION_HISTORY_UPGRADE"};
+
+// Whether to allow fragmented commitlog entries. While this is a node-local feature as such, hide
+// behind a feature to ensure an upgrading cluster appears to be at least functional before using,
+// to avoid data loss if rolling back in a dirty state, but also because it changes which/how mutations
+// can be applied to a given node - i.e. with it on, a node can accept larger, say, schema mutations,
+// whereas without it, it will fail the insert - i.e. for things like raft etc _all_ nodes should
+// have it or none, otherwise we can get partial failures on writes.
+extern const feature_definition fragmented_commitlog_entries{"FRAGMENTED_COMMITLOG_ENTRIES"};
+extern const feature_definition maintenance_tenant{"MAINTENANCE_TENANT"};
+
+extern const feature_definition tablet_incremental_repair{"TABLET_INCREMENTAL_REPAIR"};
+extern const feature_definition tablet_rebuild_incremental_repair{"TABLET_REBUILD_INCREMENTAL_REPAIR"};
+extern const feature_definition tablet_repair_scheduler{"TABLET_REPAIR_SCHEDULER"};
+extern const feature_definition tablet_repair_tasks_table{"TABLET_REPAIR_TASKS_TABLE"};
+extern const feature_definition tablet_merge{"TABLET_MERGE"};
+extern const feature_definition tablet_rack_aware_view_pairing{"TABLET_RACK_AWARE_VIEW_PAIRING"};
+
+extern const feature_definition tablet_migration_virtual_task{"TABLET_MIGRATION_VIRTUAL_TASK"};
+extern const feature_definition tablet_resize_virtual_task{"TABLET_RESIZE_VIRTUAL_TASK"};
+
+// A feature just for use in tests. It must not be advertised unless
+// the "features_enable_test_feature" injection is enabled.
+// This feature MUST NOT be advertised in release mode!
+extern const feature_definition test_only_feature{"TEST_ONLY_FEATURE"};
+extern const feature_definition address_nodes_by_host_ids{"ADDRESS_NODES_BY_HOST_IDS"};
+
+extern const feature_definition in_memory_tables{"IN_MEMORY_TABLES"};
+extern const feature_definition workload_prioritization{"WORKLOAD_PRIORITIZATION"};
+extern const feature_definition colocated_tablets{"COLOCATED_TABLETS"};
+extern const feature_definition cdc_with_tablets{"CDC_WITH_TABLETS"};
+extern const feature_definition cdc_block_tablet_merges_for_alternator_streams{"CDC_BLOCK_TABLET_MERGES_FOR_ALTERNATOR_STREAMS"};
+extern const feature_definition counters_with_tablets{"COUNTERS_WITH_TABLETS"};
+extern const feature_definition file_stream{"FILE_STREAM"};
+extern const feature_definition sstable_reference_sharing{"SSTABLE_REFERENCE_SHARING"};
+extern const feature_definition compression_dicts{"COMPRESSION_DICTS"};
+extern const feature_definition tablet_options{"TABLET_OPTIONS"};
+extern const feature_definition tablet_load_stats_v2{"TABLET_LOAD_STATS_V2"};
+extern const feature_definition sstable_compression_dicts{"SSTABLE_COMPRESSION_DICTS"};
+extern const feature_definition repair_based_tablet_rebuild{"REPAIR_BASED_TABLET_REBUILD"};
+extern const feature_definition enforced_raft_rpc_scheduling_group{"ENFORCED_RAFT_RPC_SCHEDULING_GROUP"};
+extern const feature_definition load_and_stream_abort_rpc_message{"LOAD_AND_STREAM_ABORT_RPC_MESSAGE"};
+extern const feature_definition topology_global_request_queue{"TOPOLOGY_GLOBAL_REQUEST_QUEUE"};
+extern const feature_definition lwt_with_tablets{"LWT_WITH_TABLETS"};
+extern const feature_definition repair_msg_split{"REPAIR_MSG_SPLIT"};
+extern const feature_definition parallel_tablet_draining{"PARALLEL_TABLET_DRAINING"};
+extern const feature_definition view_building_coordinator{"VIEW_BUILDING_COORDINATOR"};
+extern const feature_definition ms_sstable{"MS_SSTABLE_FORMAT"};
+extern const feature_definition mt_sstable{"MT_SSTABLE_FORMAT"};
+extern const feature_definition rack_list_rf{"RACK_LIST_RF"};
+extern const feature_definition driver_service_level{"DRIVER_SERVICE_LEVEL"};
+extern const feature_definition strongly_consistent_tables{"STRONGLY_CONSISTENT_TABLES"};
+extern const feature_definition logstor{"LOGSTOR"};
+extern const feature_definition client_routes{"CLIENT_ROUTES"};
+extern const feature_definition removenode_with_left_token_ring{"REMOVENODE_WITH_LEFT_TOKEN_RING"};
+extern const feature_definition size_based_load_balancing{"SIZE_BASED_LOAD_BALANCING"};
+extern const feature_definition topology_noop_request{"TOPOLOGY_NOOP_REQUEST"};
+extern const feature_definition tablets_intermediate_fallback_cleanup{"TABLETS_INTERMEDIATE_FALLBACK_CLEANUP"};
+extern const feature_definition batchlog_v2{"BATCHLOG_V2"};
+extern const feature_definition vnodes_to_tablets_migrations{"VNODES_TO_TABLETS_MIGRATIONS"};
+// Gates the `current_storage_mode` column of system.topology.
+extern const feature_definition topology_current_storage_mode{"TOPOLOGY_CURRENT_STORAGE_MODE"};
+extern const feature_definition writetime_ttl_individual_element{"WRITETIME_TTL_INDIVIDUAL_ELEMENT"};
+extern const feature_definition arbitrary_tablet_boundaries{"ARBITRARY_TABLET_BOUNDARIES"};
+extern const feature_definition large_data_virtual_tables{"LARGE_DATA_VIRTUAL_TABLES"};
+extern const feature_definition large_data_guardrails{"LARGE_DATA_GUARDRAILS"};
+extern const feature_definition keyspace_multi_rf_change{"KEYSPACE_MULTI_RF_CHANGE"};
+extern const feature_definition view_building_tasks_min_task_id{"VIEW_BUILDING_TASKS_MIN_TASK_ID"};
+extern const feature_definition quiesce_topology_enhanced{"QUIESCE_TOPOLOGY_ENHANCED"};
+extern const feature_definition tablet_pow2_convergence{"TABLET_POW2_CONVERGENCE"};
+extern const feature_definition fetch_column_mappings_on_tablet_migration{"FETCH_COLUMN_MAPPINGS_ON_TABLET_MIGRATION"};
+// Gates the repair_get_table_size RPC verb used to auto-detect small user
+// tables for the RBNO small table optimization. The coordinator only probes
+// table sizes when the whole cluster supports this feature, avoiding doomed
+// RPCs (and their warnings) to nodes that do not register the verb during a
+// rolling upgrade.
+extern const feature_definition small_table_optimization_size_probe{"SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"};
+extern const feature_definition alternator_composite_gsi_keys{"ALTERNATOR_COMPOSITE_GSI_KEYS"};
+extern const feature_definition cluster_config{"CLUSTER_CONFIG"};
+// Restore persists tablet transitions and a topology request that older nodes fail to parse.
+extern const feature_definition tablet_aware_restore{"TABLET_AWARE_RESTORE"};
+
+} // namespace features
+
 static const char* enable_test_feature_error_injection_name = "features_enable_test_feature";
 static const char* enable_test_feature_as_deprecated_error_injection_name = "features_enable_test_feature_as_deprecated";
 
@@ -38,14 +182,20 @@ bool is_test_only_feature_enabled() {
 }
 
 feature_service::feature_service(feature_config cfg) : _config(cfg) {
+    _defined_features.reserve(feature_definitions().size());
+    for (const feature_definition* f : feature_definitions()) {
+        register_feature(_defined_features.emplace_back(f->name()));
+    }
+
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
     initialize_suppressed_features_set();
 #endif
 
     if (is_test_only_feature_deprecated()) {
         // Assume it's enabled
-        test_only_feature.enable();
-        unregister_feature(test_only_feature);
+        auto& f = (*this)[features::test_only_feature];
+        f.enable();
+        unregister_feature(f);
     }
 
     for (const auto& opt : db::cluster_config_registry::options()) {
@@ -79,7 +229,8 @@ feature& feature_service::add_feature(const sstring& name) {
     if (const auto it = _registered_features.find(name); it != _registered_features.end()) {
         return it->second.get();
     }
-    const auto [it, inserted] = _dynamic_features.try_emplace(name, *this, std::string_view(name));
+    const auto [it, inserted] = _dynamic_features.try_emplace(name, std::string_view(name));
+    register_feature(it->second);
     return it->second;
 }
 
@@ -155,7 +306,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
     }
 
     if (is_test_only_feature_deprecated()) {
-        features.insert(test_only_feature.name());
+        features.insert((*this)[features::test_only_feature].name());
     }
 
     for (auto& [name, f_ref] : _registered_features) {
@@ -179,27 +330,9 @@ const std::unordered_map<sstring, std::reference_wrapper<feature>>& feature_serv
     return _registered_features;
 }
 
-feature::feature(feature_service& service, std::string_view name, bool enabled)
-        : _service(&service)
-        , _name(name)
+feature::feature(std::string_view name, bool enabled)
+        : _name(name)
         , _enabled(enabled) {
-    _service->register_feature(*this);
-}
-
-feature::~feature() {
-    if (_service) {
-        _service->unregister_feature(*this);
-    }
-}
-
-feature& feature::operator=(feature&& other) {
-    _service->unregister_feature(*this);
-    _service = std::exchange(other._service, nullptr);
-    _name = other._name;
-    _enabled = other._enabled;
-    _s = std::move(other._s);
-    _service->register_feature(*this);
-    return *this;
 }
 
 void feature::enable() {
@@ -216,15 +349,15 @@ db::schema_features feature_service::cluster_schema_features() const {
     db::schema_features f;
     f.set<db::schema_feature::DIGEST_INSENSITIVE_TO_EXPIRY>();
     f.set<db::schema_feature::COMPUTED_COLUMNS>();
-    f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(keyspace_storage_options);
-    f.set_if<db::schema_feature::SCYLLA_KEYSPACES>(tablets);
-    f.set_if<db::schema_feature::SCYLLA_AGGREGATES>(aggregate_storage_options);
-    f.set_if<db::schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY>(table_digest_insensitive_to_expiry);
+    f.set_if<db::schema_feature::SCYLLA_KEYSPACES>((*this)[features::keyspace_storage_options]);
+    f.set_if<db::schema_feature::SCYLLA_KEYSPACES>((*this)[features::tablets]);
+    f.set_if<db::schema_feature::SCYLLA_AGGREGATES>((*this)[features::aggregate_storage_options]);
+    f.set_if<db::schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY>((*this)[features::table_digest_insensitive_to_expiry]);
     f.set<db::schema_feature::GROUP0_SCHEMA_VERSIONING>();
     f.set<db::schema_feature::IN_MEMORY_TABLES>();
-    f.set_if<db::schema_feature::TABLET_OPTIONS>(bool(tablet_options));
-    f.set_if<db::schema_feature::KEYSPACE_MULTI_RF_CHANGE>(bool(keyspace_multi_rf_change));
-    f.set_if<db::schema_feature::CLUSTER_CONFIG_TABLES>(bool(cluster_config));
+    f.set_if<db::schema_feature::TABLET_OPTIONS>(bool((*this)[features::tablet_options]));
+    f.set_if<db::schema_feature::KEYSPACE_MULTI_RF_CHANGE>(bool((*this)[features::keyspace_multi_rf_change]));
+    f.set_if<db::schema_feature::CLUSTER_CONFIG_TABLES>(bool((*this)[features::cluster_config]));
     return f;
 }
 

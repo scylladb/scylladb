@@ -63,6 +63,10 @@
 #include <vector>
 #include <zlib.h>
 
+namespace gms::features {
+extern const feature_definition empty_replica_pages;
+}
+
 namespace alternator {
 
 static logging::logger xlogger("alternator-export");
@@ -1306,7 +1310,7 @@ seastar::future<> export_scan_table(
     // for internal groups (ours included), so read the config directly. Read per pager, so
     // live config updates apply.
     auto tombstone_limit = [&proxy] {
-        return proxy.features().empty_replica_pages
+        return proxy.feature(gms::features::empty_replica_pages)
                 ? query::tombstone_limit(proxy.local_db().get_config().query_tombstone_page_limit())
                 : query::tombstone_limit::max;
     };

@@ -66,6 +66,11 @@
 #include "utils/user_provided_param.hh"
 #include "sstable_dict_autotrainer.hh"
 
+namespace gms::features {
+extern const feature_definition sstable_compression_dicts;
+extern const feature_definition vnodes_to_tablets_migrations;
+}
+
 using namespace seastar::httpd;
 using namespace std::chrono_literals;
 
@@ -1216,7 +1221,7 @@ rest_get_effective_ownership(http_context& ctx, sharded<service::storage_service
 static
 future<json::json_return_type>
 rest_estimate_compression_ratios(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-    if (!ss.local().get_feature_service().sstable_compression_dicts) {
+    if (!ss.local().feature(gms::features::sstable_compression_dicts)) {
         apilog.warn("estimate_compression_ratios: called before the cluster feature was enabled");
         throw std::runtime_error("estimate_compression_ratios requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
     }
@@ -1282,7 +1287,7 @@ rest_estimate_compression_ratios(http_context& ctx, sharded<service::storage_ser
 static
 future<json::json_return_type>
 rest_retrain_dict(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
-    if (!ss.local().get_feature_service().sstable_compression_dicts) {
+    if (!ss.local().feature(gms::features::sstable_compression_dicts)) {
         apilog.warn("retrain_dict: called before the cluster feature was enabled");
         throw std::runtime_error("retrain_dict requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
     }
@@ -1580,7 +1585,7 @@ rest_tablet_balancing_enable(sharded<service::storage_service>& ss, std::unique_
 static
 future<json::json_return_type>
 rest_create_vnode_tablet_migration(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+    if (!ss.local().feature(gms::features::vnodes_to_tablets_migrations)) {
         apilog.warn("create_vnode_tablet_migration: called before the cluster feature was enabled");
         throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
     }
@@ -1594,7 +1599,7 @@ rest_create_vnode_tablet_migration(http_context& ctx, sharded<service::storage_s
 static
 future<json::json_return_type>
 rest_get_vnode_tablet_migration(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+    if (!ss.local().feature(gms::features::vnodes_to_tablets_migrations)) {
         apilog.warn("get_vnode_tablet_migration: called before the cluster feature was enabled");
         throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
     }
@@ -1646,7 +1651,7 @@ rest_get_vnode_tablet_migration(http_context& ctx, sharded<service::storage_serv
 static
 future<json::json_return_type>
 rest_set_vnode_tablet_migration_node_storage_mode(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+    if (!ss.local().feature(gms::features::vnodes_to_tablets_migrations)) {
         apilog.warn("set_vnode_tablet_migration_node_storage_mode: called before the cluster feature was enabled");
         throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
     }
@@ -1661,7 +1666,7 @@ rest_set_vnode_tablet_migration_node_storage_mode(http_context& ctx, sharded<ser
 static
 future<json::json_return_type>
 rest_finalize_vnode_tablet_migration(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-    if (!ss.local().get_feature_service().vnodes_to_tablets_migrations) {
+    if (!ss.local().feature(gms::features::vnodes_to_tablets_migrations)) {
         apilog.warn("finalize_vnode_tablet_migration: called before the cluster feature was enabled");
         throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
     }

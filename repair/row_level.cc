@@ -69,6 +69,13 @@
 #include "locator/tablets.hh"
 #include "gms/feature_service.hh"
 
+namespace gms::features {
+extern const feature_definition repair_msg_split;
+extern const feature_definition tablet_incremental_repair;
+extern const feature_definition tablet_rebuild_incremental_repair;
+extern const feature_definition tablet_repair_tasks_table;
+}
+
 extern logging::logger rlogger;
 
 static bool inject_rpc_stream_error = false;
@@ -1803,7 +1810,7 @@ private:
         _metrics.tx_row_nr += row_list.size();
         _metrics.tx_row_bytes += row_bytes;
         fragments_limiter limiter(_schema->ks_name(), _schema->cf_name());
-        auto msg_split_feature = bool(_db.local().features().repair_msg_split);
+        auto msg_split_feature = bool(_db.local().feature(gms::features::repair_msg_split));
         while (!row_list.empty()) {
             repair_row r = std::move(row_list.front());
             row_list.pop_front();
@@ -3726,10 +3733,10 @@ public:
             // A tablet rebuild repairs only the unrepaired data of the remaining replicas: the
             // last incremental repair already synced the repaired data on all replicas.
             auto& features = _rstate.db.local().features();
-            bool enable_incremental_repair = features.tablet_incremental_repair && _is_tablet &&
+            bool enable_incremental_repair = features[gms::features::tablet_incremental_repair] && _is_tablet &&
                                              _rstate.sched_info.sched_by_scheduler &&
                                              (_rstate.sched_info.for_tablet_rebuild
-                                                ? bool(features.tablet_rebuild_incremental_repair)
+                                                ? bool(features[gms::features::tablet_rebuild_incremental_repair])
                                                 : _rstate.sched_info.incremental_mode != locator::tablet_repair_incremental_mode::disabled);
             if (enable_incremental_repair) {
                 auto& table = _rstate.db.local().find_column_family(_table_id);
@@ -4347,7 +4354,7 @@ future<std::optional<repair_task_progress>> repair_service::get_tablet_repair_ta
     utils::chunked_vector<tablet_token_range> requested_tablets;
     utils::chunked_vector<tablet_token_range> finished_tablets;
     table_id tid;
-    if (!_db.local().features().tablet_repair_tasks_table) {
+    if (!_db.local().feature(gms::features::tablet_repair_tasks_table)) {
         co_return std::nullopt;
     }
     co_await _sys_ks.local().get_repair_task(task_uuid, [&tid, &requested_tablets, &finished_tablets] (const db::system_keyspace::repair_task_entry& entry) -> future<> {

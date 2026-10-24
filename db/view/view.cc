@@ -87,6 +87,11 @@
 #include "cartesian_product.hh"
 #include "idl/view.dist.hh"
 
+namespace gms::features {
+extern const feature_definition view_building_coordinator;
+extern const feature_definition views_with_tablets;
+}
+
 using namespace std::chrono_literals;
 
 static logging::logger vlogger("view");
@@ -2701,7 +2706,7 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
 }
 
 static bool should_ignore_tablet_keyspace(const replica::database& db, const sstring& ks_name) {
-    return db.features().view_building_coordinator && db.has_keyspace(ks_name) && db.find_keyspace(ks_name).uses_tablets();
+    return db.feature(gms::features::view_building_coordinator) && db.has_keyspace(ks_name) && db.find_keyspace(ks_name).uses_tablets();
 }
 
 future<view_builder::view_builder_units> view_builder::get_or_adopt_view_builder_lock(view_builder_units_opt units) {
@@ -3637,7 +3642,7 @@ sstring build_status_to_sstring(build_status status) {
 void validate_view_keyspace(const data_dictionary::database& db, std::string_view keyspace_name, locator::token_metadata_ptr tmptr) {
     const auto& rs = db.find_keyspace(keyspace_name).get_replication_strategy();
 
-    if (rs.uses_tablets() && !db.features().views_with_tablets) {
+    if (rs.uses_tablets() && !db.feature(gms::features::views_with_tablets)) {
         throw exceptions::invalid_request_exception("Materialized views and secondary indexes are not supported on base tables with tablets. "
                 "To be able to use them, make sure all nodes in the cluster are upgraded.");
     }

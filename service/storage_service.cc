@@ -133,6 +133,28 @@
 #include <variant>
 #include <utility>
 
+namespace gms::features {
+extern const feature_definition cdc_with_tablets;
+extern const feature_definition client_routes;
+extern const feature_definition compression_dicts;
+extern const feature_definition enforced_raft_rpc_scheduling_group;
+extern const feature_definition file_stream;
+extern const feature_definition parallel_tablet_draining;
+extern const feature_definition quiesce_topology_enhanced;
+extern const feature_definition rack_list_rf;
+extern const feature_definition removenode_with_left_token_ring;
+extern const feature_definition tablet_pow2_convergence;
+extern const feature_definition tablet_repair_scheduler;
+extern const feature_definition tablet_repair_tasks_table;
+extern const feature_definition topology_current_storage_mode;
+extern const feature_definition topology_global_request_queue;
+extern const feature_definition topology_noop_request;
+extern const feature_definition topology_requests_target_host_column;
+extern const feature_definition topology_requests_type_column;
+extern const feature_definition view_building_coordinator;
+extern const feature_definition zero_token_nodes;
+}
+
 using token = dht::token;
 using UUID = utils::UUID;
 using inet_address = gms::inet_address;
@@ -165,7 +187,7 @@ namespace {
 }
 
 void check_raft_rpc_scheduling_group(const replica::database& db, const gms::feature_service& feature_service, const std::string_view rpc_name) {
-    if (!feature_service.enforced_raft_rpc_scheduling_group) {
+    if (!feature_service[gms::features::enforced_raft_rpc_scheduling_group]) {
         return;
     }
 
@@ -279,6 +301,10 @@ storage_service::storage_service(abort_source& abort_source,
 }
 
 storage_service::~storage_service() = default;
+
+gms::feature& storage_service::feature(const gms::feature_definition& f) noexcept {
+    return _feature_service[f];
+}
 
 auth::cache& storage_service::auth_cache() noexcept {
     return _auth_cache;
@@ -537,7 +563,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         case node_state::removing:
             // A decommissioning or removing node loses its tokens when topology moves to left_token_ring.
             if (_topology_state_machine._topology.tstate == topology::transition_state::left_token_ring) {
-                if (rs.state == node_state::removing && !_feature_service.removenode_with_left_token_ring) {
+                if (rs.state == node_state::removing && !_feature_service[gms::features::removenode_with_left_token_ring]) {
                     on_internal_error(
                             rtlogger, "removenode operation can only enter the left_token_ring state when REMOVENODE_WITH_LEFT_TOKEN_RING feature is enabled");
                 }
@@ -743,7 +769,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         tablets->set_balancing_enabled(topology.tablet_balancing_enabled);
         tmptr->set_tablets(std::move(*tablets));
 
-        if (_feature_service.parallel_tablet_draining) {
+        if (_feature_service[gms::features::parallel_tablet_draining]) {
             for (auto&& [node, req]: topology.requests) {
                 if (req == topology_request::leave || req == topology_request::remove) {
                     if (tmptr->tablets().has_replica_on(locator::host_id(node.uuid()))) {
@@ -1281,11 +1307,11 @@ utils::chunked_vector<canonical_mutation> storage_service::build_mutation_from_j
             .set("topology_request", topology_request::join);
     }
     node_builder.set("request_id", params.request_id);
-    topology_request_tracking_mutation_builder rtbuilder(params.request_id, _feature_service.topology_requests_type_column);
+    topology_request_tracking_mutation_builder rtbuilder(params.request_id, _feature_service[gms::features::topology_requests_type_column]);
     rtbuilder.set("initiating_host", params.host_id.uuid())
              .set("done", false);
     rtbuilder.set("request_type", params.replaced_id ? topology_request::replace : topology_request::join);
-    if (_feature_service.topology_requests_target_host_column) {
+    if (_feature_service[gms::features::topology_requests_target_host_column]) {
         auto target = params.replaced_id ? params.replaced_id->uuid() : params.host_id.uuid();
         rtbuilder.set("target_host", target);
     }
@@ -1298,7 +1324,7 @@ utils::chunked_vector<canonical_mutation> storage_service::build_mutation_from_j
         // work on it yet, and if the topology coordinator will pick it up meanwhile the write of this new state will fail
         topology_mutation_builder builder(write_timestamp);
         builder.with_node(*params.replaced_id).del("topology_request");
-        topology_request_tracking_mutation_builder rtbuilder(old_request_id, _feature_service.topology_requests_type_column);
+        topology_request_tracking_mutation_builder rtbuilder(old_request_id, _feature_service[gms::features::topology_requests_type_column]);
         rtbuilder.done("node was replaced before the request could start");
         muts.push_back(builder.build());
         muts.push_back(rtbuilder.build());
@@ -1463,7 +1489,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     // Only report the mode once every node knows the column; older nodes silently drop
     // a cell for a column their schema lacks. The flag gates the comparison below too,
     // or the loop would keep retrying a write it is not allowed to make.
-    const bool report_storage_mode = bool(_feature_service.topology_current_storage_mode);
+    const bool report_storage_mode = bool(_feature_service[gms::features::topology_current_storage_mode]);
     // The mode this node built its tables with. It reads the intent before it has caught
     // up with group0, and a node can die between committing an intent and applying it, so
     // the row may already carry one this boot never saw - the tables are vnode-flavored
@@ -1767,7 +1793,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
             throw std::runtime_error("A node that already left the cluster cannot be restarted");
         }
     } else {
-        if (!_db.local().get_config().join_ring() && !_feature_service.zero_token_nodes) {
+        if (!_db.local().get_config().join_ring() && !_feature_service[gms::features::zero_token_nodes]) {
             throw std::runtime_error("Cannot boot a node with join_ring=false because the cluster does not support the ZERO_TOKEN_NODES feature");
         }
 
@@ -2783,11 +2809,11 @@ future<> storage_service::raft_decommission() {
         builder.with_node(raft_server.id())
                .set("topology_request", topology_request::leave)
                .set("request_id", guard.new_group0_state_id());
-        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _feature_service.topology_requests_type_column);
+        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _feature_service[gms::features::topology_requests_type_column]);
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
         rtbuilder.set("request_type", topology_request::leave);
-        if (_feature_service.topology_requests_target_host_column) {
+        if (_feature_service[gms::features::topology_requests_target_host_column]) {
             rtbuilder.set("target_host", raft_server.id().uuid());
         }
         topology_change change{{builder.build(), rtbuilder.build()}};
@@ -2934,11 +2960,11 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
         builder.add_ignored_nodes(ignored_ids).with_node(id)
                .set("topology_request", topology_request::remove)
                .set("request_id", guard.new_group0_state_id());
-        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _feature_service.topology_requests_type_column);
+        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _feature_service[gms::features::topology_requests_type_column]);
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
         rtbuilder.set("request_type", topology_request::remove);
-        if (_feature_service.topology_requests_target_host_column) {
+        if (_feature_service[gms::features::topology_requests_target_host_column]) {
             rtbuilder.set("target_host", id.uuid());
         }
         topology_change change{{builder.build(), rtbuilder.build()}};
@@ -3142,7 +3168,7 @@ future<> storage_service::do_clusterwide_vnodes_cleanup() {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
         auto curr_req = _topology_state_machine._topology.global_request;
-        if (!_feature_service.topology_global_request_queue && curr_req && *curr_req != global_topology_request::cleanup) {
+        if (!_feature_service[gms::features::topology_global_request_queue] && curr_req && *curr_req != global_topology_request::cleanup) {
             throw std::runtime_error{
                 "topology coordinator: cluster-wide vnodes cleanup: a different topology request is already pending, try again later"};
         }
@@ -3162,10 +3188,10 @@ future<> storage_service::do_clusterwide_vnodes_cleanup() {
         rtlogger.info("cluster-wide vnodes cleanup requested");
         topology_mutation_builder builder(guard.write_timestamp());
         utils::chunked_vector<canonical_mutation> muts;
-        if (_feature_service.topology_global_request_queue) {
+        if (_feature_service[gms::features::topology_global_request_queue]) {
             request_id = guard.new_group0_state_id();
             builder.queue_global_topology_request_id(request_id);
-            topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
+            topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service[gms::features::topology_requests_type_column]);
             rtbuilder.set("done", false)
                      .set("start_time", db_clock::now())
                      .set("request_type", global_topology_request::cleanup);
@@ -3359,7 +3385,7 @@ future<> storage_service::abort_rf_change(utils::UUID request_id) {
         });
     }
 
-    if (!_feature_service.rack_list_rf) {
+    if (!_feature_service[gms::features::rack_list_rf]) {
         throw std::runtime_error("The RACK_LIST_RF feature is not enabled on the cluster yet");
     }
 
@@ -3637,11 +3663,11 @@ future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
                .set("topology_request", topology_request::rebuild)
                .set("rebuild_option", source_dc)
                .set("request_id", guard.new_group0_state_id());
-        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _feature_service.topology_requests_type_column);
+        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _feature_service[gms::features::topology_requests_type_column]);
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
         rtbuilder.set("request_type", topology_request::rebuild);
-        if (_feature_service.topology_requests_target_host_column) {
+        if (_feature_service[gms::features::topology_requests_target_host_column]) {
             rtbuilder.set("target_host", raft_server.id().uuid());
         }
         topology_change change{{builder.build(), rtbuilder.build()}};
@@ -3685,7 +3711,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
         }
 
         if (curr_req && *curr_req != global_topology_request::new_cdc_generation) {
-            if (!_feature_service.topology_global_request_queue) {
+            if (!_feature_service[gms::features::topology_global_request_queue]) {
                 throw std::runtime_error{
                     "check_and_repair_cdc_streams: a different topology request is already pending, try again later"};
             } else {
@@ -3710,9 +3736,9 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
         if (!request_id) {
             topology_mutation_builder builder(guard.write_timestamp());
             utils::chunked_vector<canonical_mutation> muts;
-            if (_feature_service.topology_global_request_queue) {
+            if (_feature_service[gms::features::topology_global_request_queue]) {
                 request_id = guard.new_group0_state_id();
-                topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
+                topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service[gms::features::topology_requests_type_column]);
                 builder.queue_global_topology_request_id(request_id);
                 rtbuilder.set("done", false)
                          .set("start_time", db_clock::now())
@@ -4472,7 +4498,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         }
 
         target_pow2_per_table_map target_pow2s;
-        bool use_pow2_presplit = bool(_feature_service.tablet_pow2_convergence);
+        bool use_pow2_presplit = bool(_feature_service[gms::features::tablet_pow2_convergence]);
         if (use_pow2_presplit) {
             auto erm = ks.get_static_effective_replication_map();
             auto estimated_sizes = co_await collect_table_sizes_for_migration(ks_name, erm, trs, tables_to_migrate);
@@ -4533,7 +4559,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // lacks would leave system.topology differing between them, and the status
         // API answers from local state. Without it the migration still runs, with
         // every node reading as null - the same state an older node's prepare leaves.
-        if (_feature_service.topology_current_storage_mode) {
+        if (_feature_service[gms::features::topology_current_storage_mode]) {
             topology_mutation_builder builder(guard.write_timestamp());
             for (const auto& [node_id, _] : topology.normal_nodes) {
                 builder.with_node(node_id).set("current_storage_mode", storage_mode::vnodes);
@@ -4755,7 +4781,7 @@ storage_service::get_tablets_pow2_convergence_status(const sstring& ks_name) con
         throw std::runtime_error(fmt::format("Keyspace '{}' does not use tablets", ks_name));
     }
 
-    if (!_feature_service.tablet_pow2_convergence) {
+    if (!_feature_service[gms::features::tablet_pow2_convergence]) {
         throw std::runtime_error("TABLET_POW2_CONVERGENCE cluster feature is not enabled");
     }
 
@@ -4830,7 +4856,7 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
         topology_mutation_builder builder(guard.write_timestamp());
         builder.queue_global_topology_request_id(request_id);
 
-        topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
+        topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service[gms::features::topology_requests_type_column]);
         rtbuilder.set("done", false)
                  .set("start_time", db_clock::now())
                  .set("request_type", global_topology_request::finalize_migration)
@@ -5762,7 +5788,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         });
 
         auto& table = _db.local().find_column_family(tablet.table);
-        const bool file_stream_enabled = _feature_service.file_stream && _db.local().get_config().enable_file_stream();
+        const bool file_stream_enabled = _feature_service[gms::features::file_stream] && _db.local().get_config().enable_file_stream();
         if (table.uses_logstor() && !file_stream_enabled) {
             throw std::runtime_error(fmt::format("Table {}.{} uses logstor, which requires file streaming to be enabled", table.schema()->ks_name(), table.schema()->cf_name()));
         }
@@ -6030,7 +6056,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         tokens = std::get<utils::chunked_vector<dht::token>>(tokens_variant);
     }
 
-    if (!_feature_service.tablet_repair_scheduler) {
+    if (!_feature_service[gms::features::tablet_repair_scheduler]) {
         throw std::runtime_error("The TABLET_REPAIR_SCHEDULER feature is not enabled on the cluster yet");
     }
 
@@ -6092,7 +6118,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
                 .timestamp   = ts,
                 .table_uuid  = table,
             };
-            if (_feature_service.tablet_repair_tasks_table) {
+            if (_feature_service[gms::features::tablet_repair_tasks_table]) {
                 auto m = co_await _sys_ks.local().get_update_repair_task_mutation(entry, guard.write_timestamp());
                 updates.add_small(std::move(m));
             }
@@ -6140,7 +6166,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
         });
     }
 
-    if (!_feature_service.tablet_repair_scheduler) {
+    if (!_feature_service[gms::features::tablet_repair_scheduler]) {
         throw std::runtime_error("The TABLET_REPAIR_SCHEDULER feature is not enabled on the cluster yet");
     }
 
@@ -6248,7 +6274,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
                                                              : locator::tablet_transition_kind::migration)
             .set_migration_task_info(last_token, std::move(migration_task_info), _feature_service)
             .build());
-        if (_feature_service.view_building_coordinator) {
+        if (_feature_service[gms::features::view_building_coordinator]) {
             db::view::abort_view_building_tasks(_view_building_state_machine, updates, write_timestamp, table, src, last_token);
         }
 
@@ -6362,7 +6388,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
             .build());
-        if (_feature_service.view_building_coordinator) {
+        if (_feature_service[gms::features::view_building_coordinator]) {
             db::view::abort_view_building_tasks(_view_building_state_machine, updates, write_timestamp, table, dst, last_token);
         }
 
@@ -6452,7 +6478,7 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
         request_id = guard.new_group0_state_id();
 
         topology_mutation_builder builder(guard.write_timestamp());
-        topology_request_tracking_mutation_builder trbuilder(request_id, _feature_service.topology_requests_type_column);
+        topology_request_tracking_mutation_builder trbuilder(request_id, _feature_service[gms::features::topology_requests_type_column]);
 
         trbuilder.set_restore_tablets_data(table, snap_name)
                  .set("done", false)
@@ -6661,14 +6687,14 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
                      .build()));
 
         if (!enabled
-                && _feature_service.topology_noop_request && _feature_service.topology_global_request_queue) {
+                && _feature_service[gms::features::topology_noop_request] && _feature_service[gms::features::topology_global_request_queue]) {
             request_id = guard.new_group0_state_id();
             updates.push_back(canonical_mutation(
                 topology_mutation_builder(guard.write_timestamp())
                     .queue_global_topology_request_id(request_id)
                     .build()));
             updates.push_back(canonical_mutation(
-                topology_request_tracking_mutation_builder(request_id, _feature_service.topology_requests_type_column)
+                topology_request_tracking_mutation_builder(request_id, _feature_service[gms::features::topology_requests_type_column])
                     .set("done", false)
                     .set("request_type", global_topology_request::noop_request)
                     .build()));
@@ -6703,7 +6729,7 @@ future<utils::UUID> storage_service::submit_quiesce_topology_request() {
         topology_mutation_builder builder(guard.write_timestamp());
         builder.queue_global_topology_request_id(request_id);
 
-        topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
+        topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service[gms::features::topology_requests_type_column]);
         rtbuilder.set("done", false)
                  .set("request_type", global_topology_request::quiesce);
 
@@ -6784,8 +6810,8 @@ future<> storage_service::await_topology_quiesced() {
         co_return;
     }
 
-    if (!_feature_service.quiesce_topology_enhanced
-            || !_feature_service.topology_global_request_queue) {
+    if (!_feature_service[gms::features::quiesce_topology_enhanced]
+            || !_feature_service[gms::features::topology_global_request_queue]) {
         // Old behavior — fallback for mixed-version clusters.
         co_await _group0->group0_server().read_barrier(&_group0_as);
         co_await _topology_state_machine.await_not_busy();
@@ -7222,17 +7248,17 @@ void storage_service::init_messaging_service() {
             std::vector<table_id> additional_tables;
             if (params.tables.size() > 0 && params.tables[0] != db::system_keyspace::topology()->id()) {
                 additional_tables.push_back(db::system_keyspace::view_build_status_v2()->id());
-                if (ss._feature_service.compression_dicts) {
+                if (ss._feature_service[gms::features::compression_dicts]) {
                     additional_tables.push_back(db::system_keyspace::dicts()->id());
                 }
-                if (ss._feature_service.view_building_coordinator) {
+                if (ss._feature_service[gms::features::view_building_coordinator]) {
                     additional_tables.push_back(db::system_keyspace::view_building_tasks()->id());
                 }
-                if (ss._feature_service.cdc_with_tablets) {
+                if (ss._feature_service[gms::features::cdc_with_tablets]) {
                     additional_tables.push_back(db::system_keyspace::cdc_streams_state()->id());
                     additional_tables.push_back(db::system_keyspace::cdc_streams_history()->id());
                 }
-                if (ss._feature_service.client_routes) {
+                if (ss._feature_service[gms::features::client_routes]) {
                     additional_tables.push_back(db::system_keyspace::client_routes()->id());
                 }
             }

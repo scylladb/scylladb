@@ -78,6 +78,12 @@
 #include "utils/simple_value_with_expiry.hh"
 #include "service/paxos/paxos_state.hh"
 
+namespace gms::features {
+extern const feature_definition alternator_composite_gsi_keys;
+extern const feature_definition cdc_block_tablet_merges_for_alternator_streams;
+extern const feature_definition tablets;
+}
+
 using namespace std::chrono_literals;
 
 namespace std {
@@ -2246,7 +2252,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         if (!gsi->IsArray()) {
             co_return api_error::validation("GlobalSecondaryIndexes must be an array.");
         }
-        const bool composite_gsi_keys_supported = _proxy.features().alternator_composite_gsi_keys;
+        const bool composite_gsi_keys_supported = _proxy.feature(gms::features::alternator_composite_gsi_keys);
         for (const rjson::value& g : gsi->GetArray()) {
             const rjson::value* index_name_v = rjson::find(g, "IndexName");
             if (!index_name_v || !index_name_v->IsString()) {
@@ -2446,7 +2452,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     if (stream_enabled) {
         const bool uses_tablets = get_initial_tablet_count(tags_map, _proxy.features(), tablets_mode).has_value();
         if (uses_tablets) {
-            if (!_proxy.features().cdc_block_tablet_merges_for_alternator_streams) {
+            if (!_proxy.feature(gms::features::cdc_block_tablet_merges_for_alternator_streams)) {
                 co_return api_error::validation(
                         "Alternator Streams on tablet tables are not supported until all nodes in the cluster "
                         "support blocking tablet merges for Alternator Streams");
@@ -2824,7 +2830,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     // tablet merges (see block_tablet_merges_for_alternator_streams).
                     bool uses_tablets = p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets();
                     if (uses_tablets) {
-                        if (!p.local().features().cdc_block_tablet_merges_for_alternator_streams) {
+                        if (!p.local().feature(gms::features::cdc_block_tablet_merges_for_alternator_streams)) {
                             co_return api_error::validation(
                                     "Alternator Streams on tablet tables are not supported until all nodes in the cluster "
                                     "support blocking tablet merges for Alternator Streams");
@@ -3161,7 +3167,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         // FIXME: read and handle "Projection" parameter. This will
                         // require the MV code to copy just parts of the attrs map.
                         schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
-                        const bool composite_gsi_keys_supported = p.local().features().alternator_composite_gsi_keys;
+                        const bool composite_gsi_keys_supported = p.local().feature(gms::features::alternator_composite_gsi_keys);
                         const auto [view_hash_keys, view_range_keys] = parse_gsi_composite_key_schema(it->value, "GlobalSecondaryIndexUpdates",
                                 composite_gsi_keys_supported);
                         // If an attribute is already a real column in the base
@@ -5649,7 +5655,7 @@ static std::optional<unsigned> get_initial_tablet_count(const std::map<sstring, 
     // an automatic selection of the best number of tablets).
     // Setting this tag to any non-numeric value (e.g., an empty string or the
     // word "none") will ask to disable tablets.
-    if (!feat.tablets) {
+    if (!feat[gms::features::tablets]) {
         return std::nullopt;
     }
     auto it = tags_map.find(INITIAL_TABLETS_TAG_KEY);
@@ -5679,7 +5685,7 @@ static std::optional<unsigned> get_initial_tablet_count(const std::map<sstring, 
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts,
             const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
     auto initial_tablets = get_initial_tablet_count(tags_map, feat, tablets_mode);
-    if (feat.tablets) {
+    if (feat[gms::features::tablets]) {
         if (tags_map.contains(INITIAL_TABLETS_TAG_KEY)) {
             if (!initial_tablets) {
                 if (tablets_mode == db::tablets_mode_t::mode::enforced) {

@@ -49,6 +49,10 @@
 #include <algorithm>
 #include <set>
 
+namespace gms::features {
+extern const feature_definition tablet_aware_restore;
+}
+
 static logging::logger llog("sstables_loader");
 
 namespace {
@@ -1517,7 +1521,7 @@ static void check_endpoints(const replica::table& t, const std::vector<tablet_re
 }
 
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations) {
-    if (!_db.local().features().tablet_aware_restore) {
+    if (!_db.local().feature(gms::features::tablet_aware_restore)) {
         throw std::runtime_error("Cannot restore tablets. Feature 'TABLET_AWARE_RESTORE' is not available in cluster");
     }
 

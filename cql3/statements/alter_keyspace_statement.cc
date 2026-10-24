@@ -37,6 +37,14 @@
 #include "db/schema_tables.hh"
 #include "cql3/untyped_result_set.hh"
 
+namespace gms::features {
+extern const feature_definition keyspace_multi_rf_change;
+extern const feature_definition keyspace_storage_options;
+extern const feature_definition rack_list_rf;
+extern const feature_definition topology_global_request_queue;
+extern const feature_definition topology_requests_type_column;
+}
+
 using namespace std::string_literals;
 
 static logging::logger mylogger("alter_keyspace");
@@ -76,7 +84,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             auto ks = qp.db().find_keyspace(_name);
             data_dictionary::storage_options current_options = ks.metadata()->get_storage_options();
             data_dictionary::storage_options new_options = _attrs->get_storage_options();
-            if (!qp.proxy().features().keyspace_storage_options && !new_options.is_local_type()) {
+            if (!qp.proxy().feature(gms::features::keyspace_storage_options) && !new_options.is_local_type()) {
                 throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
             }
             if (!current_options.can_update_to(new_options)) {
@@ -121,7 +129,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                         continue;
                     }
                     if (total_abs_rfs_diff += get_abs_rf_diff(old_rf, new_rf); total_abs_rfs_diff >= 2 &&
-                            !(qp.proxy().features().keyspace_multi_rf_change && locator::uses_rack_list_exclusively(current_rf_per_dc)
+                            !(qp.proxy().feature(gms::features::keyspace_multi_rf_change) && locator::uses_rack_list_exclusively(current_rf_per_dc)
                             && locator::uses_rack_list_exclusively(new_ks->strategy_options()) && all_changes_are_0_N())) {
                         throw exceptions::invalid_request_exception("Only one DC's RF can be changed at a time and not by more than 1");
                     }
@@ -229,21 +237,21 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         //       and we'll unnecessarily trigger the processing path for ALTER tablets KS,
         //       when in reality nothing or only schema is being changed
         if (changes_tablets(qp)) {
-            if (!qp.proxy().features().topology_global_request_queue && !qp.topology_global_queue_empty()) {
+            if (!qp.proxy().feature(gms::features::topology_global_request_queue) && !qp.topology_global_queue_empty()) {
                 co_await coroutine::return_exception(
                     exceptions::invalid_request_exception("Another global topology request is ongoing, please retry."));
             }
-            if (qp.proxy().features().rack_list_rf && co_await qp.ongoing_rf_change(mc.guard(),_name)) {
+            if (qp.proxy().feature(gms::features::rack_list_rf) && co_await qp.ongoing_rf_change(mc.guard(),_name)) {
                 co_await coroutine::return_exception(
                         exceptions::invalid_request_exception(format("Another RF change for this keyspace {} ongoing, please retry.", _name)));
             }
             qp.db().real_database().validate_keyspace_update(*ks_md_update);
 
             service::topology_mutation_builder builder(ts);
-            service::topology_request_tracking_mutation_builder rtbuilder{global_request_id, qp.proxy().features().topology_requests_type_column};
+            service::topology_request_tracking_mutation_builder rtbuilder{global_request_id, qp.proxy().feature(gms::features::topology_requests_type_column)};
             rtbuilder.set("done", false)
                      .set("start_time", db_clock::now());
-            if (!qp.proxy().features().topology_global_request_queue) {
+            if (!qp.proxy().feature(gms::features::topology_global_request_queue)) {
                 builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
                 builder.set_global_topology_request_id(global_request_id);
                 builder.set_new_keyspace_rf_change_data(_name, _attrs->flattened());

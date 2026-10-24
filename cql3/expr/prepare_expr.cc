@@ -31,6 +31,10 @@
 
 #include <ranges>
 
+namespace gms::features {
+extern const feature_definition writetime_ttl_individual_element;
+}
+
 namespace cql3::expr {
 
 static const column_value resolve_column(const unresolved_identifier& col_ident, const schema& schema);
@@ -1660,7 +1664,7 @@ prepare_column_mutation_attribute(
         if (!type_allowed(inner_cval->col->type)) {
             throw exceptions::invalid_request_exception(fmt::format("{} on a {} is only valid for {}", cma.kind, context, type_allowed_str));
         }
-        if (!db.features().writetime_ttl_individual_element) {
+        if (!db.feature(gms::features::writetime_ttl_individual_element)) {
             throw exceptions::invalid_request_exception(fmt::format(
                 "{} on a {} is not supported until all nodes in the cluster are upgraded", cma.kind, context));
         }

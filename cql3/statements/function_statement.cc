@@ -14,6 +14,10 @@
 #include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
 
+namespace gms::features {
+extern const feature_definition user_defined_functions;
+}
+
 namespace cql3 {
 namespace statements {
 
@@ -98,7 +102,7 @@ data_type function_statement::prepare_type(query_processor& qp, cql3_type::raw& 
 }
 
 void function_statement::create_arg_types(query_processor& qp) const {
-    if (!qp.proxy().features().user_defined_functions) {
+    if (!qp.proxy().feature(gms::features::user_defined_functions)) {
         throw exceptions::invalid_request_exception("User defined functions are disabled. Set enable_user_defined_functions and experimental_features:udf to enable them");
     }
 

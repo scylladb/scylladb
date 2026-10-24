@@ -145,6 +145,11 @@
 #include "utils/error_injection.hh"
 #include "idl/sstables_loader.dist.impl.hh"
 
+namespace gms::features {
+extern const feature_definition load_and_stream_abort_rpc_message;
+extern const feature_definition maintenance_tenant;
+}
+
 namespace netw {
 
 static_assert(!std::is_default_constructible_v<msg_addr>);
@@ -1097,7 +1102,7 @@ void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_addre
 }
 
 void messaging_service::init_feature_listeners() {
-    _maintenance_tenant_enabled_listener = _feature_service.maintenance_tenant.when_enabled([this] {
+    _maintenance_tenant_enabled_listener = _feature_service[gms::features::maintenance_tenant].when_enabled([this] {
         enable_scheduling_tenant("$maintenance");
     });
 }
@@ -1549,7 +1554,7 @@ unsigned messaging_service::add_statement_tenant(sstring tenant_name, scheduling
 }
 
 bool messaging_service::supports_load_and_stream_abort_rpc_message() const noexcept {
-    return _feature_service.load_and_stream_abort_rpc_message;
+    return _feature_service[gms::features::load_and_stream_abort_rpc_message];
 }
 
 } // namespace net

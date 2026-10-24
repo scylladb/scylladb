@@ -33,6 +33,10 @@
 #include "utils/error_injection.hh"
 #include "utils/log.hh"
 
+namespace gms::features {
+extern const feature_definition view_building_tasks_min_task_id;
+}
+
 static logging::logger vbc_logger("view_building_coordinator");
 
 namespace db {
@@ -249,7 +253,7 @@ future<> view_building_coordinator::clean_finished_tasks() {
             builder.del_all_tasks();
         }
 
-        if (_db.features().view_building_tasks_min_task_id) {
+        if (_db.feature(gms::features::view_building_tasks_min_task_id)) {
             // If min_alive_uuid == std::nullopt, set min_task_id to a fresh UUID,
             // so future scans start past all the just-deleted rows (new tasks created
             // later will have larger UUIDs).

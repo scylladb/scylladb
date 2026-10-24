@@ -48,6 +48,10 @@
 #include "db/schema_tables.hh"
 #include "db/config.hh"
 
+namespace gms::features {
+extern const feature_definition rack_list_rf;
+}
+
 using namespace locator;
 
 struct ring_point {
@@ -1061,7 +1065,7 @@ SEASTAR_TEST_CASE(test_rack_list_rejected_when_feature_not_enabled) {
                             exceptions::configuration_exception);
 
         // When feature is enabled, rack list is accepted.
-        e.get_feature_service().local().rack_list_rf.enable();
+        e.get_feature_service().local()[gms::features::rack_list_rf].enable();
         e.execute_cql(create_stmt).get();
         e.execute_cql(fmt::format("ALTER KEYSPACE test2 WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
                                                       " '{}': ['{}']}}", loc.dc, loc.rack)).get();
@@ -1082,7 +1086,7 @@ SEASTAR_TEST_CASE(test_altering_to_numeric_forbidden) {
         topo.add_node(service::node_state::normal, shard_count);
 
         e.execute_cql("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 1}").get();
-        e.get_feature_service().local().rack_list_rf.enable();
+        e.get_feature_service().local()[gms::features::rack_list_rf].enable();
 
         // Only altering to rack list should be allowed once rf_rack_valid is enabled.
         BOOST_REQUIRE_THROW(e.execute_cql(

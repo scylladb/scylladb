@@ -33,6 +33,10 @@
 #include "view_info.hh"
 #include "mutation/async_utils.hh"
 
+namespace gms::features {
+extern const feature_definition cluster_config;
+}
+
 BOOST_AUTO_TEST_SUITE(schema_registry_test)
 
 static bytes random_column_name() {
@@ -100,7 +104,7 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_feature_is_supported) {
 SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_enabled_follows_feature_gate) {
     dummy_init dummy;
 
-    dummy.fs.cluster_config.enable();
+    dummy.fs[gms::features::cluster_config].enable();
 
     BOOST_REQUIRE(db::cluster_config_registry::enabled(dummy.fs));
 
@@ -130,7 +134,7 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_options_are_advertised_as_
     // add_feature() hands out the existing feature for a name already registered,
     // declared or created.
     BOOST_REQUIRE(&dummy.fs.add_feature(name) == &dummy.fs.registered_features().at(name).get());
-    BOOST_REQUIRE(&dummy.fs.add_feature("CLUSTER_CONFIG") == &dummy.fs.cluster_config);
+    BOOST_REQUIRE(&dummy.fs.add_feature("CLUSTER_CONFIG") == &dummy.fs[gms::features::cluster_config]);
     auto& created = dummy.fs.add_feature("TEST_CREATED_FEATURE");
     BOOST_REQUIRE(&dummy.fs.add_feature("TEST_CREATED_FEATURE") == &created);
     BOOST_REQUIRE(dummy.fs.supported_feature_set().contains("TEST_CREATED_FEATURE"));
@@ -232,7 +236,7 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_is_supported_needs_base_an
     auto& option_feature = dummy.fs.registered_features().at(ccr::feature_name(auto_repair_enabled->name)).get();
 
     BOOST_REQUIRE(!ccr::is_supported(*auto_repair_enabled, dummy.fs));
-    dummy.fs.cluster_config.enable();
+    dummy.fs[gms::features::cluster_config].enable();
     BOOST_REQUIRE(!ccr::is_supported(*auto_repair_enabled, dummy.fs));
     option_feature.enable();
     BOOST_REQUIRE(ccr::is_supported(*auto_repair_enabled, dummy.fs));

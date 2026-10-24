@@ -22,6 +22,10 @@
 #include "compaction/compaction_manager.hh"
 #include <seastar/coroutine/maybe_yield.hh>
 
+namespace gms::features {
+extern const feature_definition tombstone_gc_options;
+}
+
 extern logging::logger dblog;
 
 repair_history_map_ptr tombstone_gc_state::get_repair_history_for_table(const table_id& id) const {
@@ -353,7 +357,7 @@ void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dic
     if (!options) {
         return;
     }
-    if (!db.features().tombstone_gc_options) {
+    if (!db.feature(gms::features::tombstone_gc_options)) {
         throw exceptions::configuration_exception("tombstone_gc option not supported by the cluster");
     }
 

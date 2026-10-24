@@ -33,6 +33,14 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 
+namespace gms::features {
+extern const feature_definition large_data_guardrails;
+extern const feature_definition logstor;
+extern const feature_definition sstable_compression_dicts;
+extern const feature_definition tablet_options;
+extern const feature_definition typed_errors_in_read_rpc;
+}
+
 namespace cql3 {
 
 namespace statements {
@@ -161,11 +169,11 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
             throw exceptions::configuration_exception(sstring("Missing sub-option '") + compression_parameters::SSTABLE_COMPRESSION + "' for the '" + KW_COMPRESSION + "' option.");
         }
         compression_parameters cp(*compression_options);
-        cp.validate(compression_parameters::dicts_feature_enabled(bool(db.features().sstable_compression_dicts)));
+        cp.validate(compression_parameters::dicts_feature_enabled(bool(db.feature(gms::features::sstable_compression_dicts))));
     }
 
     auto per_partition_rate_limit_options = get_per_partition_rate_limit_options(schema_extensions);
-    if (per_partition_rate_limit_options && !db.features().typed_errors_in_read_rpc) {
+    if (per_partition_rate_limit_options && !db.feature(gms::features::typed_errors_in_read_rpc)) {
         throw exceptions::configuration_exception("Per-partition rate limit is not supported yet by the whole cluster");
     }
     if (per_partition_rate_limit_options && strong_consistency::is_strongly_consistent(db, ks_name)) {
@@ -210,7 +218,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         if (!ks.uses_tablets()) {
             throw exceptions::configuration_exception("tablet options cannot be used when tablets are disabled for the keyspace");
         }
-        if (!db.features().tablet_options) {
+        if (!db.feature(gms::features::tablet_options)) {
             throw exceptions::configuration_exception("tablet options cannot be used until all nodes in the cluster enable this feature");
         }
         db::tablet_options::validate(*tablet_options_map, db.features());
@@ -219,7 +227,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     if (has_property(KW_STORAGE_ENGINE)) {
         auto storage_engine = get_string(KW_STORAGE_ENGINE, "");
         if (storage_engine == "logstor") {
-            if (!db.features().logstor) {
+            if (!db.feature(gms::features::logstor)) {
                 throw exceptions::configuration_exception(format("The experimental feature 'logstor' must be enabled in order to use the 'logstor' storage engine."));
             }
         } else {
@@ -228,7 +236,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
 
     if (has_property(KW_LARGE_DATA_GUARDRAILS_ENABLED) && get_boolean(KW_LARGE_DATA_GUARDRAILS_ENABLED, false)) {
-        if (!db.features().large_data_guardrails) {
+        if (!db.feature(gms::features::large_data_guardrails)) {
             throw exceptions::configuration_exception("large_data_guardrails_enabled cannot be used until all nodes in the cluster enable this feature");
         }
     }

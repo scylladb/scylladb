@@ -96,6 +96,8 @@ class range_streamer;
 }
 
 namespace gms {
+class feature;
+class feature_definition;
 class feature_service;
 class gossiper;
 class loaded_endpoint_state;
@@ -450,6 +452,7 @@ public:
     gms::feature_service& get_feature_service() noexcept {
         return _feature_service;
     }
+    gms::feature& feature(const gms::feature_definition& f) noexcept;
 
     replica::database& get_database() noexcept {
         return _db.local();

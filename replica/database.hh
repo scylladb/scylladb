@@ -1904,6 +1904,7 @@ public:
     future<> init_logstor();
     future<> recover_logstor();
     const gms::feature_service& features() const { return _feat; }
+    const gms::feature& feature(const gms::feature_definition& f) const { return _feat[f]; }
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&,
                                db::timeout_clock::time_point timeout,
                                 shared_ptr<db::large_data_guardrail_base> guardrails, db::large_data_violation_type* large_data_violation_out = nullptr);

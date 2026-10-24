@@ -41,6 +41,15 @@
 #include <fmt/format.h>
 #include <fmt/chrono.h>
 
+namespace gms::features {
+extern const feature_definition arbitrary_tablet_boundaries;
+extern const feature_definition colocated_tablets;
+extern const feature_definition size_based_load_balancing;
+extern const feature_definition tablet_load_stats_v2;
+extern const feature_definition tablet_merge;
+extern const feature_definition tablet_repair_scheduler;
+}
+
 using namespace locator;
 using namespace replica;
 
@@ -1091,7 +1100,7 @@ public:
         , _minimal_tablet_size(db.get_config().minimal_tablet_size_for_balancing()) {
 
         // Force capacity based balancing until all the nodes have been upgraded
-        if (!_db.features().size_based_load_balancing && !_force_capacity_based_balancing) {
+        if (!_db.feature(gms::features::size_based_load_balancing) && !_force_capacity_based_balancing) {
             lblogger.info("Size based load balancing cluster feature disabled; forcing capacity based balancing");
             _force_capacity_based_balancing = true;
         }
@@ -1287,7 +1296,7 @@ public:
         if (!load.shard_count) {
             throw std::runtime_error(format("Shard count of {} not found in topology", host));
         }
-        if (!_db.features().tablet_load_stats_v2) {
+        if (!_db.feature(gms::features::tablet_load_stats_v2)) {
             // This way load calculation will hold tablet count.
             load.dusage = disk_usage{_target_tablet_size * load.shard_count, 0};
         } else if (_table_load_stats) {
@@ -1341,7 +1350,7 @@ public:
 
         auto ret = tablet_repair_plan();
 
-        if (!_db.features().tablet_repair_scheduler) {
+        if (!_db.feature(gms::features::tablet_repair_scheduler)) {
             lblogger.debug("make_repair_plan: The TABLET_REPAIR_SCHEDULER feature is not enabled");
             co_return ret;
         }
@@ -2416,7 +2425,7 @@ public:
             return resize_decision::merge{};
         }
 
-        if (!_db.features().arbitrary_tablet_boundaries) {
+        if (!_db.feature(gms::features::arbitrary_tablet_boundaries)) {
             on_internal_error(lblogger, format("Odd tablet count found for table {}, but arbitrary_tablet_boundaries feature is disabled", table));
         }
 
@@ -2594,7 +2603,7 @@ public:
             table_sizing& table_plan = plan.tables[table];
             table_plan.current_tablet_count = tablet_count;
             table_plan.pow2_count = tablet_options.pow2_count.value_or(
-                    _db.features().arbitrary_tablet_boundaries ? db::tablet_options::default_pow2_count : true);
+                    _db.feature(gms::features::arbitrary_tablet_boundaries) ? db::tablet_options::default_pow2_count : true);
             table_plan.tablet_merges_allowed = !s->tablet_merges_forbidden();
             if (!table_plan.tablet_merges_allowed) {
                 // Block merge decisions for Alternator tablet tables whose
@@ -3101,7 +3110,7 @@ public:
     // If cluster cannot agree on tablet merge feature, then merge will not be finalized since
     // not all nodes in the cluster can handle the finalization step.
     bool bypass_merge_completion() const {
-        return !_db.features().tablet_merge || utils::get_local_injector().enter("tablet_merge_completion_bypass");
+        return !_db.feature(gms::features::tablet_merge) || utils::get_local_injector().enter("tablet_merge_completion_bypass");
     }
 
     size_t rand_int() const {
@@ -4909,7 +4918,7 @@ public:
 
             // Group the new tables by co-location groups.
             // The key is the base table id, which may be a new table or an existing table.
-            const bool colocated_tablets_enabled = _db.features().colocated_tablets;
+            const bool colocated_tablets_enabled = _db.feature(gms::features::colocated_tablets);
             std::unordered_map<table_id, std::vector<schema_ptr>> table_groups;
             std::unordered_set<table_id> colocated_tables;
             for (auto s : cfms) {

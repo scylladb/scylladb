@@ -57,6 +57,11 @@
 #include "utils/user_provided_param.hh"
 #include "utils/labels.hh"
 
+namespace gms::features {
+extern const feature_definition small_table_optimization_size_probe;
+extern const feature_definition tombstone_gc_options;
+}
+
 using namespace std::chrono_literals;
 
 logging::logger rlogger("repair");
@@ -190,7 +195,7 @@ partition_tables_for_small_table_optimization(repair_service& rs, replica::datab
     // the repair_get_table_size RPC verb, so it is only used when the whole
     // cluster supports it. Until then, user tables fall back to the regular
     // ranged repair (the always optimized small system keyspaces are unaffected).
-    bool size_probe_supported = db.features().small_table_optimization_size_probe;
+    bool size_probe_supported = db.feature(gms::features::small_table_optimization_size_probe);
 
     // Whether the small table optimization applies to the whole keyspace
     // regardless of size (the always optimized small system keyspaces). This is
@@ -461,7 +466,7 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
     auto& db = get_db().local();
     auto uuid = id.uuid();
     bool needs_flush_before_repair = false;
-    if (db.features().tombstone_gc_options) {
+    if (db.feature(gms::features::tombstone_gc_options)) {
         for (auto& table: cfs) {
             if (const auto* cf = find_column_family_if_exists(db, keyspace, table)) {
                 auto s = cf->schema();

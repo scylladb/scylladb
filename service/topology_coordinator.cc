@@ -84,6 +84,21 @@
 #include <seastar/core/metrics_registration.hh>
 #include "utils/labels.hh"
 
+namespace gms::features {
+extern const feature_definition driver_service_level;
+extern const feature_definition group0_limited_voters;
+extern const feature_definition keyspace_multi_rf_change;
+extern const feature_definition parallel_tablet_draining;
+extern const feature_definition removenode_with_left_token_ring;
+extern const feature_definition tablet_incremental_repair;
+extern const feature_definition tablet_load_stats_v2;
+extern const feature_definition tablet_merge;
+extern const feature_definition tablet_repair_tasks_table;
+extern const feature_definition tablets_intermediate_fallback_cleanup;
+extern const feature_definition topology_global_request_queue;
+extern const feature_definition view_building_coordinator;
+}
+
 using token = dht::token;
 using inet_address = gms::inet_address;
 
@@ -1311,7 +1326,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                 skip_wait = false;
 
-                if (!_feature_service.group0_limited_voters) {
+                if (!_feature_service[gms::features::group0_limited_voters]) {
                     rtlogger.debug("group0 voters refresh fiber iteration skipped because the feature is disabled");
                     continue;
                 }
@@ -1386,7 +1401,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (co_await check_needs_colocation()) {
             co_return keyspace_rf_change_kind::conversion_to_rack_list;
         }
-        if (_feature_service.keyspace_multi_rf_change && locator::uses_rack_list_exclusively(old_replication_strategy_config) && locator::uses_rack_list_exclusively(new_replication_strategy_config) && !rf_count_per_dc_equals(old_replication_strategy_config, new_replication_strategy_config) && all_changes_are_0_N()) {
+        if (_feature_service[gms::features::keyspace_multi_rf_change] && locator::uses_rack_list_exclusively(old_replication_strategy_config) && locator::uses_rack_list_exclusively(new_replication_strategy_config) && !rf_count_per_dc_equals(old_replication_strategy_config, new_replication_strategy_config) && all_changes_are_0_N()) {
             co_return keyspace_rf_change_kind::multi_rf_change;
         }
         co_return keyspace_rf_change_kind::default_rf_change;
@@ -1403,7 +1418,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             req = *_topo_sm._topology.global_request;
             req_id = _topo_sm._topology.global_request_id.value();
         } else {
-            assert(_feature_service.topology_global_request_queue);
+            assert(_feature_service[gms::features::topology_global_request_queue]);
             req_id = _topo_sm._topology.global_requests_queue[0];
             req_entry = co_await _sys_ks.get_topology_request_entry(req_id);
             req = std::get<global_topology_request>(req_entry.request_type);
@@ -2916,7 +2931,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         // than excluded_old for intra-node migration.
                         if (excluded_new > excluded_old && trinfo.transition != locator::tablet_transition_kind::intranode_migration) {
                             rtlogger.debug("During {} stage of {} {} new nodes and {} old nodes were excluded", trinfo.stage, gid, excluded_new, excluded_old);
-                            if (_feature_service.tablets_intermediate_fallback_cleanup && !is_strong_consistency) {
+                            if (_feature_service[gms::features::tablets_intermediate_fallback_cleanup] && !is_strong_consistency) {
                                 transition_to(locator::tablet_transition_stage::write_both_read_old_fallback_cleanup);
                             } else if (is_strong_consistency) {
                                 transition_to(locator::tablet_transition_stage::sc_rollback);
@@ -3127,7 +3142,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
                         auto& tablet_state = _tablets[tablet];
                         tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
-                        if (_feature_service.tablet_repair_tasks_table) {
+                        if (_feature_service[gms::features::tablet_repair_tasks_table]) {
                             entry.timestamp = db_clock::now();
                             tablet_state.repair_task_updates = co_await _sys_ks.get_update_repair_task_mutation(entry, api::new_timestamp());
                         }
@@ -3158,7 +3173,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             auto time = tablet_state.repair_time;
                             update.set_repair_time(last_token, time);
                             auto repaired_at = sstring("None");
-                            if (_feature_service.tablet_incremental_repair && incremental) {
+                            if (_feature_service[gms::features::tablet_incremental_repair] && incremental) {
                                 auto sstables_repaired_at = tinfo.sstables_repaired_at + 1;
                                 if (utils::get_local_injector().enter("repair_tablet_no_update_sstables_repair_at")) {
                                     rtlogger.info("Skip update system.tablet ssstables_repaired_at={}", sstables_repaired_at);
@@ -3232,7 +3247,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             // repair_update_compaction_ctrl verb
                             tablet_state.repair_update_compaction_ctrl_retried++;
                         }
-                        bool feature = _feature_service.tablet_incremental_repair;
+                        bool feature = _feature_service[gms::features::tablet_incremental_repair];
                         if (advance_in_background(gid, tablet_state.repair_update_compaction_ctrl, "repair_update_compaction_ctrl", [this, ms = &_messaging,
                                     gid = gid, sid = tablet_state.session_id, feature, &tmap] () -> future<> {
                             if (feature) {
@@ -3464,7 +3479,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
                     }
                 }
-                if (_feature_service.tablet_incremental_repair) {
+                if (_feature_service[gms::features::tablet_incremental_repair]) {
                     rtlogger.info("Send rpc verb repair_update_repaired_at_for_merge table={} replicas={} old_cnt={} new_cnt={}", table_id, replicas, old_cnt, new_cnt);
                     if (utils::get_local_injector().enter("handle_tablet_resize_finalization_for_merge_error")) {
                         rtlogger.info("Got handle_tablet_resize_finalization_for_merge_error old_cnt={} new_cnt={}", old_cnt, new_cnt);
@@ -4125,7 +4140,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
 
                 if (_rollback) {
-                    if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation && _feature_service.topology_global_request_queue) {
+                    if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation && _feature_service[gms::features::topology_global_request_queue]) {
                         topology_request_tracking_mutation_builder rtbuilder(*_topo_sm._topology.global_request_id);
                         // if this is global command fail it since there is nothing to rollback
                         rtbuilder.done(*_rollback);
@@ -4188,7 +4203,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 utils::chunked_vector<canonical_mutation> updates;
                 builder.add_new_committed_cdc_generation(cdc_gen_id);
                 if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation) {
-                    if (_feature_service.topology_global_request_queue) {
+                    if (_feature_service[gms::features::topology_global_request_queue]) {
                         topology_request_tracking_mutation_builder rtbuilder(*_topo_sm._topology.global_request_id);
                         rtbuilder.done();
                         updates.push_back(rtbuilder.build());
@@ -4261,11 +4276,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     //
                     // FIXME: removenode may be aborted and the already dead node can be resurrected. We should consider
                     // restoring its voter state on the recovery path.
-                    if (node.rs->state == node_state::removing && !_feature_service.group0_limited_voters) {
+                    if (node.rs->state == node_state::removing && !_feature_service[gms::features::group0_limited_voters]) {
                         co_await _voter_handler.on_node_removed(node.id, _as);
                     }
                 }
-                if (node.rs->state == node_state::replacing && !_feature_service.group0_limited_voters) {
+                if (node.rs->state == node_state::replacing && !_feature_service[gms::features::group0_limited_voters]) {
                     // We make a replaced node a non-voter early, just like a removed node.
                     auto replaced_node_id = parse_replaced_node(node.req_param);
                     if (_group0.is_member(replaced_node_id, true)) {
@@ -4339,7 +4354,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 while (utils::get_local_injector().enter("topology_coordinator_pause_after_streaming")) {
                     co_await sleep_abortable(std::chrono::milliseconds(10), _as);
                 }
-                const bool removenode_with_left_token_ring = _feature_service.removenode_with_left_token_ring;
+                const bool removenode_with_left_token_ring = _feature_service[gms::features::removenode_with_left_token_ring];
                 auto node = get_node_to_work_on(std::move(guard));
                 bool barrier_failed = false;
                 // In this state writes goes to old and new replicas but reads start to be done from new replicas
@@ -4502,7 +4517,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                 const bool is_removenode = node_rs_state == node_state::removing;
 
-                if (is_removenode && !_feature_service.removenode_with_left_token_ring) {
+                if (is_removenode && !_feature_service[gms::features::removenode_with_left_token_ring]) {
                     on_internal_error(
                             rtlogger, "removenode operation can only enter the left_token_ring state when REMOVENODE_WITH_LEFT_TOKEN_RING feature is enabled");
                 }
@@ -4845,7 +4860,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         // meaning that reads will go to the replica being decommissioned
                         // but writes will go to new owner as well
                         auto session = session_id(node.guard.new_group0_state_id());
-                        builder.set_transition_state(_feature_service.parallel_tablet_draining
+                        builder.set_transition_state(_feature_service[gms::features::parallel_tablet_draining]
                                     ? topology::transition_state::write_both_read_old
                                     : topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
@@ -4875,7 +4890,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
 
                         auto session = session_id(node.guard.new_group0_state_id());
-                        builder.set_transition_state(_feature_service.parallel_tablet_draining
+                        builder.set_transition_state(_feature_service[gms::features::parallel_tablet_draining]
                                     ? topology::transition_state::write_both_read_old
                                     : topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
@@ -5137,7 +5152,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             muts.reserve(topo.normal_nodes.size() + 2);
             topology_mutation_builder builder(guard.write_timestamp());
             builder.del_global_topology_request();
-            if (_feature_service.topology_global_request_queue) {
+            if (_feature_service[gms::features::topology_global_request_queue]) {
                 topology_request_tracking_mutation_builder rtbuilder(*global_request_id);
                 builder.del_global_topology_request_id()
                        .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, *global_request_id);
@@ -5168,9 +5183,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     }
 
     future<> run_view_building_coordinator() {
-        while (!_feature_service.view_building_coordinator && !_as.abort_requested()) {
+        while (!_feature_service[gms::features::view_building_coordinator] && !_as.abort_requested()) {
             condition_variable feature_cv;
-            auto listener = _feature_service.view_building_coordinator.when_enabled([&feature_cv] {
+            auto listener = _feature_service[gms::features::view_building_coordinator].when_enabled([&feature_cv] {
                 feature_cv.broadcast();
             });
             auto abort = _as.subscribe([&feature_cv] () noexcept {
@@ -5222,7 +5237,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     void generate_tablet_resize_finalization_update(
             group0_update_collector& updates, const group0_guard& guard) {
         auto resize_finalization_transition_state = [this] {
-            return _feature_service.tablet_merge ? topology::transition_state::tablet_resize_finalization : topology::transition_state::tablet_split_finalization;
+            return _feature_service[gms::features::tablet_merge] ? topology::transition_state::tablet_resize_finalization : topology::transition_state::tablet_split_finalization;
         };
         updates.emplace_back(
             topology_mutation_builder(guard.write_timestamp())
@@ -5320,7 +5335,7 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
     // it's in `topology_coordinator::enable_features` ,so  topology_coordinator will re-run its loop
     // and `maybe_migrate_system_tables` will be called.
 
-    if (_feature_service.driver_service_level && !utils::get_local_injector().enter("skip_service_levels_v2_initialization")) {
+    if (_feature_service[gms::features::driver_service_level] && !utils::get_local_injector().enter("skip_service_levels_v2_initialization")) {
         const auto sl_driver_created = co_await _sys_ks.get_service_level_driver_created();
         if (!sl_driver_created.value_or(false)) {
             co_return co_await _sl_controller.migrate_to_driver_service_level(std::move(guard), _sys_ks);
@@ -5531,7 +5546,7 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
                     }
                     co_return;
                 }
-            } else if (_feature_service.tablet_load_stats_v2) {
+            } else if (_feature_service[gms::features::tablet_load_stats_v2]) {
                 node_stats = co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
                                                                                             dst,
                                                                                             as,

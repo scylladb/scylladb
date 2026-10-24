@@ -25,6 +25,12 @@
 #include "gms/feature_service.hh"
 #include "cql3/untyped_result_set.hh"
 
+namespace gms::features {
+extern const feature_definition large_collection_detection;
+extern const feature_definition large_data_virtual_tables;
+extern const feature_definition range_tombstone_and_dead_rows_detection;
+}
+
 static logging::logger large_data_logger("large_data");
 
 namespace db {
@@ -572,7 +578,7 @@ future<> large_data_handler::maybe_update_large_data_entries_sstable_name(sstabl
 }
 
 bool cql_table_large_data_handler::skip_cql_writes() const {
-    return bool(_feat.large_data_virtual_tables);
+    return bool(_feat[gms::features::large_data_virtual_tables]);
 }
 
 cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service& feat,
@@ -589,13 +595,13 @@ cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service&
     , _record_large_partitions([this] (const sstables::sstable& sst, const sstables::key& pk, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) {
         return internal_record_large_partitions(sst, pk, partition_size, rows);
     })
-    , _large_collection_detection_listener(_feat.large_collection_detection.when_enabled([this] {
+    , _large_collection_detection_listener(_feat[gms::features::large_collection_detection].when_enabled([this] {
         large_data_logger.debug("Enabled large_collection detection");
         _record_large_cells = [this] (const sstables::sstable& sst, const sstables::key& pk, const clustering_key_prefix* ck, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
             return internal_record_large_cells_and_collections(sst, pk, ck, cdef, cell_size, collection_elements);
         };
     }))
-    , _range_tombstone_and_dead_rows_detection_listener(_feat.range_tombstone_and_dead_rows_detection.when_enabled([this] {
+    , _range_tombstone_and_dead_rows_detection_listener(_feat[gms::features::range_tombstone_and_dead_rows_detection].when_enabled([this] {
         large_data_logger.debug("Enabled detection or range tombstones and dead rows");
         _record_large_partitions = [this] (const sstables::sstable& sst, const sstables::key& pk, uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) {
             return internal_record_large_partitions_all_data(sst, pk, partition_size, rows, range_tombstones, dead_rows);

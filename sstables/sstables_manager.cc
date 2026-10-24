@@ -28,6 +28,12 @@
 #include "utils/http.hh"
 #include "exceptions/exceptions.hh"
 
+namespace gms::features {
+extern const feature_definition keyspace_storage_options;
+extern const feature_definition ms_sstable;
+extern const feature_definition mt_sstable;
+}
+
 namespace sstables {
 
 logging::logger smlogger("sstables_manager");
@@ -237,9 +243,9 @@ storage_manager::connections_updater_sync::connections_updater_sync(const db::co
 {}
 
 sstables::sstable::version_types sstables_manager::get_highest_supported_format() const noexcept {
-     if (_features.mt_sstable) {
+     if (_features[gms::features::mt_sstable]) {
          return sstable_version_types::mt;
-     } else if (_features.ms_sstable) {
+     } else if (_features[gms::features::ms_sstable]) {
          return sstable_version_types::ms;
      } else {
          return sstable_version_types::me;
@@ -248,7 +254,7 @@ sstables::sstable::version_types sstables_manager::get_highest_supported_format(
 
 sstables::sstable::version_types sstables_manager::get_preferred_sstable_version() const {
     auto preferred_format = sstables::version_from_string(_config.format());
-    auto mt_supported = bool(_features.mt_sstable);
+    auto mt_supported = bool(_features[gms::features::mt_sstable]);
     if (mt_supported && preferred_format == sstable_version_types::mt) {
         return sstable_version_types::mt;
     }
@@ -258,7 +264,7 @@ sstables::sstable::version_types sstables_manager::get_preferred_sstable_version
     if (mt_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::mt;
     }
-    auto ms_supported = bool(_features.ms_sstable);
+    auto ms_supported = bool(_features[gms::features::ms_sstable]);
     if (ms_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::ms;
     }
@@ -267,7 +273,7 @@ sstables::sstable::version_types sstables_manager::get_preferred_sstable_version
 
 sstables::sstable::version_types sstables_manager::get_safe_sstable_version_for_rewrites(sstable_version_types existing_version) const {
     auto preferred_format = sstables::version_from_string(_config.format());
-    auto mt_supported = bool(_features.mt_sstable) || existing_version >= sstable_version_types::mt;
+    auto mt_supported = bool(_features[gms::features::mt_sstable]) || existing_version >= sstable_version_types::mt;
     if (mt_supported && preferred_format == sstable_version_types::mt) {
         return sstable_version_types::mt;
     }
@@ -277,7 +283,7 @@ sstables::sstable::version_types sstables_manager::get_safe_sstable_version_for_
     if (mt_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::mt;
     }
-    auto ms_supported = bool(_features.ms_sstable) || existing_version >= sstable_version_types::ms;
+    auto ms_supported = bool(_features[gms::features::ms_sstable]) || existing_version >= sstable_version_types::ms;
     if (ms_supported && preferred_format == sstable_version_types::ms) {
         return sstable_version_types::ms;
     }
@@ -530,7 +536,7 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
         [] (const data_dictionary::storage_options::local&) {
         },
         [this] (const data_dictionary::storage_options::object_storage& so) {
-            if (!_features.keyspace_storage_options) {
+            if (!_features[gms::features::keyspace_storage_options]) {
                 throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
             }
             // It's non-system keyspace

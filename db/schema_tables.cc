@@ -86,6 +86,10 @@
 #include "types/types.hh"
 #include "mutation/async_utils.hh"
 
+namespace gms::features {
+extern const feature_definition view_building_coordinator;
+}
+
 using namespace db;
 using namespace std::chrono_literals;
 
@@ -2002,7 +2006,7 @@ static void make_update_indices_mutations(
         make_drop_table_or_view_mutations(views(), view, timestamp, mutations);
 
         auto ksm = db.find_keyspace(old_table->ks_name()).metadata();
-        if (sp.features().view_building_coordinator && ksm->uses_tablets()) {
+        if (sp.feature(gms::features::view_building_coordinator) && ksm->uses_tablets()) {
             auto& sys_ks = sp.system_keyspace();
             auto& vb_state_machine = sp.view_building_state_machine();
             auto base_id = old_table->id();

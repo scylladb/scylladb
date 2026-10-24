@@ -14,6 +14,10 @@
 #include "sstables/sstables_manager.hh"
 #include <seastar/coroutine/maybe_yield.hh>
 
+namespace gms::features {
+extern const feature_definition sstable_compression_dicts;
+}
+
 static seastar::logger alogger("sstable_dict_autotrainer");
 
 sstable_dict_autotrainer::sstable_dict_autotrainer(service::storage_service& ss, service::raft_group0_client& rgc, config cfg)
@@ -139,7 +143,7 @@ future<> sstable_dict_autotrainer::run() {
             auto tick_period = std::chrono::duration<float>(_cfg.tick_period_in_seconds());
             auto tick_period_ms = std::chrono::duration_cast<std::chrono::milliseconds>(tick_period);
             co_await seastar::sleep_abortable(tick_period_ms, _as);
-            if (_ss.is_raft_leader() && _ss.get_feature_service().sstable_compression_dicts) {
+            if (_ss.is_raft_leader() && _ss.feature(gms::features::sstable_compression_dicts)) {
                 co_await tick();
             }
         } catch (const abort_requested_exception&) {

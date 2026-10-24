@@ -33,6 +33,11 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <type_traits>
 
+namespace gms::features {
+extern const feature_definition repair_based_tablet_rebuild;
+extern const feature_definition tablets;
+}
+
 namespace locator {
 
 seastar::logger tablet_logger("tablets");
@@ -977,7 +982,7 @@ static const std::unordered_map<sstring, tablet_transition_stage> tablet_transit
 });
 
 tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features) {
-    return features.repair_based_tablet_rebuild ? tablet_transition_kind::rebuild_v2 : tablet_transition_kind::rebuild;
+    return features[gms::features::repair_based_tablet_rebuild] ? tablet_transition_kind::rebuild_v2 : tablet_transition_kind::rebuild;
 }
 
 sstring tablet_transition_stage_to_string(tablet_transition_stage stage) {
@@ -1749,7 +1754,7 @@ public:
 void tablet_aware_replication_strategy::validate_tablet_options(const abstract_replication_strategy& ars,
                                                                 const gms::feature_service& fs,
                                                                 const replication_strategy_config_options& opts) const {
-    if (ars._uses_tablets && !fs.tablets) {
+    if (ars._uses_tablets && !fs[gms::features::tablets]) {
         throw exceptions::configuration_exception("Tablet replication is not enabled");
     }
 }
