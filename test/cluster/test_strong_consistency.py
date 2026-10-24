@@ -1107,9 +1107,8 @@ async def test_queries_when_shutting_down(manager: ScyllaClusterManager, target:
     requests on the followers to simulate a hanging call to
     raft_server::add_entry.
 
-    The read path is more difficult to verify and it's under active
-    work, so we skip it. It uses the same abortion mechanisms
-    as the write path, though.
+    The read path is covered by test_graceful_shutdown_with_read_in_flight
+    in test_strong_consistency_shutdown_with_read_in_flight.py.
 
     We test writes sent to both the coordinator and a follower.
     """
