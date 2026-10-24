@@ -187,6 +187,9 @@ class schema_applier {
     affected_tables_and_views _affected_tables_and_views;
 
     std::unique_ptr<replica::tables_metadata_lock_on_all_shards> _metadata_locks;
+    // One per shard, held while the change is being committed on the shards, see commit().
+    std::vector<foreign_ptr<std::unique_ptr<replica::database::schema_change_commit_guard>>> _schema_change_commit_guards;
+    future<> release_schema_change_commit_guards();
 
     functions_change_batch_all_shards _functions_batch; // includes aggregates
     // Set during prepare() when the incoming mutations touch a cluster-config table, so
