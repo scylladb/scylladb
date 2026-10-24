@@ -36,6 +36,8 @@ class storage_options;
 
 namespace db { class config; }
 
+class reader_permit;
+
 namespace sstables {
 
 enum class sstable_state;
@@ -158,8 +160,10 @@ public:
     // Reads the byte range [offset, offset + len) of the component - through
     // the object storage page cache, for a keyspace with the 'disk_cache'
     // storage option, which it populates only with populate_disk_cache::yes.
+    // f is the component's file, tracked by the read's permit, which also
+    // tracks the buffers of a source which doesn't read through f.
     virtual future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt,
-            populate_disk_cache populate) const = 0;
+            populate_disk_cache populate, reader_permit permit) const = 0;
     virtual future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const = 0;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
     virtual future<> destroy(const sstable& sst) = 0;

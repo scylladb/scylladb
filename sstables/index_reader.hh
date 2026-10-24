@@ -452,7 +452,7 @@ class index_reader final : public abstract_index_reader {
         auto index_file = make_tracked_index_file(*_sstable, _permit, _trace_state, _use_caching, _populate);
         auto input = input_stream<char>(co_await _sstable->get_storage().make_data_or_index_source(
             *_sstable, component_type::Index, index_file, begin, (_single_page_read ? end : _sstable->index_size()) - begin, get_file_input_stream_options(),
-            _populate));
+            _populate, _permit));
         auto trust_pi = trust_promoted_index(_sstable->has_correct_promoted_index_entries());
         co_return std::make_unique<index_consume_entry_context<index_consumer>>(*_sstable, _permit, consumer, trust_pi, std::move(input),
                             begin, end - begin, _sstable->get_column_translation(), _abort, _trace_state);

@@ -48,6 +48,9 @@ class page_cached_source_impl : public data_source_impl {
     // statistics of the sstable's table (if given).
     object_storage_page_cache_read_stats& _read_stats;
     lw_shared_ptr<object_storage_page_cache_table_stats> _table_stats;
+    // The permit of the read, if given, which tracks the memory of the
+    // pages in _cached.
+    std::optional<reader_permit> _permit;
     // The next byte to return, and the end of the requested range.
     uint64_t _pos;
     uint64_t _end;
@@ -56,8 +59,10 @@ class page_cached_source_impl : public data_source_impl {
     // How many pages to read from the cache in one query: about
     // bytes_per_read, judging by the average page size.
     size_t _pages_per_read;
-    // Pages which were read from the cache, but not yet returned.
+    // Pages which were read from the cache, but not yet returned, and their
+    // memory, tracked in _permit (if given).
     std::deque<object_storage_page_cache::page> _cached;
+    std::optional<reader_permit::resource_units> _cached_units;
     // The request to the object store, once it has started, and the position
     // of the next byte it will return, which is always at a page boundary.
     std::optional<input_stream<char>> _object;
@@ -66,7 +71,7 @@ public:
     page_cached_source_impl(object_storage_page_cache& cache, sstable_id sst, component_type component,
             shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t length,
             object_storage_range_reader read_range, populate_disk_cache populate,
-            lw_shared_ptr<object_storage_page_cache_table_stats> table_stats)
+            lw_shared_ptr<object_storage_page_cache_table_stats> table_stats, std::optional<reader_permit> permit)
         : _cache(cache)
         , _sst(sst)
         , _component(component)
@@ -75,6 +80,7 @@ public:
         , _populate(populate)
         , _read_stats(populate ? cache.get_stats().populating : cache.get_stats().non_populating)
         , _table_stats(std::move(table_stats))
+        , _permit(std::move(permit))
         , _pos(offset)
         , _end(offset + length)
         , _pages_end(length ? _geometry->pages_covering(offset, offset + length).end : _end)
@@ -97,6 +103,7 @@ public:
             data = co_await get_cached_page(page);
             if (data.empty()) {
                 _cached.clear();
+                track_cached();
                 _cache.get_stats().object_reads++;
                 _cache.get_stats().object_read_bytes += _pages_end - page.start;
                 if (_table_stats) {
@@ -173,13 +180,33 @@ private:
         }
         // A cached page of the wrong size cannot be a page of this component,
         // so it is treated as missing, and is read again from the object store.
-        if (_cached.empty() || _cached.front().offset != page.start
-                || _cached.front().data.size() != page.end - page.start) {
-            co_return temporary_buffer<char>();
+        temporary_buffer<char> data;
+        if (!_cached.empty() && _cached.front().offset == page.start
+                && _cached.front().data.size() == page.end - page.start) {
+            data = std::move(_cached.front().data);
+            _cached.pop_front();
         }
-        auto data = std::move(_cached.front().data);
-        _cached.pop_front();
+        track_cached();
         co_return data;
+    }
+
+    // Tracks the memory of the pages in _cached in the read's permit, if
+    // given, without waiting for memory. The pages which the source returned
+    // are no longer its own: whoever holds them tracks them (see
+    // make_page_cached_source()).
+    void track_cached() {
+        if (!_permit) {
+            return;
+        }
+        ssize_t bytes = 0;
+        for (const auto& p : _cached) {
+            bytes += p.data.size();
+        }
+        if (_cached_units) {
+            _cached_units->reset_to(reader_resources::with_memory(bytes));
+        } else {
+            _cached_units = _permit->consume_memory(bytes);
+        }
     }
 
     // Reads the given page, which starts at _object_pos, from the object
@@ -213,14 +240,39 @@ private:
     }
 };
 
+class permit_tracked_source_impl : public data_source_impl {
+    data_source _source;
+    reader_permit _permit;
+public:
+    permit_tracked_source_impl(data_source source, reader_permit permit)
+        : _source(std::move(source)), _permit(std::move(permit)) {}
+    virtual future<temporary_buffer<char>> get() override {
+        auto buf = co_await _source.get();
+        auto units = _permit.consume_memory(buf.size());
+        co_return make_tracked_temporary_buffer(std::move(buf), std::move(units));
+    }
+    virtual future<temporary_buffer<char>> skip(uint64_t n) override {
+        auto buf = co_await _source.skip(n);
+        auto units = _permit.consume_memory(buf.size());
+        co_return make_tracked_temporary_buffer(std::move(buf), std::move(units));
+    }
+    virtual future<> close() override {
+        return _source.close();
+    }
+};
+
 } // anonymous namespace
 
 data_source make_page_cached_source(object_storage_page_cache& cache, sstable_id sst, component_type component,
         shared_ptr<const page_geometry> geometry, uint64_t offset, uint64_t length,
         object_storage_range_reader read_range, populate_disk_cache populate,
-        lw_shared_ptr<object_storage_page_cache_table_stats> table_stats) {
+        lw_shared_ptr<object_storage_page_cache_table_stats> table_stats, std::optional<reader_permit> permit) {
     return data_source(std::make_unique<page_cached_source_impl>(cache, sst, component, std::move(geometry),
-            offset, length, std::move(read_range), populate, std::move(table_stats)));
+            offset, length, std::move(read_range), populate, std::move(table_stats), std::move(permit)));
+}
+
+data_source make_permit_tracked_source(data_source source, reader_permit permit) {
+    return data_source(std::make_unique<permit_tracked_source_impl>(std::move(source), std::move(permit)));
 }
 
 } // namespace sstables

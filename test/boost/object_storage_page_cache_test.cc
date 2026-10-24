@@ -34,6 +34,7 @@
 #include "sstables/object_storage_page_cache_file.hh"
 #include "sstables/object_storage_page_cache_source.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include "tombstone_gc_options.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/error_injection.hh"
@@ -2065,6 +2066,72 @@ SEASTAR_THREAD_TEST_CASE(test_page_cached_source_object_too_short) {
     BOOST_REQUIRE_THROW(read_to_end(in), std::runtime_error);
     in.close().get();
     BOOST_REQUIRE_EQUAL(cache.data_page(8192), "");
+}
+
+// make_permit_tracked_source() tracks the memory of the buffers it returns in
+// the given permit, as long as the buffers live, without waiting for memory.
+SEASTAR_THREAD_TEST_CASE(test_permit_tracked_source) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+    std::vector<temporary_buffer<char>> bufs;
+    bufs.emplace_back(1000);
+    bufs.emplace_back(3000);
+    auto src = sstables::make_permit_tracked_source(data_source(std::make_unique<util::memory_data_source>(std::move(bufs))), permit);
+    auto memory = [&] { return permit.consumed_resources().memory; };
+    BOOST_REQUIRE_EQUAL(memory(), 0);
+    auto buf1 = src.get().get();
+    BOOST_REQUIRE_EQUAL(buf1.size(), 1000);
+    // Check that the permit tracks the returned buffer.
+    BOOST_REQUIRE_EQUAL(memory(), 1000);
+    auto buf2 = src.get().get();
+    BOOST_REQUIRE_EQUAL(memory(), 4000);
+    // Check that freeing a buffer releases its memory.
+    buf1 = {};
+    BOOST_REQUIRE_EQUAL(memory(), 3000);
+    buf2 = {};
+    BOOST_REQUIRE_EQUAL(memory(), 0);
+    BOOST_REQUIRE(src.get().get().empty());
+    src.close().get();
+}
+
+// A page-cached source with a read's permit tracks the memory of the pages
+// which it read from the cache in a batch but did not return yet - which
+// wait in the source until the read reaches them - but not of the pages it
+// returned, which their holder tracks (see make_permit_tracked_source()).
+SEASTAR_THREAD_TEST_CASE(test_page_cached_source_tracks_batch) {
+    fake_page_cache cache;
+    fake_object object(10 * 4096);
+    auto geometry = make_shared<sstables::fixed_size_page_geometry>(10 * 4096);
+    auto in = cached_stream(cache, object, geometry, 0, 10 * 4096);
+    read_to_end(in);
+    in.close().get();
+    // Leave a page uncached, so that the read stops reading from the cache.
+    cache.pages.erase({Data, 5 * 4096});
+    BOOST_REQUIRE_EQUAL(cache.pages.size(), 9);
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+    auto memory = [&] { return permit.consumed_resources().memory; };
+    auto src = sstables::make_page_cached_source(cache, test_sstable, Data, geometry, 0, 10 * 4096, object.reader(),
+            sstables::populate_disk_cache::yes, {}, permit);
+    auto buf = src.get().get();
+    BOOST_REQUIRE_EQUAL(buf.size(), 4096);
+    // Check that the batch of all the cached pages was read at once, and that
+    // the permit tracks the 8 pages which the source still holds.
+    BOOST_REQUIRE_EQUAL(cache.reads, 2);
+    BOOST_REQUIRE_EQUAL(memory(), 8 * 4096);
+    // Check that each returned page stops being tracked by the source.
+    for (int i = 1; i < 5; i++) {
+        buf = src.get().get();
+        BOOST_REQUIRE_EQUAL(memory(), (8 - i) * 4096);
+    }
+    // Check that at the uncached page, the source drops the rest of the batch,
+    // and its memory.
+    buf = src.get().get();
+    BOOST_REQUIRE_EQUAL(sstring(buf.get(), buf.size()), object.bytes(5 * 4096, 4096));
+    BOOST_REQUIRE_EQUAL(memory(), 0);
+    BOOST_REQUIRE_EQUAL(read_to_end(src), object.bytes(6 * 4096, 4 * 4096));
+    BOOST_REQUIRE_EQUAL(memory(), 0);
 }
 
 // A file on a fake object store, whose dma_read_bulk() is one request to read

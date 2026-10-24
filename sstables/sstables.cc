@@ -3399,8 +3399,9 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
     if (integrity == integrity_check::yes) {
         digest = get_digest();
     }
-    auto stream_creator = [this, f, populate](uint64_t pos, uint64_t len, file_input_stream_options options) mutable -> future<input_stream<char>> {
-        co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options), populate));
+    auto stream_creator = [this, f, populate, permit](uint64_t pos, uint64_t len, file_input_stream_options options) mutable -> future<input_stream<char>> {
+        co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options),
+                populate, permit));
     };
     if (_components->compression && raw == raw_stream::no) {
         if (_version >= sstable_version_types::mc) {
