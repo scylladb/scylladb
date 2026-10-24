@@ -142,6 +142,9 @@ raft::server_address_set address_set(std::vector<raft::server_id> ids);
 raft::config_member_set config_set(std::vector<raft::server_id> ids);
 fsm_debug create_follower(raft::server_id id, raft::log log,
         raft::failure_detector& fd = trivial_failure_detector);
+fsm_debug create_follower(raft::server_id id, raft::log log,
+        std::function<std::vector<raft::server_id>()> get_priority_members,
+        raft::failure_detector& fd = trivial_failure_detector);
 
 
 // Raft uses UUID 0 as special case.

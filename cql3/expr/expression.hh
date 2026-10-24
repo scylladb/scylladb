@@ -20,6 +20,7 @@
 #include "seastarx.hh"
 #include "cql3/values.hh"
 #include "utils/chunked_string.hh"
+#include "utils/property.hh"
 
 class row;
 
@@ -450,9 +451,9 @@ struct collection_constructor {
 // Called with error message string.
 using error_sink_fn = std::function<void(const std::string&)>;
 
-std::map<sstring, sstring> convert_property_map(const collection_constructor&, error_sink_fn);
+utils::property_string_map convert_property_map(const collection_constructor&, error_sink_fn);
 
-std::map<sstring, std::variant<sstring, std::vector<sstring>>>
+utils::extended_property_map
 convert_extended_property_map(const collection_constructor&, error_sink_fn);
 
 // Constructs an object of a user-defined type
