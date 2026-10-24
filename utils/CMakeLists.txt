@@ -6,7 +6,6 @@ target_sources(utils
   PRIVATE
     UUID_gen.cc
     alien_worker.cc
-    array-search.cc
     ascii.cc
     base64.cc
     big_decimal.cc
