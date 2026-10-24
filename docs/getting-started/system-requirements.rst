@@ -34,15 +34,14 @@ ScyllaDB tries to maximize the resource usage of all system components. The shar
 CPU
 ^^^
 
-ScyllaDB requires modern Intel/AMD CPUs that support the SSE4.2 instruction set and will not boot without it.
+ScyllaDB requires modern Intel/AMD CPUs that support the x86-64-v3 instruction set level (AVX2, BMI2, FMA and the rest) and PCLMUL, and will not boot without them.
 
 
 ScyllaDB supports the following CPUs:
 
-* Intel core: Westmere and later (2010)
-* Intel atom: Goldmont and later (2016)
-* AMD low power: Jaguar and later (2013)
-* AMD standard: Bulldozer and later (2011)
+* Intel core: Haswell and later (2013)
+* Intel atom: Gracemont and later (2021)
+* AMD: Excavator and later (2015)
 * Apple M1 and M2
 * Ampere Altra
 * AWS Graviton, Graviton2, Graviton3
