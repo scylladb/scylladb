@@ -2126,22 +2126,17 @@ async def test_aborted_decommision_reenables_snapshot(manager: ScyllaClusterMana
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_drop_keyspace_during_tablet_restore(manager: ScyllaClusterManager, object_storage):
-    """Verify that dropping a keyspace while tablet restore is downloading
-    SSTables does not crash the node.
+@pytest.mark.parametrize("pause_at", ["download", "attach"])
+async def test_drop_keyspace_during_tablet_restore(manager: ScyllaClusterManager, object_storage, pause_at):
+    """Verify that dropping a keyspace during tablet restore does not crash the node.
 
-    The restore path in sstables_loader calls find_column_family() and then
-    download_sstable() which writes SSTable components to the table's data
-    directory.  If DROP KEYSPACE is applied concurrently, the data directory
-    is removed while download_sstable is writing — causing an ENOENT abort.
-
-    Uses the 'pause_download_sstable' error injection to pause the download
-    after find_column_family() has succeeded (table still exists), then issues
-    DROP KEYSPACE and releases the injection to trigger the race.
-
-    The fix acquires a stream_in_progress() phaser guard before downloading,
-    which makes table::stop() block until the download completes.
+    Restore touches the table's data directory twice - the download, and the attach
+    that follows it - and each needs its own stream_in_progress() guard to join the
+    handshake DROP makes through cf.await_pending_ops(). Unguarded, the directory is
+    removed mid-flight and the node aborts on a missing sstable component.
     """
+    injection = {"download": "pause_download_sstable", "attach": "pause_attach_sstable"}[pause_at]
+
     topology = topo(rf=2, nodes=2, racks=2, dcs=1)
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
     await manager.disable_tablet_balancing()
@@ -2168,23 +2163,24 @@ async def test_drop_keyspace_during_tablet_restore(manager: ScyllaClusterManager
         f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}")
     await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk text PRIMARY KEY, value int) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}}")
 
-    await manager.api.enable_injection(servers[1].ip_addr, "pause_download_sstable", one_shot=True)
+    await manager.api.enable_injection(servers[1].ip_addr, injection, one_shot=True)
     server_log = await manager.server_open_log(servers[1].server_id)
     log_mark = await server_log.mark()
 
     manifests = [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
     tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, cf, snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
 
-    await manager.api.wait_for_injection_enter(servers[1].ip_addr, "pause_download_sstable")
+    await manager.api.wait_for_injection_enter(servers[1].ip_addr, injection)
 
-    # Issue DROP concurrently — with the fix stream_in_progress() guard blocks
-    # table::stop() until download completes; without the fix the data directory
-    # is removed and download_sstable gets ENOENT → node aborts.
     drop_task = asyncio.ensure_future(cql.run_async(f"DROP KEYSPACE {ks}"))
     await server_log.wait_for(f"Dropping keyspace {ks}", from_mark=log_mark)
 
-    await manager.api.message_injection(servers[1].ip_addr, "pause_download_sstable")
+    # Checked before releasing: an unguarded drop truncates the table, and the released
+    # restore then kills the node, failing the test on that instead of on this.
+    done, _ = await asyncio.wait([drop_task], timeout=5)
+    assert not done, f"DROP completed while the {pause_at} was in progress"
 
+    await manager.api.message_injection(servers[1].ip_addr, injection)
     await drop_task
 
 
