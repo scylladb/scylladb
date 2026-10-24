@@ -1541,6 +1541,88 @@ async def test_migration_with_zero_token_node(manager: ScyllaClusterManager):
         await verify_data_integrity(cql, ks, "test", num_keys)
 
 
+@pytest.mark.parametrize("down_node", ["token_owner", "zero_token"])
+async def test_finalize_refused_while_node_down(manager: ScyllaClusterManager, down_node: str):
+    """Verify that finalization refuses while a normal node is down, and names that node.
+
+    Regression test for https://scylladb.atlassian.net/browse/SCYLLADB-2351.
+
+    Finalization is irreversible and decides from each node's load stats, so it collects
+    them afresh and requires every normal node to answer. The coordinator keeps a down
+    node's last answer, and finalization must not fall back to it: with
+    force_vnodes_for_migrating_tables the node may come back in a different mode. A
+    zero-token node used to slip through, because only a down token owner made the
+    collection incomplete.
+
+    Steps:
+    1. Start two token-owning nodes in dc1 and a zero-token node in dc2 (arbiter DC).
+    2. Migrate a keyspace to tablets on every node, up to finalization.
+    3. Stop one node - a token owner or the zero-token one.
+       - Verify that finalization fails, naming the stopped node.
+    4. Start the node again.
+       - Verify that finalization succeeds and the keyspace uses tablets.
+    """
+    num_keys = 100
+    cfg = {'num_tokens': 16}
+
+    logger.info("Starting two token-owning nodes in dc1 and a zero-token node in dc2")
+    token_owning_servers = [
+        await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file={"dc": "dc1", "rack": rack})
+        for rack in ("rack1", "rack2")
+    ]
+    zero_token_server = await manager.server_add(cmdline=['--smp', '2'], config=cfg | {'join_ring': False},
+                                                 property_file={"dc": "dc2", "rack": "rack1"})
+    servers = token_owning_servers + [zero_token_server]
+    api_server = token_owning_servers[0]
+    stopped_server = token_owning_servers[1] if down_node == "token_owner" else zero_token_server
+    stopped_host_id = await manager.get_host_id(stopped_server.server_id)
+
+    cql, _ = await manager.get_ready_cql(token_owning_servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        logger.info("Migrating the keyspace to tablets on every node")
+        await manager.api.create_vnode_tablet_migration(api_server.ip_addr, ks)
+        for server in servers:
+            await manager.api.upgrade_node_to_tablets(server.ip_addr)
+            await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(token_owning_servers)
+
+        # Quiesce collects every node's load stats, so the coordinator now holds an answer
+        # from each node that passes finalization's checks. Without the liveness check,
+        # finalization would go ahead on the stopped node's copy.
+        await manager.api.quiesce_topology(api_server.ip_addr)
+
+        logger.info(f"Stopping the {down_node} node {stopped_host_id}")
+        await manager.server_stop_gracefully(stopped_server.server_id)
+        await manager.others_not_see_server(stopped_server.ip_addr)
+
+        logger.info("Verifying that finalization refuses while the node is down")
+        with pytest.raises(HTTPError, match=fr"Migration finalization failed for keyspace '{ks}': "
+                                            fr"Cannot verify every node's storage mode: node {stopped_host_id} is down"):
+            await manager.api.finalize_vnode_tablet_migration(api_server.ip_addr, ks)
+
+        logger.info("Starting the node again")
+        await manager.server_start(stopped_server.server_id)
+        await manager.servers_see_each_other(servers)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(token_owning_servers)
+
+        logger.info("Verifying that finalization succeeds once every node is up")
+        await manager.api.finalize_vnode_tablet_migration(api_server.ip_addr, ks)
+        await read_barrier(manager.api, api_server.ip_addr)
+        api_host = cql.cluster.metadata.get_host(api_server.ip_addr)
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'", host=api_host)
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
+
+        await verify_data_integrity(cql, ks, "test", num_keys)
+
+
 async def test_no_tablet_routing_before_finalization(manager: ScyllaClusterManager):
     """Tablet routing info must not reach CQL clients before the migration is finalized.
 
