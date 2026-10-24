@@ -15,6 +15,7 @@
 
 #include "clocks-impl.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/eventually.hh"
 #include "test/lib/log.hh"
 #include "test/lib/error_injection.hh"
 
@@ -23,9 +24,12 @@
 #include "tasks/task_manager.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/error_injection.hh"
+#include "raft/raft.hh"
 #include "transport/messages/result_message.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/metrics_api.hh>
@@ -572,6 +576,95 @@ SEASTAR_TEST_CASE(test_group0_hard_timeout_history_absent_after_real_gc_is_hard_
 }
 
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
+
+// The group0 state machine waits for the read/apply mutex before it applies
+// entries or loads a snapshot, and the mutex may be held for long, e.g. by
+// a topology operation across round-trips to other nodes. Holds the mutex,
+// makes the state machine wait for it, and checks that aborting group0 doesn't
+// wait for the mutex to be released.
+static void check_group0_abort_does_not_wait_for_read_apply_mutex(cql_test_env& env,
+        std::string_view waiting_injection,
+        noncopyable_function<void ()> make_state_machine_wait) {
+    auto& client = env.get_raft_group0_client();
+    auto& raft_gr = env.get_raft_group_registry().local();
+
+    abort_source as;
+    auto mutex_holder = client.hold_read_apply_mutex(as).get();
+    scoped_error_injection waiting{waiting_injection};
+    make_state_machine_wait();
+    wait_for_injection_enter(waiting_injection).get();
+
+    auto aborted = raft_gr.abort_server(raft_gr.group0_id(), "test abort");
+    const bool aborted_with_mutex_held = eventually_true([&] { return aborted.available(); });
+    mutex_holder.return_all();
+    aborted.get();
+    BOOST_CHECK(aborted_with_mutex_held);
+}
+
+// Refs: SCYLLADB-1056.
+SEASTAR_TEST_CASE(test_group0_abort_does_not_wait_for_apply) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        auto& client = env.get_raft_group0_client();
+        constexpr std::string_view injection = "group0_state_machine_apply_waits_for_read_apply_mutex";
+        std::optional<future<>> applied;
+        check_group0_abort_does_not_wait_for_read_apply_mutex(env, injection, [&] {
+            // Unlike add_entry(), doesn't need the mutex, which the test holds.
+            applied = client.add_entry_unguarded(
+                client.prepare_command(service::write_mutations{}, "test"),
+                nullptr);
+        });
+        BOOST_CHECK_THROW(applied->get(), raft::stopped_error);
+    });
+}
+
+// Refs: SCYLLADB-1056.
+SEASTAR_TEST_CASE(test_group0_abort_does_not_wait_for_load_snapshot) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        auto& group0 = env.get_raft_group_registry().local().group0();
+        // The fsm rejects a snapshot while it has commits it hasn't reported
+        // yet. Everything committed so far is reported once it's applied.
+        group0.read_barrier(nullptr).get();
+
+        constexpr std::string_view injection = "group0_state_machine_load_snapshot_waits_for_read_apply_mutex";
+
+        check_group0_abort_does_not_wait_for_read_apply_mutex(env, injection, [&] {
+            constexpr int max_attempts = 10;
+            const auto get_random_id = [&] {
+                for (int attempt = 1; ; ++attempt) {
+                    const auto id = raft::server_id::create_random_id();
+                    if (id != group0.id()) {
+                        return id;
+                    }
+                    BOOST_REQUIRE_LT(attempt, max_attempts);
+                }
+            };
+            // A snapshot from a leader of a later term so that the state
+            // machine goes on to load it. Handed to the server directly:
+            // group0's rpc would first transfer the snapshot's state from the
+            // sender. A group0 command committed in the background since the
+            // read barrier may make the fsm reject it, hence the retries.
+            for (int attempt = 1; ; ++attempt) {
+                const auto term = raft::term_t{group0.get_current_term().value() + 1};
+                raft::install_snapshot snp {
+                    .current_term = term,
+                    .snp = {
+                        .idx = raft::index_t{group0.log_last_idx_term().first.value() + 100},
+                        .term = term,
+                        .config = group0.get_configuration(),
+                        .id = raft::snapshot_id::create_random_id(),
+                    },
+                };
+                // The reply comes once the snapshot is persisted, before it's loaded.
+                const auto reply = dynamic_cast<raft::rpc_server&>(group0).apply_snapshot(
+                        get_random_id(), std::move(snp)).get();
+                if (reply.success) {
+                    break;
+                }
+                BOOST_REQUIRE_LT(attempt, max_attempts);
+            }
+        });
+    });
+}
 
 // A topology request must not report completion while the group0 command
 // carrying its result is still being applied on the local node.
