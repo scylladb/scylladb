@@ -149,12 +149,12 @@ public:
 
     /* Inserts a single SSTable entry for a given snapshot, keyspace, table, datacenter,
      * and rack. The row is written with the specified TTL (in seconds). Uses consistency
-     * level `EACH_QUORUM` by default.*/
+     * level `QUORUM` by default.*/
     future<> insert_snapshot_sstable(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack
         , sstables::sstable_id sstable_id, dht::token first_token, dht::token last_token, sstring toc_name, sstring prefix
         , locator::host_id node, size_t tablet_id, snapshot_state, int64_t repaired_at = {}
         , int64_t data_size = 0, int64_t index_size = 0
-        , db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+        , db::consistency_level cl = db::consistency_level::QUORUM);
 
     /* Retrieves all SSTable entries for a given snapshot, keyspace, table, datacenter, and rack.
      * If `start_token` and `end_token` are provided, only entries whose `first_token` is in the range [`start_token`, `end_token`] will be returned.
@@ -174,7 +174,7 @@ public:
                                             dht::token start_token,
                                             is_downloaded downloaded) const;
 
-    future<> insert_snapshot_remote_location(sstring snapshot_name, sstring datacenter, sstring endpoint, sstring bucket, sstring prefix, snapshot_state, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<> insert_snapshot_remote_location(sstring snapshot_name, sstring datacenter, sstring endpoint, sstring bucket, sstring prefix, snapshot_state, db::consistency_level cl = db::consistency_level::QUORUM);
     future<snapshot_remote_location_entry> get_snapshot_remote_location(sstring snapshot_name, sstring datacenter, db::consistency_level cl = db::consistency_level::QUORUM) const;
 
     /* Inserts multiple SSTable entries for a given snapshot, keyspace, table, datacenter,
@@ -182,47 +182,47 @@ public:
      */
     future<> insert_snapshot_sstables(std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc, std::string_view rack
         , std::span<const snapshot_sstable_entry> sstables
-        , db::consistency_level cl = db::consistency_level::EACH_QUORUM
+        , db::consistency_level cl = db::consistency_level::QUORUM
     );
 
     future<> insert_snapshot_sstables(std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc, std::string_view rack
         , const utils::chunked_vector<snapshot_sstable_entry>& sstables
-        , db::consistency_level cl = db::consistency_level::EACH_QUORUM
+        , db::consistency_level cl = db::consistency_level::QUORUM
     );
 
     /**
      * Inserts a snapshot into system.dist table
      */
-    future<> insert_snapshot(const snapshot_entry&, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<> insert_snapshot(const snapshot_entry&, db::consistency_level cl = db::consistency_level::QUORUM);
     /**
      * Find a snapshot entry. 
      */
-    future<std::optional<snapshot_entry>> get_snapshot(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
+    future<std::optional<snapshot_entry>> get_snapshot(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
 
     /**
      * Add backup locations to a snapshot
      */
-    future<> insert_snapshot_remote_locations(std::span<const snapshot_remote_location_entry> keyspaces, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<> insert_snapshot_remote_locations(std::span<const snapshot_remote_location_entry> keyspaces, db::consistency_level cl = db::consistency_level::QUORUM);
 
     /**
      * Get all remote locations for snapshot
      */
-    future<utils::chunked_vector<snapshot_remote_location_entry>> get_snapshot_remote_locations(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
+    future<utils::chunked_vector<snapshot_remote_location_entry>> get_snapshot_remote_locations(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
 
     /**
      * Add keyspaces to a snapshot
      */
-    future<> insert_snapshot_keyspaces(std::span<const snapshot_keyspace_entry> keyspaces, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<> insert_snapshot_keyspaces(std::span<const snapshot_keyspace_entry> keyspaces, db::consistency_level cl = db::consistency_level::QUORUM);
 
     /**
      * Get all keyspaces in snapshot
      */
-    future<utils::chunked_vector<snapshot_keyspace_entry>> get_snapshot_keyspaces(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
+    future<utils::chunked_vector<snapshot_keyspace_entry>> get_snapshot_keyspaces(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
 
     /**
      * Add tables to a snapshot
      */
-    future<> insert_snapshot_tables(std::span<const snapshot_table_entry> tables, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<> insert_snapshot_tables(std::span<const snapshot_table_entry> tables, db::consistency_level cl = db::consistency_level::QUORUM);
 
     /**
      * Helper to build a snapshot_table_entry describing the current schema of the given table
@@ -232,7 +232,7 @@ public:
     /**
      * Get all tables in snapshot, optionally restricted by keyspace
      */
-    future<utils::chunked_vector<snapshot_table_entry>> get_snapshot_tables(std::string_view snapshot_name, std::string_view keyspace = {}, std::string_view table = {}, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
+    future<utils::chunked_vector<snapshot_table_entry>> get_snapshot_tables(std::string_view snapshot_name, std::string_view keyspace = {}, std::string_view table = {}, db::consistency_level cl = db::consistency_level::QUORUM);
 
     /**
      * Add tablets to a snapshot
@@ -240,7 +240,7 @@ public:
     future<> insert_snapshot_tablets(std::string_view snapshot_name
         , std::string_view keyspace, std::string_view table, std::string_view datacenter
         , std::span<const snapshot_tablet_entry> tables
-        , db::consistency_level cl = db::consistency_level::EACH_QUORUM
+        , db::consistency_level cl = db::consistency_level::QUORUM
     );
 
     /**
@@ -249,12 +249,12 @@ public:
      */
     future<utils::chunked_vector<snapshot_tablet_entry>> get_snapshot_tablets(std::string_view snapshot_name
         , std::string_view keyspace, std::string_view table, std::string_view datacenter
-        , db::consistency_level cl = db::consistency_level::LOCAL_QUORUM
+        , db::consistency_level cl = db::consistency_level::QUORUM
     );
 
     future<> insert_snapshot_nodes(std::string_view snapshot_name
         , std::span<const snapshot_node_entry> nodes
-        , db::consistency_level cl = db::consistency_level::EACH_QUORUM
+        , db::consistency_level cl = db::consistency_level::QUORUM
     );
 
     /**
@@ -263,7 +263,7 @@ public:
     future<utils::chunked_vector<snapshot_node_entry>> get_snapshot_nodes(std::string_view snapshot_name
         , std::string_view datacenter = {}
         , std::string_view rack = {}
-        , db::consistency_level cl = db::consistency_level::LOCAL_QUORUM
+        , db::consistency_level cl = db::consistency_level::QUORUM
     );
 
     /**
@@ -272,7 +272,7 @@ public:
     future<> insert_snapshot_entries(std::string_view snapshot_name, std::string_view keyspace
         , std::string_view table, std::string_view datacenter, std::string_view rack, locator::host_id
         , const snapshot_entries& entries
-        , db::consistency_level cl = db::consistency_level::LOCAL_QUORUM
+        , db::consistency_level cl = db::consistency_level::QUORUM
     );
 
     /**
@@ -281,7 +281,7 @@ public:
     future<> insert_snapshot_info(std::string_view snapshot_name
         , db_clock::time_point created, db_clock::time_point expiry
         , std::span<const lw_shared_ptr<replica::table>> tables
-        , db::consistency_level cl = db::consistency_level::LOCAL_QUORUM
+        , db::consistency_level cl = db::consistency_level::QUORUM
     );
 
 };
