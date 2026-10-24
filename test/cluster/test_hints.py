@@ -1973,19 +1973,23 @@ async def test_corrupted_segment_hint_fails_before_corruption(manager: ScyllaClu
 
     injections = [
         *injections,
-        # Only the first hint fails. Note that the failure will be reported *before*
-        # the corruption. At most two hints can be processed at a time (1 being sent,
-        # the other getting scheduled), and the corruption is in the second sector.
+        # Only the first hint fails. Hint sender may run into the corruption
+        # (in the second sector) after this failure, or while the first hint is
+        # still blocked: the reader parses the next entry before it waits for the
+        # first hint to finish, and if the first hint is alone in the first sector,
+        # that entry is in the corrupted one. The segment must be kept either way.
         {"name": "hinted_handoff_fail_hint_send", "one_shot": True}]
     await manager.server_update_config(node1.server_id, "error_injections_at_startup", injections)
     await manager.server_start(node1.server_id)
 
+    # Take the mark before hint sender can start: it may log the corruption
+    # as soon as it starts processing the hints (see above).
+    log = await manager.server_open_log(node1.server_id)
+    mark = await log.mark()
+
     # Wait until hint sender starts processing the hints.
     await manager.server_start(node2.server_id)
     await manager.api.wait_for_injection_enter(node1.ip_addr, "hinted_handoff_fail_hint_send")
-
-    log = await manager.server_open_log(node1.server_id)
-    mark = await log.mark()
 
     # Prevent hint sender from trying to replay the segment again after it runs
     # into the corruption. Note that this doesn't prevent us from reaching it
