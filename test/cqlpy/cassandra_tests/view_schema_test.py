@@ -498,7 +498,10 @@ def testAllTypes(cql, test_keyspace):
 
         execute(cql, table, "INSERT INTO %s (k, frozenmapval) VALUES (?, from_json(?))", 0, "{\"b\": 2, \"a\": 3}")
         assert_rows(execute(cql, table, "SELECT k, frozenmapval FROM %s WHERE k = ?", 0), row(0, {"a": 3, "b": 2}))
-        assert_rows(execute(cql, table, "SELECT k, frozenmapval FROM %s WHERE k = ?", 0), row(0, {"a": 3, "b": 2}))
+        # The Java test repeats the above check of the base table here, by
+        # mistake - we check the view, like the tuple test below does.
+        assert_empty(execute(cql, mv["frozenmapval"], "SELECT k, textval FROM %s WHERE frozenmapval = from_json(?)", "{\"a\": 1, \"b\": 2}"))
+        assert_rows(execute(cql, mv["frozenmapval"], "SELECT k, textval FROM %s WHERE frozenmapval = from_json(?)", "{\"a\": 3, \"b\": 2}"), row(0, "abcd"))
 
         # ================ tuples ================
         execute(cql, table, "INSERT INTO %s (k, tupleval) VALUES (?, from_json(?))", 0, "[1, \"foobar\", \"6bddc89a-5644-11e4-97fc-56847afe9799\"]")
