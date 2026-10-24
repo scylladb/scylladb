@@ -3191,6 +3191,10 @@ uint64_t database::get_logstor_disk_space_used() const {
     return _logstor ? _logstor->get_segment_manager().get_usage().segment_bytes_in_use : 0;
 }
 
+uint64_t database::logstor_space_on_disk() const {
+    return _logstor ? _logstor->get_segment_manager().get_usage().space_on_disk : 0;
+}
+
 uint64_t database::disk_space_used() const {
     // The logstor part is the segments holding data, not every file logstor has allocated for them:
     // space that holds nothing is nobody's load, the same as for sstables, where the room left on

@@ -268,9 +268,15 @@ public:
     size_t live_sstable_count() const noexcept;
     // Disk space used by all the storage of this group, sstables and logstor segments alike.
     uint64_t live_disk_space_used() const noexcept;
+    // The size of the data this group holds. For sstables it is the disk space of the live sstables.
+    // For logstor it is the size of the live records in the segments the group owns, without the dead
+    // records and the free space of those segments.
+    uint64_t data_size() const noexcept;
     uint64_t total_disk_space_used() const noexcept;
     // Space taken by the logstor segments this group owns. Zero for a table that doesn't use logstor.
     size_t logstor_disk_space_used() const noexcept;
+    // Record bytes of the live records in the logstor segments this group owns. Zero for a table that doesn't use logstor.
+    uint64_t logstor_live_record_bytes() const noexcept;
     // The sstable part alone, which is what table_stats caches. The logstor part is not cached,
     // see table::live_disk_space_used().
     utils::file_size_stats live_sstable_disk_space_used() const noexcept;
@@ -402,6 +408,8 @@ public:
     compaction_group_ptr& select_compaction_group(dht::token first, dht::token last, const locator::tablet_map&) noexcept;
 
     uint64_t live_disk_space_used() const;
+    // The sum of compaction_group::data_size() over the groups of this storage group.
+    uint64_t data_size() const;
 
     void for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const;
     utils::small_vector<compaction_group_ptr, 3> compaction_groups_immediate();

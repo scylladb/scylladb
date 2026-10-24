@@ -4348,9 +4348,10 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
 
     for (const auto& [tid, cf_name] : tables_to_estimate) {
         // Table statistics are per-shard, so the size of the local dataset is
-        // the sum over all shards.
+        // the sum over all shards. The size is the one the resize logic reads,
+        // so the tablet count fits the data of the table.
         auto local_size = co_await _db.map_reduce0([tid] (replica::database& db) {
-            return uint64_t(db.find_column_family(tid).live_disk_space_used().on_disk);
+            return db.find_column_family(tid).data_size();
         }, uint64_t(0), std::plus<uint64_t>());
         auto estimated_total_size = static_cast<uint64_t>(local_size / local_fraction);
         table_sizes.emplace(tid, estimated_total_size);
@@ -6517,14 +6518,15 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     const locator::host_id this_host = _db.local().get_token_metadata().get_my_id();
 
     // Align to 64 bytes to avoid cache line ping-pong when updating size in map_reduce0() below
-    struct alignas(64) aligned_tablet_size {
-        uint64_t size = 0;
+    struct alignas(64) shard_load {
+        uint64_t sstable_tablet_sizes = 0;
+        uint64_t logstor_space = 0;
     };
-    std::vector<aligned_tablet_size> tablet_sizes_per_shard(this_smp_shard_count());
+    std::vector<shard_load> load_per_shard(this_smp_shard_count());
 
     // Each node combines a per-table load map from all of its shards and returns it to the coordinator.
     // So if there are 1k nodes, there will be 1k RPCs in total.
-    auto load_stats = co_await _db.map_reduce0([&table_ids, &this_host, &tablet_sizes_per_shard] (replica::database& db) -> future<locator::load_stats> {
+    auto load_stats = co_await _db.map_reduce0([&table_ids, &this_host, &load_per_shard] (replica::database& db) -> future<locator::load_stats> {
         locator::load_stats load_stats{};
         auto& tables_metadata = db.get_tables_metadata();
 
@@ -6536,10 +6538,14 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
 
             locator::combined_load_stats combined_ls { table->table_load_stats() };
             load_stats.tables.emplace(id, std::move(combined_ls.table_ls));
-            tablet_sizes_per_shard[this_shard_id()].size += load_stats.tablet_stats[this_host].add_tablet_sizes(combined_ls.tablet_ls);
+            const uint64_t tablet_sizes = load_stats.tablet_stats[this_host].add_tablet_sizes(combined_ls.tablet_ls);
+            if (!table->uses_logstor()) {
+                load_per_shard[this_shard_id()].sstable_tablet_sizes += tablet_sizes;
+            }
 
             co_await coroutine::maybe_yield();
         }
+        load_per_shard[this_shard_id()].logstor_space = db.logstor_space_on_disk();
 
         co_return std::move(load_stats);
     }, locator::load_stats{}, std::plus<locator::load_stats>());
@@ -6557,11 +6563,15 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     } else if (_db.local().get_config().force_effective_capacity_to_raw_disk_capacity()) {
         tls.effective_capacity = _disk_space_monitor->space().capacity;
     } else {
-        uint64_t sum_tablet_sizes = 0;
-        for (const auto& ts : tablet_sizes_per_shard) {
-            sum_tablet_sizes += ts.size;
+        uint64_t sum_sstable_tablet_sizes = 0;
+        uint64_t sum_logstor_space = 0;
+        for (const auto& shard : load_per_shard) {
+            sum_sstable_tablet_sizes += shard.sstable_tablet_sizes;
+            sum_logstor_space += shard.logstor_space;
         }
-        tls.effective_capacity = si.available + sum_tablet_sizes;
+        // The capacity is the space the tablets can use: the free space, plus the sstables of the
+        // tablets, plus all of the logstor files.
+        tls.effective_capacity = si.available + sum_sstable_tablet_sizes + sum_logstor_space;
     }
 
     co_return std::move(load_stats);
