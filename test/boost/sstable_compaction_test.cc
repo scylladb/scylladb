@@ -2554,6 +2554,8 @@ void time_window_strategy_size_tiered_behavior_correctness_fn(test_env& env) {
 
     auto cf = env.make_table_for_tests(s);
     auto close_cf = deferred_stop(cf);
+    // Past windows only relax min_threshold when it isn't strictly enforced, as in production by default.
+    cf.set_compaction_enforce_min_threshold(false);
     auto major_compact_bucket = [&] (api::timestamp_type window_ts) {
         auto bound = compaction::time_window_compaction_strategy::get_window_lower_bound(window_size, window_ts);
         auto ret = compact_sstables(env, compaction::compaction_descriptor(std::move(buckets[bound])), cf, sst_gen).get();
@@ -2594,13 +2596,11 @@ void time_window_strategy_size_tiered_behavior_correctness_fn(test_env& env) {
     // now past window cannot be compacted again, because it was already compacted into a single SSTable, now it switches to STCS mode.
     BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now, *state).size() == 0);
 
-    // make past window contain more than min_threshold similar-sized SSTables, allowing it to be compacted again.
-    for (api::timestamp_type t = 1; t < min_threshold; t++) {
-        add_new_sstable_to_bucket(t, past_window_ts);
-    }
+    // make past window contain 2 similar-sized SSTables, fewer than min_threshold, which applies only to the current window.
+    add_new_sstable_to_bucket(1, past_window_ts);
 
-    // now past window can be compacted again because it switched to STCS mode and has more than min_threshold SSTables.
-    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now, *state).size() == size_t(min_threshold));
+    // now past window can be compacted again because it switched to STCS mode, where past windows need only 2 SSTables.
+    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now, *state).size() == 2);
 }
 
 SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
