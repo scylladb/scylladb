@@ -88,6 +88,7 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
             OPERATION(export_table_to_point_in_time, "ExportTableToPointInTime")
             OPERATION(describe_export, "DescribeExport")
             OPERATION(list_exports, "ListExports")
+            OPERATION(import_table, "ImportTable")
     });
     OPERATION_LATENCY(put_item_latency, "PutItem")
     OPERATION_LATENCY(get_item_latency, "GetItem")
