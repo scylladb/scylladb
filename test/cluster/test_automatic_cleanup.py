@@ -9,6 +9,9 @@ from cassandra import WriteFailure
 import pytest
 import logging
 import asyncio
+import glob
+import os
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -162,3 +165,77 @@ async def test_cleanup_waits_for_stale_writes(manager: ScyllaClusterManager):
 
         with pytest.raises(WriteFailure, match="stale topology exception"):
             await write_task
+
+
+async def test_cleanup_fails_fast_on_quarantined_sstables(manager: ScyllaClusterManager):
+    """A quarantined sstable is never compacted, so a cleanup that has to clean
+       it up cannot make progress. Cleanup must fail right away, naming the
+       sstable, rather than time out after minutes of waiting, and the
+       automatic cleanup must complete once the operator scrubs the table.
+
+       Scenario:
+       * Start two nodes and a vnodes-based table with rf=2, write and flush
+       * Quarantine every sstable of the table on the first node
+       * Scale out by adding a third node: the first two nodes lose ranges
+       * Request a cluster-wide cleanup. On the first node it must fail fast,
+         naming the quarantined sstables, and keep being retried
+       * Scrub the table on the first node, which moves the sstables out of
+         quarantine. The retried cleanup then completes and the request returns
+    """
+    config = {'tablets_mode_for_new_keyspaces': 'disabled'}
+
+    logger.info("start two servers")
+    servers = [await manager.server_add(property_file={"dc": "dc1", "rack": "rack1"}, config=config)]
+    servers += [await manager.server_add(property_file={"dc": "dc1", "rack": "rack2"}, config=config)]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        table = "test"
+        await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, c int)")
+        rows = 100
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{table} (pk, c) VALUES ({i}, {i})") for i in range(rows)))
+        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+
+        logger.info(f"quarantine the sstables of {ks}.{table} on {servers[0].server_id}")
+        await manager.server_stop_gracefully(servers[0].server_id)
+        workdir = await manager.server_get_workdir(servers[0].server_id)
+        [table_dir] = glob.glob(os.path.join(workdir, 'data', ks, f'{table}-*'))
+        quarantine_dir = os.path.join(table_dir, 'quarantine')
+        os.makedirs(quarantine_dir, exist_ok=True)
+        sstable_files = [f for f in glob.glob(os.path.join(table_dir, '*')) if os.path.isfile(f)]
+        assert sstable_files, f"no sstable files in {table_dir}"
+        for f in sstable_files:
+            shutil.move(f, quarantine_dir)
+        await manager.server_start(servers[0].server_id)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("scale out: add a third server")
+        servers += [await manager.server_add(property_file={"dc": "dc1", "rack": "rack3"}, config=config)]
+
+        log0 = await manager.server_open_log(servers[0].server_id)
+        mark0 = await log0.mark()
+
+        logger.info("request a cluster-wide cleanup")
+        cleanup_task = asyncio.create_task(manager.api.cleanup_all(servers[0].ip_addr))
+        await log0.wait_for(f"cleanup request failed: {ks}.{table}.*has quarantined sstables requiring cleanup", from_mark=mark0, timeout=60)
+        # It is retried, and keeps failing, until the quarantined sstables are dealt with.
+        await log0.wait_for("vnodes_cleanup fiber got an error", from_mark=mark0, timeout=60)
+        timed_out = await log0.grep("Cleanup timed out", from_mark=mark0)
+        assert len(timed_out) == 0
+        mark0 = await log0.mark()
+        await log0.wait_for("vnodes_cleanup fiber got an error", from_mark=mark0, timeout=60)
+        assert not cleanup_task.done()
+
+        logger.info(f"scrub {ks}.{table} on {servers[0].server_id} to move its sstables out of quarantine")
+        await manager.api.client.post("/system/logger/compaction", host=servers[0].ip_addr, params={"level": "debug"})
+        scrub_status = await manager.api.keyspace_scrub_sstables(servers[0].ip_addr, ks, "ABORT", table)
+        logger.info(f"scrub status {scrub_status}")
+        assert scrub_status == 0
+
+        logger.info("wait for the cleanup to complete")
+        await asyncio.wait_for(cleanup_task, timeout=120)
+        await log0.wait_for("vnodes_cleanup ended", from_mark=mark0, timeout=10)
+
+        cql, _ = await manager.get_ready_cql(servers)
+        result = await cql.run_async(f"SELECT COUNT(*) FROM {ks}.{table}")
+        assert result[0].count == rows

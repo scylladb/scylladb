@@ -375,6 +375,9 @@ public:
     // of a newly added node.
     future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
 private:
+    // Throws if any quarantined sstable in t needs cleanup, since it can never be cleaned up.
+    future<> check_quarantined_sstables_requiring_cleanup(compaction::compaction_group_view& t, const dht::token_range_vector& sorted_owned_ranges);
+    future<> calculate_sstables_cleanup_state(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t);
     future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
 
     // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
