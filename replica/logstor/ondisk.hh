@@ -311,7 +311,8 @@ record_header read_record_header(Input& in, uint32_t key_size) {
     };
 }
 
-// A record frame, as write_record_frame() writes it and read_record_frame() reads it:
+// A record frame, as write_record_frame() writes it and read_record_frame() and
+// try_read_record_frame() read it:
 //
 //   +-----------------------+-------------------+------------------+
 //   |  record_frame_header  |   record_header   |   record value   |
@@ -371,6 +372,44 @@ log_record read_record_frame(Input& in) {
     return log_record {
         .header = read_record_header(header_stream, frame_header.key_size),
         .value = record_value(bytes_view(reinterpret_cast<const int8_t*>(value_stream.begin()), value_stream.size())),
+    };
+}
+
+// A record that a frame holds: the record header, and the views of the serialized header and value
+// in the buffer of the frame.
+struct parsed_record_frame {
+    record_header header;
+    log_record_bytes_view bytes;
+};
+
+// Reads the record frame at the start of `in`, without its padding. `in` can hold more after the
+// frame, such as the next frames of a chunk body. Returns nullopt if the frame header is invalid or
+// the frame does not fit in what is left of `in`.
+template <typename Input>
+std::optional<parsed_record_frame> try_read_record_frame(Input& in) {
+    // The sizes a frame claims are checked against what is left of `in` before they are trusted,
+    // as the body CRC only says the bytes are the ones written, not that the writer was right.
+    if (in.size() < record_frame_header_size) {
+        return std::nullopt;
+    }
+    auto frame_header = ser::serializer<record_frame_header>::read(in);
+    const size_t header_size = record_header_size(frame_header.key_size);
+
+    if (!validate_record_frame_header(frame_header) || header_size + frame_header.value_size > in.size()) {
+        return std::nullopt;
+    }
+
+    auto header_stream = in.read_substream(header_size);
+    auto value_stream = in.read_substream(frame_header.value_size);
+    // Taken before read_record_header() consumes the stream.
+    const auto header_bytes = bytes_view(reinterpret_cast<const int8_t*>(header_stream.begin()), header_size);
+
+    return parsed_record_frame{
+        .header = read_record_header(header_stream, frame_header.key_size),
+        .bytes = {
+            .header = header_bytes,
+            .value = bytes_view(reinterpret_cast<const int8_t*>(value_stream.begin()), value_stream.size()),
+        },
     };
 }
 
