@@ -223,6 +223,19 @@ def test_hybrid_rejects_a_where_clause_on_an_unsearched_column(cql, two_of_each_
                     f"ORDER BY RRF(ANN(embedding, {VECTOR}), BM25(content, 'fox')) LIMIT 10")
 
 
+@pytest.mark.parametrize("selection", ["p", "p, BM25(content, 'fox')"], ids=["key", "key_and_score"])
+def test_hybrid_distinct_rejected(cql, test_keyspace, selection):
+    """The same queries as test_invalid_ann_queries.py::test_ann_query_with_distinct_rejected,
+    reached through a hybrid search, with the same outcome. Reproduces SCYLLADB-5051."""
+    schema = "p int, c int, content text, embedding vector<float, 2>, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(embedding) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match="do not support SELECT DISTINCT"):
+            cql.prepare(f"SELECT DISTINCT {selection} FROM {table} "
+                        f"ORDER BY RRF(ANN(embedding, {VECTOR}), BM25(content, 'fox')) LIMIT 10")
+
+
 def test_ordering_expression_naming_no_search_rejected(cql, hybrid_table):
     table = hybrid_table
     with pytest.raises(InvalidRequest, match="must name at least one search"):

@@ -157,6 +157,12 @@ uint64_t request_limit(const search_source& source, uint64_t limit) {
         throw exceptions::invalid_request_exception(
                 seastar::format("{} queries cannot be run with aggregation", query_kind_name(sources)));
     }
+    // The base table is read one primary key at a time, in the order the index returned them, so
+    // nothing would collapse the rows of one partition into one.
+    if (args.parameters->is_distinct()) {
+        throw exceptions::invalid_request_exception(
+                seastar::format("{} queries do not support SELECT DISTINCT", query_kind_name(sources)));
+    }
 
     if (std::ranges::any_of(sources, &search_source::has_temporaries)) {
         external_search::fetch_primary_key_columns(*args.selection, *args.schema);
