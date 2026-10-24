@@ -199,6 +199,20 @@ def page_hits_with_shard(cql):
                   cql.execute('SELECT shard, sstable, component, offset, last_hit FROM system_cache.pagecache_hits'))
 
 
+async def settled(get, timeout=60):
+    '''Returns get()'s result once it stops changing - for the hits of pages,
+    which the cache records in the background, after the reads complete.'''
+    deadline = time.time() + timeout
+    previous = get()
+    while True:
+        await asyncio.sleep(0.5)
+        current = get()
+        if current == previous:
+            return current
+        assert time.time() < deadline
+        previous = current
+
+
 def cached_pages_with_shard(cql):
     '''The (shard, sstable, component, offset) of each cached page.'''
     return sorted((row.shard, row.sstable, row.component, row.offset) for row in
@@ -948,8 +962,8 @@ async def test_intranode_migration_copies_pages(manager: ScyllaClusterManager, s
         # Scan again, to record the hits of the cached pages.
         await manager.api.drop_sstable_caches(server.ip_addr)
         assert scan(cql, ks) == data
-        hits = page_hits_with_shard(cql)
-        assert hits
+        hits = await settled(lambda: page_hits_with_shard(cql))
+        assert any(last_hit for *_, last_hit in hits)
 
         dst_shard = 1 - src_shard
         await manager.api.move_tablet(server.ip_addr, ks, 'test', host, src_shard, host, dst_shard, 0)
@@ -1035,8 +1049,9 @@ async def test_hits(manager: ScyllaClusterManager, s3_storage):
         # Check that reading them again records a hit of each of them.
         await manager.api.drop_sstable_caches(server.ip_addr)
         point_read()
-        first_hits = page_hits(cql)
+        first_hits = await settled(lambda: page_hits(cql))
         assert sorted(first_hits) == pages
+        assert all(first_hits.values())
 
         # Check that the next read doesn't record their hits again: the cache
         # is far from full, so the hand which evicts pages didn't start a new
@@ -1045,13 +1060,13 @@ async def test_hits(manager: ScyllaClusterManager, s3_storage):
         await asyncio.sleep(0.002)
         await manager.api.drop_sstable_caches(server.ip_addr)
         point_read()
-        assert page_hits(cql) == first_hits
+        assert await settled(lambda: page_hits(cql)) == first_hits
 
         # Check that a read with BYPASS CACHE records no hits.
         await asyncio.sleep(0.002)
         await manager.api.drop_sstable_caches(server.ip_addr)
         point_read('BYPASS CACHE')
-        assert page_hits(cql) == first_hits
+        assert await settled(lambda: page_hits(cql)) == first_hits
 
 
 def cached_bytes(cql):

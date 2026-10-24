@@ -827,6 +827,35 @@ SEASTAR_TEST_CASE(test_page_cache_flushes_tables_when_needed) {
     }, page_cache_config());
 }
 
+// Hits recorded in the background are limited: if recording the hits of the
+// pages which get_pages() returns would exceed the limit of writes in
+// progress, they aren't recorded - nor remembered as recorded, so their next
+// hits are.
+SEASTAR_TEST_CASE(test_page_cache_background_hits_limited) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        db::object_storage_page_cache_table cache(env.local_qp(), unlimited(), remembered_hits());
+        cache.record_hits_in_background();
+        auto stop = defer([&] () noexcept { cache.stop().get(); });
+        auto sst = new_sstable_id();
+        constexpr size_t pages = 1001;
+        for (size_t i = 0; i < pages; i++) {
+            cache.put_page(sst, Data, i * 100, make_page('a', 100)).get();
+        }
+        // Check that hits of more pages than the limit aren't recorded.
+        BOOST_REQUIRE_EQUAL(cache.get_pages(sst, Data, 0, pages * 100, pages, sstables::populate_disk_cache::yes).get().size(), pages);
+        BOOST_REQUIRE_EQUAL(cache.get_stats().unrecorded_hits, pages);
+        // Check that the next hit of a page is recorded.
+        cache.get_pages(sst, Data, 0, 100, 1, sstables::populate_disk_cache::yes).get();
+        auto deadline = lowres_clock::now() + std::chrono::seconds(60);
+        while (!hits(env, sst).at({"Data", 0})) {
+            BOOST_REQUIRE(lowres_clock::now() < deadline);
+            sleep(std::chrono::milliseconds(1)).get();
+        }
+        BOOST_REQUIRE_EQUAL(cache.get_stats().unrecorded_hits, pages);
+        BOOST_REQUIRE(!hits(env, sst).at({"Data", 100}));
+    }, page_cache_config());
+}
+
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
 // Waits until the given injection point has a waiter.
 static void wait_for_injection(const sstring& name) {
@@ -1090,6 +1119,40 @@ SEASTAR_TEST_CASE(test_page_cache_hand_skips_page_being_cached) {
         BOOST_REQUIRE_EQUAL(pages.size(), 1);
         BOOST_REQUIRE_EQUAL(sstring(pages[0].data.get(), pages[0].data.size()), sstring(4096, 'b'));
         BOOST_REQUIRE(hits(env, sst).contains({"Data", 0}));
+    }, page_cache_config());
+}
+
+// With record_hits_in_background(), get_pages() returns its pages without
+// waiting for the writes of their hits - which wait when memtables take too
+// much memory - and stop() waits for these writes.
+SEASTAR_TEST_CASE(test_page_cache_records_hits_in_background) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        db::object_storage_page_cache_table cache(env.local_qp(), unlimited(), remembered_hits());
+        cache.record_hits_in_background();
+        auto sst = new_sstable_id();
+        cache.put_page(sst, Data, 0, make_page('a')).get();
+
+        const auto write_hits = "object_storage_page_cache_write_hits";
+        auto& injector = utils::get_local_injector();
+        injector.enable(write_hits, false);
+        auto cleanup = defer([&] () noexcept {
+            injector.disable(write_hits);
+            cache.stop().get();
+        });
+        // Check that the read returns its page while the write of its hit is
+        // paused.
+        auto pages = with_timeout(lowres_clock::now() + std::chrono::seconds(60),
+                cache.get_pages(sst, Data, 0, 4096, 1, sstables::populate_disk_cache::yes)).get();
+        check_pages(pages, {{0, 'a'}});
+        wait_for_injection(write_hits);
+        BOOST_REQUIRE(!hits(env, sst).at({"Data", 0}));
+        // Check that the hit is recorded when the write continues.
+        injector.disable(write_hits);
+        auto deadline = lowres_clock::now() + std::chrono::seconds(60);
+        while (!hits(env, sst).at({"Data", 0})) {
+            BOOST_REQUIRE(lowres_clock::now() < deadline);
+            sleep(std::chrono::milliseconds(1)).get();
+        }
     }, page_cache_config());
 }
 
