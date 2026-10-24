@@ -13,6 +13,7 @@
 #include "locator/tablets.hh"
 
 namespace service::strong_consistency { struct stats; }
+namespace tracing { class trace_state_ptr; }
 
 namespace cql3::statements::strong_consistency {
 
@@ -23,6 +24,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
     db::timeout_clock::time_point timeout,
     bool is_write,
     service::strong_consistency::stats& stats,
+    const tracing::trace_state_ptr& trace_state,
     locator::host_id_or_exception_callback on_forwarding_finished = {});
 
 bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_name);

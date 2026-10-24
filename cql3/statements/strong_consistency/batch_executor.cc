@@ -109,7 +109,7 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
                 on_internal_error(logger, "batch produced no mutations");
             }
             return std::move(*merged);
-        }, timeout, qs.get_client_state().get_abort_source(),
+        }, qs.get_trace_state(), timeout, qs.get_client_state().get_abort_source(),
         // Only EXECUTE requests carry a tablet version block; a BATCH doesn't, so there
         // is no routing information to hand back.
         std::nullopt);
@@ -117,7 +117,7 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
     using namespace service::strong_consistency;
     if (auto* redirect = get_if<need_redirect>(&mutate_result)) {
         bool is_write = true;
-        co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats(), std::move(redirect->on_forwarding_finished));
+        co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats(), qs.get_trace_state(), std::move(redirect->on_forwarding_finished));
     }
 
     co_return seastar::make_shared<result_message::void_message>();

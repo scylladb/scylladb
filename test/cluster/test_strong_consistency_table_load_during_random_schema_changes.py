@@ -62,6 +62,8 @@ SERVER_CONFIG = {
 SERVER_CMDLINE = [
     "--logger-log-level", "sc_groups_manager=debug",
     "--logger-log-level", "sc_coordinator=debug",
+    "--logger-log-level", "sc_state_machine=debug",
+    "--logger-log-level", "raft_groups_storage=debug",
 ]
 
 # --- Schema configuration ----------------------------------------------------

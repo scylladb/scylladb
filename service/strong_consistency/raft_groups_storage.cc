@@ -43,6 +43,7 @@ raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_
 }
 
 future<> raft_groups_storage::store_term_and_vote(raft::term_t term, raft::server_id vote) {
+    rgslog.debug("Raft group {} on shard {} stores term {} and vote {}.", _group_id, _shard, term, vote);
     return execute_with_linearization_point([this, term, vote] {
         static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, vote_term, vote) VALUES (?, ?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
@@ -56,15 +57,18 @@ future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_
     static const auto load_cql = format("SELECT vote_term, vote FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1", db::system_keyspace::RAFT_GROUPS);
     ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
     if (rs->empty()) {
+        rgslog.debug("Raft group {} on shard {} has no persisted term and vote.", _group_id, _shard);
         co_return std::pair(raft::term_t(), raft::server_id());
     }
     const auto& static_row = rs->one();
     raft::term_t vote_term = raft::term_t(static_row.get_or<int64_t>("vote_term", raft::term_t{}.value()));
     raft::server_id vote{static_row.get_or<utils::UUID>("vote", raft::server_id{}.id)};
+    rgslog.debug("Raft group {} on shard {} loaded term {} and vote {}.", _group_id, _shard, vote_term, vote);
     co_return std::pair(vote_term, vote);
 }
 
 future<> raft_groups_storage::store_commit_idx(raft::index_t idx) {
+    rgslog.trace("Raft group {} on shard {} stores commit index {}.", _group_id, _shard, idx);
     return execute_with_linearization_point([this, idx] {
         static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, commit_idx) VALUES (?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
@@ -128,6 +132,7 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
     static const auto load_id_cql = format("SELECT snapshot_id FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1", db::system_keyspace::RAFT_GROUPS);
     ::shared_ptr<cql3::untyped_result_set> id_rs = co_await _qp.execute_internal(load_id_cql, {int16_t(_shard), _group_id.id}, cql3::query_processor::cache_internal::yes);
     if (id_rs->empty() || !id_rs->one().has("snapshot_id")) {
+        rgslog.debug("Raft group {} on shard {} has no snapshot.", _group_id, _shard);
         co_return raft::snapshot_descriptor();
     }
     const auto& id_row = id_rs->one(); // should be only one row since snapshot_id column is static
@@ -161,11 +166,15 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
         .term = raft::term_t(snp_row.get_as<int64_t>("term")),
         .config = std::move(cfg),
         .id = raft::snapshot_id(snapshot_id)};
+    rgslog.debug("Raft group {} on shard {} loaded snapshot {} at index {}, term {}, with configuration {}.",
+        _group_id, _shard, s.id, s.idx, s.term, s.config);
     co_return s;
 }
 
 future<> raft_groups_storage::store_snapshot_descriptor(const raft::snapshot_descriptor& snap, size_t preserve_log_entries) {
     // TODO: check that snap.idx refers to an already persisted entry
+    rgslog.debug("Raft group {} on shard {} stores snapshot {} at index {}, term {}, with configuration {}, preserving {} log entries.",
+        _group_id, _shard, snap.id, snap.idx, snap.term, snap.config, preserve_log_entries);
     return execute_with_linearization_point([this, &snap, preserve_log_entries] () -> future<> {
         static const auto store_snp_cql = format("INSERT INTO system.{} (shard, group_id, snapshot_id, idx, term) VALUES (?, ?, ?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);
@@ -236,6 +245,8 @@ future<> raft_groups_storage::store_snapshot_index(cql3::query_processor& qp, ra
     if (!rs->empty() && rs->one().has("idx")) {
         auto existing_idx = raft::index_t(static_cast<uint64_t>(rs->one().get_as<int64_t>("idx")));
         if (existing_idx >= snap.idx) {
+            rgslog.debug("Raft group {} on shard {} keeps its persisted snapshot index {}, which is not older than {}.",
+                gid, shard, existing_idx, snap.idx);
             co_return;
         }
     }
