@@ -11,6 +11,8 @@
 #include "test/lib/cql_assertions.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/shared_future.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/util/defer.hh>
 
 #include "clocks-impl.hh"
@@ -631,6 +633,66 @@ SEASTAR_TEST_CASE(test_request_completes_after_local_apply) {
         testlog.info("Releasing the apply; the request must complete now");
         injector.receive_message(apply_pause);
         request.get_future().get();
+    });
+}
+
+// Commits a group0 batch whose entry can't be applied (io_fiber paused) with an
+// already-expired deadline, and expects the timeout to be classified as Exception.
+template <typename Exception>
+static future<> check_stalled_commit_classification(cql_test_env& e, std::string table, bool past_gc_window) {
+    auto& rclient = e.get_raft_group0_client();
+    abort_source as;
+
+    schema_builder::register_schema_initializer([table] (schema_builder& builder) {
+        if (builder.cf_name() == table) {
+            builder.set_is_group0_table();
+        }
+    });
+    co_await e.execute_cql(fmt::format("CREATE TABLE {} (key int PRIMARY KEY)", table));
+
+    auto guard = co_await rclient.start_operation(as);
+    auto muts = co_await e.get_modification_mutations(fmt::format("INSERT INTO {} (key) VALUES (1)", table));
+    service::group0_batch mc(std::move(guard));
+    mc.add_mutation(muts[0]);
+
+    // Make the guard's state id GC-eligible before the commit.
+    const std::chrono::seconds jump = past_gc_window ? rclient.get_history_gc_duration() + std::chrono::seconds{1} : std::chrono::seconds{0};
+    forward_jump_clocks(jump);
+    auto restore_clocks = defer([jump] noexcept { forward_jump_clocks(-jump); });
+
+    utils::get_local_injector().enable("poll_fsm_output/pause");
+    auto resume_polling = defer([] noexcept { utils::get_local_injector().disable("poll_fsm_output/pause"); });
+
+    ::service::raft_timeout past_deadline{.value = seastar::lowres_clock::now() - std::chrono::seconds{1}};
+
+    // A fix that retries instead of classifying would loop forever.
+    seastar::timer<seastar::lowres_clock> watchdog([&as] () noexcept { as.request_abort(); });
+    watchdog.arm(std::chrono::minutes{2});
+
+    BOOST_CHECK_EXCEPTION(co_await std::move(mc).commit(rclient, as, past_deadline),
+            Exception, [] (const Exception&) { return true; });
+    watchdog.cancel();
+}
+
+// A timeout while the entry is still in flight must be retryable, not opaque.
+SEASTAR_TEST_CASE(test_group0_add_entry_timeout_in_flight_is_concurrent_modification) {
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        co_await check_stalled_commit_classification<service::group0_concurrent_modification>(
+                e, "test_group0_timeout_bypass", false);
+
+        // The "failed" write lands once polling resumes, so retrying is right.
+        for (int i = 0; (co_await fetch_rows(e, "SELECT key FROM test_group0_timeout_bypass")).empty(); ++i) {
+            BOOST_REQUIRE_MESSAGE(i < 600, "stalled entry never applied after polling resumed");
+            co_await seastar::sleep(std::chrono::milliseconds{100});
+        }
+    });
+}
+
+// Past the GC window the outcome is ambiguous, so the timeout must be a hard timeout.
+SEASTAR_TEST_CASE(test_group0_add_entry_timeout_past_gc_window_is_hard_timeout) {
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        co_await check_stalled_commit_classification<service::group0_hard_timeout>(
+                e, "test_group0_timeout_bypass_gc", true);
     });
 }
 
