@@ -1230,6 +1230,153 @@ future<> snapshot_table_helper::insert_snapshot_sstables(std::string_view snapsh
     co_await do_insert_snapshot_sstables(_qp, snapshot_name, ks, table, dc, rack, sstables, cl);
 }
 
+future<> snapshot_table_helper::delete_snapshot_tablet_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+        std::string_view dc, dht::token first_token, int64_t write_timestamp, db::consistency_level cl) {
+    static const sstring query = format("DELETE FROM {}.{} USING TIMESTAMP ?"
+        " WHERE snapshot_name = ? AND keyspace_name = ? AND table_name = ? AND datacenter = ? AND first_token = ?"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLETS
+    );
+
+    co_await _qp.execute_internal(
+            query,
+            cl,
+            internal_distributed_query_state(),
+            { write_timestamp, sstring(snapshot_name), sstring(ks), sstring(table), sstring(dc), dht::token::to_int64(first_token) },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<utils::chunked_vector<snapshot_tablet_cleanup_entry>>
+snapshot_table_helper::get_snapshot_tablets_for_cleanup(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+        std::string_view dc, db::consistency_level cl) const {
+    utils::chunked_vector<snapshot_tablet_cleanup_entry> entries;
+
+    static const sstring query = format("SELECT first_token, WRITETIME(tablet_id) AS wt FROM {}.{}"
+        " WHERE snapshot_name = ? AND keyspace_name = ? AND table_name = ? AND datacenter = ?"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLETS
+    );
+
+    co_await _qp.query_internal(
+        query,
+        cl,
+        { sstring(snapshot_name), sstring(ks), sstring(table), sstring(dc) },
+        1000,
+        [&] (const cql3::untyped_result_set_row& row) {
+            entries.push_back(snapshot_tablet_cleanup_entry{
+                .first_token = dht::token::from_int64(row.get_as<int64_t>("first_token")),
+                .write_timestamp = row.get_or<int64_t>("wt", 0),
+            });
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        });
+
+    co_return entries;
+}
+
+future<snapshot_schema_cleanup_info>
+snapshot_table_helper::get_snapshot_schema_rows_for_cleanup(std::string_view snapshot_name, db::consistency_level cl) const {
+    snapshot_schema_cleanup_info info;
+
+    static const sstring tables_query = format("SELECT keyspace_name, table_name, WRITETIME(table_schema) AS wt FROM {}.{}"
+        " WHERE snapshot_name = ?"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLES
+    );
+    co_await _qp.query_internal(
+        tables_query,
+        cl,
+        { sstring(snapshot_name) },
+        1000,
+        [&] (const cql3::untyped_result_set_row& row) {
+            info.tables.emplace_back(row.get_as<sstring>("keyspace_name"), row.get_as<sstring>("table_name"));
+            info.max_write_timestamp = std::max(info.max_write_timestamp, row.get_or<int64_t>("wt", 0));
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        });
+
+    static const sstring keyspaces_query = format("SELECT WRITETIME(keyspace_schema) AS wt FROM {}.{}"
+        " WHERE snapshot_name = ?"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_KEYSPACES
+    );
+    co_await _qp.query_internal(
+        keyspaces_query,
+        cl,
+        { sstring(snapshot_name) },
+        1000,
+        [&] (const cql3::untyped_result_set_row& row) {
+            info.max_write_timestamp = std::max(info.max_write_timestamp, row.get_or<int64_t>("wt", 0));
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        });
+
+    co_return info;
+}
+
+future<> snapshot_table_helper::delete_snapshot_schema_rows(std::string_view snapshot_name, int64_t write_timestamp, db::consistency_level cl) {
+    static const sstring keyspaces_query = format("DELETE FROM {}.{} USING TIMESTAMP ? WHERE snapshot_name = ?",
+            system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_KEYSPACES);
+    static const sstring tables_query = format("DELETE FROM {}.{} USING TIMESTAMP ? WHERE snapshot_name = ?",
+            system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLES);
+    co_await coroutine::parallel_for_each(std::array{&keyspaces_query, &tables_query}, [&] (const sstring* query) -> future<> {
+        co_await _qp.execute_internal(
+                *query,
+                cl, internal_distributed_query_state(),
+                { write_timestamp, sstring(snapshot_name) },
+                cql3::query_processor::cache_internal::yes).discard_result();
+    });
+}
+
+future<> snapshot_table_helper::delete_snapshot_nodes_rows(std::string_view snapshot_name, int64_t write_timestamp, db::consistency_level cl) {
+    static const sstring query = format("DELETE FROM {}.{} USING TIMESTAMP ? WHERE snapshot_name = ?",
+            system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_NODES);
+    co_await _qp.execute_internal(
+            query,
+            cl, internal_distributed_query_state(),
+            { write_timestamp, sstring(snapshot_name) },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<utils::chunked_vector<snapshot_sstable_cleanup_entry>>
+snapshot_table_helper::get_snapshot_sstables_for_cleanup(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+        std::string_view dc, std::string_view rack, db::consistency_level cl) const {
+    utils::chunked_vector<snapshot_sstable_cleanup_entry> entries;
+
+    static const sstring query = format("SELECT sstable_id, first_token, toc_name, node, WRITETIME(toc_name) AS wt FROM {}.{}"
+        " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES
+    );
+
+    co_await _qp.query_internal(
+        query,
+        cl,
+        { sstring(snapshot_name), sstring(ks), sstring(table), sstring(dc), sstring(rack) },
+        1000,
+        [&] (const cql3::untyped_result_set_row& row) {
+            entries.push_back(snapshot_sstable_cleanup_entry{
+                .sstable_id = sstables::sstable_id(row.get_as<utils::UUID>("sstable_id")),
+                .first_token = dht::token::from_int64(row.get_as<int64_t>("first_token")),
+                .toc_name = row.get_or<sstring>("toc_name", ""),
+                .node = locator::host_id(row.get_or<utils::UUID>("node", utils::UUID{})),
+                .write_timestamp = row.get_or<int64_t>("wt", 0),
+            });
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        });
+
+    co_return entries;
+}
+
+future<> snapshot_table_helper::delete_snapshot_sstable_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+        std::string_view dc, std::string_view rack,
+        dht::token first_token, sstables::sstable_id sstable_id, int64_t write_timestamp, db::consistency_level cl) {
+    static const sstring query = format("DELETE FROM {}.{} USING TIMESTAMP ?"
+        " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ? AND first_token = ? AND sstable_id = ?"
+        , system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES
+    );
+
+    co_await _qp.execute_internal(
+            query,
+            cl,
+            internal_distributed_query_state(),
+            { write_timestamp, sstring(snapshot_name), sstring(ks), sstring(table), sstring(dc), sstring(rack),
+              dht::token::to_int64(first_token), sstable_id.uuid() },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
 /**
  * Helper to write a full snapshot_entries
  */
@@ -1289,21 +1436,13 @@ db::snapshot_table_entry snapshot_table_helper::make_snapshot_table_entry(std::s
 }
 
 /**
- * Helper to write snapshot base metadata
+ * Helper to write a snapshot's keyspace and table schema rows
  */
-future<> snapshot_table_helper::insert_snapshot_info(std::string_view snapshot_name
-    , db_clock::time_point created, db_clock::time_point expiry
+future<> snapshot_table_helper::insert_snapshot_schema_rows(std::string_view snapshot_name
     , std::span<const lw_shared_ptr<replica::table>> tables_in
     , db::consistency_level cl
 )
 {
-    co_await insert_snapshot(db::snapshot_entry{
-        .name = std::string(snapshot_name),
-        .created_at = created,
-        .expires_at = expiry,
-        // TODO: namespace/manifest version?
-    }, cl);
-
     std::unordered_map<std::string, db::snapshot_keyspace_entry> keyspaces;
     std::vector<db::snapshot_table_entry> tables;
 
