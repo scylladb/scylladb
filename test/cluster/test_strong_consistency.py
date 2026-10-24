@@ -1657,6 +1657,13 @@ async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterMa
             assert len(rows) == 1
             assert rows[0].c == 2
 
+            # The first write was acked by the stopped leader. The new leader has to serve
+            # it too - read it linearizably, a CL=ONE read could miss it on a lagging replica.
+            rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {table} WHERE pk = 1",
+                                                       consistency_level=ConsistencyLevel.QUORUM),
+                                       host=non_replica_host)
+            assert [(row.pk, row.c) for row in rows] == [(1, 1)]
+
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_stepdown_on_graceful_shutdown(manager: ScyllaClusterManager):

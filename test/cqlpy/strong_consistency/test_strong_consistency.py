@@ -594,11 +594,76 @@ def test_null_primary_key_on_sc_table(cql, sc_keyspace):
         assert list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1")) == []
 
 
+def test_partial_update_on_sc_table(cql, sc_keyspace):
+    """
+    A strongly consistent UPDATE, or a DELETE of a single column, changes the
+    cells it names and nothing else: the other regular columns of the row and
+    the static column of the partition keep their values, and an update of the
+    static column leaves the clustering rows alone.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, w int, s int static, PRIMARY KEY (pk, ck)") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v, w, s) VALUES (1, 1, 10, 100, 7)")
+
+        cql.execute(f"UPDATE {table} SET v = 11 WHERE pk = 1 AND ck = 1")
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 1")) == [(1, 11, 100, 7)]
+
+        cql.execute(f"UPDATE {table} SET s = 8 WHERE pk = 1")
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 1")) == [(1, 11, 100, 8)]
+
+        cql.execute(f"DELETE w FROM {table} WHERE pk = 1 AND ck = 1")
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 1")) == [(1, 11, None, 8)]
+
+
+# Each case: the DELETE run on partition 1, and the clustering rows of that
+# partition it leaves behind.
+@pytest.mark.parametrize("where,surviving", [
+    ("pk = 1 AND ck = 2", [1, 3, 4]),
+    ("pk = 1 AND ck >= 2 AND ck < 4", [1, 4]),
+    ("pk = 1", []),
+], ids=["row", "range", "partition"])
+def test_delete_and_reinsert_on_sc_table(cql, sc_keyspace, where, surviving):
+    """
+    A strongly consistent row, range or partition delete removes exactly what
+    it covers - a partition delete takes the static column along - and leaves
+    the rest of the partition and the neighbouring partition alone.
+
+    Re-inserting the deleted rows afterwards brings back only the cells the
+    re-insert writes: none of the deleted cells resurrect. User timestamps
+    are rejected on these tables, so the re-insert shadows the tombstone only
+    because the leader keeps its write timestamps increasing.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, w int, s int static, PRIMARY KEY (pk, ck)") as table:
+        for pk in (1, 2):
+            for ck in (1, 2, 3, 4):
+                cql.execute(f"INSERT INTO {table} (pk, ck, v, w, s) VALUES ({pk}, {ck}, {ck}, {10 * ck}, {pk})")
+        untouched = list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 2"))
+        assert len(untouched) == 4
+
+        cql.execute(f"DELETE FROM {table} WHERE {where}")
+
+        # A partition left with only its static row would still come back as
+        # one row with a null ck, so an empty result also shows s is gone.
+        static = 1 if surviving else None
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 1")) == \
+            [(ck, ck, 10 * ck, static) for ck in surviving]
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 2")) == untouched
+
+        deleted = [ck for ck in (1, 2, 3, 4) if ck not in surviving]
+        for ck in deleted:
+            cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, {ck}, {100 + ck})")
+
+        expected = {ck: (ck, ck, 10 * ck, static) for ck in surviving}
+        expected.update({ck: (ck, 100 + ck, None, static) for ck in deleted})
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 1")) == \
+            [expected[ck] for ck in (1, 2, 3, 4)]
+        assert list(cql.execute(f"SELECT ck, v, w, s FROM {table} WHERE pk = 2")) == untouched
+
+
 def test_oversized_write_on_sc_table(cql, sc_keyspace):
     """
     A write whose raft command exceeds the command size limit of the
     group is rejected with a clear error, not the raft error surfacing as
-    a server error.
+    a server error. The rejection leaves the table writable.
     """
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v blob") as table:
         insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
@@ -608,6 +673,11 @@ def test_oversized_write_on_sc_table(cql, sc_keyspace):
         m = re.search(r"write of (\d+) bytes exceeds the limit of (\d+) bytes", str(e.value))
         size, limit = int(m.group(1)), int(m.group(2))
         assert size >= 200 * 1024 > limit
+
+        cql.execute(insert, [3, b'y' * 1024])
+        assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE pk = 1")] == [b'x' * 1024]
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk = 2")) == []
+        assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE pk = 3")] == [b'y' * 1024]
 
 
 def test_mutation_fragments_on_sc_table(cql, sc_keyspace):
