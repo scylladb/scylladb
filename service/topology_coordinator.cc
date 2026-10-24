@@ -617,14 +617,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     fail_unexpected_state();
                 }
                 b().set_replicas(last_token, std::move(*next))
-                        .del_transition(last_token);
+                        .del_transition(last_token, _feature_service);
                 return;
             }
             case replace_tablets_phase::rollback: {
                 if (!trinfo || trinfo->transition != transition_kind || trinfo->next != *next) {
                     return;
                 }
-                b().del_transition(last_token);
+                b().del_transition(last_token, _feature_service);
                 return;
             }
             default:
@@ -2502,6 +2502,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         bool needs_barrier = false;
         bool has_transitions = false;
         tablet_builder_map tablet_builders;
+        // Published only once the round commits, as a retried round would count again.
+        uint64_t cancelled_transitions = 0;
 
         shared_promise barrier;
         auto fail_barrier = seastar::defer([&] noexcept {
@@ -2690,8 +2692,48 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 locator::tablet_transition_stage::sc_remove_pending :
                 locator::tablet_transition_stage::cleanup_target;
 
+            // Rolls a cancelled transition back, onto the track a failed one takes, once the
+            // stage's in-flight actions have finished. A strongly consistent migration keeps a
+            // session to its end (see do_config_sync), so it gets a fresh one.
+            auto rollback_cancelled = [&] (background_action_holder* holder,
+                                           background_action_holder* also = nullptr) {
+                bool in_flight = false;
+                for (auto* h : {holder, also}) {
+                    if (!h || !*h) {
+                        continue;
+                    }
+                    if (!(*h)->available()) {
+                        in_flight = true;
+                        continue;
+                    }
+                    if ((*h)->failed()) {
+                        (*h)->ignore_ready_future();
+                    }
+                    // ignore_ready_future() leaves an invalid future, which neither a later round
+                    // nor stop() could handle.
+                    *h = make_ready_future<>();
+                }
+                if (in_flight) {
+                    rtlogger.debug("Tablet {} cancelled at stage {}, waiting for the in-flight action",
+                                   gid, trinfo.stage);
+                    return;
+                }
+                rtlogger.debug("Rolling back cancelled tablet transition of {} at stage {}", gid, trinfo.stage);
+                cancelled_transitions++;
+                auto& builder = get_mutation_builder().set_stage(last_token, rollback_stage);
+                if (is_strong_consistency) {
+                    builder.set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()));
+                } else {
+                    builder.del_session(last_token);
+                }
+            };
+
             switch (trinfo.stage) {
                 case locator::tablet_transition_stage::allow_write_both_read_old: /* start_migration */
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.barriers[trinfo.stage]);
+                        break;
+                    }
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
                             transition_to(rollback_stage);
@@ -2724,6 +2766,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                     break;
                 case locator::tablet_transition_stage::write_both_read_old: /* sc_add_nonvoter */
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.barriers[trinfo.stage],
+                                           is_strong_consistency ? &tablet_state.config_sync[trinfo.stage] : nullptr);
+                        break;
+                    }
                     if (action_failed(tablet_state.barriers[trinfo.stage])
                             || (is_strong_consistency && action_failed(tablet_state.config_sync[trinfo.stage]))) {
                         if (check_excluded_replicas()) {
@@ -2747,6 +2794,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     transition_to_with_barrier(rollback_stage);
                     break;
                 case locator::tablet_transition_stage::rebuild_repair: {
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.rebuild_repair);
+                        break;
+                    }
                     if (action_failed(tablet_state.rebuild_repair)) {
                         bool fail = utils::get_local_injector().enter("rebuild_repair_stage_fail");
                         if (fail || check_excluded_replicas()) {
@@ -2789,6 +2840,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
                 // stage in case of coordinator failover.
                 case locator::tablet_transition_stage::streaming: /* sc_snapshot_transfer */ {
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.streaming);
+                        break;
+                    }
                     if (action_failed(tablet_state.streaming) || utils::get_local_injector().enter("stream_tablet_fail")) {
                         std::optional<sstring> rollback;
 
@@ -3037,7 +3092,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (do_barrier()) {
                         _tablets.erase(gid);
                         get_mutation_builder()
-                                .del_transition(last_token)
+                                .del_transition(last_token, _feature_service)
                                 .del_migration_task_info(last_token, _feature_service);
                         auto leaving_replica = get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
                         if (leaving_replica) {
@@ -3055,7 +3110,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (!defer_transition && do_barrier()) {
                         _tablets.erase(gid);
                         get_mutation_builder()
-                                .del_transition(last_token)
+                                .del_transition(last_token, _feature_service)
                                 .set_replicas(last_token, trinfo.next)
                                 .del_migration_task_info(last_token, _feature_service);
                         _vb_coordinator->generate_tablet_migration_updates(updates, guard, tmap, gid, trinfo);
@@ -3182,7 +3237,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto ep = tablet_state.restore->get_exception();
                         rtlogger.debug("Clearing restore transition for {} due to error", gid);
                         _tablets.erase(gid);
-                        get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).del_session(last_token);
+                        get_mutation_builder().del_transition(last_token, _feature_service).del_snapshot_name(last_token).del_session(last_token);
                         // Record error on the ongoing restore request so it's propagated to the caller.
                         if (auto it = restore_request_for_table.find(gid.table); it != restore_request_for_table.end()) {
                             updates.add(
@@ -3215,7 +3270,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     })) {
                         rtlogger.debug("Clearing restore transition for {}", gid);
                         _tablets.erase(gid);
-                        get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).del_session(last_token);
+                        get_mutation_builder().del_transition(last_token, _feature_service).del_snapshot_name(last_token).del_session(last_token);
                     }
                 }
                     break;
@@ -3253,7 +3308,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 rtlogger.info("The end_repair stage finished for tablet repair tablet_id={} session_id={}", gid, tablet_state.session_id);
                             }
                             _tablets.erase(gid);
-                            get_mutation_builder().del_transition(last_token);
+                            get_mutation_builder().del_transition(last_token, _feature_service);
                         }
                     }
                 }
@@ -3306,6 +3361,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             } else {
                 co_await update_topology_state(std::move(guard), std::move(updates), format("Tablet migration"));
             }
+            _tablet_ops_metrics.add_cancelled_transitions(cancelled_transitions);
         }
 
         if (needs_barrier) {
@@ -5947,6 +6003,10 @@ tablet_ops_metrics::tablet_ops_metrics() {
                 sm::description("Number of failed tablet user repair"), {ops_label_type("user_repair"), basic_level}),
         sm::make_gauge("succeeded", [this] { return stats[locator::tablet_task_type::user_repair].succeeded; },
                 sm::description("Number of succeeded tablet user repair"), {ops_label_type("user_repair"), basic_level}),
+        sm::make_counter("cancelled_transitions", [this] { return cancelled_transitions; },
+                sm::description("Number of tablet transitions which were cancelled and rolled back. "
+                                "Counted by the topology coordinator, so it restarts when the coordinator changes"),
+                {basic_level}),
     });
 }
 

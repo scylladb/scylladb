@@ -185,13 +185,15 @@ tablet_transition_info::tablet_transition_info(tablet_transition_stage stage,
                                                tablet_replica_set next,
                                                std::optional<tablet_replica> pending_replica,
                                                service::session_id session_id,
-                                               sstring snapshot_name)
+                                               sstring snapshot_name,
+                                               bool cancelled)
     : stage(stage)
     , transition(transition)
     , next(std::move(next))
     , pending_replica(std::move(pending_replica))
     , session_id(session_id)
     , snapshot_name(std::move(snapshot_name))
+    , cancelled(cancelled)
     , writes(get_selector_for_writes(stage))
     , reads(get_selector_for_reads(stage))
 { }
@@ -975,6 +977,37 @@ static const std::unordered_map<sstring, tablet_transition_stage> tablet_transit
     }
     return result;
 });
+
+bool can_cancel_tablet_transition(tablet_transition_stage stage) {
+    switch (stage) {
+        case tablet_transition_stage::allow_write_both_read_old:
+        case tablet_transition_stage::write_both_read_old:
+        case tablet_transition_stage::rebuild_repair:
+        case tablet_transition_stage::streaming:
+        case tablet_transition_stage::repair:
+            return true;
+        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
+        case tablet_transition_stage::write_both_read_new:
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::sc_rollback:
+        case tablet_transition_stage::sc_remove_pending:
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration:
+        case tablet_transition_stage::end_migration:
+        case tablet_transition_stage::end_repair:
+        case tablet_transition_stage::restore:
+            return false;
+    }
+    on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
+}
+
+bool is_tablet_transition_cancelled(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+    if (trinfo.transition == tablet_transition_kind::repair) {
+        return !tinfo.repair_task_info;
+    }
+    return trinfo.cancelled;
+}
 
 tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features) {
     return features.repair_based_tablet_rebuild ? tablet_transition_kind::rebuild_v2 : tablet_transition_kind::rebuild;
@@ -1782,9 +1815,15 @@ void tablet_metadata_guard::check() noexcept {
         erm.get()->get_token_metadata().get_version(),
         old_tmap,
         tmap);
-    if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage) || 
+    // Cancelling doesn't change the stage, so check the flag too. It stays set through the
+    // roll-back stages, whose operations must not be aborted.
+    bool newly_cancelled = trinfo && trinfo->cancelled && !_cancelled
+            && can_cancel_tablet_transition(trinfo->stage);
+    if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage) ||
+        newly_cancelled ||
         old_tmap.tablet_count() != tmap.tablet_count())
     {
+        _cancelled = _cancelled || newly_cancelled;
         tablet_logger.debug("tablet_metadata_guard::check: retain the erm and abort the guard");
         _abort_source.request_abort();
     } else {
@@ -1802,6 +1841,10 @@ tablet_metadata_guard::tablet_metadata_guard(replica::table& table, global_table
     subscribe();
     if (auto* trinfo = get_tablet_map().get_tablet_transition_info(tablet.tablet)) {
         _stage = trinfo->stage;
+        if (trinfo->cancelled && can_cancel_tablet_transition(trinfo->stage)) {
+            _cancelled = true;
+            _abort_source.request_abort();
+        }
     }
 }
 
@@ -2193,6 +2236,9 @@ auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, f
             out = fmt::format_to(out, ", stage={}, new_replicas={}, pending={}", tr->stage, tr->next, tr->pending_replica);
             if (tr->session_id) {
                 out = fmt::format_to(out, ", session={}", tr->session_id);
+            }
+            if (tr->cancelled) {
+                out = fmt::format_to(out, ", cancelled");
             }
         }
         if (r.has_raft_info()) {

@@ -301,8 +301,11 @@ struct topology_state_machine {
     std::function<void()> on_tablet_split_ready;
 
     future<> await_not_busy();
+    // Waits until the request is done and returns its error, empty on success. Throws
+    // seastar::timed_out_error if the request is not done by the deadline, when one is given.
     future<sstring> wait_for_request_completion(db::system_keyspace& sys_ks, raft_group0_client& group0_client,
-            abort_source& as, utils::UUID id, bool require_entry);
+            abort_source& as, utils::UUID id, bool require_entry,
+            std::optional<lowres_clock::time_point> deadline = std::nullopt);
 
     // Generates mutations that cancel a topology request which is active on the given node.
     // If no request is found, or it cannot be canceled at this stage, no mutations are generated.

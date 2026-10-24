@@ -111,8 +111,12 @@ public:
         uint64_t succeeded;
     };
     std::unordered_map<locator::tablet_task_type, tablet_ops_stats> stats;
+    uint64_t cancelled_transitions = 0;
 public:
     tablet_ops_metrics();
+    void add_cancelled_transitions(uint64_t n) {
+        cancelled_transitions += n;
+    }
     void inc_failed(locator::tablet_task_type type) {
         if (type == locator::tablet_task_type::none) {
             return;

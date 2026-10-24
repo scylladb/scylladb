@@ -408,6 +408,10 @@ enum class tablet_transition_kind {
 
 tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features);
 
+// Whether a transition at this stage can be cancelled: migration stages up to and including
+// streaming, where writes still go to the leaving replica, and repair.
+bool can_cancel_tablet_transition(tablet_transition_stage);
+
 sstring tablet_transition_stage_to_string(tablet_transition_stage);
 tablet_transition_stage tablet_transition_stage_from_string(const sstring&);
 sstring tablet_transition_kind_to_string(tablet_transition_kind);
@@ -428,6 +432,8 @@ struct tablet_transition_info {
     std::optional<tablet_replica> pending_replica; // Optimization (next - tablet_info::replicas)
     service::session_id session_id;
     sstring snapshot_name;
+    // Set by tablet_mutation_builder::cancel_transition(); the coordinator rolls the transition back.
+    bool cancelled = false;
     write_replica_set_selector writes;
     read_replica_set_selector reads;
 
@@ -436,10 +442,14 @@ struct tablet_transition_info {
                            tablet_replica_set next,
                            std::optional<tablet_replica> pending_replica,
                            service::session_id session_id = {},
-                           sstring snapshot_name = {});
+                           sstring snapshot_name = {},
+                           bool cancelled = false);
 
     bool operator==(const tablet_transition_info&) const = default;
 };
+
+// A repair is cancelled by clearing its repair_task_info, anything else by the cancel flag.
+bool is_tablet_transition_cancelled(const tablet_info&, const tablet_transition_info&);
 
 // Returns the leaving replica for a given transition.
 std::optional<tablet_replica> get_leaving_replica(const tablet_info&, const tablet_transition_info&);

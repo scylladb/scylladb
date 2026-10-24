@@ -97,7 +97,8 @@ schema_ptr make_tablets_schema() {
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
             .with_column("base_table", uuid_type, column_kind::static_column)
-            .with_column("snapshot_name", utf8_type);
+            .with_column("snapshot_name", utf8_type)
+            .with_column("cancel", boolean_type);
 
     if (strongly_consistent_tables_enabled) {
         builder
@@ -321,6 +322,9 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             if (tr_info->session_id) {
                 m.set_clustered_cell(ck, "session", data_value(tr_info->session_id.uuid()), ts);
             }
+            if (features.tablet_transition_cancel && tr_info->cancelled) {
+                m.set_clustered_cell(ck, "cancel", data_value(true), ts);
+            }
         }
 
         if (tablets.has_raft_info()) {
@@ -388,7 +392,7 @@ tablet_mutation_builder::del_session(dht::token last_token) {
 }
 
 tablet_mutation_builder&
-tablet_mutation_builder::del_transition(dht::token last_token) {
+tablet_mutation_builder::del_transition(dht::token last_token, const gms::feature_service& features) {
     auto ck = get_ck(last_token);
     auto stage_col = _s->get_column_definition("stage");
     _m.set_clustered_cell(ck, *stage_col, atomic_cell::make_dead(_ts, gc_clock::now()));
@@ -396,6 +400,26 @@ tablet_mutation_builder::del_transition(dht::token last_token) {
     _m.set_clustered_cell(ck, *transition_col, atomic_cell::make_dead(_ts, gc_clock::now()));
     auto new_replicas_col = _s->get_column_definition("new_replicas");
     _m.set_clustered_cell(ck, *new_replicas_col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    auto session_col = _s->get_column_definition("session");
+    _m.set_clustered_cell(ck, *session_col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    if (features.tablet_transition_cancel) {
+        auto cancel_col = _s->get_column_definition("cancel");
+        _m.set_clustered_cell(ck, *cancel_col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    }
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::cancel_transition(dht::token last_token, const locator::tablet_transition_info& trinfo,
+                                           const gms::feature_service& features) {
+    if (trinfo.transition == locator::tablet_transition_kind::repair) {
+        return del_repair_task_info(last_token, features).del_session(last_token);
+    }
+    if (!features.tablet_transition_cancel) {
+        on_internal_error(tablet_logger, "cancel_transition() without the TABLET_TRANSITION_CANCEL feature");
+    }
+    auto ck = get_ck(last_token);
+    _m.set_clustered_cell(ck, "cancel", data_value(true), _ts);
     auto session_col = _s->get_column_definition("session");
     _m.set_clustered_cell(ck, *session_col, atomic_cell::make_dead(_ts, gc_clock::now()));
     return *this;
@@ -799,8 +823,10 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
         if (row.has("session")) {
             session_id = service::session_id(row.get_as<utils::UUID>("session"));
         }
+        bool cancelled = row.has("cancel") && row.get_as<bool>("cancel");
         map.set_tablet_transition_info(tid, tablet_transition_info{stage, transition,
-                std::move(new_tablet_replicas), pending_replica, session_id, std::move(snapshot_name)});
+                std::move(new_tablet_replicas), pending_replica, session_id, std::move(snapshot_name),
+                cancelled});
     }
 
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);

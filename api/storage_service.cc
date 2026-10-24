@@ -1573,7 +1573,14 @@ static
 future<json::json_return_type>
 rest_tablet_balancing_enable(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto enabled = require_query_param<bool>(*req, "enabled");
-        co_await ss.local().set_tablet_balancing_enabled(enabled);
+        auto grace_period = try_get_query_param<std::chrono::seconds>(*req, "grace_period_in_seconds");
+        // Capped so that lowres_clock::now() + grace_period can't overflow.
+        constexpr auto max_grace_period = std::chrono::seconds(7 * 24 * 60 * 60);
+        if (grace_period && (*grace_period < std::chrono::seconds::zero() || *grace_period > max_grace_period)) {
+            throw bad_param_exception(fmt::format("grace_period_in_seconds: must be between 0 and {}, got '{}'",
+                    max_grace_period.count(), grace_period->count()));
+        }
+        co_await ss.local().set_tablet_balancing_enabled(enabled, grace_period);
         co_return json_void();
 }
 
