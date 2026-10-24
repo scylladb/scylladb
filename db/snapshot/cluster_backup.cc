@@ -26,6 +26,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/storage.hh"
 #include "sstables/object_storage_client.hh"
 #include "sstables/component_type.hh"
 #include "utils/error_injection.hh"
@@ -124,7 +125,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
     // We are already on shard 0. Can use all objects fine. Just need to acquire snap locks.
     // Mainly for semantic consistency. Maybe all this should be a raft op.
     co_await snap_ctl.run_snapshot_modify_operation([&]() -> future<> {
-        co_await sth.insert_snapshot_remote_locations(new_locations); // update status
+        co_await sth.insert_snapshot_remote_locations(new_locations, db::consistency_level::QUORUM, 0); // update status
     });
 
     auto nodes = co_await sth.get_snapshot_nodes(snapshot_name);
@@ -247,7 +248,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
                 for (auto& sst : sstables) {
                     sst.state = db::snapshot_state::local;
                 }
-                co_await sth.insert_snapshot_sstables(snapshot_name, keyspace, table, node.datacenter, node.rack, sstables);
+                co_await sth.insert_snapshot_sstables(snapshot_name, keyspace, table, node.datacenter, node.rack, sstables, db::consistency_level::QUORUM, 0);
             }
 
             // we don't really need/use this atm, but...
@@ -352,7 +353,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 
     // See above.
     co_await snap_ctl.run_snapshot_modify_operation([&]() -> future<> {
-        co_await sth.insert_snapshot_remote_locations(new_locations); // update status
+        co_await sth.insert_snapshot_remote_locations(new_locations, db::consistency_level::QUORUM, 0); // update status
     });
 }
 
@@ -496,7 +497,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
             }
 
             auto gen = (*gen_info).generation;
-            auto ref_name = sstables::object_name(bucket, table_prefix, fmt::format("refs/snapshot-{}/{}", tag, gen));
+            auto ref_name = sstables::object_name(bucket, table_prefix, sstables::object_storage_snapshot_ref_name(tag, gen));
             co_await client->put_object(ref_name, memory_data_sink_buffers{}, sstables::object_storage_attributes{}); // any exception here can just propagate
 
             bool any_failed = false;
@@ -560,7 +561,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
                 // braced list, which would be ambiguous between the two
                 // insert_snapshot_sstables() overloads.
                 std::array sstables{info.sstable};
-                co_await sth.insert_snapshot_sstables(tag, ksname, cfname, local.dc, local.rack, sstables);
+                co_await sth.insert_snapshot_sstables(tag, ksname, cfname, local.dc, local.rack, sstables, db::consistency_level::QUORUM, 0);
             } catch (...) {
                 snap_log.error("Error marking {} as uploaded: {:t}", id, std::current_exception());
             }

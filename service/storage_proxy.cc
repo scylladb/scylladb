@@ -44,6 +44,9 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "exceptions/exceptions.hh"
+#include "sstables/open_info.hh"
+#include "sstables/sstables_manager.hh"
+#include "sstables/storage.hh"
 #include <boost/intrusive/list.hpp>
 #include "utils/assert.hh"
 #include "utils/chunked_vector.hh"
@@ -70,6 +73,7 @@
 #include "service/topology_mutation.hh"
 #include "locator/token_metadata.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/all.hh>
@@ -999,6 +1003,89 @@ private:
         co_await replica::database::truncate_table_on_all_shards(_sp._db, _sys_ks, ksname, cfname);
     }
 
+    // Cleanup before (re)taking a snapshot tag.
+    // Rows under an uncommitted tag are residue of a crashed or failed
+    // attempt. Release this node's leftover references, delete its rows, let
+    // the attempt re-insert.
+    // Important to note here that we release, not plain delete, a ref may be a
+    // compacted-away sstable's last claim, and its components and retained
+    // snapshot_owned registry entry must go away too.
+    // Local tables have no references, their residue is the rows alone.
+    future<> cleanup_snapshot_residue(const utils::chunked_vector<table_id>& ids, const sstring& tag,
+            const locator::endpoint_dc_rack& local, locator::host_id me) {
+        db::snapshot_table_helper sth(_sp.system_keyspace().query_processor());
+        if ((co_await sth.get_snapshot(tag, db::consistency_level::QUORUM)).has_value()) {
+            // Fine to throw, the coordinator will catch this on retry
+            throw std::runtime_error(fmt::format("Snapshot '{}' is already committed", tag));
+        }
+        for (const auto& id : ids) {
+            auto tp = _sp._db.local().get_tables_metadata().get_table_if_exists(id);
+            if (!tp) {
+                // Dropped since the operation was created; nothing of it can
+                // be snapshotted, and throwing would wedge the retry loop.
+                slogger.warn("Snapshot '{}': table {} no longer exists, skipping", tag, id);
+                continue;
+            }
+            auto s = tp->schema();
+            auto residue = co_await sth.get_snapshot_sstables_for_cleanup(tag, s->ks_name(), s->cf_name(), local.dc, local.rack);
+            auto own = residue | std::views::filter([&] (const auto& e) { return e.node == me; })
+                    | std::ranges::to<std::vector<db::snapshot_sstable_cleanup_entry>>();
+            if (own.empty()) {
+                continue;
+            }
+            slogger.warn("Snapshot '{}' of {}.{} left {} catalog rows on this node from a previous crashed or failed attempt,"
+                    " cleaning them up", tag, s->ks_name(), s->cf_name(), own.size());
+            const bool remote_table = tp->get_storage_options().is_object_storage_type();
+            std::optional<data_dictionary::storage_options::s3> os;
+            shared_ptr<sstables::object_storage_client> client;
+            sstables::sstables_registry* registry = nullptr;
+            if (remote_table) {
+                os = std::get<data_dictionary::storage_options::s3>(tp->get_storage_options().value);
+                try {
+                    client = tp->get_sstables_manager().get_endpoint_client(os->endpoint);
+                } catch (const std::invalid_argument&) {
+                    // Endpoint removed from object_storage_endpoints.
+                    slogger.warn("Snapshot '{}' of {}.{}: object-storage endpoint '{}' is not configured, leaving the residue in place",
+                            tag, s->ks_name(), s->cf_name(), os->endpoint);
+                    continue;
+                }
+                // There should always be a registry here, but in case it's missing, the cleanup will proceed without it, deleting the
+                // ref and the components if it was the last ref. Next reboot will delete the registry entry.
+                registry = tp->get_sstables_manager().has_sstables_registry() ? &tp->get_sstables_manager().sstables_registry() : nullptr;
+            }
+            co_await seastar::max_concurrent_for_each(own, 16, [&] (const db::snapshot_sstable_cleanup_entry& e) -> future<> {
+                if (remote_table) {
+                    // The reference goes first
+                    bool released = false;
+                    if (!e.toc_name.empty()) {
+                        auto desc = sstables::parse_path(std::filesystem::path(std::string_view(e.toc_name)), s->ks_name(), s->cf_name());
+                        if (desc) {
+                            desc->sid = e.sstable_id;
+                            co_await sstables::release_object_storage_snapshot_ref(*client, *os, registry, s->id(), me, tag, *desc);
+                            released = true;
+                        } else {
+                            slogger.warn("Snapshot '{}' of {}.{}: cannot derive the snapshot reference of {} from toc_name '{}': {}",
+                                    tag, s->ks_name(), s->cf_name(), e.sstable_id, e.toc_name, desc.error());
+                        }
+                    }
+                    if (!released) {
+                        // The row cannot name its reference, but we can do it wit the sstable_id
+                        // and a list op. It's fine as this is an unlikely case. We remove the refs now
+                        // and next boot GC will check if refs exist, if it sees
+                        // a) none and then deletes the components
+                        // and registry entry if sstable was compacted in the meantime.
+                        // b) node refs, does nothing, sstable needs to keep chilling
+                        co_await sstables::release_object_storage_snapshot_refs_by_listing(*client, *os, e.sstable_id, tag);
+                    }
+                }
+
+                auto ts = e.write_timestamp ? e.write_timestamp : api::new_timestamp();
+                co_await sth.delete_snapshot_sstable_entry(tag, s->ks_name(), s->cf_name(), local.dc, local.rack,
+                        e.first_token, e.sstable_id, ts);
+            });
+        }
+    }
+
     future<> handle_snapshot_with_tablets(utils::chunked_vector<table_id> ids, sstring tag, gc_clock::time_point ts, bool skip_flush, std::optional<gc_clock::time_point> expiry, service::frozen_topology_guard frozen_guard) {
         topology_guard guard(frozen_guard);
         db::snapshot_options opts {
@@ -1008,12 +1095,23 @@ private:
         };
         auto local = _sp.get_token_metadata_ptr()->get_topology().get_location();
         auto me = _sp.get_token_metadata_ptr()->get_topology().my_host_id();
+        co_await cleanup_snapshot_residue(ids, tag, local, me);
         co_await coroutine::parallel_for_each(ids, [&] (const table_id& id) -> future<> {
-            co_await replica::database::snapshot_table_on_all_shards(_sp._db, id, tag, opts, [&](const db::snapshot_entries& e) -> future<> {
-                auto s = _sp._db.local().find_schema(id);
-                db::snapshot_table_helper sth(_sp.system_keyspace().query_processor());
-                co_await sth.insert_snapshot_entries(tag, s->ks_name(), s->cf_name(), local.dc, local.rack, me, e);
-            });
+            if (!_sp._db.local().get_tables_metadata().get_table_if_exists(id)) {
+                // Dropped since the operation was created.
+                slogger.warn("Snapshot '{}': table {} no longer exists, skipping", tag, id);
+                co_return;
+            }
+            try {
+                co_await replica::database::snapshot_table_on_all_shards(_sp._db, id, tag, opts, [&](const db::snapshot_entries& e) -> future<> {
+                    auto s = _sp._db.local().find_schema(id);
+                    db::snapshot_table_helper sth(_sp.system_keyspace().query_processor());
+                    co_await sth.insert_snapshot_entries(tag, s->ks_name(), s->cf_name(), local.dc, local.rack, me, e);
+                });
+            } catch (const replica::no_such_column_family&) {
+                // Dropped since the operation was created.
+                slogger.warn("Snapshot '{}': table {} no longer exists, skipping", tag, id);
+            }
         });
     }
 

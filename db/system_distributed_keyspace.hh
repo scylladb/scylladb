@@ -17,6 +17,7 @@
 #include "sstables/types.hh"
 
 #include <seastar/core/future.hh>
+#include <chrono>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
 
@@ -142,6 +143,10 @@ private:
     future<> create_tables(std::vector<schema_ptr> tables);
 };
 
+// Restore uses a TTL to expire rows, cluster snapshots/backups don't anymore, they rely on specific
+// cleanup mechanisms and/or the operator issued cluster clearsnapshot operation, they pass a TTL of 0.
+inline constexpr int32_t snapshot_table_ttl_seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(3)).count();
+
 class snapshot_table_helper {
     cql3::query_processor& _qp;
 public:
@@ -165,6 +170,45 @@ public:
     /* Retrieves download progress for a given snapshot, keyspace, table, datacenter, and rack */
     future<snapshot_sstables_progress> get_snapshot_sstables_progress(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl = db::consistency_level::QUORUM) const;
 
+    /* Retrieves, for one (snapshot, keyspace, table, datacenter, rack) partition, the
+     * information needed to clean up the residue of a crashed or failed snapshot
+     * attempt. */
+    future<utils::chunked_vector<snapshot_sstable_cleanup_entry>> get_snapshot_sstables_for_cleanup(
+            std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc, std::string_view rack,
+            db::consistency_level cl = db::consistency_level::QUORUM) const;
+
+    /* Retrieves, for one (snapshot, keyspace, table, datacenter) partition,
+     * each snapshot_tablets row's clustering key and write timestamp, for the
+     * coordinator's pre-RPC pruning of a prior crashed attempt's rows. */
+    future<utils::chunked_vector<snapshot_tablet_cleanup_entry>> get_snapshot_tablets_for_cleanup(
+            std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc,
+            db::consistency_level cl = db::consistency_level::QUORUM) const;
+
+    /* Deletes a single snapshot_tablets row, tombstone pinned at the row's
+     * observed write timestamp */
+    future<> delete_snapshot_tablet_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc, dht::token first_token, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* Returns the previous attempt's snapshot_keyspaces/snapshot_tables rows for one
+     * tag, needed by the coordinator's pre-RPC cleanup. */
+    future<snapshot_schema_cleanup_info> get_snapshot_schema_rows_for_cleanup(std::string_view snapshot_name,
+            db::consistency_level cl = db::consistency_level::QUORUM) const;
+
+    /* Deletes one tag's snapshot_keyspaces and snapshot_tables partitions with 
+     * tombstones set at the max observed write timestamp. */
+    future<> delete_snapshot_schema_rows(std::string_view snapshot_name, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* Deletes a single snapshot_sstables row, tombstone pinned at the row's
+     * observed write timestamp, thus deleting exactly the observed write and
+     * it cannot shadow a later re-insert by a snapshot retry. */
+    future<> delete_snapshot_sstable_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc, std::string_view rack,
+            dht::token first_token, sstables::sstable_id sstable_id, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
     future<> update_sstable_download_status(sstring snapshot_name,
                                             sstring ks,
                                             sstring table,
@@ -183,11 +227,13 @@ public:
     future<> insert_snapshot_sstables(std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc, std::string_view rack
         , std::span<const snapshot_sstable_entry> sstables
         , db::consistency_level cl = db::consistency_level::EACH_QUORUM
+        , int32_t ttl = snapshot_table_ttl_seconds
     );
 
     future<> insert_snapshot_sstables(std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc, std::string_view rack
         , const utils::chunked_vector<snapshot_sstable_entry>& sstables
         , db::consistency_level cl = db::consistency_level::EACH_QUORUM
+        , int32_t ttl = snapshot_table_ttl_seconds
     );
 
     /**
@@ -202,7 +248,7 @@ public:
     /**
      * Add backup locations to a snapshot
      */
-    future<> insert_snapshot_remote_locations(std::span<const snapshot_remote_location_entry> keyspaces, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<> insert_snapshot_remote_locations(std::span<const snapshot_remote_location_entry> keyspaces, db::consistency_level cl = db::consistency_level::EACH_QUORUM, int32_t ttl = snapshot_table_ttl_seconds);
 
     /**
      * Get all remote locations for snapshot
@@ -222,7 +268,7 @@ public:
     /**
      * Add tables to a snapshot
      */
-    future<> insert_snapshot_tables(std::span<const snapshot_table_entry> tables, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<> insert_snapshot_tables(std::span<const snapshot_table_entry> tables, db::consistency_level cl = db::consistency_level::EACH_QUORUM, int32_t ttl = snapshot_table_ttl_seconds);
 
     /**
      * Helper to build a snapshot_table_entry describing the current schema of the given table
@@ -276,10 +322,9 @@ public:
     );
 
     /**
-     * Helper to write snapshot base metadata
+     * Helper to write a snapshot's keyspace and table schema rows.
      */
-    future<> insert_snapshot_info(std::string_view snapshot_name
-        , db_clock::time_point created, db_clock::time_point expiry
+    future<> insert_snapshot_schema_rows(std::string_view snapshot_name
         , std::span<const lw_shared_ptr<replica::table>> tables
         , db::consistency_level cl = db::consistency_level::LOCAL_QUORUM
     );

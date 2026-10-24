@@ -1209,14 +1209,14 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         return db.invoke_on_all([value] (replica::database& db) {
             db.set_enable_incremental_backups(value);
 
-            // Change both KS and CF, so they are in sync
+            // Change both KS and CF, so they are in sync.
             for (auto& pair: db.get_keyspaces()) {
                 auto& ks = *pair.second;
-                ks.set_incremental_backups(value);
+                ks.set_incremental_backups(value && !ks.metadata()->get_storage_options().is_object_storage_type());
             }
 
             db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
-                table->set_incremental_backups(value);
+                table->set_incremental_backups(value && !table->get_storage_options().is_object_storage_type());
             });
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());

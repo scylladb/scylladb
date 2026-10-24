@@ -11,7 +11,10 @@ be downloaded from object storage and restored locally.
 Entries are also created when generating cluster wide snapshots to provide metadata
 on snapshot contents.
 
-Rows are inserted with a TTL so that stale restore metadata is automatically cleaned up.
+Restore inserts its rows with a TTL so that the metadata of a crashed restore is
+automatically cleaned up. Cluster snapshots and backups insert durable rows: the
+catalog is their source of truth, and the rows live until cluster clearsnapshot
+deletes them.
 
 ## Schema
 
@@ -104,3 +107,4 @@ The following C++ APIs are provided in `db::system_distributed_keyspace`:
 - insert\_snapshot\_remote\_location
 
 - get\_snapshot\_remote\_location
+
