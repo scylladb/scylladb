@@ -2934,6 +2934,81 @@ table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consi
     });
 }
 
+future<>
+table::major_compact_tablet(locator::tablet_id tid, tasks::task_info info, abort_source& as) {
+    // The caller's tablet metadata guard keeps the table alive, and blocks the topology
+    // barriers of a migration of the tablet, so its storage group isn't erased by the migration
+    // meanwhile. Dropping the table stops and clears its storage groups all the same, so hold
+    // the table's and the storage group's gates, like clone_tablet_storage() does.
+    auto holder = async_gate().hold();
+    auto* sg = _sg_manager->maybe_storage_group_for_id(_schema, tid.value());
+    if (!sg) {
+        throw std::runtime_error(format("Tablet {} of table {}.{} has no replica on shard {}", tid, _schema->ks_name(), _schema->cf_name(), this_shard_id()));
+    }
+    auto sg_holder = sg->async_gate().hold();
+    auto views = sg->compaction_groups_immediate()
+            | std::views::transform([] (const compaction_group_ptr& cg) { return cg->all_views(); })
+            | std::views::join
+            | std::ranges::to<std::unordered_set<const compaction::compaction_group_view*>>();
+    std::optional<future<>> stopping;
+    auto sub = std::make_optional(as.subscribe([this, &views, &stopping] () noexcept {
+        stopping = _compaction_manager.stop_ongoing_compactions("tablet major compaction aborted",
+                compaction::compaction_type_set::of<compaction::compaction_type::Major, compaction::compaction_type::Reshape>(),
+                [&views] (const compaction::compaction_group_view* v) { return views.contains(v); });
+    }));
+
+    std::exception_ptr ex;
+    try {
+        // Flush first, so that tombstones sitting in the memtables are compacted with the data they shadow.
+        co_await sg->flush();
+        for (auto& cg : sg->compaction_groups_immediate()) {
+            auto holder = cg->async_gate().hold();
+            for (auto* view : cg->all_views()) {
+                // The repairing view holds the sstables of an ongoing incremental repair, which doesn't
+                // run concurrently with the tablet's major compaction, and is never compacted.
+                if (cg->is_repairing_view(view)) {
+                    continue;
+                }
+                auto lock_holder = co_await _compaction_manager.get_incremental_repair_read_lock(*view, "major_compact_tablet");
+                // An abort which fired while waiting for the lock found no compaction to stop, so
+                // check it before starting one.
+                as.check();
+                // Off-strategy first, so that the sstables of the maintenance set are compacted too:
+                // major compaction only compacts the main set. Tablet repair and file-based tablet
+                // streaming don't write into the maintenance set, but a tablet may still have
+                // sstables there:
+                // - after a restart, which moves sstables written by repair to the maintenance set
+                //   (SCYLLADB-5476);
+                // - after a tablet rebuild with mutation-based streaming, i.e. without file
+                //   streaming (SCYLLADB-5477).
+                // It does nothing when the maintenance set is empty.
+                co_await _compaction_manager.perform_offstrategy(*view, info);
+                // Only this view's part of the maintenance set: the sstables classified for the
+                // other views are compacted when their turn comes.
+                if ((co_await view->maintenance_sstable_set())->size()) {
+                    // Off-strategy compaction completes without an error when it doesn't run.
+                    throw std::runtime_error(format("Off-strategy compaction of tablet {} of table {}.{} didn't complete",
+                            tid, _schema->ks_name(), _schema->cf_name()));
+                }
+                as.check();
+                // Fails if the major compaction doesn't run to completion for any reason, e.g. the
+                // node's shutdown, so that a tablet which isn't compacted is never reported as such.
+                co_await _compaction_manager.perform_major_compaction(*view, info, false, compaction::throw_if_stopping::yes);
+            }
+        }
+        as.check();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    sub.reset();
+    if (stopping) {
+        co_await std::move(*stopping);
+    }
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+}
+
 void table::start_compaction() {
     set_compaction_strategy(_schema->compaction_strategy());
 }
@@ -3701,7 +3776,8 @@ bool has_size_on_leaving (locator::tablet_transition_stage stage) {
         case locator::tablet_transition_stage::rebuild_repair:                          [[fallthrough]];
         case locator::tablet_transition_stage::repair:                                  [[fallthrough]];
         case locator::tablet_transition_stage::end_repair:                              [[fallthrough]];
-        case locator::tablet_transition_stage::restore:
+        case locator::tablet_transition_stage::restore:                                 [[fallthrough]];
+        case locator::tablet_transition_stage::tablet_compaction:
             return true;
         case locator::tablet_transition_stage::cleanup:                                 [[fallthrough]];
         case locator::tablet_transition_stage::end_migration:
@@ -3727,7 +3803,8 @@ bool has_size_on_pending (locator::tablet_transition_stage stage) {
         case locator::tablet_transition_stage::end_migration:                           [[fallthrough]];
         case locator::tablet_transition_stage::repair:                                  [[fallthrough]];
         case locator::tablet_transition_stage::end_repair:                              [[fallthrough]];
-        case locator::tablet_transition_stage::restore:
+        case locator::tablet_transition_stage::restore:                                 [[fallthrough]];
+        case locator::tablet_transition_stage::tablet_compaction:
             return true;
     }
 }

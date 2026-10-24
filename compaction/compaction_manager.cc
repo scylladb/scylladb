@@ -616,7 +616,11 @@ protected:
         // Write lock is used to synchronize selection of sstables for compaction and their registration.
         // Also used to synchronize with regular compaction, so major waits for regular to cease before selecting candidates.
         auto lock_holder = co_await _compaction_state.lock.hold_write_lock();
-        if (!can_proceed()) {
+        if (!can_proceed(_do_throw_if_stopping)) {
+            if (_do_throw_if_stopping) {
+                // Compaction is disabled for the table, e.g. while it is being cleaned up.
+                throw compaction_stopped_exception(_compacting_table->schema()->ks_name(), _compacting_table->schema()->cf_name(), "compaction is disabled");
+            }
             co_return std::nullopt;
         }
 
@@ -709,13 +713,17 @@ future<> compaction_manager::close_compaction_state_gate(compaction_state& cs) {
     return cs.gate_closed->get_future();
 }
 
-future<> compaction_manager::perform_major_compaction(compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data) {
+future<> compaction_manager::perform_major_compaction(compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data,
+        throw_if_stopping do_throw_if_stopping) {
     auto gh = start_compaction(t);
     if (!gh) {
+        if (do_throw_if_stopping) {
+            throw compaction_stopped_exception(t.schema()->ks_name(), t.schema()->cf_name(), "compaction manager is stopped or disabled, or the table is being removed");
+        }
         co_return;
     }
 
-    co_await perform_compaction<major_compaction_task_executor>({.type = major_compaction_task_type}, throw_if_stopping::no, info, &t, consider_only_existing_data).discard_result();
+    co_await perform_compaction<major_compaction_task_executor>({.type = major_compaction_task_type}, do_throw_if_stopping, info, &t, consider_only_existing_data).discard_result();
 }
 
 class custom_compaction_task_executor : public compaction_task_executor {

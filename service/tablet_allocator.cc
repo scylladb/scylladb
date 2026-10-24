@@ -516,6 +516,13 @@ struct fmt::formatter<service::plan_summary> : fmt::formatter<std::string_view> 
         if (!plan.restore_completions().empty()) {
             fmt::format_to(ctx.out(), "{}restore completed for: {}", get_delim(), plan.restore_completions() | std::views::transform(&service::restore_completion_info::table));
         }
+        if (!plan.compaction_plan().compactions.empty()) {
+            fmt::format_to(ctx.out(), "{}tablet compactions: {}", get_delim(), plan.compaction_plan().compactions.size());
+        }
+        if (!plan.compaction_plan().completions.empty()) {
+            fmt::format_to(ctx.out(), "{}cluster-wide compaction completed for: {}", get_delim(),
+                    plan.compaction_plan().completions | std::views::transform(&service::cluster_compaction_completion_info::table));
+        }
         if (delim.empty()) {
             fmt::format_to(ctx.out(), "empty");
         }
@@ -1025,6 +1032,8 @@ private:
                 return true;
             case tablet_transition_stage::restore:
                 return false;
+            case tablet_transition_stage::tablet_compaction:
+                return true;
             case tablet_transition_stage::end_repair:
                 return false;
             case tablet_transition_stage::write_both_read_new:
@@ -1147,6 +1156,103 @@ public:
         }
     }
 
+    // Schedules the tablet_compaction transitions of the tablets which ongoing cluster-wide major
+    // compactions haven't compacted yet, as long as the streaming load of their replicas' shards
+    // allows it, like repairs. The load includes the transitions already running and the
+    // migrations and repairs of mplan. That bounds the temporary space overhead of compacting
+    // whole tables to the size of a few tablets per shard.
+    //
+    // A request is complete when it processed every tablet of its tables: compacted it, or failed
+    // to, which isn't retried. The transition records it in the tablet's cluster_compaction_request_id
+    // when it ends, and a failure in its cluster_compaction_failed. The request then fails if any of
+    // the tablets failed.
+    future<tablet_compaction_plan> make_compaction_plan(const migration_plan& mplan) {
+        tablet_compaction_plan ret;
+        if (_topology == nullptr || _sys_ks == nullptr || _topology->ongoing_cluster_compaction_requests.empty()) {
+            co_return ret;
+        }
+
+        const locator::topology& topo = _tm->get_topology();
+        node_load_map nodes = co_await make_streaming_load_map(mplan);
+
+        auto busy = co_await mplan.get_migration_tablet_ids();
+        auto repair_trinfo = tablet_transition_info(locator::tablet_transition_stage::repair,
+                locator::tablet_transition_kind::repair, tablet_replica_set(), {}, service::session_id());
+        for (auto& gid : mplan.repair_plan().repairs()) {
+            co_await coroutine::maybe_yield();
+            busy.insert(gid);
+            const auto& tinfo = _tm->tablets().get_tablet_map(gid.table).get_tablet_info(gid.tablet);
+            apply_load(nodes, get_migration_streaming_info(topo, tinfo, repair_trinfo));
+        }
+
+        auto trinfo = tablet_transition_info(locator::tablet_transition_stage::tablet_compaction,
+                locator::tablet_transition_kind::tablet_compaction, tablet_replica_set(), {}, service::session_id());
+
+        // Ordered by request id, i.e. by time, so that older requests are served first.
+        auto requests = _topology->ongoing_cluster_compaction_requests | std::ranges::to<std::vector>();
+        std::ranges::sort(requests, [] (const utils::UUID& a, const utils::UUID& b) { return utils::timeuuid_tri_compare(a, b) < 0; });
+        for (const auto& request_id : requests) {
+            auto req_entry = co_await _sys_ks->get_topology_request_entry(request_id);
+            const auto compaction_id = locator::cluster_compaction_id(request_id);
+            bool pending = false;
+            size_t failed = 0;
+            std::vector<locator::global_tablet_id> failed_sample;
+            std::vector<table_id> dropped;
+            for (auto table : req_entry.cluster_compaction_table_ids) {
+                if (!_tm->tablets().has_tablet_map(table)) {
+                    dropped.push_back(table);
+                    continue;
+                }
+                if (is_migrating_table(table)) {
+                    pending = true;
+                    continue;
+                }
+                const auto& tmap = _tm->tablets().get_tablet_map(table);
+                co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
+                    locator::global_tablet_id gid{table, tid};
+                    if (info.cluster_compaction_request_id == compaction_id) {
+                        // Processed: compacted, or failed, which isn't retried.
+                        if (info.cluster_compaction_failed && failed++ < 3) {
+                            failed_sample.push_back(gid);
+                        }
+                        return make_ready_future<>();
+                    }
+                    pending = true;
+                    if (tmap.get_tablet_transition_info(tid) || busy.contains(gid)) {
+                        return make_ready_future<>();
+                    }
+                    // Tablets with replicas which are down are scheduled too, and fail, rather than
+                    // hold up the request until the nodes are back.
+                    auto tmsi = get_migration_streaming_info(topo, info, trinfo);
+                    if (!can_accept_load(nodes, tmsi)) {
+                        return make_ready_future<>();
+                    }
+                    apply_load(nodes, tmsi);
+                    ret.compactions.insert(gid);
+                    return make_ready_future<>();
+                });
+            }
+            if (!pending) {
+                sstring error;
+                if (failed) {
+                    error = fmt::format("{} compaction failed for {} tablet(s), e.g. {}", req_entry.cluster_compaction_type, failed, fmt::join(failed_sample, ", "));
+                    if (!req_entry.cluster_compaction_first_error.empty()) {
+                        error += fmt::format("; first error: {}", req_entry.cluster_compaction_first_error);
+                    }
+                }
+                if (!dropped.empty()) {
+                    error += fmt::format("{}Tables {} were dropped during compaction", error.empty() ? "" : "; ", dropped);
+                }
+                ret.completions.push_back(cluster_compaction_completion_info{
+                    .request_id = request_id,
+                    .table = *req_entry.cluster_compaction_table_id,
+                    .error = std::move(error),
+                });
+            }
+        }
+        co_return ret;
+    }
+
     future<migration_plan> make_plan() {
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
@@ -1182,6 +1288,7 @@ public:
         // Skip making repair plans if resize finalizations are pending, since repairs could delay finalization.
         if (plan.resize_plan().finalize_resize.empty()) {
             plan.set_repair_plan(co_await make_repair_plan(plan));
+            plan.set_compaction_plan(co_await make_compaction_plan(plan));
         }
 
         co_await check_restore_completions(plan);
@@ -1336,16 +1443,9 @@ public:
         }
     }
 
-    future<tablet_repair_plan> make_repair_plan(const migration_plan& mplan) {
-        lblogger.debug("In make_repair_plan");
-
-        auto ret = tablet_repair_plan();
-
-        if (!_db.features().tablet_repair_scheduler) {
-            lblogger.debug("make_repair_plan: The TABLET_REPAIR_SCHEDULER feature is not enabled");
-            co_return ret;
-        }
-
+    // Returns the streaming load of the nodes, of the transitions which are already scheduled
+    // and of the migrations which are about to be scheduled by mplan.
+    future<node_load_map> make_streaming_load_map(const migration_plan& mplan) {
         const locator::topology& topo = _tm->get_topology();
 
         // Populate the load of the migration that is already in the plan
@@ -1364,6 +1464,23 @@ public:
 
         // Consider load that is about to be scheduled
         co_await consider_planned_load(nodes, mplan);
+
+        co_return nodes;
+    }
+
+    future<tablet_repair_plan> make_repair_plan(const migration_plan& mplan) {
+        lblogger.debug("In make_repair_plan");
+
+        auto ret = tablet_repair_plan();
+
+        if (!_db.features().tablet_repair_scheduler) {
+            lblogger.debug("make_repair_plan: The TABLET_REPAIR_SCHEDULER feature is not enabled");
+            co_return ret;
+        }
+
+        const locator::topology& topo = _tm->get_topology();
+
+        node_load_map nodes = co_await make_streaming_load_map(mplan);
 
         service::auto_repair_stats auto_repair_stats;
 

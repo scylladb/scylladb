@@ -95,6 +95,7 @@
 #include "replica/tablets.hh"
 #include <seastar/core/metrics.hh>
 #include "cdc/generation.hh"
+#include "cdc/log.hh"
 #include "cdc/generation_service.hh"
 #include "repair/repair.hh"
 #include "repair/row_level.hh"
@@ -3349,6 +3350,47 @@ future<> storage_service::alter_table_with_tablet_hints(table_id tid,
     }
 }
 
+future<> storage_service::abort_cluster_compaction(utils::UUID request_id) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.abort_cluster_compaction(request_id);
+        });
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        auto entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
+        if (entry.done) {
+            slogger.info("Cluster-wide compaction request {} is already done", request_id);
+            co_return;
+        }
+        utils::chunked_vector<canonical_mutation> updates;
+        // A request which is still queued is dropped from the queue when the coordinator sees it is done.
+        if (_topology_state_machine._topology.ongoing_cluster_compaction_requests.contains(request_id)) {
+            updates.push_back(topology_mutation_builder(guard.write_timestamp())
+                    .finish_cluster_compaction_requests(_topology_state_machine._topology.ongoing_cluster_compaction_requests, {request_id})
+                    .build());
+        }
+        updates.push_back(topology_request_tracking_mutation_builder(request_id)
+                .done("Aborted by user request")
+                .build());
+
+        topology_change change{std::move(updates)};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, format("Abort cluster-wide compaction request {}", request_id));
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            slogger.info("Aborted cluster-wide compaction request {}", request_id);
+            co_return;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("abort_cluster_compaction: concurrent modification, retrying");
+        }
+    }
+}
+
 future<> storage_service::abort_rf_change(utils::UUID request_id) {
     auto holder = _async_gate.hold();
 
@@ -5965,6 +6007,102 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
     });
 }
 
+void storage_service::validate_tablet_compaction(std::string_view compaction_type, const std::unordered_map<sstring, sstring>& options) {
+    if (compaction_type != major_tablet_compaction_type) {
+        throw std::invalid_argument(fmt::format("Unsupported tablet compaction type '{}': only '{}' is supported", compaction_type, major_tablet_compaction_type));
+    }
+    for (const auto& [name, value] : options) {
+        // An option of every compaction type.
+        if (name == tablet_compaction_force_flush_option) {
+            if (value != "true" && value != "false") {
+                throw std::invalid_argument(fmt::format("Invalid value '{}' of option {}: expected true or false", value, name));
+            }
+            continue;
+        }
+        throw std::invalid_argument(fmt::format("Unsupported option '{}' for {} compaction", name, compaction_type));
+    }
+}
+
+future<> storage_service::flush_before_cluster_compaction(locator::cluster_compaction_id request_id, bool force_flush) {
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [request_id, force_flush] (auto& ss) {
+            return ss.flush_before_cluster_compaction(request_id, force_flush);
+        });
+    }
+    // Forget the flushes of the requests which are no longer ongoing.
+    std::erase_if(_cluster_compaction_flushes, [this] (const auto& e) {
+        return !_topology_state_machine._topology.ongoing_cluster_compaction_requests.contains(e.first.uuid());
+    });
+    auto it = _cluster_compaction_flushes.find(request_id);
+    if (it == _cluster_compaction_flushes.end()) {
+        auto f = compaction::maybe_flush_commitlog(_db, force_flush).then([request_id] (bool flushed) {
+            if (flushed) {
+                slogger.info("Flushed all tables before cluster-wide compaction request {}", request_id);
+            } else {
+                slogger.info("Skipped flushing all tables before cluster-wide compaction request {}: flushed recently", request_id);
+            }
+        });
+        it = _cluster_compaction_flushes.emplace(request_id, shared_future<>(std::move(f))).first;
+    }
+    try {
+        co_await it->second.get_future();
+    } catch (...) {
+        // Let the next tablet compaction of the request try again.
+        _cluster_compaction_flushes.erase(request_id);
+        throw;
+    }
+}
+
+future<> storage_service::compact_tablet(locator::global_tablet_id tablet, locator::cluster_compaction_id request_id, sstring compaction_type, std::unordered_map<sstring, sstring> options) {
+    // The coordinator may run a newer version, which supports more compaction types.
+    validate_tablet_compaction(compaction_type, options);
+    auto force_flush_it = options.find(sstring(tablet_compaction_force_flush_option));
+    const bool force_flush = force_flush_it != options.end() && force_flush_it->second == "true";
+    co_await do_tablet_operation(tablet, fmt::format("{} compaction", compaction_type), [this, tablet, request_id, force_flush] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
+        shard_id shard;
+        {
+            auto tm = guard.get_token_metadata();
+            auto& tmap = guard.get_tablet_map();
+            auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+
+            // Check if the request is still valid.
+            // If there is mismatch, it means this compaction was canceled and the coordinator moved on.
+            if (!trinfo || trinfo->stage != locator::tablet_transition_stage::tablet_compaction) {
+                throw std::runtime_error(fmt::format("Tablet {} is not in the tablet_compaction stage", tablet));
+            }
+            auto& tinfo = tmap.get_tablet_info(tablet.tablet);
+            auto it = std::ranges::find(tinfo.replicas, tm->get_my_id(), &locator::tablet_replica::host);
+            if (it == tinfo.replicas.end()) {
+                throw std::runtime_error(fmt::format("Tablet {} has no replica on this node", tablet));
+            }
+            shard = it->shard;
+        }
+        // After do_tablet_operation()'s read barrier, so that this node knows that the request is
+        // ongoing, and doesn't take its flush for that of a finished request.
+        co_await flush_before_cluster_compaction(request_id, force_flush);
+        co_await utils::get_local_injector().inject("tablet_compaction_wait", utils::wait_for_message(std::chrono::minutes(5)));
+        utils::get_local_injector().inject("tablet_compaction_fail", [] {
+            throw std::runtime_error("tablet_compaction_fail injection");
+        });
+        guard.get_abort_source().check();
+        co_await _db.invoke_on(shard, [tablet] (replica::database& db) -> future<> {
+            auto& table = db.find_column_family(tablet.table);
+            // Aborts the compaction when the transition goes away, e.g. when the table is dropped,
+            // or when the coordinator cancels it.
+            locator::tablet_metadata_guard guard(table, tablet);
+            // The guard only aborts when the transition changes after it was created, so check
+            // that the transition is still there, in the guard's own view of the tablet map, as
+            // it may have gone away since it was checked above.
+            auto* trinfo = guard.get_tablet_map().get_tablet_transition_info(tablet.tablet);
+            if (!trinfo || trinfo->stage != locator::tablet_transition_stage::tablet_compaction) {
+                throw std::runtime_error(fmt::format("Tablet {} is no longer in the tablet_compaction stage", tablet));
+            }
+            co_await table.major_compact_tablet(tablet.tablet, tasks::make_empty_task_info(), guard.get_abort_source());
+        });
+        co_return tablet_operation_result();
+    });
+}
+
 static bool increases_replicas_per_rack(const locator::topology& topology, const locator::tablet_info& tinfo, sstring dst_rack) {
     std::unordered_map<sstring, size_t> m;
     for (auto& replica: tinfo.replicas) {
@@ -6477,6 +6615,123 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
     }
 
     slogger.info("Restoring {} finished", table);
+}
+
+// The tables derived from the tables of the co-location group of `base`, which aren't co-located
+// with it: materialized views (secondary indexes are backed by views) and CDC log tables. Each is
+// represented by the base table of its own co-location group.
+static std::unordered_set<table_id> derived_tables(const replica::database& db, const locator::tablet_metadata& tablets, table_id base) {
+    std::unordered_set<table_id> ret;
+    auto add = [&] (table_id id) {
+        if (tablets.has_tablet_map(id)) {
+            auto group_base = tablets.get_base_table(id);
+            if (group_base != base) {
+                ret.insert(group_base);
+            }
+        }
+    };
+    auto group = tablets.all_table_groups().find(base);
+    auto group_tables = group != tablets.all_table_groups().end() ? group->second : locator::table_group_set{base};
+    for (auto id : group_tables) {
+        if (!db.column_family_exists(id)) {
+            continue;
+        }
+        const auto& cf = db.find_column_family(id);
+        for (const auto& view : cf.views()) {
+            add(view->id());
+        }
+        const auto& s = *cf.schema();
+        if (auto log_name = cdc::log_name(s.cf_name()); db.has_schema(s.ks_name(), log_name)) {
+            add(db.find_schema(s.ks_name(), log_name)->id());
+        }
+    }
+    return ret;
+}
+
+future<utils::UUID> storage_service::compact_tablets(table_id table, bool recursive, sstring compaction_type, std::unordered_map<sstring, sstring> options) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [&] (auto& ss) {
+            return ss.compact_tablets(table, recursive, compaction_type, options);
+        });
+    }
+
+    validate_tablet_compaction(compaction_type, options);
+    if (!_feature_service.tablet_cluster_compaction) {
+        throw std::runtime_error("Cluster-wide compaction of tablets requires all nodes to support the TABLET_CLUSTER_COMPACTION cluster feature");
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        auto tmptr = get_token_metadata_ptr();
+        const auto& tablets = tmptr->tablets();
+        if (!tablets.has_tablet_map(table)) {
+            throw std::invalid_argument(fmt::format("Table {} doesn't use tablets", table));
+        }
+        // Co-located tables share the tablets, and their transitions, of their base table, whose
+        // tablets keep the compaction state, so the whole group is compacted on behalf of the base
+        // table. Like repair, a request is accepted only for the base table, so that compacting
+        // all the tables of a keyspace one by one doesn't compact each group more than once.
+        if (!tablets.is_base_table(table)) {
+            auto s = _db.local().find_schema(table);
+            auto base_s = _db.local().find_schema(tablets.get_base_table(table));
+            throw std::invalid_argument(::format(
+                "Cannot compact table '{}'.'{}' because it is colocated with the base table '{}'.'{}'. "
+                "Compact the base table instead, which compacts its colocated tables too.",
+                s->ks_name(), s->cf_name(), base_s->ks_name(), base_s->cf_name()));
+        }
+        auto table_ids = recursive ? derived_tables(_db.local(), tablets, table) : std::unordered_set<table_id>{};
+        table_ids.insert(table);
+
+        // Two requests compacting the same table at the same time would keep compacting its tablets
+        // again, each recording itself in them in turn. So join a request which compacts all the
+        // tables with the same type and options, and reject one which compacts only some of them,
+        // or compacts them differently.
+        auto requests = std::ranges::to<std::vector>(_topology_state_machine._topology.ongoing_cluster_compaction_requests);
+        requests.insert(requests.end(), _topology_state_machine._topology.global_requests_queue.begin(), _topology_state_machine._topology.global_requests_queue.end());
+        for (auto req : requests) {
+            auto entry = co_await _sys_ks.local().get_topology_request_entry(req);
+            if (!entry.cluster_compaction_table_id || entry.done) {
+                continue;
+            }
+            auto it = std::ranges::find_if(table_ids, [&] (table_id t) { return entry.cluster_compaction_table_ids.contains(t); });
+            if (it == table_ids.end()) {
+                continue;
+            }
+            if (entry.cluster_compaction_type != compaction_type || entry.cluster_compaction_options != options) {
+                throw std::runtime_error(fmt::format("Table {} is already being compacted by request {}, a {} compaction with options {}",
+                        *it, req, entry.cluster_compaction_type, entry.cluster_compaction_options));
+            }
+            if (std::ranges::all_of(table_ids, [&] (table_id t) { return entry.cluster_compaction_table_ids.contains(t); })) {
+                slogger.info("{} compaction of table {} is already in progress as request {}", compaction_type, table, req);
+                co_return req;
+            }
+            throw std::runtime_error(fmt::format("Table {} is already being compacted by request {}", *it, req));
+        }
+
+        auto request_id = guard.new_group0_state_id();
+        topology_mutation_builder builder(guard.write_timestamp());
+        topology_request_tracking_mutation_builder trbuilder(request_id, _feature_service.topology_requests_type_column);
+        trbuilder.set_cluster_compaction_tables(table, table_ids)
+                 .set_cluster_compaction_params(compaction_type, options)
+                 .set("done", false)
+                 .set("start_time", db_clock::now());
+        builder.queue_global_topology_request_id(request_id);
+        trbuilder.set("request_type", global_topology_request::compact_tablets);
+
+        topology_change change{{builder.build(), trbuilder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, fmt::format("{} compaction of tables {}", compaction_type, table_ids));
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            slogger.info("Queued {} compaction of tables {} as request {}", compaction_type, table_ids, request_id);
+            co_return request_id;
+        } catch (group0_concurrent_modification&) {
+            slogger.debug("compact_tablets: concurrent modification, retrying");
+        }
+    }
 }
 
 future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables() {
@@ -7310,6 +7565,11 @@ void storage_service::init_messaging_service() {
     ser::storage_service_rpc_verbs::register_tablet_cleanup(&_messaging.local(), [this] (raft::server_id dst_id, locator::global_tablet_id tablet) {
         return handle_raft_rpc(dst_id, [tablet] (auto& ss) {
             return ss.cleanup_tablet(tablet);
+        });
+    });
+    ser::storage_service_rpc_verbs::register_tablet_compaction(&_messaging.local(), [this] (raft::server_id dst_id, locator::global_tablet_id tablet, locator::cluster_compaction_id request_id, sstring compaction_type, std::unordered_map<sstring, sstring> options) {
+        return handle_raft_rpc(dst_id, [tablet, request_id, compaction_type = std::move(compaction_type), options = std::move(options)] (auto& ss) mutable {
+            return ss.compact_tablet(tablet, request_id, std::move(compaction_type), std::move(options));
         });
     });
     ser::storage_service_rpc_verbs::register_table_load_stats(&_messaging.local(), [this] (raft::server_id dst_id) {

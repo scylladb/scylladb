@@ -220,6 +220,26 @@ struct restore_completion_info {
     sstring error;
 };
 
+struct cluster_compaction_completion_info {
+    utils::UUID request_id;
+    table_id table;
+    sstring error;
+};
+
+// The tablet_compaction transitions to start on behalf of ongoing cluster-wide major
+// compactions, and the requests which are complete.
+struct tablet_compaction_plan {
+    std::unordered_set<locator::global_tablet_id> compactions;
+    std::vector<cluster_compaction_completion_info> completions;
+
+    size_t size() const { return compactions.size() + completions.size(); }
+
+    void merge(tablet_compaction_plan&& other) {
+        compactions.merge(std::move(other.compactions));
+        std::move(other.completions.begin(), other.completions.end(), std::back_inserter(completions));
+    }
+};
+
 struct rf_change_completion_info {
     utils::UUID request_id;
     sstring ks_name;
@@ -258,6 +278,7 @@ private:
     tablet_rack_list_colocation_plan _rack_list_colocation_plan;
     keyspace_rf_change_plan _rf_change_plan;
     std::vector<restore_completion_info> _restore_completions;
+    tablet_compaction_plan _compaction_plan;
     bool _has_nodes_to_drain = false;
     std::vector<drain_failure> _drain_failures;
 public:
@@ -273,7 +294,8 @@ public:
                                + _rack_list_colocation_plan.size()
                                + _drain_failures.size()
                                + _rf_change_plan.size()
-                               + _restore_completions.size();
+                               + _restore_completions.size()
+                               + _compaction_plan.size();
                         }
     size_t tablet_migration_count() const { return _migrations.size(); }
     size_t resize_decision_count() const { return _resize_plan.size(); }
@@ -305,6 +327,7 @@ public:
         _repair_plan.merge(std::move(other._repair_plan));
         _rack_list_colocation_plan.merge(std::move(other._rack_list_colocation_plan));
         _rf_change_plan.merge(std::move(other._rf_change_plan));
+        _compaction_plan.merge(std::move(other._compaction_plan));
     }
 
     void set_has_nodes_to_drain(bool b) {
@@ -318,6 +341,12 @@ public:
     }
 
     const tablet_repair_plan& repair_plan() const { return _repair_plan; }
+
+    const tablet_compaction_plan& compaction_plan() const { return _compaction_plan; }
+
+    void set_compaction_plan(tablet_compaction_plan plan) {
+        _compaction_plan = std::move(plan);
+    }
 
     void set_repair_plan(tablet_repair_plan repair) {
         _repair_plan = std::move(repair);

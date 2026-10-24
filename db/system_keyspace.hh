@@ -436,6 +436,19 @@ public:
         std::optional<sstring> finalize_migration_ks_name;
         std::optional<table_id> restore_table_id;
         std::optional<sstring> restore_snapshot_name;
+        // The base table of the co-location group a compact_tablets request was made for
+        std::optional<table_id> cluster_compaction_table_id;
+        // All the tables a compact_tablets request compacts: cluster_compaction_table_id, and
+        // with recursive, the base tables of the co-location groups of the tables derived from it
+        std::unordered_set<table_id> cluster_compaction_table_ids;
+        // The error of the first tablet which a compact_tablets request failed to compact.
+        // Not kept in `error`, which is set only once the request completes: the mutations of a
+        // request all have the same timestamp, so a later value wouldn't replace an earlier one.
+        sstring cluster_compaction_first_error;
+        // The type of compaction of a compact_tablets request, e.g. "major", and its options,
+        // which depend on the type.
+        sstring cluster_compaction_type;
+        std::unordered_map<sstring, sstring> cluster_compaction_options;
     };
     using topology_requests_entries = std::unordered_map<utils::UUID, system_keyspace::topology_requests_entry>;
 

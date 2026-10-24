@@ -211,6 +211,10 @@ replica_set_view serving_replicas(const locator::tablet_info& tinfo, const locat
         case revert_migration:
             return current_set(tinfo);
 
+        case tablet_compaction:
+            // A compaction doesn't change the replicas.
+            return current_set(tinfo);
+
         case write_both_read_old_fallback_cleanup:
             // A strongly consistent migration that fails at sc_become_voter rolls
             // back through sc_rollback instead.

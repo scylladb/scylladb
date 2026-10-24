@@ -178,6 +178,7 @@ are the currently supported global topology operations:
    contain replicas of the table being truncated. It uses [sessions](#Topology guards)
    to make sure that no stale RPCs are executed outside of the scope of the request.
 - `restore_tablets` See [Tablet restore transition](#tablet-restore-transition) below.
+- `compact_tablets` See [Tablet compaction transition](#tablet-compaction-transition) below.
 
 ## Tablet draining
 
@@ -1224,3 +1225,75 @@ is propagated back to user by the API handler.
 Like `repair`, the `restore` transition does not change token ownership — replicas remain intact.
 Restore transitions are serialized per-tablet like any other transition (invariant [INV-TABL-2]),
 so they do not run concurrently with migrations or repairs on the same tablet.
+
+# Tablet compaction transition
+
+The `tablet_compaction` tablet transition kind, whose only stage is also named
+`tablet_compaction`, compacts a tablet on all of its replicas, on behalf of a cluster-wide
+compaction of its table. The transition is generic: the type of compaction (e.g. `major`) and
+its options come from the request it was started for, and are passed to the replicas in the
+`TABLET_COMPACTION` RPC. Only major compaction, without options, is supported for now. Like `repair` and `restore`, it doesn't change
+the replicas: reads and writes use the current ones throughout. It only serializes the
+compaction with the other transitions of the tablet (invariant [INV-TABL-2]), so the tablet
+isn't migrated, repaired, or merged while it is being compacted.
+
+The topology coordinator processes a tablet in this stage by calling the
+`TABLET_COMPACTION` RPC on all tablet replicas in parallel, with the request's id, compaction
+type and options. Before compacting the first tablet of a request, each node flushes all of its
+tables on all shards, forcing new commitlog segments, once per request, like a node-wide major
+compaction does, so that the compaction can purge as many tombstones as possible: unless the
+request's `force_flush` option is `true`, only if `compaction_flush_all_tables_before_major_seconds`
+elapsed since all tables were last flushed. For a major compaction, each replica then flushes
+the tablet's memtables and compacts its compaction groups one at a time, first off-strategy then
+major, and fails unless the tablet was really compacted, e.g. when the compaction is stopped by
+the node's shutdown. The tablets of a co-location group are compacted one after the other. A
+replica which is down fails the tablet right away. The transition is cleared whether the
+compaction succeeded or failed: a failure isn't retried. The tablet's
+`cluster_compaction_request_id` in `system.tablets` is then set to the id of the request it was
+processed for, and `cluster_compaction_failed` tells whether it failed.
+
+A cluster-wide compaction is a `compact_tablets` global topology request, made for the base
+table of a co-location group, which compacts the whole group. The request carries the type of
+compaction in `cluster_compaction_type` and its options in `cluster_compaction_options`, and the
+ids of the tables it compacts in `cluster_compaction_table_ids`: the table it was made for, and
+with `recursive`, the base tables of the co-location groups of the tables derived from it which
+aren't co-located with it, i.e. its materialized views (including those backing secondary
+indexes) and its CDC log table. A table is compacted by at most one ongoing request at a time: a
+request for tables which an ongoing or queued request compacts, with the same type and options,
+joins it, and one which overlaps it partially, or with another type or options, is rejected.
+
+When the topology coordinator picks the request from the queue, it just registers it in
+`ongoing_cluster_compaction_requests`, so requests for different tables can be ongoing at the same
+time. From then on, in every round, the load balancer starts the `tablet_compaction` transitions
+of the tablets of the request's tables whose `cluster_compaction_request_id` differs from the
+request's id and which have no other transition, as long as the streaming load of the shards of
+their replicas allows it. Like repair, a `tablet_compaction` transition is accounted for with a
+weight of 2 in both the read and the write streaming load of the shards of all of the tablet's
+replicas, against the `tablet_streaming_read_concurrency_per_shard` and
+`tablet_streaming_write_concurrency_per_shard` limits. So with the default limits of 2, a shard
+compacts a single tablet at a time, and doesn't take part in migrations or repairs
+meanwhile. That bounds the temporary space overhead of compacting a whole table to the size of a
+few tablets per shard. This doesn't depend on load balancing being enabled. Tablets with replicas which are down are scheduled too, so that
+they fail rather than hold up the request.
+
+The compaction is best effort: the failure of a tablet doesn't stop the compaction of the other
+tablets. The coordinator records the error of the first tablet which failed in the request's
+`cluster_compaction_first_error` column. Once every tablet of the request's tables was processed, the load balancer
+reports its completion, and the coordinator removes it from `ongoing_cluster_compaction_requests`
+and marks it done: failed, with the number of failed tablets, a sample of them and the first
+error, if any tablet failed, or if any of its tables was dropped.
+
+The compaction state survives coordinator changes and migrations, since it is kept in the
+tablets: a split copies it to both new tablets, and a merge keeps `cluster_compaction_request_id`
+only when both siblings agree on it, so the merged tablet is otherwise compacted again, except
+that a failure of either sibling sticks, since it isn't retried.
+
+A cluster-wide compaction is tracked by a cluster task of the
+`global_topology_requests` task manager module, whose id is the request's id. Its progress is
+the number of tablets of the request's tables which it processed, compacted or failed, out of
+all of them. While it is running, its error is the first error of a tablet which failed, if any.
+Aborting the task removes the request from `ongoing_cluster_compaction_requests` and marks it done
+with an error. The topology coordinator then cancels the `tablet_compaction` transitions which
+already started, as their tables no longer have an ongoing request: it deletes them without
+recording the request in their tablets, which aborts the compactions on the replicas through their
+tablet metadata guards.

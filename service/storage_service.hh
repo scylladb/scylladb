@@ -240,6 +240,26 @@ private:
     // when both of which sit on the same node. So all the movement is local.
     future<> clone_locally_tablet_storage(locator::global_tablet_id, locator::tablet_replica leaving, locator::tablet_replica pending);
     future<> cleanup_tablet(locator::global_tablet_id);
+    // Compacts a tablet replica on behalf of the cluster-wide compaction request request_id, with the
+    // given compaction type and options.
+    future<> compact_tablet(locator::global_tablet_id, locator::cluster_compaction_id request_id, sstring compaction_type, std::unordered_map<sstring, sstring> options);
+    // The flushes of all tables of this node, before the tablet compactions of each ongoing
+    // cluster-wide compaction request, so that a request flushes them only once. On shard 0.
+    std::unordered_map<locator::cluster_compaction_id, shared_future<>> _cluster_compaction_flushes;
+    // Flushes all tables on all shards, forcing new commitlog segments, once per cluster-wide
+    // compaction request, before compacting its first tablet on this node, like a node-wide
+    // major compaction does. See compaction::maybe_flush_commitlog() for force_flush.
+    future<> flush_before_cluster_compaction(locator::cluster_compaction_id request_id, bool force_flush);
+public:
+    // The compaction type of a cluster-wide major compaction of tablets.
+    static constexpr std::string_view major_tablet_compaction_type = "major";
+    // The option of a cluster-wide compaction of tablets, of any type, which forces flushing all
+    // tables before compacting, regardless of compaction_flush_all_tables_before_major_seconds.
+    static constexpr std::string_view tablet_compaction_force_flush_option = "force_flush";
+    // Throws unless the compaction type and options of a cluster-wide compaction of tablets are
+    // supported. Only major compaction is supported for now, and it takes no options of its own.
+    static void validate_tablet_compaction(std::string_view compaction_type, const std::unordered_map<sstring, sstring>& options);
+private:
     // Handler for table load stats RPC.
     future<locator::load_stats> load_stats_for_tablet_based_tables();
     future<> process_tablet_split_candidate(table_id) noexcept;
@@ -1019,6 +1039,15 @@ public:
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> restore_tablets(table_id, sstring snap_name);
+    // Starts a cluster-wide compaction of the table, tablet by tablet, of the given type (e.g.
+    // "major") with the given options, and returns the id of the compact_tablets topology request
+    // driving it, which is also the id of its task. Only major compaction, without options, is
+    // supported for now. The table must be the base table of its co-location group, and the whole
+    // group is compacted. With recursive, the tables derived from it which aren't co-located with
+    // it are compacted too: materialized views, secondary indexes and CDC log tables. Joins a
+    // request which is already queued or ongoing for all of these tables, with the same type and
+    // options, and fails if one is for only some of them, or with another type or options.
+    future<utils::UUID> compact_tablets(table_id table, bool recursive, sstring compaction_type, std::unordered_map<sstring, sstring> options);
     future<> abort_restore_tablets(table_id);
     future<> set_tablet_balancing_enabled(bool);
 
@@ -1052,6 +1081,9 @@ public:
     future<> wait_for_topology_not_busy();
 
     future<> abort_rf_change(utils::UUID request_id);
+    // Aborts a cluster-wide compaction request. The topology coordinator then cancels the
+    // compaction of the tablets which are being compacted.
+    future<> abort_cluster_compaction(utils::UUID request_id);
 
 private:
     semaphore _do_sample_sstables_concurrency_limiter{1};

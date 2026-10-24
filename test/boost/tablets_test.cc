@@ -585,6 +585,63 @@ sibling_map get_siblings(const tablet_map& tmap) {
     return result;
 }
 
+// The id of the last cluster-wide major compaction request which processed a tablet, and whether
+// it failed to compact it, are persisted in system.tablets. The id survives a merge when both
+// siblings agree on it, and a failure always survives it.
+SEASTAR_TEST_CASE(test_tablet_cluster_compaction_request_id) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto table1 = add_table(e).get();
+        auto ts = current_timestamp(e);
+        auto request_id = locator::cluster_compaction_id(utils::UUID_gen::get_time_UUID());
+
+        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+        tablet_map tmap(2);
+        auto first = tmap.first_tablet();
+        auto second = *tmap.next_tablet(first);
+        tablet_info compacted(tablet_replica_set{tablet_replica{h1, 0}});
+        compacted.cluster_compaction_request_id = request_id;
+        tmap.set_tablet(first, compacted);
+        tablet_info failed_info(tablet_replica_set{tablet_replica{h1, 0}});
+        failed_info.cluster_compaction_request_id = request_id;
+        failed_info.cluster_compaction_failed = true;
+        tmap.set_tablet(second, failed_info);
+        tm.set_tablet_map(table1, std::move(tmap));
+
+        auto read = verify_tablet_metadata_persistence(e, tm, ts);
+        auto& read_map = read.get_tablet_map(table1);
+        BOOST_REQUIRE_EQUAL(read_map.get_tablet_info(first).cluster_compaction_request_id, request_id);
+        BOOST_REQUIRE(!read_map.get_tablet_info(first).cluster_compaction_failed);
+        BOOST_REQUIRE_EQUAL(read_map.get_tablet_info(second).cluster_compaction_request_id, request_id);
+        BOOST_REQUIRE(read_map.get_tablet_info(second).cluster_compaction_failed);
+
+        auto pending = tablet_info(tablet_replica_set{tablet_replica{h1, 0}});
+        auto failed = compacted;
+        failed.cluster_compaction_failed = true;
+        auto merged = [] (const tablet_info& a, const tablet_info& b) {
+            auto m = *locator::merge_tablet_info(a, b);
+            return std::make_pair(m.cluster_compaction_request_id, m.cluster_compaction_failed);
+        };
+        BOOST_REQUIRE(merged(compacted, compacted) == std::make_pair(request_id, false));
+        BOOST_REQUIRE(merged(compacted, pending) == std::make_pair(locator::cluster_compaction_id(), false));
+        BOOST_REQUIRE(merged(pending, compacted) == std::make_pair(locator::cluster_compaction_id(), false));
+        // A failure isn't retried, so it sticks.
+        BOOST_REQUIRE(merged(compacted, failed) == std::make_pair(request_id, true));
+        BOOST_REQUIRE(merged(failed, pending) == std::make_pair(request_id, true));
+        BOOST_REQUIRE(merged(pending, failed) == std::make_pair(request_id, true));
+        // Failures under different requests: the newer request's one sticks, as it may be ongoing.
+        auto newer_request_id = locator::cluster_compaction_id(utils::UUID_gen::get_time_UUID());
+        BOOST_REQUIRE(utils::timeuuid_tri_compare(newer_request_id.uuid(), request_id.uuid()) > 0);
+        auto newer_failed = failed;
+        newer_failed.cluster_compaction_request_id = newer_request_id;
+        BOOST_REQUIRE(merged(failed, newer_failed) == std::make_pair(newer_request_id, true));
+        BOOST_REQUIRE(merged(newer_failed, failed) == std::make_pair(newer_request_id, true));
+        auto newer_compacted = compacted;
+        newer_compacted.cluster_compaction_request_id = newer_request_id;
+        BOOST_REQUIRE(merged(failed, newer_compacted) == std::make_pair(request_id, true));
+    }, tablet_cql_test_config());
+}
+
 SEASTAR_THREAD_TEST_CASE(test_siblings) {
     {
         tablet_map tmap(1);

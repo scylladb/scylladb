@@ -571,6 +571,8 @@ static raft::config_member_set expected_raft_config(
         case tablet_transition_stage::sc_remove_pending:
         case tablet_transition_stage::cleanup_target:
         case tablet_transition_stage::revert_migration:
+        // A compaction doesn't change the replicas.
+        case tablet_transition_stage::tablet_compaction:
             return config(tinfo.replicas);
 
         case tablet_transition_stage::sc_add_nonvoter:
@@ -637,6 +639,7 @@ static bool hosts_raft_group(const locator::tablet_info& tinfo,
 
         case tablet_transition_stage::cleanup_target:
         case tablet_transition_stage::revert_migration:
+        case tablet_transition_stage::tablet_compaction:
             return locator::contains(tinfo.replicas, replica);
 
         case tablet_transition_stage::write_both_read_old_fallback_cleanup:

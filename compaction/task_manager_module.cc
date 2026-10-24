@@ -363,7 +363,7 @@ static std::vector<table_info> get_table_infos(const replica::database& db, cons
     return table_infos;
 }
 
-static future<bool> maybe_flush_commitlog(sharded<replica::database>& db, bool force_flush) {
+future<bool> maybe_flush_commitlog(sharded<replica::database>& db, bool force_flush) {
     // flush commitlog if
     // (a) force_flush == true (or)
     // (b) flush_all_tables_before_major > 0s and the configured seconds have elapsed since last all tables flush

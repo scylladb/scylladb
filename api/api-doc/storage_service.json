@@ -3160,6 +3160,78 @@
          ]
       },
       {
+         "path":"/storage_service/tablets/compaction",
+         "operations":[
+            {
+               "nickname":"tablet_compaction",
+               "method":"POST",
+               "summary":"Starts a cluster-wide compaction of a table with tablets, of the given type, which compacts it tablet by tablet, a limited number of tablets per shard at a time (like repair, it counts against the tablet_streaming_read_concurrency_per_shard and tablet_streaming_write_concurrency_per_shard limits, which by default allow a single tablet per shard), to bound its temporary space overhead. Query parameters other than the ones listed here are options of the compaction type; options which the type doesn't support are rejected. Joins a compaction of the same type and options already in progress for all the tables, and fails if one is in progress for some of them, or with another type or options. It is best effort: a tablet which fails to compact isn't retried, the other tablets are compacted all the same, and the compaction then fails, reporting the failed tablets. Returns the id of the task tracking it.",
+               "type":"string",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"ks",
+                     "description":"Keyspace name. Required with table. Optional with table_id, which must then belong to it.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table",
+                     "description":"Table name. It must be the base table of its co-location group, and the tables co-located with it are compacted too. Exactly one of table and table_id must be given.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"table_id",
+                     "description":"Table id, in place of the table name. Exactly one of table and table_id must be given.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"recursive",
+                     "description":"Set true to also compact the tables derived from the table which aren't co-located with it: its materialized views, secondary indexes and CDC log table, all tracked by a single task. Defaults to false.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"type",
+                     "description":"The type of compaction. Only major is supported for now, and it takes no options of its own. Defaults to major.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"force_flush",
+                     "description":"An option of every compaction type. Set true to flush all tables on every node, forcing new commitlog segments, before compacting, regardless of compaction_flush_all_tables_before_major_seconds. Otherwise, all tables are flushed only if that interval elapsed since they were last flushed. Defaults to false.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"await_completion",
+                     "description":"Set true to wait for the compaction to complete. Defaults to false.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/tablets/balancing",
          "operations":[
             {
