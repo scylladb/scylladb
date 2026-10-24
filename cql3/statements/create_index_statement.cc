@@ -421,6 +421,11 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on counter tables");
     }
 
+    // Indexes are backed by views, which cannot be built or kept consistent on logstor.
+    if (schema->logstor_enabled()) {
+        throw exceptions::invalid_request_exception("Cannot create an index on a logstor table");
+    }
+
     if (schema->is_view()) {
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on materialized views");
     }

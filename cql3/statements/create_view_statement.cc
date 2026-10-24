@@ -168,6 +168,11 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
         throw exceptions::invalid_request_exception(format("Materialized views are not supported on counter tables"));
     }
 
+    // View building reads only sstables, and view updates assume INSERT merges rather than replaces.
+    if (schema->logstor_enabled()) {
+        throw exceptions::invalid_request_exception("Cannot create a materialized view on a logstor table");
+    }
+
     if (schema->is_view()) {
         throw exceptions::invalid_request_exception(format("Materialized views cannot be created against other materialized views"));
     }
