@@ -22,6 +22,8 @@ import textwrap
 from shutil import which
 from typing import NamedTuple
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scripts'))
+from choose_precompiled_header import Chooser as PrecompiledHeaderChooser
 
 configure_args = str.join(' ', [shlex.quote(x) for x in sys.argv[1:] if not x.startswith('--out=') and not x.startswith('--out-final-name=')])
 
@@ -2961,11 +2963,11 @@ def write_build_file(f,
               description = CXX $out
               depfile = $out.d
             rule cxx_build_precompiled_header.{mode}
-              command = $cxx_launcher $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -fpch-instantiate-templates -Xclang -emit-pch -DSCYLLA_USE_PRECOMPILED_HEADER
+              command = $cxx_launcher $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -fpch-instantiate-templates -Xclang -emit-pch -DSCYLLA_USE_PRECOMPILED_HEADER $pch_parent
               description = CXX-PRECOMPILED-HEADER $out
               depfile = $out.d
             rule cxx_with_pch.{mode}
-              command = $cxx_launcher $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -Xclang -include-pch -Xclang $builddir/{mode}/stdafx.hh.pch
+              command = $cxx_launcher $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -Xclang -include-pch -Xclang $pch
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
@@ -3203,13 +3205,25 @@ def write_build_file(f,
             f.write('build {}: rust_source {}\n'.format(cc, src))
             obj = cc.replace('.cc', '.o')
             compiles[obj] = cc
+        # A source that includes one of our heavy headers uses a precompiled
+        # header that also contains it, see scripts/choose_precompiled_header.py.
+        pch_chooser = PrecompiledHeaderChooser('.')
+        def choose_pch(obj, src):
+            if not use_precompiled_header:
+                return None
+            return pch_chooser.choose(src) or ('stdafx.hh' if obj in compiles_with_pch else None)
+        used_pchs = set()
         for obj in compiles:
             src = compiles[obj]
             seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
             abseil_dep = ' '.join(f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs)
-            pch_dep = f'$builddir/{mode}/stdafx.hh.pch' if obj in compiles_with_pch else ''
-            cxx_cmd = 'cxx_with_pch' if obj in compiles_with_pch else 'cxx'
+            pch_hh = choose_pch(obj, src)
+            pch_dep = f'$builddir/{mode}/{pch_hh}.pch' if pch_hh else ''
+            cxx_cmd = 'cxx_with_pch' if pch_hh else 'cxx'
             f.write(f'build {obj}: {cxx_cmd}.{mode} {src} | {profile_dep} {seastar_dep} {abseil_dep} {gen_headers_dep} {pch_dep}\n')
+            if pch_hh:
+                used_pchs.add(pch_hh)
+                f.write(f'    pch = {pch_dep}\n')
             if src in modeval['per_src_extra_cxxflags']:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
         for swagger in swaggers:
@@ -3282,7 +3296,17 @@ def write_build_file(f,
             f.write(f'  target = {lib}\n')
             f.write(f'  profile_dep = {profile_dep}\n')
 
-        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_dep} {abseil_dep} {gen_headers_dep} {pch_dep}\n')
+        # Each heavy precompiled header is built on top of its parent, so the
+        # parents of the used ones are needed too.
+        heavy_pchs = used_pchs - {'stdafx.hh'}
+        for pch_hh in list(heavy_pchs):
+            while (pch_hh := pch_chooser.parent(pch_hh)) != 'stdafx.hh':
+                heavy_pchs.add(pch_hh)
+        f.write(f'build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep} {seastar_dep} {abseil_dep} {gen_headers_dep}\n')
+        for pch_hh in sorted(heavy_pchs):
+            parent = f'$builddir/{mode}/{pch_chooser.parent(pch_hh)}.pch'
+            f.write(f'build $builddir/{mode}/{pch_hh}.pch: cxx_build_precompiled_header.{mode} {pch_hh} | {profile_dep} {seastar_dep} {abseil_dep} {gen_headers_dep} {parent}\n')
+            f.write(f'    pch_parent = -Xclang -include-pch -Xclang {parent}\n')
 
         f.write(f'build $builddir/{mode}/seastar/apps/iotune/iotune: ninja $builddir/{mode}/seastar/build.ninja | $builddir/{mode}/seastar/libseastar.{seastar_lib_ext}\n')
         f.write('  pool = submodule_pool\n')
@@ -3461,7 +3485,7 @@ def write_build_file(f,
           command = ./configure.py --out={buildfile_final_name}.new --out-final-name={buildfile_final_name} $configure_args && mv {buildfile_final_name}.new {buildfile_final_name}
           generator = 1
           description = CONFIGURE $configure_args
-        build {buildfile_final_name} {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {cmake_deps_list}
+        build {buildfile_final_name} {build_ninja_list}: configure | configure.py scripts/choose_precompiled_header.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {cmake_deps_list}
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE

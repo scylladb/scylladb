@@ -11,6 +11,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/core/units.hh>
 
 #include "utils/managed_bytes.hh"
 #include "utils/logalloc.hh"
@@ -49,7 +50,6 @@
 
 static const int cell_size = 128;
 static bool cancelled = false;
-static const auto MB = 1024 * 1024;
 
 void test_scans_with_dummy_entries() {
     std::cout << __FUNCTION__<< std::endl;
