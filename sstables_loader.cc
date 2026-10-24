@@ -240,6 +240,11 @@ private:
         llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}, submitted from shard {}", min_info.generation, _table.schema()->ks_name(), _table.schema()->cf_name(), this_shard_id(), from_shard);
         auto& db = _db.local();
         auto& table = db.find_column_family(ks, cf);
+        // DROP waits for streams before truncating, so this guard is what makes it wait
+        // for the attach rather than remove the directory under sst->load(). Must be
+        // taken in the same continuation as the lookup: `table` is unpinned, and a
+        // suspension between the two reopens the race.
+        auto stream_guard = table.stream_in_progress();
         auto& sst_manager = table.get_sstables_manager();
         auto sst = sst_manager.make_sstable(
             table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
@@ -939,6 +944,13 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
 future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, const minimal_sst_info& min_info) const {
     auto& db = _db.local();
     auto& table = db.find_column_family(tid);
+    // DROP waits for streams before truncating, so this guard is what makes it wait
+    // for the attach rather than remove the directory under sst->load(). Must be
+    // taken in the same continuation as the lookup: `table` is unpinned, and a
+    // suspension between the two reopens the race.
+    auto stream_guard = table.stream_in_progress();
+    // After the guard on purpose: the test needs the DROP to meet a guarded attach.
+    co_await utils::get_local_injector().inject("pause_attach_sstable", utils::wait_for_message(60s));
     llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}", min_info.generation, table.schema()->ks_name(), table.schema()->cf_name(), this_shard_id());
     auto& sst_manager = table.get_sstables_manager();
     auto sst = sst_manager.make_sstable(
