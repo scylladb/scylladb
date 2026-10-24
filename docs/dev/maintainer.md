@@ -182,9 +182,12 @@ latest submodules.
  4. Use `git push` to push the submodule update commits to the remote
     `next` branch.
 
-By default `refresh-submodules.sh` will refresh all submodules from their
-master branches. It's possible to specify submodules and branches as command
-line arguments. Each is treated by the script as `name[:branch]`, so for
+By default `refresh-submodules.sh` will refresh all submodules from the
+branch matching the current scylla branch: on `next-X` and `branch-X` it is
+`branch-X`, on any other branch it is `master`. If a submodule's origin
+doesn't have the `branch-X` branch, the script falls back to `master`. It's
+possible to specify submodules and branches as command line arguments. Each
+is treated by the script as `name[:branch]`, so for
 example the `refresh-submodules.sh seastar` will only refresh the seastar
 submodule and `refresh-submodules.sh seastar:foo` will do it fetching from
 the remote `foo` branch.
@@ -273,7 +276,9 @@ Alternatively
  * In the `scylla` repository
  1. Check out the relevant next branch (e.g. `next-3.2` one)
  2. Use the refreshing script specifying the `seastar:<branch>` as its
-    first argument (`refresh-submodules.sh seastar:branch-3.2`)
+    first argument (`refresh-submodules.sh seastar:branch-3.2`), or just
+    `refresh-submodules.sh seastar`, since on `next-3.2` the script picks the
+    `branch-3.2` branch by default
  3. Publish with `git push`.
 
 ## Guidelines for merging pull-requests
