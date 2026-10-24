@@ -644,7 +644,8 @@ async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager:
         return repl
 
     injection = "create_with_numeric"
-    config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [injection]}
+    # The RF change plan waits for fresh tablet load stats; the default 60s refresh dominates the runtime.
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [injection], "tablet_load_stats_refresh_interval_in_seconds": 1}
 
     servers = await manager.servers_add(4, config=config, cmdline=['--smp=2'], property_file=[
         {'dc': 'dc1', 'rack': 'rack1a'},
