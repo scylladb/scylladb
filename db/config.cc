@@ -246,6 +246,12 @@ const config_type& config_type_for<std::unordered_map<sstring, log_level>>() {
 }
 
 template <>
+const config_type& config_type_for<std::unordered_map<sstring, unsigned>>() {
+    static config_type ct("string map", value_to_json<std::unordered_map<sstring, unsigned>>);
+    return ct;
+}
+
+template <>
 const config_type& config_type_for<int64_t>() {
     static config_type ct("integer", value_to_json<int64_t>);
     return ct;
@@ -1800,9 +1806,16 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , ldap_bind_passwd(this, "ldap_bind_passwd", value_status::Used, "", "Password used by LDAPRoleManager for binding to LDAP server.")
     , saslauthd_socket_path(this, "saslauthd_socket_path", value_status::Used, "", "UNIX domain socket on which saslauthd is listening.")
     , object_storage_endpoints(this, "object_storage_endpoints", liveness::LiveUpdate, value_status::Used, {}, "Object storage endpoints configuration.")
+    , object_storage_connections(this, "object_storage_connections", liveness::LiveUpdate, value_status::Used, {},
+        "Maximum number of S3 connections per shard for each connection pool, as a map from the pool name to a positive count. "
+        "A scheduling group uses the pool named after it, except that every service-level group uses service_levels and a group "
+        "with no pool of its own uses general, which logs a warning naming that group. Entries override the built-in values.")
     , object_storage_connections_per_shard(this, "object_storage_connections_per_shard", liveness::LiveUpdate, value_status::Used, 128,
-        "Maximum number of object storage connections per shard. "
-        "Connections are distributed proportionally across scheduling groups based on their shares.")
+        "Deprecated, superseded by object_storage_connections. This set one budget for the whole shard, which was "
+        "split across the scheduling groups by their shares. Setting it at all is still honored as a shard budget: "
+        "the value is spread over the built-in per-pool values in their own proportions, and no pool is lowered "
+        "below its built-in value, so a budget at or under their total leaves them as they are. Ignored once "
+        "object_storage_connections is set, which names the caps itself.")
     , object_storage_clients_memory_fraction(this, "object_storage_clients_memory_fraction", value_status::Unused, 0.01,
         "Fraction of shard memory used as the buffer budget shared by all object storage clients.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
@@ -2233,6 +2246,7 @@ template struct utils::config_file::named_value<std::vector<enum_option<db::cons
 template struct utils::config_file::named_value<std::vector<db::error_injection_at_startup>>;
 template struct utils::config_file::named_value<std::vector<std::unordered_map<sstring, sstring>>>;
 template struct utils::config_file::named_value<std::unordered_map<sstring, seastar::log_level>>;
+template struct utils::config_file::named_value<std::unordered_map<sstring, unsigned>>;
 template struct utils::config_file::named_value<std::vector<db::object_storage_endpoint_param>>;
 template struct utils::config_file::named_value<std::vector<audit::audit_rule>>;
 
