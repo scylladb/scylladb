@@ -2824,9 +2824,9 @@ Error from server: code=2200 [Invalid query] message="Invalid non-frozen collect
 > --
 > create table lwt (a int, b int, c int, primary key (a, b));
 OK
-> -- error: can't use token and non-token restrictions
+> -- error: can't use token restrictions in UPDATE (even with restrictions on the partition key)
 > update lwt set c = 1 where a = 1 and b = 1 and token(a) > 0 and token(a) < 0 if c = 1;
-Error from server: code=2200 [Invalid query] message="Columns "ColumnDefinition{name=a, type=org.apache.cassandra.db.marshal.Int32Type, kind=PARTITION_KEY, componentIndex=0, droppedAt=-9223372036854775808}" cannot be restricted by both a normal relation and a token relation"
+Error from server: code=2200 [Invalid query] message="The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: (token(a) > 0) AND (token(a) < 0)"
 > -- error: can't use eq and non-eq restriction
 > update lwt set c = 1 where a = 1 and b = 1 and a < 0 if c = 1;
 Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
