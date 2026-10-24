@@ -413,6 +413,10 @@ public:
     ///
     /// Uses make_sizing_plan() to determine target pow2 counts per table based on
     /// per-table size estimates and replication strategy.
+    ///
+    /// size_per_table holds the size of the data in each tablet map, keyed by
+    /// the table that owns the map. For a base table with co-located tables,
+    /// that is the total size of the whole co-location group.
     future<target_pow2_per_table_map> compute_migration_target_pow2s(
         const locator::tablet_aware_replication_strategy* rs,
         const size_per_table_map& size_per_table);

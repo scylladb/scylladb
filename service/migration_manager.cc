@@ -37,6 +37,7 @@
 #include "partition_slice_builder.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
+#include "locator/tablets.hh"
 #include "replica/query.hh"
 #include "db/schema_applier.hh"
 #include "db/schema_tables.hh"
@@ -523,6 +524,19 @@ void migration_notifier::before_allocate_tablet_map_in_notification(const locato
     });
 }
 
+// Throws if the keyspace is undergoing vnodes-to-tablets migration.
+//
+// While a keyspace is migrating, its tables have a tablet map even though the
+// keyspace still uses vnode replication. Schema changes in that state would
+// either create tables without a tablet map or invalidate the maps already
+// built, so they are rejected until the migration is finalized or rolled back.
+static void validate_no_tablets_migration(storage_proxy& sp, const keyspace_metadata& ksm, std::string_view operation) {
+    if (locator::is_keyspace_undergoing_tablets_migration(sp.get_token_metadata_ptr()->tablets(), ksm)) {
+        throw exceptions::invalid_request_exception(fmt::format(
+                "Cannot {}: keyspace {} is undergoing vnodes-to-tablets migration", operation, ksm.name()));
+    }
+}
+
 utils::chunked_vector<mutation> prepare_keyspace_update_announcement(replica::database& db, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type ts) {
     db.validate_keyspace_update(*ksm);
     mlogger.info("Update Keyspace: {}", ksm);
@@ -554,7 +568,7 @@ static future<utils::chunked_vector<mutation>> do_prepare_new_column_families_an
         const keyspace_metadata& ksm, std::vector<schema_ptr> cfms, api::timestamp_type timestamp) {
     auto& db = sp.local_db();
 
-    return seastar::async([&db, &ksm, timestamp, cfms = std::move(cfms)] mutable {
+    return seastar::async([&sp, &db, &ksm, timestamp, cfms = std::move(cfms)] mutable {
         for (auto cfm : cfms) {
             if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
                 throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
@@ -563,6 +577,7 @@ static future<utils::chunked_vector<mutation>> do_prepare_new_column_families_an
                 throw exceptions::invalid_request_exception(format("Table with ID {} already exists: {}", cfm->id(), db.find_schema(cfm->id())));
             }
         }
+        validate_no_tablets_migration(sp, ksm, "create table");
 
         for (auto cfm : cfms) {
             mlogger.info("Create new ColumnFamily: {}", cfm);
@@ -627,8 +642,17 @@ future<utils::chunked_vector<mutation>> prepare_column_family_update_announcemen
     try {
         auto& db = sp.local_db();
         auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
-        mlogger.info("Update table '{}.{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
         auto&& keyspace = db.find_keyspace(cfm->ks_name()).metadata();
+        // Creating or dropping an index adds or removes its backing view.
+        // Other table updates don't change the set of tables in the keyspace
+        // and so they are ignored.
+        auto index_names = [] (const schema& s) {
+            return s.all_indices() | std::views::keys | std::ranges::to<std::set<sstring>>();
+        };
+        if (index_names(*old_schema) != index_names(*cfm)) {
+            validate_no_tablets_migration(sp, *keyspace, "create or drop an index");
+        }
+        mlogger.info("Update table '{}.{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
 
         auto mutations = co_await seastar::async([&] {
             // Can call notifier when it creates new indexes, so needs to run in Seastar thread
@@ -730,6 +754,7 @@ future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(stora
         throw exceptions::configuration_exception(format("Cannot drop non existing keyspace '{}'.", ks_name));
     }
     auto& keyspace = db.find_keyspace(ks_name);
+    validate_no_tablets_migration(sp, *keyspace.metadata(), "drop keyspace");
     mlogger.info("Drop Keyspace '{}'", ks_name);
     return seastar::async([&sp, &keyspace, ts, ks_name] {
         auto& db = sp.local_db();
@@ -752,6 +777,7 @@ future<utils::chunked_vector<mutation>> prepare_column_family_drop_announcement(
             co_await coroutine::return_exception(exceptions::invalid_request_exception("Cannot use DROP TABLE on Materialized View. (Did you mean DROP MATERIALIZED VIEW)?"));
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
+        validate_no_tablets_migration(sp, *keyspace, "drop table");
 
         // If drop_views is false (the default), we don't allow to delete a
         // table which has views which aren't part of an index. If drop_views
@@ -859,6 +885,7 @@ future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_pr
         if (keyspace->cf_meta_data().contains(view->cf_name())) {
             throw exceptions::already_exists_exception(view->ks_name(), view->cf_name());
         }
+        validate_no_tablets_migration(sp, *keyspace, "create materialized view");
         mlogger.info("Create new view: {}", view);
         co_return co_await seastar::async([&db, keyspace = std::move(keyspace), &sp, view = std::move(view), ts] {
             auto mutations = db::schema_tables::make_create_view_mutations(keyspace, view, ts);
@@ -939,6 +966,7 @@ future<utils::chunked_vector<mutation>> prepare_view_drop_announcement(storage_p
             throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Index. (Did you mean DROP INDEX)?");
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
+        validate_no_tablets_migration(sp, *keyspace, "drop materialized view");
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
         auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), ts);
         if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {
