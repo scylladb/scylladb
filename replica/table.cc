@@ -3048,6 +3048,43 @@ void compaction_group::set_compaction_strategy_state(compaction::compaction_stra
     _compaction_strategy_state = std::move(compaction_strategy_state);
 }
 
+uint64_t table::expected_memtable_size() const {
+    // The memtable memory budget this table flushes from, shared with the other
+    // tables on this shard that were given the same dirty memory manager.
+    auto budget = _config.dirty_memory_manager->flush_threshold();
+    if (!budget) {
+        return 0;
+    }
+
+    if (uses_tablets()) {
+        // Each tablet replica has its own memtable. The number of replicas per shard
+        // is kept around tablets_per_shard_goal, but it varies between the goal and
+        // twice as much, as tablets are split when the table grows, and merged back
+        // once the count is brought down to the goal. Normalize by the average.
+        auto tablets_per_shard = _config.tablets_per_shard_goal() * 1.5;
+        if (tablets_per_shard < 1) {
+            return 0;
+        }
+        return budget / tablets_per_shard;
+    }
+
+    // With vnodes, the table has a single memtable per shard, covering the shard's
+    // whole token range, so the budget is shared by the tables on this shard that
+    // flush from it.
+    auto tables = _config.table_count ? _config.table_count(*_config.dirty_memory_manager) : 0;
+    if (!tables) {
+        return 0;
+    }
+    return budget / tables;
+}
+
+compaction::compaction_strategy table::create_compaction_strategy(compaction::compaction_strategy_type strategy) const {
+    compaction::strategy_options_defaults defaults {
+        .expected_memtable_size = expected_memtable_size(),
+    };
+    return compaction::make_compaction_strategy(strategy, _schema->compaction_strategy_options(), defaults);
+}
+
 void table::set_compaction_strategy(compaction::compaction_strategy_type strategy) {
     tlogger.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), compaction::compaction_strategy::name(strategy));
     // Don't let the switch be silent: a table carrying the deprecated name from
@@ -3059,7 +3096,7 @@ void table::set_compaction_strategy(compaction::compaction_strategy_type strateg
                 compaction::compaction_strategy::name(compaction::compaction_strategy_type::size_tiered),
                 compaction::compaction_strategy::name(compaction::compaction_strategy_type::incremental));
     }
-    auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
+    auto new_cs = create_compaction_strategy(strategy);
 
     struct compaction_group_strategy_updater {
         table& t;
@@ -3639,7 +3676,7 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
                          column_family_label(_schema->cf_name())
                         )
     , _compaction_manager(compaction_manager)
-    , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
+    , _compaction_strategy(create_compaction_strategy(_schema->compaction_strategy()))
     , _logstor(logstor)
     , _logstor_index(_schema->logstor_enabled() ? _logstor->make_primary_index(cache_enabled()) : nullptr)
     , _sg_manager(make_storage_group_manager())

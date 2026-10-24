@@ -2853,4 +2853,46 @@ SEASTAR_TEST_CASE(test_lowering_dirty_memory_threshold_triggers_flush) {
     });
 }
 
+// The expected memtable size of a vnode table is the memtable memory it flushes
+// from, divided by the number of tables on the shard that flush from the same
+// memory. The system and internal tables have a memtable memory of their own, so
+// they aren't counted against the user tables, and vice versa.
+SEASTAR_TEST_CASE(test_expected_memtable_size_counts_tables_sharing_memtable_memory) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_vnodes WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE ks_vnodes.t1 (k INT PRIMARY KEY, v INT)").get();
+        e.execute_cql("CREATE TABLE ks_vnodes.t2 (k INT PRIMARY KEY, v INT)").get();
+
+        auto& db = e.local_db();
+        auto& user_table = db.find_column_family("ks_vnodes", "t1");
+        auto& system_table = db.find_column_family(db::system_keyspace::NAME, db::system_keyspace::PEERS);
+        BOOST_REQUIRE(!user_table.uses_tablets());
+        BOOST_REQUIRE(!system_table.uses_tablets());
+
+        const auto* user_dmm = user_table.get_config().dirty_memory_manager;
+        const auto* system_dmm = system_table.get_config().dirty_memory_manager;
+        BOOST_REQUIRE(user_dmm != system_dmm);
+        BOOST_REQUIRE_GT(user_dmm->flush_threshold(), 0);
+        BOOST_REQUIRE_GT(system_dmm->flush_threshold(), 0);
+
+        auto tables_flushing_from = [&db] (const replica::dirty_memory_manager* dmm) {
+            size_t count = 0;
+            db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> t) {
+                count += t->get_config().dirty_memory_manager == dmm;
+            });
+            return count;
+        };
+        const auto user_tables = tables_flushing_from(user_dmm);
+        const auto system_tables = tables_flushing_from(system_dmm);
+        BOOST_REQUIRE_GE(user_tables, 2);
+        // Far more system tables than user tables, and a much smaller memory for them:
+        // counting them together would get both estimates wrong.
+        BOOST_REQUIRE_GT(system_tables, user_tables);
+        BOOST_REQUIRE_LT(system_dmm->flush_threshold(), user_dmm->flush_threshold());
+
+        BOOST_REQUIRE_EQUAL(user_table.expected_memtable_size(), user_dmm->flush_threshold() / user_tables);
+        BOOST_REQUIRE_EQUAL(system_table.expected_memtable_size(), system_dmm->flush_threshold() / system_tables);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

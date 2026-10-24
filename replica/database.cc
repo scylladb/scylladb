@@ -1718,6 +1718,21 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.tombstone_warn_threshold = db_config.tombstone_warn_threshold();
     cfg.view_update_memory_semaphore_limit = _config.view_update_memory_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
+    cfg.tablets_per_shard_goal = db_config.tablets_per_shard_goal;
+    // The tables on this shard that flush from the given memtable memory: the system
+    // and internal tables have a memtable memory of their own, separate from the one
+    // the user tables share, and a few system tables are moved to the latter (see
+    // create_local_system_table()), so the tables are told apart by the dirty memory
+    // manager they were given rather than by their keyspace.
+    // The table is registered only once it has been constructed and started, and its
+    // compaction strategy is created before that, so count it while it isn't there yet.
+    cfg.table_count = [&db, id = s.id()] (const replica::dirty_memory_manager& dmm) {
+        size_t count = !db.column_family_exists(id);
+        db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<table> t) {
+            count += t->get_config().dirty_memory_manager == &dmm;
+        });
+        return count;
+    };
     cfg.enable_compacting_data_for_streaming_and_repair = db_config.enable_compacting_data_for_streaming_and_repair;
     cfg.enable_tombstone_gc_for_streaming_and_repair = db_config.enable_tombstone_gc_for_streaming_and_repair;
     cfg.guardrail_config = db::guardrail_config{
