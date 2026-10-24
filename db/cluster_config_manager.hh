@@ -89,6 +89,13 @@ public:
     double resolve_floating_point_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const;
     sstring resolve_text_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const;
 
+    // The same for a table, by name: the counterpart of the *_no_default() accessors above
+    // for a consumer that has no fallback of its own. A table no longer in the local schema
+    // gets the default too. A `config_name` that is not a registered option is an internal
+    // error, since there would be no default to give.
+    int64_t resolve_integer_config(std::string_view config_name, table_id table) const;
+    double resolve_floating_point_config(std::string_view config_name, table_id table) const;
+
     // A consumer registers a callback to be told the effective value of an option for each
     // target the option resolves for: once initially, and again whenever a refresh pass finds
     // the value changed since the one last delivered. A table-oriented option has one target
@@ -201,6 +208,7 @@ private:
     // holding a table_id reads through the typed resolve_*_table_config() accessors rather
     // than assembling a context itself.
     std::optional<lookup_context> table_lookup_context(table_id table) const;
+    std::optional<sstring> stored_table_config(std::string_view config_name, table_id table) const;
 
     // Look up `config_name` in a keyed scope map (dc/rack/node/keyspace/table):
     // nullopt if the key is absent or holds no such override. Shared by the

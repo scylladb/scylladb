@@ -1172,6 +1172,20 @@ uint64_t tablet_load_stats::add_tablet_sizes(const tablet_load_stats& tls) {
     return table_sizes_sum;
 }
 
+// FIXME: yield as this walks, like tablet_load_stats::add_tablet_sizes() is made to in
+// https://github.com/scylladb/scylladb/pull/31647. This folds one entry per tablet replica
+// in the cluster, the same shape and count as add_tablet_sizes(), so on a large cluster it
+// roughly doubles a fold that #31647 measured at 8-12ms of uninterrupted work. It cannot
+// yield until load_stats::operator+= becomes the coroutine that #31647 turns it into, so
+// adding the yield here is left to follow that PR rather than rewrite the same operator.
+void tablet_unrepaired_load_stats::add_unrepaired_sizes(const tablet_unrepaired_load_stats& tus) {
+    for (auto& [table, sizes] : tus.unrepaired_sizes) {
+        for (auto& [range, unrepaired] : sizes) {
+            unrepaired_sizes[table][range] = unrepaired;
+        }
+    }
+}
+
 load_stats load_stats::from_v1(load_stats_v1&& stats) {
     return { .tables = std::move(stats.tables) };
 }
@@ -1218,6 +1232,9 @@ load_stats& load_stats::operator+=(const load_stats& s) {
         tablet_stats[host].effective_capacity = tablet_ls.effective_capacity;
         tablet_stats[host].add_tablet_sizes(tablet_ls);
     }
+    for (auto& [host, tablet_unrepaired_ls] : s.tablet_unrepaired_stats) {
+        tablet_unrepaired_stats[host].add_unrepaired_sizes(tablet_unrepaired_ls);
+    }
     return *this;
 }
 
@@ -1251,6 +1268,37 @@ std::optional<uint64_t> load_stats::get_avg_tablet_size(const tablet_map& tmap, 
     }
 
     return tablet_size / std::max(1ul, tinfo.replicas.size());
+}
+
+std::optional<uint64_t> load_stats::get_avg_unrepaired_tablet_size(const tablet_map& tmap, global_tablet_id tablet) const {
+    auto [table, tid] = tablet;
+    auto trange = tmap.get_token_range(tid);
+    auto& tinfo = tmap.get_tablet_info(tid);
+
+    uint64_t unrepaired_size = 0;
+    for (auto&& r : tinfo.replicas) {
+        auto host_i = tablet_unrepaired_stats.find(r.host);
+        if (host_i == tablet_unrepaired_stats.end()) {
+            return std::nullopt;
+        }
+        auto& sizes_per_table = host_i->second.unrepaired_sizes;
+        auto table_i = sizes_per_table.find(table);
+        if (table_i == sizes_per_table.end()) {
+            return std::nullopt;
+        }
+        auto size_i = table_i->second.find(trange);
+        if (size_i == table_i->second.end()) {
+            return std::nullopt;
+        }
+        // Discard a measurement taken before the tablet's last repair: it still counts data
+        // that repair has since covered.
+        if (size_i->second.sstables_repaired_at < tinfo.sstables_repaired_at) {
+            return std::nullopt;
+        }
+        unrepaired_size += size_i->second.unrepaired_size;
+    }
+
+    return unrepaired_size / std::max(size_t(1), tinfo.replicas.size());
 }
 
 std::optional<uint64_t> load_stats::get_tablet_size_in_transition(host_id host, const range_based_tablet_id& rb_tid, const tablet_info& ti, const tablet_transition_info* trinfo) const {

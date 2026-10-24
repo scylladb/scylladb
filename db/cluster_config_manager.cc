@@ -587,4 +587,25 @@ sstring cluster_config_manager::resolve_text_config(const cluster_config_registr
     return cluster_config_registry::to_text(opt, resolve_config(opt.name, ctx));
 }
 
+// The stored value for a table, or nullopt when the table is no longer in the local schema or
+// no scope in the chain stores one. The per-table resolve_*_config() accessors hand this to
+// the registry's converter, which substitutes the option's registered default for nullopt.
+std::optional<sstring> cluster_config_manager::stored_table_config(std::string_view config_name, table_id table) const {
+    auto ctx = table_lookup_context(table);
+    if (!ctx) {
+        return std::nullopt;
+    }
+    return resolve_config(config_name, *ctx);
+}
+
+int64_t cluster_config_manager::resolve_integer_config(std::string_view config_name, table_id table) const {
+    const auto& opt = find_registered_option(config_name);
+    return cluster_config_registry::to_integer(opt, stored_table_config(config_name, table));
+}
+
+double cluster_config_manager::resolve_floating_point_config(std::string_view config_name, table_id table) const {
+    const auto& opt = find_registered_option(config_name);
+    return cluster_config_registry::to_floating_point(opt, stored_table_config(config_name, table));
+}
+
 }

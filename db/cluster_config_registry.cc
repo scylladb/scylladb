@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -75,6 +76,28 @@ constexpr std::array registry_options = {
         .scopes = table_oriented_scopes,
         .default_value = auto_repair_threshold_default_seconds,
     },
+    option{
+        .name = option_name::auto_repair_threshold_size_fraction,
+        .description = "Trigger automatic repair for a tablet once the average unrepaired size of its "
+                       "replicas reaches this fraction of their average total size. 0 disables the "
+                       "size-based trigger, leaving only the time-based one",
+        .scopes = table_oriented_scopes,
+        .default_value = 0.0,
+        // A tablet's unrepaired data is a subset of its data, so the ratio the trigger
+        // compares against never exceeds 1. A larger threshold could never fire, which would
+        // leave a tablet that also disables the time-based trigger never repaired at all.
+        .min_value = 0.0,
+        .max_value = 1.0,
+    },
+    option{
+        .name = option_name::auto_repair_threshold_min_size_in_bytes,
+        .description = "Floor for the size-based automatic repair trigger: a tablet is not repaired on "
+                       "the size threshold until the average unrepaired size of its replicas reaches "
+                       "this many bytes, however large a fraction of the tablet that is",
+        .scopes = table_oriented_scopes,
+        .default_value = int64_t(10 * 1024 * 1024),
+        .min_value = int64_t(0),
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
@@ -89,6 +112,24 @@ constexpr bool all_registry_options_are_single_domain() {
 static_assert(all_registry_options_are_single_domain(),
         "A cluster config option must not mix table-oriented (KEYSPACE/TABLE) and "
         "node-oriented (DATACENTER/RACK/NODE) scopes");
+
+// A bound is compared against a value parsed as the option's own type, so it has to hold that
+// same alternative. Getting this wrong would throw from std::get at validation time, i.e. on a
+// user's ALTER, so it is caught here instead.
+constexpr bool all_registry_option_bounds_match_type() {
+    for (const auto& opt : registry_options) {
+        if (opt.min_value && opt.min_value->index() != opt.default_value.index()) {
+            return false;
+        }
+        if (opt.max_value && opt.max_value->index() != opt.default_value.index()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(all_registry_option_bounds_match_type(),
+        "A cluster config option's min_value/max_value must have the same type as its default");
 
 // The feature names of options removed from the registry; see retired_feature_names().
 constexpr std::array<std::string_view, 0> retired_option_features = {};
@@ -157,7 +198,17 @@ std::optional<seastar::sstring> validate_integer(std::string_view value) {
 }
 
 std::optional<seastar::sstring> validate_floating_point(std::string_view value) {
-    return validate_with(parse_floating_point, "floating-point number", value);
+    if (auto error = validate_with(parse_floating_point, "floating-point number", value)) {
+        return error;
+    }
+    // CQL has a NaN literal and it parses, but it compares false against everything: it slips
+    // straight through any bounds the option declares, and then every comparison a consumer
+    // makes against it is false too, silently turning off whatever the option controls. There
+    // is no setting for which it is a meaningful value, so reject it for all of them.
+    if (std::isnan(parse_floating_point(value))) {
+        return seastar::sstring("expected a floating-point number, got NaN");
+    }
+    return std::nullopt;
 }
 
 std::optional<seastar::sstring> validate_boolean(std::string_view value) {
@@ -265,14 +316,45 @@ bool is_supported(const option& opt, const gms::feature_service& features) {
     return feature && *feature;
 }
 
+// Checks a parsed numeric value against the option's inclusive bounds. The bounds are held as
+// config_value so that each one carries the option's own type and an integer bound keeps the
+// full int64 range instead of being squeezed through a double.
+template <typename T>
+std::optional<seastar::sstring> check_bounds(const option& opt, T parsed) {
+    auto bound = [] (const std::optional<config_value>& v) -> std::optional<T> {
+        if (!v) {
+            return std::nullopt;
+        }
+        return std::get<T>(*v);
+    };
+    auto min = bound(opt.min_value);
+    auto max = bound(opt.max_value);
+    if ((min && parsed < *min) || (max && parsed > *max)) {
+        if (min && max) {
+            return fmt::format("expected a value between {} and {}, got {}", *min, *max, parsed);
+        }
+        if (min) {
+            return fmt::format("expected a value of at least {}, got {}", *min, parsed);
+        }
+        return fmt::format("expected a value of at most {}, got {}", *max, parsed);
+    }
+    return std::nullopt;
+}
+
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value) {
     switch (opt.type()) {
     case value_type::text:
         return validate_text(value);
     case value_type::integer:
-        return validate_integer(value);
+        if (auto error = validate_integer(value)) {
+            return error;
+        }
+        return check_bounds<int64_t>(opt, parse_integer(value));
     case value_type::floating_point:
-        return validate_floating_point(value);
+        if (auto error = validate_floating_point(value)) {
+            return error;
+        }
+        return check_bounds<double>(opt, parse_floating_point(value));
     case value_type::boolean:
         return validate_boolean(value);
     }

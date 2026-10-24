@@ -42,11 +42,25 @@ struct tablet_load_stats final {
     std::unordered_map<::table_id, std::unordered_map<dht::token_range, uint64_t>> tablet_sizes;
 };
 
+// Not final, unlike tablet_load_stats: the size prefix is what lets this one grow a field
+// later without breaking the wire format.
+struct tablet_unrepaired_size {
+    uint64_t unrepaired_size;
+    int64_t sstables_repaired_at;
+};
+
+struct tablet_unrepaired_load_stats {
+    // Contains the unrepaired size per tablet, per table. The token ranges must be in the
+    // form (a, b] and only such ranges are allowed
+    std::unordered_map<::table_id, std::unordered_map<dht::token_range, locator::tablet_unrepaired_size>> unrepaired_sizes;
+};
+
 struct load_stats {
     std::unordered_map<::table_id, locator::table_load_stats> tables;
     std::unordered_map<locator::host_id, uint64_t> capacity;
     std::unordered_map<locator::host_id, bool> critical_disk_utilization [[version 2025.3]];
     std::unordered_map<locator::host_id, locator::tablet_load_stats> tablet_stats [[version 2026.1]];
+    std::unordered_map<locator::host_id, locator::tablet_unrepaired_load_stats> tablet_unrepaired_stats [[version 2026.4]];
 };
 
 }
