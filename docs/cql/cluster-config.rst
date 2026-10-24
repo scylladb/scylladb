@@ -34,8 +34,10 @@ value set at a broader one:
 * ``NODE`` overrides ``RACK``, which overrides ``DATACENTER``, which overrides ``CLUSTER``.
 
 Each option supports a fixed set of scopes. Options that describe a table (such as
-``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. No option
-currently supports the ``DATACENTER``, ``RACK`` or ``NODE`` scopes.
+``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. Options that
+describe the cluster as a whole (such as ``repair_hints_batchlog_flush_discard_unreplayed_hints``)
+can be set at ``CLUSTER`` scope only. No option currently supports the ``DATACENTER``, ``RACK`` or
+``NODE`` scopes.
 
 Each scope stores only the values that were explicitly set there. The *effective* value of an
 option for a table is the value stored at the narrowest scope that has one: the table's own value
@@ -172,3 +174,13 @@ Available options
        automatic repair. Default: ``86400``. Until the deprecated
        ``auto_repair_threshold_default_in_seconds`` option is removed, a node that sets it in
        ``scylla.yaml`` uses that value when no scope sets this option.
+   * - ``repair_hints_batchlog_flush_discard_unreplayed_hints``
+     - boolean
+     - ``CLUSTER``
+     - A repair of a table with ``tombstone_gc`` in ``repair`` mode waits for the hints written
+       before it to be sent, and records no repair time if that times out. With this option on,
+       such a timeout discards those hints, so that the next repair does not wait for them again.
+       This drops every regular hint on the node, for all tables and destinations; a write
+       acknowledged at consistency level ``ANY`` that only hints hold is lost. Hints for
+       materialized views are never discarded. Default: ``true``, in effect once every node knows
+       the option.

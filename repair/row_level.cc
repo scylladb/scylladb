@@ -30,6 +30,7 @@
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/when_all.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <list>
@@ -51,6 +52,9 @@
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "db/batchlog_manager.hh"
+#include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
+#include "utils/exceptions.hh"
 #include "idl/repair.dist.hh"
 #include "readers/empty.hh"
 #include "readers/evictable.hh"
@@ -2830,6 +2834,20 @@ future<repair_update_system_table_response> repair_service::repair_update_system
     co_return repair_update_system_table_response();
 }
 
+bool repair_service::discard_unreplayed_hints_enabled() const {
+    const auto name = db::cluster_config_registry::option_name::repair_hints_batchlog_flush_discard_unreplayed_hints;
+    const auto* option = db::cluster_config_registry::find(name);
+    if (!option) {
+        on_internal_error(rlogger, format("{} is not a registered cluster config option", name));
+    }
+    // The option is on by default, so its default would take effect on an upgraded node while
+    // the others still wait for the hints it discards. Treat it as off until every node knows it.
+    if (!db::cluster_config_registry::is_supported(*option, _sp.local().features()) || !_cluster_config.local().is_ready()) {
+        return false;
+    }
+    return _cluster_config.local().resolve_boolean_config(*option, {});
+}
+
 future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_batchlog_handler(gms::inet_address from, repair_flush_hints_batchlog_request req) {
     if (this_shard_id() != 0) {
         co_return co_await container().invoke_on(0, [&] (auto& rs) {
@@ -2858,9 +2876,44 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
             co_await coroutine::all(
                 [this, &from, &req, &sync_point, &deadline] () -> future<> {
                     rlogger.info("repair[{}]: Started to flush hints for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
-                    co_await _sp.local().wait_for_hint_sync_point(std::move(sync_point), deadline);
+                    // Read once: a discard without the flush below would take the hints written since.
+                    bool discard_enabled = discard_unreplayed_hints_enabled();
+                    if (discard_enabled) {
+                        // Segments are discarded whole: closing the current ones right after creating the
+                        // sync point keeps the hints written from now on out of a later discard.
+                        auto flush = co_await coroutine::as_future(_sp.local().flush_hints());
+                        if (flush.failed()) {
+                            rlogger.warn("repair[{}]: Failed to close the hint segments for repair_flush_hints_batchlog_request from node={}, not discarding hints on a timeout: {}",
+                                    req.repair_uuid, from, flush.get_exception());
+                            discard_enabled = false;
+                        }
+                    }
+                    using hint_kind = service::storage_proxy::hint_kind;
+                    // Only regular hints can be discarded, so they are waited for separately.
+                    auto [regular, view] = co_await when_all(
+                            _sp.local().wait_for_hint_sync_point(sync_point, deadline, hint_kind::regular),
+                            _sp.local().wait_for_hint_sync_point(sync_point, deadline, hint_kind::view));
+                    // View hints are never discarded, so while they hold the flush back, the next repair
+                    // would wait for them anyway and discarding regular hints would gain nothing.
+                    if (view.failed()) {
+                        regular.ignore_ready_future();
+                        co_await coroutine::return_exception_ptr(view.get_exception());
+                    }
+                    if (regular.failed()) {
+                        auto ex = regular.get_exception();
+                        if (try_catch<timed_out_error>(ex) && discard_enabled) {
+                            rlogger.warn("repair[{}]: Timed out flushing hints for repair_flush_hints_batchlog_request from node={}, discarding the hints written before the request",
+                                    req.repair_uuid, from);
+                            // The timeout is what the coordinator has to see, a failed discard is only logged.
+                            auto discard = co_await coroutine::as_future(_sp.local().discard_hint_segments_up_to(sync_point));
+                            if (discard.failed()) {
+                                rlogger.warn("repair[{}]: Failed to discard the hints for repair_flush_hints_batchlog_request from node={}: {}",
+                                        req.repair_uuid, from, discard.get_exception());
+                            }
+                        }
+                        co_await coroutine::return_exception_ptr(std::move(ex));
+                    }
                     rlogger.info("repair[{}]: Finished to flush hints for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
-                    co_return;
                 },
                 [this, now, cache_disabled, &flush_time, &cache_time, &from, &req, &all_replayed, batchlog_deadline] () -> future<>  {
                     rlogger.info("repair[{}]: Started to flush batchlog for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
@@ -3944,6 +3997,7 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
         sharded<db::view::view_building_worker>& vbw,
         tasks::task_manager& tm,
         service::migration_manager& mm,
+        sharded<db::cluster_config_manager>& ccm,
         size_t max_repair_memory,
         config cfg)
     : _tsm(tsm)
@@ -3957,6 +4011,7 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
     , _view_building_worker(vbw)
     , _repair_module(seastar::make_shared<repair::task_manager_module>(tm, *this, max_repair_memory))
     , _mm(mm)
+    , _cluster_config(ccm)
     , _node_ops_metrics(_repair_module)
     , _max_repair_memory(max_repair_memory)
     , _memory_sem(max_repair_memory)

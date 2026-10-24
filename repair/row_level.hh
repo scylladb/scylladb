@@ -36,6 +36,7 @@ class storage_proxy;
 
 namespace db {
 
+class cluster_config_manager;
 class system_keyspace;
 class system_distributed_keyspace;
 class batchlog_manager;
@@ -133,6 +134,7 @@ private:
     sharded<db::view::view_building_worker>& _view_building_worker;
     shared_ptr<repair::task_manager_module> _repair_module;
     service::migration_manager& _mm;
+    sharded<db::cluster_config_manager>& _cluster_config;
     node_ops_metrics _node_ops_metrics;
     std::unordered_map<node_repair_meta_id, repair_meta_ptr> _repair_metas;
     uint32_t _next_repair_meta_id = 0;  // used only on shard 0
@@ -168,6 +170,7 @@ private:
 
     future<> init_ms_handlers();
     future<> uninit_ms_handlers();
+    bool discard_unreplayed_hints_enabled() const;
 
     seastar::semaphore _flush_hints_batchlog_sem{1};
     gc_clock::time_point _flush_hints_batchlog_time;
@@ -193,6 +196,7 @@ public:
             sharded<db::view::view_building_worker>& vbw,
             tasks::task_manager& tm,
             service::migration_manager& mm,
+            sharded<db::cluster_config_manager>& ccm,
             size_t max_repair_memory,
             repair_service::config cfg = default_config()
             );

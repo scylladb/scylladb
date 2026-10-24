@@ -75,6 +75,12 @@ constexpr std::array registry_options = {
         .scopes = table_oriented_scopes,
         .default_value = auto_repair_threshold_default_seconds,
     },
+    option{
+        .name = option_name::repair_hints_batchlog_flush_discard_unreplayed_hints,
+        .description = "Discard the regular hints a repair gave up waiting for, so that the next repair does not wait for them again. This covers every hint on the node, for all tables and destinations; a write acknowledged at consistency level ANY that only hints hold is lost. View hints are never discarded",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = true,
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
