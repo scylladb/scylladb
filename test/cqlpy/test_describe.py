@@ -766,7 +766,7 @@ def test_generic_desc_user_defined(scylla_only, cql, test_keyspace):
 # The test is marked scylla_only because it uses Lua as UDF language.
 def test_desc_udf_uda(cql, test_keyspace, scylla_only):
     with new_function(cql, test_keyspace, "(a int, b int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE LUA AS 'return a+b'") as fn:
-        with new_aggregate(cql, test_keyspace, f"(int) SFUNC {fn} STYPE int") as aggr:
+        with new_aggregate(cql, test_keyspace, f"(int) SFUNC {fn} STYPE int INITCOND 0") as aggr:
 
             with pytest.raises(InvalidRequest):
                 cql.execute(f"DESC FUNCTION {test_keyspace}.{aggr}")
@@ -977,6 +977,7 @@ def test_aggregate_quoting(scylla_only, cql, test_keyspace):
             CREATE AGGREGATE \"{ks_name}\".\"{name}\"(int)
             SFUNC \"{sfunc_name}\"
             STYPE int
+            INITCOND 0
         """)
         desc = cql.execute(f"DESC AGGREGATE \"{ks_name}\".\"{name}\"").one().create_statement
 

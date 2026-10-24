@@ -1131,7 +1131,7 @@ def testAggregatesReferencedInAggregates(cql, cassandra_bug):
 # Reproduces SCYLLADB-5158 (CREATE AGGREGATE should reject a RETURNS NULL ON
 # NULL INPUT state function without INITCOND) and #24344 (such a state
 # function called with null should leave the state unchanged).
-@pytest.mark.xfail(reason="SCYLLADB-5158, #24344")
+@pytest.mark.xfail(reason="#24344")
 def testCalledOnNullInput(cql):
     with create_keyspace(cql, REPLICATION) as ks:
         fStateNonNull = createFunction(cql, ks,
