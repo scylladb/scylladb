@@ -68,6 +68,7 @@
 #include "absl-flat_hash_map.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/object_storage_page_cache_stats.hh"
 #include "db/rate_limiter.hh"
 #include "db/operation_type.hh"
 #include "locator/tablets.hh"
@@ -158,6 +159,7 @@ class large_data_handler;
 class system_table_corrupt_data_handler;
 class nop_corrupt_data_handler;
 class system_keyspace;
+class object_storage_page_cache_table;
 
 struct snapshot_entries;
 
@@ -585,6 +587,12 @@ private:
     db::rate_limiter::label _rate_limiter_label_for_reads;
 
     void set_metrics();
+    // The statistics of this table's reads through the object storage page
+    // cache, if its keyspace has the 'disk_cache' option. The reads which are
+    // still running hold them too, so they outlive the table if it is dropped
+    // while they run. They are declared before _metrics, which reports them, so
+    // that _metrics is destroyed first.
+    lw_shared_ptr<sstables::object_storage_page_cache_table_stats> _page_cache_stats;
     seastar::metrics::metric_groups _metrics;
 
     // holds average cache hit rate of all shards
@@ -866,7 +874,8 @@ private:
                                         streamed_mutation::forwarding fwd,
                                         mutation_reader::forwarding fwd_mr,
                                         const sstables::sstable_predicate& = sstables::default_sstable_predicate(),
-                                        sstables::integrity_check integrity = sstables::integrity_check::no) const;
+                                        sstables::integrity_check integrity = sstables::integrity_check::no,
+                                        sstables::populate_disk_cache populate = sstables::populate_disk_cache::no) const;
 
     lw_shared_ptr<const sstables::sstable_set> make_compound_sstable_set() const;
     // Compound sstable set must be refreshed whenever any of its managed sets are changed
@@ -1861,6 +1870,9 @@ private:
     std::unique_ptr<db::nop_corrupt_data_handler> _nop_corrupt_data_handler;
 
     std::unique_ptr<sstables::sstables_manager> _user_sstables_manager;
+    // The object storage page cache, which the user sstables manager uses, if
+    // its experimental feature is enabled.
+    shared_ptr<db::object_storage_page_cache_table> _object_storage_page_cache;
     std::unique_ptr<sstables::sstables_manager> _system_sstables_manager;
 
     query::result_memory_limiter _result_memory_limiter;

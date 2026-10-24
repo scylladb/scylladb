@@ -363,8 +363,8 @@ public:
 };
 
 inline file make_tracked_index_file(sstable& sst, reader_permit permit, tracing::trace_state_ptr trace_state,
-                                    use_caching caching) {
-    auto f = caching ? sst.index_file() : sst.uncached_index_file();
+                                    use_caching caching, populate_disk_cache populate) {
+    auto f = caching ? sst.index_file() : sst.uncached_index_file(populate);
     f = make_tracked_file(std::move(f), std::move(permit));
     if (!trace_state) {
         return f;
@@ -444,13 +444,15 @@ class index_reader final : public abstract_index_reader {
     logalloc::allocating_section _alloc_section;
     logalloc::region& _region;
     use_caching _use_caching;
+    populate_disk_cache _populate;
     bool _single_page_read;
     abort_source _abort;
 
     future<std::unique_ptr<index_consume_entry_context<index_consumer>>> make_context(uint64_t begin, uint64_t end, index_consumer& consumer) {
-        auto index_file = make_tracked_index_file(*_sstable, _permit, _trace_state, _use_caching);
+        auto index_file = make_tracked_index_file(*_sstable, _permit, _trace_state, _use_caching, _populate);
         auto input = input_stream<char>(co_await _sstable->get_storage().make_data_or_index_source(
-            *_sstable, component_type::Index, index_file, begin, (_single_page_read ? end : _sstable->index_size()) - begin, get_file_input_stream_options()));
+            *_sstable, component_type::Index, index_file, begin, (_single_page_read ? end : _sstable->index_size()) - begin, get_file_input_stream_options(),
+            _populate));
         auto trust_pi = trust_promoted_index(_sstable->has_correct_promoted_index_entries());
         co_return std::make_unique<index_consume_entry_context<index_consumer>>(*_sstable, _permit, consumer, trust_pi, std::move(input),
                             begin, end - begin, _sstable->get_column_translation(), _abort, _trace_state);
@@ -786,20 +788,22 @@ public:
     index_reader(shared_sstable sst, reader_permit permit,
                  tracing::trace_state_ptr trace_state = {},
                  use_caching caching = use_caching::yes,
-                 bool single_partition_read = false)
+                 bool single_partition_read = false,
+                 populate_disk_cache populate = populate_disk_cache::no)
         : _sstable(std::move(sst))
         , _permit(std::move(permit))
         , _trace_state(std::move(trace_state))
-        , _local_index_cache(caching ? nullptr
+        , _local_index_cache(_sstable->index_caching(caching, populate) ? nullptr
             : std::make_unique<partition_index_cache>(_sstable->manager().get_cache_tracker().get_lru(),
                                                       _sstable->manager().get_cache_tracker().region(),
                                                       _sstable->manager().get_cache_tracker().get_partition_index_cache_stats()))
-        , _index_cache(caching ? *_sstable->_index_cache : *_local_index_cache)
+        , _index_cache(_sstable->index_caching(caching, populate) ? *_sstable->_index_cache : *_local_index_cache)
         , _alloc_section(abstract_formatter([sst = _sstable] (fmt::format_context& ctx) {
             fmt::format_to(ctx.out(), "index_reader {}", sst->get_filename());
         }))
         , _region(_sstable->manager().get_cache_tracker().region())
-        , _use_caching(caching)
+        , _use_caching(_sstable->index_caching(caching, populate))
+        , _populate(populate)
         , _single_page_read(single_partition_read) // all entries for a given partition are within a single page
     {
         if (sstlog.is_enabled(logging::log_level::trace)) {
@@ -813,12 +817,13 @@ public:
         reader_permit permit,
         tracing::trace_state_ptr trace_state,
         file_input_stream_options options,
-        use_caching caching)
+        use_caching caching,
+        populate_disk_cache populate)
     {
         if (sst->get_version() >= sstable_version_types::mc) [[likely]] {
             seastar::shared_ptr<cached_file> cached_file_ptr = caching
                     ? sst->_cached_index_file
-                    : seastar::make_shared<cached_file>(make_tracked_index_file(*sst, permit, trace_state, caching),
+                    : seastar::make_shared<cached_file>(make_tracked_index_file(*sst, permit, trace_state, caching, populate),
                                                         sst->manager().get_cache_tracker().get_index_cached_file_stats(),
                                                         sst->manager().get_cache_tracker().get_lru(),
                                                         sst->manager().get_cache_tracker().region(),
@@ -829,7 +834,7 @@ public:
                 sst->get_column_translation(), cached_file_ptr, pi.num_blocks, trace_state, sst->features());
         }
 
-        auto file = make_tracked_index_file(*sst, permit, std::move(trace_state), caching);
+        auto file = make_tracked_index_file(*sst, permit, std::move(trace_state), caching, populate);
         auto promoted_index_stream = make_file_input_stream(std::move(file), pi.promoted_index_start, pi.promoted_index_size,options);
         return std::make_unique<scanning_clustered_index_cursor>(*sst->get_schema(), permit,
             std::move(promoted_index_stream), pi.promoted_index_size, pi.num_blocks, std::nullopt);
@@ -874,7 +879,7 @@ public:
                 if (page.has_promoted_index(bound.current_index_idx)) {
                     promoted_index& pi = page.get_promoted_index(bound.current_index_idx);
                     bound.clustered_cursor = make_cursor(pi, _sstable, _permit, _trace_state,
-                        get_file_input_stream_options(), _use_caching);
+                        get_file_input_stream_options(), _use_caching, _populate);
                 }
             });
             if (!bound.clustered_cursor) {

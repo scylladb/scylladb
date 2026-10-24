@@ -5661,12 +5661,24 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
         co_return sst;
     };
 
-    co_await smp::submit_to(pending.shard, [this, tablet, load_sstable, d = std::move(d)] () mutable -> future<> {
+    co_await smp::submit_to(pending.shard, [this, tablet, leaving, load_sstable, d = std::move(d)] () mutable -> future<> {
         // Loads cloned sstables from leaving replica into pending one.
         auto& table = _db.local().find_column_family(tablet.table);
         auto& sstm = table.get_sstables_manager();
         auto op = table.stream_in_progress();
         dht::auto_refreshing_sharder sharder(table.shared_from_this());
+
+        // A clone keeps the sstable_id of its source (if it shares its
+        // objects), so the pages which the leaving replica cached for the
+        // sstables are useful here too. Copy them before loading the
+        // sstables, which already reads some of their pages.
+        std::vector<sstables::sstable_id> sids;
+        for (const auto& sst_desc : d) {
+            if (sst_desc.sid) {
+                sids.push_back(*sst_desc.sid);
+            }
+        }
+        co_await sstm.copy_cached_pages(table.get_storage_options(), sids, leaving.shard);
 
         std::unordered_set<sstables::shared_sstable> ssts;
         for (auto&& sst_desc : d) {

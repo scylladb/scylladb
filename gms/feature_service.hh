@@ -204,6 +204,9 @@ public:
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+    // Gates the 'disk_cache' option of a keyspace's STORAGE clause, which older
+    // nodes reject when they load the keyspace's schema.
+    gms::feature object_storage_page_cache { *this, "OBJECT_STORAGE_PAGE_CACHE"sv };
 
     // Features created at run time rather than declared above: one per cluster config
     // option, from the registry at construction, plus any a test adds. Node-based, so a

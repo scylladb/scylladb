@@ -30,6 +30,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/coroutine/try_future.hh>
 #include "db/system_keyspace.hh"
+#include "db/object_storage_page_cache_table.hh"
 #include "db/system_keyspace_sstables_registry.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/commitlog/commitlog.hh"
@@ -1181,7 +1182,11 @@ future<> database::create_local_system_table(
         schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
     auto ks_name = table->ks_name();
     if (!has_keyspace(ks_name)) {
-        bool durable = _cfg.data_file_directories().size() > 0;
+        // Local system keyspaces use durable writes (the commitlog), except
+        // system_cache, the keyspace of the object-storage disk cache: losing
+        // the most recently cached pages in a crash is acceptable, so it does
+        // not need the commitlog.
+        bool durable = _cfg.data_file_directories().size() > 0 && ks_name != db::object_storage_page_cache_table::SYSTEM_CACHE;
         auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
                 "org.apache.cassandra.locator.LocalStrategy",
                 locator::replication_strategy_config_options{},
@@ -3832,9 +3837,21 @@ void database::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
     _large_data_handler->plug_system_keyspace(sys_ks);
     _corrupt_data_handler->plug_system_keyspace(sys_ks);
     _user_sstables_manager->plug_sstables_registry(std::make_unique<db::system_keyspace_sstables_registry>(sys_ks));
+    if (_cfg.check_experimental(db::experimental_features_t::feature::OBJECT_STORAGE_PAGE_CACHE)) {
+        _object_storage_page_cache = make_shared<db::object_storage_page_cache_table>(sys_ks.query_processor(),
+                utils::updateable_value<uint64_t>(_cfg.object_storage_page_cache_size_in_mb),
+                utils::updateable_value<uint64_t>(_cfg.object_storage_page_cache_max_remembered_hits));
+        _object_storage_page_cache->start(_user_sstables_manager->maintenance_sg());
+        _user_sstables_manager->plug_object_storage_page_cache(_object_storage_page_cache);
+    }
 }
 
 future<> database::unplug_system_keyspace() noexcept {
+    _user_sstables_manager->unplug_object_storage_page_cache();
+    if (_object_storage_page_cache) {
+        co_await _object_storage_page_cache->stop();
+        _object_storage_page_cache = nullptr;
+    }
     _user_sstables_manager->unplug_sstables_registry();
     co_await _compaction_manager.unplug_system_keyspace();
     co_await _large_data_handler->unplug_system_keyspace();
