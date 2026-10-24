@@ -67,7 +67,7 @@ create_function_statement::prepare_schema_mutations(query_processor& qp, const q
 
     if (func) {
         m = co_await service::prepare_new_function_announcement(qp.proxy(), func, ts);
-        ret = create_schema_change(*func, true);
+        ret = create_schema_change(*func, change_type());
     }
 
     co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());

@@ -555,8 +555,7 @@ def assertSchemaChange(cql, query, change, target, keyspace, name, *argTypes):
     assert [re.sub(r'<frozen<(tuple<[^<>]*>)>', r'<\1', t) for t in function.argument_types] == list(argTypes)
 
 # Reproduces SCYLLADB-5168 (CREATE OR REPLACE AGGREGATE of an existing
-# aggregate reports CREATED instead of UPDATED)
-@pytest.mark.xfail(reason="SCYLLADB-5168")
+# aggregate reported CREATED instead of UPDATED)
 def testSchemaChange(cql):
     with create_keyspace(cql, REPLICATION) as KEYSPACE:
         f = createFunction(cql, KEYSPACE,

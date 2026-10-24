@@ -90,7 +90,7 @@ create_aggregate_statement::prepare_schema_mutations(query_processor& qp, const 
     auto aggregate = dynamic_pointer_cast<functions::user_aggregate>(co_await validate_while_executing(qp));
     if (aggregate) {
         m = co_await service::prepare_new_aggregate_announcement(qp.proxy(), aggregate, ts);
-        ret = create_schema_change(*aggregate, true);
+        ret = create_schema_change(*aggregate, change_type());
     }
 
     co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
