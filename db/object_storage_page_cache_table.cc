@@ -430,7 +430,9 @@ object_storage_page_cache_table::get_pages(sstables::sstable_id sst, sstables::c
     // behind it, and so would all the reads. So the permit is of a semaphore
     // without limits, which never makes a read wait - for admission, or for
     // memory (database::object_storage_page_cache_semaphore()). The lookup's
-    // memory is bounded anyway, by max_pages.
+    // memory is bounded anyway, by max_pages, and the read's own permit
+    // tracks the pages which the read keeps (see
+    // make_data_or_index_source()).
     auto& db = _qp.proxy().local_db();
     auto& table = db.find_column_family(SYSTEM_CACHE, PAGECACHE);
     auto s = table.schema();
