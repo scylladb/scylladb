@@ -866,6 +866,7 @@ public:
     future<> start_hints_manager();
     void allow_replaying_hints() noexcept;
     future<> drain_hints_for_left_nodes();
+    future<> drain_all_hints();
     future<> abort_view_writes();
     future<> abort_batch_writes();
 
