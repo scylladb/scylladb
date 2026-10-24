@@ -14,6 +14,7 @@
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/strong_consistency/table_metrics.hh"
+#include "service/strong_consistency/state_machine.hh"
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 #include "utils/hash.hh"
@@ -160,6 +161,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     gms::feature_service& _features;
     gms::gossiper& _gossiper;
     db::raft_commitlog_replay_buffer& _raft_replay_buffer;
+    state_machine_stats _state_machine_stats;
     std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
     // Keyed by keyspace and table name, which is what the series are labelled
     // with, so that two entries can never register colliding series.

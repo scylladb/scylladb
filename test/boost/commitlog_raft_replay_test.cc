@@ -2224,9 +2224,10 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
                 const auto segments_before = log.get_active_segment_names();
                 BOOST_REQUIRE(!segments_before.empty());
 
+                service::strong_consistency::state_machine_stats stats;
                 auto state_machine = service::strong_consistency::make_state_machine(
                         locator::global_tablet_id{schema->id(), locator::tablet_id(0)}, gid, db,
-                        env.migration_manager().local(), env.get_system_keyspace().local(), storage);
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, stats);
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 // Abort the apply after the handle is acquired and before the entry reaches a memtable.
@@ -2343,6 +2344,64 @@ SEASTAR_TEST_CASE(test_segment_of_applied_entries_is_reclaimed_strong_consistenc
 
 SEASTAR_TEST_CASE(test_segment_of_applied_entries_is_reclaimed_logstor_strong_consistency) {
     return segment_of_applied_entries_is_reclaimed_impl(true);
+}
+
+// Test that state_machine::apply() counts each applied entry in the database's
+// total_writes. It applies them with apply_in_memory(), which doesn't count them.
+SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+
+    return do_with_cql_env([] (cql_test_env& env) -> future<> {
+        co_await env.get_storage_service().local().set_tablet_balancing_enabled(false);
+        co_await env.execute_cql("CREATE KEYSPACE test_ks WITH replication = {'class': 'NetworkTopologyStrategy', "
+                "'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'");
+        co_await env.execute_cql("CREATE TABLE test_ks.tbl (pk int PRIMARY KEY, c int)");
+
+        const auto table = env.local_db().find_schema("test_ks", "tbl")->id();
+        const auto& replicas = env.local_token_metadata_ptr()->tablets()
+                .get_tablet_map(table)
+                .get_tablet_info(locator::tablet_id(0))
+                .replicas;
+        BOOST_REQUIRE_EQUAL(replicas.size(), 1);
+
+        // Only the shard of the tablet's replica holds the tablet's data.
+        co_await env.db().invoke_on(replicas.front().shard, [&env, table] (replica::database& db) {
+            return seastar::async([&env, &db, table] {
+                const auto schema = db.find_schema(table);
+                raft::log_entry_ptr_list entries;
+                for (int pk = 1; pk <= 3; ++pk) {
+                    mutation m(schema, partition_key::from_singular(*schema, pk));
+                    m.set_cell(clustering_key::make_empty(), "c", data_value(pk), api::new_timestamp());
+                    raft::command cmd;
+                    ser::serialize(cmd, service::strong_consistency::raft_command{.mutation = freeze(m)});
+                    entries.push_back(make_lw_shared<raft::log_entry>(raft::log_entry{
+                        .term = raft::term_t(1),
+                        .idx = raft::index_t(pk),
+                        .data = std::move(cmd)
+                    }));
+                }
+
+                const auto gid = make_group_id();
+                service::strong_consistency::raft_groups_storage storage(
+                        env.qp().local(), gid, raft::server_id::create_random_id(),
+                        this_shard_id(), *db.commitlog(), table,
+                        service::strong_consistency::replayed_data_per_group{});
+                auto stop_storage = defer([&] noexcept { storage.abort().get(); });
+                storage.store_log_entries(entries).get();
+
+                service::strong_consistency::state_machine_stats stats;
+                auto state_machine = service::strong_consistency::make_state_machine(
+                        locator::global_tablet_id{table, locator::tablet_id(0)}, gid, db,
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, stats);
+                auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
+
+                const auto writes_before = db.get_stats().total_writes;
+                state_machine->apply(entries).get();
+                BOOST_REQUIRE_EQUAL(db.get_stats().total_writes - writes_before, 3);
+            });
+        });
+    }, std::move(db_cfg_ptr));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

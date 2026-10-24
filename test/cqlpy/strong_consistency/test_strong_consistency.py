@@ -21,7 +21,8 @@ from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from .. import nodetool
-from ..util import new_materialized_view, new_test_table, unique_name
+from ..test_service_levels import new_service_level
+from ..util import ScyllaMetrics, new_materialized_view, new_session, new_test_table, new_user, unique_name
 
 
 def test_reject_user_provided_timestamps(cql, sc_keyspace):
@@ -708,3 +709,37 @@ def test_mutation_fragments_consistency_level_on_sc_table(cql, sc_keyspace):
         for cl in (ConsistencyLevel.QUORUM, ConsistencyLevel.LOCAL_QUORUM, ConsistencyLevel.ALL):
             with pytest.raises(InvalidRequest, match=error_msg):
                 cql.execute(SimpleStatement(query, consistency_level=cl))
+
+
+def test_coordinator_metrics_per_scheduling_group(cql, sc_keyspace):
+    """
+    Verify that the coordinator metrics are split by scheduling group: the requests of
+    a role with its own service level are counted under that service level's
+    scheduling group, and a request of another role is not.
+
+    No other test runs in that scheduling group: the service level is attached only to
+    this test's role. But the group may be reused from a dropped service level and keep
+    its counts, so the test compares counts before and after its requests.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, c int") as table, \
+            new_user(cql, with_superuser_privileges=True) as role, \
+            new_service_level(cql, role=role) as sl, \
+            new_session(cql, role) as session:
+        scheduling_group = f"sl:{sl}"
+
+        def counts():
+            metrics = ScyllaMetrics.query(cql)
+            writes = metrics.get('scylla_strong_consistency_coordinator_write_latency_count',
+                                 {'scheduling_group_name': scheduling_group})
+            reads = metrics.get('scylla_strong_consistency_coordinator_read_latency_count',
+                                {'scheduling_group_name': scheduling_group, 'read_type': 'linearizable'})
+            return (writes or 0, reads or 0)
+
+        writes_before, reads_before = counts()
+        session.execute(f"INSERT INTO {table} (pk, c) VALUES (1, 1)")
+        session.execute(f"INSERT INTO {table} (pk, c) VALUES (2, 2)")
+        session.execute(f"SELECT * FROM {table} WHERE pk = 1")
+        assert counts() == (writes_before + 2, reads_before + 1)
+
+        cql.execute(f"INSERT INTO {table} (pk, c) VALUES (3, 3)")
+        assert counts() == (writes_before + 2, reads_before + 1)

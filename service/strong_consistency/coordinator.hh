@@ -13,6 +13,7 @@
 #include "query/query-result.hh"
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>
+#include <seastar/core/scheduling_specific.hh>
 #include <seastar/util/noncopyable_function.hh>
 
 namespace gms {
@@ -48,16 +49,28 @@ using value_or_redirect = std::variant<T, need_redirect>;
 
 struct stats {
     utils::timed_rate_moving_average_summary_and_histogram write;
+    uint64_t foreground_writes = 0;
     uint64_t write_errors_timeout = 0;
     uint64_t write_errors_status_unknown = 0;
+    uint64_t write_errors_unavailable = 0;
+    uint64_t write_errors_table_dropped = 0;
     uint64_t write_errors_other = 0;
+    uint64_t write_retries_wait_for_leader = 0;
+    uint64_t write_retries_stale_leader = 0;
+    uint64_t write_retries_not_a_leader = 0;
+    uint64_t write_retries_dropped_entry = 0;
     uint64_t write_node_bounces = 0;
     uint64_t write_shard_bounces = 0;
 
     utils::timed_rate_moving_average_summary_and_histogram linearizable_read;
     utils::timed_rate_moving_average_summary_and_histogram non_linearizable_read;
+    uint64_t foreground_reads = 0;
     uint64_t read_errors_timeout = 0;
+    uint64_t read_errors_unavailable = 0;
+    uint64_t read_errors_table_dropped = 0;
     uint64_t read_errors_other = 0;
+    uint64_t read_retries_wait_for_leader = 0;
+    uint64_t read_retries_stale_leader = 0;
     uint64_t read_node_bounces = 0;
     uint64_t read_shard_bounces = 0;
 
@@ -74,7 +87,7 @@ private:
     groups_manager& _groups_manager;
     replica::database& _db;
     gms::gossiper& _gossiper;
-    stats _stats;
+    scheduling_group_key _stats_key;
 
     class replica_selector;
     struct operation_ctx;
@@ -89,9 +102,10 @@ private:
         abort_source& as,
         bool needs_leader);
 public:
-    coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper);
+    coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper,
+        scheduling_group_key stats_key);
 
-    stats& get_stats() { return _stats; }
+    stats& get_stats() { return scheduling_group_get_specific<stats>(_stats_key); }
 
     // What a request that ran on this node hands back. `routing_info` is set when the
     // request carried a tablet version block that doesn't match the tablet's current

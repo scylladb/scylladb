@@ -62,74 +62,138 @@ void stats::register_stats() {
     namespace sm = seastar::metrics;
     sm::label reason_label("reason");
     sm::label read_type_label("read_type");
+    const sm::label_instance sg_label("scheduling_group_name", current_scheduling_group().name());
 
-    _metrics.add_group("strong_consistency_coordinator", {
+    // Called again when the scheduling group is renamed.
+    auto new_metrics = sm::metric_groups();
+    new_metrics.add_group("strong_consistency_coordinator", {
         sm::make_summary("write_latency_summary", sm::description("Strong consistency write latency summary"),
-            [this] { return to_metrics_summary(write.summary()); }).set_skip_when_empty(),
+            [this] { return to_metrics_summary(write.summary()); })(sg_label).set_skip_when_empty(),
 
         sm::make_histogram("write_latency", sm::description("Strong consistency write latency histogram"),
-            {}, [this] { return to_metrics_histogram(write.histogram()); })
+            {sg_label}, [this] { return to_metrics_histogram(write.histogram()); })
             .aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+
+        sm::make_queue_length("foreground_writes", foreground_writes,
+            sm::description("number of strong consistency write requests being executed on this shard, "
+                "a request forwarded to another node is counted there"), {sg_label})
+            .set_skip_when_empty(),
 
         sm::make_counter("write_errors", write_errors_timeout,
             sm::description("number of strong consistency write requests that failed"),
-            {reason_label("timeout")})
+            {reason_label("timeout"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("write_errors", write_errors_status_unknown,
             sm::description("number of strong consistency write requests that failed"),
-            {reason_label("status_unknown")})
+            {reason_label("status_unknown"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("write_errors", write_errors_unavailable,
+            sm::description("number of strong consistency write requests that failed"),
+            {reason_label("unavailable"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("write_errors", write_errors_table_dropped,
+            sm::description("number of strong consistency write requests that failed"),
+            {reason_label("table_dropped"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("write_errors", write_errors_other,
             sm::description("number of strong consistency write requests that failed"),
-            {reason_label("other")})
+            {reason_label("other"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("write_retries", write_retries_wait_for_leader,
+            sm::description("number of times strong consistency write requests were retried"),
+            {reason_label("wait_for_leader"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("write_retries", write_retries_stale_leader,
+            sm::description("number of times strong consistency write requests were retried"),
+            {reason_label("stale_leader"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("write_retries", write_retries_not_a_leader,
+            sm::description("number of times strong consistency write requests were retried"),
+            {reason_label("not_a_leader"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("write_retries", write_retries_dropped_entry,
+            sm::description("number of times strong consistency write requests were retried"),
+            {reason_label("dropped_entry"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("write_node_bounces", write_node_bounces,
-            sm::description("number of strong consistency write requests bounced to another node"))
+            sm::description("number of strong consistency write requests bounced to another node"), {sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("write_shard_bounces", write_shard_bounces,
-            sm::description("number of strong consistency write requests bounced to another shard"))
+            sm::description("number of strong consistency write requests bounced to another shard"), {sg_label})
             .set_skip_when_empty(),
 
         sm::make_summary("read_latency_summary", sm::description("Strong consistency read latency summary"),
-            [this] { return to_metrics_summary(linearizable_read.summary()); })(read_type_label("linearizable"))
+            [this] { return to_metrics_summary(linearizable_read.summary()); })(read_type_label("linearizable"))(sg_label)
             .set_skip_when_empty(),
 
         sm::make_histogram("read_latency", sm::description("Strong consistency read latency histogram"),
-            {}, [this] { return to_metrics_histogram(linearizable_read.histogram()); })
+            {sg_label}, [this] { return to_metrics_histogram(linearizable_read.histogram()); })
             .aggregate({seastar::metrics::shard_label})(read_type_label("linearizable"))
             .set_skip_when_empty(),
 
         sm::make_summary("read_latency_summary", sm::description("Strong consistency read latency summary"),
-            [this] { return to_metrics_summary(non_linearizable_read.summary()); })(read_type_label("non_linearizable"))
+            [this] { return to_metrics_summary(non_linearizable_read.summary()); })(read_type_label("non_linearizable"))(sg_label)
             .set_skip_when_empty(),
 
         sm::make_histogram("read_latency", sm::description("Strong consistency read latency histogram"),
-            {}, [this] { return to_metrics_histogram(non_linearizable_read.histogram()); })
+            {sg_label}, [this] { return to_metrics_histogram(non_linearizable_read.histogram()); })
             .aggregate({seastar::metrics::shard_label})(read_type_label("non_linearizable"))
+            .set_skip_when_empty(),
+
+        sm::make_queue_length("foreground_reads", foreground_reads,
+            sm::description("number of strong consistency read requests being executed on this shard, "
+                "a request forwarded to another node is counted there"), {sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("read_errors", read_errors_timeout,
             sm::description("number of strong consistency read requests that failed"),
-            {reason_label("timeout")})
+            {reason_label("timeout"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("read_errors", read_errors_unavailable,
+            sm::description("number of strong consistency read requests that failed"),
+            {reason_label("unavailable"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("read_errors", read_errors_table_dropped,
+            sm::description("number of strong consistency read requests that failed"),
+            {reason_label("table_dropped"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("read_errors", read_errors_other,
             sm::description("number of strong consistency read requests that failed"),
-            {reason_label("other")})
+            {reason_label("other"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("read_retries", read_retries_wait_for_leader,
+            sm::description("number of times strong consistency read requests were retried"),
+            {reason_label("wait_for_leader"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("read_retries", read_retries_stale_leader,
+            sm::description("number of times strong consistency read requests were retried"),
+            {reason_label("stale_leader"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("read_node_bounces", read_node_bounces,
-            sm::description("number of strong consistency read requests bounced to another node"))
+            sm::description("number of strong consistency read requests bounced to another node"), {sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("read_shard_bounces", read_shard_bounces,
-            sm::description("number of strong consistency read requests bounced to another shard"))
+            sm::description("number of strong consistency read requests bounced to another shard"), {sg_label})
             .set_skip_when_empty(),
     });
+    _metrics = std::exchange(new_metrics, {});
 }
 
 template <std::predicate<const locator::tablet_replica&> Pred>
@@ -284,9 +348,9 @@ public:
     }
 
     // The live replica the request may be served by that is closest to this node,
-    // preferring the same rack. Throws unavailable_exception if none is alive: there is
-    // no node worth forwarding to.
-    locator::tablet_replica closest_replica(const gms::gossiper& gossiper) const {
+    // preferring the same rack. Nullopt if none is alive: there is no node worth
+    // forwarding to.
+    std::optional<locator::tablet_replica> closest_replica(const gms::gossiper& gossiper) const {
         // sort_by_proximity() works on hosts, so the replica is looked up again after it.
         host_id_vector_replica_set hosts;
         _serving.for_each([&] (const locator::tablet_replica& replica) {
@@ -296,8 +360,7 @@ public:
         });
 
         if (hosts.empty()) {
-            throw exceptions::unavailable_exception(format("All replicas of tablet {} are down", _tablet_id),
-                    db::consistency_level::ONE, 1, 0);
+            return std::nullopt;
         }
         const auto& topo = _erm->get_token_metadata().get_topology();
         topo.sort_by_proximity(topo.my_host_id(), hosts);
@@ -396,10 +459,15 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
                 // Cached leader is no longer a replica/alive, evict it.
                 _groups_manager.leader_cache().erase(group_id);
             }
-            return make_ready_future<value_or_redirect<operation_ctx>>(
-                redirect_to_leader(replicas.closest_replica(_gossiper), _groups_manager, group_id));
         }
-        return make_ready_future<value_or_redirect<operation_ctx>>(redirect_to_replica(replicas.closest_replica(_gossiper)));
+        const auto target = replicas.closest_replica(_gossiper);
+        if (!target) {
+            return make_exception_future<value_or_redirect<operation_ctx>>(exceptions::unavailable_exception(
+                    format("All replicas of tablet {} are down", replicas.tablet_id()), db::consistency_level::ONE, 1, 0));
+        }
+        return make_ready_future<value_or_redirect<operation_ctx>>(needs_leader
+                ? redirect_to_leader(*target, _groups_manager, group_id)
+                : redirect_to_replica(*target));
     }
 
     return utils::get_local_injector().inject(
@@ -414,12 +482,13 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     });
 }
 
-coordinator::coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper)
+coordinator::coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper,
+        scheduling_group_key stats_key)
     : _groups_manager(groups_manager)
     , _db(db)
     , _gossiper(gossiper)
+    , _stats_key(stats_key)
 {
-    _stats.register_stats();
 }
 
 auto coordinator::mutate(schema_ptr schema,
@@ -435,7 +504,9 @@ auto coordinator::mutate(schema_ptr schema,
 
     utils::latency_counter lc;
     lc.start();
-    auto mark_write_latency = defer([this, &lc] noexcept { _stats.write.mark(lc.stop().latency()); });
+    auto mark_write_latency = defer([this, &lc] noexcept { get_stats().write.mark(lc.stop().latency()); });
+    ++get_stats().foreground_writes;
+    auto end_foreground_write = defer([this] noexcept { --get_stats().foreground_writes; });
 
     // State of the request as it advances through its stages. Each pointer
     // is null until the corresponding stage has been reached, so log messages
@@ -471,29 +542,38 @@ auto coordinator::mutate(schema_ptr schema,
                 || try_catch<seastar::timed_out_error>(ex)
                 || try_catch<raft::stopped_error>(ex)) {
             if (!_db.column_family_exists(schema->id())) {
+                ++get_stats().write_errors_table_dropped;
                 return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
             }
             logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
-            ++_stats.write_errors_timeout;
+            ++get_stats().write_errors_timeout;
             return std::make_exception_ptr(write_timeout(schema->ks_name(), schema->cf_name()));
         } else if (try_catch<raft::commit_status_unknown>(ex)) {
             logger.debug("mutate(): add_entry, got commit_status_unknown {}, table {}.{}, {}",
                 ex, schema->ks_name(), schema->cf_name(), state_fmt);
 
-            ++_stats.write_errors_status_unknown;
+            ++get_stats().write_errors_status_unknown;
             // FIXME: use a dedicated ERROR_CODE instead of SERVER_ERROR
             return std::make_exception_ptr(exceptions::server_exception(
                 "The outcome of this statement is unknown. It may or may not have been applied. "
                 "Retrying the statement may be necessary."));
+        } else if (try_catch<exceptions::unavailable_exception>(ex)) {
+            logger.trace("mutate(): no live replica, table {}.{}, token {}", schema->ks_name(), schema->cf_name(), token);
+            ++get_stats().write_errors_unavailable;
+            return ex;
+        } else if (try_catch<replica::no_such_column_family>(ex)) {
+            logger.trace("mutate(): table {}.{} was dropped, token {}", schema->ks_name(), schema->cf_name(), token);
+            ++get_stats().write_errors_table_dropped;
+            return ex;
         } else if (auto* too_big = try_catch<raft::command_is_too_big_error>(ex)) {
             logger.trace("mutate(): command of {} bytes exceeds the limit of {}, table {}.{}, token {}",
                 too_big->command_size, too_big->limit, schema->ks_name(), schema->cf_name(), token);
-            ++_stats.write_errors_other;
+            ++get_stats().write_errors_other;
             return std::make_exception_ptr(exceptions::invalid_request_exception(fmt::format(
                 "Strongly consistent write of {} bytes exceeds the limit of {} bytes", too_big->command_size, too_big->limit)));
         } else {
-            ++_stats.write_errors_other;
+            ++get_stats().write_errors_other;
             logger.trace("mutate(): unknown exception {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
@@ -511,6 +591,8 @@ auto coordinator::mutate(schema_ptr schema,
     auto op_result = std::move(op_result_future).get();
 
     if (auto* redirect = get_if<need_redirect>(&op_result)) {
+        // A redirected request is timed where it is executed.
+        mark_write_latency.cancel();
         co_return std::move(*redirect);
     }
     op = &get<operation_ctx>(op_result);
@@ -554,6 +636,7 @@ auto coordinator::mutate(schema_ptr schema,
                     schema->ks_name(), schema->cf_name(), op->replicas.tablet_id(), leader_host_id,
                     op->replicas.transition_stage());
 
+                ++get_stats().write_retries_stale_leader;
                 auto f = co_await coroutine::as_future(
                         op->raft_server.server().wait_for_leader(&aoe.abort_source(), true));
                 if (f.failed()) {
@@ -561,9 +644,11 @@ auto coordinator::mutate(schema_ptr schema,
                 }
                 continue;
             }
+            mark_write_latency.cancel();
             co_return redirect_to_leader(*target, _groups_manager, op->replicas.group_id());
         }
         if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+            ++get_stats().write_retries_wait_for_leader;
             auto f = co_await coroutine::as_future(std::move(wait_for_leader->future));
             if (f.failed()) {
                 co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
@@ -616,6 +701,7 @@ auto coordinator::mutate(schema_ptr schema,
             logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, {}",
                 ex, schema->ks_name(), schema->cf_name(), state_fmt);
 
+            ++(try_catch<raft::not_a_leader>(ex) ? get_stats().write_retries_not_a_leader : get_stats().write_retries_dropped_entry);
             continue;
         }
 
@@ -640,8 +726,10 @@ auto coordinator::query(schema_ptr schema,
     lc.start();
 
     auto& read_stats = (rtype == read_type::linearizable)
-        ? _stats.linearizable_read : _stats.non_linearizable_read;
+        ? get_stats().linearizable_read : get_stats().non_linearizable_read;
     auto mark_read_latency = defer([&read_stats, &lc] () mutable noexcept { read_stats.mark(lc.stop().latency()); });
+    ++get_stats().foreground_reads;
+    auto end_foreground_read = defer([this] noexcept { --get_stats().foreground_reads; });
 
     auto filter_error = [&] (std::exception_ptr ex) -> std::exception_ptr {
         // Unfortunately, timeouts can materialize in different forms depending
@@ -659,16 +747,25 @@ auto coordinator::query(schema_ptr schema,
                 || try_catch<timed_out_error>(ex)
                 || try_catch<raft::stopped_error>(ex)) {
             if (!_db.column_family_exists(schema->id())) {
+                ++get_stats().read_errors_table_dropped;
                 return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
             }
             logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
-            ++_stats.read_errors_timeout;
+            ++get_stats().read_errors_timeout;
             return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name()));
+        } else if (try_catch<exceptions::unavailable_exception>(ex)) {
+            logger.trace("query(): no live replica, table {}.{}, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
+            ++get_stats().read_errors_unavailable;
+            return ex;
+        } else if (try_catch<replica::no_such_column_family>(ex)) {
+            logger.trace("query(): table {}.{} was dropped, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
+            ++get_stats().read_errors_table_dropped;
+            return ex;
         } else {
             logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
-            ++_stats.read_errors_other;
+            ++get_stats().read_errors_other;
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
             return ex;
         }
@@ -687,6 +784,8 @@ auto coordinator::query(schema_ptr schema,
     auto op_result = std::move(op_result_future).get();
 
     if (auto* redirect = get_if<need_redirect>(&op_result)) {
+        // A redirected request is timed where it is executed.
+        mark_read_latency.cancel();
         co_return std::move(*redirect);
     }
     auto& op = get<operation_ctx>(op_result);
@@ -712,6 +811,7 @@ auto coordinator::query(schema_ptr schema,
                         schema->ks_name(), schema->cf_name(), op.replicas.tablet_id(), leader_host_id,
                         op.replicas.transition_stage());
 
+                    ++get_stats().read_retries_stale_leader;
                     future<> f = co_await coroutine::as_future(
                             op.raft_server.server().wait_for_leader(&aoe.abort_source(), true));
                     if (f.failed()) {
@@ -719,9 +819,11 @@ auto coordinator::query(schema_ptr schema,
                     }
                     continue;
                 }
+                mark_read_latency.cancel();
                 co_return redirect_to_leader(*target, _groups_manager, op.replicas.group_id());
             }
             if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+                ++get_stats().read_retries_wait_for_leader;
                 future<> f = co_await coroutine::as_future(std::move(wait_for_leader->future));
                 if (f.failed()) {
                     co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));

@@ -15,7 +15,8 @@ from cassandra.policies import FallthroughRetryPolicy
 from cassandra.pool import Host
 from cassandra.query import SimpleStatement
 
-from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, get_table_raft_group_id, wait_for_leader
+from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, expect_retry_before_timeout, \
+    get_table_raft_group_id, wait_for_leader
 from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -28,6 +29,8 @@ NO_QUORUM_CONFIG = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 3000, 'read_
 WRITE_ERRORS = 'scylla_strong_consistency_coordinator_write_errors'
 READ_ERRORS = 'scylla_strong_consistency_coordinator_read_errors'
 READ_COUNT = 'scylla_strong_consistency_coordinator_read_latency_count'
+WRITE_RETRIES = 'scylla_strong_consistency_coordinator_write_retries'
+READ_RETRIES = 'scylla_strong_consistency_coordinator_read_retries'
 
 
 async def get_roles(manager: ScyllaClusterManager, servers: list[ServerInfo], ks: str, table_name: str) \
@@ -103,8 +106,8 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
     a QUORUM (linearizable) read and a CL=ONE (relaxed) read alike.
 
     The request timeouts are raised to 10s so that "fast" and "timed out" cannot be
-    confused, and the coordinator's error counters are checked to be untouched: the
-    refusal happens before the coordinator starts waiting for anything. Once the replicas
+    confused, and the coordinator's error counters are checked to count the refusal only
+    as unavailable: it happens before the coordinator starts waiting for anything. Once the replicas
     are back, the acknowledged write is still there and the refused one left nothing.
     """
     config = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 10000, 'read_request_timeout_in_ms': 10000}
@@ -124,8 +127,12 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
                 assert e.alive_replicas == 0 and "All replicas" in str(e), str(e)
                 assert elapsed < 5.0, f"{query} took {elapsed:.1f}s to be refused"
 
-            errors_after = [await get_metric(manager, non_replica, name) for name in (WRITE_ERRORS, READ_ERRORS)]
-            assert errors_after == errors_before, "the refusal was accounted as a coordinator error"
+            metrics = await manager.metrics.query(non_replica.ip_addr)
+            errors_after = [metrics.get(name) or 0 for name in (WRITE_ERRORS, READ_ERRORS)]
+            unavailable = [metrics.get(name, {'reason': 'unavailable'}) or 0 for name in (WRITE_ERRORS, READ_ERRORS)]
+            assert all(unavailable), "the refusal was not accounted as unavailable"
+            assert [after - before for after, before in zip(errors_after, errors_before)] == unavailable, \
+                "the refusal was accounted as an error other than unavailable"
 
         await wait_for_leader(manager, leader, group_id)
         assert [r.c for r in await cql.run_async(reads[0], host=coordinator)] == [1]
@@ -205,6 +212,34 @@ async def test_no_quorum_times_out_and_relaxed_read_answers(manager: ScyllaClust
 
         await wait_for_leader(manager, alive, group_id)
         assert [r.c for r in await cql.run_async(quorum_read, host=host_of[alive])] == [1]
+
+
+@pytest.mark.asyncio
+async def test_no_quorum_counts_leader_waits(manager: ScyllaClusterManager, scale_timeout):
+    """
+    Verify that a write and a QUORUM read on the only live replica of three are counted
+    as retries with reason "wait_for_leader": without a quorum no leader is elected, so
+    each request waits for one until its timeout.
+    """
+    async with sc_table(manager) as (cql, host_of, table, (group_id, leader, followers, non_replica)):
+        alive = followers[0]
+        no_retry = FallthroughRetryPolicy()
+        def write(timeout_ms):
+            return SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES (0, 1) USING TIMEOUT {timeout_ms}ms", retry_policy=no_retry)
+        def quorum_read(timeout_ms):
+            return SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0 USING TIMEOUT {timeout_ms}ms",
+                                   consistency_level=ConsistencyLevel.QUORUM, retry_policy=no_retry)
+
+        # The leader dies last, so that the two followers never have a quorum to elect one of them.
+        async with down(manager, list(host_of), [followers[1], leader]):
+            async def no_leader() -> bool | None:
+                return await manager.api.get_raft_leader(alive.ip_addr, group_id) is None or None
+            await wait_for(no_leader, time.time() + 60, label=f"{alive} to report no leader of group {group_id}")
+
+            await expect_retry_before_timeout(manager, alive, host_of[alive], write, WriteTimeout,
+                                              WRITE_RETRIES, 'wait_for_leader', scale_timeout)
+            await expect_retry_before_timeout(manager, alive, host_of[alive], quorum_read, ReadTimeout,
+                                              READ_RETRIES, 'wait_for_leader', scale_timeout)
 
 
 @pytest.mark.asyncio
