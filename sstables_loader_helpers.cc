@@ -42,7 +42,7 @@ future<minimal_sst_info> clone_backup_sstable(replica::table& table, const sstab
     co_return minimal_sst_info{shards.front(), gen, desc.version, desc.format, desc.sid, *source_sid};
 }
 
-future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger) {
+future<minimal_sst_info> download_sstable(replica::table& table, sstables::shared_sstable sstable, logging::logger& logger) {
     constexpr auto foptions = file_open_options{.extent_allocation_size_hint = 32_MiB, .sloppy_size = true};
     constexpr auto stream_options = file_output_stream_options{.buffer_size = 128_KiB, .write_behind = 10};
     auto components = sstable->all_components();
@@ -99,19 +99,11 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
                                              sstables::sstable_stream_sink_cfg{.last_component = std::next(it) == components.cend(), .leave_unsealed = true});
             auto out = co_await sstable_sink->output(foptions, stream_options);
 
-            input_stream src(co_await [&it, sstable, f = files.at(it->first), &db, &table]() -> future<input_stream<char>> {
-                const auto fis_options = file_input_stream_options{.buffer_size = 128_KiB, .read_ahead = 2};
-
-                if (it->first != sstables::component_type::Data) {
-                    co_return input_stream<char>(
-                        co_await sstable->get_storage().make_source(*sstable, it->first, f, 0, std::numeric_limits<size_t>::max(), fis_options));
-                }
-                auto permit = co_await db.obtain_reader_permit(table, "download_fully_contained_sstables", db::no_timeout, {});
-                co_return co_await (
-                    sstable->get_compression()
-                        ? sstable->data_stream(0, sstable->ondisk_data_size(), std::move(permit), nullptr, nullptr, sstables::sstable::raw_stream::yes)
-                        : sstable->data_stream(0, sstable->data_size(), std::move(permit), nullptr, nullptr, sstables::sstable::raw_stream::no));
-            }());
+            // The components are copied as-is, including the Data component: a
+            // compressed Data.db must stay compressed, so no decompressing or
+            // checksumming stream is wanted, and make_source() gives the raw bytes.
+            const auto fis_options = file_input_stream_options{.buffer_size = 128_KiB, .read_ahead = 2};
+            input_stream<char> src(co_await sstable->get_storage().make_source(*sstable, it->first, files.at(it->first), 0, std::numeric_limits<size_t>::max(), fis_options));
 
             std::exception_ptr eptr;
             try {

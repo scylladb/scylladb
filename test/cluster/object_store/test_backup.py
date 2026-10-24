@@ -891,7 +891,11 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
     # Create the keyspace, populate multiple tables, and back them all up
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as src_ks:
         async def create_table(cf):
-            await cql.run_async(f"CREATE TABLE {src_ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
+            # Restore copies the sstable components as they are, so leave every table
+            # but the first uncompressed: the multi-table cases then restore both a
+            # compressed Data.db and a plain one with its CRC.db in the same run.
+            compression = '' if cf == tables[0] else " AND compression = {}"
+            await cql.run_async(f"CREATE TABLE {src_ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}}{compression};")
             insert_stmt = cql.prepare(f"INSERT INTO {src_ks}.{cf} (pk, value) VALUES (?, ?)")
             insert_stmt.consistency_level = ConsistencyLevel.ALL
             await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
