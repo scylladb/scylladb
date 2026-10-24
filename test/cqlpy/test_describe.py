@@ -1959,6 +1959,25 @@ def test_desc_authorization(cql, scylla_only):
             try_describe_with_passwords(r1)
             try_describe_with_passwords(r2)
 
+# Verify that `DESC SCHEMA WITH INTERNALS`, which describes all roles, permission grants and
+# service levels, requires the permissions needed to list them - DESCRIBE on all roles and on
+# all service levels - while `DESC SCHEMA` without INTERNALS requires no permissions.
+# Permissions on service levels can't currently be granted (SCYLLADB-5333), so we can't check
+# a non-superuser which has both permissions. We check that a user without permissions, and a
+# user with DESCRIBE only on all roles, are refused, and that a superuser isn't.
+# Marked as `scylla_only` because we verify `DESCRIBE SCHEMA WITH INTERNALS`,
+# which is not present on Cassandra.
+# Reproduces SCYLLADB-5334.
+def test_desc_with_internals_authorization(cql, scylla_only):
+    with new_user(cql) as r1, new_user(cql) as r2:
+        cql.execute(f'GRANT DESCRIBE ON ALL ROLES TO {r2}')
+        for role in [r1, r2]:
+            with new_session(cql, role) as ncql:
+                ncql.execute('DESC SCHEMA')
+                with pytest.raises(Unauthorized):
+                    ncql.execute('DESC SCHEMA WITH INTERNALS')
+        cql.execute('DESC SCHEMA WITH INTERNALS')
+
 # Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
 # contains information about auth. That's not the case in Cassandra.
 def test_desc_roles_format(cql, scylla_only):
