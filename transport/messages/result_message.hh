@@ -101,17 +101,20 @@ class result_message::bounce : public result_message {
     std::optional<seastar::lowres_clock::time_point> _timeout;
     std::optional<bool> _is_write;
     locator::host_id_or_exception_callback _on_forwarding_finished;
+    // For the forwarding metrics: the group 0 leader, or a tablet replica.
+    bool _to_group0_leader;
 
 public:
     bounce(locator::host_id host, unsigned shard, cql3::computed_function_values cached_fn_calls,
            std::optional<seastar::lowres_clock::time_point> timeout = std::nullopt, std::optional<bool> is_write = std::nullopt,
-           locator::host_id_or_exception_callback on_forwarding_finished = {})
+           locator::host_id_or_exception_callback on_forwarding_finished = {}, bool to_group0_leader = false)
         : _host(host)
         , _shard(shard)
         , _cached_fn_calls(std::move(cached_fn_calls))
         , _timeout(std::move(timeout))
         , _is_write(std::move(is_write))
         , _on_forwarding_finished(std::move(on_forwarding_finished))
+        , _to_group0_leader(to_group0_leader)
     {}
     virtual void accept(result_message::visitor& v) const override {
         v.visit(*this);
@@ -134,6 +137,10 @@ public:
 
     std::optional<bool> is_write() const {
         return _is_write;
+    }
+
+    bool to_group0_leader() const {
+        return _to_group0_leader;
     }
 
     cql3::computed_function_values&& take_cached_pk_function_calls() {

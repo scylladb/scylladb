@@ -346,6 +346,7 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
 
     init_messaging_service();
 
+    sm::label subsystem_label("subsystem");
     auto ls = {
         sm::make_counter("cql-connections", _stats.connects,
                         sm::description("Counts a number of client connections.")),
@@ -381,7 +382,13 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
                             seastar::format("Holds the amount of available memory for admitting new requests (max is {}B)."
                                             "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _config.max_request_size))),
         sm::make_counter("requests_forwarded_successfully", _stats.requests_forwarded_successfully,
-                        sm::description("Counts the number of requests that were forwarded to another replica and executed successfully there.")).set_skip_when_empty(),
+                        sm::description("Counts the number of requests that were forwarded to another node and executed successfully there: "
+                                        "to a tablet replica (strong_consistency) or to the group 0 leader (group0)."),
+                        {subsystem_label("strong_consistency")}).set_skip_when_empty(),
+        sm::make_counter("requests_forwarded_successfully", _stats.group0_requests_forwarded_successfully,
+                        sm::description("Counts the number of requests that were forwarded to another node and executed successfully there: "
+                                        "to a tablet replica (strong_consistency) or to the group 0 leader (group0)."),
+                        {subsystem_label("group0")}).set_skip_when_empty(),
 
         sm::make_counter("requests_forwarded_failed", _stats.requests_forwarded_failed,
                         sm::description("Counts the number of requests that were forwarded to another replica but failed to execute there.")).set_skip_when_empty(),
@@ -428,7 +435,7 @@ void cql_server::init_messaging_service() {
 
             co_await utils::get_local_injector().inject("wait_before_handling_forwarded_request", utils::wait_for_message(60s));
 
-            co_return co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
+            auto response = co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
                 service::client_state cs(shard_svc._auth_service,
                     &shard_svc._sl_controller,
                     std::move(req.client_state),
@@ -467,6 +474,8 @@ void cql_server::init_messaging_service() {
                 }
                 co_return f.get();
             });
+            co_await utils::get_local_injector().inject("wait_after_handling_forwarded_request", utils::wait_for_message(60s));
+            co_return response;
         });
 
     ser::forward_cql_rpc_verbs::register_forward_cql_prepare(&_ms,
@@ -563,6 +572,7 @@ cql_server::forward_cql(
     unsigned target_shard,
     seastar::lowres_clock::time_point timeout,
     bool is_write,
+    bool group0,
     uint16_t stream,
     tracing::trace_state_ptr trace_state,
     forward_cql_execute_request req,
@@ -582,7 +592,7 @@ cql_server::forward_cql(
             if (try_catch<seastar::rpc::timeout_error>(eptr)) {
                 clogger.debug("Forwarding CQL request to {} shard {} failed due to RPC timeout. Will return blanket timeout exception", target_host, target_shard);
                 if (on_forwarding_finished) {
-                    on_forwarding_finished(eptr);
+                    co_await on_forwarding_finished(eptr);
                 }
                 eptr = is_write
                     ? std::make_exception_ptr(exceptions::mutation_write_timeout_exception(
@@ -592,7 +602,7 @@ cql_server::forward_cql(
             } else if (try_catch<seastar::rpc::closed_error>(eptr)) {
                 clogger.debug("Forwarding CQL request to {} shard {} failed due to RPC closed connection. Will return blanket failure exception", target_host, target_shard);
                 if (on_forwarding_finished) {
-                    on_forwarding_finished(eptr);
+                    co_await on_forwarding_finished(eptr);
                 }
                 eptr = is_write
                     ? std::make_exception_ptr(exceptions::mutation_write_failure_exception(
@@ -608,11 +618,11 @@ cql_server::forward_cql(
         auto response = response_fut.get();
         switch (response.status) {
         case forward_cql_status::success:
-            _stats.requests_forwarded_successfully++;
+            ++(group0 ? _stats.group0_requests_forwarded_successfully : _stats.requests_forwarded_successfully);
             clogger.trace("Forwarded CQL request executed successfully on replica: {}", target_host);
             tracing::trace(trace_state, "Forwarded CQL request executed successfully on replica: {}", target_host);
             if (on_forwarding_finished) {
-                on_forwarding_finished(current_host);
+                co_await on_forwarding_finished(current_host);
             }
             co_return std::make_unique<cql_transport::response>(stream, cql_binary_opcode::RESULT, response.response_flags, std::move(response.response_body));
         case forward_cql_status::error: {
@@ -2185,7 +2195,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
             };
 
             auto response = co_await forward_cql(
-                target_host, shard, (*bounce_msg)->timeout().value(), (*bounce_msg)->is_write().value(),
+                target_host, shard, (*bounce_msg)->timeout().value(), (*bounce_msg)->is_write().value(), (*bounce_msg)->to_group0_leader(),
                 stream, trace_state, std::move(req), (*bounce_msg)->on_forwarding_finished());
 
             co_return cql_server::result_with_foreign_response_ptr(std::move(response));

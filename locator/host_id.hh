@@ -11,6 +11,7 @@
 
 #include "utils/UUID.hh"
 
+#include <seastar/core/future.hh>
 #include <seastar/util/noncopyable_function.hh>
 
 #include <exception>
@@ -20,7 +21,9 @@ namespace locator {
 
 using host_id = utils::tagged_uuid<struct host_id_tag>;
 using host_id_or_exception = std::variant<host_id, std::exception_ptr>;
-using host_id_or_exception_callback = noncopyable_function<void(host_id_or_exception)>;
+// Called when a forwarded request finishes, with the host that executed it or
+// the error. The forwarding node waits for the returned future before replying.
+using host_id_or_exception_callback = noncopyable_function<seastar::future<>(host_id_or_exception)>;
 
 }
 

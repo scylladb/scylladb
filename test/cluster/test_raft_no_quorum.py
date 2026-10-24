@@ -245,7 +245,8 @@ async def test_cannot_run_operations(manager: ScyllaClusterManager, raft_op_time
                             expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
                             timeout=60)
 
-    with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, "
+    # A guarded statement first waits for a group 0 leader to forward to.
+    with pytest.raises(Exception, match="raft operation \\[(read_barrier|wait_for_leader)\\] timed out, "
                                         "there is no raft quorum, total voters count 3, alive voters count 1"):
         await manager.get_cql().run_async(f'drop table {ks}.test_table', timeout=60)
 
