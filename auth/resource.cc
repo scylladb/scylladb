@@ -32,13 +32,15 @@ static const std::unordered_map<resource_kind, std::string_view> roots{
         {resource_kind::data, "data"},
         {resource_kind::role, "roles"},
         {resource_kind::service_level, "service_levels"},
-        {resource_kind::functions, "functions"}};
+        {resource_kind::functions, "functions"},
+        {resource_kind::object_storage, "object_storage"}};
 
 static const std::unordered_map<resource_kind, std::size_t> max_parts{
         {resource_kind::data, 2},
         {resource_kind::role, 1},
         {resource_kind::service_level, 0},
-        {resource_kind::functions, 2}};
+        {resource_kind::functions, 2},
+        {resource_kind::object_storage, 0}};
 
 static permission_set applicable_permissions(const data_resource_view& dv) {
 
@@ -99,6 +101,13 @@ static permission_set applicable_permissions(const functions_resource_view& fv) 
             permission::DROP,
             permission::AUTHORIZE,
             permission::EXECUTE>();
+}
+
+static permission_set applicable_permissions(const object_storage_resource_view&) {
+    return permission_set::of<
+            permission::SELECT,
+            permission::MODIFY,
+            permission::AUTHORIZE>();
 }
 
 resource::resource(resource_kind kind) : _kind(kind) {
@@ -172,6 +181,7 @@ permission_set resource::applicable_permissions() const {
         case resource_kind::role: ps = ::auth::applicable_permissions(role_resource_view(*this)); break;
         case resource_kind::service_level: ps = ::auth::applicable_permissions(service_level_resource_view(*this)); break;
         case resource_kind::functions: ps = ::auth::applicable_permissions(functions_resource_view(*this)); break;
+        case resource_kind::object_storage: ps = ::auth::applicable_permissions(object_storage_resource_view(*this)); break;
     }
 
     return ps;
@@ -280,6 +290,12 @@ std::optional<std::vector<std::string_view>> functions_resource_view::function_a
     return parts;
 }
 
+object_storage_resource_view::object_storage_resource_view(const resource& r) {
+    if (r._kind != resource_kind::object_storage) {
+        throw resource_kind_mismatch(resource_kind::object_storage, r._kind);
+    }
+}
+
 data_resource_view::data_resource_view(const resource& r) : _resource(r) {
     if (r._kind != resource_kind::data) {
         throw resource_kind_mismatch(resource_kind::data, r._kind);
@@ -371,6 +387,12 @@ const resource &root_service_level_resource() {
     return the_root_service_level_resource;
 }
 
+static const resource the_root_object_storage_resource{resource_kind::object_storage};
+
+const resource& root_object_storage_resource() {
+    return the_root_object_storage_resource;
+}
+
 resource_set expand_resource_family(const resource& rr) {
     resource r = rr;
     resource_set rs;
@@ -438,6 +460,13 @@ template <> struct fmt::formatter<auth::functions_resource_view> {
     }
 };
 
+template <> struct fmt::formatter<auth::object_storage_resource_view> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const auth::object_storage_resource_view&, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "<all object storage>");
+    }
+};
+
 auto fmt::formatter<auth::data_resource_view>::format(const auth::data_resource_view& v,
                                                       fmt::format_context& ctx) const -> decltype(ctx.out()) {
     const auto keyspace = v.keyspace();
@@ -461,6 +490,7 @@ auto fmt::formatter<auth::resource>::format(const auth::resource& r,
     case role: return fmt::format_to(out, "{}", auth::role_resource_view(r));
     case service_level: return fmt::format_to(out, "{}", auth::service_level_resource_view(r));
     case functions: return fmt::format_to(out, "{}", auth::functions_resource_view(r));
+    case object_storage: return fmt::format_to(out, "{}", auth::object_storage_resource_view(r));
     }
     return out;
 }

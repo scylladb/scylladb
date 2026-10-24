@@ -173,7 +173,7 @@ on how to use GRANT and REVOKE to control permissions:
 
 The following permissions are needed to run the following API operations:
 
- * `SELECT`:      GetItem, Query, Scan, BatchGetItem, GetRecords
+ * `SELECT`:      GetItem, Query, Scan, BatchGetItem, GetRecords, ExportTableToPointInTime
  * `MODIFY`:      PutItem, DeleteItem, UpdateItem, BatchWriteItem
  * `CREATE`:      CreateTable
  * `DROP`:        DeleteTable
@@ -187,6 +187,10 @@ Note that the required permissions depend on the type of operation, not on
 what it does. For example, even though the PutItem operation can read the
 value of an item (when used with `ReturnValues=ALL_OLD`), it still requires
 the MODIFY permission, not the SELECT permission.
+
+ExportTableToPointInTime needs both SELECT on the table and MODIFY on ALL
+OBJECT STORAGE. DescribeExport and ListExports, with or without a TableArn,
+need only SELECT on ALL OBJECT STORAGE, and no permission on the table.
 
 Permissions are separate for a base table and each of its GSI/LSI and CDC
 log, so it's possible to give a role permissions to read one index and

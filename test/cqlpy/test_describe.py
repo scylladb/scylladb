@@ -2378,7 +2378,8 @@ def test_desc_auth_different_permissions(cql, scylla_only):
         all_ks_grants = [f"GRANT {permission} ON ALL KEYSPACES TO {{}};" for permission in KS_AND_TABLE_PERMISSIONS]
         specific_ks_grants = [f"GRANT {permission} ON KEYSPACE {ctx.ks} TO {{}};" for permission in KS_AND_TABLE_PERMISSIONS]
 
-        grants = [*all_ks_grants, *specific_ks_grants, r"GRANT DESCRIBE ON ALL ROLES TO {};"]
+        grants = [*all_ks_grants, *specific_ks_grants, r"GRANT DESCRIBE ON ALL ROLES TO {};",
+                  r"GRANT MODIFY ON ALL OBJECT STORAGE TO {};"]
 
         roles = [f"my_role_{idx}" for idx in range(len(grants))]
         grants = [grant.format(roles[idx]) for idx, grant in enumerate(grants)]

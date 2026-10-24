@@ -418,23 +418,33 @@ future<> verify_permission(
     }
 }
 
-// Similar to verify_permission() above, but just for CREATE operations.
-// Those do not operate on any specific table, so require permissions on
-// ALL KEYSPACES instead of any specific table.
-future<> verify_create_permission(bool enforce_authorization, bool warn_authorization, const service::client_state& client_state, stats& stats) {
+// Similar to verify_permission() above, but for operations which do not
+// operate on any specific table, so require permissions on a root resource,
+// such as ALL KEYSPACES, which resource_name names in the error message.
+static future<> verify_root_permission(bool enforce_authorization, bool warn_authorization, const service::client_state& client_state,
+        const auth::resource& resource, std::string_view resource_name, auth::permission permission_to_check, stats& stats) {
     if (!enforce_authorization && !warn_authorization) {
         co_return;
     }
-    auto resource = auth::resource(auth::resource_kind::data);
     if (!client_state.user() || !client_state.user()->name ||
-        !co_await client_state.check_has_permission(auth::command_desc(auth::permission::CREATE, resource))) {
+        !co_await client_state.check_has_permission(auth::command_desc(permission_to_check, resource))) {
         sstring username = "<anonymous>";
         if (client_state.user() && client_state.user()->name) {
             username = client_state.user()->name.value();
         }
         authorization_error(stats, enforce_authorization, warn_authorization, fmt::format(
-            "CREATE access on ALL KEYSPACES is denied to role {}", username));
+            "{} access on {} is denied to role {}", auth::permissions::to_string(permission_to_check), resource_name, username));
     }
+}
+
+future<> verify_create_permission(bool enforce_authorization, bool warn_authorization, const service::client_state& client_state, stats& stats) {
+    return verify_root_permission(enforce_authorization, warn_authorization, client_state,
+            auth::root_data_resource(), "ALL KEYSPACES", auth::permission::CREATE, stats);
+}
+
+future<> verify_object_storage_permission(bool enforce_authorization, bool warn_authorization, const service::client_state& client_state, auth::permission permission_to_check, stats& stats) {
+    return verify_root_permission(enforce_authorization, warn_authorization, client_state,
+            auth::root_object_storage_resource(), "ALL OBJECT STORAGE", permission_to_check, stats);
 }
 
 schema_ptr try_get_internal_table(const data_dictionary::database& db, std::string_view table_name) {
