@@ -25,7 +25,7 @@ from cassandra.murmur3 import murmur3
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_view
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, quiesce_and_disable_tablet_balancing
 
 
 PAUSE_COORDINATOR = "view_building_coordinator_pause_main_loop"
@@ -244,6 +244,9 @@ async def test_view_build_suspends_tombstone_gc_before_state_reload(manager: Scy
     cql, hosts = await manager.get_ready_cql([base_node, view_node])
     base_host = next(h for h in hosts if h.address == base_node.ip_addr)
     view_host = next(h for h in hosts if h.address == view_node.ip_addr)
+    # PAUSE_GROUP0_RELOAD is one-shot and has to be taken by the view creation, not by a
+    # topology command of the balancer still spreading the system keyspaces' tablets.
+    await quiesce_and_disable_tablet_balancing(manager, base_node.ip_addr)
 
     ks_opts = "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND TABLETS = {'enabled': false}"
     async with new_test_keyspace(manager, ks_opts) as ks:

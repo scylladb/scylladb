@@ -53,6 +53,7 @@
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "service/storage_service.hh"
+#include "service/topology_utils.hh"
 #include "service/migration_manager.hh"
 #include "service/tablet_allocator.hh"
 #include "service/load_meter.hh"
@@ -2624,10 +2625,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
             // about the layout of the cluster (= list of nodes along with the racks/DCs).
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
-            db.local().check_rf_rack_validity(token_metadata.local().get());
+            // The auto-RF keyspaces only get a warning: the topology coordinator makes them valid.
+            const auto& auto_rf_keyspace_names = service::auto_rf_keyspace_names();
+            db.local().check_rf_rack_validity(token_metadata.local().get(), auto_rf_keyspace_names);
 
             startlog.info("Verifying that all of the tablet keyspaces use rack list replication factors");
-            db.local().check_rack_list_everywhere(cfg->enforce_rack_list());
+            db.local().check_rack_list_everywhere(cfg->enforce_rack_list(), auto_rf_keyspace_names);
 
             // The table-based audit backend needs Raft (via join_cluster)
             // to create its keyspace and table.

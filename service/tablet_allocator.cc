@@ -1516,9 +1516,7 @@ public:
         // returns accurate results for nodes in this DC. Without this, the sketch
         // may contain stale data from the last DC processed by make_plan(), causing
         // shard 0 to always be selected for nodes in other DCs.
-        _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
-        _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
-        _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
+        _load_sketch = make_load_sketch();
         co_await _load_sketch->populate_dc(dc);
 
         for (auto& [rack, colocation_sources] : racks) {
@@ -1535,6 +1533,14 @@ public:
                 if (auto rack_it = requests_for_dc.find(rack); rack_it != requests_for_dc.end()) {
                     plan.maybe_add_rack_list_request_to_fail(*rack_it->second.begin(), std::move(error));
                 }
+                continue;
+            }
+
+            // The sketch throws when picking a shard on a node without complete load stats
+            // (one which (re)joined since the last refresh); leave the rack for the next round.
+            if (auto it = std::ranges::find_if(nodes_by_load_dst, [&] (host_id h) { return !_load_sketch->has_complete_data(h); });
+                    it != nodes_by_load_dst.end()) {
+                lblogger.debug("Skipping RF change colocation plan in dc {}, rack {} until node {} has reported load stats", dc, rack, *it);
                 continue;
             }
 
@@ -1733,6 +1739,7 @@ public:
                         .ks_name = ks_name,
                         .error = format("Keyspace {} not found", ks_name),
                         .saved_ks_props = req_entry.new_keyspace_rf_change_data.value(),
+                        .initiating_host = req_entry.initiating_host,
                     };
                 }
                 continue;
@@ -1752,7 +1759,8 @@ public:
                         .request_id = request_id,
                         .ks_name = ks_name,
                         .error = req_entry.error,
-                        .saved_ks_props = req_entry.new_keyspace_rf_change_data.value()
+                        .saved_ks_props = req_entry.new_keyspace_rf_change_data.value(),
+                        .initiating_host = req_entry.initiating_host,
                     };
                 }
                 continue;
@@ -1839,6 +1847,8 @@ public:
         if (has_extending) {
             // Check that all normal, non-excluded nodes in the target dc/rack are present in the
             // balanced node set. If any such node is missing, extending cannot safely proceed.
+            // A node without complete load stats counts as missing too: picking a target
+            // shard on it would throw out of the sketch.
             const auto& topo = _tm->get_topology();
             const auto& dc_rack_nodes = topo.get_datacenter_rack_nodes();
             bool missing_node = false;
@@ -1848,7 +1858,10 @@ public:
                 if (rack_it != dc_it->second.end()) {
                     for (const auto& node_ref : rack_it->second) {
                         const auto& node = node_ref.get();
-                        if (node.is_normal() && !node.is_excluded() && !nodes.contains(node.host_id())) {
+                        if (node.is_normal() && !node.is_excluded()
+                                && (!nodes.contains(node.host_id()) || !_load_sketch->has_complete_data(node.host_id()))) {
+                            lblogger.debug("Node {} in dc {}, rack {} is not available for RF change extending plan (in node set: {}, load stats complete: {})",
+                                    node.host_id(), dc, rack, nodes.contains(node.host_id()), _load_sketch->has_complete_data(node.host_id()));
                             missing_node = true;
                             break;
                         }
@@ -1981,8 +1994,10 @@ public:
                         auto mig_streaming_info = get_migration_streaming_info(topo, ti, mig);
                         // The node being shrunk may be excluded/down and lack complete tablet stats.
                         // Since we're removing a replica (not placing one), accurate load data isn't needed.
+                        // A dead node which is not (yet) excluded lacks load stats too, and
+                        // unload() throws without them.
                         auto* rep_node = topo.find_node(replica->host);
-                        if (_load_sketch->has_node(replica->host) && !(rep_node && rep_node->is_excluded())) {
+                        if (_load_sketch->has_complete_data(replica->host) && !(rep_node && rep_node->is_excluded())) {
                             unload(*_load_sketch, replica->host, replica->shard, source_tablets);
                         }
                         if (can_accept_load(nodes, mig_streaming_info)) {
@@ -2291,6 +2306,17 @@ public:
         return !ks.get_replication_strategy().uses_tablets();
     }
 
+    locator::load_sketch make_load_sketch() {
+        locator::load_sketch sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
+        sketch.set_minimal_tablet_size(_minimal_tablet_size);
+        sketch.set_force_capacity_based_load(_force_capacity_based_balancing);
+        // A node which keeps a table under vnodes-to-tablets migration in vnodes storage
+        // reports no tablet sizes for it, and nothing is balanced for such a table. Its
+        // missing sizes must not keep the node from balancing, nor block draining a node.
+        sketch.set_tables_with_optional_sizes([this] (table_id table) { return is_migrating_table(table); });
+        return sketch;
+    }
+
     struct table_sizing {
         size_t current_tablet_count; // Tablet count in group0.
         size_t target_tablet_count; // Tablet count wanted by scheduler.
@@ -2582,8 +2608,13 @@ public:
             if (utils::get_local_injector().enter("tablet_force_tablet_count_increase")) {
                 target_tablet_count = {tablet_count * 2, "force_tablet_count_increase"};
             } else if (utils::get_local_injector().enter("tablet_force_tablet_count_decrease")) {
-                auto size = std::max(size_t(1), tablet_count / 2);
-                target_tablet_count = {size, "force_tablet_count_decrease"};
+                auto for_table_id_str_opt = utils::get_local_injector().inject_parameter<std::string_view>("tablet_force_tablet_count_decrease", "for_table_id");
+                auto for_table_id_opt = for_table_id_str_opt.transform( [] (const std::string_view& table_id_str) { return table_id(utils::UUID(table_id_str)); });
+                if (!for_table_id_opt || *for_table_id_opt == table) {
+                    lblogger.debug("tablet_force_tablet_count_decrease for table ks:{} table:{}", s->ks_name(), s->cf_name());
+                    auto size = std::max(size_t(1), tablet_count / 2);
+                    target_tablet_count = {size, "force_tablet_count_decrease"};
+                }
             }
 
             result.target = target_tablet_count;
@@ -4550,9 +4581,7 @@ public:
             }
         }
 
-        _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
-        _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
-        _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
+        _load_sketch = make_load_sketch();
         co_await _load_sketch->populate_dc(dc);
 
         // If we don't have nodes to drain, remove nodes which don't have complete tablet sizes

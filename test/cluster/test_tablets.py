@@ -17,7 +17,8 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
-    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, get_current_group0_config
+    get_topology_coordinator, parse_replication_options, get_replication, get_replica_count, get_current_group0_config, \
+    wait_for_auto_rf_settled, quiesce_and_disable_tablet_balancing
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -910,6 +911,8 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
     coord = await get_topology_coordinator(manager)
     coord_serv = await manager.find_server_by_host_id(servers, coord)
 
+    # The injection fires for any keyspace_rf_change; let auto-RF's finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
 
@@ -924,7 +927,7 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
@@ -983,6 +986,8 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
     coord = await get_topology_coordinator(manager)
     coord_serv = await manager.find_server_by_host_id(servers, coord)
 
+    # The injection fires for any keyspace_rf_change; let auto-RF's finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
 
@@ -997,7 +1002,7 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
@@ -1057,6 +1062,8 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
     coord = await get_topology_coordinator(manager)
     coord_serv = await manager.find_server_by_host_id(servers, coord)
 
+    # The injection fires for any keyspace_rf_change; let auto-RF's finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
 
@@ -1127,6 +1134,8 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
     coord = await get_topology_coordinator(manager)
     coord_serv = await manager.find_server_by_host_id(servers, coord)
 
+    # The injection fires for any keyspace_rf_change; let auto-RF's finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
     for s in servers:
         await manager.api.enable_injection(s.ip_addr, injection, one_shot=False)
 
@@ -1148,7 +1157,7 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
@@ -1228,7 +1237,7 @@ async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureR
 
     task_manager_client = TaskManagerClient(manager.api)
     tasks = await task_manager_client.list_tasks(servers[0].ip_addr, "global_topology_requests")
-    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change"]
+    rf_change_tasks = [t for t in tasks if t.type == "keyspace_rf_change" and t.keyspace == "ks1"]
     assert len(rf_change_tasks) == 1
     task_id = rf_change_tasks[0].task_id
     await task_manager_client.abort_task(servers[0].ip_addr, task_id)
@@ -1252,7 +1261,10 @@ async def test_failed_tablet_rebuild_is_retried(request: pytest.FixtureRequest, 
         await cql.run_async(f"alter keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', {new_rf}}};")
 
     injection = "rebuild_repair_stage_fail"
-    config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [injection]}
+    # The ALTERs below make racks eligible for auto-RF, whose rebuilds of the system
+    # keyspaces would fail on the injection too and be retried in the same way, so their
+    # retry could be the one the test waits for. Keep auto-RF out of it.
+    config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [injection, "skip_auto_rf_change"]}
     cmdline = [
         '--logger-log-level', 'load_balancer=debug',
         '--smp=2',
@@ -2239,7 +2251,9 @@ async def test_drop_keyspace_while_split(manager: ScyllaClusterManager):
     cql = manager.get_cql()
     await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
 
-    await manager.disable_tablet_balancing()
+    # The split injections below are not scoped to the test table. Let the initial split
+    # of the system keyspaces' tablets finish first, so that only the test table splits.
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     # create a table so that it has at least 2 tablets (and storage groups) per shard
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4};")
@@ -2493,6 +2507,8 @@ async def check_tablet_rebuild_with_repair(manager: ScyllaClusterManager, fail: 
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        table_id = await manager.get_table_id(ks, "test")
+
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
@@ -2516,7 +2532,7 @@ async def check_tablet_rebuild_with_repair(manager: ScyllaClusterManager, fail: 
         # keyspace, hence force=True.
         await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0, force=True)
 
-        assert sum([len(await log.grep(rf'.*Will set tablet .* stage to rebuild_repair.*')) for log in logs]) == 1
+        assert sum([len(await log.grep(rf'.*Will set tablet {table_id}:\d+ stage to rebuild_repair.*')) for log in logs]) == 1
 
         replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
         logger.info(f"Tablet is now on [{replicas}]")
@@ -2667,26 +2683,46 @@ async def test_table_creation_wakes_up_balancer(manager: ScyllaClusterManager):
     2. Block the topology coordinator right before it goes to sleep
     3. Create a table, which should wake up the coordinator
     4. Verify that the coordinator didn't go to sleep
+
+    Any other event in the window (a completed load stats refresh, for one) would wake the
+    coordinator too, so the trap is set by an ALTER TABLE, periodic refreshes are off, the
+    system keyspaces stay on vnodes (their splits refresh), and no refresh may complete.
     """
-    server = await manager.server_add()
+    cfg = {'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes'],
+           'tablet_load_stats_refresh_interval_in_seconds': 3600}
+    server = await manager.server_add(config=cfg)
     log = await manager.server_open_log(server.server_id)
     cql = manager.get_cql()
 
+    # The coordinator refreshes the load stats when it starts; let that refresh complete
+    # first, so that the wait below is for the one started by the table creation.
+    await log.wait_for("Refreshed table load stats for all DC", timeout=60)
+    mark = await log.mark()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8}") as ks:
+        # A table to ALTER for the trap; creating it starts a load stats refresh, so let
+        # that complete and the coordinator go back to sleep before arming the injection.
+        await cql.run_async(f"CREATE TABLE {ks}.other (pk int PRIMARY KEY, c int);")
+        await log.wait_for("Refreshed table load stats for all DC", from_mark=mark)
+        async def coordinator_asleep():
+            lines = await log.grep(r"topology coordinator fiber (has nothing to do\. Sleeping\.|got an event)", from_mark=mark)
+            return True if lines and "Sleeping" in lines[-1][0] else None
+        await wait_for(coordinator_asleep, time.time() + 60)
+
         # Block coordinator right before going to sleep
-        # We use node bootstrap as an operation which is going to be trapped on exit, but it's arbitrary.
         mark = await log.mark()
         await manager.api.enable_injection(server.ip_addr, 'wait-before-topology-coordinator-goes-to-sleep', one_shot=True)
-        await manager.server_add()
-        await log.wait_for('wait-before-topology-coordinator-goes-to-sleep: wait', from_mark=mark)
+        await cql.run_async(f"ALTER TABLE {ks}.other WITH comment = 'wake up';")
+        trap_pos, _ = await log.wait_for('wait-before-topology-coordinator-goes-to-sleep: wait', from_mark=mark)
 
         # Create a table, which should prevent the coordinator from sleeping
         await manager.api.enable_injection(server.ip_addr, 'wait-after-topology-coordinator-gets-event', one_shot=True)
         mark = await log.mark()
+        assert not await log.grep("Refreshed table load stats for all DC", from_mark=trap_pos), \
+            "a load stats refresh completed after the trap, it would wake the coordinator on its own"
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
-        # Verify it didn't go to sleep. If it did, the wait for wakeup would be 30s on average,
-        # up to stats refresh period, which is 60s. So use a small timeout.
+        # Verify it didn't go to sleep. If it did, nothing would wake it up before the next
+        # periodic stats refresh, an hour away. So use a small timeout.
         await manager.api.message_injection(server.ip_addr, 'wait-before-topology-coordinator-goes-to-sleep')
         await log.wait_for('wait-after-topology-coordinator-gets-event: wait', from_mark=mark, timeout=5)
 

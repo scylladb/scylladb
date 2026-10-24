@@ -9,7 +9,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts, Host
 from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, create_table_insert_data_for_repair_multiple_rows, get_tablet_task_id, load_tablet_repair_task_infos
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
-from test.cluster.util import create_new_test_keyspace
+from test.cluster.util import create_new_test_keyspace, wait_for_auto_rf_settled
 
 from cassandra.cluster import Session as CassandraSession
 from cassandra.query import SimpleStatement, ConsistencyLevel
@@ -82,7 +82,7 @@ async def do_test_tablet_repair_progress_split_merge(manager: ScyllaClusterManag
     # 12 out of 16 tablets should finish
     await wait_task_progress(nr_tablets_repaired, nr_tablets)
 
-    async def resize_and_check(op, resize_injection):
+    async def resize_and_check(op, resize_injection, params={}):
         # Hold back repair scheduling until the progress is checked. A resize
         # renumbers the tablets, so tablet_repair_skip_sched keeps a different
         # set of tablets unrepaired afterwards, and repairing one of the new
@@ -91,8 +91,8 @@ async def do_test_tablet_repair_progress_split_merge(manager: ScyllaClusterManag
         await inject_error_on(manager, "tablet_skip_repair_plan", servers)
 
         s1_mark = await logs[0].mark()
-        await inject_error_on(manager, resize_injection, servers)
-        await logs[0].wait_for(f'Detected tablet {op} for table', from_mark=s1_mark)
+        await inject_error_on(manager, resize_injection, servers, params=params)
+        await logs[0].wait_for(f'Detected tablet {op} for table {ks}.test', from_mark=s1_mark)
         await inject_error_off(manager, resize_injection, servers)
 
         await get_task_status_and_check(f"after_{op}")
@@ -105,7 +105,9 @@ async def do_test_tablet_repair_progress_split_merge(manager: ScyllaClusterManag
 
     if do_merge:
         await get_task_status_and_check("before_merge")
-        await resize_and_check("merge", "tablet_force_tablet_count_decrease")
+        # Unscoped, the injection merges the system keyspaces' tables as well, and their
+        # merge could be the one the wait above sees. Merge only the test table.
+        await resize_and_check("merge", "tablet_force_tablet_count_decrease", {'for_table_id': table_id})
 
     # Wait for all repair to finish after all tablets can be scheduled to run repair
     await inject_error_off(manager, "tablet_repair_skip_sched", servers)
@@ -347,6 +349,9 @@ async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraS
     await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
     table_id = await manager.get_table_id(ks, "test")
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    # Let auto-RF finish extending the system keyspaces to the test keyspace's racks
+    # before the test arms repair injections or reads the repair metrics.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
     return (servers, cql, hosts, ks, table_id)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')

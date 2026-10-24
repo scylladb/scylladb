@@ -93,6 +93,8 @@ enum class global_topology_request: uint16_t {
     finalize_migration,
     quiesce,
     restore_tablets,
+    // Answered once auto-RF has nothing to do; see storage_service::await_auto_rf_quiesced().
+    auto_rf_quiesce,
 };
 
 struct ring_slice {
@@ -255,6 +257,12 @@ struct topology {
     // Tablet replicas may temporarily include left nodes (e.g. when a node is replaced),
     // hence the need for this field.
     std::unordered_set<raft::server_id> excluded_tablet_nodes;
+
+    // Set when the auto-RF reconciler has a change to schedule, so that tablet load
+    // balancing yields to it. Cleared by the next reconciler pass which has nothing to
+    // schedule (the change queued, running, backed off or deferred): the change's own
+    // migrations are part of the balance plan, so the flag must not be held while they run.
+    bool needs_auto_rf_change = false;
 
     // Find only nodes in non 'left' state
     const std::pair<const raft::server_id, replica_state>* find(raft::server_id id) const;

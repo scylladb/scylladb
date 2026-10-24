@@ -14,12 +14,13 @@
 #include "tracing/tracing.hh"
 #include "table_helper.hh"
 #include "cql3/values.hh"
+#include "service/auto_rf_keyspaces.hh"
 
 namespace tracing {
 
 class trace_keyspace_helper final : public i_tracing_backend_helper {
 public:
-    static constexpr std::string_view KEYSPACE_NAME = "system_traces";
+    static constexpr std::string_view KEYSPACE_NAME = service::system_traces_keyspace_name;
     static constexpr std::string_view SESSIONS = "sessions";
     static constexpr std::string_view SESSIONS_TIME_IDX = "sessions_time_idx";
     static constexpr std::string_view EVENTS = "events";

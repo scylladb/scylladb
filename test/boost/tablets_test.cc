@@ -836,6 +836,77 @@ SEASTAR_TEST_CASE(test_paused_rf_change_requests_persistence) {
     }, tablet_cql_test_config());
 }
 
+// A set column is overwritten by emitting a tombstone at timestamp-1 and the surviving
+// elements at timestamp, so several overwrites of one column at the same write timestamp
+// merge as the union of their elements rather than the later one winning. A caller that
+// drops ids one mutation at a time therefore loses every removal. Both sets the topology
+// coordinator maintains this way have to be updated with a single overwrite per pass.
+SEASTAR_TEST_CASE(test_set_removals_in_one_batch_need_a_single_overwrite) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+        auto& sys_ks = e.get_system_keyspace().local();
+
+        // ongoing_restore_requests, as generate_migration_updates() maintains it.
+        const auto id1 = utils::UUID_gen::get_time_UUID();
+        const auto id2 = utils::UUID_gen::get_time_UUID();
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .start_restore_request(id1).build());
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .start_restore_request(id2).build());
+        });
+        auto topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.ongoing_restore_requests.size(), 2u);
+
+        // One overwrite per removal, which is what the coordinator used to emit: the two
+        // merge as their union and neither removal sticks. Asserted rather than left as a
+        // comment, because it is the whole reason the plural builder has to be used.
+        const auto ongoing = topology.ongoing_restore_requests;
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .finish_restore_requests(ongoing, {id1}).build());
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .finish_restore_requests(ongoing, {id2}).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.ongoing_restore_requests.size(), 2u);
+
+        // One overwrite carrying both removals empties the set.
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .finish_restore_requests(ongoing, {id1, id2}).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE(topology.ongoing_restore_requests.empty());
+
+        // paused_rf_change_requests, as the rack_list colocation path maintains it: one plan
+        // can carry both a request to resume and a request to fail.
+        const auto p1 = utils::UUID_gen::get_time_UUID();
+        const auto p2 = utils::UUID_gen::get_time_UUID();
+        topo.pause_rf_change_request(p1);
+        topo.pause_rf_change_request(p2);
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.paused_rf_change_requests.size(), 2u);
+
+        const auto paused = topology.paused_rf_change_requests;
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .resume_rf_change_request(paused, p1).build());
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .resume_rf_change_request(paused, p2).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.paused_rf_change_requests.size(), 2u);
+
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .resume_rf_change_requests(paused, {p1, p2}).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE(topology.paused_rf_change_requests.empty());
+    }, tablet_cql_test_config());
+}
+
 SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
@@ -5285,6 +5356,62 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_does_not_balance_with_missing_tablet
         {
             auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
             BOOST_REQUIRE(plan.empty());
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_balancer_drains_with_missing_sizes_of_a_migrating_table) {
+    // A node which keeps a table under vnodes-to-tablets migration in vnodes storage reports
+    // no tablet sizes for it. That must not keep the balancer from draining another node.
+    do_with_cql_env_thread([] (auto& e) {
+
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
+
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, 2);
+        auto host2 = topo.add_node(node_state::normal, 2);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
+        auto table1 = add_table(e, ks_name).get();
+
+        // A table under vnodes-to-tablets migration: its keyspace uses vnodes, but it has a tablet map.
+        e.execute_cql(fmt::format("create keyspace vnode_ks with replication = {{'class': 'NetworkTopologyStrategy', '{}': 1}}"
+                                  " and tablets = {{'enabled': false}}", topo.dc())).get();
+        e.execute_cql("create table vnode_ks.t (pk int primary key)").get();
+        auto migrating = e.local_db().find_schema("vnode_ks", "t")->id();
+
+        auto& stm = e.shared_token_metadata().local();
+
+        {
+            abort_source as;
+            auto guard = e.get_raft_group0_client().start_operation(as).get();
+            mutate_tablets(e, guard, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map tmap(4);
+                for (auto tid : tmap.tablet_ids()) {
+                    tmap.set_tablet(tid, tablet_info {
+                        tablet_replica_set {
+                            tablet_replica {host1, 0},
+                        }
+                    });
+                }
+                tmeta.set_tablet_map(migrating, std::move(tmap));
+                co_return;
+            });
+        }
+
+        topo.set_node_state(host2, node_state::decommissioning);
+
+        // host1 keeps the migrating table in vnodes storage: no tablet sizes for it.
+        auto& shared_stats = topo.get_shared_load_stats();
+        shared_stats.set_default_tablet_sizes(stm.get());
+        shared_stats.stats.tablet_stats.at(host1).tablet_sizes.erase(migrating);
+
+        auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
+        BOOST_REQUIRE(!plan.migrations().empty());
+        for (auto&& mig : plan.migrations()) {
+            BOOST_REQUIRE_EQUAL(mig.tablet.table, table1);
+            BOOST_REQUIRE(mig.src);
+            BOOST_REQUIRE_EQUAL(mig.src->host, host2);
         }
     }).get();
 }

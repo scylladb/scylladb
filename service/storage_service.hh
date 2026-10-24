@@ -947,6 +947,17 @@ private:
 
     future<> raft_decommission();
     future<> raft_removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params);
+    // State of the retry loop of a removal which only the auto-RF keyspaces make
+    // RF-rack-invalid; it waits, for a bounded time, for auto-RF to give the rack up.
+    struct auto_rf_removal_wait {
+        // Set on the first rejection.
+        std::optional<lowres_clock::time_point> deadline;
+        bool waited = false;
+    };
+    // Called after a removal was found RF-rack-invalid. Releases the guard, waits for
+    // the next topology change and returns true if the caller should validate again,
+    // false if the rejection stands.
+    future<bool> auto_rf_may_still_fix_removal(group0_guard guard, auto_rf_removal_wait& wait, locator::host_id host_id);
     future<> raft_rebuild(utils::optional_param source_dc);
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
@@ -1022,11 +1033,15 @@ public:
     future<> abort_restore_tablets(table_id);
     future<> set_tablet_balancing_enabled(bool);
 
-    future<utils::UUID> submit_quiesce_topology_request();
+    future<utils::UUID> submit_quiesce_topology_request(global_topology_request type = global_topology_request::quiesce);
     // The body of await_topology_quiesced(), run through _quiesce_topology so that
     // concurrent callers share a single request. Shard 0 only.
     future<> do_await_topology_quiesced();
     future<> await_topology_quiesced();
+    // Waits until auto-RF has nothing left to do: no change due, queued, running or
+    // backed off. Unlike await_topology_quiesced(), it does not wait for the tablet
+    // balancer.
+    future<> await_auto_rf_quiesced();
     // Verifies topology is not busy, and also that topology version hasn't changed since the one provided
     // by the caller.
     future<bool> verify_topology_quiesced(token_metadata::version_t expected_version);
