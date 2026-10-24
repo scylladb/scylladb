@@ -375,13 +375,70 @@ SEASTAR_TEST_CASE(test_populate_snapshot_sstables_from_manifests, *boost::unit_t
 
             auto dc = env.get_storage_proxy().local().get_token_metadata_ptr()->get_topology().get_datacenter();
 
-            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "unexpected_snapshot", dc, {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);
-            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", "unexpected_dc", {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);
+            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "unexpected_snapshot", dc, "unexpected_snapshot", {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);
+            BOOST_REQUIRE_THROW(populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", "unexpected_dc", "snapshot", {manifest_path}, db::consistency_level::ONE).get(), std::runtime_error);
 
             // populate system_distributed.snapshot_sstables with the content of the snapshot manifest
-            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", dc, {manifest_path}, db::consistency_level::ONE).get();
+            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", dc, "snapshot", {manifest_path}, db::consistency_level::ONE).get();
 
             check_snapshot_sstables(env).get();
+    }, false, db_cfg_ptr, 10);
+}
+
+// An in-place restore's catalog rows share primary keys with the live
+// snapshot's rows of the same tag, so populate writes them under the staging
+// name instead and must leave the live rows untouched.
+SEASTAR_TEST_CASE(test_restore_populates_under_the_staging_name, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    using namespace sstables;
+
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    auto storage_options = make_test_object_storage_options("S3");
+    db_cfg_ptr->object_storage_endpoints(make_storage_options_config(storage_options));
+
+    return do_with_some_data_in_thread({"cf"}, [storage_options = std::move(storage_options)] (cql_test_env& env) {
+        take_snapshot(env, "ks", "cf", "snapshot").get();
+
+        auto ep = storage_options.to_map()["endpoint"];
+        auto bucket = storage_options.to_map()["bucket"];
+        auto prefix = backup(env, ep, bucket).get();
+        auto manifest_path = prefix + "/manifest.json";
+
+        auto& topology = env.get_storage_proxy().local().get_token_metadata_ptr()->get_topology();
+        auto dc = topology.get_datacenter();
+        auto rack = topology.get_rack();
+
+        db::snapshot_table_helper sth(env.local_qp());
+        // Fabricate the snapshot's rows. Populate once under the real
+        // tag, then rewrite each row with the shape the snapshot flow writes
+        // (a real node, state local). An in-place restore's rows share these
+        // rows primary keys, the staging snapshot name should ovoid overriding them.
+        populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(),
+                "ks", "cf", ep, bucket, "", "snapshot", dc, "snapshot", {manifest_path}, db::consistency_level::ONE).get();
+        auto me = locator::host_id(utils::UUID_gen::get_time_UUID());
+        auto snapshot_rows_before = sth.get_snapshot_sstables("snapshot", "ks", "cf", dc, rack, db::consistency_level::ONE).get();
+        BOOST_REQUIRE(!snapshot_rows_before.empty());
+        for (const auto& e : snapshot_rows_before) {
+            sth.insert_snapshot_sstable("snapshot", "ks", "cf", dc, rack, e.sstable_id, e.first_token, e.last_token,
+                    e.toc_name, e.prefix, me, e.tablet_id, db::snapshot_state::local, 0, 0, 0, db::consistency_level::ONE).get();
+        }
+
+        populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(),
+                "ks", "cf", ep, bucket, "", "snapshot", dc, "snapshot/restore/tid", {manifest_path}, db::consistency_level::ONE).get();
+
+        auto snapshot_rows_after = sth.get_snapshot_sstables("snapshot", "ks", "cf", dc, rack, db::consistency_level::ONE).get();
+        BOOST_REQUIRE_EQUAL(snapshot_rows_after.size(), snapshot_rows_before.size());
+        for (const auto& e : snapshot_rows_after) {
+            BOOST_CHECK(e.node == me);
+            BOOST_CHECK(e.state == db::snapshot_state::local);
+        }
+
+        auto staged = sth.get_snapshot_sstables("snapshot/restore/tid", "ks", "cf", dc, rack, db::consistency_level::ONE).get();
+        BOOST_CHECK_EQUAL(staged.size(), snapshot_rows_before.size());
+        for (const auto& e : staged) {
+            BOOST_CHECK(e.node == locator::host_id::create_null_id());
+            BOOST_CHECK(e.state == db::snapshot_state::remote);
+        }
     }, false, db_cfg_ptr, 10);
 }
 
@@ -433,7 +490,7 @@ SEASTAR_TEST_CASE(test_restore_should_handle_missing_optional_fields, *boost::un
             auto manifest_path = prefix + "/manifest-without-optional-fields.json";
             upload_object(env, ep, bucket, manifest_path, rjson::print(manifest)).get();
 
-            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", dc, {manifest_path}, db::consistency_level::ONE).get();
+            populate_snapshot_sstables_from_manifests(env.get_sstorage_manager().local(), env.get_system_distributed_keyspace().local(), "ks", "cf", ep, bucket, "", "snapshot", dc, "snapshot", {manifest_path}, db::consistency_level::ONE).get();
 
             check_snapshot_sstables(env, [] (const db::snapshot_sstable_entry& e) {
                 // the fields dropped above default to 0

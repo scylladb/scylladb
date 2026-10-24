@@ -1235,10 +1235,14 @@ async def test_restore_tablets_abort(build_mode: str, manager: ScyllaClusterMana
 
         # Every node had its session closed before the pause was released, so no download could
         # complete: none of the sstables must be marked as downloaded.
+        # Restore stages its catalog rows under a name derived from the tag
+        # and the target table id.
+        table_id = str(await manager.get_table_or_view_id(ks, 'test'))
+        staging_name = f'{snap_name}/restore/{table_id}'
         dc = servers[0].datacenter
         rack = 'rack0'
         rows = list(await cql.run_async(f"SELECT downloaded FROM system_distributed.snapshot_sstables "
-                                        f"WHERE snapshot_name = '{snap_name}' AND \"keyspace\" = '{ks}' AND \"table\" = 'test' "
+                                        f"WHERE snapshot_name = '{staging_name}' AND \"keyspace\" = '{ks}' AND \"table\" = 'test' "
                                         f"AND datacenter = '{dc}' AND rack = '{rack}'"))
         total = len(rows)
         downloaded = sum(1 for row in rows if row.downloaded)
