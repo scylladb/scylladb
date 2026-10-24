@@ -229,7 +229,14 @@ class KeyGenerator:
         with self.pk_lock:
             return self.pk
 
-async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int = 3, ignore_errors=False):
+async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int = 3, ignore_errors=False,
+                       retried_write_errors: tuple[type[Exception], ...] = ()):
+    """Keep writing rows (pk, pk) with increasing keys until the returned function is called.
+
+    The returned function stops the writers and returns the number of keys written: every
+    key below it is in the table. A write that fails with one of `retried_write_errors` is
+    sent again rather than failing the writer, and so is any failure with `ignore_errors`.
+    """
     logger.info(f"Starting to asynchronously write, concurrency = {concurrency}")
 
     stop_event = asyncio.Event()
@@ -269,7 +276,11 @@ async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int
             while True:
                 start_time = time.time()
                 try:
-                    await cql.run_async(stmt, [pk, pk])
+                    try:
+                        await cql.run_async(stmt, [pk, pk])
+                    except retried_write_errors as e:
+                        logger.info(f"Retrying the write of pk={pk} started {time.time() - start_time}s ago: {e}")
+                        continue
                     # Check read-your-writes
                     rows = await run_retry_async(cql, rd_stmt, [pk])
                     assert(len(rows) == 1)
