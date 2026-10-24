@@ -480,6 +480,7 @@ public:
         bool enable_disk_reads = true;
         bool enable_cache = true;
         bool enable_commitlog = true;
+        // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
         bool enable_incremental_backups = false;
         utils::updateable_value<bool> compaction_enforce_min_threshold{false};
         replica::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
@@ -1214,6 +1215,7 @@ public:
     future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
     static future<snapshot_details> get_snapshot_details(std::filesystem::path snapshot_dir, std::filesystem::path datadir);
 
+    // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
     bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;
     }
@@ -1578,6 +1580,7 @@ public:
         bool enable_disk_reads = true;
         bool enable_disk_writes = true;
         bool enable_cache = true;
+        // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
         bool enable_incremental_backups = false;
         utils::updateable_value<bool> compaction_enforce_min_threshold{false};
         replica::dirty_memory_manager* dirty_memory_manager = &default_dirty_memory_manager;
@@ -1650,6 +1653,7 @@ public:
     void add_user_type(const user_type ut);
     void remove_user_type(const user_type ut);
 
+    // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
     bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;
     }
@@ -1847,6 +1851,7 @@ private:
     // compaction_manager object is referenced by all column families of a database.
     compaction::compaction_manager& _compaction_manager;
     seastar::metrics::metric_groups _metrics;
+    // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
     bool _enable_incremental_backups = false;
     uint32_t _critical_disk_utilization_mode_count = 0;
     bool _shutdown = false;
@@ -1971,6 +1976,7 @@ public:
         return _result_memory_limiter;
     }
 
+    // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
     void set_enable_incremental_backups(bool val) { _enable_incremental_backups = val; }
 
     void enable_autocompaction_toggle() noexcept { _enable_autocompaction_toggle = true; }

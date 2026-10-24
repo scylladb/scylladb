@@ -250,6 +250,7 @@ public:
     named_value<uint32_t> concurrent_reads;
     named_value<uint32_t> concurrent_writes;
     named_value<uint32_t> concurrent_counter_writes;
+    // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
     named_value<bool> incremental_backups;
     named_value<bool> snapshot_before_compaction;
     named_value<uint32_t> phi_convict_threshold;

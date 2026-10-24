@@ -991,6 +991,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             warn_deprecated_auto_repair_option(cfg->auto_repair_enabled_default);
             warn_deprecated_auto_repair_option(cfg->auto_repair_threshold_default_in_seconds);
 
+            // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
+            if (cfg->incremental_backups()) {
+                startlog.warn("The incremental_backups option is enabled, but this feature is deprecated"
+                        " and support for it may be removed in a future release.");
+            }
+
             auto unused_features = cfg->experimental_features() | std::views::filter([] (auto& f) {
                 return f == db::experimental_features_t::feature::UNUSED;
             });

@@ -1185,6 +1185,7 @@ void disableautocompaction_operation(scylla_rest_client& client, const bpo::vari
     }
 }
 
+// FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
 void disablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/incremental_backups", {{"value", "false"}});
 }
@@ -1216,6 +1217,7 @@ void enableautocompaction_operation(scylla_rest_client& client, const bpo::varia
     }
 }
 
+// FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
 void enablebackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     client.post("/storage_service/incremental_backups", {{"value", "true"}});
 }
@@ -2907,6 +2909,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     }
 }
 
+// FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
 void statusbackup_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto status = client.get("/storage_service/incremental_backups");
     fmt::print(std::cout, "{}\n", status.GetBool() ? "running" : "not running");
@@ -4405,8 +4408,10 @@ For more information, see: {}
         {
             {
                 "disablebackup",
-                "Disables incremental backup",
+                "Disables incremental backup (deprecated)",
 fmt::format(R"(
+Incremental backup is deprecated, and support for it may be removed in a future release.
+
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/disablebackup.html")),
             },
@@ -4477,8 +4482,10 @@ For more information, see: {}
         {
             {
                 "enablebackup",
-                "Enables incremental backup",
+                "Enables incremental backup (deprecated)",
 fmt::format(R"(
+Incremental backup is deprecated, and support for it may be removed in a future release.
+
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/enablebackup.html")),
             },
@@ -5159,8 +5166,10 @@ For more information, see: {}
         {
             {
                 "statusbackup",
-                "Displays the incremental backup status",
+                "Displays the incremental backup status (deprecated)",
 fmt::format(R"(
+Incremental backup is deprecated, and support for it may be removed in a future release.
+
 Results can be one of the following: `running` or `not running`.
 
 By default, the incremental backup status is `not running`.
@@ -5175,7 +5184,7 @@ For more information, see: {}
         {
             {
                 "statusbinary",
-                "Displays the incremental backup status",
+                "Displays the native transport (binary protocol) status",
 fmt::format(R"(
 Provides the status of native transport - CQL (binary protocol).
 In case that you don’t want to use CQL you can disable it using the disablebinary

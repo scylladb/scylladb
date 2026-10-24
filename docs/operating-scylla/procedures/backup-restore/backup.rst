@@ -14,7 +14,7 @@ You can choose one of the following:
 
 * :ref:`Full Backup <backup-full-backup-snapshots>` - Copy the entire data of a node.
 
-* :ref:`Incremental Backup <backup-incremental-backup>` - Updates (delta) - flushed SSTables.
+* :ref:`Incremental Backup <backup-incremental-backup>` - Updates (delta) - flushed SSTables. **Deprecated**.
 
 
 .. _backup-full-backup-snapshots:
@@ -67,6 +67,12 @@ From one of the nodes, recreate the schema. Repeat these steps for each node in 
 
 Incremental Backup
 ==================
+
+.. warning::
+
+   Incremental backup is deprecated, and support for it may be removed in a future release.
+   Use :ref:`snapshots <backup-full-backup-snapshots>` and
+   `ScyllaDB Manager <https://manager.docs.scylladb.com/stable/backup/>`_ to back up your data instead.
 
 | Enabling the incremental backup (disabled by default) will create a hard-link from each SSTable, right after it is **flushed**, to a backups directory.
 | For a complete point in time backup, the following is required: 

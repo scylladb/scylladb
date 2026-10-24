@@ -96,13 +96,13 @@ Operations that are not listed below are currently not available.
 * :doc:`describecluster </operating-scylla/nodetool-commands/describecluster/>` - Print the name, snitch, partitioner and schema version of a cluster.
 * :doc:`describering </operating-scylla/nodetool-commands/describering/>` - :code:`<keyspace>`- Shows the partition ranges of a given keyspace.
 * :doc:`disableautocompaction </operating-scylla/nodetool-commands/disableautocompaction/>` - Disable automatic compaction of a keyspace or table.
-* :doc:`disablebackup </operating-scylla/nodetool-commands/disablebackup/>` - Disable incremental backup.
+* :doc:`disablebackup </operating-scylla/nodetool-commands/disablebackup/>` - Disable incremental backup (deprecated).
 * :doc:`disablebinary </operating-scylla/nodetool-commands/disablebinary/>` - Disable native transport (binary protocol).
 * :doc:`disablegossip </operating-scylla/nodetool-commands/disablegossip/>` - Disable gossip (effectively marking the node down).
 * :doc:`drain </operating-scylla/nodetool-commands/drain/>` - Drain the node (stop accepting writes and flush all column families).
 * :doc:`dropquarantinedsstables </operating-scylla/nodetool-commands/dropquarantinedsstables>` :code:`<keyspace>` :code:`<table>` Drop quarantined SSTables from the specified keyspace and table(s), or from all keyspaces if no keyspace is specified.
 * :doc:`enableautocompaction </operating-scylla/nodetool-commands/enableautocompaction/>` - Enable automatic compaction of a keyspace or table.
-* :doc:`enablebackup </operating-scylla/nodetool-commands/enablebackup/>` - Enable incremental backup.
+* :doc:`enablebackup </operating-scylla/nodetool-commands/enablebackup/>` - Enable incremental backup (deprecated).
 * :doc:`enablebinary </operating-scylla/nodetool-commands/enablebinary/>` - Re-enable native transport (binary protocol).
 * :doc:`enablegossip </operating-scylla/nodetool-commands/enablegossip/>` - Re-enable gossip.
 * :doc:`excludenode </operating-scylla/nodetool-commands/excludenode/>`- Mark nodes as permanently down.
@@ -135,7 +135,7 @@ Operations that are not listed below are currently not available.
 * :doc:`snapshot </operating-scylla/nodetool-commands/snapshot>` :code:`[-t tag] [-cf column_family] <keyspace>`  - Take a snapshot of specified keyspaces or a snapshot of the specified table.
 * :doc:`sstableinfo </operating-scylla/nodetool-commands/sstableinfo>` - Get information about sstables per keyspace/table.
 * :doc:`status </operating-scylla/nodetool-commands/status/>` - Print cluster information.
-* :doc:`statusbackup </operating-scylla/nodetool-commands/statusbackup/>` - Status of incremental backup.
+* :doc:`statusbackup </operating-scylla/nodetool-commands/statusbackup/>` - Status of incremental backup (deprecated).
 * :doc:`statusbinary </operating-scylla/nodetool-commands/statusbinary/>` - Status of native transport (binary protocol).
 * :doc:`statusgossip </operating-scylla/nodetool-commands/statusgossip/>` - Status of gossip.
 * :doc:`stop </operating-scylla/nodetool-commands/stop/>` - Stop compaction operation.
