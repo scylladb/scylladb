@@ -268,6 +268,7 @@ future<> controller::do_start_server() {
               .cql_duplicate_bind_variable_names_refer_to_same_variable = cfg.cql_duplicate_bind_variable_names_refer_to_same_variable,
               .max_relations_in_where_clause = cfg.max_relations_in_where_clause,
               .cql_in_bind_variable_name_uses_uppercase_operator = cfg.cql_in_bind_variable_name_uses_uppercase_operator,
+              .max_type_nesting = cfg.max_type_nesting,
               .uninitialized_connections_semaphore_cpu_concurrency = cfg.uninitialized_connections_semaphore_cpu_concurrency,
               .request_timeout_on_shutdown_in_seconds = cfg.request_timeout_on_shutdown_in_seconds
             };

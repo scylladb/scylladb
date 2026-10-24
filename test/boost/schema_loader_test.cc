@@ -445,6 +445,22 @@ SEASTAR_THREAD_TEST_CASE(test_materialized_view_above_default_relation_limit) {
             {view_type::view});
 }
 
+/// A type nested deeper than the default max_type_nesting of 32 can only be
+/// created by a node with a raised limit, or before the limit existed. The tools
+/// cannot know that configuration, so they have to load such a schema regardless.
+SEASTAR_THREAD_TEST_CASE(test_type_above_default_nesting_limit) {
+    db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
+    std::string lists_40 = "int";
+    for (int i = 0; i < 40; ++i) {
+        lists_40 = fmt::format("frozen<list<{}>>", lists_40);
+    }
+    BOOST_REQUIRE_EQUAL(tools::load_schemas(dbcfg, fmt::format(
+            "CREATE TYPE ks.ut (a {}); "
+            "CREATE TABLE ks.cf (pk int PRIMARY KEY, v {});", lists_40, lists_40)).get().size(), 1);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_index) {
     db::config dbcfg;
     dbcfg.rf_rack_valid_keyspaces(true);

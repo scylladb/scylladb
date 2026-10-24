@@ -16,6 +16,8 @@
 #include "types/tuple.hh"
 #include "keys/compound.hh"
 #include "db/marshal/type_parser.hh"
+#include "db/cql_type_parser.hh"
+#include "data_dictionary/user_types_metadata.hh"
 #include "cql3/cql3_type.hh"
 #include "utils/big_decimal.hh"
 #include "utils/chunked_string.hh"
@@ -1133,4 +1135,15 @@ SEASTAR_TEST_CASE(test_list_type_serialization) {
     BOOST_REQUIRE_EQUAL(*ser, to_bytes(sstring("\0\0\0\3\0\0\0\4\0\0\0\7\xff\xff\xff\xff\0\0\0\4\0\0\0\6"sv)));
     BOOST_REQUIRE_EQUAL(list, list_type->deserialize_value(managed_bytes_view(*ser)));
     return make_ready_future<>();
+}
+
+// A stored type was accepted when it was created, so loading it must not apply
+// the limit on nesting meant for client statements, also inside a vector.
+BOOST_AUTO_TEST_CASE(test_parse_stored_type_above_nesting_limit) {
+    std::string lists_40 = "vector<int, 3>";
+    for (int i = 0; i < 40; ++i) {
+        lists_40 = fmt::format("frozen<list<{}>>", lists_40);
+    }
+    auto type = db::cql_type_parser::parse("ks", lists_40, data_dictionary::user_types_metadata{});
+    BOOST_REQUIRE_EQUAL(cql3::cql3_type::nesting(*type), 41);
 }

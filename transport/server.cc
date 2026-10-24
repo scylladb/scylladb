@@ -2200,6 +2200,7 @@ cql_server::connection::get_dialect() const {
         .duplicate_bind_variable_names_refer_to_same_variable = _server._config.cql_duplicate_bind_variable_names_refer_to_same_variable,
         .max_relations_in_where_clause = _server._config.max_relations_in_where_clause,
         .in_bind_variable_name_uses_uppercase_operator = _server._config.cql_in_bind_variable_name_uses_uppercase_operator,
+        .max_type_nesting = _server._config.max_type_nesting,
     };
 }
 

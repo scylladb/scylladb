@@ -1648,6 +1648,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Name the bind variable of an IN restriction \"IN(column)\" (if false, the operator is spelled in lowercase, \"in(column)\").")
     , max_relations_in_where_clause(this, "max_relations_in_where_clause", liveness::LiveUpdate, value_status::Used, 100,
             "Maximum number of relations allowed in a WHERE clause. Queries with too many relations can cause quadratic complexity.")
+    , max_type_nesting(this, "max_type_nesting", liveness::LiveUpdate, value_status::Used, 32,
+            "Maximum nesting depth of a type in a CQL statement. Collections, tuples, vectors and user types each add a level. Types nested too deeply can crash the node.")
     , select_internal_page_size(this, "select_internal_page_size", liveness::LiveUpdate, value_status::Used, 10000,
             "SELECT statements with aggregation or GROUP BYs or a secondary index may use this page size for their internal reading data, not the page size specified in the query options.")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port.")

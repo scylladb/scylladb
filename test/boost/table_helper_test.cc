@@ -21,6 +21,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "cql3/cql_config.hh"
+#include "cql3/cql3_type.hh"
 #include "service/client_state.hh"
 #include "service/migration_manager.hh"
 #include "service/query_state.hh"
@@ -50,6 +51,21 @@ SEASTAR_TEST_CASE(test_best_effort_setup_table_failure_is_consumed) {
         BOOST_REQUIRE_THROW(helper.cache_table_info(qp, mm, qs).get(), bad_column_family);
 
         seastar::yield().get();
+    });
+}
+
+// A snapshot keeps the CREATE TABLE of its table for restore. That table was
+// accepted when it was created, so the client limit on type nesting must not
+// reject its stored CREATE TABLE.
+SEASTAR_TEST_CASE(test_parse_create_table_above_nesting_limit) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        std::string lists_40 = "int";
+        for (int i = 0; i < 40; ++i) {
+            lists_40 = fmt::format("frozen<list<{}>>", lists_40);
+        }
+        auto schema = table_helper::parse_new_cf_statement(env.local_qp(),
+                fmt::format("CREATE TABLE ks.t (k int PRIMARY KEY, v {})", lists_40));
+        BOOST_REQUIRE_EQUAL(cql3::cql3_type::nesting(*schema->get_column_definition(to_bytes("v"))->type), 40);
     });
 }
 
