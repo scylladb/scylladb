@@ -218,3 +218,116 @@ in the CreateTable operation. The value of this tag can be:
 The `system:initial_tablets` tag only has any effect while creating
 a new table with CreateTable - changing it later has no effect.
 
+## Custom write timestamps
+
+DynamoDB doesn't allow clients to set the write timestamp of updates. All
+updates use the current server time as their timestamp, and ScyllaDB uses
+these timestamps for last-write-wins conflict resolution when concurrent
+writes reach different replicas.
+
+ScyllaDB Alternator extends this with the `system:timestamp_attribute` tag,
+which allows specifying a custom write timestamp for each PutItem,
+UpdateItem, DeleteItem, or BatchWriteItem request. To use this feature:
+
+1. Tag the table (at CreateTable time or using TagResource) with
+   `system:timestamp_attribute` set to the name of an attribute that will
+   hold the custom write timestamp. This attribute must not be a key
+   attribute of the table, nor an attribute used by one of its indexes
+   (a key of a GSI or LSI, or an attribute of a vector index), nor the
+   table's TTL attribute (see `UpdateTimeToLive`). If it is, the tag is
+   ignored, and the attribute is treated as an ordinary attribute.
+
+2. When performing a PutItem, UpdateItem or BatchWriteItem PutRequest,
+   include the named attribute in the request with an integer value
+   between 1 and 2^63-1 (the range of positive signed 64-bit integers).
+   The value represents the write timestamp in **microseconds since the
+   Unix epoch** (this is the same unit used internally by ScyllaDB for
+   timestamps).
+   For a DeleteItem or a BatchWriteItem DeleteRequest, include the named
+   attribute in the `Key` parameter.
+
+3. The named attribute is **not stored** in the item data - it only
+   controls the write timestamp. If you also want to record the timestamp
+   as data, use a separate attribute for that purpose. Because it isn't
+   stored, UpdateItem can set it (with `SET` or `PUT`) but cannot `ADD`
+   to it.
+
+4. If the named attribute is absent, the write proceeds normally using the
+   current server time as the timestamp. If the named attribute is present
+   but has a non-numeric value, or a number outside the above range, the
+   write is rejected with a ValidationException.
+
+### Limitations
+
+- **Incompatible with Streams**: Streams can only record writes whose
+  timestamps are close to the current time, so on a table with Streams
+  enabled, writes with a custom timestamp are rejected with a
+  ValidationException.
+
+- **Incompatible with indexes with multi-attribute keys**: If writes don't
+  arrive in timestamp order, an index whose key has two or more attributes
+  which aren't key attributes of the table (for example, a GSI with both a
+  hash key and a range key which are not the table's keys) may lose items.
+  So on a table with such an index, writes with a custom timestamp are
+  rejected with a ValidationException. Indexes with just one such
+  attribute in their key are fine.
+
+- **Incompatible with LWT (lightweight transactions)**: Custom write
+  timestamps cannot be used for writes that execute as an LWT, because LWT
+  requires the write timestamp to be set by the Paxos protocol, not by the
+  client. Which writes use LWT depends on the table's write isolation policy:
+
+  - **`always`** (`always_use_lwt`): every write uses LWT, so the
+    `system:timestamp_attribute` feature is entirely unusable on such tables.
+    Consider using `system:write_isolation=only_rmw_uses_lwt` (or `forbid_rmw`)
+    instead.
+  - **`only_rmw_uses_lwt`**: read-modify-write operations — those that include
+    a `ConditionExpression` or the legacy `Expected`, or use an `UpdateExpression`
+    or `AttributeUpdates` that reads existing attribute values, or use
+    `ReturnValues` that needs to read the old item — all use LWT and are
+    therefore rejected with a `ValidationException`. Write-only requests in
+    this mode work normally with custom timestamps.
+  - **`forbid_rmw`** and **`unsafe_rmw`**: writes never use LWT, so custom
+    timestamps are always allowed. (`forbid_rmw` rejects read-modify-write
+    requests outright; `unsafe_rmw` performs them without isolation guarantees.)
+
+- **Timestamps far from the current time**: If you write an item with a
+  timestamp far in the future, subsequent writes that do _not_ specify an
+  explicit timestamp will use the current server time, which will be smaller
+  than that future timestamp and will therefore lose the last-write-wins
+  conflict — effectively making the item immutable until real time catches up.
+  This also applies to deletion by TTL expiration (see `UpdateTimeToLive`),
+  which uses the current server time: an expired item written with a future
+  timestamp is only deleted once real time passes that timestamp.
+  Similarly, writing with a timestamp far in the past risks losing to any
+  concurrent or future write that uses the current server time. Keep explicit
+  timestamps reasonably close to the current wall-clock time to avoid these
+  surprises.
+
+- **Writes with equal timestamps**: If two writes to the same item use the
+  same timestamp, the result is unspecified. For example, two PutItem
+  requests with the same timestamp may leave an item combining the
+  attributes of both. Give each write to an item a distinct timestamp.
+
+### Example use case
+
+This feature is useful for ingesting data from multiple sources where each
+record has a known logical timestamp. By setting the `system:timestamp_attribute`
+tag, you can ensure that the record with the highest logical timestamp always
+wins, regardless of ingestion order:
+
+```python
+# Create table with timestamp attribute
+dynamodb.create_table(
+    TableName='my_table',
+    ...
+    Tags=[{'Key': 'system:timestamp_attribute', 'Value': 'write_ts'}]
+)
+
+# Write a record with a specific timestamp (in microseconds since epoch)
+table.put_item(Item={
+    'pk': 'my_key',
+    'data': 'new_value',
+    'write_ts': Decimal('1700000000000000'),  # Nov 14, 2023 in microseconds
+})
+```
