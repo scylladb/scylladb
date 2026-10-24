@@ -974,6 +974,9 @@ public:
     bool use_sketch() const {
         return _is_tablet && use_rpc_stream() && _db.local().features().repair_row_hash_sketch;
     }
+    bool use_start_with_estimate() const {
+        return _is_tablet && _db.local().features().repair_start_with_estimate;
+    }
 
 public:
     // master constructor
@@ -1993,10 +1996,11 @@ public:
     }
 
     // RPC API
-    future<>
+    // Returns the follower's partition estimate, if it sent one.
+    future<std::optional<uint64_t>>
     repair_row_level_start(locator::host_id remote_node, sstring ks_name, sstring cf_name, dht::token_range range, table_schema_version schema_version, streaming::stream_reason reason, gc_clock::time_point compaction_time, shard_id dst_cpu_id) {
         if (remote_node == myhostid()) {
-            co_return;
+            co_return std::nullopt;
         }
         stats().rpc_call_nr++;
         // Even though remote partitioner name is ignored in the current version of
@@ -2012,9 +2016,8 @@ public:
                 remote_partitioner_name, std::move(schema_version), reason, compaction_time, dst_cpu_id, _frozen_topology_guard, _repaired_at, _incremental_mode);
         if (resp && resp->status == repair_row_level_start_status::no_such_column_family) {
             throw replica::no_such_column_family(ks_name, cf_name);
-        } else {
-            co_return;
         }
+        co_return resp ? resp->estimated_partitions : std::nullopt;
     }
 
     // RPC handler
@@ -2037,7 +2040,17 @@ public:
                 co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
             }
             co_await repair.insert_repair_meta(from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as, topo_guard, repaired_at, incremental_mode, explicit_dst_cpu_id);
-            co_return repair_row_level_start_response{repair_row_level_start_status::ok};
+            repair_row_level_start_response resp{repair_row_level_start_status::ok};
+            // Saves the master a repair_get_estimated_partitions round trip; on failure
+            // it falls back to the separate RPC.
+            if (auto rm = repair.get_repair_meta(from_id, repair_meta_id); rm->use_start_with_estimate()) {
+                try {
+                    resp.estimated_partitions = co_await rm->get_estimated_partitions();
+                } catch (...) {
+                    rlogger.debug("repair[{}]: estimate in repair_row_level_start failed: {}", repair_meta_id, std::current_exception());
+                }
+            }
+            co_return resp;
         } catch (replica::no_such_column_family&) {
             co_return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
         }
@@ -2084,6 +2097,7 @@ public:
 
     // RPC handler
     static future<uint64_t> repair_get_estimated_partitions_handler(repair_service& rs, locator::host_id from, uint32_t repair_meta_id) {
+        utils::get_local_injector().inject("repair_estimated_partitions_rpc_fail", [] { throw std::runtime_error("repair_estimated_partitions_rpc_fail"); });
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::get_estimated_partitions_started);
         uint64_t partitions = co_await rm->get_estimated_partitions();
@@ -2103,6 +2117,7 @@ public:
 
     // RPC handler
     static future<> repair_set_estimated_partitions_handler(repair_service& rs, locator::host_id from, uint32_t repair_meta_id, uint64_t estimated_partitions) {
+        utils::get_local_injector().inject("repair_estimated_partitions_rpc_fail", [] { throw std::runtime_error("repair_estimated_partitions_rpc_fail"); });
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::set_estimated_partitions_started);
         co_await rm->set_estimated_partitions(estimated_partitions);
@@ -2112,18 +2127,21 @@ public:
     // RPC API
     // Return the largest sync point contained in the _row_buf , current _row_buf checksum, and the _row_buf size
     future<get_sync_boundary_response>
-    get_sync_boundary(locator::host_id remote_node, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_cpu_id) {
+    get_sync_boundary(locator::host_id remote_node, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_cpu_id, std::optional<uint64_t> estimated_partitions) {
         if (remote_node == myhostid()) {
-            co_return co_await get_sync_boundary_handler(skipped_sync_boundary);
+            co_return co_await get_sync_boundary_handler(skipped_sync_boundary, estimated_partitions);
         }
         stats().rpc_call_nr++;
-        co_return co_await ser::repair_rpc_verbs::send_repair_get_sync_boundary(&_messaging, remote_node, _repair_meta_id, skipped_sync_boundary, dst_cpu_id);
+        co_return co_await ser::repair_rpc_verbs::send_repair_get_sync_boundary(&_messaging, remote_node, _repair_meta_id, skipped_sync_boundary, dst_cpu_id, estimated_partitions);
     }
 
     // RPC handler
     future<get_sync_boundary_response>
-    get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary) {
+    get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary, std::optional<uint64_t> estimated_partitions) {
         auto gate_held = _gate.hold();
+        if (estimated_partitions) {
+            co_await set_estimated_partitions(*estimated_partitions);
+        }
         auto& cf = _db.local().find_column_family(_schema->id());
         cf.update_off_strategy_trigger();
         co_return co_await get_sync_boundary(std::move(skipped_sync_boundary));
@@ -3138,15 +3156,16 @@ future<> repair_service::init_ms_handlers() {
         });
     });
     ser::repair_rpc_verbs::register_repair_get_sync_boundary(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
-            std::optional<repair_sync_boundary> skipped_sync_boundary, rpc::optional<shard_id> dst_cpu_id_opt) {
+            std::optional<repair_sync_boundary> skipped_sync_boundary, rpc::optional<shard_id> dst_cpu_id_opt,
+            rpc::optional<std::optional<uint64_t>> estimated_partitions) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
-        return container().invoke_on(shard, [from, repair_meta_id,
+        return container().invoke_on(shard, [from, repair_meta_id, estimated_partitions = estimated_partitions.value_or(std::nullopt),
                 skipped_sync_boundary = std::move(skipped_sync_boundary)] (repair_service& local_repair) mutable {
             auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_sync_boundary_started);
-            return rm->get_sync_boundary_handler(std::move(skipped_sync_boundary)).then([rm] (get_sync_boundary_response resp) {
+            return rm->get_sync_boundary_handler(std::move(skipped_sync_boundary), estimated_partitions).then([rm] (get_sync_boundary_response resp) {
                 rm->set_repair_state_for_local_node(repair_state::get_sync_boundary_finished);
                 return resp;
             });
@@ -3507,7 +3526,8 @@ private:
             // `_skipped_sync_boundary` if it is not std::nullopt.
             ns.state = repair_state::get_sync_boundary_started;
             try {
-                get_sync_boundary_response res = co_await master.get_sync_boundary(node, _skipped_sync_boundary, dst_cpu_id);
+                get_sync_boundary_response res = co_await master.get_sync_boundary(node, _skipped_sync_boundary, dst_cpu_id,
+                        master.use_start_with_estimate() ? std::make_optional(_estimated_partitions) : std::nullopt);
                 ns.state = repair_state::get_sync_boundary_finished;
                 master.stats().row_from_disk_bytes[node] += res.new_rows_size;
                 master.stats().row_from_disk_nr[node] += res.new_rows_nr;
@@ -3975,12 +3995,17 @@ public:
                 parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
                     const auto& node = ns.node;
                     ns.state = repair_state::row_level_start_started;
-                    co_await master.repair_row_level_start(node, _rstate.get_keyspace(), _cf_name, _range, schema_version, _rstate.reason(), compaction_time, ns.shard);
+                    auto estimate = co_await master.repair_row_level_start(node, _rstate.get_keyspace(), _cf_name, _range, schema_version, _rstate.reason(), compaction_time, ns.shard);
                     ns.state = repair_state::row_level_start_finished;
                     nodes_to_stop.push_back(ns);
-                    ns.state = repair_state::get_estimated_partitions_started;
-                    uint64_t partitions = co_await master.repair_get_estimated_partitions(node, ns.shard);
-                    ns.state = repair_state::get_estimated_partitions_finished;
+                    uint64_t partitions;
+                    if (estimate) {
+                        partitions = *estimate;
+                    } else {
+                        ns.state = repair_state::get_estimated_partitions_started;
+                        partitions = co_await master.repair_get_estimated_partitions(node, ns.shard);
+                        ns.state = repair_state::get_estimated_partitions_finished;
+                    }
                     rlogger.trace("Get repair_get_estimated_partitions for node={}, estimated_partitions={}", node, partitions);
                     _estimated_partitions += partitions;
                 })).get();
@@ -4006,13 +4031,16 @@ public:
                     _estimated_partitions *= _rstate.rs.get_config().repair_partition_count_estimation_ratio();
                 }
 
-                parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
-                    const auto& node = ns.node;
-                    rlogger.trace("Get repair_set_estimated_partitions for node={}, estimated_partitions={}", node, _estimated_partitions);
-                    ns.state = repair_state::set_estimated_partitions_started;
-                    co_await master.repair_set_estimated_partitions(node, _estimated_partitions, ns.shard);
-                    ns.state = repair_state::set_estimated_partitions_finished;
-                })).get();
+                // Otherwise the estimate goes out with every get_sync_boundary.
+                if (!master.use_start_with_estimate()) {
+                    parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
+                        const auto& node = ns.node;
+                        rlogger.trace("Get repair_set_estimated_partitions for node={}, estimated_partitions={}", node, _estimated_partitions);
+                        ns.state = repair_state::set_estimated_partitions_started;
+                        co_await master.repair_set_estimated_partitions(node, _estimated_partitions, ns.shard);
+                        ns.state = repair_state::set_estimated_partitions_finished;
+                    })).get();
+                }
 
                 while (true) {
                     auto status = negotiate_sync_boundary(master);

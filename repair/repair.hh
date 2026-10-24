@@ -173,6 +173,7 @@ enum class repair_row_level_start_status: uint8_t {
 
 struct repair_row_level_start_response {
     repair_row_level_start_status status;
+    std::optional<uint64_t> estimated_partitions;
 };
 
 // Return value of the REPAIR_GET_SYNC_BOUNDARY RPC verb
