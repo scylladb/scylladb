@@ -806,6 +806,12 @@ public:
     compaction_group& compaction_group_for_logstor_segment(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) const override {
         return get_compaction_group();
     }
+    compaction_group* maybe_compaction_group_for_token(dht::token token) const override {
+        return &get_compaction_group();
+    }
+    compaction_group* maybe_compaction_group_for_logstor_segment(dht::token first_token, dht::token last_token) const override {
+        return &get_compaction_group();
+    }
     storage_group& storage_group_for_token(dht::token token) const override {
         return *_single_sg;
     }
@@ -1003,6 +1009,8 @@ public:
     compaction_group& compaction_group_for_token_range(sstring desc, dht::token first_token, dht::token last_token) const;
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override;
     compaction_group& compaction_group_for_logstor_segment(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) const override;
+    compaction_group* maybe_compaction_group_for_token(dht::token token) const override;
+    compaction_group* maybe_compaction_group_for_logstor_segment(dht::token first_token, dht::token last_token) const override;
 
     storage_group& storage_group_for_token(dht::token token) const override {
         return storage_group_for_id(storage_group_of(token));
@@ -1706,6 +1714,23 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_logstor_seg
     return compaction_group_for_token_range(std::move(desc), first_token, last_token);
 }
 
+// Not through storage_group_of(): in a non-release build it looks the storage group up to validate
+// the tablet range, and throws for the very token this is asked about, one of a tablet that is
+// not on this shard.
+compaction_group* tablet_storage_group_manager::maybe_compaction_group_for_token(dht::token token) const {
+    auto* sg = maybe_storage_group_for_id(schema(), tablet_id_for_token(token));
+    return sg ? &*sg->select_compaction_group(token, tablet_map()) : nullptr;
+}
+
+compaction_group* tablet_storage_group_manager::maybe_compaction_group_for_logstor_segment(dht::token first_token, dht::token last_token) const {
+    const auto first_id = tablet_id_for_token(first_token);
+    if (first_id != tablet_id_for_token(last_token)) {
+        return nullptr;
+    }
+    auto* sg = maybe_storage_group_for_id(schema(), first_id);
+    return sg ? &*sg->select_compaction_group(first_token, last_token, tablet_map()) : nullptr;
+}
+
 compaction_group& table::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
     return _sg_manager->compaction_group_for_sstable(sst);
 }
@@ -1812,7 +1837,7 @@ future<utils::chunked_vector<logstor::segment_snapshot>> table::take_logstor_sna
 }
 
 future<std::unique_ptr<logstor::segment_stream_sink>> table::create_logstor_segment_sink(replica::database& db) {
-    return get_logstor_segment_manager().create_segment_output_stream(db);
+    return get_logstor_segment_manager().create_segment_output_stream(db.logstor_catalog());
 }
 
 future<utils::chunked_vector<sstables::entry_descriptor>>
@@ -2012,12 +2037,18 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
     }
 }
 
-logstor::logstor_group& table::get_logstor_group(dht::token token) {
-    return compaction_group_for_token(token).as_logstor_group();
-}
-
 logstor::logstor_group& table::get_logstor_group(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) {
     return compaction_group_for_logstor_segment(seg_id, first_token, last_token).as_logstor_group();
+}
+
+logstor::logstor_group* table::maybe_get_logstor_group(dht::token token) {
+    auto* cg = _sg_manager->maybe_compaction_group_for_token(token);
+    return cg ? &cg->as_logstor_group() : nullptr;
+}
+
+logstor::logstor_group* table::maybe_get_logstor_group(dht::token first_token, dht::token last_token) {
+    auto* cg = _sg_manager->maybe_compaction_group_for_logstor_segment(first_token, last_token);
+    return cg ? &cg->as_logstor_group() : nullptr;
 }
 
 // Handles permit management only, used for situations where we don't want to inform

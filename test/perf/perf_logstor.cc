@@ -606,7 +606,8 @@ public:
     }
 
     future<> start() {
-        co_await _logstor->do_recovery_for_test();
+        tests::logstor::test_recovery_catalog no_tables;
+        co_await _logstor->do_recovery(no_tables);
         co_await _logstor->start();
         // The cache is enabled, and the tests that are not about it bypass it per read instead, so
         // that one dataset serves them all.

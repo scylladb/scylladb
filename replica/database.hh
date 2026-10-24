@@ -645,8 +645,12 @@ public:
                                           sstables::offstrategy offstrategy = sstables::offstrategy::no);
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
 
-    logstor::logstor_group& get_logstor_group(dht::token token);
     logstor::logstor_group& get_logstor_group(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token);
+    // Return the logstor group of the token or of the token range, or nullptr if this shard has
+    // none. See storage_group_manager::maybe_compaction_group_for_token() and
+    // maybe_compaction_group_for_logstor_segment().
+    logstor::logstor_group* maybe_get_logstor_group(dht::token token);
+    logstor::logstor_group* maybe_get_logstor_group(dht::token first_token, dht::token last_token);
 
     // Restricted to new sstables produced by external processes such as repair.
     // The sstable might undergo split if table is in split mode.
@@ -1836,6 +1840,9 @@ private:
     // Declared ahead of the tables, since a logstor table holds a pointer to it and its compaction
     // groups reach for its compaction manager as they are destroyed, so it has to outlive them.
     std::unique_ptr<logstor::logstor> _logstor;
+    // The tables of this shard as logstor recovery and the adoption of a streamed segment see them.
+    // Set with _logstor.
+    std::unique_ptr<logstor::recovery_catalog> _logstor_catalog;
 
     // By pointer, so that rehashing does not move keyspaces: tables link to theirs by address.
     flat_hash_map<sstring, std::unique_ptr<keyspace>> _keyspaces;
@@ -2237,6 +2244,10 @@ public:
     static future<> flush_logstor_separator_on_all_shards(sharded<database>& sharded_db);
     future<> flush_logstor_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
     size_t get_logstor_memory_usage() const;
+    // Only valid when logstor is used.
+    logstor::recovery_catalog& logstor_catalog() noexcept {
+        return *_logstor_catalog;
+    }
     size_t get_logstor_index_entries_memory_usage() const;
     void update_dirty_memory_threshold(size_t reserved_memory);
     // Space the logstor segments holding data take on this shard, which is less than the space of
