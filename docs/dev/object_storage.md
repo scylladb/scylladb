@@ -223,7 +223,9 @@ which skips admission would wait there for memory, when the semaphore's
 reads use too much memory, and let only one of them proceed - possibly the
 one waiting for the lookup. So the lookups read with permits of a semaphore
 without limits, `database::object_storage_page_cache_semaphore()`, which
-never waits.
+never waits; the pages which a read keeps - including the rest of each
+batch of pages which it read from the cache, until it reaches them - are
+tracked in its own permit, without waiting either.
 
 ### Pages
 
