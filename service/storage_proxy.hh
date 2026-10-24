@@ -395,7 +395,7 @@ private:
             std::unique_ptr<mutation_holder> mh, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state,
             service_permit permit, db::allow_per_partition_rate_limit allow_limit, is_cancellable, coordinator_mutate_options options);
     result<response_id_type> make_write_response_handler(locator::effective_replication_map_ptr ermp, db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m, host_id_vector_replica_set targets,
-            const host_id_vector_topology_change& pending_endpoints, host_id_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable, bool skip_large_data_guardrails = false, db::large_data_violation_type* violations_out = nullptr);
+            const host_id_vector_topology_change& pending_endpoints, host_id_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, const locator::token_replication_factor& rf, is_cancellable, bool skip_large_data_guardrails = false, db::large_data_violation_type* violations_out = nullptr);
     result<response_id_type> create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
     result<response_id_type> create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
     result<response_id_type> create_write_response_handler(const batchlog_replay_mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options);
@@ -418,10 +418,17 @@ private:
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
     void sort_endpoints_by_proximity(const locator::effective_replication_map& erm, host_id_vector_replica_set& eps) const;
-    host_id_vector_replica_set get_endpoints_for_reading(const schema& s,  const locator::effective_replication_map& erm, const dht::token& token, node_local_only node_local_only) const;
-    host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, host_id_vector_replica_set live_endpoints, const host_id_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<locator::host_id>* extra, replica::column_family*) const;
+    // The read or write replica set of the token and the replication factor which sizes cl over that set.
+    // In maintenance mode the per-datacenter counts come from the schema, see replicas_with_rf_for_cl().
+    locator::replicas_with_rf read_replicas_with_rf(const locator::effective_replication_map& erm, const dht::token& token, db::consistency_level cl) const;
+    locator::replicas_with_rf write_replicas_with_rf(const locator::effective_replication_map& erm, const dht::token& token, db::consistency_level cl) const;
+    // The live read replicas, sorted by proximity, and the replication factor which sizes cl.
+    // The replication factor counts dead replicas too. With node_local_only, the replica set
+    // is the local node alone and the replication factor comes from the schema.
+    locator::replicas_with_rf get_endpoints_for_reading(const schema& s,  const locator::effective_replication_map& erm, const dht::token& token, db::consistency_level cl, node_local_only node_local_only) const;
+    host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, host_id_vector_replica_set live_endpoints, const host_id_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<locator::host_id>* extra, replica::column_family*, const locator::token_replication_factor& rf) const;
     // As above with read_repair_decision=NONE, extra=nullptr.
-    host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, const host_id_vector_replica_set& live_endpoints, const host_id_vector_replica_set& preferred_endpoints, replica::column_family*) const;
+    host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, const host_id_vector_replica_set& live_endpoints, const host_id_vector_replica_set& preferred_endpoints, replica::column_family*, const locator::token_replication_factor& rf) const;
     result<::shared_ptr<abstract_read_executor>> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             locator::effective_replication_map_ptr ermp,
             schema_ptr schema,
@@ -506,7 +513,12 @@ private:
                                                     tracing::trace_state_ptr trace_state, service_permit permit,
                                                     fencing_token fence, locator::host_id caller);
 
-    locator::host_id find_leader_for_counter_update(const mutation& m, const locator::effective_replication_map& erm, db::consistency_level cl);
+    struct counter_leader {
+        locator::host_id leader;
+        // Reported if forwarding to the leader fails.
+        size_t block_for;
+    };
+    counter_leader find_leader_for_counter_update(const mutation& m, const locator::effective_replication_map& erm, db::consistency_level cl);
 
     future<result<>> do_mutate(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker, coordinator_mutate_options options);
 
