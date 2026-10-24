@@ -342,7 +342,7 @@ future<> require_column_has_value(cql_test_env& e, const sstring& table_name,
         SCYLLA_ASSERT(row != nullptr);
         auto col_def = schema->get_column_definition(utf8_type->decompose(column_name));
         SCYLLA_ASSERT(col_def != nullptr);
-        const atomic_cell_or_collection* cell = row->find_cell(col_def->id);
+        auto cell = row->find_cell(col_def->id);
         if (!cell) {
             SCYLLA_ASSERT(((void)"column not set", 0));
         }

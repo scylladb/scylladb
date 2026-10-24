@@ -23,6 +23,7 @@ future<> apply_gently(mutation_partition& target, const schema& s, mutation_part
     mutation_partition p2(target, mutation_partition::copy_comparators_only{});
     partition_builder b(p_schema, p2);
     co_await p.accept_gently(p_schema, b);
+    b.finish();
     if (s.version() != p_schema.version()) {
         p2.upgrade(p_schema, s);
     }
@@ -87,6 +88,7 @@ future<mutation> to_mutation_gently(const canonical_mutation& cm, schema_ptr s) 
         auto partition_view = mutation_partition_view::from_view(mv.partition());
         partition_builder b(*m.schema(), m.partition());
         co_await partition_view.accept_gently(*m.schema(), b);
+        b.finish();
     } else {
         column_mapping cm = mv.mapping();
         converting_mutation_partition_applier v(cm, *m.schema(), m.partition());
@@ -137,6 +139,7 @@ unfreeze_gently(const frozen_mutation& fm, schema_ptr schema) {
     partition_builder b(*schema, m.partition());
     try {
         co_await fm.partition().accept_gently(*schema, b);
+        b.finish();
     } catch (...) {
         std::throw_with_nested(std::runtime_error(format(
                 "frozen_mutation::unfreeze_gently(): failed unfreezing mutation {} of {}.{}", fm.key(), schema->ks_name(), schema->cf_name())));
