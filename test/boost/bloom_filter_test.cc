@@ -17,6 +17,7 @@
 
 #include "db/config.hh"
 #include "readers/from_mutations.hh"
+#include "utils/bloom_calculations.hh"
 #include "utils/bloom_filter.hh"
 #include "utils/error_injection.hh"
 #include "utils/i_filter.hh"
@@ -332,6 +333,61 @@ SEASTAR_TEST_CASE(test_bloom_filters_with_bad_partition_estimates) {
       }
     });
 };
+
+// Reproducer for https://github.com/scylladb/scylladb/issues/31207.
+// bloom_filter_fp_chance accepts any value above min_supported_bloom_filter_fp_chance(),
+// but sealing an sstable with an Index component (mc, md, me) used to throw for values
+// below about 8.9467e-05: maybe_rebuild_filter_from_index() computed a filter size for
+// 75% of the configured rate, which is below the supported minimum. During a memtable
+// flush, that exception aborts the node.
+SEASTAR_TEST_CASE(test_bloom_filter_fp_chance_near_minimum) {
+    return test_env::do_with_async([] (test_env& env) {
+        const uint64_t n_partitions = 100;
+        // The values from the issue; the first five used to throw.
+        for (const double fp_chance : {6.8e-05, 7e-05, 8e-05, 8.9e-05, 8.946e-05, 8.947e-05, 9e-05, 1e-04}) {
+            // CREATE TABLE accepts all of them.
+            BOOST_REQUIRE_GT(fp_chance, utils::bloom_calculations::min_supported_bloom_filter_fp_chance());
+            auto s = schema_builder(this_smp_shard_count(), "ks", "test_bloom_filter_fp_chance_near_minimum")
+                    .with_column("pk", long_type, column_kind::partition_key)
+                    .set_bloom_filter_fp_chance(fp_chance)
+                    .build();
+
+            std::vector<dht::decorated_key> dks;
+            for (int64_t pk = 0; dks.size() < n_partitions; pk++) {
+                auto dk = dht::decorate_key(*s, partition_key::from_singular(*s, pk));
+                if (s->get_sharder().shard_of(dk.token()) != this_shard_id()) {
+                    continue;
+                }
+                dks.push_back(std::move(dk));
+            }
+            std::ranges::sort(dks, dht::decorated_key::less_comparator(s));
+            auto optimal_filter = utils::i_filter::get_filter(n_partitions, fp_chance, utils::filter_format::m_format);
+
+            // With an exact estimate, the filter built during the write is kept.
+            // A 100x estimate makes that filter too large (over 16K, and more than
+            // 1K and 10% off the optimal size), so it gets rebuilt from the index.
+            for (const uint64_t estimated_partitions : {n_partitions, n_partitions * 100}) {
+                auto sst = env.make_sstable(s, sstables::sstable_version_types::me);
+                auto cfg = env.manager().configure_writer();
+                auto enc_stats = encoding_stats();
+                auto partition_tombstone = tombstone(api::new_timestamp(), gc_clock::now());
+                auto wr = sst->get_writer(*s, estimated_partitions, cfg, enc_stats);
+                for (const auto& dk : dks) {
+                    wr.consume_new_partition(dk);
+                    wr.consume(partition_tombstone);
+                    wr.consume_end_of_partition();
+                }
+                wr.consume_end_of_stream();
+
+                // Either way, the sealed filter has the optimal size and all the keys.
+                BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), optimal_filter->memory_size());
+                for (const auto& dk : dks) {
+                    BOOST_REQUIRE(sst->filter_has_key(sstables::key::from_partition_key(*s, dk._key)));
+                }
+            }
+        }
+    });
+}
 
 SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
     return test_env::do_with_async([] (test_env& env) {
