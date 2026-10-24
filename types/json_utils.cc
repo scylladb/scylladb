@@ -145,6 +145,17 @@ template <typename T> static T to_int(const rjson::value& value) {
             throw marshal_exception(format("Value {} out of range", double_value));
         }
 
+        // A double holds every integer only below 2^53 (e.g., 2^53+1 is read
+        // as 2^53), so a larger number read as a double may have lost its
+        // lower digits. Reject it rather than silently store a different
+        // number. Such a number can still be written as an integer, without
+        // an exponent or a decimal point, which RapidJSON reads exactly.
+        constexpr double exact_limit = double(int64_t(1) << 53);
+        if (std::abs(double_value) >= exact_limit) {
+            throw marshal_exception(format("Value {} is too large to be read exactly as an integer when written "
+                "with an exponent or a decimal point", value));
+        }
+
         return double_value;
     }
     else {
@@ -183,7 +194,7 @@ static bytes from_json_object_aux(const map_type_impl& t, const rjson::value& va
             raw_map.emplace(from_json_object(*t.get_keys_type(), it->name), std::move(value));
         } else {
             try {
-                rjson::value map_key = rjson::parse(rjson::to_string_view(it->name));
+                rjson::value map_key = rjson::parse_full_precision(rjson::to_string_view(it->name));
                 raw_map.emplace(from_json_object(*t.get_keys_type(), map_key), std::move(value));
             } catch (rjson::error& e) {
                 throw marshal_exception(format("Failed parsing map_key {}: {}", it->name, e.what()));
@@ -371,6 +382,13 @@ struct from_json_object_visitor {
         } else if (!value.IsNumber()) {
             throw marshal_exception(
                     format("{} must be represented as numeric or string in JSON", value));
+        } else if (value.IsDouble()) {
+            // The JSON number was read as the double nearest to it. Its
+            // shortest representation, which fmt prints, has the value of the
+            // original number if it has up to 15 significant digits - while
+            // rjson::print() doesn't always print the shortest one, e.g.,
+            // it prints the double nearest to 9.58220516 as 9.582205160000001.
+            return to_bytes(t.from_string(fmt::format("{}", value.GetDouble())));
         }
 
         return to_bytes(t.from_string(rjson::print(value)));
