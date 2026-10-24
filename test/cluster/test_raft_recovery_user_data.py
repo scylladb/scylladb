@@ -6,6 +6,7 @@
 import asyncio
 import logging
 import time
+from typing import Callable
 import pytest
 
 from cassandra.cluster import ConsistencyLevel
@@ -24,7 +25,8 @@ from test.cluster.util import check_system_topology_and_cdc_generations_v3_consi
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("remove_dead_nodes_with", ["remove", "replace"])
-async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dead_nodes_with: str):
+async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dead_nodes_with: str,
+                                       scale_timeout: Callable[[int | float], int | float]):
     """
     Test that the Raft-based recovery procedure works correctly with the user data. It involves testing:
     - client requests during the procedure (mainly availability),
@@ -45,7 +47,8 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
     7. Stop sending writes.
     """
     # Workaround for flakiness from https://github.com/scylladb/scylladb/issues/23565.
-    cfg = {'hinted_handoff_enabled': False}
+    # A short write timeout keeps write handlers waiting on dead dc2 replicas from stalling graceful shutdown.
+    cfg = {'hinted_handoff_enabled': False, 'write_request_timeout_in_ms': int(scale_timeout(5000))}
 
     # Add servers to dc2 first, so 3 out of 5 voters will be there.
     logging.info('Adding servers that will be killed to dc2')
