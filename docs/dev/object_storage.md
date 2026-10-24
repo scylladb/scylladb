@@ -318,7 +318,10 @@ cache.
   can hold: about 1% of the other pages seem to be in it, so their first hit
   in the pass isn't recorded, and they may be evicted a pass early. A page
   cached while it is in the filter is written with a hit, because the
-  filter can't forget it.
+  filter can't forget it. A read records its hits in the
+  background, rather than wait for their writes - which wait when memtables
+  take too much memory - and if too many of these writes are in progress, it
+  doesn't record its hits at all.
 
   Each shard counts the bytes in its cache in memory, adding a page's size
   when it is cached and subtracting it when it is evicted. Caching a page

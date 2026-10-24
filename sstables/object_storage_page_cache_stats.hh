@@ -53,6 +53,9 @@ struct object_storage_page_cache_stats {
     uint64_t write_errors = 0;
     uint64_t hit_recording_errors = 0;
     uint64_t eviction_errors = 0;
+    // Hits which weren't recorded, because too many recordings of hits were
+    // in progress.
+    uint64_t unrecorded_hits = 0;
     // Reads of a component of an sstable whose keyspace has the
     // 'disk_cache' option, which don't use the cache: through a duplicate of
     // an index file, which another shard reads when it reshards the sstable
