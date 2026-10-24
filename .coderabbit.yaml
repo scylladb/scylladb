@@ -233,6 +233,20 @@ reviews:
           compatibility with older nodes during a rolling upgrade, and schema
           or feature changes missing a cluster feature gate.
 
+    # The rule itself is in .agents/code-review/rules.d/db-config-new-options.md,
+    # included as a code guideline. Only the CodeRabbit-specific part is here:
+    # a path rule rather than a pre-merge check, so the remark lands inline on
+    # the added option, where it can be answered and resolved. It is uncertain
+    # whether an included guideline alone would override the "only
+    # merge-blocking issues" rule above, so this rule does it explicitly.
+    - path: "db/config.{hh,cc}"
+      instructions: |
+        This rule overrides the "only merge-blocking issues" rule above.
+        Apply the code guideline in
+        .agents/code-review/rules.d/db-config-new-options.md: if the diff adds
+        a new configuration option and the PR description doesn't already give
+        the reason for it, post one comment, on the db/config.hh declaration.
+
     - path: "**/*.py"
       instructions: |
         Flag bare `except:` that swallows failures, and subprocess calls that
@@ -247,6 +261,12 @@ chat:
   auto_reply: true
 
 knowledge_base:
+  # Review rules shared with the other review tools, see
+  # .agents/code-review/rules.d/README.md. AGENTS.md and
+  # .github/copilot-instructions.md are read by default.
+  code_guidelines:
+    filePatterns:
+      - ".agents/code-review/rules.d/*.md"
   learnings:
     scope: auto
   issues:
