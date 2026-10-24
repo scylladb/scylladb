@@ -64,9 +64,9 @@ drop_view_statement::prepare_schema_mutations(query_processor& qp, const query_o
     co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
 }
 
-std::unique_ptr<cql3::statements::prepared_statement>
+future<std::unique_ptr<cql3::statements::prepared_statement>>
 drop_view_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<drop_view_statement>(*this));
+    return make_ready_future<std::unique_ptr<prepared_statement>>(std::make_unique<prepared_statement>(audit_info(), make_shared<drop_view_statement>(*this)));
 }
 
 }

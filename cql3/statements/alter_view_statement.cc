@@ -105,9 +105,9 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
     co_return std::make_tuple(std::move(ret), std::move(m), std::move(warnings));
 }
 
-std::unique_ptr<cql3::statements::prepared_statement>
+future<std::unique_ptr<cql3::statements::prepared_statement>>
 alter_view_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<alter_view_statement>(*this));
+    return make_ready_future<std::unique_ptr<prepared_statement>>(std::make_unique<prepared_statement>(audit_info(), make_shared<alter_view_statement>(*this)));
 }
 
 }

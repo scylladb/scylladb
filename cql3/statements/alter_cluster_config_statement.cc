@@ -209,8 +209,8 @@ alter_cluster_config_statement::prepare_schema_mutations(query_processor& qp, se
     co_return std::make_tuple(::shared_ptr<event_t>(nullptr), cql3::cql_warnings_vec{});
 }
 
-std::unique_ptr<prepared_statement> alter_cluster_config_statement::prepare(data_dictionary::database, cql_stats&, const cql_config&) {
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<alter_cluster_config_statement>(*this));
+future<std::unique_ptr<prepared_statement>> alter_cluster_config_statement::prepare(data_dictionary::database, cql_stats&, const cql_config&) {
+    return make_ready_future<std::unique_ptr<prepared_statement>>(std::make_unique<prepared_statement>(audit_info(), ::make_shared<alter_cluster_config_statement>(*this)));
 }
 
 }

@@ -1037,7 +1037,7 @@ snapshot_table_helper::get_snapshot_tables(std::string_view snapshot_name, std::
         query += " AND table_name = ?";
         params.emplace_back(table);
     }
-    co_await _qp.query_internal(query, cl, params, 1000, read_row);
+    co_await _qp.query_internal(std::move(query), cl, std::move(params), 1000, read_row);
     co_return entries;
 }
 
@@ -1168,8 +1168,8 @@ future<utils::chunked_vector<snapshot_node_entry>> snapshot_table_helper::get_sn
     }
 
     co_await _qp.query_internal(
-        query, cl,
-        params,
+        std::move(query), cl,
+        std::move(params),
         1000, [&] (const cql3::untyped_result_set_row& row) {
             entries.emplace_back(row.get_as<sstring>("datacenter"), row.get_as<sstring>("rack")
                 , locator::host_id(row.get_as<utils::UUID>("node"))

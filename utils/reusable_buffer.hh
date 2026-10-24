@@ -16,6 +16,7 @@
 #include <seastar/core/timer.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/util/bool_class.hh>
 #include <bit>
 #include <concepts>
 
@@ -218,6 +219,9 @@ protected:
     }
 };
 
+// Whether a guard may hold a reusable_buffer across preemption points.
+using held_across_preemption = seastar::bool_class<struct held_across_preemption_tag>;
+
 /* Sometimes (e.g. for compression), we need a big contiguous buffer
  * of a given size.
  *
@@ -253,6 +257,8 @@ protected:
  * checked by comparing reallocs() before and after the preemption point.
  * The content might be also easily invalidated by an unrelated future
  * sharing the same buffer, if you are not careful.
+ * A buffer built with held_across_preemption::yes keeps its content while
+ * a guard holds it, even across preemption points.
  *
  * To make this buffer slightly harder to misuse, it's only accessible
  * by reusable_buffer_guard.
@@ -266,9 +272,14 @@ public:
 private:
     seastar::timer<Clock> _decay_timer;
     period_type _decay_period;
+    held_across_preemption _held_across_preemption;
 
     void decay() & {
-        SCYLLA_ASSERT(_refcount == 0);
+        SCYLLA_ASSERT(_refcount == 0 || _held_across_preemption);
+        if (_refcount) {
+            // Held across a preemption point. Shrink it at a later decay.
+            return;
+        }
         if (_high_watermark <= _buf_size / 16) {
             // We shrink when the size falls at least by four power-of-2
             // notches, instead of just one notch. This adds hysteresis:
@@ -284,8 +295,9 @@ private:
         _high_watermark = 0;
     }
 public:
-    reusable_buffer(period_type period)
+    reusable_buffer(period_type period, held_across_preemption held = held_across_preemption::no)
         : _decay_period(period)
+        , _held_across_preemption(held)
     {
         if (engine_is_ready()) { // To accommodate BOOST_AUTO_TEST_CASE which have no reactor setup
             _decay_timer.set_callback([this] {decay();});
@@ -300,7 +312,9 @@ public:
  * The reference/use counts exist only for SCYLLA_ASSERT purposes.
  * They don't influence the program otherwise.
  *
- * Never keep the guard across preemption points.
+ * Never keep the guard across preemption points, unless the buffer was
+ * built with held_across_preemption::yes. Code that can run meanwhile must
+ * then check used() before it takes a guard, since only one guard may exist.
  *
  * Don't let views obtained through the guard outlive the guard,
  * that defeats its purpose and is begging for trouble.

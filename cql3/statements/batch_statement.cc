@@ -16,10 +16,15 @@
 #include "data_dictionary/data_dictionary.hh"
 #include <ranges>
 #include <seastar/core/execution_stage.hh>
+#include <seastar/core/memory.hh>
+#include <seastar/core/thread_cputime_clock.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "cql3/query_processor.hh"
 #include "tracing/trace_state.hh"
 #include "cql3/statements/modification_executor.hh"
 #include "cql3/statements/eventual_consistency/batch_executor.hh"
+#include "utils/error_injection.hh"
+#include "utils/stall_free.hh"
 
 namespace cql3 {
 
@@ -219,9 +224,23 @@ void batch_statement::build_cas_result_set_metadata() {
     _metadata = seastar::make_shared<cql3::metadata>(std::move(columns));
 }
 
+mixed_schema_versions::mixed_schema_versions(const schema& s)
+    : std::runtime_error(format("Table {}.{} changed while the batch was being prepared", s.ks_name(), s.cf_name())) {
+}
+
+bool table_versions::try_add(const schema& s) {
+    return _versions.try_emplace(s.id(), s.version()).first->second == s.version();
+}
+
+void table_versions::add(const schema& s) {
+    if (!try_add(s)) {
+        throw mixed_schema_versions(s);
+    }
+}
+
 namespace raw {
 
-std::unique_ptr<prepared_statement>
+future<std::unique_ptr<prepared_statement>>
 batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     auto&& meta = get_prepare_context();
 
@@ -234,6 +253,11 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
     std::vector<std::reference_wrapper<const audit::audit_info>> batch_audit_infos;
     batch_audit_infos.reserve(_parsed_statements.size());
 
+    table_versions versions;
+    // Other tasks run while this coroutine yields, so the bytes it allocates
+    // are summed over the segments between the yields.
+    uint64_t allocated = 0;
+    auto segment_start = seastar::memory::stats().total_bytes_allocated();
     for (auto&& parsed : _parsed_statements) {
         if (!first_ks) {
             first_ks = parsed->keyspace();
@@ -243,11 +267,21 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
             have_multiple_cfs |= first_cf.value() != parsed->column_family();
         }
         auto statement = parsed->prepare(db, meta, stats);
+        versions.add(*statement->s);
+        // Stands in for a sub-statement that is slow to prepare.
+        utils::get_local_injector().inject("batch_statement_prepare_spin", [] {
+            auto until = seastar::thread_cputime_clock::now() + std::chrono::milliseconds(50);
+            while (seastar::thread_cputime_clock::now() < until) {}
+        });
         if (auto* audit_info = statement->get_audit_info()) {
             audit_info->set_query_string(parsed->get_raw_cql());
             batch_audit_infos.emplace_back(*audit_info);
         }
         statements.emplace_back(std::move(statement));
+        allocated += seastar::memory::stats().total_bytes_allocated() - segment_start;
+        co_await coroutine::maybe_yield();
+        co_await utils::get_local_injector().inject("batch_statement_prepare_yield", utils::wait_for_message(std::chrono::minutes(1)));
+        segment_start = seastar::memory::stats().total_bytes_allocated();
     }
     auto&& prep_attrs = _attrs->prepare(db, "[batch]", "[batch]");
     prep_attrs->fill_prepare_context(meta);
@@ -265,9 +299,14 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         ai->set_batch_infos(std::move(batch_audit_infos));
     }
 
-    return std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
+    auto prepared = std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
                                                       meta.get_variable_specifications(),
                                                       std::move(partition_key_bind_indices));
+    _prepare_allocated_bytes = allocated + seastar::memory::stats().total_bytes_allocated() - segment_start;
+    // The parsed sub-statements are not used any more, and freeing a large
+    // batch of them at once would stall.
+    co_await utils::clear_gently(_parsed_statements);
+    co_return prepared;
 }
 
 audit::statement_category batch_statement::category() const {

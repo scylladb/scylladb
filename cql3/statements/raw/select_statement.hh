@@ -117,7 +117,7 @@ public:
     virtual void prepare_keyspace(const service::client_state& state) override;
     virtual void prepare_keyspace(std::string_view keyspace) override;
 
-    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    virtual future<std::unique_ptr<prepared_statement>> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 
     virtual void set_pinned_plan(restrictions::pinned_plan_opt pinned_plan) override {
         _pinned_plan = std::move(pinned_plan);

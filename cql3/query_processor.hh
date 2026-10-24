@@ -15,6 +15,8 @@
 
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/condition-variable.hh>
+#include <deque>
 #include <seastar/core/shared_ptr.hh>
 
 #include "cql3/prepared_statements_cache.hh"
@@ -142,6 +144,14 @@ private:
     // Tracks the rolling maximum of gross bytes allocated during CQL parsing
     utils::rolling_max_tracker _parsing_cost_tracker{1000};
 
+    // Large statements are parsed one at a time, by a thread that lives until
+    // stop(), so its stack is allocated once. See parse_in_thread().
+    struct parse_job;
+    std::deque<parse_job*> _parse_jobs;
+    condition_variable _parse_jobs_cv;
+    std::optional<future<>> _parse_thread;
+    bool _parse_thread_stopped = false;
+
     std::function<void(uint32_t)> _auth_prepared_cache_cfg_cb;
     serialized_action _authorized_prepared_cache_config_action;
     utils::observer<uint32_t> _authorized_prepared_cache_update_interval_in_ms_observer;
@@ -184,7 +194,8 @@ public:
             std::string_view keyspace,
             dialect d);
 
-    static std::unique_ptr<statements::raw::parsed_statement> parse_statement(utils::chunked_string_view query, dialect d);
+    static std::unique_ptr<statements::raw::parsed_statement> parse_statement(utils::chunked_string_view query, dialect d,
+            noncopyable_function<void()>* on_token = nullptr);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(utils::chunked_string_view queries, dialect d);
 
     query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, vector_search::vector_store_client& vsc,
@@ -266,6 +277,11 @@ public:
         return _prepared_cache.find(key);
     }
 
+    // For a prepared statement found stale before a schema change removes it.
+    void remove_prepared(const prepared_cache_key_type& key) {
+        _prepared_cache.remove(key);
+    }
+
     inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_prepared(
@@ -310,12 +326,12 @@ public:
     inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_direct(
-            utils::chunked_string_view query_string,
+            utils::chunked_string query_string,
             service::query_state& query_state,
             dialect d,
             query_options& options) {
         return execute_direct_without_checking_exception_message(
-                query_string,
+                std::move(query_string),
                 query_state,
                 d,
                 options)
@@ -326,7 +342,7 @@ public:
     // The result_message::exception must be explicitly handled.
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_direct_without_checking_exception_message(
-            utils::chunked_string_view query_string,
+            utils::chunked_string query_string,
             service::query_state& query_state,
             dialect d,
             query_options& options);
@@ -348,7 +364,7 @@ public:
             std::optional<service::group0_guard> guard,
             cql3::cql_warnings_vec warnings);
 
-    statements::prepared_statement::checked_weak_ptr prepare_internal(const sstring& query);
+    future<statements::prepared_statement::checked_weak_ptr> prepare_internal(sstring query);
 
     /*!
      * \brief iterate over all cql results using paging
@@ -383,9 +399,9 @@ public:
      * \note This function is optimized for convenience, not performance.
      */
     future<> query_internal(
-            const sstring& query_string,
+            sstring query_string,
             db::consistency_level cl,
-            const query_data_params& values,
+            query_data_vector values,
             int32_t page_size,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f,
             std::optional<service::query_state> qs = std::nullopt);
@@ -402,9 +418,9 @@ public:
      * once the deadline has passed. db::no_timeout means no bound.
      */
     future<> query_internal(
-            const sstring& query_string,
+            sstring query_string,
             db::consistency_level cl,
-            const query_data_params& values,
+            query_data_vector values,
             int32_t page_size,
             db::timeout_clock::time_point deadline,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
@@ -421,7 +437,7 @@ public:
      * \note This function is optimized for convenience, not performance.
      */
     future<> query_internal(
-            const sstring& query_string,
+            sstring query_string,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
 
     class cache_internal_tag;
@@ -436,36 +452,36 @@ public:
     //
     // note: optimized for convenience, not performance.
     future<::shared_ptr<untyped_result_set>> execute_internal(
-            const sstring& query_string,
+            sstring query_string,
             db::consistency_level,
-            const query_data_params&,
+            query_data_vector values,
             cache_internal cache);
     future<::shared_ptr<untyped_result_set>> execute_internal(
-            const sstring& query_string,
+            sstring query_string,
             db::consistency_level,
             service::query_state& query_state,
-            const query_data_params& values,
+            query_data_vector values,
             cache_internal cache);
     future<::shared_ptr<untyped_result_set>> execute_internal(
-            const sstring& query_string,
+            sstring query_string,
             db::consistency_level cl,
             cache_internal cache) {
-        return execute_internal(query_string, cl, {}, cache);
+        return execute_internal(std::move(query_string), cl, {}, cache);
     }
     future<::shared_ptr<untyped_result_set>> execute_internal(
-            const sstring& query_string,
+            sstring query_string,
             db::consistency_level cl,
             service::query_state& query_state,
             cache_internal cache) {
-        return execute_internal(query_string, cl, query_state, {}, cache);
+        return execute_internal(std::move(query_string), cl, query_state, {}, cache);
     }
     future<::shared_ptr<untyped_result_set>>
-    execute_internal(const sstring& query_string, const query_data_params& values, cache_internal cache) {
-        return execute_internal(query_string, db::consistency_level::ONE, values, cache);
+    execute_internal(sstring query_string, query_data_vector values, cache_internal cache) {
+        return execute_internal(std::move(query_string), db::consistency_level::ONE, std::move(values), cache);
     }
     future<::shared_ptr<untyped_result_set>>
-    execute_internal(const sstring& query_string, cache_internal cache) {
-        return execute_internal(query_string, db::consistency_level::ONE, {}, cache);
+    execute_internal(sstring query_string, cache_internal cache) {
+        return execute_internal(std::move(query_string), db::consistency_level::ONE, {}, cache);
     }
 
     // Obtains mutations from query. For internal usage, most notable
@@ -534,8 +550,8 @@ public:
 
     // pinned_plan and forced_keyspace re-derive a statement continuing a
     // paged query: same plan, same keyspace it was prepared against.
-    std::unique_ptr<statements::prepared_statement> get_statement(
-            utils::chunked_string_view query,
+    future<std::unique_ptr<statements::prepared_statement>> get_statement(
+            utils::chunked_string query,
             const service::client_state& client_state,
             dialect d,
             std::optional<service::pager::query_plan> pinned_plan = std::nullopt,
@@ -594,15 +610,31 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard);
 
+    // Runs the parse jobs until stop().
+    future<> start_parse_thread();
+
+    // Parses a large statement in the parse thread, which yields between
+    // tokens. Returns the statement and the bytes its parse allocated.
+    future<std::pair<std::unique_ptr<statements::raw::parsed_statement>, uint64_t>> parse_in_thread(
+            utils::chunked_string_view query, dialect d);
+
+    // One attempt of get_statement(). Takes the query only on success.
+    future<std::unique_ptr<statements::prepared_statement>> parse_and_prepare(
+            utils::chunked_string& query,
+            const service::client_state& client_state,
+            dialect d,
+            std::optional<service::pager::query_plan>& pinned_plan,
+            std::optional<std::string_view> forced_keyspace);
+
     /*!
      * \brief created a state object for paging
      *
      * When using paging internally a state object is needed.
      */
-    internal_query_state create_paged_state(
-            const sstring& query_string,
+    future<internal_query_state> create_paged_state(
+            sstring query_string,
             db::consistency_level,
-            const query_data_params& values,
+            query_data_vector values,
             int32_t page_size,
             std::optional<service::query_state> qs = std::nullopt,
             db::timeout_clock::time_point deadline = db::no_timeout);

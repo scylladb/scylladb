@@ -494,6 +494,11 @@ public:
     // other shards.
     client_state_for_another_shard move_to_other_shard() const;
 
+    // A copy of this state, to read while the connection's own state may
+    // change, for example by a USE. Changes to the copy do not reach the
+    // connection, and the copy is valid on this shard only.
+    client_state snapshot() const;
+
 #if 0
     public static SemanticVersion[] getCQLSupportedVersion()
     {
@@ -577,6 +582,13 @@ inline client_state::client_state_for_another_shard client_state::move_to_other_
     return client_state_for_another_shard(this,
         _auth_service ? &_auth_service->container() : nullptr,
         _sl_controller ? &_sl_controller->container() : nullptr);
+}
+
+inline client_state client_state::snapshot() const {
+    return client_state(this,
+        _auth_service ? &_auth_service->container() : nullptr,
+        _sl_controller ? &_sl_controller->container() : nullptr,
+        nullptr);
 }
 
 }
