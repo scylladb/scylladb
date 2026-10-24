@@ -294,7 +294,10 @@ cache.
 
   To save writes, each shard remembers which pages it recorded a hit of in
   the hand's current pass, and doesn't write their hits again - so a page's
-  last hit is known only to within a pass.
+  last hit is known only to within a pass. A read records its hits in the
+  background, rather than wait for their writes - which wait when memtables
+  take too much memory - and if too many of these writes are in progress, it
+  doesn't record its hits at all.
 
   Each shard counts the bytes in its cache in memory, adding a page's size
   when it is cached and subtracting it when it is evicted. Caching a page

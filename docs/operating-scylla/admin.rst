@@ -618,6 +618,10 @@ The object storage page cache reports these metrics, per shard:
    * - ``scylla_object_storage_page_cache_errors``
      - Failures of the cache, which didn't fail any read, by ``operation``:
        ``read``, ``write``, ``record_hits`` and ``evict``.
+   * - ``scylla_object_storage_page_cache_unrecorded_hits``
+     - Hits of pages which weren't recorded, because too many recordings of
+       hits were in progress. Unrecorded hits make the choice of pages to evict
+       less accurate.
    * - ``scylla_object_storage_page_cache_bypasses``
      - Reads of SSTables of keyspaces with the object storage page cache which
        didn't use it, by ``reason``: of a duplicate of an SSTable's index for
