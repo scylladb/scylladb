@@ -653,7 +653,7 @@ object_storage_page_cache_table::get_pages(sstables::sstable_id sst, sstables::c
     }
     // If the hand evicts a page after it was read here, recording its hit
     // leaves a row without a page and without a size, which the hand evicts
-    // when it reaches it.
+    // once its hit is older than the hand's cutoff.
     if (populate && !pages.empty()) {
         std::vector<int64_t> offsets;
         for (const auto& p : pages) {
@@ -672,17 +672,50 @@ future<> object_storage_page_cache_table::record_hits(sstables::sstable_id sst, 
         // makes the choice of pages to evict less accurate.
         co_return;
     }
+    // If the hand evicts a page after it was read, recording its hit leaves
+    // a row without a page and without a size, which the hand evicts once
+    // its hit is older than the hand's cutoff.
     auto now = db_clock::now();
+    std::erase_if(offsets, [&] (int64_t offset) {
+        return hit_in_pass(page_key{sst.uuid(), component, uint64_t(offset)});
+    });
+    if (_record_hits_in_background && (_hit_writes_in_progress + offsets.size() > max_hit_writes_in_progress
+            || _hit_writes.is_closed())) {
+        // Too many hits are being recorded: skip these, which only makes
+        // the choice of pages to evict less accurate. They aren't
+        // remembered as recorded, so their next hits are recorded.
+        _stats.unrecorded_hits += offsets.size();
+        offsets.clear();
+    }
+    for (auto offset : offsets) {
+        remember_hit(page_key{sst.uuid(), component, uint64_t(offset)});
+    }
+    if (offsets.empty()) {
+        // Nothing to record.
+    } else if (_record_hits_in_background) {
+        _hit_writes_in_progress += offsets.size();
+        auto n = offsets.size();
+        // The count is decremented inside the gate, because stop() may
+        // destroy the cache as soon as the gate is closed.
+        (void)with_gate(_hit_writes, [this, sst, component_name, offsets = std::move(offsets), now, n] () mutable {
+            return write_hits(sst.uuid(), std::move(component_name), std::move(offsets), now).finally([this, n] {
+                _hit_writes_in_progress -= n;
+            });
+        });
+    } else {
+        co_await write_hits(sst.uuid(), component_name, std::move(offsets), now);
+    }
+}
+
+future<> object_storage_page_cache_table::write_hits(utils::UUID sstable, sstring component, std::vector<int64_t> offsets,
+        db_clock::time_point now) noexcept {
     // Recording the hits is only for choosing which pages to evict, so a
-    // failure to record them doesn't fail the read of the pages.
+    // failure to record them doesn't fail anything.
     try {
+        co_await utils::get_local_injector().inject("object_storage_page_cache_write_hits",
+                utils::wait_for_message(std::chrono::minutes(5)), false);
         co_await coroutine::parallel_for_each(offsets, [&] (int64_t offset) -> future<> {
-            page_key key{sst.uuid(), component, uint64_t(offset)};
-            if (hit_in_pass(key)) {
-                co_return;
-            }
-            remember_hit(key);
-            co_await apply(hits_mutation(this_shard(), sst.uuid(), component_name, offset, std::nullopt, now));
+            co_await apply(hits_mutation(this_shard(), sstable, component, offset, std::nullopt, now));
         });
     } catch (...) {
         static thread_local logging::logger::rate_limit rate_limit{std::chrono::minutes(1)};
@@ -1071,6 +1104,7 @@ db_clock::time_point object_storage_page_cache_table::eviction_cutoff(uint64_t t
 
 void object_storage_page_cache_table::start(scheduling_group sg) {
     register_metrics();
+    record_hits_in_background();
     _evictor = with_scheduling_group(sg, [this] { return evict_in_background(); });
 }
 
@@ -1106,6 +1140,8 @@ void object_storage_page_cache_table::register_metrics() {
                 sm::description("Failures to write pages to the object storage page cache"), {operation("write")}),
         sm::make_counter("page_cache_errors", [this] { return _stats.hit_recording_errors; },
                 sm::description("Failures to record hits of pages of the object storage page cache"), {operation("record_hits")}),
+        sm::make_counter("page_cache_unrecorded_hits", [this] { return _stats.unrecorded_hits; },
+                sm::description("Hits of pages of the object storage page cache which weren't recorded, because too many recordings of hits were in progress")),
         sm::make_counter("page_cache_errors", [this] { return _stats.eviction_errors; },
                 sm::description("Failures to evict pages from the object storage page cache"), {operation("evict")}),
         sm::make_counter("page_cache_bypasses", [this] { return _stats.dup_bypasses; },
@@ -1126,6 +1162,7 @@ future<> object_storage_page_cache_table::drain() noexcept {
     if (_evictor) {
         co_await std::exchange(_evictor, std::nullopt).value();
     }
+    co_await _hit_writes.close();
     co_await _operations.close();
 }
 

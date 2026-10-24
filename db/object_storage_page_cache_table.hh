@@ -210,6 +210,14 @@ class object_storage_page_cache_table : public sstables::object_storage_page_cac
     // they are being copied, for the same reason as above.
     std::unordered_set<utils::UUID> _sstables_being_copied;
 
+    // Whether hits are recorded in the background (see
+    // record_hits_in_background()), the background writes of hits, and how
+    // many of them are in progress, which is limited.
+    bool _record_hits_in_background = false;
+    gate _hit_writes;
+    size_t _hit_writes_in_progress = 0;
+    static constexpr size_t max_hit_writes_in_progress = 1000;
+
     // The background fiber which evicts pages when the cache is too large.
     condition_variable _eviction_needed;
     std::optional<future<>> _evictor;
@@ -258,8 +266,8 @@ public:
 
     // The cache's life cycle: start() starts the background fiber which
     // evicts pages when this shard's cache is too large, which runs in the
-    // given scheduling group. It is called before the cache is given to any
-    // sstable.
+    // given scheduling group, and makes the cache record hits in the
+    // background. It is called before the cache is given to any sstable.
     //
     // On shutdown, drain() is called before the query processor stops. It
     // stops the background fiber, waits for the writes of pages and hits
@@ -275,6 +283,14 @@ public:
     void start(scheduling_group sg);
     future<> drain() noexcept;
     future<> stop() noexcept;
+    // Makes the cursors of read_pages() (and get_pages()) record the hits of
+    // the pages which they return in the background, rather than wait for
+    // their writes: a read which finds its pages in the cache shouldn't wait
+    // for writes - which wait when memtables take too much memory. drain()
+    // waits for the writes in progress. Called by start(), and by tests.
+    void record_hits_in_background() noexcept {
+        _record_hits_in_background = true;
+    }
 
     virtual future<> put_page(sstables::sstable_id sst, sstables::component_type component,
             uint64_t offset, temporary_buffer<char> data) override;
@@ -330,9 +346,12 @@ private:
     // Adds a page to a histogram, or removes it.
     static void add_to_histogram(age_histogram& h, std::optional<db_clock::time_point> last_hit, int64_t size);
     future<> evict_page(int16_t shard, utils::UUID sstable, const sstring& component, int64_t offset, int32_t size);
-    // Records that the given pages of an sstable's component were hit -
-    // except those whose hits were already recorded in the hand's current
-    // pass.
+    // Writes the hits, at the given time, of the given pages of an sstable's
+    // component. Never fails: a failure is only logged and counted.
+    future<> write_hits(utils::UUID sstable, sstring component, std::vector<int64_t> offsets, db_clock::time_point now) noexcept;
+    // Records that the given pages of an sstable's component were hit, in
+    // the background if record_hits_in_background() was called - except
+    // those whose hits were already recorded in the hand's current pass.
     future<> record_hits(sstables::sstable_id sst, sstables::component_type component,
             const sstring& component_name, std::vector<int64_t> offsets);
     // How many pages the filter of pages hit in a pass should be sized for.
