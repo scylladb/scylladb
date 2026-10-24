@@ -38,6 +38,7 @@
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "mutation/timestamp.hh"
+#include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/to_string.hh"
 #include "utils/error_injection.hh"
@@ -481,13 +482,23 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
 future<> group0_state_machine::enable_in_memory_state_machine() {
     co_await utils::get_local_injector().inject("group0_state_machine_enable_in_memory_fail",
             [] { return std::make_exception_ptr(std::runtime_error("injected failure in enable_in_memory_state_machine")); });
-    co_await utils::get_local_injector().inject("delay_before_enable_in_memory_state_machine",
-            utils::wait_for_message(300s));
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
     if (!_in_memory_state_machine_enabled) {
         _in_memory_state_machine_enabled = true;
         co_await reload_state();
     }
+}
+
+future<> group0_state_machine::reload_schema_dependent_state() {
+    SCYLLA_ASSERT(_in_memory_state_machine_enabled);
+    auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
+    co_await do_reload_schema_dependent_state();
+}
+
+future<> group0_state_machine::do_reload_schema_dependent_state() {
+    // we assume that the apply mutex is held
+    co_await _ss.view_building_transition();
+    co_await sync_audit_known_entities();
 }
 
 future<> group0_state_machine::sync_audit_known_entities() {
@@ -513,7 +524,6 @@ future<> group0_state_machine::reload_state() {
     // we assume that the apply mutex is held, topology_state_load applies
     // persisted state machine into memory so it needs to be protected with it
     co_await _ss.topology_state_load();
-    co_await _ss.view_building_state_load();
     if (_feature_service.compression_dicts) {
         co_await _ss.compression_dictionary_updated_callback_all();
     }
@@ -522,11 +532,10 @@ future<> group0_state_machine::reload_state() {
         co_await _ss.load_cdc_streams();
     }
     co_await _ss.auth_cache().load_all();
-
-    co_await sync_audit_known_entities();
+    // The audit known roles come from the auth cache loaded above.
+    co_await do_reload_schema_dependent_state();
 
     _ss._topology_state_machine.event.broadcast();
-    _ss._view_building_state_machine.event.broadcast();
 }
 
 future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) {

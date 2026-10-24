@@ -1189,7 +1189,6 @@ private:
 
             if (!group0_service.maintenance_mode() && _sys_ks.local().bootstrap_complete()) {
                 group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
-                group0_service.enable_group0_state_machine().get();
             }
             // As in main(): the first authoritative refresh runs once the group0 state is applied.
             _cluster_config_manager.local().refresh().get();

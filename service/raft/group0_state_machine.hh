@@ -240,6 +240,7 @@ class group0_state_machine : public raft_state_machine {
     future<> merge_and_apply(group0_state_machine_merger& merger);
     future<> reload_state();
     future<> sync_audit_known_entities();
+    future<> do_reload_schema_dependent_state();
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
             gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately);
@@ -250,6 +251,8 @@ public:
     future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override;
     future<> abort() override;
     future<> enable_in_memory_state_machine();
+    // Reload the in-memory state built from non-system table schemas.
+    future<> reload_schema_dependent_state();
 };
 
 bool should_flush_system_topology_after_applying(const mutation& mut, const data_dictionary::database db);
