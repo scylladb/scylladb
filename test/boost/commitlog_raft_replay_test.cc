@@ -35,6 +35,7 @@
 #include "service/strong_consistency/raft_commitlog.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 #include "service/strong_consistency/state_machine.hh"
+#include "service/strong_consistency/table_metrics.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
 #include "service/migration_manager.hh"
@@ -2226,7 +2227,8 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
 
                 auto state_machine = service::strong_consistency::make_state_machine(
                         locator::global_tablet_id{schema->id(), locator::tablet_id(0)}, gid, db,
-                        env.migration_manager().local(), env.get_system_keyspace().local(), storage);
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage,
+                        make_lw_shared<service::strong_consistency::table_apply_stats>());
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 // Abort the apply after the handle is acquired and before the entry reaches a memtable.

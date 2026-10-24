@@ -435,7 +435,16 @@ auto coordinator::mutate(schema_ptr schema,
 
     utils::latency_counter lc;
     lc.start();
-    auto mark_write_latency = defer([this, &lc] noexcept { _stats.write.mark(lc.stop().latency()); });
+    // Set while the request runs on a raft group of this shard, so that it counts for the
+    // table only where it ends and not on every replica that redirected it.
+    lw_shared_ptr<table_request_stats> table_stats;
+    auto mark_write_latency = defer([this, &lc, &table_stats] noexcept {
+        const auto latency = lc.stop().latency();
+        _stats.write.mark(latency);
+        if (table_stats) {
+            table_stats->write_latency.add(latency);
+        }
+    });
 
     // State of the request as it advances through its stages. Each pointer
     // is null until the corresponding stage has been reached, so log messages
@@ -476,12 +485,18 @@ auto coordinator::mutate(schema_ptr schema,
             logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             ++_stats.write_errors_timeout;
+            if (table_stats) {
+                ++table_stats->write_errors_timeout;
+            }
             return std::make_exception_ptr(write_timeout(schema->ks_name(), schema->cf_name()));
         } else if (try_catch<raft::commit_status_unknown>(ex)) {
             logger.debug("mutate(): add_entry, got commit_status_unknown {}, table {}.{}, {}",
                 ex, schema->ks_name(), schema->cf_name(), state_fmt);
 
             ++_stats.write_errors_status_unknown;
+            if (table_stats) {
+                ++table_stats->write_errors_status_unknown;
+            }
             // FIXME: use a dedicated ERROR_CODE instead of SERVER_ERROR
             return std::make_exception_ptr(exceptions::server_exception(
                 "The outcome of this statement is unknown. It may or may not have been applied. "
@@ -490,10 +505,16 @@ auto coordinator::mutate(schema_ptr schema,
             logger.trace("mutate(): command of {} bytes exceeds the limit of {}, table {}.{}, token {}",
                 too_big->command_size, too_big->limit, schema->ks_name(), schema->cf_name(), token);
             ++_stats.write_errors_other;
+            if (table_stats) {
+                ++table_stats->write_errors_other;
+            }
             return std::make_exception_ptr(exceptions::invalid_request_exception(fmt::format(
                 "Strongly consistent write of {} bytes exceeds the limit of {} bytes", too_big->command_size, too_big->limit)));
         } else {
             ++_stats.write_errors_other;
+            if (table_stats) {
+                ++table_stats->write_errors_other;
+            }
             logger.trace("mutate(): unknown exception {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
@@ -514,6 +535,7 @@ auto coordinator::mutate(schema_ptr schema,
         co_return std::move(*redirect);
     }
     op = &get<operation_ctx>(op_result);
+    table_stats = op->raft_server.request_stats();
 
     while (true) {
         // `disposition` below is local to one iteration, so the pointer into
@@ -561,6 +583,7 @@ auto coordinator::mutate(schema_ptr schema,
                 }
                 continue;
             }
+            table_stats = nullptr;
             co_return redirect_to_leader(*target, _groups_manager, op->replicas.group_id());
         }
         if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
@@ -641,7 +664,17 @@ auto coordinator::query(schema_ptr schema,
 
     auto& read_stats = (rtype == read_type::linearizable)
         ? _stats.linearizable_read : _stats.non_linearizable_read;
-    auto mark_read_latency = defer([&read_stats, &lc] () mutable noexcept { read_stats.mark(lc.stop().latency()); });
+    // See mutate().
+    lw_shared_ptr<table_request_stats> table_stats;
+    auto mark_read_latency = defer([&read_stats, &lc, &table_stats, rtype] () mutable noexcept {
+        const auto latency = lc.stop().latency();
+        read_stats.mark(latency);
+        if (table_stats) {
+            auto& table_read_latency = (rtype == read_type::linearizable)
+                ? table_stats->linearizable_read_latency : table_stats->non_linearizable_read_latency;
+            table_read_latency.add(latency);
+        }
+    });
 
     auto filter_error = [&] (std::exception_ptr ex) -> std::exception_ptr {
         // Unfortunately, timeouts can materialize in different forms depending
@@ -664,11 +697,17 @@ auto coordinator::query(schema_ptr schema,
             logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_timeout;
+            if (table_stats) {
+                ++table_stats->read_errors_timeout;
+            }
             return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name()));
         } else {
             logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_other;
+            if (table_stats) {
+                ++table_stats->read_errors_other;
+            }
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
             return ex;
         }
@@ -690,6 +729,7 @@ auto coordinator::query(schema_ptr schema,
         co_return std::move(*redirect);
     }
     auto& op = get<operation_ctx>(op_result);
+    table_stats = op.raft_server.request_stats();
 
     if (rtype == read_type::linearizable) {
         // For linearizable reads we may need to forward to the raft leader.
@@ -719,6 +759,7 @@ auto coordinator::query(schema_ptr schema,
                     }
                     continue;
                 }
+                table_stats = nullptr;
                 co_return redirect_to_leader(*target, _groups_manager, op.replicas.group_id());
             }
             if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
