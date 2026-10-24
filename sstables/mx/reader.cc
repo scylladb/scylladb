@@ -180,6 +180,10 @@ public:
             sstring name = sstring(to_string_view(*column_info.name));
             auto it = _schema->dropped_columns().find(name);
             if (it == _schema->dropped_columns().end() || timestamp > it->second.timestamp) {
+                if (const auto* def = _schema->get_column_definition(*column_info.name); def && column_info.kind_mismatch) {
+                    throw_malformed_sstable_exception(format("Column {} is {} in the sstable but {} in the current schema",
+                            name, def->is_static() ? "regular" : "static", def->is_static() ? "static" : "regular"));
+                }
                 throw_malformed_sstable_exception(format("Column {} missing in current schema", name));
             }
         }
