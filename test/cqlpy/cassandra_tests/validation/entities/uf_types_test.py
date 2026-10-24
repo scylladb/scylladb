@@ -35,10 +35,6 @@ def read_function_from_file(file_name, wasm_name=None, udf_name=None):
         print(f"Can't open {wat_path}.\nPlease build Wasm examples.")
         exit(1)
 
-@pytest.mark.skip_bug(
-    link="https://github.com/scylladb/scylladb/issues/22799",
-    reason="CI regression, no understanding why this started happening ",
-)
 def test_complex_null_values(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(txt text, i int)") as type:
         schema = f"(key int primary key, lst list<double>, st set<text>, mp map<int, boolean>, tup frozen<tuple<double, text, int, boolean>>, udt frozen<{type}>)"
