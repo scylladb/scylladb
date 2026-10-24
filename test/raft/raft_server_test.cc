@@ -1771,3 +1771,101 @@ SEASTAR_THREAD_TEST_CASE(test_follower_log_is_bounded_when_apply_is_slow) {
     slow.read_barrier(nullptr).get();
     BOOST_CHECK_LE(slow.get_status().log_memory_usage, bound);
 }
+
+// A follower refuses entries once its log is full only if its applier fiber
+// will shrink the log by taking a snapshot, and it tells the leader to stop
+// replicating to it. It used to decide that from the commit index alone:
+// something committed above its snapshot index was taken to mean the applier
+// will snapshot. But the applier considered a snapshot only right after it
+// applied entries, so a follower which had already applied everything
+// committed, and whose log then filled up with uncommitted entries, never
+// took one. If the leader needs that follower for a quorum, the group
+// deadlocks: the leader can commit nothing without the follower, and the
+// follower frees no memory without new commits.
+//
+// The uncommitted entries have to be from an earlier term, which the leader
+// cannot commit by counting replicas: it needs an entry of its own term
+// accepted above them. So node 0 adds entries which node 1 receives but cannot
+// acknowledge, and is then re-elected in a new term.
+//
+// Reproduces SCYLLADB-5634.
+SEASTAR_THREAD_TEST_CASE(test_full_follower_with_everything_applied_does_not_deadlock) {
+    const size_t command_size = sizeof(size_t);
+    const size_t max_log_size = 10 * command_size;
+
+    test_case test_config {
+        .nodes = 3,
+        .config = std::vector<raft::server::configuration>(3,
+            raft::server::configuration {
+                // Only the byte threshold triggers a snapshot here.
+                .snapshot_threshold = 1000,
+                .snapshot_threshold_log_size = 5 * command_size,
+                .snapshot_trailing = 1,
+                .snapshot_trailing_size = command_size,
+                .max_log_size = max_log_size,
+                .enable_forwarding = false,
+                .max_command_size = command_size,
+            })
+    };
+    // Must exceed the number of entries added below, or the state machine's
+    // done promise fires early.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        1000,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& leader = cluster.get_server(0);
+    auto& follower = cluster.get_server(1);
+
+    // Node 1 applies a few entries, too few for a snapshot, so they are
+    // committed above its snapshot index.
+    cluster.add_entries(3, 0).get();
+    follower.read_barrier(nullptr).get();
+    const auto [follower_last_idx, follower_last_term] = follower.log_last_idx_term();
+
+    // Empty the leader's log, so that it admits max_log_size worth of new
+    // entries, more than node 1 has room for on top of the entries it keeps.
+    leader.trigger_snapshot(nullptr).get();
+
+    // Node 0 can reach only node 1, and hears nothing back from it, so the
+    // entries added below are not committed. Node 0 stays the leader, since
+    // its failure detector sees node 1 alive.
+    cluster.disconnect(2);
+    cluster.block_receive(0, 1);
+    std::vector<future<>> added;
+    for (size_t i = 0; i < max_log_size / command_size; ++i) {
+        added.push_back(leader.add_entry(create_command(100 + i), raft::wait_type::committed, nullptr));
+    }
+    // Node 1 has room for 8 of them: max_log_size + snapshot_trailing_size is
+    // 11 commands, and it holds 3.
+    follower.wait_log_idx_term({follower_last_idx + raft::index_t{8}, follower_last_term}).get();
+
+    // Re-elect node 0 in a new term, with node 1's vote: node 0 has the longer
+    // log. Node 2 stays disconnected, so node 0 needs node 1 for a quorum.
+    cluster.pause_tickers();
+    cluster.disconnect(0);
+    leader.elapse_election();
+    // Step down: an election timeout has passed without a live quorum.
+    leader.tick();
+    leader.wait_until_candidate();
+    cluster.connect_all();
+    cluster.disconnect(2);
+    cluster.restart_tickers().get();
+    // Node 1 has a shorter log and node 2 is disconnected, so node 0 is the
+    // only node which can win an election.
+    leader.wait_for_leader(nullptr).get();
+    BOOST_REQUIRE(leader.is_leader());
+
+    // The leader commits an entry of its new term, and with it everything
+    // added above.
+    with_timeout(std::chrono::steady_clock::now() + tick_delay * 200,
+            leader.read_barrier(nullptr)).get();
+    when_all_succeed(added.begin(), added.end()).get();
+
+    cluster.connect_all();
+}
