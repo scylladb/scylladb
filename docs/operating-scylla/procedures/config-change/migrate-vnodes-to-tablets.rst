@@ -74,17 +74,36 @@ Keyspace and table configuration
   :doc:`arbiter datacenter </operating-scylla/procedures/cluster-management/arbiter-dc>`,
   which contains only zero-token nodes, must have RF=0. To change the
   replication factor, see :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>`.
-* All tables in the keyspace should have ``tombstone_gc`` mode set to ``repair``
-  to prevent tombstone garbage collection from running during migration.
-  For guidance, see :ref:`Tombstone Garbage Collection <ddl-tombstones-gc>`.
+  If the keyspace has materialized views or secondary indexes, or the
+  ``rf_rack_valid_keyspaces`` option is enabled, the migration refuses to
+  start unless the keyspace is RF-rack-valid. Migration with the
+  ``enforce_rack_list`` option enabled is not currently supported. Check the
+  Limitations section below for more details.
+* All tables, materialized views and secondary indexes in the keyspace should
+  have ``tombstone_gc`` mode set to ``repair`` to prevent tombstone garbage
+  collection from running during migration. For guidance, see
+  :ref:`Tombstone Garbage Collection <ddl-tombstones-gc>`.
+* All materialized views and secondary indexes in the keyspace must be
+  **fully built** before the migration is started. Builds in progress are not
+  carried over to tablets. Check the build status with
+  :doc:`nodetool viewbuildstatus </operating-scylla/nodetool-commands/viewbuildstatus>`;
+  for a secondary index, pass the name of its backing view, ``<index name>_index``.
 
 Limitations
 -----------
 
 The current migration procedure has the following limitations:
 
-* **No schema changes** during the migration. Do not create, alter, or drop
-  tables in the migrating keyspace until the migration is finished.
+* Clusters with the ``enforce_rack_list`` option enabled are not yet
+  supported: the migrated keyspace would keep its numeric replication factors,
+  which the option rejects. Disable the option, run the migration, convert the
+  replication factors to rack lists with ``ALTER KEYSPACE``, then enable it
+  again.
+
+* **No schema changes** during the migration. Creating or dropping tables, views,
+  or indexes, and dropping the migrating keyspace are rejected until the
+  migration is finished. Altering the properties of existing tables and views is
+  allowed, except enabling CDC, which is not supported.
 * **No planned topology changes** during the migration. Do not add, remove,
   decommission, or rebuild nodes while a migration is in progress. Replacing
   a dead node is supported as an emergency recovery operation.
@@ -94,8 +113,13 @@ The current migration procedure has the following limitations:
   Do not take snapshots, run backups, or restore into the migrating keyspace
   while the migration is in progress.
 * **No TRUNCATE** on tables in the migrating keyspace during the migration.
-* Only **CQL base tables** can be migrated. Materialized views, secondary
-  indexes, CDC tables, and Alternator tables are not supported.
+* Only **CQL tables, materialized views, and secondary indexes** can be
+  migrated. CDC tables and Alternator tables are not supported. Views whose
+  partition key consists of exactly the base table's partition key columns,
+  in the same order, including the backing views of local secondary indexes,
+  are migrated as :term:`co-located tables <Colocated Table>` with their base
+  table (sharing its tablets). Other views, including the backing views of
+  global secondary indexes, get tablets of their own.
 * Tables with **counters** or **LWTs** cannot be migrated.
 * Only tables using the **Incremental Compaction Strategy (ICS)** can be migrated.
   Other compaction strategies are not supported.
@@ -333,6 +357,13 @@ Procedure
 
          nodetool migrate-to-tablets finalize <keyspace>
 
+      Finalization switches co-located materialized views and local secondary
+      indexes that use the ``repair`` ``tombstone_gc`` mode to ``timeout``.
+      After the migration they become
+      :term:`co-located tables <Colocated Table>`, which do not support
+      ``repair``, and ``timeout`` is their default mode. Other views and the
+      backing views of global secondary indexes keep their mode.
+
    #. Verify that the keyspace status changed to ``tablets``:
 
       .. code-block:: console
@@ -389,6 +420,12 @@ Procedure
 #. Run a full cluster repair to ensure that all nodes have the most up-to-date
    data. As the storage upgrade process kept each node offline for an extended
    period of time, its dataset might have become stale.
+
+   If the keyspace has materialized views or secondary indexes, the repair
+   also covers updates to them that were lost during finalization. Each node
+   switches to the tablet-based way of pairing base and view replicas when it
+   applies the finalization, so view updates written while the nodes
+   disagreed can miss some view replicas.
 
    Either run the repair with ``nodetool``, as described below, or let
    `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ run it for you.

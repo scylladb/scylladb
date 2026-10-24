@@ -70,6 +70,7 @@
 #include <algorithm>
 #include <bit>
 #include "locator/local_strategy.hh"
+#include "locator/network_topology_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "utils/user_provided_param.hh"
 #include "version.hh"
@@ -120,6 +121,7 @@
 #include "node_ops/task_manager_module.hh"
 #include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
+#include "db/view/view_build_status.hh"
 #include "cql3/query_processor.hh"
 #include <csignal>
 #include "utils/labels.hh"
@@ -4354,11 +4356,130 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
         }, uint64_t(0), std::plus<uint64_t>());
         auto estimated_total_size = static_cast<uint64_t>(local_size / local_fraction);
         table_sizes.emplace(tid, estimated_total_size);
-        slogger.info("Estimated size of table {}.{}: {} byte(s) (local data set is {} byte(s))",
-                ks_name, cf_name, estimated_total_size, local_size);
+        slogger.info("Estimated size of {} {}.{}: {} byte(s) (local data set is {} byte(s))",
+                _db.local().find_schema(tid)->is_view() ? "view" : "table", ks_name, cf_name,
+                estimated_total_size, local_size);
     }
 
     co_return table_sizes;
+}
+
+// Validates that a keyspace's replication factors will be valid once it
+// migrates from vnodes to tablets.
+//
+// Tablet-based keyspaces must not have an RF larger than the number of
+// token-owning nodes in a datacenter: allocating tablets for new tables fails
+// otherwise. Vnode-based keyspaces allow it, so the migration rejects such
+// keyspaces up front.
+//
+// Additionally, tablet-based keyspaces must be RF-rack-valid if:
+// - they have materialized views, or
+// - the rf_rack_valid_keyspaces config option is enabled.
+// Nodes refuse to start otherwise, so the migration rejects such
+// keyspaces up front.
+//
+// Finally, the migration cannot run at all if the enforce_rack_list config
+// option enabled. The option causes nodes to refuse to start if a tablet-based
+// keyspace has a numeric replication factor. Vnode-based keyspaces only have
+// numeric replication factors, which the migration carries to the tablets world.
+// FIXME: Convert numeric RFs to rack lists on migration finalization if
+// enforce_rack_list is enabled.
+static void validate_rf_for_tablets_migration(const replica::database& db,
+        const locator::token_metadata_ptr& tmptr,
+        const locator::network_topology_strategy& nts,
+        const sstring& ks_name) {
+    const auto& ks = db.find_keyspace(ks_name);
+
+    if (db.get_config().enforce_rack_list()) {
+        throw std::runtime_error(fmt::format(
+                "Cannot migrate keyspace {} to tablets: the enforce_rack_list option is enabled, but the migrated"
+                " keyspace would keep its numeric replication factors. Disable enforce_rack_list, migrate, convert"
+                " the replication factors to rack lists with ALTER KEYSPACE, then enable it again.", ks_name));
+    }
+
+    // Check that RF <= #nodes.
+    // (copied from `natural_endpoints_tracker::check_enough_endpoints()`)
+    auto dc_token_owners = tmptr->get_datacenter_token_owners();
+    for (const auto& dc : nts.get_datacenters()) {
+        auto it = dc_token_owners.find(dc);
+        auto node_count = it != dc_token_owners.end() ? it->second.size() : size_t(0);
+        auto rf = nts.get_replication_factor(dc);
+        if (rf > node_count) {
+            throw std::runtime_error(fmt::format(
+                    "Cannot migrate keyspace {} to tablets: datacenter {} doesn't have enough token-owning nodes"
+                    " for replication_factor={}", ks_name, dc, rf));
+        }
+    }
+
+    // Check the keyspace as it will look after the migration: the same
+    // replication options, but with tablets.
+    locator::replication_strategy_params params(nts.get_config_options(), 0, std::nullopt);
+    auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(
+            ks.metadata()->strategy_name(), params, tmptr->get_topology());
+    try {
+        locator::assert_rf_rack_valid_keyspace(ks_name, tmptr, *tablet_rs);
+    } catch (const std::invalid_argument& e) {
+        if (db.enforce_rf_rack_validity_for_keyspace(ks)) {
+            throw std::runtime_error(fmt::format("Cannot migrate keyspace {} to tablets: {}", ks_name, e.what()));
+        }
+        // e.what() states that RF-rack-validity is required, which doesn't
+        // hold here, so don't include it.
+        slogger.warn("Keyspace '{}' will not be RF-rack-valid after the migration to tablets: the replication"
+                " factor doesn't match the rack count in at least one datacenter. A rack failure may reduce"
+                " availability.", ks_name);
+    }
+}
+
+// Validates that the materialized views of a keyspace can be migrated from
+// vnodes to tablets.
+//
+// Views whose partition key consists of exactly the base table's partition
+// key columns, in the same order, are migrated as tables co-located with
+// their base table, sharing the base table's tablet map. Other views,
+// including the backing views of global secondary indexes, get a tablet map
+// of their own, derived from the vnodes the same way as the base table's.
+//
+// Views must be fully built on all normal nodes. The migration
+// doesn't hand over in-progress builds: once the keyspace uses tablets, the
+// node-local view builder ignores it, and the view building coordinator only
+// builds views it has build tasks for. Those tasks are created by CREATE
+// MATERIALIZED VIEW on a tablets keyspace, so a view created under vnodes
+// never gets any. A partially built view would never be completed, and the
+// tablet bookkeeping would treat it as unbuilt, because not all of its
+// entries in system.view_build_status_v2 are SUCCESS.
+//
+// Co-located tables don't support the 'repair' tombstone_gc mode, but views
+// using it are accepted: finalizing the migration switches them to 'timeout'.
+//
+// Throws std::runtime_error if any view cannot be migrated.
+static future<> validate_keyspace_views_for_tablets_migration(
+        replica::database& db,
+        db::system_keyspace& sys_ks,
+        const topology& topology,
+        const sstring& ks_name) {
+    auto& ks = db.find_keyspace(ks_name);
+    auto views = ks.metadata()->views();
+    if (views.empty()) {
+        co_return;
+    }
+
+    auto build_statuses = co_await sys_ks.get_view_build_status_map();
+
+    for (const auto& view : views) {
+        auto it = build_statuses.find({view->ks_name(), view->cf_name()});
+        for (const auto& server_id : topology.normal_nodes | std::views::keys) {
+            auto host_id = locator::host_id{server_id.uuid()};
+            bool built = it != build_statuses.end()
+                    && it->second.contains(host_id)
+                    && it->second.at(host_id) == db::view::build_status::SUCCESS;
+            if (!built) {
+                throw std::runtime_error(fmt::format(
+                        "Cannot migrate keyspace {} to tablets: materialized view {}.{} is not built on node {}."
+                        " Wait for the view build to finish and retry.",
+                        ks_name, ks_name, view->cf_name(), host_id));
+            }
+        }
+    }
 }
 
 future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) {
@@ -4397,20 +4518,40 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             }
         }
 
-        std::vector<std::pair<table_id, sstring>> tables_to_migrate;
+        const auto* nts = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
+        if (!nts) {
+            throw std::runtime_error(fmt::format(
+                "Keyspace '{}' uses a replication strategy that does not support tablets. Please convert to NetworkTopologyStrategy first.",
+                ks_name));
+        }
+
+        validate_rf_for_tablets_migration(db, get_token_metadata_ptr(), *nts, ks_name);
+        co_await validate_keyspace_views_for_tablets_migration(db, get_system_keyspace(), topology, ks_name);
+
+        // Tables that get a tablet map of their own: base tables, and views
+        // that cannot be co-located with their base table.
+        std::vector<std::pair<table_id, sstring>> tables_to_build_maps;
+        // Tables that share the tablet map of another table, keyed by the
+        // table whose map they share. Currently, these are views co-located
+        // with their base table.
+        std::unordered_map<table_id, std::vector<std::pair<table_id, sstring>>> tables_to_colocate;
 
         for (const auto& [name, schema] : cf_meta_data) {
             auto tid = schema->id();
             auto& cf = db.find_column_family(tid);
 
             if (cf.uses_tablets()) {
-                slogger.info("Table {}.{} already uses tablets, skipping", ks_name, name);
+                slogger.info("{} {}.{} already uses tablets, skipping", schema->is_view() ? "View" : "Table", ks_name, name);
                 continue;
             }
-            tables_to_migrate.push_back({tid, name});
+            if (auto base_id = schema->is_view() ? db.get_base_table_for_tablet_colocation(*schema, {}) : std::nullopt) {
+                tables_to_colocate[*base_id].push_back({tid, name});
+            } else {
+                tables_to_build_maps.push_back({tid, name});
+            }
         }
 
-        if (tables_to_migrate.empty()) {
+        if (tables_to_build_maps.empty() && tables_to_colocate.empty()) {
             slogger.info("All tables in keyspace {} already use tablets, nothing to do", ks_name);
             co_return;
         }
@@ -4463,20 +4604,25 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // Estimate table sizes when pow2 convergence is enabled.
         // The estimates are used by the tablet allocator to determine the
         // target pow2 tablet count per table.
-        auto& rs = ks.get_replication_strategy();
-        const auto* trs = dynamic_cast<const locator::tablet_aware_replication_strategy*>(&rs);
-        if (!trs) {
-            throw std::runtime_error(fmt::format(
-                "Keyspace '{}' uses a replication strategy that does not support tablets. Please convert to NetworkTopologyStrategy first.",
-                ks_name));
-        }
-
         target_pow2_per_table_map target_pow2s;
         bool use_pow2_presplit = bool(_feature_service.tablet_pow2_convergence);
         if (use_pow2_presplit) {
+            // Estimate the sizes of all tables, including co-located ones.
+            // Co-located tables share a single tablet map, so size each tablet
+            // map by the total size of the whole colocation group.
+            auto tables_to_estimate = tables_to_build_maps;
+            for (const auto& colocated : tables_to_colocate | std::views::values) {
+                tables_to_estimate.insert(tables_to_estimate.end(), colocated.begin(), colocated.end());
+            }
             auto erm = ks.get_static_effective_replication_map();
-            auto estimated_sizes = co_await collect_table_sizes_for_migration(ks_name, erm, trs, tables_to_migrate);
-            target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(trs, estimated_sizes);
+            auto estimated_sizes = co_await collect_table_sizes_for_migration(ks_name, erm, nts, tables_to_estimate);
+            for (const auto& [base_id, colocated] : tables_to_colocate) {
+                for (const auto& [tid, cf_name] : colocated) {
+                    estimated_sizes[base_id] += estimated_sizes[tid];
+                    estimated_sizes.erase(tid);
+                }
+            }
+            target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(nts, estimated_sizes);
         }
 
         // Build tablet map mutations for all tables and persist them to group0 (system.tablets)
@@ -4508,19 +4654,37 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                     });
             };
 
+            // Co-located tables don't get a tablet map of their own; instead,
+            // they are registered in system.tablets as co-located with the
+            // table whose tablet map they share.
+            auto append_colocated_tablet_map_mutations = [&] (table_id base_id) -> future<> {
+                auto it = tables_to_colocate.find(base_id);
+                if (it == tables_to_colocate.end()) {
+                    co_return;
+                }
+                for (const auto& [tid, cf_name] : it->second) {
+                    slogger.info("Built co-located tablet map for {}.{} (shares the tablet map of {})",
+                                 ks_name, cf_name, base_id);
+                    auto m = replica::colocated_tablet_map_to_mutation(tid, ks_name, cf_name, base_id, guard.write_timestamp());
+                    updates.emplace_back(co_await make_canonical_mutation_gently(std::move(m)));
+                }
+            };
+
             if (use_pow2_presplit) {
-                for (const auto& [tid, cf_name] : tables_to_migrate) {
+                for (const auto& [tid, cf_name] : tables_to_build_maps) {
                     size_t target_pow2 = 0;
                     if (auto it = target_pow2s.find(tid); it != target_pow2s.end()) {
                         target_pow2 = it->second;
                     }
                     auto tmap = co_await build_tablet_map_for_migration(erm, target_pow2);
                     co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
+                    co_await append_colocated_tablet_map_mutations(tid);
                 }
             } else {
                 auto shared_tmap = co_await build_tablet_map_for_migration(erm, 0);
-                for (const auto& [tid, cf_name] : tables_to_migrate) {
+                for (const auto& [tid, cf_name] : tables_to_build_maps) {
                     co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
+                    co_await append_colocated_tablet_map_mutations(tid);
                 }
             }
         }
@@ -4552,9 +4716,15 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             continue;
         }
 
-        for (const auto& [tid, cf_name] : tables_to_migrate) {
+        for (const auto& [tid, cf_name] : tables_to_build_maps) {
             slogger.info("Successfully built tablet map for table {}.{}",
                          ks_name, cf_name);
+        }
+        for (const auto& colocated : tables_to_colocate | std::views::values) {
+            for (const auto& [tid, cf_name] : colocated) {
+                slogger.info("Successfully built co-located tablet map for {}.{}",
+                             ks_name, cf_name);
+            }
         }
         break;
     }
@@ -4643,11 +4813,11 @@ storage_service::migration_status storage_service::get_tablets_migration_status(
     const auto& tm = get_token_metadata();
     const auto& tablet_metadata = tm.tablets();
 
-    auto tables = ks.metadata()->tables();
+    const auto& cf_meta_data = ks.metadata().get()->cf_meta_data();
 
-    // Check whether all tables have tablet maps (i.e. migration was started).
-    bool has_tablet_maps = !tables.empty() && std::ranges::all_of(tables, [&] (const auto& schema) {
-        return tablet_metadata.has_tablet_map(schema->id());
+    // Check whether all tables and views have tablet maps (i.e. migration was started).
+    bool has_tablet_maps = !cf_meta_data.empty() && std::ranges::all_of(cf_meta_data, [&] (const auto& e) {
+        return tablet_metadata.has_tablet_map(e.second->id());
     });
 
     if (!has_tablet_maps) {
@@ -4766,10 +4936,7 @@ storage_service::get_tablets_pow2_convergence_status(const sstring& ks_name) con
     status.tables_converging = 0;
     status.tables_total = 0;
 
-    for (const auto& schema : ks.metadata()->tables()) {
-        if (!tablet_metadata.has_tablet_map(schema->id())) {
-            continue;
-        }
+    for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
         auto& tmap = tablet_metadata.get_tablet_map(schema->id());
         bool converging = tmap.is_converging_to_pow2();
 
@@ -4809,20 +4976,20 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
         const auto& tm = get_token_metadata();
         const auto& tablet_metadata = tm.tablets();
 
-        auto tables = ks.metadata()->tables();
+        const auto& tables = ks.metadata()->cf_meta_data();
         if (tables.empty()) {
             throw std::runtime_error(fmt::format("Keyspace '{}' has no tables", ks_name));
         }
 
-        for (const auto& schema : tables) {
+        for (const auto& schema : tables | std::views::values) {
             if (!tablet_metadata.has_tablet_map(schema->id())) {
-                throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
-                    "all tables in keyspace '{}' must be prepared for migration before finalizing",
-                    ks_name, schema->cf_name(), ks_name));
+                throw std::runtime_error(fmt::format("{} {}.{} does not have a tablet map; "
+                    "all tables and views in keyspace '{}' must be prepared for migration before finalizing",
+                    schema->is_view() ? "View" : "Table", ks_name, schema->cf_name(), ks_name));
             }
         }
 
-        slogger.info("All {} table(s) in keyspace '{}' have tablet maps, submitting finalization request",
+        slogger.info("All {} table(s) and view(s) in keyspace '{}' have tablet maps, submitting finalization request",
                      tables.size(), ks_name);
 
         request_id = guard.new_group0_state_id();

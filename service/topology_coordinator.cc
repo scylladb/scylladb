@@ -45,7 +45,11 @@
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
 #include "db/config.hh"
+#include "db/schema_tables.hh"
 #include "db/view/view_builder.hh"
+#include "schema/schema_builder.hh"
+#include "tombstone_gc.hh"
+#include "tombstone_gc_extension.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/group0_voter_handler.hh"
@@ -1724,13 +1728,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     auto tmptr = get_token_metadata_ptr();
                     const auto& tablet_metadata = tmptr->tablets();
-                    auto tables = ks.metadata()->tables();
+                    auto tables = ks.metadata()->cf_meta_data()
+                        | std::views::values
+                        | std::ranges::to<std::vector<schema_ptr>>();
+                    auto kind = [] (const schema& s) { return s.is_view() ? "view" : "table"; };
 
-                    // Verify all tables have tablet maps.
+                    // Verify all tables and views have tablet maps.
                     for (const auto& schema : tables) {
                         if (!tablet_metadata.has_tablet_map(schema->id())) {
                             throw std::runtime_error(fmt::format(
-                                "Table {}.{} does not have a tablet map", ks_name, schema->cf_name()));
+                                "{} {}.{} does not have a tablet map",
+                                schema->is_view() ? "View" : "Table", ks_name, schema->cf_name()));
                         }
                     }
 
@@ -1772,8 +1780,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             for (const auto& schema : tables) {
                                 if (!node_stats.tables.contains(schema->id())) {
                                     throw std::runtime_error(fmt::format(
-                                        "Node {} has not yet migrated table {}.{} to tablets",
-                                        host_id, ks_name, schema->cf_name()));
+                                        "Node {} has not yet migrated {} {}.{} to tablets",
+                                        host_id, kind(*schema), ks_name, schema->cf_name()));
                                 }
                             }
                         } else { // rollback path (tablets to vnodes)
@@ -1782,8 +1790,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 for (const auto& schema : tables) {
                                     if (node_stats.tables.contains(schema->id())) {
                                         throw std::runtime_error(fmt::format(
-                                            "Node {} still reports table {}.{} as tablet-based, rollback not complete",
-                                            host_id, ks_name, schema->cf_name()));
+                                            "Node {} still reports {} {}.{} as tablet-based, rollback not complete",
+                                            host_id, kind(*schema), ks_name, schema->cf_name()));
                                     }
                                 }
                             }
@@ -1809,8 +1817,71 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
 
                     if (!rollback) {
-                        // All nodes have been migrated. ALTER the keyspace to use tablets.
+                        // Remove the build status entries of views that no longer
+                        // exist.
+                        //
+                        // Before 2026.4 (bedcc69578), DROP MATERIALIZED VIEW in a
+                        // vnode keyspace didn't remove the view's entries from
+                        // system.view_build_status_v2. Instead, the view builder of
+                        // every node with view building enabled removed them
+                        // asynchronously, after the DROP had returned: it waited for
+                        // its semaphore, then deleted the node-local build rows of
+                        // the view and, in a separate group0 command, the entries.
+                        // If that group0 command failed, e.g. because the node was
+                        // shutting down or group0 had no quorum for longer than the
+                        // operation timeout, the view builder logged a warning and
+                        // didn't retry. On restart, a node retries only for views it
+                        // still has node-local build rows for, which the failed
+                        // attempt may already have deleted.
+                        //
+                        // So an entry is left behind for good only if this fails on
+                        // every node at once, e.g. if the whole cluster shuts down
+                        // right after the DROP. That is almost impossible. But the
+                        // consequences would be severe: once the keyspace uses
+                        // tablets, loading the view building state looks up the
+                        // view of every entry with find_schema(), which throws
+                        // no_such_column_family for a dropped view. Every following
+                        // group0 command that touches view building would fail,
+                        // on all nodes, stopping group0 cluster-wide. This cleanup
+                        // guards against that, just in case.
+                        const auto& views = ks.metadata()->views();
+                        auto build_statuses = co_await _sys_ks.get_view_build_status_map();
+                        for (const auto& name : build_statuses | std::views::keys) {
+                            if (name.first != ks_name || std::ranges::contains(views, name.second, &schema::cf_name)) {
+                                continue;
+                            }
+                            rtlogger.info("finalize_migration: removing build status entries of dropped view {}.{}", name.first, name.second);
+                            updates.emplace_back(co_await _sys_ks.make_remove_view_build_status_mutation(guard.write_timestamp(), name));
+                        }
+
+                        // Co-located tables don't support the 'repair'
+                        // tombstone_gc mode (see SCYLLADB-362): they are never
+                        // repaired on their own, so no repair time would ever
+                        // allow purging their tombstones. Views of a vnode
+                        // keyspace default to 'repair', so switch co-located
+                        // views to the default for co-located tables
+                        // ('timeout'). Views with a tablet map of their own
+                        // support 'repair' and keep their mode. Doing it here
+                        // keeps tombstone GC off for the whole migration,
+                        // during which repair is not allowed.
                         auto old_md = ks.metadata();
+                        auto colocated_gc_mode = get_default_tombstone_gc_mode(ks.get_replication_strategy(), false);
+                        for (const auto& view : old_md->views()) {
+                            bool is_colocated = !tablet_metadata.is_base_table(view->id());
+                            if (!is_colocated || view->tombstone_gc_options().mode() != tombstone_gc_mode::repair) {
+                                continue;
+                            }
+                            rtlogger.info("finalize_migration: switching tombstone_gc mode of view {}.{} from 'repair' to 'timeout'",
+                                ks_name, view->cf_name());
+                            schema_builder b(view);
+                            b.add_extension(tombstone_gc_extension::NAME, seastar::make_shared<tombstone_gc_extension>(colocated_gc_mode));
+                            for (auto& m : db::schema_tables::make_update_view_mutations(old_md, view, view_ptr(b.build()),
+                                    guard.write_timestamp(), false)) {
+                                updates.emplace_back(std::move(m));
+                            }
+                        }
+
+                        // All nodes have been migrated. ALTER the keyspace to use tablets.
                         auto new_md = data_dictionary::keyspace_metadata::new_keyspace(
                             old_md->name(),
                             old_md->strategy_name(),

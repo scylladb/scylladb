@@ -451,6 +451,16 @@ bool tablet_metadata::is_base_table(table_id id) const {
     return !_base_table.contains(id);
 }
 
+std::vector<schema_ptr> tablet_metadata::base_tables(const data_dictionary::keyspace_metadata& ksm) const {
+    std::vector<schema_ptr> result;
+    for (const auto& s : ksm.cf_meta_data() | std::views::values) {
+        if (has_tablet_map(s->id()) && is_base_table(s->id())) {
+            result.push_back(s);
+        }
+    }
+    return result;
+}
+
 future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_function<future<>(tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
@@ -2382,4 +2392,16 @@ locator::tablet_task_info locator::tablet_task_info::make_merge_request() {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::merge, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+bool locator::is_keyspace_undergoing_tablets_migration(const tablet_metadata& tmeta, const data_dictionary::keyspace_metadata& ksm) {
+    if (ksm.uses_tablets()) {
+        return false;
+    }
+    for (const auto& [name, s] : ksm.cf_meta_data()) {
+        if (tmeta.has_tablet_map(s->id())) {
+            return true;
+        }
+    }
+    return false;
 }

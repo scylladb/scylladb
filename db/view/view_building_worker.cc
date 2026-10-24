@@ -345,7 +345,7 @@ std::set<view_building_worker::staging_sstable_task_info> view_building_worker::
     auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
 
     _db.get_tables_metadata().for_each_table([&] (table_id table_id, lw_shared_ptr<replica::table> table) {
-        if (!table->uses_tablets()) {
+        if (!_db.find_keyspace(table->schema()->ks_name()).uses_tablets()) {
             return;
         }
 

@@ -11,6 +11,8 @@
 
 #include "db/config.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/exception_utils.hh"
+#include "test/lib/topology_builder.hh"
 #include "locator/tablets.hh"
 #include "service/storage_service.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -18,10 +20,13 @@
 #include "locator/token_metadata.hh"
 #include "db/schema_tables.hh"
 #include "dht/token.hh"
+#include "db/view/view_builder.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/error_injection.hh"
 
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
+#include <fmt/ranges.h>
 
 BOOST_AUTO_TEST_SUITE(vnodes_to_tablets_migration_test)
 
@@ -34,6 +39,64 @@ BOOST_AUTO_TEST_SUITE(vnodes_to_tablets_migration_test)
 // MAX_TOKEN. It does not matter where MAX_TOKEN came from. Depending on the
 // vnode layout, MAX_TOKEN may already be present as a vnode boundary; with pow2
 // pre-splitting, it is also the terminal pow2 boundary.
+static void verify_migration_tablet_map(const locator::tablet_map& tmap, const std::set<dht::token>& vnode_boundaries) {
+    // Collect actual tablet boundaries.
+    std::set<dht::token> tablet_boundaries;
+    for (size_t i = 0; i < tmap.tablet_count(); ++i) {
+        tablet_boundaries.insert(tmap.get_last_token(locator::tablet_id(i)));
+    }
+
+    // Verify all vnode boundaries are present.
+    std::vector<dht::token> missing_vnode;
+    std::set_difference(vnode_boundaries.begin(), vnode_boundaries.end(),
+                        tablet_boundaries.begin(), tablet_boundaries.end(),
+                        std::back_inserter(missing_vnode));
+    BOOST_REQUIRE_MESSAGE(missing_vnode.empty(),
+        fmt::format("Vnode boundaries missing from tablet map: {}", fmt::join(missing_vnode, ", ")));
+
+    // Verify MAX_TOKEN independently from the pow2-boundary check: ending
+    // the tablet map at MAX_TOKEN is a tablet-map invariant, not just an
+    // incidental pow2 boundary.
+    BOOST_REQUIRE_EQUAL(tmap.get_last_token(tmap.last_tablet()), dht::last_token());
+
+    // The tablet map must have a pow2 target set.
+    BOOST_REQUIRE(tmap.is_converging_to_pow2());
+    size_t P = tmap.target_pow2_tablet_count();
+    BOOST_REQUIRE_MESSAGE(std::has_single_bit(P),
+            fmt::format("target_pow2_tablet_count {} is not a power of two", P));
+    BOOST_REQUIRE_MESSAGE(P < tmap.tablet_count(),
+            fmt::format("target_pow2_tablet_count {} must be less than the current tablet count {}", P, tmap.tablet_count()));
+
+    // Verify all pow2 boundaries are present.
+    std::set<dht::token> pow2_boundaries;
+    for (const auto& t : dht::get_uniform_tokens(P)) {
+        pow2_boundaries.insert(dht::token(t));
+    }
+
+    std::vector<dht::token> missing_pow2;
+    std::set_difference(pow2_boundaries.begin(), pow2_boundaries.end(),
+                        tablet_boundaries.begin(), tablet_boundaries.end(),
+                        std::back_inserter(missing_pow2));
+    BOOST_REQUIRE_MESSAGE(missing_pow2.empty(),
+        fmt::format("Pow2 boundaries missing from tablet map: {}", fmt::join(missing_pow2, ", ")));
+
+    // Verify no spurious boundaries.
+    std::set<dht::token> expected_boundaries;
+    std::set_union(vnode_boundaries.begin(), vnode_boundaries.end(),
+                   pow2_boundaries.begin(), pow2_boundaries.end(),
+                   std::inserter(expected_boundaries, expected_boundaries.end()));
+    expected_boundaries.insert(dht::last_token());
+
+    std::vector<dht::token> extra;
+    std::set_difference(tablet_boundaries.begin(), tablet_boundaries.end(),
+                        expected_boundaries.begin(), expected_boundaries.end(),
+                        std::back_inserter(extra));
+    BOOST_REQUIRE_MESSAGE(extra.empty(),
+        fmt::format("Unexpected boundaries in tablet map: {}", fmt::join(extra, ", ")));
+}
+
+// Verify the tablet map that prepare_for_tablets_migration() creates for a
+// table on a node with the given vnode tokens.
 static future<> test_tablet_map_creation(std::vector<int64_t> tokens) {
     cql_test_config cfg;
     auto initial_token = fmt::format("{}", fmt::join(tokens, ", "));
@@ -53,65 +116,11 @@ static future<> test_tablet_map_creation(std::vector<int64_t> tokens) {
         auto& stm = e.shared_token_metadata().local();
         auto& tmap = stm.get()->tablets().get_tablet_map(tid);
 
-        // Collect actual tablet boundaries.
-        std::set<dht::token> tablet_boundaries;
-        for (size_t i = 0; i < tmap.tablet_count(); ++i) {
-            tablet_boundaries.insert(tmap.get_last_token(locator::tablet_id(i)));
-        }
-
-        // Build expected vnode boundaries.
         std::set<dht::token> vnode_boundaries;
         for (const auto& t : tokens) {
             vnode_boundaries.insert(dht::token(t));
         }
-
-        // Verify all vnode boundaries are present.
-        std::vector<dht::token> missing_vnode;
-        std::set_difference(vnode_boundaries.begin(), vnode_boundaries.end(),
-                            tablet_boundaries.begin(), tablet_boundaries.end(),
-                            std::back_inserter(missing_vnode));
-        BOOST_REQUIRE_MESSAGE(missing_vnode.empty(),
-            fmt::format("Vnode boundaries missing from tablet map: {}", fmt::join(missing_vnode, ", ")));
-
-        // Verify MAX_TOKEN independently from the pow2-boundary check: ending
-        // the tablet map at MAX_TOKEN is a tablet-map invariant, not just an
-        // incidental pow2 boundary.
-        BOOST_REQUIRE_EQUAL(tmap.get_last_token(tmap.last_tablet()), dht::last_token());
-
-        // The tablet map must have a pow2 target set.
-        BOOST_REQUIRE(tmap.is_converging_to_pow2());
-        size_t P = tmap.target_pow2_tablet_count();
-        BOOST_REQUIRE_MESSAGE(std::has_single_bit(P),
-                fmt::format("target_pow2_tablet_count {} is not a power of two", P));
-        BOOST_REQUIRE_MESSAGE(P < tmap.tablet_count(),
-                fmt::format("target_pow2_tablet_count {} must be less than the current tablet count {}", P, tmap.tablet_count()));
-
-        // Verify all pow2 boundaries are present.
-        std::set<dht::token> pow2_boundaries;
-        for (const auto& t : dht::get_uniform_tokens(P)) {
-            pow2_boundaries.insert(dht::token(t));
-        }
-
-        std::vector<dht::token> missing_pow2;
-        std::set_difference(pow2_boundaries.begin(), pow2_boundaries.end(),
-                            tablet_boundaries.begin(), tablet_boundaries.end(),
-                            std::back_inserter(missing_pow2));
-        BOOST_REQUIRE_MESSAGE(missing_pow2.empty(),
-            fmt::format("Pow2 boundaries missing from tablet map: {}", fmt::join(missing_pow2, ", ")));
-
-        // Verify no spurious boundaries.
-        std::set<dht::token> expected_boundaries;
-        std::set_union(vnode_boundaries.begin(), vnode_boundaries.end(),
-                       pow2_boundaries.begin(), pow2_boundaries.end(),
-                       std::inserter(expected_boundaries, expected_boundaries.end()));
-        expected_boundaries.insert(dht::last_token());
-
-        std::vector<dht::token> extra;
-        std::set_difference(tablet_boundaries.begin(), tablet_boundaries.end(),
-                            expected_boundaries.begin(), expected_boundaries.end(),
-                            std::back_inserter(extra));
-        BOOST_REQUIRE_MESSAGE(extra.empty(),
-            fmt::format("Unexpected boundaries in tablet map: {}", fmt::join(extra, ", ")));
+        verify_migration_tablet_map(tmap, vnode_boundaries);
     }, cfg);
 }
 
@@ -549,6 +558,374 @@ SEASTAR_TEST_CASE(test_table_size_estimate_fails_on_rf_0_dc) {
                         return sstring(ex.what()).find("replication factor for local DC") != sstring::npos;
                     });
         });
+    });
+}
+
+// Validation tests for replication strategy and replication factor:
+
+namespace {
+
+// Creates a vnode keyspace with a table. Without `rf_per_dc`, the keyspace
+// replicates to every DC with RF=1.
+void create_vnode_keyspace_with_table(cql_test_env& e, const sstring& ks_name,
+        const std::map<sstring, size_t>& rf_per_dc = {}) {
+    auto replication = rf_per_dc.empty()
+            ? std::string("'replication_factor': 1")
+            : fmt::to_string(fmt::join(rf_per_dc | std::views::transform([] (const auto& dc_rf) {
+                    return fmt::format("'{}': {}", dc_rf.first, dc_rf.second);
+              }), ", "));
+    e.execute_cql(fmt::format("CREATE KEYSPACE {} WITH replication = "
+            "{{'class': 'NetworkTopologyStrategy', {}}} AND tablets = {{'enabled': false}}",
+            ks_name, replication)).get();
+    e.execute_cql(fmt::format("CREATE TABLE {}.t (pk int PRIMARY KEY, v int)", ks_name)).get();
+}
+
+// Adds a new DC with the given number of nodes in each rack, and returns its name.
+sstring add_dc(cql_test_env& e, std::vector<size_t> nodes_per_rack) {
+    topology_builder topo(e);
+    for (size_t i = 0; i < nodes_per_rack.size(); ++i) {
+        if (i > 0) {
+            topo.start_new_rack();
+        }
+        for (size_t n = 0; n < nodes_per_rack[i]; ++n) {
+            topo.add_node();
+        }
+    }
+    return topo.dc();
+}
+
+// The migration estimates table sizes from the local node's data, so test
+// keyspaces also replicate to the local DC.
+sstring local_dc(cql_test_env& e) {
+    const auto& tm = e.local_db().get_token_metadata();
+    return tm.get_topology().get_location(tm.get_my_id()).dc;
+}
+
+cql_test_config rf_rack_valid_keyspaces_config(bool enabled) {
+    cql_test_config cfg;
+    cfg.db_config->rf_rack_valid_keyspaces.set(bool(enabled));
+    return cfg;
+}
+
+} // anonymous namespace
+
+// Only NetworkTopologyStrategy supports tablets.
+// The migration must reject other strategies with an error.
+SEASTAR_TEST_CASE(test_prepare_rejects_simple_strategy) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks_name = sstring("test_migration_ks");
+        e.execute_cql(format("CREATE KEYSPACE {} "
+                "WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'enabled': false}}", ks_name)).get();
+        e.execute_cql(format("CREATE TABLE {}.t (pk int PRIMARY KEY, v int)", ks_name)).get();
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get(),
+                std::runtime_error,
+                exception_predicate::message_contains("does not support tablets"));
+    });
+}
+
+// Vnode keyspaces allow an RF larger than the number of token-owning nodes in
+// a datacenter, but tablet allocation rejects it, so the migration must reject
+// such keyspaces, whether RF-rack-validity is enforced or not.
+SEASTAR_TEST_CASE(test_prepare_rejects_rf_larger_than_node_count) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto dc = add_dc(e, {1});
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}, {dc, 2}});
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get(),
+                std::runtime_error,
+                exception_predicate::message_contains("doesn't have enough token-owning nodes"));
+    }, rf_rack_valid_keyspaces_config(false));
+}
+
+// With enforce_rack_list enabled, nodes refuse to start if a tablet keyspace
+// has a numeric replication factor. The migration keeps the numeric
+// replication factors of the vnode keyspace, so it must reject it, even if the
+// keyspace is RF-rack-valid.
+SEASTAR_TEST_CASE(test_prepare_rejects_keyspace_when_rack_list_enforced) {
+    cql_test_config cfg;
+    cfg.db_config->enforce_rack_list.set(true);
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}});
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get(),
+                std::runtime_error,
+                exception_predicate::message_contains("the enforce_rack_list option is enabled"));
+    }, cfg);
+}
+
+// Tablet keyspaces with views must be RF-rack-valid, even if
+// rf_rack_valid_keyspaces is disabled, so the migration must reject a keyspace
+// with views that would not be RF-rack-valid.
+SEASTAR_TEST_CASE(test_prepare_rejects_rf_rack_invalid_keyspace_with_views) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto dc = add_dc(e, {2});
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}, {dc, 2}});
+        e.execute_cql("CREATE MATERIALIZED VIEW test_migration_ks.mv AS SELECT * FROM test_migration_ks.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)").get();
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get(),
+                std::runtime_error,
+                exception_predicate::message_contains("is required to be RF-rack-valid"));
+    }, rf_rack_valid_keyspaces_config(false));
+}
+
+// With rf_rack_valid_keyspaces enabled, all tablet keyspaces must be
+// RF-rack-valid, so the migration must reject a keyspace that would not be,
+// even without views.
+SEASTAR_TEST_CASE(test_prepare_rejects_rf_rack_invalid_keyspace_when_enforced) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto dc = add_dc(e, {2});
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}, {dc, 2}});
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get(),
+                std::runtime_error,
+                exception_predicate::message_contains("is required to be RF-rack-valid"));
+    }, rf_rack_valid_keyspaces_config(true));
+}
+
+// Without views and with rf_rack_valid_keyspaces disabled, an RF-rack-invalid
+// keyspace is allowed with tablets, so the migration must accept it.
+SEASTAR_TEST_CASE(test_prepare_accepts_rf_rack_invalid_keyspace_when_not_enforced) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto dc = add_dc(e, {2});
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}, {dc, 2}});
+
+        e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get();
+
+        auto t_id = e.local_db().find_schema("test_migration_ks", "t")->id();
+        BOOST_REQUIRE(e.local_db().get_shared_token_metadata().get()->tablets().has_tablet_map(t_id));
+    }, rf_rack_valid_keyspaces_config(false));
+}
+
+// An RF equal to the number of racks is RF-rack-valid, so the migration must
+// accept it even when RF-rack-validity is enforced.
+SEASTAR_TEST_CASE(test_prepare_accepts_rf_rack_valid_keyspace) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto dc = add_dc(e, {1, 1});
+        create_vnode_keyspace_with_table(e, "test_migration_ks", {{local_dc(e), 1}, {dc, 2}});
+
+        e.get_storage_service().local().prepare_for_tablets_migration("test_migration_ks").get();
+
+        auto t_id = e.local_db().find_schema("test_migration_ks", "t")->id();
+        BOOST_REQUIRE(e.local_db().get_shared_token_metadata().get()->tablets().has_tablet_map(t_id));
+    }, rf_rack_valid_keyspaces_config(true));
+}
+
+// Verify that preparing the migration of a keyspace with views registers
+// the views as co-located with their base table, sharing its tablet map,
+// instead of creating independent tablet maps for them.
+SEASTAR_TEST_CASE(test_colocated_view_tablet_map_creation) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks_name = sstring("test_migration_ks");
+        create_vnode_keyspace_with_table(e, ks_name);
+        e.execute_cql(format("CREATE TABLE {}.t2 (pk int PRIMARY KEY, v int)", ks_name)).get();
+        // Subscribe before creating the views: wait_until_built() only reports
+        // builds that finish after the call.
+        auto views_built = when_all_succeed(
+                e.local_view_builder().wait_until_built(ks_name, "mv"),
+                e.local_view_builder().wait_until_built(ks_name, "local_idx_index"));
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks_name, ks_name)).get();
+        // A local secondary index is backed by a view with the same partition
+        // key as the base table, so it can be co-located too.
+        e.execute_cql(format("CREATE INDEX local_idx ON {}.t ((pk), v)", ks_name)).get();
+        views_built.get();
+
+        auto base_id = e.local_db().find_schema(ks_name, "t")->id();
+        auto t2_id = e.local_db().find_schema(ks_name, "t2")->id();
+        auto mv_id = e.local_db().find_schema(ks_name, "mv")->id();
+        auto idx_id = e.local_db().find_schema(ks_name, "local_idx_index")->id();
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+
+        auto& stm = e.local_db().get_shared_token_metadata();
+        const auto& tablets = stm.get()->tablets();
+
+        // The views are co-located with their base table.
+        BOOST_REQUIRE(tablets.is_base_table(base_id));
+        BOOST_REQUIRE(!tablets.is_base_table(mv_id));
+        BOOST_REQUIRE(!tablets.is_base_table(idx_id));
+        BOOST_REQUIRE(tablets.get_base_table(mv_id) == base_id);
+        BOOST_REQUIRE(tablets.get_base_table(idx_id) == base_id);
+
+        // Co-located tables share a single tablet map instance.
+        BOOST_REQUIRE(&tablets.get_tablet_map(mv_id) == &tablets.get_tablet_map(base_id));
+        BOOST_REQUIRE(&tablets.get_tablet_map(idx_id) == &tablets.get_tablet_map(base_id));
+
+        // A table without views forms its own group.
+        BOOST_REQUIRE(tablets.is_base_table(t2_id));
+        BOOST_REQUIRE(&tablets.get_tablet_map(t2_id) != &tablets.get_tablet_map(base_id));
+    });
+}
+
+// Verify that preparing the migration of a keyspace with views whose
+// partition key differs from the base table's, including the backing views
+// of global secondary indexes, gives each of these views a tablet map of
+// its own, derived from the vnodes like the base table's. Views with the
+// same partition key in the same keyspace remain co-located.
+SEASTAR_TEST_CASE(test_non_colocated_view_tablet_map_creation) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks_name = sstring("test_migration_ks");
+        create_vnode_keyspace_with_table(e, ks_name);
+        // Subscribe before creating the views: wait_until_built() only reports
+        // builds that finish after the call.
+        auto views_built = when_all_succeed(
+                e.local_view_builder().wait_until_built(ks_name, "mv_by_v"),
+                e.local_view_builder().wait_until_built(ks_name, "global_idx_index"),
+                e.local_view_builder().wait_until_built(ks_name, "mv"));
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv_by_v AS SELECT * FROM {}.t "
+                "WHERE v IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (v, pk)", ks_name, ks_name)).get();
+        e.execute_cql(format("CREATE INDEX global_idx ON {}.t (v)", ks_name)).get();
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks_name, ks_name)).get();
+        views_built.get();
+
+        auto base_id = e.local_db().find_schema(ks_name, "t")->id();
+        auto mv_by_v_id = e.local_db().find_schema(ks_name, "mv_by_v")->id();
+        auto idx_id = e.local_db().find_schema(ks_name, "global_idx_index")->id();
+        auto mv_id = e.local_db().find_schema(ks_name, "mv")->id();
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+
+        auto& stm = e.local_db().get_shared_token_metadata();
+        const auto& tablets = stm.get()->tablets();
+
+        // The co-located view shares the base table's tablet map.
+        BOOST_REQUIRE(tablets.get_base_table(mv_id) == base_id);
+        BOOST_REQUIRE(&tablets.get_tablet_map(mv_id) == &tablets.get_tablet_map(base_id));
+
+        // The other views own a tablet map, distinct from the base table's
+        // and from each other's.
+        for (auto id : {mv_by_v_id, idx_id}) {
+            BOOST_REQUIRE(tablets.has_tablet_map(id));
+            BOOST_REQUIRE(tablets.is_base_table(id));
+            BOOST_REQUIRE(&tablets.get_tablet_map(id) != &tablets.get_tablet_map(base_id));
+        }
+        BOOST_REQUIRE(&tablets.get_tablet_map(mv_by_v_id) != &tablets.get_tablet_map(idx_id));
+
+        const auto& vnode_tokens = stm.get()->sorted_tokens();
+        std::set<dht::token> vnode_boundaries(vnode_tokens.begin(), vnode_tokens.end());
+        for (auto id : {base_id, mv_by_v_id, idx_id}) {
+            verify_migration_tablet_map(tablets.get_tablet_map(id), vnode_boundaries);
+        }
+
+        // The base table and the non-co-located views are the base tables of
+        // their co-location groups.
+        auto base_tables = tablets.base_tables(*e.local_db().find_keyspace(ks_name).metadata())
+                | std::views::transform([] (const schema_ptr& s) { return s->id(); })
+                | std::ranges::to<std::set<table_id>>();
+        auto expected_base_tables = std::set<table_id>{base_id, mv_by_v_id, idx_id};
+        BOOST_REQUIRE_MESSAGE(base_tables == expected_base_tables,
+                fmt::format("Unexpected base tables: got {}, expected {}", base_tables, expected_base_tables));
+    });
+}
+
+// Builds in progress aren't carried over to tablets, so the migration must be
+// rejected while a view is still being built, and accepted once it is built.
+SEASTAR_TEST_CASE(test_prepare_rejects_unbuilt_view) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future<>();
+#else
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto pause = "view_builder_pause_before_mark_success";
+        auto ks_name = sstring("test_migration_ks");
+        create_vnode_keyspace_with_table(e, ks_name);
+        for (int k = 0; k < 100; ++k) {
+            e.execute_cql(format("INSERT INTO {}.t (pk, v) VALUES ({}, {})", ks_name, k, k)).get();
+        }
+
+        smp::invoke_on_all([pause] { utils::get_local_injector().enable(pause); }).get();
+        // Subscribe before creating the view: wait_until_built() only reports
+        // builds that finish after the call.
+        auto mv_built = e.local_view_builder().wait_until_built(ks_name, "mv");
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks_name, ks_name)).get();
+
+        BOOST_REQUIRE_EXCEPTION(
+                e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get(),
+                std::runtime_error,
+                exception_predicate::message_contains("is not built"));
+
+        smp::invoke_on_all([pause] { utils::get_local_injector().disable(pause); }).get();
+        mv_built.get();
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+    });
+#endif
+}
+
+// Creates a vnode keyspace holding a table, a materialized view and a local
+// secondary index, and starts its migration.
+static sstring start_migration_with_views(cql_test_env& e, const sstring& ks_name) {
+    create_vnode_keyspace_with_table(e, ks_name);
+    // Subscribe before creating the views: wait_until_built() only reports
+    // builds that finish after the call.
+    auto views_built = when_all_succeed(
+            e.local_view_builder().wait_until_built(ks_name, "mv"),
+            e.local_view_builder().wait_until_built(ks_name, "local_idx_index"));
+    e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+            "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks_name, ks_name)).get();
+    e.execute_cql(format("CREATE INDEX local_idx ON {}.t ((pk), v)", ks_name)).get();
+    views_built.get();
+    e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+    return ks_name;
+}
+
+// Schema changes in a keyspace undergoing migration would break the
+// correspondence between its tables and their tablet maps, so they must be
+// rejected until the migration is finalized or rolled back.
+static void require_rejected_during_migration(cql_test_env& e, const sstring& cql) {
+    BOOST_TEST_CONTEXT(cql) {
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql(cql).get(),
+                exceptions::invalid_request_exception,
+                exception_predicate::message_contains("undergoing vnodes-to-tablets migration"));
+    }
+}
+
+SEASTAR_TEST_CASE(test_block_table_schema_changes_during_migration) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks = start_migration_with_views(e, "test_migration_ks");
+        require_rejected_during_migration(e, format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks));
+        require_rejected_during_migration(e, format("DROP TABLE {}.t", ks));
+        require_rejected_during_migration(e, format("DROP KEYSPACE {}", ks));
+        // Other table updates don't change the set of tables.
+        e.execute_cql(format("ALTER TABLE {}.t ADD w int", ks)).get();
+        // Creating a table that already exists doesn't change the set of tables.
+        e.execute_cql(format("CREATE TABLE IF NOT EXISTS {}.t (pk int PRIMARY KEY)", ks)).get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_block_view_schema_changes_during_migration) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks = start_migration_with_views(e, "test_migration_ks");
+        require_rejected_during_migration(e, format("CREATE MATERIALIZED VIEW {}.mv2 AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks, ks));
+        require_rejected_during_migration(e, format("DROP MATERIALIZED VIEW {}.mv", ks));
+        // Altering a view doesn't change the set of tables.
+        e.execute_cql(format("ALTER MATERIALIZED VIEW {}.mv WITH gc_grace_seconds = 3600", ks)).get();
+        // Creating a view that already exists doesn't change the set of tables.
+        e.execute_cql(format("CREATE MATERIALIZED VIEW IF NOT EXISTS {}.mv AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks, ks)).get();
+    });
+}
+
+SEASTAR_TEST_CASE(test_block_index_schema_changes_during_migration) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks = start_migration_with_views(e, "test_migration_ks");
+        require_rejected_during_migration(e, format("CREATE INDEX ON {}.t (v)", ks));
+        require_rejected_during_migration(e, format("DROP INDEX {}.local_idx", ks));
+        // Altering the backing view of an index doesn't change the set of tables.
+        e.execute_cql(format("ALTER MATERIALIZED VIEW {}.local_idx_index WITH gc_grace_seconds = 3600", ks)).get();
+        // Creating an index that already exists doesn't change the set of tables.
+        e.execute_cql(format("CREATE INDEX IF NOT EXISTS local_idx ON {}.t ((pk), v)", ks)).get();
     });
 }
 

@@ -351,7 +351,7 @@ void view_update_generator::setup_metrics() {
 
 void view_update_generator::discover_staging_sstables() {
     _db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
-        if (table->uses_tablets()) {
+        if (_db.find_keyspace(table->schema()->ks_name()).uses_tablets()) {
             return;
         }
         auto t = table->shared_from_this();
