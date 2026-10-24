@@ -34,8 +34,9 @@ value set at a broader one:
 * ``NODE`` overrides ``RACK``, which overrides ``DATACENTER``, which overrides ``CLUSTER``.
 
 Each option supports a fixed set of scopes. Options that describe a table (such as
-``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. No option
-currently supports the ``DATACENTER``, ``RACK`` or ``NODE`` scopes.
+``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. Options that
+describe the cluster as a whole (such as ``tablet_streaming_min_batch_size_in_bytes``) can be set at
+``CLUSTER`` scope only. No option currently supports the ``DATACENTER``, ``RACK`` or ``NODE`` scopes.
 
 Each scope stores only the values that were explicitly set there. The *effective* value of an
 option for a table is the value stored at the narrowest scope that has one: the table's own value
@@ -172,3 +173,27 @@ Available options
        automatic repair. Default: ``86400``. Until the deprecated
        ``auto_repair_threshold_default_in_seconds`` option is removed, a node that sets it in
        ``scylla.yaml`` uses that value when no scope sets this option.
+   * - ``tablet_streaming_min_batch_size_in_bytes``
+     - integer
+     - ``CLUSTER``
+     - Amount of tablet data (in bytes) which may be streaming to or from a shard regardless of the
+       per-shard tablet count concurrency limits (``tablet_streaming_read_concurrency_per_shard``
+       and ``tablet_streaming_write_concurrency_per_shard`` in ``scylla.yaml``): a tablet migration
+       which fits in it together with what the shard already streams is not subject to them, so
+       that many small tablets migrate at once. ``0`` always enforces the limits.
+       Default: ``1073741824`` (1 GiB).
+   * - ``tablet_streaming_max_token_space_percentage``
+     - floating point
+     - ``CLUSTER``
+     - Percentage of a table's token space, between 0 and 100, which may be in transition
+       (migrating or rebuilding) at the same time, to limit how many requests pay the
+       double-quorum overhead. A migration may start while the table is within it, so it may be
+       exceeded by one tablet. Values outside the range are clamped to it, and ``0`` allows one
+       migration per table at a time. Default: ``5.0``.
+   * - ``tablet_streaming_max_transitions_per_shard``
+     - integer
+     - ``CLUSTER``
+     - Maximum number of tablet transitions which may stream to or from a shard at the same time,
+       counted like the per-shard tablet count concurrency limits. Unlike them, it also holds when
+       ``tablet_streaming_min_batch_size_in_bytes`` relaxes them, so that many tables or many small
+       tablets cannot overload a shard. Default: ``32``.

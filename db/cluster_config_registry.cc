@@ -75,6 +75,24 @@ constexpr std::array registry_options = {
         .scopes = table_oriented_scopes,
         .default_value = auto_repair_threshold_default_seconds,
     },
+    option{
+        .name = option_name::tablet_streaming_min_batch_size_in_bytes,
+        .description = "Amount of tablet data (in bytes) which may be streaming to or from a shard regardless of the per-shard tablet count concurrency limits: a tablet migration which fits in it together with what the shard already streams is not subject to them. 0 always enforces the limits",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t(1) << 30,
+    },
+    option{
+        .name = option_name::tablet_streaming_max_token_space_percentage,
+        .description = "Percentage of a table's token space, between 0 and 100, which may be in transition (migrating or rebuilding) at the same time. A migration may start while the table is within it, so it may be exceeded by one tablet. Values outside the range are clamped to it, and 0 allows one migration per table at a time",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = 5.0,
+    },
+    option{
+        .name = option_name::tablet_streaming_max_transitions_per_shard,
+        .description = "Maximum number of tablet transitions which may stream to or from a shard at the same time, counted like the per-shard tablet count concurrency limits. Unlike them, it also holds when tablet_streaming_min_batch_size_in_bytes relaxes them",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t(32),
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
