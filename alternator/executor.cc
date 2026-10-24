@@ -1542,7 +1542,7 @@ regular_column_transformation::result extract_from_attrs_column_computation::com
     for (auto&& [key, cell] : cmv) {
         if (key == managed_bytes_view(_attr_name)) {
             return regular_column_transformation::result(cell,
-                std::bind(serialized_value_if_type, std::placeholders::_1, _desired_type));
+                std::bind(serialized_key_if_type, std::placeholders::_1, _desired_type));
         }
     }
     return regular_column_transformation::result();

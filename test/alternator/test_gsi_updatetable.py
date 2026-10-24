@@ -381,7 +381,6 @@ def test_gsi_creates_and_deletes(dynamodb):
 # skipped while filling the GSI - even if Scylla actually capable of
 # representing such empty view keys (see issue #9375).
 # Reproduces issue #9424.
-@pytest.mark.xfail(reason="issue #9424")
 def test_gsi_backfill_empty_string(dynamodb):
     # First create, and fill, a table without GSI:
     with new_test_table(dynamodb,
@@ -429,6 +428,13 @@ def test_gsi_backfill_empty_string(dynamodb):
         # data is already in the index.
         assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index1')
         assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index2')
+        # The item which was skipped because of its empty-string "x" is
+        # added to the GSIs once "x" gets a non-empty value.
+        table.update_item(Key={'p': p2, 'c': c}, AttributeUpdates={'x': {'Value': 'world', 'Action': 'PUT'}})
+        assert_index_query(table, 'index1', [{'p': p2, 'c': c, 'x': 'world'}],
+            KeyConditions={'x': {'AttributeValueList': ['world'], 'ComparisonOperator': 'EQ'}})
+        assert_index_query(table, 'index2', [{'p': p1, 'c': c, 'x': 'hello'}, {'p': p2, 'c': c, 'x': 'world'}],
+            KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
 
 # Trying to create two different GSIs with different types for the same key is
 # NOT allowed. The reason is that DynamoDB wants to insist that future writes
