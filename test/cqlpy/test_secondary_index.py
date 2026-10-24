@@ -2701,68 +2701,53 @@ def test_short_count(cql, test_keyspace):
         assert len(rs) == 1
         assert rs[0].count == 4
 
-# Reproducer for SCYLLADB-4057.
-# This reproducer covers two related paging bugs in indexed reads with a
-# clustering-key range tombstone. The first bug changes a reconstructed
-# "before" bound into an "after" bound. The second skips reconstruction when
-# the preceding base-table page contains no rows, so the view read resumes
-# from the wrong clustering position.
-@pytest.mark.xfail(reason="SCYLLADB-4057")
-def test_index_paging_ends_on_range_tombstone_bound(cql, test_keyspace, scylla_only):
-    schema = 'pk int, ck1 int, ck2 int, v int, PRIMARY KEY (pk, ck1, ck2)'
+# Reproducer for the first bug of SCYLLADB-4057: a base page which ends on a
+# range tombstone bound resumes after the bound's key, not before it.
+# The index on the first clustering column makes the base read cover a slice
+# of the partition. The first page returns (0,0,0) and stops on the range
+# tombstone which opens before (0,0,1). The paging state loses the bound
+# weight, so the next page would start after (0,0,1) and skip it.
+# Issue #25839 hides this bug: the next page skips the rest of partition 0,
+# because find_index_partition_ranges() skips every index entry of the
+# partition which the paging state names.
+@pytest.mark.xfail(reason="SCYLLADB-4057, issue #25839")
+def test_index_paging_resumes_before_range_tombstone_bound(cql, test_keyspace, scylla_only):
+    schema = 'pk int, ck1 int, ck2 int, PRIMARY KEY (pk, ck1, ck2)'
     with new_test_table(cql, test_keyspace, schema, extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
-        cql.execute(f'CREATE INDEX ON {table}(v)')
-        cql.execute(f'DELETE FROM {table} WHERE pk=0 AND ck1=0')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v) VALUES (0, 0, 0, 7)')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v) VALUES (0, 0, 1, 7)')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v) VALUES (0, 0, 2, 7)')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v) VALUES (0, 0, 3, 7)')
-
-        # Induce a page break before the first row, after reading the range tombstone.
+        cql.execute(f'CREATE INDEX ON {table}(ck1)')
+        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2) VALUES (0, 0, 0)')
+        cql.execute(f'DELETE FROM {table} WHERE pk=0 AND ck1=0 AND ck2 >= 1 AND ck2 <= 2')
+        for ck2 in (1, 2, 3):
+            cql.execute(f'INSERT INTO {table} (pk, ck1, ck2) VALUES (0, 0, {ck2})')
         with config_value_context(cql, 'query_tombstone_page_limit', '1'):
-            stmt = SimpleStatement(f'SELECT pk, ck1, ck2 FROM {table} WHERE v = 7')
+            stmt = SimpleStatement(f'SELECT pk, ck1, ck2 FROM {table} WHERE ck1 = 0')
             assert list(cql.execute(stmt)) == [(0, 0, 0), (0, 0, 1), (0, 0, 2), (0, 0, 3)]
 
-# Isolated reproducer for the first bug described in SCYLLADB-4057.
-# (The first row means that the first page is nonempty, so "empty page" problems
-# are not exercised.
+# Reproducer for the second bug of SCYLLADB-4057: a base page without rows
+# makes the next page start after the end of the index page, so the keys
+# which the base page did not read are skipped.
+# A swallowed view update failure leaves an index entry for the deleted row
+# (0,0). The base read of (0,0) stops on the row tombstone before it returns
+# a row. The next page then starts after (0,2), the end of the index page,
+# and (0,1) and (0,2) are skipped.
 @pytest.mark.xfail(reason="SCYLLADB-4057")
-def test_index_paging_reconstructs_range_tombstone_bound(cql, test_keyspace, scylla_only):
-    schema = 'pk int, ck1 int, ck2 int, v int, PRIMARY KEY (pk, ck1, ck2)'
+def test_index_paging_resumes_after_empty_base_page(cql, test_keyspace, scylla_only):
+    injection = 'view_update_generation_failure'
+    schema = 'pk int, ck int, v int, PRIMARY KEY (pk, ck)'
     with new_test_table(cql, test_keyspace, schema, extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
         cql.execute(f'CREATE INDEX ON {table}(v)')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v) VALUES (0, -1, 0, 7)')
-        cql.execute(f'DELETE FROM {table} WHERE pk=0 AND ck1=0')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v) VALUES (0, 0, 0, 7)')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v) VALUES (0, 0, 1, 7)')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v) VALUES (0, 0, 2, 7)')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v) VALUES (0, 0, 3, 7)')
-
+        for ck in range(6):
+            cql.execute(f'INSERT INTO {table} (pk, ck, v) VALUES (0, {ck}, 7)')
+        try:
+            rest_api.post_request(cql, f'v2/error_injection/injection/{injection}?one_shot=True')
+            if injection not in rest_api.get_request(cql, 'v2/error_injection/injection'):
+                skip_env("error injection not enabled in this build")
+            cql.execute(f'DELETE FROM {table} WHERE pk=0 AND ck=0')
+        finally:
+            rest_api.delete_request(cql, f'v2/error_injection/injection/{injection}')
         with config_value_context(cql, 'query_tombstone_page_limit', '1'):
-            stmt = SimpleStatement(f'SELECT pk, ck1, ck2 FROM {table} WHERE v = 7')
-            first_page = cql.execute(stmt)
-            assert list(first_page.current_rows) == [(0, -1, 0)]
-            assert first_page.has_more_pages
-        with config_value_context(cql, 'query_tombstone_page_limit', '100'):
-            assert list(cql.execute(stmt, paging_state=first_page.paging_state)) == [(0, 0, 0), (0, 0, 1), (0, 0, 2), (0, 0, 3)]
-
-# Isolated reproducer for the second bug described in SCYLLADB-4057.
-# (The `WHERE w=1` part means that the results of the test don't depend on the
-# fact that the first row is skipped due to the first bug).
-@pytest.mark.xfail(reason="SCYLLADB-4057")
-def test_index_paging_reconstructs_after_empty_page(cql, test_keyspace, scylla_only):
-    schema = 'pk int, ck1 int, ck2 int, v int, w int, PRIMARY KEY (pk, ck1, ck2)'
-    with new_test_table(cql, test_keyspace, schema, extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
-        cql.execute(f'CREATE INDEX ON {table}(v)')
-        cql.execute(f'DELETE FROM {table} WHERE pk=0 AND ck1=0')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v, w) VALUES (0, 0, 0, 7, 0)')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v, w) VALUES (0, 1, 0, 7, 1)')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v, w) VALUES (0, 2, 0, 7, 1)')
-        cql.execute(f'INSERT INTO {table} (pk, ck1, ck2, v, w) VALUES (0, 3, 0, 7, 1)')
-
-        with config_value_context(cql, 'query_tombstone_page_limit', '1'):
-            stmt = SimpleStatement(f'SELECT pk, ck1, ck2 FROM {table} WHERE v = 7 AND w = 1 ALLOW FILTERING')
-            assert list(cql.execute(stmt)) == [(0, 1, 0), (0, 2, 0), (0, 3, 0)]
+            stmt = SimpleStatement(f'SELECT pk, ck FROM {table} WHERE v = 7', fetch_size=3)
+            assert list(cql.execute(stmt)) == [(0, ck) for ck in range(1, 6)]
 
 def test_index_metrics(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
