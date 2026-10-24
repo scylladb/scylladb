@@ -3462,12 +3462,16 @@ semaphore& storage_service::get_do_sample_sstables_concurrency_limiter() {
     return _do_sample_sstables_concurrency_limiter;
 }
 
+// Bounds a hung peer; shutdown is handled by _abort_source.
+static constexpr auto sstable_sampling_rpc_timeout = std::chrono::minutes(5);
+
 future<uint64_t> storage_service::estimate_total_sstable_volume(table_id t, ignore_errors errors) {
     co_return co_await seastar::map_reduce(
         _db.local().get_token_metadata().get_host_ids(),
         [&] (auto h) -> future<uint64_t> {
             try {
-                co_return co_await ser::storage_service_rpc_verbs::send_estimate_sstable_volume(&_messaging.local(), h, t);
+                co_return co_await ser::storage_service_rpc_verbs::send_estimate_sstable_volume(&_messaging.local(), h,
+                        netw::messaging_service::clock_type::now() + sstable_sampling_rpc_timeout, _abort_source, t);
             }
             catch(...) {
                 if (errors == ignore_errors::yes) {
@@ -3557,7 +3561,8 @@ future<utils::chunked_vector<temporary_buffer<char>>> storage_service::do_sample
     co_await coroutine::parallel_for_each(
         db.get_token_metadata().get_host_ids(),
         [&] (auto h) -> future<> {
-            auto est = co_await ser::storage_service_rpc_verbs::send_estimate_sstable_volume(&ms, h, t);
+            auto est = co_await ser::storage_service_rpc_verbs::send_estimate_sstable_volume(&ms, h,
+                    netw::messaging_service::clock_type::now() + sstable_sampling_rpc_timeout, _abort_source, t);
             if (est) {
                 estimated_sizes.emplace(h, est);
             }
@@ -3583,18 +3588,13 @@ future<utils::chunked_vector<temporary_buffer<char>>> storage_service::do_sample
         }
     }
     slogger.debug("do_sample_sstables(): sending out send_sample_sstables with proportions {}", chunks_per_host);
-    auto samples = co_await seastar::map_reduce(
-        chunks_per_host,
-        [&] (std::pair<locator::host_id, uint64_t> h_s) -> future<utils::chunked_vector<temporary_buffer<char>>> {
-            const auto& [h, sz] = h_s;
-            return ser::storage_service_rpc_verbs::send_sample_sstables(&ms, h, t, chunk_size, sz);
-        },
-        utils::chunked_vector<temporary_buffer<char>>(),
-        [] (auto v, auto some_samples) {
-            std::ranges::move(some_samples, std::back_inserter(v));
-            return v;
-        }
-    );
+    // Serial, so the caller's inbound link isn't flooded by all hosts replying at once.
+    utils::chunked_vector<temporary_buffer<char>> samples;
+    for (const auto& [h, sz] : chunks_per_host) {
+        auto some_samples = co_await ser::storage_service_rpc_verbs::send_sample_sstables(&ms, h,
+                netw::messaging_service::clock_type::now() + sstable_sampling_rpc_timeout, _abort_source, t, chunk_size, sz);
+        std::ranges::move(some_samples, std::back_inserter(samples));
+    }
     slogger.debug("do_sample_sstables(): returned {} chunks", samples.size());
     co_return samples;
 }
@@ -7324,7 +7324,7 @@ void storage_service::init_messaging_service() {
             });
         });
     });
-    ser::storage_service_rpc_verbs::register_estimate_sstable_volume(&_messaging.local(), [this] (table_id t_id) -> future<uint64_t> {
+    ser::storage_service_rpc_verbs::register_estimate_sstable_volume(&_messaging.local(), [this] (rpc::opt_time_point, table_id t_id) -> future<uint64_t> {
         co_return co_await _db.map_reduce0(seastar::coroutine::lambda([&] (replica::database& local_db) -> future<uint64_t> {
             uint64_t result = 0;
             auto& t = local_db.get_tables_metadata().get_table(t_id);
@@ -7335,7 +7335,7 @@ void storage_service::init_messaging_service() {
             co_return result;
         }), uint64_t(0), std::plus());
     });
-    ser::storage_service_rpc_verbs::register_sample_sstables(&_messaging.local(), [this] (table_id table, uint64_t chunk_size, uint64_t n_chunks) -> future<utils::chunked_vector<temporary_buffer<char>>> {
+    ser::storage_service_rpc_verbs::register_sample_sstables(&_messaging.local(), [this] (rpc::opt_time_point, table_id table, uint64_t chunk_size, uint64_t n_chunks) -> future<utils::chunked_vector<temporary_buffer<char>>> {
         return _db.local().sample_data_files(table, chunk_size, n_chunks);
     });
     ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [this] (raft::server_id dst_id, service::join_node_request_params params) {
