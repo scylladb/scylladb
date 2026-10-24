@@ -89,6 +89,14 @@ rate_limit_exception::rate_limit_exception(const sstring& ks, const sstring& cf,
     , rejected_by_coordinator(rejected_by_coordinator_)
     { }
 
+keyspace_not_defined_exception::keyspace_not_defined_exception(std::string_view keyspace) noexcept
+    : invalid_request_exception{prepare_message("Keyspace '{}' does not exist", keyspace)}
+    { }
+
+table_not_defined_exception::table_not_defined_exception(std::string_view keyspace, std::string_view table) noexcept
+    : invalid_request_exception{prepare_message("Table '{}.{}' does not exist", keyspace, table)}
+    { }
+
 prepared_query_not_found_exception::prepared_query_not_found_exception(bytes id) noexcept
     : request_validation_exception{exception_code::UNPREPARED, prepare_message("No prepared statement with ID {} found.", id)}
     , id{id}

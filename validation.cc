@@ -61,7 +61,7 @@ validate_column_family(data_dictionary::database db, const sstring& keyspace_nam
 
     auto t = db.try_find_table(keyspace_name, cf_name);
     if (!t) {
-        throw exceptions::invalid_request_exception(format("unconfigured table {}", cf_name));
+        throw exceptions::table_not_defined_exception(keyspace_name, cf_name);
     }
 
     return t->schema();
@@ -73,7 +73,7 @@ void validate_keyspace(data_dictionary::database db, const sstring& keyspace_nam
     }
 
     if (!db.has_keyspace(keyspace_name)) {
-        throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace_name));
+        throw exceptions::keyspace_not_defined_exception(keyspace_name);
     }
 }
 
