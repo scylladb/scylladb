@@ -834,17 +834,45 @@ struct internal_query_state {
     sstring query_string;
     std::unique_ptr<query_options> opts;
     statements::prepared_statement::checked_weak_ptr p;
+    std::optional<service::query_state> qs;
     bool more_results = true;
+    // Set when the query is bounded by a deadline: qs then refers to this
+    // client_state, which is rebuilt before every page fetch so that its
+    // timeouts are the time left until the deadline.
+    std::unique_ptr<service::client_state> deadline_client_state;
+    db::timeout_clock::time_point deadline = db::no_timeout;
 };
+
+// A timeout config whose every timeout is the time left until deadline.
+static timeout_config timeout_config_until(db::timeout_clock::time_point deadline) {
+    auto left = std::max(deadline - db::timeout_clock::now(), db::timeout_clock::duration::zero());
+    return timeout_config{left, left, left, left, left, left, left};
+}
+
+static void set_deadline_query_state(internal_query_state& state) {
+    auto cs = std::make_unique<service::client_state>(service::client_state::internal_tag{}, timeout_config_until(state.deadline));
+    state.qs.emplace(*cs, empty_service_permit());
+    state.deadline_client_state = std::move(cs);
+}
 
 internal_query_state query_processor::create_paged_state(
         const sstring& query_string,
         db::consistency_level cl,
         const data_value_list& values,
-        int32_t page_size) {
+        int32_t page_size,
+        std::optional<service::query_state> qs,
+        db::timeout_clock::time_point deadline) {
     auto p = prepare_internal(query_string);
     auto opts = make_internal_options(p, values, cl, page_size);
-    return internal_query_state{query_string, std::make_unique<cql3::query_options>(std::move(opts)), std::move(p), true};
+    if (!qs) {
+        qs.emplace(query_state_for_internal_call());
+    }
+    internal_query_state state{query_string, std::make_unique<cql3::query_options>(std::move(opts)), std::move(p), std::move(qs), true};
+    if (deadline != db::no_timeout) {
+        state.deadline = deadline;
+        set_deadline_query_state(state);
+    }
+    return state;
 }
 
 bool query_processor::has_more_results(cql3::internal_query_state& state) const {
@@ -855,6 +883,9 @@ future<> query_processor::for_each_cql_result(
         cql3::internal_query_state& state,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set::row&)> f) {
     do {
+        if (state.deadline != db::no_timeout) {
+            set_deadline_query_state(state);
+        }
         auto msg = co_await execute_paged_internal(state);
         for (auto& row : *msg) {
             if ((co_await f(row)) == stop_iteration::yes) {
@@ -867,9 +898,8 @@ future<> query_processor::for_each_cql_result(
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(internal_query_state& state) {
     state.p->statement->validate(*this, service::client_state::for_internal_calls());
-    auto qs = query_state_for_internal_call();
     ::shared_ptr<cql_transport::messages::result_message> msg =
-      co_await state.p->statement->execute(*this, qs, *state.opts, std::nullopt);
+      co_await state.p->statement->execute(*this, *state.qs, *state.opts, std::nullopt);
 
     class visitor : public result_message::visitor_base {
         internal_query_state& _state;
@@ -1179,8 +1209,20 @@ future<> query_processor::query_internal(
         db::consistency_level cl,
         const data_value_list& values,
         int32_t page_size,
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f,
+        std::optional<service::query_state> qs) {
+    auto query_state = create_paged_state(query_string, cl, values, page_size, std::move(qs));
+    co_return co_await for_each_cql_result(query_state, std::move(f));
+}
+
+future<> query_processor::query_internal(
+        const sstring& query_string,
+        db::consistency_level cl,
+        const data_value_list& values,
+        int32_t page_size,
+        db::timeout_clock::time_point deadline,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
-    auto query_state = create_paged_state(query_string, cl, values, page_size);
+    auto query_state = create_paged_state(query_string, cl, values, page_size, std::nullopt, deadline);
     co_return co_await for_each_cql_result(query_state, std::move(f));
 }
 
