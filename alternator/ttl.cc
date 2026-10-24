@@ -51,6 +51,7 @@
 #include "alternator/ttl_tag.hh"
 #include "dht/sharder.hh"
 #include "db/config.hh"
+#include "db/consistency_level.hh"
 #include "db/tags/utils.hh"
 #include "utils/labels.hh"
 
@@ -242,13 +243,14 @@ static bool is_expired(const rjson::value& expiration_time, gc_clock::time_point
 }
 
 // expire_item() expires an item - i.e., deletes it as appropriate for
-// expiration - with CL=QUORUM and (FIXME!) in a way Alternator Streams
-// understands it is an expiration event - not a user-initiated deletion.
+// expiration - with the given CL and in a way Alternator Streams understands
+// it is an expiration event - not a user-initiated deletion.
 static future<> expire_item(service::storage_proxy& proxy,
                             const service::query_state& qs,
                             const std::vector<managed_bytes_opt>& row,
                             schema_ptr schema,
-                            api::timestamp_type ts) {
+                            api::timestamp_type ts,
+                            db::consistency_level cl) {
     // Prepare the row key to delete
     // NOTICE: the order of columns is guaranteed by the fact that selection::wildcard
     // is used, which indicates that columns appear in the order defined by
@@ -293,7 +295,7 @@ static future<> expire_item(service::storage_proxy& proxy,
     utils::chunked_vector<mutation> mutations;
     mutations.push_back(std::move(m));
     return proxy.mutate(std::move(mutations),
-        db::consistency_level::LOCAL_QUORUM,
+        cl,
         executor::default_timeout(), // FIXME - which timeout?
         qs.get_trace_state(), qs.get_permit(),
         db::allow_per_partition_rate_limit::no,
@@ -503,11 +505,57 @@ public:
     }
 };
 
+// The consistency level of the expiration scan and of the deletes it issues,
+// per replication strategy:
+//
+// - NetworkTopologyStrategy with tablets: LOCAL_QUORUM. Tablets require
+//   NetworkTopologyStrategy and refuse an RF above the number of the DC's
+//   token owners (natural_endpoints_tracker::check_enough_endpoints()), so a
+//   local quorum is always reachable and LOCAL_ONE is never chosen.
+// - NetworkTopologyStrategy with vnodes: LOCAL_QUORUM, or LOCAL_ONE when the
+//   local DC has fewer token owners than a local quorum blocks for. Here the
+//   per-DC RF is not checked against the DC's size, so e.g. RF=3 in a DC with
+//   a single node makes LOCAL_QUORUM permanently unreachable.
+// - Any other strategy (SimpleStrategy, LocalStrategy, ...) - all of which use
+//   vnodes, as tablets are only supported by NetworkTopologyStrategy: QUORUM,
+//   or ONE when the whole cluster has fewer token owners than a quorum blocks
+//   for. Those strategies have no per-DC replication factor, so
+//   db::local_quorum_for() falls back to the table's total RF: a LOCAL_QUORUM
+//   read would demand RF/2+1 replicas while counting only the local DC's, and
+//   such a strategy spreads those RF replicas over all the DCs - so that many
+//   local replicas often don't exist and the scan would always fail. QUORUM
+//   counts replicas in all DCs instead, paying for a cross-DC round trip in
+//   this background scan.
+//
+// The ONE / LOCAL_ONE fallbacks are needed because a quorum is counted from
+// the configured replication factor, not from the replicas which actually
+// exist, so with fewer token owners than that the quorum is never reachable
+// and the scan could never run. Each of those few nodes owns every token
+// range, so CL=ONE does read an existing replica, but possibly a stale one
+// which hasn't yet seen a write pushing the row's expiration time forward: we
+// would then delete a row which is no longer expired, and the delete's fresh
+// api::new_timestamp() (see below) makes its tombstone shadow that write. We
+// accept that risk - the alternative is a table in which nothing ever expires.
+static db::consistency_level expiration_consistency_level(const locator::effective_replication_map& erm) {
+    const locator::token_metadata& tm = erm.get_token_metadata();
+    if (erm.get_replication_strategy().get_type() != locator::replication_strategy_type::network_topology) {
+        return tm.count_normal_token_owners() < db::quorum_for(erm)
+            ? db::consistency_level::ONE : db::consistency_level::QUORUM;
+    }
+    const auto& local_dc = tm.get_topology().get_datacenter();
+    const auto dc_token_owners = tm.get_datacenter_token_owners();
+    const auto it = dc_token_owners.find(local_dc);
+    const size_t local_token_owners = it == dc_token_owners.end() ? 0 : it->second.size();
+    return local_token_owners < db::local_quorum_for(erm, local_dc)
+        ? db::consistency_level::LOCAL_ONE : db::consistency_level::LOCAL_QUORUM;
+}
+
 // Precomputed information needed to perform a scan on partition ranges
 struct scan_ranges_context {
     schema_ptr s;
     bytes column_name;
     std::optional<std::string> member;
+    db::consistency_level cl;
 
     service::client_state internal_client_state;
     ::shared_ptr<cql3::selection::selection> selection;
@@ -519,6 +567,7 @@ struct scan_ranges_context {
         : s(s)
         , column_name(column_name)
         , member(member)
+        , cl(expiration_consistency_level(*s->table().get_effective_replication_map()))
         , internal_client_state(service::client_state::internal_tag())
     {
         // FIXME: don't read the entire items - read only parts of it.
@@ -545,7 +594,6 @@ struct scan_ranges_context {
         // FIXME: What should we do on multi-DC? Will we run the expiration on the same ranges on all
         // DCs or only once for each range? If the latter, we need to change the CLs in the
         // scanner and deleter.
-        db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
         query_options = std::make_unique<cql3::query_options>(cl, std::vector<cql3::raw_value>{});
         query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(paging_state));
     }
@@ -678,7 +726,7 @@ static future<> scan_table_ranges(
                 // FIXME: maybe don't recalculate new_timestamp() all the time
                 // FIXME: if expire_item() throws on timeout, we need to retry it.
                 auto ts = api::new_timestamp();
-                co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, s, ts);
+                co_await expire_item(proxy, *scan_ctx.query_state_ptr, row, s, ts, scan_ctx.cl);
             }
         }
         // FIXME: once in a while, persist p->state(), so on reboot

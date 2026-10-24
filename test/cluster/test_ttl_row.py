@@ -349,3 +349,44 @@ async def test_row_ttl_multi_dc(manager: ScyllaClusterManager):
                     time.sleep(0.1)
             for dc in range(2):
                 assert 0 == len(list(await cql_dc[dc].run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.LOCAL_QUORUM))))
+
+
+@pytest.mark.parametrize("ksdef", [
+    # SimpleStrategy ignores the DC layout and places each range on two
+    # consecutive nodes in the ring. Tablets don't support SimpleStrategy,
+    # so this keyspace must be vnode-based.
+    "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 2 } AND TABLETS = { 'enabled': false }",
+    # RF=4 in dc1, which has two nodes - fewer than the three a local quorum
+    # needs. Tablets don't allow an RF higher than the number of racks in the
+    # DC, so this keyspace must be vnode-based.
+    "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'dc1': 4, 'dc2': 1 } AND TABLETS = { 'enabled': false }",
+], ids=["simple_strategy", "rf_above_dc_node_count"])
+async def test_row_ttl_multi_dc_quorum_unreachable(manager: ScyllaClusterManager, ksdef):
+    """Check that per-row TTL expires all rows also when the node scanning a
+       range cannot reach a local quorum for it. With two nodes in dc1 and one
+       in dc2, each keyspace above leaves some ranges without a local quorum
+       in the DC of their primary replica, so with LOCAL_QUORUM the rows in
+       those ranges would never expire. Reproduces SCYLLADB-5125.
+    """
+    config = {
+        'alternator_ttl_period_in_seconds': '0.5',
+    }
+    for dc, rack in [('dc1', 'rack1'), ('dc1', 'rack2'), ('dc2', 'rack1')]:
+        await manager.servers_add(1, config=config, property_file={'dc': dc, 'rack': rack})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, ksdef) as keyspace:
+        async with new_test_table(manager, keyspace, 'p int primary key, e bigint ttl') as table:
+            # Insert 50 expired rows in different partitions, so that each node
+            # is the primary replica of some. QUORUM is all replicas of a row in
+            # both keyspaces, so the loop ends with each row on all its replicas.
+            e = int(time.time()) - 10
+            for p in range(50):
+                await cql.run_async(SimpleStatement(f'INSERT INTO {table} (p, e) VALUES ({p}, {e})', consistency_level=ConsistencyLevel.QUORUM))
+            # Expect that after a short delay, all the rows will have expired
+            # - including those whose primary replica has no local quorum.
+            timeout = time.time() + 120
+            while time.time() < timeout:
+                if 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM)))):
+                    break
+                await asyncio.sleep(0.1)
+            assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM))))
