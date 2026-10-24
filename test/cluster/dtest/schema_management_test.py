@@ -722,8 +722,10 @@ class DDL(NamedTuple):
 
 
 class TestSchemaHistory(Tester):
-    def prepare(self):
+    def prepare(self, config=None):
         cluster = self.cluster
+        if config:
+            cluster.set_configuration_options(values=config)
         # in case support tablets and rf-rack-valid-keyspaces
         # create cluster with 3 racks with 1 node in each rack
         cluster_topology = generate_cluster_topology(rack_num=3)
@@ -734,7 +736,9 @@ class TestSchemaHistory(Tester):
 
     def test_schema_history_alter_table(self):
         """test schema history changes following alter table cql commands"""
-        self.prepare()
+        # The test re-adds a dropped varint column as bigint, which can't
+        # interpret varint values, so it needs this option to be allowed.
+        self.prepare(config={"allow_readd_column_with_incompatible_type": True})
         verifier = HistoryVerifier(table_name="table2")
         queries_and_expected_diffs = [
             DDL(ddl_command="CREATE TABLE IF NOT EXISTS lwt_load_ks.table2 (pk int PRIMARY KEY, v int, int_col int)", expected_current_diff=None, expected_prev_diff=None),

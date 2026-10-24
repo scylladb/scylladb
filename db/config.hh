@@ -598,6 +598,7 @@ public:
     // guardrails options
     named_value<bool> enable_create_table_with_compact_storage;
     named_value<bool> allow_deprecated_size_tiered_compaction_strategy;
+    named_value<bool> allow_readd_column_with_incompatible_type;
     named_value<int> minimum_replication_factor_fail_threshold;
     named_value<int> minimum_replication_factor_warn_threshold;
     named_value<int> maximum_replication_factor_fail_threshold;

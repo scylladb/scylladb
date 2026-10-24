@@ -444,6 +444,33 @@ class deletion_time:
         return f"deletion_time({self._dt})"
 
 
+# A snapshot's schema.cql describes a column that was dropped and re-added as
+# "ALTER TABLE ... DROP ... USING TIMESTAMP" followed by "ALTER TABLE ... ADD".
+# Older versions allowed re-adding a dropped column with an incompatible type,
+# which is now refused (see test_alter_table.py::
+# test_readd_column_with_incompatible_type), but scylla-sstable must still be
+# able to load the schema.cql of such a table.
+def test_scylla_sstable_schema_with_incompatible_readd(scylla_path):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file = os.path.join(tmp_dir, 'schema.cql')
+        with open(schema_file, 'w') as f:
+            f.write('CREATE TABLE ks.tbl (pk int PRIMARY KEY, x bigint);\n'
+                    'ALTER TABLE ks.tbl DROP x USING TIMESTAMP 1;\n'
+                    'ALTER TABLE ks.tbl ADD x text;\n')
+        input_file = os.path.join(tmp_dir, 'input.cql')
+        with open(input_file, 'w') as f:
+            f.write("INSERT INTO scylla_sstable.tbl (pk, x) VALUES (0, 'hello')")
+        generation = subprocess.check_output([scylla_path, 'sstable', 'write',
+                                              '--schema-file', schema_file,
+                                              '--input-format', 'cql',
+                                              '--input-file', input_file,
+                                              '--output-dir', tmp_dir], text=True).strip()
+        sstable_files = glob.glob(os.path.join(tmp_dir, f'*-{generation}-big-Data.db'))
+        assert len(sstable_files) == 1
+        result = json.loads(subprocess.check_output([scylla_path, 'sstable', 'query', '--schema-file', schema_file, '--output-format', 'json', sstable_files[0]], text=True))
+        assert result == [{'pk': 0, 'x': 'hello'}]
+
+
 def test_scylla_sstable_write_cql_query_file_reader(cql, test_keyspace, scylla_path):
     with tempfile.TemporaryDirectory() as tmp_dir:
         schema_file = os.path.join(tmp_dir, 'schema.cql')
