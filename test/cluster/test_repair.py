@@ -823,6 +823,63 @@ async def test_data_resurrection_from_repair_range_spanning_replica_sets(manager
         assert rows == [], f"deleted row was resurrected: {rows}"
 
 
+async def test_repair_history_not_recorded_with_ignore_nodes(manager: ScyllaClusterManager):
+    """A repair with ignore_nodes must not record repair history.
+
+    An ignored node's hints and batchlog are not flushed before the repair, and
+    it may hold writes for the repaired ranges as a coordinator, even if it is
+    not a replica of them. Recording the repair time would let tombstone GC
+    purge tombstones which may still shadow those writes, resurrecting them
+    when they are replayed.
+
+    Nodes A and B in dc1 replicate every range, node C in dc2 replicates none,
+    so the ignored node does not stop the history update by being a replica
+    that did not participate. With C up, a repair records history (the
+    control). With C down and ignored, it must not. With C down and not
+    ignored, it must not either (the existing behaviour, as a baseline).
+
+    Regression test for SCYLLADB-5322.
+    """
+    cfg = {"tablets_mode_for_new_keyspaces": "disabled"}
+    cmdline = ["--smp", "1", "--repair-hints-batchlog-flush-cache-time-in-ms", "0"]
+    node_a = await manager.server_add(config=cfg, cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack1"})
+    node_b = await manager.server_add(config=cfg, cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack2"})
+    node_c = await manager.server_add(config=cfg, cmdline=cmdline, property_file={"dc": "dc2", "rack": "rack1"})
+
+    cql = manager.get_cql()
+    host_a, host_b = await wait_for_cql_and_get_hosts(cql, [node_a, node_b], time.time() + 60)
+
+    async def history(ks: str, table: str) -> dict[str, int]:
+        """The number of repair_history rows of the table on nodes A and B"""
+        counts = await asyncio.gather(*(
+            cql.run_async("SELECT COUNT(*) FROM system.repair_history "
+                          f"WHERE keyspace_name = '{ks}' AND table_name = '{table}' ALLOW FILTERING", host=host)
+            for host in (host_a, host_b)))
+        return {node.ip_addr: rows[0].count for node, rows in zip((node_a, node_b), counts)}
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2} AND tablets = {'enabled': false}") as ks:
+        for table in ("control", "ignored", "down"):
+            cql.execute(f"CREATE TABLE {ks}.{table} (pk int, ck int, PRIMARY KEY (pk, ck)) "
+                        "WITH tombstone_gc = {'mode': 'repair', 'propagation_delay_in_seconds': '0'}")
+
+        await manager.api.repair(node_a.ip_addr, ks, "control")
+        control = await history(ks, "control")
+        logger.info(f"repair_history of the control table: {control}")
+        assert all(control.values()), f"a repair with all nodes up did not record repair history: {control}"
+
+        await manager.server_stop_gracefully(node_c.server_id)
+        await manager.server_not_sees_other_server(node_a.ip_addr, node_c.ip_addr)
+
+        await manager.api.repair(node_a.ip_addr, ks, "ignored", ignore_nodes=node_c.ip_addr)
+        ignored = await history(ks, "ignored")
+        assert not any(ignored.values()), f"a repair with ignore_nodes recorded repair history: {ignored}"
+
+        await manager.api.repair(node_a.ip_addr, ks, "down")
+        down = await history(ks, "down")
+        assert not any(down.values()), f"a repair with a down node recorded repair history: {down}"
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_topology_barrier_aborts_vnode_repair_pinning_stale_versions(manager: ManagerClient):
     """Verify that a topology barrier is not blocked behind a long-running
