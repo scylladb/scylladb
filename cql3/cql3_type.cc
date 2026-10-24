@@ -523,6 +523,23 @@ sstring maybe_quote(const std::string_view identifier) {
     return result;
 }
 
+sstring maybe_quote_user_type_name(const std::string_view name) {
+    auto cql_name = maybe_quote(name);
+    if (cql_name != name) {
+        return cql_name;
+    }
+    try {
+        auto type = do_with_parser(name, dialect{}, [] (cql3_parser::CqlParser& parser) {
+            return parser.comparator_type(false);
+        });
+        if (type->is_user_type()) {
+            return cql_name;
+        }
+    } catch (exceptions::syntax_exception&) {
+    }
+    return quote(name);
+}
+
 template <char C>
 static sstring quote_with(const std::string_view str) {
     static const std::string quote_str{C};

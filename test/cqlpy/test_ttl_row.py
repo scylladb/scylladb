@@ -16,7 +16,7 @@
 import pytest
 import time
 from cassandra.protocol import InvalidRequest
-from .util import new_test_table, new_materialized_view, new_secondary_index, ScyllaMetrics
+from .util import new_test_table, new_materialized_view, new_secondary_index, new_type, ScyllaMetrics
 
 # All tests in this file check the Scylla-only per-row TTL feature, so
 # let's mark them all scylla_only with an autouse fixture:
@@ -73,6 +73,15 @@ def test_create_table_with_bad_ttl_type(cql, test_keyspace):
         with pytest.raises(InvalidRequest, match='must be of type'):
             with new_test_table(cql, test_keyspace, f'p int primary key, expiration {t} ttl'):
                 pass
+
+# A user type named like an allowed TTL column type, like "int", is still
+# a user type, and must be rejected as the TTL column type.
+def test_create_table_with_udt_ttl_type(cql, test_keyspace):
+    for t in ['"timestamp"', '"bigint"', '"int"']:
+        with new_type(cql, test_keyspace, '(a int)', name=t):
+            with pytest.raises(InvalidRequest, match='must be of type'):
+                with new_test_table(cql, test_keyspace, f'p int primary key, expiration {t} ttl'):
+                    pass
 
 # Check that the TTL column chosen in CREATE TABLE must be a regular
 # column. In other words, it cannot be a primary key column (one of the
