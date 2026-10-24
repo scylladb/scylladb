@@ -8,7 +8,7 @@ from cassandra import WriteFailure
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement, ConsistencyLevel
-from cassandra.protocol import InvalidRequest, WriteTimeout
+from cassandra.protocol import InvalidRequest, WriteTimeout, ReadTimeout
 from cassandra import Unauthorized
 
 from test.cluster.lwt.lwt_common import wait_for_tablet_count
@@ -496,8 +496,18 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ScyllaClust
                              manager.server_stop_gracefully(servers[2].server_id))
 
         logger.info(f"Running an LWT with timeout {timeout}")
-        with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, there is no raft quorum"):
+        # Check that the client gets a write timeout, whose message gives the reason.
+        with pytest.raises(WriteTimeout, match="raft operation \\[read_barrier\\] timed out, there is no raft quorum"):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
+
+        # The paxos state table still doesn't exist, so a SERIAL read tries to
+        # create it as well. Check that it gets a read timeout, whose message
+        # gives the reason. Without a raft quorum the read barrier can't
+        # finish, so a short timeout is enough.
+        stmt = SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 1 USING TIMEOUT 100ms",
+                               consistency_level=ConsistencyLevel.SERIAL)
+        with pytest.raises(ReadTimeout, match="raft operation \\[read_barrier\\] timed out"):
+            await cql.run_async(stmt)
 
         logger.info("Start the second and third nodes")
         await asyncio.gather(manager.server_start(servers[1].server_id),
