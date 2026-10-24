@@ -9,6 +9,7 @@
 #
 
 import os
+from pathlib import Path
 
 from scylla_util import parse_scylla_dirs_with_default
 
@@ -51,10 +52,13 @@ def tune_blockdev(path, nomerges):
     tuned_blockdevs.add(path)
 
     def check_sched(current):
-        return current == 'none' or '[noop]' in current
+        return current == 'none' or '[none]' in current or '[noop]' in current
 
     if not nomerges:
-        tune_path(join(path, 'queue', 'scheduler'), 'noop', check_sched)
+        # blk-mq kernels have no 'noop', its equivalent there is 'none'
+        sched_path = join(path, 'queue', 'scheduler')
+        sched = 'noop' if exists(sched_path) and 'noop' in Path(sched_path).read_text().split() else 'none'
+        tune_path(sched_path, sched, check_sched)
         tune_path(join(path, 'queue', 'nomerges'), '2')
     else:
         tune_path(join(path, 'queue', 'nomerges'), nomerges)

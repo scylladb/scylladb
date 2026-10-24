@@ -14,8 +14,8 @@ import glob
 import shutil
 import stat
 import re
-from scylla_util import colorprint, is_valid_nic, scylladir_p, is_offline, is_debian_variant, is_redhat_variant, is_suse_variant, is_gentoo, out, is_unused_disk, scriptsdir, is_nonroot, systemd_unit, swap_exists, get_product, etcdir
-from subprocess import run, DEVNULL
+from scylla_util import colorprint, is_valid_nic, is_offline, is_debian_variant, is_redhat_variant, out, is_unused_disk, scriptsdir, is_nonroot, systemd_unit, swap_exists, get_product, etcdir
+from subprocess import run
 
 PRODUCT = get_product(etcdir())
 
@@ -90,7 +90,7 @@ def interactive_choose_swap_directory():
     while True:
         d = input('> ')
         if not os.path.isdir(d):
-            print('{} is not valid directory, input again')
+            print('{} is not valid directory, input again'.format(d))
         else:
             return d
 
@@ -102,28 +102,6 @@ def interactive_choose_swap_size():
             return int(s)
         except Exception as e:
             print(f'"{s}" is not valid number, input again')
-
-pkg_files = {
-        f'{PRODUCT}-tools': scylladir_p() / 'share/cassandra/bin/cqlsh'
-        }
-def do_verify_package(pkg):
-    if is_offline():
-        res = 0 if pkg_files[pkg].exists() else 1
-    elif is_debian_variant():
-        res = run('dpkg -s {}'.format(pkg), shell=True, stdout=DEVNULL, stderr=DEVNULL).returncode
-    elif is_redhat_variant() or is_suse_variant():
-        res = run('rpm -q {}'.format(pkg), shell=True, stdout=DEVNULL, stderr=DEVNULL).returncode
-    elif is_gentoo():
-        res = 0 if len(glob.glob('/var/db/pkg/*/{}-*'.format(pkg))) else 1
-    else:
-        print("OS variant not recognized")
-        sys.exit(1)
-    return res
-
-def do_verify_package_and_exit(pkg):
-    if do_verify_package(pkg) != 0:
-        print('{} package is not installed.'.format(pkg))
-        sys.exit(1)
 
 def list_block_devices():
     devices = []
@@ -234,8 +212,9 @@ if __name__ == '__main__':
     parser.add_argument('--no-kernel-check', action='store_true',
                         default=default_no_kernel_check,
                         help='skip kernel version check')
+    # no-op, kept for compatibility with existing callers
     parser.add_argument('--no-verify-package', action='store_true', default=False,
-                        help='skip verifying packages')
+                        help=argparse.SUPPRESS)
     parser.add_argument('--no-enable-service', action='store_true', default=False,
                         help='skip enabling service')
     if is_redhat_variant():
@@ -294,7 +273,6 @@ if __name__ == '__main__':
     swap_directory = args.swap_directory
     swap_size = args.swap_size
     kernel_check = not args.no_kernel_check
-    verify_package = not args.no_verify_package
     enable_service = not args.no_enable_service
     if is_redhat_variant():
         selinux_setup = not args.no_selinux_setup
@@ -326,9 +304,6 @@ if __name__ == '__main__':
         args.no_kernel_check = not kernel_check
         if kernel_check:
             run('{}/scylla_kernel_check'.format(scriptsdir()), shell=True, check=True)
-
-        verify_package = interactive_ask_service('Do you want to verify the ScyllaDB packages are installed?', 'Yes - runs a script to confirm that ScyllaDB is installed. No - skips the installation check.', verify_package)
-        args.no_verify_package = not verify_package
 
     enable_service = interactive_ask_service('Do you want the Scylla server service to automatically start when the Scylla node boots?', 'Yes - Scylla server service automatically starts on Scylla node boot. No - skips this step. Note you will have to start the Scylla Server service manually.', enable_service)
     args.no_enable_service = not enable_service
@@ -403,6 +378,9 @@ if __name__ == '__main__':
                     continue
                 if dsk in selected:
                     print(f'{dsk} is already added')
+                    continue
+                if dsk not in devices:
+                    print(f'{dsk} is not an unused disk')
                     continue
                 selected.append(dsk)
                 devices.remove(dsk)
