@@ -70,6 +70,10 @@ BOOST_AUTO_TEST_CASE(enum_valid_sequence) {
 
 using fruit_set = enum_set<fruit_enum>;
 
+static_assert(std::ranges::forward_range<fruit_set>);
+static_assert(std::ranges::view<fruit_set>);
+static_assert(std::ranges::borrowed_range<fruit_set>);
+
 BOOST_AUTO_TEST_CASE(set_contains) {
     const auto fs = fruit_set::of<fruit::apple, fruit::banana>();
     BOOST_REQUIRE(fs.contains(fruit::apple));
