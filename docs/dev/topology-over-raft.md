@@ -521,7 +521,7 @@ C is the current replica set and next the new one; L is the leaving replica and 
 | use_new | next / none | next | C+P | barrier, sync removing L |
 | cleanup | next / none | next | next | cleanup RPC |
 | end_migration | unchanged | next | next | barrier |
-| sc_rollback, only from sc_become_voter | C / P | C+P | C+P | barrier, sync |
+| sc_rollback, only from sc_become_voter | C / P | C+P | C+P | sync |
 | sc_remove_pending | C / none | C | C+P | barrier, sync removing P |
 | cleanup_target | C / none | C | C | cleanup RPC |
 | revert_migration | unchanged | C | C | barrier |
@@ -574,12 +574,14 @@ Only these steps put an invariant at risk:
 | cleanup of m | I3 | m's server is gone, and m is drained as for its removal | m |
 | deleting the transition | a stale cleanup RPC erases a later copy of the tablet | drained(m, RPCs, S), S the stage after the cleanup | m |
 
-A sync handler starts only if its host sees the stage and migration it was sent for, and proposes nothing
-once that stage moves on there. Hosts see a new stage at slightly different times, though: a follower may judge convergence
-while a leader that hasn't applied the stage yet lands an older stage's change. So a sync whose older sync
-could still propose something runs a barrier first, which waits for every older handler. The only such
-sync is sc_rollback's, after sc_become_voter: sc_add_nonvoter's sync is the first one, and without a pending
-replica it targets the configuration the group already has.
+A sync handler starts only if its host sees the stage and migration it was sent for. An older sync of the
+migration that is still running, such as sc_become_voter's when sc_rollback's starts, needs no barrier. The
+newer sync reaches every replica that can lead, and succeeds only once each of them reports. On each
+replica, before the newer handler first reads the configuration, the older handler's abort source is
+cancelled: by the guard, when the replica applies the newer stage, and by the newer handler superseding it.
+The older handler checks its abort source and appends its change with no suspension in between. So either
+it saw the cancellation and proposes nothing more, or its change is already in the replica's log, where the
+newer handler sees it and reverts it before reporting.
 
 Every barrier in the table serves one of these needs; the others were dropped.
 

@@ -2645,10 +2645,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
             // Advances past a stage of a strongly consistent migration once its raft
             // configuration change is done. The barrier runs first when the change needs
-            // requests drained - a promotion, of requests whose serving set lacks the
+            // requests drained: a promotion, of requests whose serving set lacks the
             // promoted replica, and a removal, of requests that may still be inside the
-            // removed replica's raft server - or when an older sync of this migration
-            // could still propose something.
+            // removed replica's raft server. An older sync of this migration that is still
+            // running needs no barrier; see sc_rollback.
             auto transition_to_with_config_sync = [&] (locator::tablet_transition_stage stage, with_barrier needs_barrier) {
                 if ((!needs_barrier || do_barrier()) && do_config_sync()) {
                     transition_to(stage);
@@ -2704,12 +2704,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             break;
                         }
                     }
-                    // The barrier lets every node see the pending replica's new storage
-                    // before the next stage writes to it. A strongly consistent tablet
-                    // takes writes only through raft, and raft reaches the pending replica
-                    // only through its raft server, which the pending replica starts only
-                    // once it has applied this stage. So this stage does nothing for it,
-                    // and is kept for uniformity with the eventually consistent migration.
+                    // The barrier makes the pending replica apply this stage, and so
+                    // allocate the tablet's storage, before coordinators of the next stage
+                    // write to it: the pending replica counts towards a write's acks. A
+                    // strongly consistent tablet takes writes only through raft, which
+                    // reaches the pending replica only through its raft server. The pending
+                    // replica allocates the storage and starts the server in the same token
+                    // metadata update, whichever stage it sees first, and the server's start
+                    // suspends before it can apply anything. So nothing needs every node to
+                    // see this stage, which is kept for uniformity with the eventually
+                    // consistent migration.
                     if (is_strong_consistency || do_barrier()) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
                         auto leaving_replica = get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
@@ -2985,15 +2989,25 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     break;
                 case locator::tablet_transition_stage::sc_rollback:
                     // Demotes the pending replica and makes the leaving one a voter again.
-                    // The leaving replica serves at every stage, so its promotion needs no
-                    // drain. The barrier is for the sync of sc_become_voter: it may still
-                    // run on a leader that hasn't applied this stage yet, and land its
-                    // change after the followers judged this stage's configuration
-                    // converged - they find it in place, since that change never landed.
+                    // Promoting the leaving replica needs no drain: it is in the serving
+                    // set of every stage a live request can have here, so no request can
+                    // see it named leader without being able to forward to it.
+                    //
+                    // A sync of sc_become_voter may still be running on the group's leader,
+                    // and needs no barrier either. This sync reaches every replica that can
+                    // lead, and succeeds only once each of them reports. On each replica,
+                    // before this sync's handler first reads the configuration, the older
+                    // handler's abort source is cancelled: by the guard, when the replica
+                    // applies this stage, and by this handler superseding it. The older
+                    // handler checks its abort source and appends its change with no
+                    // suspension in between (sync_raft_group_config()). So either it saw the
+                    // cancellation and proposes nothing more, or its change is already in
+                    // this replica's log, where this handler sees it and reverts it before
+                    // reporting.
                     //
                     // Retried until it succeeds: unlike the forward path there is
                     // nothing further to fall back to.
-                    transition_to_with_config_sync(locator::tablet_transition_stage::sc_remove_pending, with_barrier::yes);
+                    transition_to_with_config_sync(locator::tablet_transition_stage::sc_remove_pending, with_barrier::no);
                     break;
                 case locator::tablet_transition_stage::sc_remove_pending:
                     // Views of sc_rollback let the pending replica serve, so the barrier
