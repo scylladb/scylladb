@@ -102,3 +102,42 @@ def test_distinct_count_group_by_limit(cql, test_keyspace):
             results = list(cql.execute(f"select distinct p, count(p) from {table} group by p limit {n}"))
             assert n == len(results)
             assert set(results).issubset(set(all))
+
+# SELECT DISTINCT reads only the partition key and static row of each
+# partition, so a WHERE clause may filter on static columns (with ALLOW
+# FILTERING), but not on clustering or regular columns. Reproduces #10354,
+# where Scylla rejected filtering on static columns too.
+# The translated Cassandra tests in cassandra_tests/ also reproduce #10354,
+# but this test also checks a few cases they don't: a static-column
+# restriction combined with a restriction on a regular or clustering column
+# is still rejected, a partition with no static row doesn't match, and
+# ALLOW FILTERING is still required.
+def test_distinct_filter_static_column(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, s int static, v int, PRIMARY KEY (p, c)') as table:
+        for p in range(6):
+            cql.execute(f'INSERT INTO {table} (p, c, s, v) VALUES ({p}, 1, {p%3}, {p})')
+            cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({p}, 2, {p})')
+        # Partition 6 has no static row, partition 7 has only a static row:
+        cql.execute(f'INSERT INTO {table} (p, c, v) VALUES (6, 1, 6)')
+        cql.execute(f'INSERT INTO {table} (p, s) VALUES (7, 1)')
+        assert sorted(cql.execute(f'SELECT DISTINCT p, s FROM {table} WHERE s = 1 ALLOW FILTERING')) == [(1, 1), (4, 1), (7, 1)]
+        assert sorted(cql.execute(f'SELECT DISTINCT p FROM {table} WHERE s > 0 ALLOW FILTERING')) == [(1,), (2,), (4,), (5,), (7,)]
+        assert sorted(cql.execute(f'SELECT DISTINCT p, s FROM {table} WHERE p IN (1, 2, 7) AND s = 1 ALLOW FILTERING')) == [(1, 1), (7, 1)]
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f'SELECT DISTINCT p, s FROM {table} WHERE s = 1')
+        with pytest.raises(InvalidRequest, match='static'):
+            cql.execute(f'SELECT DISTINCT p, s FROM {table} WHERE s = 1 AND v = 1 ALLOW FILTERING')
+        with pytest.raises(InvalidRequest, match='static'):
+            cql.execute(f'SELECT DISTINCT p, s FROM {table} WHERE s = 1 AND c = 1 ALLOW FILTERING')
+
+# Same as test_distinct_filter_static_column, but with a secondary index on
+# the static column, so the restriction is served by the index instead of by
+# filtering, and doesn't need ALLOW FILTERING. Also reproduces #10354.
+def test_distinct_indexed_static_column(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, s int static, v int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        for p in range(6):
+            cql.execute(f'INSERT INTO {table} (p, c, s, v) VALUES ({p}, 1, {p%3}, {p})')
+            cql.execute(f'INSERT INTO {table} (p, c, v) VALUES ({p}, 2, {p})')
+        cql.execute(f'INSERT INTO {table} (p, s) VALUES (7, 1)')
+        assert sorted(cql.execute(f'SELECT DISTINCT p, s FROM {table} WHERE s = 1')) == [(1, 1), (4, 1), (7, 1)]
