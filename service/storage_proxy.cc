@@ -64,6 +64,7 @@
 #include "utils/histogram_metrics_helper.hh"
 #include "service/paxos/prepare_summary.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/raft_group_registry.hh"
 #include "service/client_state.hh"
 #include "service/paxos/proposal.hh"
 #include "db/large_data_handler.hh"
@@ -7177,7 +7178,23 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
                 format("LWT is not supported on CDC log tables: {}.{}", schema->ks_name(), schema->cf_name())
             ));
         }
-        co_await remote().paxos_store().ensure_initialized(*schema, write_timeout);
+        // Creating the paxos state table goes through group0, limited by this
+        // request's timeout. If that times out, report it to the client like
+        // the other timeouts of this request below, not as a server error -
+        // but keep the reason (e.g., "there is no raft quorum") in the message.
+        try {
+            co_await remote().paxos_store().ensure_initialized(*schema, write_timeout);
+        } catch (const raft_operation_timeout_error& e) {
+            auto msg = fmt::format("Operation timed out for {}.{} while creating its paxos state table: {}",
+                    schema->ks_name(), schema->cf_name(), e.what());
+            const auto block_for = db::block_for(*cas_shard.get_erm(), cl_for_paxos);
+            if (write) {
+                get_stats().cas_write_timeouts.mark();
+                throw mutation_write_timeout_exception(std::move(msg), cl_for_paxos, 0, block_for, db::write_type::CAS);
+            }
+            get_stats().cas_read_timeouts.mark();
+            throw read_timeout_exception(std::move(msg), cl_for_paxos, 0, block_for, false);
+        }
     }
 
     SCYLLA_ASSERT(partition_ranges.size() == 1);

@@ -8,7 +8,7 @@ from cassandra import WriteFailure
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement, ConsistencyLevel
-from cassandra.protocol import InvalidRequest, WriteTimeout
+from cassandra.protocol import InvalidRequest, WriteTimeout, ReadTimeout
 from cassandra import Unauthorized
 
 from test import DEBUG_MODES
@@ -500,9 +500,19 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ScyllaClust
         # Which stage of the group0 operation trips the timeout depends on what else the
         # node has in flight: the read barrier when the operation runs alone, the group0
         # operation mutex when it has to queue behind one that cannot commit. Both report
-        # the same reason, which is what this test is about.
-        with pytest.raises(Exception, match=r"raft operation \[[^\]]*\] timed out, there is no raft quorum"):
+        # the same reason. Check that the client gets a write timeout, whose message gives
+        # that reason.
+        with pytest.raises(WriteTimeout, match=r"raft operation \[[^\]]*\] timed out, there is no raft quorum"):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
+
+        # The paxos state table still doesn't exist, so a SERIAL read tries to
+        # create it as well. Check that it gets a read timeout, whose message
+        # gives the reason. Without a raft quorum the read barrier can't
+        # finish, so a short timeout is enough.
+        stmt = SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 1 USING TIMEOUT 100ms",
+                               consistency_level=ConsistencyLevel.SERIAL)
+        with pytest.raises(ReadTimeout, match=r"raft operation \[[^\]]*\] timed out"):
+            await cql.run_async(stmt)
 
         logger.info("Start the second and third nodes")
         await asyncio.gather(manager.server_start(servers[1].server_id),
