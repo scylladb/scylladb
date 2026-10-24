@@ -5299,12 +5299,13 @@ SEASTAR_TEST_CASE(incremental_backlog_tracker_rates_test) {
 }
 
 // compaction_controller_v2 scales the shares by (target / achieved)^alpha, by up to x2 either
-// way, within the bounds.
+// way, within the bounds, while regular compaction is busy: raising them takes it to be busy
+// for most of the interval.
 BOOST_AUTO_TEST_CASE(compaction_controller_v2_next_shares) {
     using rate = utils::rate<utils::units::bytes>;
     using namespace std::chrono_literals;
-    auto next = [] (float shares, double target, double achieved, float max_shares = 1000) {
-        return compaction_controller_v2::next_shares(shares, {.target = rate(target, 10s), .achieved = rate(achieved, 10s)}, max_shares);
+    auto next = [] (float shares, double target, double achieved, float max_shares = 1000, double busy = 1) {
+        return compaction_controller_v2::next_shares(shares, {.target = rate(target, 10s), .achieved = rate(achieved, 10s)}, busy, max_shares);
     };
     const auto alpha = compaction_controller_v2::alpha;
     // Behind the target, or ahead of it.
@@ -5323,6 +5324,13 @@ BOOST_AUTO_TEST_CASE(compaction_controller_v2_next_shares) {
     BOOST_REQUIRE_CLOSE(next(800, 1000, 0), 1000, 1e-4);
     BOOST_REQUIRE_CLOSE(next(800, 1000, 0, 1200), 1200, 1e-4);
     BOOST_REQUIRE_CLOSE(next(60, 0, 1000), compaction_controller_v2::min_shares, 1e-4);
+    // Compaction idle part of the interval is held back by the work available, so its
+    // shares are only lowered; idle all of it, they are left as they are.
+    const auto min_busy = compaction_controller_v2::min_busy_fraction_to_raise;
+    BOOST_REQUIRE_CLOSE(next(200, 1500, 1000, 1000, min_busy), 200 * std::pow(1.5, alpha), 1e-4);
+    BOOST_REQUIRE_CLOSE(next(200, 1500, 1000, 1000, min_busy / 2), 200, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(200, 1000, 1500, 1000, min_busy / 2), 200 * std::pow(1 / 1.5, alpha), 1e-4);
+    BOOST_REQUIRE_CLOSE(next(200, 1000, 1500, 1000, 0), 200, 1e-4);
 }
 
 void test_major_does_not_miss_data_in_memtable_fn(test_env& env) {

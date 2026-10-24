@@ -74,8 +74,12 @@ public:
         int64_t completed_tasks = 0;
         uint64_t active_tasks = 0; // Number of compaction going on.
         int64_t errors = 0;
-        // Number of regular compactions that started running.
-        uint64_t started_regular_compactions = 0;
+        // Number of regular compactions running.
+        uint64_t running_regular_compactions = 0;
+        // Time regular compaction was busy, i.e. at least one ran, until it last became
+        // idle, and since when it is busy, if it is.
+        seastar::lowres_clock::duration regular_compaction_busy_time{};
+        seastar::lowres_clock::time_point regular_compaction_busy_since;
     };
     using scheduling_group = backlog_controller::scheduling_group;
     struct config {
@@ -168,6 +172,8 @@ private:
     std::unique_ptr<compaction_controller_v2> make_compaction_controller_v2(compaction_controller_v2::dry_run dry_run);
     // compaction_controller_v2, whether it sets the shares or runs in a dry run, if any.
     const compaction_controller_v2* get_compaction_controller_v2() const noexcept;
+    // The time regular compaction was busy, i.e. at least one ran, so far.
+    seastar::lowres_clock::duration regular_compaction_busy_time() const noexcept;
     void stop_compaction_controller(std::unique_ptr<compaction_controller> controller);
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;

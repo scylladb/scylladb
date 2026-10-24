@@ -949,17 +949,24 @@ std::unique_ptr<compaction_controller_v2> compaction_manager::make_compaction_co
     // for the rates, averaged over minutes, to respond to the shares.
     return std::make_unique<compaction_controller_v2>(compaction_sg(), static_shares(), max_shares(), 1min,
             [this] { return _backlog_manager.rates(); },
-            // Regular compaction ran since the last update if one is running, or one started
-            // since: most complete well within an update interval.
-            [this, started = _stats.started_regular_compactions] () mutable {
-                auto ran = _stats.started_regular_compactions != started
-                        || std::ranges::any_of(_tasks, [] (const compaction_task_executor& task) {
-                    return task.compaction_type() == compaction_type::Compaction && task.compaction_running();
-                });
-                started = _stats.started_regular_compactions;
-                return ran;
+            // The fraction of the interval since the last update regular compaction was busy.
+            [this, last_busy_time = regular_compaction_busy_time(), last_update = lowres_clock::now()] () mutable {
+                auto busy_time = regular_compaction_busy_time();
+                auto now = lowres_clock::now();
+                auto busy = now > last_update ? std::chrono::duration<double>(busy_time - last_busy_time) / (now - last_update) : 0.0;
+                last_busy_time = busy_time;
+                last_update = now;
+                return busy;
             },
             dry_run);
+}
+
+lowres_clock::duration compaction_manager::regular_compaction_busy_time() const noexcept {
+    auto busy_time = _stats.regular_compaction_busy_time;
+    if (_stats.running_regular_compactions) {
+        busy_time += lowres_clock::now() - _stats.regular_compaction_busy_since;
+    }
+    return busy_time;
 }
 
 const compaction_controller_v2* compaction_manager::get_compaction_controller_v2() const noexcept {
@@ -1083,6 +1090,9 @@ compaction_task_executor::state compaction_task_executor::switch_state(state new
         break;
     case state::active:
         --_cm._stats.active_tasks;
+        if (_type == compaction_type::Compaction && --_cm._stats.running_regular_compactions == 0) {
+            _cm._stats.regular_compaction_busy_time += lowres_clock::now() - _cm._stats.regular_compaction_busy_since;
+        }
         break;
     }
     switch (new_state) {
@@ -1095,8 +1105,8 @@ compaction_task_executor::state compaction_task_executor::switch_state(state new
         break;
     case state::active:
         ++_cm._stats.active_tasks;
-        if (_type == compaction_type::Compaction) {
-            ++_cm._stats.started_regular_compactions;
+        if (_type == compaction_type::Compaction && _cm._stats.running_regular_compactions++ == 0) {
+            _cm._stats.regular_compaction_busy_since = lowres_clock::now();
         }
         break;
     case state::done:

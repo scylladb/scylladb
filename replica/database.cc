@@ -615,10 +615,10 @@ void compaction_controller_v1::set_max_shares(float max_shares) {
 }
 
 compaction_controller_v2::compaction_controller_v2(scheduling_group sg, float static_shares, std::optional<float> max_shares,
-        std::chrono::milliseconds interval, std::function<compaction::compaction_rates()> current_rates, std::function<bool()> compacting, dry_run dry_run)
+        std::chrono::milliseconds interval, std::function<compaction::compaction_rates()> current_rates, std::function<double()> busy, dry_run dry_run)
     : _scheduling_group(std::move(sg))
     , _current_rates(std::move(current_rates))
-    , _compacting(std::move(compacting))
+    , _busy(std::move(busy))
     , _static_shares(static_shares)
     , _dry_run(dry_run)
     , _update_timer([this] { adjust(); })
@@ -649,7 +649,10 @@ void compaction_controller_v2::set_max_shares(float max_shares) {
     _shares = std::min(_shares, _max_shares);
 }
 
-float compaction_controller_v2::next_shares(float shares, const compaction::compaction_rates& rates, float max_shares) {
+float compaction_controller_v2::next_shares(float shares, const compaction::compaction_rates& rates, double busy, float max_shares) {
+    if (busy <= 0) {
+        return shares;
+    }
     auto target = rates.target.per_second();
     auto achieved = rates.achieved.per_second();
     double step = 1;
@@ -657,6 +660,9 @@ float compaction_controller_v2::next_shares(float shares, const compaction::comp
         step = std::clamp(std::pow(target / achieved, alpha), 1 / max_step, max_step);
     } else if (target > 0) {
         step = max_step;
+    }
+    if (step > 1 && busy < min_busy_fraction_to_raise) {
+        return shares;
     }
     return std::clamp(float(shares * step), min_shares, max_shares);
 }
@@ -668,7 +674,7 @@ void compaction_controller_v2::adjust() {
         }
         return;
     }
-    bool compacting = false;
+    double busy = 0;
     compaction::compaction_rates rates;
     auto previous_shares = _shares;
     try {
@@ -676,10 +682,8 @@ void compaction_controller_v2::adjust() {
         // metrics show what the controller sees.
         rates = _current_rates();
         _last_rates = rates;
-        compacting = _compacting();
-        if (compacting) {
-            _shares = next_shares(_shares, rates, _max_shares);
-        }
+        busy = _busy();
+        _shares = next_shares(_shares, rates, busy, _max_shares);
     } catch (...) {
         // The shares are left as they are, as with unknown rates.
         dblog.warn("Failed to compute the compaction rates, leaving compaction shares at {}: {}", _shares, std::current_exception());
@@ -687,15 +691,15 @@ void compaction_controller_v2::adjust() {
     if (_dry_run) {
         dblog.log(log_level::info, _dry_run_log_limit,
                 "compaction controller v2 dry run: would set shares from {:.1f} to {:.1f}, while they are {:.1f}; "
-                "regular compaction ran: {}, target {:.0f} bytes/s over {:.0f}s, achieved {:.0f} bytes/s over {:.0f}s",
-                previous_shares, _shares, _scheduling_group.get_shares(), compacting,
+                "regular compaction busy {:.0f}%, target {:.0f} bytes/s over {:.0f}s, achieved {:.0f} bytes/s over {:.0f}s",
+                previous_shares, _shares, _scheduling_group.get_shares(), busy * 100,
                 rates.target.per_second(), rates.target.interval().count(),
                 rates.achieved.per_second(), rates.achieved.interval().count());
         return;
     }
     dblog.debug("compaction controller v2: setting shares from {:.1f} to {:.1f}; "
-            "regular compaction ran: {}, target {:.0f} bytes/s over {:.0f}s, achieved {:.0f} bytes/s over {:.0f}s",
-            previous_shares, _shares, compacting,
+            "regular compaction busy {:.0f}%, target {:.0f} bytes/s over {:.0f}s, achieved {:.0f} bytes/s over {:.0f}s",
+            previous_shares, _shares, busy * 100,
             rates.target.per_second(), rates.target.interval().count(),
             rates.achieved.per_second(), rates.achieved.interval().count());
     _scheduling_group.set_shares(_shares);
