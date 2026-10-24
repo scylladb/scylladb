@@ -96,7 +96,7 @@ The current migration procedure has the following limitations:
 * **No TRUNCATE** on tables in the migrating keyspace during the migration.
 * Only **CQL base tables** can be migrated. Materialized views, secondary
   indexes, CDC tables, and Alternator tables are not supported.
-* Tables with **counters** or **LWTs** cannot be migrated.
+* Tables with **LWTs** cannot be migrated.
 * Only tables using the **Incremental Compaction Strategy (ICS)** can be migrated.
   Other compaction strategies are not supported.
 
