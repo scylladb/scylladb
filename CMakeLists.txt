@@ -257,12 +257,27 @@ find_package(ICU COMPONENTS uc i18n REQUIRED)
 # Resolves to the bundled submodule added via add_subdirectory(fmt) above
 # (CMake redirects find_package to it), not the host's fmt.
 find_package(fmt REQUIRED)
-find_package(libdeflate REQUIRED)
+# Prefer the config files that Conan generates (found through
+# CMAKE_PREFIX_PATH), falling back to our Find modules for distribution
+# packages when building without Conan.
+block(SCOPE_FOR VARIABLES)
+  set(CMAKE_FIND_PACKAGE_PREFER_CONFIG ON)
+  find_package(libdeflate REQUIRED)
+  find_package(xxHash REQUIRED)
+endblock()
+# libdeflate's upstream config, shipped by distribution packages, only
+# provides libdeflate::libdeflate_shared and libdeflate::libdeflate_static.
+if(NOT TARGET libdeflate::libdeflate)
+  if(TARGET libdeflate::libdeflate_shared)
+    add_library(libdeflate::libdeflate ALIAS libdeflate::libdeflate_shared)
+  else()
+    add_library(libdeflate::libdeflate ALIAS libdeflate::libdeflate_static)
+  endif()
+endif()
 find_package(libxcrypt REQUIRED)
 find_package(p11-kit REQUIRED)
 find_package(Snappy REQUIRED)
 find_package(RapidJSON REQUIRED)
-find_package(xxHash REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(zstd REQUIRED)
 find_package(lz4 REQUIRED)
@@ -281,7 +296,9 @@ target_link_libraries(scylla-precompiled-header PRIVATE
     absl::hash
     absl::raw_hash_set
     Seastar::seastar
+    libdeflate::libdeflate
     Snappy::snappy
+    xxHash::xxhash
     systemd
     ZLIB::ZLIB
     lz4::lz4_static
