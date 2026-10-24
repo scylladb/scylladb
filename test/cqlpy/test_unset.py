@@ -170,13 +170,32 @@ def test_unset_where_clustering(cql, table2):
 # Reproduces #10358
 def test_unset_where_regular(cql, table1):
     p = unique_key_int()
-    # We need to add some data for the filtering to find, otherwise the
-    # expression never gets evaluated and the UNSET_VALUE error is never
-    # detected. Cassandra does detect this error even if there is no data,
-    # but we don't care about reproducing that specific error case.
+    # Add a row for the filter to check. The case of no such row is tested
+    # in test_unset_where_regular_no_rows below.
     cql.execute(f'INSERT INTO {table1} (p, a) VALUES ({p}, 1)')
     stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p = {p} and a = ? ALLOW FILTERING')
     with pytest.raises(InvalidRequest, match="unset"):
+        cql.execute(stmt, [UNSET_VALUE])
+
+# Like test_unset_where_regular, but no row reaches the filter which uses the
+# UNSET_VALUE, because the partition doesn't exist. The UNSET_VALUE must be
+# reported anyway - whether a query fails shouldn't depend on the data.
+# Reproduces SCYLLADB-5213.
+def test_unset_where_regular_no_rows(cql, table1):
+    p = unique_key_int()
+    for where in ['a = ?', 'a > ?', 'li CONTAINS ?', 'a IN ?']:
+        stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p = {p} and {where} ALLOW FILTERING')
+        with pytest.raises(InvalidRequest, match='unset'):
+            cql.execute(stmt, [UNSET_VALUE])
+
+# Like test_unset_where_regular_no_rows, with the UNSET_VALUE as an element of
+# an IN list. Cassandra before version 6 silently ignores such an unset
+# element, and returns no rows, so this test is skipped there.
+# Reproduces SCYLLADB-5213.
+def test_unset_where_regular_no_rows_in_list(cql, table1, new_to_cassandra_6):
+    p = unique_key_int()
+    stmt = cql.prepare(f'SELECT * FROM {table1} WHERE p = {p} and a IN (1, ?) ALLOW FILTERING')
+    with pytest.raises(InvalidRequest, match='unset'):
         cql.execute(stmt, [UNSET_VALUE])
 
 # TODO: check that (according to NEWS.txt documentation): "Unset tuple field,
