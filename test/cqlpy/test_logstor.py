@@ -12,7 +12,7 @@ import json
 import pytest
 from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import SimpleStatement
-from .util import new_test_table, new_materialized_view
+from .util import new_test_table, new_materialized_view, new_secondary_index
 
 # All tests in this file are Scylla-only (logstor is not available on Cassandra).
 @pytest.fixture(scope="module", autouse=True)
@@ -201,6 +201,24 @@ def test_logstor_create_index_storage_engine_disabled(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
         with pytest.raises(InvalidRequest, match="Cannot set storage_engine on an index"):
             cql.execute(f"CREATE INDEX ON {table}(v) WITH storage_engine = 'logstor'")
+
+# Test that a materialized view can't be created on a logstor base table:
+# view building doesn't see logstor data and view updates would diverge.
+def test_logstor_materialized_view_disabled(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'") as table:
+        with pytest.raises(InvalidRequest, match="Cannot create a materialized view on a logstor table"):
+            with new_materialized_view(cql, table, "*", "v, pk", "v IS NOT NULL AND pk IS NOT NULL"):
+                pass
+
+# Test that a secondary index can't be created on a logstor base table,
+# since secondary indexes are backed by materialized views.
+def test_logstor_secondary_index_disabled(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'") as table:
+        with pytest.raises(InvalidRequest, match="Cannot create an index on a logstor table"):
+            with new_secondary_index(cql, table, "v"):
+                pass
 
 # Test frozen map column with logstor storage engine.
 def test_logstor_frozen_map(cql, test_keyspace):
