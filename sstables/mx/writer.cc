@@ -15,13 +15,16 @@
 #include "vint-serialization.hh"
 #include "sstables/types.hh"
 #include "sstables/mx/types.hh"
+#include "sstables/mx/index_position_resolver.hh"
 #include "mutation/atomic_cell.hh"
 #include "utils/assert.hh"
 #include "utils/exceptions.hh"
+#include "utils/overloaded_functor.hh"
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
 #include "keys/keys.hh"
 
+#include <deque>
 #include <functional>
 #include <iterator>
 #include <queue>
@@ -540,17 +543,69 @@ private:
     const encoding_stats _enc_stats;
     shard_id _shard; // Specifies which shard the new SStable will belong to.
     bool _compression_enabled = false;
+    // Whether the BTI index stores physical (post-compression) positions. Only
+    // compressed `mu` sstables do. The other BTI sstables store logical positions.
+    bool _physical_index_positions = false;
     std::unique_ptr<file_writer> _data_writer;
     std::unique_ptr<file_writer> _index_writer;
     std::unique_ptr<file_writer> _rows_writer;
     std::unique_ptr<file_writer> _partitions_writer;
     optimized_optional<trie::bti_row_index_writer> _bti_row_index_writer;
     optimized_optional<trie::bti_partition_index_writer> _bti_partition_index_writer;
-    // The key of the last `consume_new_partition` call.
-    // A partition key can only be inserted into Partitions.db
-    // after its intra-partition index is written to Rows.db.
-    // So we need to hold onto the key until `consume_end_of_partition`.
-    std::optional<dht::decorated_key> _current_dk_for_bti;
+
+    // Translates the logical Data.db positions of the BTI index writes into the
+    // positions that the index stores. Only used by BTI sstables.
+    index_position_resolver _index_position_resolver{false};
+
+    // The BTI index writes are buffered until the Data.db positions they need are
+    // known. For a physically indexed sstable, a position is known only after the
+    // chunk that contains it has been compressed. Each buffered write needs one
+    // position. The writes are queued in Data.db order, so the order of the queue
+    // is also the order of the positions. flush_ready_index_writes() passes the
+    // writes at the front of the queue to the index writers, as far as their
+    // positions are known.
+    //
+    // The start of a partition. The partition's later writes need its position.
+    struct index_partition_start {
+        // Logical position of the partition in Data.db.
+        uint64_t position;
+        sstables::key partition_key;
+        dht::decorated_key dk;
+        utils::hashed_key murmur_hash;
+    };
+    // A `bti_row_index_writer::add()` call.
+    struct index_row_block {
+        // Logical position of the row index block in Data.db.
+        uint64_t position;
+        clustering_info first;
+        clustering_info last;
+        sstables::deletion_time preceding_range_tombstone;
+    };
+    // The end of a partition: a `bti_row_index_writer::finish()` +
+    // `bti_partition_index_writer::add()` pair.
+    struct index_partition_end {
+        // Logical position of the end of the partition in Data.db.
+        uint64_t position;
+        sstables::deletion_time partition_tombstone;
+    };
+    using index_write = std::variant<index_partition_start, index_row_block, index_partition_end>;
+    static uint64_t position_of(const index_write& w) noexcept {
+        return std::visit([] (const auto& x) { return x.position; }, w);
+    }
+    std::deque<index_write> _buffered_index_writes;
+    // Logical position of the last queued index write. Later writes aren't
+    // before it.
+    uint64_t _last_index_write_position = 0;
+    // The partition whose index writes are being passed to the index writers,
+    // i.e. the last index_partition_start taken from the queue.
+    struct indexed_partition {
+        sstable_position start;
+        sstables::key partition_key;
+        dht::decorated_key dk;
+        utils::hashed_key murmur_hash;
+    };
+    std::optional<indexed_partition> _indexed_partition;
+
     // Position of the Data writer at the moment of the last
     // `consume_new_partition` call.
     uint64_t _current_partition_position = 0;
@@ -692,6 +747,16 @@ private:
     void close_index_writer();
     void close_rows_writer();
     void close_partitions_writer();
+
+    // Queues an index write, then calls flush_ready_index_writes(). Only used by
+    // BTI sstables.
+    void queue_index_write(index_write w);
+
+    // Passes the queued index writes to the index writers, in order, until it
+    // reaches a write whose position is not known yet. Then lets the resolver
+    // forget the chunks that no queued or future write needs. Only used by BTI
+    // sstables.
+    void flush_ready_index_writes();
 
     void ensure_tombstone_is_written() {
         if (!_tombstone_written) {
@@ -908,6 +973,8 @@ public:
         _sst.open_sstable(cfg.origin);
         _sst.create_data().get();
         _compression_enabled = !_sst.has_component(component_type::CRC);
+        _physical_index_positions = _sst.uses_physical_positions();
+        _index_position_resolver = index_position_resolver(_physical_index_positions);
         _delayed_filter = _sst.has_component(component_type::Filter) && !_sst.has_component(component_type::Index);
         init_file_writers();
         _sst._shards = { shard };
@@ -1012,6 +1079,7 @@ void writer::maybe_add_pi_block() {
 
 void writer::init_file_writers() {
     auto out = _sst._storage->make_data_or_index_sink(_sst, component_type::Data).get();
+    bool has_bti_index = _sst.has_component(component_type::Partitions) && _sst.has_component(component_type::Rows);
 
     if (!_compression_enabled) {
         _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.get_filename());
@@ -1021,21 +1089,37 @@ void writer::init_file_writers() {
             make_compressed_file_m_format_output_stream(
                 output_stream<char>(std::move(out)),
                 &_sst._components->compression,
+                _sst.get_version(),
                 _sst._schema->get_compressor_params(),
-                std::move(compressor)), _sst.get_filename());
+                std::move(compressor),
+                // Only a physically indexed sstable needs the chunks, to compute the
+                // positions of the buffered index writes.
+                !_physical_index_positions ? compressed_chunk_observer() :
+                [this] (uint64_t post_compression_pos, uint64_t pre_compression_pos, uint64_t size, uint64_t uncompressed_size) {
+                    _index_position_resolver.add_chunk(index_position_resolver::chunk{
+                        .uncompressed_start = pre_compression_pos,
+                        .uncompressed_length = uncompressed_size,
+                        .chunk_start = post_compression_pos,
+                        .extent = size,
+                    });
+                }), _sst.get_filename());
     }
 
     if (_sst.has_component(component_type::Index)) {
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index).get();
         _index_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.index_filename());
     }
-    if (_sst.has_component(component_type::Partitions) && _sst.has_component(component_type::Rows)) {
+    if (has_bti_index) {
+        // The compressed data stream has set the chunk length in the compression
+        // component above, so the sstable can build the encoding now, the same
+        // way as a reader does.
+        auto position_encoding = _sst.get_bti_position_encoding();
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Rows).get();
         _rows_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, component_name(_sst, component_type::Rows));
-        _bti_row_index_writer = trie::bti_row_index_writer(*_rows_writer);
+        _bti_row_index_writer = trie::bti_row_index_writer(_sst.get_version(), *_rows_writer, position_encoding);
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Partitions).get();
         _partitions_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, component_name(_sst, component_type::Partitions));
-        _bti_partition_index_writer = trie::bti_partition_index_writer(_sst.get_version(), *_partitions_writer);
+        _bti_partition_index_writer = trie::bti_partition_index_writer(_sst.get_version(), *_partitions_writer, position_encoding);
     }
     if (_delayed_filter) {
         file_output_stream_options options;
@@ -1066,6 +1150,73 @@ void writer::close_data_writer() {
     } else {
         _sst.write_digest(_sst._components->compression.get_full_checksum());
     }
+}
+
+void writer::queue_index_write(index_write w) {
+    SCYLLA_ASSERT(_bti_partition_index_writer);
+    auto pos = position_of(w);
+    SCYLLA_ASSERT(pos >= _last_index_write_position);
+    _last_index_write_position = pos;
+    _buffered_index_writes.push_back(std::move(w));
+    // Pass the writes whose chunks have been compressed already, so that the
+    // queue doesn't grow with the size of the partition.
+    flush_ready_index_writes();
+}
+
+void writer::flush_ready_index_writes() {
+    SCYLLA_ASSERT(_bti_partition_index_writer);
+    while (!_buffered_index_writes.empty()) {
+        auto& w = _buffered_index_writes.front();
+        auto pos = _index_position_resolver.resolve(position_of(w));
+        if (!pos) {
+            break;
+        }
+        std::visit(overloaded_functor{
+            [&] (index_partition_start& start) {
+                SCYLLA_ASSERT(!_indexed_partition);
+                _indexed_partition.emplace(indexed_partition{
+                    .start = *pos,
+                    .partition_key = std::move(start.partition_key),
+                    .dk = std::move(start.dk),
+                    .murmur_hash = start.murmur_hash,
+                });
+            },
+            [&] (index_row_block& block) {
+                SCYLLA_ASSERT(_indexed_partition);
+                _bti_row_index_writer->add(
+                    _schema,
+                    block.first,
+                    block.last,
+                    _indexed_partition->start,
+                    *pos,
+                    block.preceding_range_tombstone
+                );
+            },
+            [&] (index_partition_end& end) {
+                SCYLLA_ASSERT(_indexed_partition);
+                auto partitions_db_payload = _bti_row_index_writer->finish(
+                    _schema,
+                    _indexed_partition->start,
+                    *pos,
+                    _indexed_partition->partition_key,
+                    end.partition_tombstone
+                );
+                _bti_partition_index_writer->add(
+                    _schema,
+                    std::move(_indexed_partition->dk),
+                    _indexed_partition->murmur_hash,
+                    partitions_db_payload
+                );
+                _indexed_partition.reset();
+            },
+        }, w);
+        _buffered_index_writes.pop_front();
+    }
+    // The queued writes and the future ones aren't before the front of the queue,
+    // or before the last queued write if the queue is empty.
+    _index_position_resolver.discard_before(_buffered_index_writes.empty()
+            ? _last_index_write_position
+            : position_of(_buffered_index_writes.front()));
 }
 
 void writer::close_index_writer() {
@@ -1120,8 +1271,15 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
     write(_sst.get_version(), *_index_writer, p_key);
     write_vint(*_index_writer, _data_writer->offset());
   }
-    _current_dk_for_bti = dk;
     _current_partition_position = _data_writer->offset();
+    if (_bti_partition_index_writer) {
+        queue_index_write(index_partition_start{
+            .position = _current_partition_position,
+            .partition_key = *_partition_key,
+            .dk = dk,
+            .murmur_hash = _current_murmur_hash,
+        });
+    }
 
     _pi_write_m.first_entry.reset();
     _pi_write_m.blocks.clear();
@@ -1693,13 +1851,14 @@ void writer::write_pi_block(const pi_block& block) {
     }
   }
     if (_bti_row_index_writer) {
-        _bti_row_index_writer->add(
-            _schema,
-            block.first,
-            block.last,
-            block.offset,
-            to_deletion_time(block.preceding_range_tombstone)
-        );
+        // `block.offset` is relative to the partition start. The queue needs the
+        // position in Data.db.
+        queue_index_write(index_row_block{
+            .position = _current_partition_position + block.offset,
+            .first = block.first,
+            .last = block.last,
+            .preceding_range_tombstone = to_deletion_time(block.preceding_range_tombstone),
+        });
     }
 }
 
@@ -1781,24 +1940,16 @@ stop_iteration writer::consume_end_of_partition() {
         maybe_add_pi_block();
     }
 
-    write_promoted_index();
-
     if (_bti_partition_index_writer) {
-        auto partitions_db_payload = _bti_row_index_writer->finish(
-            _sst.get_version(),
-            _schema,
-            _current_partition_position,
-            end_of_partition_position,
-            *_partition_key,
-            _pi_write_m.partition_tombstone
-        );
-        _bti_partition_index_writer->add(
-            _schema,
-            *std::exchange(_current_dk_for_bti, std::nullopt),
-            _current_murmur_hash,
-            partitions_db_payload
-        );
+        // Queued after the last row index block, which is before the end of the
+        // partition in Data.db, but can be added after the end is written.
+        queue_index_write(index_partition_end{
+            .position = end_of_partition_position,
+            .partition_tombstone = _pi_write_m.partition_tombstone,
+        });
     }
+
+    write_promoted_index();
 
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
@@ -1836,6 +1987,19 @@ void writer::consume_end_of_stream() {
 
     close_index_writer();
 
+    // Close the Data.db writer first so that all compressed chunks are flushed
+    // and their post-compression coordinates are reported to the chunk observer.
+    // Only then can the remaining buffered index writes be resolved and replayed
+    // into the trie writers (which write to Partitions.db / Rows.db), so this must
+    // happen before those writers are closed.
+    close_data_writer();
+    if (_bti_partition_index_writer) {
+        flush_ready_index_writes();
+        // With the stream closed, every position is known, so nothing must
+        // remain buffered.
+        SCYLLA_ASSERT(_buffered_index_writes.empty() && !_indexed_partition);
+    }
+
     close_partitions_writer();
     close_rows_writer();
 
@@ -1849,7 +2013,6 @@ void writer::consume_end_of_stream() {
     seal_statistics(_sst.get_version(), _sst._components->statistics, _collector,
         _sst._schema->get_partitioner().name(), _sst._schema->bloom_filter_fp_chance(),
         _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
-    close_data_writer();
 
   if (_sst._components->summary) {
     _sst.write_summary();
@@ -1870,6 +2033,14 @@ void writer::consume_end_of_stream() {
     auto decompressor = _sst.manager().get_compressor_factory().make_compressor_for_reading(_sst._components->compression).get();
     _sst._components->compression.set_compressor(std::move(decompressor));
     _sst._components->compression.discard_hidden_options();
+    if (_physical_index_positions) {
+        // The chunk offsets are in CompressionInfo.db now, and a physically indexed
+        // sstable doesn't read them from memory: its reads navigate Data.db by chunk
+        // coordinates, and the one path which addresses it by a logical range reads
+        // the offsets from the file on demand. Drop the copy we accumulated during
+        // the write.
+        _sst._components->compression.discard_offsets();
+    }
     run_identifier identifier{_run_identifier};
     std::optional<scylla_metadata::large_data_stats> ld_stats(scylla_metadata::large_data_stats{
         .map = {

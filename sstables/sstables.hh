@@ -30,6 +30,7 @@
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "component_type.hh"
+#include "sstables/abstract_index_reader.hh"
 #include "column_translation.hh"
 #include "stats.hh"
 #include "utils/observable.hh"
@@ -46,6 +47,7 @@
 #include "dht/decorated_key.hh"
 #include "service/session.hh"
 #include "sstables/trie/bti_index.hh"
+#include "sstables/framed_chunk.hh"
 #include "utils/file_size_stats.hh"
 
 #include <seastar/util/optimized_optional.hh>
@@ -64,6 +66,10 @@ class in_memory_config_type;
 namespace db {
 class large_data_handler;
 class corrupt_data_handler;
+}
+
+namespace data_consumer {
+class continuous_data_consumer_input_stream;
 }
 
 namespace sstables {
@@ -226,23 +232,7 @@ public:
     sstable(const sstable&) = delete;
     sstable(sstable&&) = delete;
 
-    // disk_read_range describes a byte ranges covering part of an sstable
-    // row that we need to read from disk. Usually this is the whole byte
-    // range covering a single sstable row, but in very large rows we might
-    // want to only read a subset of the atoms which we know contains the
-    // columns we are looking for.
-    struct disk_read_range {
-        // TODO: this should become a vector of ranges
-        uint64_t start;
-        uint64_t end;
-
-        disk_read_range() : start(0), end(0) {}
-        disk_read_range(uint64_t start, uint64_t end) :
-            start(start), end(end) { }
-        explicit operator bool() const {
-            return start != end;
-        }
-    };
+    using disk_read_range = sstables::disk_read_range;
 
     static component_type component_from_sstring(version_types version, const sstring& s);
     static sstring component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
@@ -392,10 +382,38 @@ public:
     // Returns true iff this sstable contains data which belongs to many shards.
     bool is_shared() const;
 
+    // Returns the open file handle for the data component.
+    file get_data_file() const {
+        return _data_file;
+    }
+
     // Returns uncompressed size of data component.
     uint64_t data_size() const;
     // Returns on-disk size of data component.
     uint64_t ondisk_data_size() const;
+    // Whether positions in this sstable's data component are physical, i.e.
+    // chunk coordinates in the compressed file. Only compressed `mu` sstables
+    // use physical positions. All other sstables, including uncompressed `mu`
+    // ones, use logical positions.
+    bool uses_physical_positions() const;
+    // The codec of the chunks of the compressed data component. Only valid for
+    // a compressed sstable.
+    framed_chunk_codec get_chunk_codec() const;
+    // How the BTI index of this sstable stores data positions. Physical
+    // positions go with framed chunks: both follow from get_chunk_codec().
+    // Throws malformed_sstable_exception if the chunk length doesn't allow
+    // physical positions.
+    trie::bti_position_encoding get_bti_position_encoding() const;
+    // Calls `func` with the offset of each chunk of the compressed data
+    // component, in order. An sstable that uses physical positions doesn't keep
+    // the offsets in memory (see compression::offsets), so for it, reads them
+    // from CompressionInfo.db.
+    future<> for_each_compression_offset(noncopyable_function<void (uint64_t)> func) const;
+    // Start/end positions of the data component, expressed as sstable_positions.
+    sstable_position start_position() const;
+    sstable_position end_position() const;
+
+    double approximate_file_fraction(sstable_positions_range range) const;
 
     uint64_t index_size() const {
         return _index_file_size;
@@ -582,6 +600,11 @@ private:
     std::optional<trie::bti_partitions_db_footer> _partitions_db_footer;
     file _rows_file;
     seastar::shared_ptr<cached_file> _cached_rows_file;
+    // Open only if the sstable uses physical positions (`mu`). Such an sstable
+    // reads its chunk offsets from CompressionInfo.db on demand. The file is
+    // kept open, so that the offsets stay readable after the sstable is
+    // unlinked, like the other components that are kept open.
+    file _compression_info_file;
     uint64_t _data_file_size;
     uint64_t _index_file_size = 0;
     uint64_t _partitions_file_size = 0;
@@ -718,7 +741,7 @@ private:
             unsigned buffer_size);
 
     template <component_type Type, typename T>
-    uint32_t write_simple_with_digest(const T& comp);
+    uint32_t write_simple_with_digest(T& comp);
     uint32_t do_write_simple_with_digest(component_type type,
             noncopyable_function<void (version_types version, file_writer& writer)> write_component,
             unsigned buffer_size);
@@ -844,6 +867,8 @@ public:
     future<std::optional<position_in_partition>>
     find_first_position_in_partition(reader_permit permit, const dht::decorated_key& key, bool reversed);
 
+    disk_read_range full_range();
+
     // Return an input_stream which reads exactly the specified byte range
     // from the data file (after uncompression, if the file is compressed).
     // Unlike data_read() below, this method does not read the entire byte
@@ -853,13 +878,6 @@ public:
     // about the buffer size to read, and where exactly to stop reading
     // (even when a large buffer size is used).
     //
-    // When created with `raw_stream::yes`, the sstable data file will be
-    // streamed as-is, without decompressing (if compressed).
-    //
-    // When created with `raw_stream::compressed_chunks`, compressed sstable data
-    // will be streamed as raw compressed chunks with checksum verification but
-    // without decompression, and digests will be calculated.
-    //
     // When created with `integrity_check::yes`, the integrity mechanisms
     // of the underlying data streams will be enabled.
     //
@@ -867,21 +885,34 @@ public:
     // logic when a checksum or digest mismatch is detected on an
     // integrity-checked stream with no compression. The parameter is ignored
     // if integrity checking is disabled or the SSTable is compressed.
-    enum class raw_stream {
-        no,
-        yes,
-        compressed_chunks
-    };
-    future<input_stream<char>> data_stream(uint64_t pos, size_t len,
+    future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> data_stream(disk_read_range range,
             reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
-            raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
+            integrity_check integrity = integrity_check::no,
             integrity_error_handler error_handler = throwing_integrity_error_handler);
 
-    future<input_stream<char>> data_stream(uint64_t pos, size_t len,
+    future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> data_stream(disk_read_range range,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
         file_input_stream_options options,
-        raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
+        integrity_check integrity = integrity_check::no,
         integrity_error_handler error_handler = throwing_integrity_error_handler);
+
+    // Returns the sstable data file streamed as-is, without decompressing
+    // (if compressed) and without integrity checking.
+    future<input_stream<char>> data_stream_raw(
+            reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history);
+
+    // Returns the sstable data file as a stream of raw compressed chunks
+    // (without decompression) with checksum verification and digest
+    // calculation. Compatible with SSTables version 3.x and later.
+    //
+    // If the sstable is not compressed (or not version mc+), the stream
+    // falls back to the integrity-checked decompressed stream when a
+    // checksum is available, or a plain stream otherwise.
+    future<input_stream<char>> data_stream_compressed_chunks(
+            reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
+            file_input_stream_options options,
+            integrity_check integrity = integrity_check::no,
+            integrity_error_handler error_handler = throwing_integrity_error_handler);
 
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
@@ -892,6 +923,15 @@ public:
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, reader_permit permit);
 
 private:
+    // Translates the logical range [begin, end) of the data component to a
+    // disk_read_range in the position kind of this sstable. Requires
+    // begin < end <= data_size(). If the sstable uses physical positions, reads
+    // the offsets of the chunks in the range from CompressionInfo.db.
+    future<disk_read_range> disk_read_range_from_logical_range(uint64_t begin, uint64_t end);
+    // Reads the offsets of the chunks [first, first + n) from the CompressionInfo.db
+    // file `f`, as big-endian uint64_t values.
+    future<temporary_buffer<char>> read_compression_offsets(file& f, uint64_t first, uint64_t n) const;
+
     future<summary_entry&> read_summary_entry(size_t i);
 
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
@@ -1238,7 +1278,7 @@ public:
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
     friend future<std::unique_ptr<DataConsumeRowsContext>>
-    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t, integrity_check);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, sstable_position, integrity_check);
     template <typename DataConsumeRowsContext>
     friend future<std::unique_ptr<DataConsumeRowsContext>>
     data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, integrity_check);

@@ -566,6 +566,7 @@ scylla_tests = set([
     'test/boost/counter_test',
     'test/boost/cql_auth_syntax_test',
     'test/boost/crc_test',
+    'test/boost/decompressing_cursor_test',
     'test/boost/dict_trainer_test',
     'test/boost/dirty_memory_manager_test',
     'test/boost/tablet_aware_restore_test',
@@ -594,6 +595,7 @@ scylla_tests = set([
     'test/boost/hwlb_test',
     'test/boost/idl_test',
     'test/boost/incremental_compaction_test',
+    'test/boost/index_position_resolver_test',
     'test/boost/index_reader_test',
     'test/boost/input_stream_test',
     'test/boost/interval_index_test',
@@ -657,6 +659,7 @@ scylla_tests = set([
     'test/boost/sstable_move_test',
     'test/boost/sstable_mutation_test',
     'test/boost/sstable_partition_index_cache_test',
+    'test/boost/sstable_position_test',
     'test/boost/sstable_resharding_test',
     'test/boost/sstable_test',
     'test/boost/stall_free_test',
@@ -994,6 +997,7 @@ scylla_core = (['message/messaging_service.cc',
                 'sstables/kl/reader.cc',
                 'sstables/sstable_version.cc',
                 'sstables/compress.cc',
+                'sstables/decompressing_cursor.cc',
                 'sstables/compressor.cc',
                 'sstables/checksummed_data_source.cc',
                 'sstables/digest_checked_data_source.cc',
@@ -1655,6 +1659,7 @@ pure_boost_tests = set([
     'test/boost/enum_option_test',
     'test/boost/enum_set_test',
     'test/boost/idl_test',
+    'test/boost/index_position_resolver_test',
     'test/boost/interval_index_test',
     'test/boost/json_test',
     'test/boost/keys_test',
@@ -1670,6 +1675,7 @@ pure_boost_tests = set([
     'test/boost/rolling_max_tracker_test',
     'test/boost/serialization_test',
     'test/boost/small_vector_test',
+    'test/boost/sstable_position_test',
     'test/boost/top_k_test',
     'test/boost/vint_serialization_test',
     'test/boost/utf8_test',
@@ -1845,6 +1851,8 @@ deps['test/boost/rolling_max_tracker_test'] = ['test/boost/rolling_max_tracker_t
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/summary_test'] = ['test/boost/summary_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
+deps['test/boost/sstable_position_test'] = ['test/boost/sstable_position_test.cc']
+deps['test/boost/index_position_resolver_test'] = ['test/boost/index_position_resolver_test.cc']
 deps['test/perf/perf_canonical_mutation'] += ['seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_mutation'] += ['seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_commitlog'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']

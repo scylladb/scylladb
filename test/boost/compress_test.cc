@@ -10,7 +10,11 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <array>
+#include <vector>
+
 #include "sstables/compress.hh"
+#include "sstables/exceptions.hh"
 
 BOOST_AUTO_TEST_CASE(segmented_offsets_basic_functionality) {
     sstables::compression::segmented_offsets offsets;
@@ -142,4 +146,66 @@ BOOST_AUTO_TEST_CASE(segmented_offsets_corner_cases) {
     // incremental at() to read the next offset.
     BOOST_REQUIRE(accessor.at(4079) == 4079);
     BOOST_REQUIRE(accessor.at(4080) == 4080);
+}
+
+BOOST_AUTO_TEST_CASE(chunk_length_field_bits_and_size) {
+    // A valid compressed length is at most compressed_chunk_length_limit, so a
+    // chunk-length field stores the length in exactly the minimal number of bits
+    // that can hold that limit, rounded up to ceil(bits / 8) bytes. The 87381/
+    // 87382 pair straddles the boundary where the limit crosses 2^17.
+    for (uint32_t uncompressed_chunk_length : {1u << 10, 1u << 12, 1u << 16, (1u << 16) + 1, 87381u, 87382u}) {
+        BOOST_TEST_CONTEXT("uncompressed_chunk_length=" << uncompressed_chunk_length) {
+            const uint64_t limit = sstables::compressed_chunk_length_limit(uncompressed_chunk_length);
+            const auto bits = sstables::chunk_length_field_bits(uncompressed_chunk_length);
+            // Enough bits to represent any length up to the limit, and not one more.
+            BOOST_CHECK_GT(uint64_t(1) << bits, limit);
+            BOOST_CHECK_LT(uint64_t(1) << (bits - 1), limit);
+            BOOST_CHECK_EQUAL(sstables::chunk_length_field_size(uncompressed_chunk_length),
+                    (bits + 7) / 8);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(chunk_length_field_roundtrip) {
+    const uint32_t uncompressed_chunk_length = 1u << 12; // 4096
+    const uint32_t limit = sstables::compressed_chunk_length_limit(uncompressed_chunk_length); // 6144
+    const size_t size = sstables::chunk_length_field_size(uncompressed_chunk_length);
+    std::vector<char> buf(size + 4, char(0xAA)); // extra bytes must stay untouched
+
+    // A real compressed length is at most compressed_chunk_length_limit, so it fits
+    // in chunk_length_field_bits bits and is accepted by the reader.
+    for (uint32_t len : {0u, 1u, limit, uncompressed_chunk_length}) {
+        BOOST_TEST_CONTEXT("len=" << len) {
+            sstables::write_chunk_length_field(buf.data(), uncompressed_chunk_length, len);
+            BOOST_CHECK_EQUAL(sstables::read_chunk_length_field(buf.data(), uncompressed_chunk_length), len);
+            // The field must not spill past chunk_length_field_size bytes.
+            for (size_t i = size; i < buf.size(); ++i) {
+                BOOST_CHECK_EQUAL(static_cast<unsigned char>(buf[i]), 0xAAu);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(chunk_length_field_rejects_out_of_range) {
+    // A length exceeding compressed_chunk_length_limit signals corruption; the
+    // reader must throw rather than size a read from a bogus length. We can only
+    // materialise such a value on disk by hand, since the writer never emits it.
+    // The limit (36) is not a power of two, so chunk_length_field_bits leaves room
+    // (2^6 == 64 > 36) to encode an out-of-range value that the reader rejects.
+    const uint32_t uncompressed_chunk_length = 24; // limit 36, 6 bits
+    const uint64_t limit = sstables::compressed_chunk_length_limit(uncompressed_chunk_length);
+    const size_t bits = sstables::chunk_length_field_bits(uncompressed_chunk_length);
+    const size_t size = sstables::chunk_length_field_size(uncompressed_chunk_length);
+    std::vector<char> buf(size, 0);
+
+    // Craft a raw field value just past the limit.
+    const uint64_t bad = limit + 1;
+    for (size_t i = 0; i < size; ++i) {
+        buf[i] = static_cast<char>(static_cast<uint8_t>(bad >> (8 * i)));
+    }
+    BOOST_CHECK_LT(bad, uint64_t(1) << bits); // fits in the field, but exceeds the bound
+
+    BOOST_CHECK_THROW(
+            sstables::read_chunk_length_field(buf.data(), uncompressed_chunk_length),
+            sstables::malformed_sstable_exception);
 }

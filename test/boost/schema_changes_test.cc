@@ -19,12 +19,13 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
-constexpr std::array<sstable_version_types, 5> expected_writable_sstable_versions = {
+constexpr std::array<sstable_version_types, 6> expected_writable_sstable_versions = {
 sstable_version_types::mc,
 sstable_version_types::md,
 sstable_version_types::me,
 sstable_version_types::ms,
 sstable_version_types::mt,
+sstable_version_types::mu,
 };
 
 // Add/remove test cases if writable_sstable_versions changes
@@ -34,6 +35,7 @@ static_assert(writable_sstable_versions[1] == expected_writable_sstable_versions
 static_assert(writable_sstable_versions[2] == expected_writable_sstable_versions[2], "writable_sstable_versions changed");
 static_assert(writable_sstable_versions[3] == expected_writable_sstable_versions[3], "writable_sstable_versions changed");
 static_assert(writable_sstable_versions[4] == expected_writable_sstable_versions[4], "writable_sstable_versions changed");
+static_assert(writable_sstable_versions[5] == expected_writable_sstable_versions[5], "writable_sstable_versions changed");
 
 future <> test_schema_changes_int(sstable_version_types sstable_vtype) {
   return sstables::test_env::do_with_async([] (sstables::test_env& env) {
@@ -90,4 +92,8 @@ SEASTAR_TEST_CASE(test_schema_changes_ms) {
 
 SEASTAR_TEST_CASE(test_schema_changes_mt) {
     return test_schema_changes_int(sstable_version_types::mt);
+}
+
+SEASTAR_TEST_CASE(test_schema_changes_mu) {
+    return test_schema_changes_int(sstable_version_types::mu);
 }

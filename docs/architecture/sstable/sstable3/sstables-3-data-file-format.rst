@@ -35,13 +35,17 @@ Note that the file on-disk format applies to all "m*" SSTable format versions ("
 
 See :doc:`SSTables 3.0 Statistics File Format </architecture/sstable/sstable3/sstables-3-statistics>` for more details.
 
-Since Scylla 2025.4, there are "ms"-"mt" formats in Scylla which is a hybrid of "me" and the "da" format introduced in Cassandra 5.0.
+Since Scylla 2025.4, there are "ms"-"mu" formats in Scylla which is a hybrid of "me" and the "da" format introduced in Cassandra 5.0.
 Most components in those are exactly the same as in "me", but the index components (Index.db and Summary.db) are replaced
 with the trie-based index format (components Partitions.db and Rows.db) used in "da".
 
 Partitions.db and Rows.db are not described on this page.
 See https://github.com/apache/cassandra/blob/70bcaec54d492658cb331b70869215ad64feb63d/src/java/org/apache/cassandra/io/sstable/format/bti/BtiFormat.md
 for a description.
+
+The "mu" format also changes the layout of compressed chunks in Data.db and the
+positions stored in Partitions.db and Rows.db.
+See :doc:`SSTable mu Format </architecture/sstable/sstable3/sstable-mu-format>` for details.
 
 Overview
 ........

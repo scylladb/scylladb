@@ -697,7 +697,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_digest_
 }
 
 void sstable_validate_fn(test_env& env) {
-    for (const auto sst_version : {sstable_version_types::me, sstable_version_types::ms}) {
+    for (const auto sst_version : {sstable_version_types::me, sstable_version_types::ms, sstable_version_types::mu}) {
         auto schema = schema_builder(this_smp_shard_count(), "ks", testing::seastar_test::get_name())
                 .with_column("pk", utf8_type, column_kind::partition_key)
                 .with_column("ck", int32_type, column_kind::clustering_key)
@@ -771,6 +771,14 @@ void sstable_validate_fn(test_env& env) {
             const auto errors = sst->validate(permit, abort, error_handler{count}).get();
             BOOST_REQUIRE_EQUAL(errors, 0);
             BOOST_REQUIRE_EQUAL(errors, count);
+
+            // An intact compressed sstable must pass checksum/digest validation.
+            // This exercises the per-chunk checksum and whole-file digest math in
+            // do_validate_compressed, including the header/footer framing of
+            // physically-indexed ("mu") sstables.
+            auto res = sstables::validate_checksums_and_digests(sst, permit).get();
+            BOOST_REQUIRE(res.status == validate_checksums_status::valid);
+            BOOST_REQUIRE(res.has_digest);
         }
 
         // BTI index writers won't accept out-of-order keys.

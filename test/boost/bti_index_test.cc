@@ -20,6 +20,8 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
+#include "sstables/compress.hh"
+#include "sstables/framed_chunk.hh"
 #include "sstables/mx/types.hh"
 #include "sstables/trie/bti_index.hh"
 #include "sstables/trie/bti_index_internal.hh"
@@ -33,6 +35,289 @@
 #include "utils/i_filter.hh"
 #include "utils/memory_data_sink.hh"
 #include <fmt/std.h>
+
+// Focused coverage for the BTI physical-payload packing primitives. These
+// are pure functions with no I/O, so a plain BOOST_AUTO_TEST_CASE suffices.
+BOOST_AUTO_TEST_CASE(test_bti_extent_block_count_roundtrip) {
+    using namespace sstables::trie;
+    // For every (chunk_position, extent), blocks -> recovered is a lossy upper
+    // bound: recovered >= extent, and it never over-rounds by more than a full
+    // block.
+    for (int64_t chunk_position : {int64_t{0}, int64_t{1}, int64_t{7}, int64_t{511},
+                                   int64_t{512}, int64_t{513}, int64_t{1024},
+                                   int64_t{100'000}, int64_t{100'001}}) {
+        for (int64_t extent : {int64_t{1}, int64_t{2}, int64_t{511}, int64_t{512},
+                               int64_t{513}, int64_t{4096}, int64_t{65536}}) {
+            const auto blocks = bti_extent_to_block_count(chunk_position, extent);
+            const auto recovered = bti_extent_hint_from_block_count(chunk_position, blocks);
+            BOOST_CHECK_GE(recovered, extent);
+            BOOST_CHECK_LT(recovered - extent, sstable_compressed_block_size);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_bti_pack_unpack_length_and_offset_roundtrip) {
+    using namespace sstables::trie;
+    for (uint32_t uncompressed_chunk_length : {uint32_t{4096}, uint32_t{16384}, uint32_t{65536}}) {
+        const auto layout = bti_physical_layout(sstables::framed_chunk_codec::for_framed_chunks(uncompressed_chunk_length));
+        const auto max_len = layout.max_block_count();
+        const auto packed_bits = layout.packed_bits();
+        // The packed value never exceeds its advertised bit width / byte width.
+        BOOST_CHECK_LE(layout.packed_bytes() * 8, 64u);
+        for (uint64_t block_count : {uint64_t{1}, uint64_t{2}, uint64_t{7}, max_len}) {
+            for (uint64_t offset : {uint64_t{0}, uint64_t{1}, uint64_t{uncompressed_chunk_length - 1}}) {
+                const auto packed = layout.pack(block_count, offset);
+                BOOST_CHECK_LT(packed, uint64_t{1} << packed_bits);
+                auto [decoded_len, decoded_offset] = layout.unpack(packed);
+                // The block count and offset are both stored exactly.
+                BOOST_CHECK_EQUAL(decoded_offset, offset);
+                BOOST_CHECK_EQUAL(decoded_len, block_count);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_bti_max_block_count_covers_largest_chunk) {
+    using namespace sstables::trie;
+    // The largest chunk holds compressed_chunk_length_limit bytes of compressed
+    // data. Its block count must stay within the bound, and fit in the block-count
+    // field, at every alignment and for every chunk length that the schema allows.
+    for (uint32_t uncompressed_chunk_length = 1024; uncompressed_chunk_length <= 128 * 1024; uncompressed_chunk_length *= 2) {
+        BOOST_TEST_CONTEXT("uncompressed_chunk_length=" << uncompressed_chunk_length) {
+            const auto codec = sstables::framed_chunk_codec::for_framed_chunks(uncompressed_chunk_length);
+            const auto max_extent = codec.extent(sstables::compressed_chunk_length_limit(uncompressed_chunk_length));
+            const auto layout = bti_physical_layout(codec);
+            const auto max_blocks = layout.max_block_count();
+            const auto length_bits = layout.block_count_bits();
+            BOOST_CHECK_LE(max_blocks - 1, (uint64_t{1} << length_bits) - 1);
+            for (int64_t chunk_position = 0; chunk_position < sstable_compressed_block_size; ++chunk_position) {
+                const auto blocks = bti_extent_to_block_count(chunk_position, max_extent);
+                BOOST_CHECK_LE(uint64_t(blocks), max_blocks);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_bti_physical_layout_matches_format_doc) {
+    using namespace sstables::trie;
+    // The table of N_max, W_N and W_O in docs/architecture/sstable/sstable3/sstable-mu-format.rst.
+    struct expected_layout {
+        uint32_t uncompressed_chunk_length;
+        uint64_t max_block_count;
+        unsigned block_count_bits;
+        unsigned offset_within_chunk_bits;
+    };
+    for (const auto& e : {
+            expected_layout{1024, 5, 3, 10},
+            expected_layout{2048, 8, 3, 11},
+            expected_layout{4096, 14, 4, 12},
+            expected_layout{8192, 26, 5, 13},
+            expected_layout{16384, 50, 6, 14},
+            expected_layout{32768, 98, 7, 15},
+            expected_layout{65536, 194, 8, 16},
+            expected_layout{131072, 386, 9, 17},
+    }) {
+        BOOST_TEST_CONTEXT("uncompressed_chunk_length=" << e.uncompressed_chunk_length) {
+            const auto layout = bti_physical_layout(sstables::framed_chunk_codec::for_framed_chunks(e.uncompressed_chunk_length));
+            BOOST_CHECK_EQUAL(layout.max_block_count(), e.max_block_count);
+            BOOST_CHECK_EQUAL(layout.block_count_bits(), e.block_count_bits);
+            BOOST_CHECK_EQUAL(layout.offset_within_chunk_bits(), e.offset_within_chunk_bits);
+            // The largest values of N and O use every bit of the packed field.
+            const auto packed = layout.pack(e.max_block_count, e.uncompressed_chunk_length - 1);
+            BOOST_CHECK_EQUAL(unsigned(std::bit_width(packed)), layout.packed_bits());
+        }
+    }
+}
+
+// A partition for the payload characterization tests below.
+// All positions are in Data.db.
+struct payload_test_partition {
+    struct block {
+        int16_t first_ck;
+        int16_t last_ck;
+        sstables::sstable_position start;
+        sstables::deletion_time range_tombstone_before_first_ck;
+    };
+    // Also the value of the partition key.
+    int16_t token;
+    sstables::sstable_position start;
+    // The position of the END_OF_PARTITION byte.
+    sstables::sstable_position end;
+    sstables::deletion_time partition_tombstone;
+    // Partitions with no blocks have no row index.
+    std::vector<block> blocks;
+};
+
+struct index_files_hex {
+    std::string partitions_db;
+    std::string rows_db;
+};
+
+static std::string to_hex(const memory_data_sink_buffers& bufs) {
+    std::string retval;
+    for (const auto& frag : bufs.buffers()) {
+        retval += fmt::to_string(fmt_hex(std::as_bytes(std::span(frag))));
+    }
+    return retval;
+}
+
+// Writes Partitions.db and Rows.db for `partitions` the way the sstable writer
+// does, and returns their contents in hex.
+static index_files_hex write_index_for_payload_test(
+    sstables::sstable_version_types sst_ver,
+    const sstables::trie::bti_position_encoding& encoding,
+    const std::vector<payload_test_partition>& partitions
+) {
+    auto s = schema_builder(this_smp_shard_count(), "ks", "t")
+        .with_column("pk", short_type, column_kind::partition_key)
+        .with_column("ck", short_type, column_kind::clustering_key)
+        .build();
+    auto make_ck = [&] (int16_t value) {
+        return sstables::clustering_info{
+            clustering_key::from_deeply_exploded(*s, {data_value(value)}),
+            sstables::bound_kind_m::clustering};
+    };
+    memory_data_sink_buffers partitions_bufs;
+    memory_data_sink_buffers rows_bufs;
+    {
+        sstables::file_writer partitions_db_writer(data_sink(std::make_unique<memory_data_sink>(partitions_bufs)));
+        sstables::file_writer rows_db_writer(data_sink(std::make_unique<memory_data_sink>(rows_bufs)));
+        auto close_partitions_db = defer([&] noexcept { partitions_db_writer.close(); });
+        auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
+        auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer, encoding);
+        auto row_index_writer = sstables::trie::bti_row_index_writer(sst_ver, rows_db_writer, encoding);
+        std::vector<sstables::key> keys;
+        for (const auto& p : partitions) {
+            auto pk = partition_key::from_deeply_exploded(*s, {data_value(p.token)});
+            auto dk = dht::decorated_key(dht::token::from_int64(p.token), pk);
+            auto key = sstables::key::from_partition_key(*s, pk);
+            for (const auto& b : p.blocks) {
+                row_index_writer.add(*s, make_ck(b.first_ck), make_ck(b.last_ck), p.start, b.start, b.range_tombstone_before_first_ck);
+            }
+            auto target = row_index_writer.finish(*s, p.start, p.end, key, p.partition_tombstone);
+            partition_index_writer.add(*s, dk, utils::make_hashed_key(bytes_view(key)), target);
+            keys.push_back(std::move(key));
+        }
+        std::move(partition_index_writer).finish(keys.front(), keys.back());
+    }
+    return index_files_hex{
+        .partitions_db = to_hex(partitions_bufs),
+        .rows_db = to_hex(rows_bufs),
+    };
+}
+
+// Checks the exact bytes of the BTI index files of `mt`.
+// A change in these bytes is a change of the on-disk format.
+SEASTAR_THREAD_TEST_CASE(test_mt_index_payload_encoding) {
+    auto pos = [] (uint64_t p) { return sstables::sstable_position::from_logical(p); };
+    const auto live = sstables::deletion_time::make_live();
+    const auto partitions = std::vector<payload_test_partition>{
+        {.token = 1, .start = pos(127), .end = pos(150), .partition_tombstone = live},
+        {.token = 2, .start = pos(200), .end = pos(1199), .partition_tombstone = {789, 1011}, .blocks = {
+            {.first_ck = 1, .last_ck = 2, .start = pos(210), .range_tombstone_before_first_ck = live},
+            {.first_ck = 3, .last_ck = 4, .start = pos(500), .range_tombstone_before_first_ck = {123, 456}},
+        }},
+        {.token = 3, .start = pos(0x123456789a), .end = pos(0x12345678ff), .partition_tombstone = live},
+    };
+    auto files = write_index_for_payload_test(
+        sstables::sstable_version_types::mt,
+        sstables::trie::bti_position_encoding::logical(),
+        partitions);
+    // Each payload node starts with a byte holding the node type (high 4 bits)
+    // and the payload field (low 4 bits). A partition payload field is
+    // 0x8 (hash byte present) | (position width - 1).
+    BOOST_CHECK_EQUAL(files.partitions_db,
+        // Partition 1: Data.db position 127.
+        // The payload is the hash byte and ~127 in 1 byte.
+        "08" "44" "80"
+        // Partition 2: Rows.db position 30, not negated.
+        "08" "c1" "1e"
+        // Partition 3: Data.db position 0x123456789a.
+        // The payload is the hash byte and ~0x123456789a in 5 bytes.
+        "0c" "9f" "edcba98765"
+        // The trie nodes for the token bytes, from the leaves to the root.
+        "50" "03" "010203" "0d0a07"
+        "1800" "1200" "1200" "1200" "1200" "1200" "1280" "1240"
+        // The footer: the first and last keys, the footer position,
+        // the partition count, and the root position.
+        "0002" "0001" "0002" "0003" "0000000000000025" "0000000000000003" "0000000000000023");
+    // A row payload field is 0x8 (range tombstone present) | (offset width).
+    BOOST_CHECK_EQUAL(files.rows_db,
+        // Partition 2, block 2: offset 300 from the partition start, then the
+        // range tombstone: marked_for_delete_at and local_deletion_time.
+        "0a" "012c" "00000000000001c8" "0000007b"
+        // Partition 2, the end of the partition: offset 999.
+        "02" "03e7"
+        // The trie nodes for the separators.
+        "50" "02" "0305" "1203"
+        "1680"
+        // The root is a SINGLE_8 node with a payload: the transition byte,
+        // the child offset, then the payload of block 1: offset 10.
+        "21" "40" "02" "0a"
+        // The row index header of partition 2, at Rows.db position 30: the key,
+        // Data.db position 200 as a vint, the root position relative to the
+        // previous field (-8) as a signed vint, the block count, and the
+        // partition tombstone.
+        "0002" "0002" "80c8" "0f" "02" "00000000000003f3" "00000315");
+}
+
+// Checks the exact bytes of the BTI index files of a compressed `mu` sstable.
+// The names C, N, O, LO, delta_C, T, P, and V are from
+// docs/architecture/sstable/sstable3/sstable-mu-format.rst.
+SEASTAR_THREAD_TEST_CASE(test_mu_index_payload_encoding) {
+    auto pos = [] (uint64_t chunk_position, uint64_t extent_hint, uint64_t offset_within_chunk) {
+        return sstables::sstable_position::from_physical(chunk_position, extent_hint, offset_within_chunk);
+    };
+    const auto live = sstables::deletion_time::make_live();
+    const auto partitions = std::vector<payload_test_partition>{
+        {.token = 1, .start = pos(0, 100, 0), .end = pos(0, 100, 23), .partition_tombstone = live},
+        {.token = 2, .start = pos(1000, 700, 50), .end = pos(2300, 900, 2000), .partition_tombstone = {789, 1011}, .blocks = {
+            {.first_ck = 1, .last_ck = 2, .start = pos(1000, 700, 300), .range_tombstone_before_first_ck = live},
+            {.first_ck = 3, .last_ck = 4, .start = pos(1700, 600, 10), .range_tombstone_before_first_ck = {123, 456}},
+        }},
+        {.token = 3, .start = pos(0x123456789a, 1500, 4095), .end = pos(0x123456789a + 1500, 1000, 50), .partition_tombstone = live},
+    };
+    // With L = 4096, LO has W_N = 4 bits of N - 1 and W_O = 12 bits of O.
+    auto files = write_index_for_payload_test(
+        sstables::sstable_version_types::mu,
+        sstables::trie::bti_position_encoding::physical(sstables::framed_chunk_codec::for_framed_chunks(4096)),
+        partitions);
+    // The payload field of a partition payload is the payload size.
+    BOOST_CHECK_EQUAL(files.partitions_db,
+        // Partition 1: (C, N, O) = (0, 1, 0).
+        // The payload is the hash byte, then V: the top bit, C and LO, in 3 bytes.
+        "04" "44" "800000"
+        // Partition 2: Rows.db position 36. The top bit of V is clear.
+        "02" "c1" "24"
+        // Partition 3: (C, N, O) = (0x123456789a, 4, 4095).
+        "08" "9f" "923456789a3fff"
+        // The trie nodes for the token bytes, from the leaves to the root.
+        "50" "03" "010203" "110c09"
+        "1800" "1200" "1200" "1200" "1200" "1200" "1280" "1240"
+        // The footer: the first and last keys, the footer position,
+        // the partition count, and the root position.
+        "0002" "0001" "0002" "0003" "0000000000000029" "0000000000000003" "0000000000000027");
+    // The payload field of a row payload is P.
+    BOOST_CHECK_EQUAL(files.rows_db,
+        // Partition 2, block 2: (C, N, O) = (1700, 2, 10), so delta_C = 700, and T = 1.
+        // Then the range tombstone: marked_for_delete_at and local_deletion_time.
+        "04" "05782015" "00000000000001c8" "0000007b"
+        // Partition 2, the end of the partition: (C, N, O) = (2300, 3, 2000),
+        // so delta_C = 1300, and T = 0.
+        "04" "0a284fa0"
+        // The trie nodes for the separators.
+        "50" "02" "0305" "1605"
+        "1680"
+        // The root is a SINGLE_8 node with a payload: the transition byte,
+        // the child offset, then the payload of block 1:
+        // (C, N, O) = (1000, 3, 300), so delta_C = 0, and T = 0.
+        "23" "40" "02" "004258"
+        // The row index header of partition 2, at Rows.db position 36: the key,
+        // C = 1000 as a vint, LO for (N, O) = (3, 50) in 2 bytes, the root
+        // position relative to the C field (-10) as a signed vint, the block
+        // count, and the partition tombstone.
+        "0002" "0002" "83e8" "2032" "13" "02" "00000000000003f3" "00000315");
+}
 
 struct clustering_index_entry {
     sstables::clustering_info first_ck;
@@ -327,7 +612,7 @@ struct reference_index {
     std::vector<entry_idx> _present_dk_indices;
     // `_data_file_offsets[i]` is the `_entries[i].data_file_offset`.
     // (Extracted for convenience, because `_entries[i]` is a variant).
-    std::vector<uint64_t> _data_file_offsets;
+    std::vector<sstables::sstable_position> _data_file_offsets;
 
     // The mutable state of this index reader.
     // An index reader is expected to behave like a (lower bound, upper bound) pair,
@@ -344,7 +629,7 @@ struct reference_index {
     {
         for (const auto& e : _entries) {
             std::visit([this](const auto& entry) {
-                _data_file_offsets.push_back(entry.data_file_offset);
+                _data_file_offsets.push_back(sstables::sstable_position::from_logical(entry.data_file_offset));
             }, e);
         }
         {
@@ -374,7 +659,7 @@ struct reference_index {
         }
     }
 
-    entry_idx entry_idx_from_data_position(uint64_t data_position) const {
+    entry_idx entry_idx_from_data_position(sstables::sstable_position data_position) const {
         auto it = std::find(_data_file_offsets.begin(), _data_file_offsets.end(), data_position);
         if (it != _data_file_offsets.end()) {
             return static_cast<entry_idx>(std::distance(_data_file_offsets.begin(), it));
@@ -397,7 +682,7 @@ struct reference_index {
         return get_partition_of_entry(_lower);
     }
 
-    void recalibrate(sstables::data_file_positions_range r) {
+    void recalibrate(sstables::sstable_positions_range r) {
         _lower = entry_idx_from_data_position(r.start);
         if (r.end) {
             _upper = entry_idx_from_data_position(*r.end);
@@ -598,15 +883,15 @@ struct reference_index {
         }
         return std::nullopt;
     }
-    sstables::data_file_positions_range data_file_positions() const {
+    sstables::sstable_positions_range sstable_positions() const {
         auto lo = _data_file_offsets[_lower];
-        std::optional<uint64_t> hi;
+        std::optional<sstables::sstable_position> hi;
         if (_upper) {
             hi = _data_file_offsets[*_upper];
         }
         return {lo, hi};
     }
-    std::optional<uint64_t> last_block_offset() {
+    std::optional<sstables::sstable_position_offset> last_block_offset() {
         auto curpar = get_current_partition();
         if (std::holds_alternative<eof_index_entry>(_entries[curpar])) {
             return std::nullopt;
@@ -616,7 +901,8 @@ struct reference_index {
         }
         for (uint64_t idx = curpar + 1; idx < _entries.size(); ++idx) {
             if (std::holds_alternative<partition_end_entry>(_entries[idx + 1])) {
-                return _data_file_offsets[idx] - _data_file_offsets[curpar];
+                return sstables::sstable_position_offset::from_logical(
+                    _data_file_offsets[idx].to_logical() - _data_file_offsets[curpar].to_logical());
             }
         }
         abort();
@@ -631,7 +917,7 @@ struct reference_index {
     sstables::indexable_element element_kind() const {
         return element_kind_for_entry(_lower);
     }
-    sstables::indexable_element element_kind_for_position(std::optional<uint64_t> pos) const {
+    sstables::indexable_element element_kind_for_position(std::optional<sstables::sstable_position> pos) const {
         if (!pos) {
             return sstables::indexable_element::partition;
         }
@@ -722,8 +1008,8 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
         auto reader = reader_factory();
         ri.reset();
         auto check_integrity = [&] {
-            testlog.debug("check_integrity: reader->data_file_positions()={},{}", reader->data_file_positions().start, reader->data_file_positions().end);
-            auto positions = reader->data_file_positions();
+            testlog.debug("check_integrity: reader->sstable_positions()={},{}", reader->sstable_positions().start, reader->sstable_positions().end);
+            auto positions = reader->sstable_positions();
             // Adjust the reference index to match the reader's positions exactly.
             // (Before this call, the positions may be different, because the real
             // reader is allowed some degree of inexactness/suboptimality after some method calls).
@@ -731,8 +1017,8 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
             if (ri.partition_data_ready()) {
                 SCYLLA_ASSERT(reader->partition_data_ready());
             }
-            SCYLLA_ASSERT(ri.data_file_positions().start == positions.start);
-            SCYLLA_ASSERT(ri.data_file_positions().end == positions.end);
+            SCYLLA_ASSERT(ri.sstable_positions().start == positions.start);
+            SCYLLA_ASSERT(ri.sstable_positions().end == positions.end);
             SCYLLA_ASSERT(ri.element_kind() == reader->element_kind());
             SCYLLA_ASSERT(ri.eof() == reader->eof());
             auto get_tombstone = [] (const sstables::open_rt_marker& marker) {
@@ -741,7 +1027,11 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
             SCYLLA_ASSERT(ri.end_open_marker().transform(get_tombstone) == reader->end_open_marker().transform(get_tombstone));
             SCYLLA_ASSERT(ri.reverse_end_open_marker().transform(get_tombstone) == reader->reverse_end_open_marker().transform(get_tombstone));
             if (reader->partition_data_ready()) {
-                SCYLLA_ASSERT(ri.last_block_offset() == reader->last_block_offset().get());
+                // This test uses logical positions only.
+                auto to_logical = [] (const sstables::sstable_position_offset& off) {
+                    return off.to_logical();
+                };
+                SCYLLA_ASSERT(ri.last_block_offset().transform(to_logical) == reader->last_block_offset().get().transform(to_logical));
                 if (ri.has_row_index()) {
                     SCYLLA_ASSERT(reader->partition_tombstone());
                     SCYLLA_ASSERT(reader->get_partition_key());
@@ -757,13 +1047,13 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
         check_integrity();
         for (int op = 0; op < max_ops; ++op) {
             testlog.debug("op={}, start={}, end={}",
-                op, reader->data_file_positions().start, reader->data_file_positions().end);
+                op, reader->sstable_positions().start, reader->sstable_positions().end);
             if (auto vt = ri.valid_targets_for_advance_lower_and_check_if_present(); !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 auto rp = vt[target];
                 testlog.debug("advance_lower_and_check_if_present(rp={})", rp);
                 
-                auto upper_before = reader->data_file_positions().end;
+                auto upper_before = reader->sstable_positions().end;
                 auto possible_match = reader->advance_lower_and_check_if_present(rp).get();
                 auto reference_match = ri.advance_lower_and_check_if_present(rp);
                 if (!possible_match) {
@@ -774,36 +1064,36 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
                     break;
                 }
                 SCYLLA_ASSERT(reader->element_kind() == sstables::indexable_element::partition);
-                testlog.debug("reader->data_file_positions()={},{}, ri.data_file_positions()={},{}, upper_before={}",
-                    reader->data_file_positions().start,
-                    reader->data_file_positions().end,
-                    ri.data_file_positions().start,
-                    ri.data_file_positions().end,
+                testlog.debug("reader->sstable_positions()={},{}, ri.sstable_positions()={},{}, upper_before={}",
+                    reader->sstable_positions().start,
+                    reader->sstable_positions().end,
+                    ri.sstable_positions().start,
+                    ri.sstable_positions().end,
                     upper_before);
-                SCYLLA_ASSERT(reader->data_file_positions().start <= ri.data_file_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().start <= ri.sstable_positions().start);
                 if (reference_match) {
                     SCYLLA_ASSERT(possible_match);
-                    SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
+                    SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
                 }
-                SCYLLA_ASSERT(reader->data_file_positions().end == upper_before);
+                SCYLLA_ASSERT(reader->sstable_positions().end == upper_before);
             } else if (auto vt = ri.valid_targets_for_advance_past_definitely_present_partition(); !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 auto dk = vt[target];
-                auto upper_before = reader->data_file_positions().end;
+                auto upper_before = reader->sstable_positions().end;
                 testlog.debug("advance_to_definitely_present_partition(dk={})", dk);
                 reader->advance_to_definitely_present_partition(dk).get();
                 ri.advance_to_definitely_present_partition(dk);
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
-                SCYLLA_ASSERT(reader->data_file_positions().end == upper_before);
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end == upper_before);
             } else if (auto vt = ri.valid_targets_for_advance_past_definitely_present_partition(); !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 auto dk = vt[target];
-                auto upper_before = reader->data_file_positions().end;
+                auto upper_before = reader->sstable_positions().end;
                 testlog.debug("advance_past_definitely_present_partition(dk={})", dk);
                 reader->advance_past_definitely_present_partition(dk).get();
                 ri.advance_past_definitely_present_partition(dk);
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
-                SCYLLA_ASSERT(reader->data_file_positions().end == upper_before);
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end == upper_before);
             } else if (!ndcs.choose_bool()) {
                 std::optional<dht::partition_range::bound> lb;
                 if (auto vt = ri.valid_lb_targets_for_advance_to(); !vt.empty() && !ndcs.choose_bool()) {
@@ -830,12 +1120,12 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
                 testlog.debug("advance_to(pr={})", pr);
                 reader->advance_to(pr).get();
                 ri.advance_to(pr);
-                auto positions = reader->data_file_positions();
+                auto positions = reader->sstable_positions();
                 SCYLLA_ASSERT(reader->element_kind() == sstables::indexable_element::partition);
-                SCYLLA_ASSERT(positions.start <= ri.data_file_positions().start);
-                if (ri.data_file_positions().end) {
+                SCYLLA_ASSERT(positions.start <= ri.sstable_positions().start);
+                if (ri.sstable_positions().end) {
                     SCYLLA_ASSERT(positions.end);
-                    SCYLLA_ASSERT(*positions.end >= *ri.data_file_positions().end);
+                    SCYLLA_ASSERT(*positions.end >= *ri.sstable_positions().end);
                 } else {
                     SCYLLA_ASSERT(!positions.end);
                 }
@@ -843,45 +1133,45 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
                 testlog.debug("advance_to_next_partition()");
                 reader->advance_to_next_partition().get();
                 ri.advance_to_next_partition();
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
-                SCYLLA_ASSERT(reader->data_file_positions().end == ri.data_file_positions().end);
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end == ri.sstable_positions().end);
             } else if (!ndcs.choose_bool()) {
                 testlog.debug("advance_reverse_to_next_partition()");
                 reader->advance_reverse_to_next_partition().get();
                 ri.advance_reverse_to_next_partition();
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
-                SCYLLA_ASSERT(reader->data_file_positions().end == ri.data_file_positions().end);
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end == ri.sstable_positions().end);
             } else if (auto vt = ri.valid_targets_for_advance_to_pip(); !reader->eof() && !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 const auto& pos = vt[target];
                 testlog.debug("advance_to({})", pos);
                 reader->advance_to(pos).get();
                 ri.advance_to(pos);
-                SCYLLA_ASSERT(reader->data_file_positions().start <= ri.data_file_positions().start);
-                SCYLLA_ASSERT(reader->data_file_positions().end == ri.data_file_positions().end);
+                SCYLLA_ASSERT(reader->sstable_positions().start <= ri.sstable_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end == ri.sstable_positions().end);
             } else if (auto vt = ri.valid_targets_for_advance_to_pip(); !reader->eof() && !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 const auto& pos = vt[target];
                 testlog.debug("advance_upper_past({})", pos);
                 reader->advance_upper_past(pos).get();
                 ri.advance_upper_past(pos);
-                SCYLLA_ASSERT(reader->data_file_positions().end.value() >= ri.data_file_positions().end.value());
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end.value() >= ri.sstable_positions().end.value());
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
             } else if (auto vt = ri.valid_targets_for_advance_reverse(); !reader->eof() && !vt.empty() && !ndcs.choose_bool()) {
                 auto target = ndcs.choose_up_to(vt.size() - 1);
                 const auto& pos = vt[target];
                 testlog.debug("advance_upper_past({})", pos);
                 reader->advance_reverse(pos).get();
                 ri.advance_reverse(pos);
-                SCYLLA_ASSERT(reader->data_file_positions().end.value() >= ri.data_file_positions().end.value());
-                SCYLLA_ASSERT(reader->data_file_positions().start == ri.data_file_positions().start);
+                SCYLLA_ASSERT(reader->sstable_positions().end.value() >= ri.sstable_positions().end.value());
+                SCYLLA_ASSERT(reader->sstable_positions().start == ri.sstable_positions().start);
             } else {
                 testlog.debug("read_partition_data()");
-                auto positions_before = reader->data_file_positions();
+                auto positions_before = reader->sstable_positions();
                 reader->read_partition_data().get();
                 ri.read_partition_data();
                 SCYLLA_ASSERT(reader->partition_data_ready());
-                auto positions_after = reader->data_file_positions();
+                auto positions_after = reader->sstable_positions();
                 SCYLLA_ASSERT(positions_before.start == positions_after.start);
                 SCYLLA_ASSERT(positions_before.end == positions_after.end);
             }
@@ -954,8 +1244,16 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto close_partitions_db = defer([&] noexcept { partitions_db_writer.close(); });
         auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
 
-        auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer);
-        auto row_index_writer = sstables::trie::bti_row_index_writer(rows_db_writer);
+        // This test uses the `mt` (logical) format, so the payloads use the legacy
+        // (non-physical) serialization.
+        auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer, sstables::trie::bti_position_encoding::logical());
+        auto row_index_writer = sstables::trie::bti_row_index_writer(sst_ver, rows_db_writer, sstables::trie::bti_position_encoding::logical());
+
+        // This test uses the `mt` (logical) format, so the positions are logical;
+        // the post-compression (physical) position isn't exercised here.
+        auto pos = [] (int64_t uncompressed) {
+            return sstables::sstable_position::from_logical(uncompressed);
+        };
 
         std::optional<partition_index_entry> last_partition_entry;
         std::optional<partition_end_entry> last_partition_end_entry;
@@ -965,10 +1263,9 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                 auto pk = sstables::key::from_partition_key(*the_schema, last.dk.key());
                 auto hash = utils::make_hashed_key(bytes_view(pk));
                 auto payload = row_index_writer.finish(
-                    sst_ver,
                     *the_schema,
-                    last.data_file_offset,
-                    last_partition_end_entry.value().data_file_offset,
+                    pos(last.data_file_offset),
+                    pos(last_partition_end_entry.value().data_file_offset),
                     pk,
                     last.partition_tombstone);
                 partition_index_writer.add(*the_schema, last.dk, hash, payload);
@@ -987,7 +1284,8 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                         *the_schema,
                         e.first_ck,
                         e.last_ck,
-                        e.data_file_offset - last_partition_entry.value().data_file_offset,
+                        pos(last_partition_entry.value().data_file_offset),
+                        pos(e.data_file_offset),
                         e.range_tombstone_before_first_ck);
                 },
                 [&](const partition_end_entry& e) {
@@ -1029,9 +1327,11 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                 partitions_db_cached,
                 rows_db_cached,
                 partitions_db_root_pos,
-                std::get<eof_index_entry>(dataset.entries.back()).data_file_offset,
+                sstables::sstable_position::from_logical(0),
+                sstables::sstable_position::from_logical(std::get<eof_index_entry>(dataset.entries.back()).data_file_offset),
                 sst_ver,
                 the_schema,
+                sstables::trie::bti_position_encoding::logical(),
                 semaphore.make_permit(),
                 trace_state
             );
@@ -1106,40 +1406,207 @@ static data_source make_fragmented(nondeterministic_choice_stack& ndcs, std::spa
 // fragmentations (up to a given number of cuts) and yield points.
 SEASTAR_THREAD_TEST_CASE(test_read_row_index_header) {
     auto pk = sstables::key(tests::random::get_bytes(4));
+    constexpr uint32_t uncompressed_chunk_length = 4096;
+    // extent_hint is a byte-length upper bound; the index stores it internally
+    // as a block count bounded by max_block_count(). Position equality ignores
+    // extent_hint, so the exact recovered value is not asserted here; we only
+    // need a value the writer accepts (>= 1 byte, and within the block-count bound).
+    const uint64_t max_extent_hint = sstables::trie::bti_physical_layout(sstables::framed_chunk_codec::for_framed_chunks(uncompressed_chunk_length)).max_block_count();
     uint64_t partition_data_start = tests::random::get_int<int64_t>(0, std::numeric_limits<int64_t>::max());
+    uint64_t chunk_start = tests::random::get_int<int64_t>(0, std::numeric_limits<int64_t>::max());
+    uint64_t extent_hint = tests::random::get_int<uint64_t>(1, max_extent_hint);
+    uint64_t offset_within_chunk = tests::random::get_int<uint64_t>(0, uncompressed_chunk_length - 1);
     uint64_t number_of_blocks = tests::random::get_int<uint64_t>();
     uint64_t root_pos = tests::random::get_int<uint64_t>();
     auto tomb = make_random_tombstone();
-    memory_data_sink_buffers bufs;
-    {
-        sstables::file_writer fw(data_sink(std::make_unique<memory_data_sink>(bufs)));
-        auto close_fw = defer([&] noexcept{ fw.close(); });
-        sstables::trie::write_row_index_header(
-            sstables::sstable_version_types::mt,
-            fw,
-            pk,
-            partition_data_start,
-            number_of_blocks,
-            root_pos,
-            tomb
-        );
-    }
+
     nondeterministic_choice_stack ndcs;
     size_t n_cases = 0;
     do {
+        // `mu` stores the full physical position; `mt` stores only the uncompressed offset.
+        auto sst_ver = ndcs.choose_bool()
+            ? sstables::sstable_version_types::mu
+            : sstables::sstable_version_types::mt;
+        auto encoding = sstables::index_holds_physical_positions(sst_ver)
+            ? sstables::trie::bti_position_encoding::physical(sstables::framed_chunk_codec::for_framed_chunks(uncompressed_chunk_length))
+            : sstables::trie::bti_position_encoding::logical();
+        auto position_to_write = encoding.is_physical()
+            ? sstables::sstable_position::from_physical(chunk_start, extent_hint, offset_within_chunk)
+            : sstables::sstable_position::from_logical(partition_data_start);
+        auto expected_position = position_to_write;
+        memory_data_sink_buffers bufs;
+        {
+            sstables::file_writer fw(data_sink(std::make_unique<memory_data_sink>(bufs)));
+            auto close_fw = defer([&] noexcept { fw.close(); });
+            sstables::trie::write_row_index_header(
+                sst_ver,
+                fw,
+                pk,
+                position_to_write,
+                encoding,
+                number_of_blocks,
+                root_pos,
+                tomb
+            );
+        }
         auto vec = linearize(bufs);
         vec.append_range(std::as_bytes(std::span(std::string_view("some_suffix"))));
         uint64_t stream_size = ndcs.choose_bool() ? bufs.size() : vec.size();
         constexpr size_t max_cuts = 2;
         auto in = seastar::input_stream<char>(make_fragmented(ndcs, vec, max_cuts));
         auto semaphore = tests::reader_concurrency_semaphore_wrapper();
-        auto result = sstables::trie::read_row_index_header(std::move(in), 0, stream_size, semaphore.make_permit()).get();
+        auto result = sstables::trie::read_row_index_header(
+            encoding,
+            std::move(in),
+            0,
+            stream_size,
+            semaphore.make_permit()).get();
         SCYLLA_ASSERT(bytes_view(result.partition_key) == bytes_view(pk));
-        SCYLLA_ASSERT(result.data_file_offset == partition_data_start);
+        SCYLLA_ASSERT(result.data_file_position == expected_position);
         SCYLLA_ASSERT(result.number_of_blocks == number_of_blocks);
         SCYLLA_ASSERT(result.trie_root == root_pos);
-        SCYLLA_ASSERT(result.partition_tombstone == tomb);  
+        SCYLLA_ASSERT(result.partition_tombstone == tomb);
         ++n_cases;
     } while (ndcs.rewind());
     testlog.debug("Executed test cases: {}", n_cases);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_physical_partition_payload_encoding) {
+    auto the_schema = schema_builder(this_smp_shard_count(), "ks", "t")
+        .with_column("pk", short_type, column_kind::partition_key)
+        .with_column("ck", short_type, column_kind::clustering_key)
+        .build();
+
+    constexpr uint32_t uncompressed_chunk_length = 4096;
+    // extent_hint is a byte-length upper bound; the index stores it internally
+    // as a block count. Position equality ignores extent_hint, so the exact
+    // recovered value is not asserted below.
+    auto physical_pos = [] (uint64_t chunk_position, uint64_t extent_hint, uint64_t offset_within_chunk) {
+        return sstables::sstable_position::from_physical(chunk_position, extent_hint, offset_within_chunk);
+    };
+
+    auto make_dk = [&] (int64_t token, int16_t pk_value) {
+        auto pk = partition_key::from_deeply_exploded(*the_schema, {data_value(pk_value)});
+        return dht::decorated_key(dht::token::from_int64(token), pk);
+    };
+    auto dk_direct = make_dk(1, 1);
+    auto dk_rows = make_dk(2, 2);
+    auto key_direct = sstables::key::from_partition_key(*the_schema, dk_direct.key());
+    auto key_rows = sstables::key::from_partition_key(*the_schema, dk_rows.key());
+    auto hash_direct = utils::make_hashed_key(bytes_view(key_direct));
+    auto hash_rows = utils::make_hashed_key(bytes_view(key_rows));
+
+    // extent_hint values below are byte-length hints; the writer accepts any value
+    // that fits the block-count bound once converted. Equality ignores extent_hint,
+    // so the recovered upper bounds aren't asserted.
+    auto direct_actual = physical_pos(8192, 20, 17);
+    auto direct_expected = physical_pos(8192, 20, 17);
+    // The partition start's chunk isn't block-aligned, and the row block is in a
+    // later chunk, so that the block's chunk position relative to the partition
+    // start's chunk has a different block misalignment than the absolute one.
+    auto rows_partition_start = physical_pos(12300, 8, 64);
+    auto rows_partition_end = physical_pos(13000, 20, 512);
+    auto row_block_actual = physical_pos(13000, 20, 128);
+    auto row_block_expected = physical_pos(13000, 20, 128);
+    auto eof = physical_pos(16384, 8, 0);
+    auto partition_tomb = sstables::deletion_time::make_live();
+    auto row_tomb = sstables::deletion_time{123, 456};
+    auto ck = clustering_key::from_deeply_exploded(*the_schema, {data_value(int16_t(0))});
+
+    tmpdir dir;
+    auto partitions_path = dir.path() / "Partitions.db";
+    auto rows_path = dir.path() / "Rows.db";
+    {
+        file partitions_db = open_file_dma(partitions_path.c_str(), open_flags::create | open_flags::wo).get();
+        file rows_db = open_file_dma(rows_path.c_str(), open_flags::create | open_flags::wo).get();
+
+        sstables::file_writer partitions_db_writer(make_file_output_stream(partitions_db).get());
+        sstables::file_writer rows_db_writer(make_file_output_stream(rows_db).get());
+
+        auto close_partitions_db = defer([&] noexcept { partitions_db_writer.close(); });
+        auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
+
+        auto partition_index_writer = sstables::trie::bti_partition_index_writer(
+            sstables::sstable_version_types::mu,
+            partitions_db_writer,
+            sstables::trie::bti_position_encoding::physical(sstables::framed_chunk_codec::for_framed_chunks(uncompressed_chunk_length)));
+        auto row_index_writer = sstables::trie::bti_row_index_writer(
+            sstables::sstable_version_types::mu,
+            rows_db_writer,
+            sstables::trie::bti_position_encoding::physical(sstables::framed_chunk_codec::for_framed_chunks(uncompressed_chunk_length)));
+
+        partition_index_writer.add(*the_schema, dk_direct, hash_direct, direct_actual);
+
+        // The row index stores the block's offset from its partition's start; the
+        // reader recomposes the absolute position (row_block_expected) from the
+        // partition start it reads back.
+        row_index_writer.add(
+            *the_schema,
+            sstables::clustering_info{ck, sstables::bound_kind_m::clustering},
+            sstables::clustering_info{ck, sstables::bound_kind_m::clustering},
+            rows_partition_start,
+            row_block_actual,
+            row_tomb);
+        auto rows_payload = row_index_writer.finish(
+            *the_schema,
+            rows_partition_start,
+            rows_partition_end,
+            key_rows,
+            partition_tomb);
+        partition_index_writer.add(*the_schema, dk_rows, hash_rows, rows_payload);
+        std::move(partition_index_writer).finish(key_direct, key_rows);
+    }
+
+    file partitions_db = open_file_dma(partitions_path.c_str(), open_flags::ro).get();
+    file rows_db = open_file_dma(rows_path.c_str(), open_flags::ro).get();
+    auto close_partitions_db = deferred_close(partitions_db);
+    auto close_rows_db = deferred_close(rows_db);
+
+    auto stats = cached_file_stats();
+    auto cached_file_lru = lru();
+    auto region = logalloc::region();
+    auto partitions_db_size = partitions_db.size().get();
+    auto rows_db_size = rows_db.size().get();
+    auto partitions_db_cached = seastar::make_shared<cached_file>(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
+    auto rows_db_cached = seastar::make_shared<cached_file>(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
+
+    auto partitions_db_footer = sstables::trie::read_bti_partitions_db_footer(
+        *the_schema,
+        sstables::sstable_version_types::mu,
+        partitions_db,
+        partitions_db_size).get();
+    auto semaphore = tests::reader_concurrency_semaphore_wrapper();
+    auto trace_state = tracing::trace_state_ptr();
+    auto reader = sstables::trie::make_bti_index_reader(
+        partitions_db_cached,
+        rows_db_cached,
+        partitions_db_footer.trie_root_position,
+        direct_expected,
+        eof,
+        sstables::sstable_version_types::mu,
+        the_schema,
+        sstables::trie::bti_position_encoding::physical(sstables::framed_chunk_codec::for_framed_chunks(uncompressed_chunk_length)),
+        semaphore.make_permit(),
+        trace_state);
+
+    BOOST_REQUIRE(reader->advance_lower_and_check_if_present(dht::ring_position_view(dk_direct), hash_direct).get());
+    BOOST_REQUIRE(reader->sstable_positions().start == direct_expected);
+    BOOST_REQUIRE(!reader->partition_tombstone());
+
+    reader->advance_to_definitely_present_partition(dk_rows).get();
+    BOOST_REQUIRE(reader->sstable_positions().start == rows_partition_start);
+    BOOST_REQUIRE(reader->partition_tombstone());
+    BOOST_REQUIRE(reader->get_partition_key());
+    BOOST_REQUIRE(bytes_view(sstables::key::from_partition_key(*the_schema, *reader->get_partition_key())) == bytes_view(key_rows));
+
+    reader->advance_to(position_in_partition(partition_region::clustered, bound_weight(0), ck)).get();
+    BOOST_REQUIRE(reader->sstable_positions().start == row_block_expected);
+    // The recovered extent hint is an upper bound which rounds the chunk end up
+    // to the next block boundary in the file.
+    auto row_block_recovered = reader->sstable_positions().start.as_physical();
+    BOOST_REQUIRE_GE(row_block_recovered.extent_hint, row_block_actual.as_physical().extent_hint);
+    BOOST_REQUIRE_EQUAL((row_block_recovered.chunk_position + row_block_recovered.extent_hint) % 512, 0);
+    auto marker = reader->end_open_marker();
+    BOOST_REQUIRE(marker);
+    BOOST_REQUIRE(marker->tomb == tombstone(row_tomb));
 }
