@@ -40,6 +40,7 @@ Examples:
 1. `./test.py --coverage` - will run all tests in all built modes and will produce a coverage lcov traces for all of them.
 2. `./test.py --coverage-mode dev` - will run all tests in all built modes and will produce a coverage lcov traces only for the dev mode runs.
 3. `./test.py --mode dev --mode release --coverage-mode dev` - will run all tests in the dev and release mode but will only produce an lcov traces for the dev mode tests.
+4. `./test.py --mode coverage --coverage-report` - same as `--coverage`, and also generates an html report for every mode coverage is collected for, under `<tmpdir>/<mode>/coverage/tests/`.
 
    ### Where To Find The Lcov Traces After The `test.py` Run?
    `test.py` will produce a hierarchy of of lcov trace, all rooted in the `<tmpdir>` (default:``./testlog``).

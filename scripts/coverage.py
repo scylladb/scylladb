@@ -169,9 +169,9 @@ def generate_coverage_report(path="testlog/coverage/coverage", build_path="build
         maybe_print(f"Found {len(profraw_files)} input files")
 
     if not profraw_files:
-        # Not a fatal error: test.py calls this in-process after every
-        # coverage-mode run, and a run may legitimately produce no raw
-        # profiles (e.g. only cluster-based suites ran without --coverage).
+        # Not a fatal error: test.py --coverage-report calls this in-process
+        # for every mode coverage is collected for, and a run may legitimately
+        # produce no raw profiles (e.g. a suite with coverage disabled).
         print("Warning: couldn't find any raw profiling data files, skipping coverage report generation")
         return
 

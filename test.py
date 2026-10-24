@@ -230,6 +230,9 @@ def parse_cmd_line() -> argparse.Namespace:
                              "The lcov files can eventually be used for generating coverage reports")
     parser.add_argument("--coverage-mode",action = 'append', type = str, dest = "coverage_modes",
                         help = "Collect and process coverage only for the modes specified. implies: --coverage, default: All built modes")
+    parser.add_argument("--coverage-report", action = 'store_true',
+                        help = "Also generate an html coverage report (scripts/coverage.py) for every mode coverage "
+                               "is collected for. implies: --coverage")
     parser.add_argument("--coverage-keep-raw",action = 'store_true',
                         help = "Do not delete llvm raw profiles when processing coverage reports.")
     parser.add_argument("--coverage-keep-indexed",action = 'store_true',
@@ -293,6 +296,8 @@ def parse_cmd_line() -> argparse.Namespace:
                  'import os; print(len(os.sched_getaffinity(0)))']))
         args.jobs = ThreadsCalculator(args.modes, args.threads_multiplier).get_number_of_threads(nr_cpus)
 
+    if args.coverage_report:
+        args.coverage = True
     if not args.coverage_modes and args.coverage:
         args.coverage_modes = list(args.modes)
         if not args.coverage_modes:
@@ -478,11 +483,12 @@ async def main() -> int:
         print(palette.fail("No tests were collected. Please check the test names and modes you provided, as well as"
                            "the test markers if you used the '--markers' option."
                            "Alternatively you can check with --list option if there any errors."))
-    if 'coverage' in options.modes:
-        coverage.generate_coverage_report(
-            str(coverage_utils.coverage_dir(pathlib.Path(options.tmpdir) / "coverage")),
-            path_to("coverage", "test"),
-        )
+    if options.coverage_report:
+        for mode in options.coverage_modes:
+            coverage.generate_coverage_report(
+                str(coverage_utils.coverage_dir(pathlib.Path(options.tmpdir) / mode)),
+                path_to(mode, "test"),
+            )
 
     if options.coverage:
         await process_coverage(options)
