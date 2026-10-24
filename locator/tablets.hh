@@ -467,7 +467,6 @@ tablet_transition_info migration_to_transition_info(const tablet_info&, const ta
 /// Describes streaming required for a given tablet transition.
 constexpr int tablet_migration_stream_weight_default = 1;
 constexpr int tablet_migration_stream_weight_repair = 2;
-constexpr int tablet_migration_stream_weight_restore = 2;
 struct tablet_migration_streaming_info {
     std::unordered_set<tablet_replica> read_from;
     std::unordered_set<tablet_replica> written_to;
