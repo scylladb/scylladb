@@ -2282,13 +2282,21 @@ public:
     // Returns true if the table is under vnodes-to-tablets migration.
     // Such tables have a tablet map but their keyspace RS doesn't use tablets.
     // They should be excluded from load balancing.
+    //
+    // A table whose migration has been finalized is not one of them, even while
+    // its keyspace still replicates by vnodes: every node runs it on tablets and
+    // it cannot be rolled back, so it is balanced and converges to its pow2
+    // layout like any other tablet table.
     bool is_migrating_table(table_id table) {
         auto t = _db.get_tables_metadata().get_table_if_exists(table);
         if (!t) {
             return false;
         }
         auto& ks = _db.find_keyspace(t->schema()->ks_name());
-        return !ks.get_replication_strategy().uses_tablets();
+        if (ks.get_replication_strategy().uses_tablets()) {
+            return false;
+        }
+        return !_tm->tablets().get_tablet_map(table).migration_finalized();
     }
 
     struct table_sizing {
@@ -4553,7 +4561,14 @@ public:
         _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
         _load_sketch->set_minimal_tablet_size(_minimal_tablet_size);
         _load_sketch->set_force_capacity_based_load(_force_capacity_based_balancing);
-        co_await _load_sketch->populate_dc(dc);
+        // A migrating table's sizes are not reported by a node that has not been
+        // upgraded yet, and the balancer does not move such a table anyway. Letting
+        // its missing sizes mark the node as incompletely measured would stop the
+        // balancer planning anything at all - including draining a finalized table
+        // off a replaced node, which only the balancer can do.
+        co_await _load_sketch->populate_dc(dc, [this] (table_id table) {
+            return is_migrating_table(table);
+        });
 
         // If we don't have nodes to drain, remove nodes which don't have complete tablet sizes
         if (nodes_to_drain.empty()) {
@@ -5026,6 +5041,8 @@ private:
 
         lblogger.info("Split tablets for table {}, increasing tablet count from {} to {}",
                       table, tablets.tablet_count(), new_tablets.tablet_count());
+        new_tablets.set_migration_finalized(tablets.migration_finalized());
+
         co_return std::move(new_tablets);
     }
 
@@ -5085,6 +5102,8 @@ private:
 
         lblogger.info("Merge tablets for table {}, decreasing tablet count from {} to {}",
                       table, tablets.tablet_count(), new_tablets.tablet_count());
+
+        new_tablets.set_migration_finalized(tablets.migration_finalized());
 
         if (tablets.is_converging_to_pow2()) {
             auto target_pow2 = tablets.target_pow2_tablet_count();

@@ -219,7 +219,8 @@ async def wait_for_pow2_convergence(manager: ScyllaClusterManager, server: Serve
 
 async def verify_migration_status(manager: ScyllaClusterManager, server: ServerInfo,
                                   ks: str, expected_status: str,
-                                  expected_node_statuses: dict[str, tuple[str, str]]):
+                                  expected_node_statuses: dict[str, tuple[str, str]],
+                                  expected_tables: dict[str, tuple[bool, bool]] | None = None):
     # The status API takes a group0 read barrier, so a single check is enough:
     # anything a node published before it finished starting up is already visible.
     status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
@@ -242,6 +243,14 @@ async def verify_migration_status(manager: ScyllaClusterManager, server: ServerI
         assert len(queried) == 1, f"Expected one entry for host {queried_host_id}, got {queried}"
         assert queried[0]['endpoint'] == server.ip_addr, \
             f"Expected endpoint {server.ip_addr} for host {queried_host_id}, got {queried[0]['endpoint']}"
+
+    # Verify the per-table section, which reports which tables have been
+    # prepared for migration (i.e. have a tablet map) and which are finalized.
+    if expected_tables is not None:
+        actual_tables = {t['table']: (t['prepared'], t['finalized']) for t in status['tables']}
+        assert actual_tables == expected_tables, f"Expected table states {expected_tables}, got {actual_tables}"
+        assert [t['table'] for t in status['tables']] == sorted(expected_tables), \
+            f"Expected tables sorted by name, got {[t['table'] for t in status['tables']]}"
 
     # Verify migration status via the tasks API
     tm = TaskManagerClient(manager.api)
@@ -3081,3 +3090,477 @@ async def test_replace_rollback_coordinator_failover(manager: ScyllaClusterManag
                     f"Tablet at {row.last_token} in {table_name}: expected stage=None after rollback, got {row.stage}"
                 assert row.transition is None, \
                     f"Tablet at {row.last_token} in {table_name}: expected transition=None after rollback, got {row.transition}"
+
+
+@pytest.mark.asyncio
+async def test_migration_table_level(manager: ScyllaClusterManager):
+    """Migrate a keyspace one table at a time.
+
+    A round prepares one or more tables, marks the nodes once, and restarts them
+    all; each table is then finalized on its own, which releases it to the load
+    balancer. Finalizing the last table of the keyspace flips the keyspace too.
+    """
+    cfg = {'num_tokens': 16, 'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    host_id = await manager.get_host_id(server.server_id)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        for t in ("t1", "t2", "t3"):
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+            stmt = cql.prepare(f"INSERT INTO {ks}.{t} (pk, c) VALUES (?, ?)")
+            await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(200)))
+
+        logger.info("Round one prepares t1 and t2 together, before marking the nodes")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks, table="t1")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks, table="t2")
+
+        await verify_migration_status(manager, server, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id: ('vnodes', 'vnodes')},
+            expected_tables={"t1": (True, False), "t2": (True, False), "t3": (False, False)})
+
+        logger.info("Preparing a table is refused once a node has been marked")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        with pytest.raises(HTTPError, match="Another migration is in progress"):
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks, table="t3")
+
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Finalizing an unprepared table is refused")
+        with pytest.raises(HTTPError, match="does not have a tablet map"):
+            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks, table="t3")
+
+        logger.info("Finalizing t1 leaves the keyspace on vnodes, t3 is untouched")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks, table="t1")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 0 or res[0].initial_tablets is None, "keyspace flipped before its last table was finalized"
+
+        logger.info("Finalizing t1 twice is refused")
+        with pytest.raises(HTTPError, match="already finalized"):
+            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks, table="t1")
+
+        logger.info("t1 converges to its pow2 layout while the keyspace is still on vnodes")
+        # The convergence of a finalized table has to be observable, or an operator
+        # has no way to tell when it is safe to start the next round. The keyspace
+        # still uses vnodes here, which used to suppress the whole section.
+        status = await manager.api.get_vnode_tablet_migration_status(
+            server.ip_addr, ks, with_tablet_status=True)
+        assert 'tablets' in status, \
+            f"no tablet status reported for a finalized table in a vnode keyspace: {status}"
+        reported = {t['table'] for t in status['tablets']['pow2_convergence']['tables']}
+        assert reported == {'t1'}, \
+            f"expected only the finalized table to be reported, got {reported}"
+
+        await wait_for_pow2_convergence(manager, server, ks, 't1')
+
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks, table="t2")
+
+        logger.info("With t3 still on vnodes the modes are cleared, so a new round may start")
+        await verify_migration_status(manager, server, ks, expected_status='vnodes',
+            expected_node_statuses={},
+            expected_tables={"t1": (True, True), "t2": (True, True), "t3": (False, False)})
+
+        logger.info("Round two migrates the last table, which flips the keyspace")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks, table="t3")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks, table="t3")
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "keyspace did not flip after its last table was finalized"
+
+        for t in ("t1", "t2", "t3"):
+            await verify_data_integrity(cql, ks, t, 200)
+
+
+@pytest.mark.asyncio
+async def test_migration_table_level_with_zero_token_node(manager: ScyllaClusterManager):
+    """A zero-token node takes part in a per-table migration like any other.
+
+    It holds no tablet replica, so it never appears in system.tablet_sizes, but
+    it has a storage mode of its own and has to be marked and restarted before a
+    table can be finalized.
+    """
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': 16}
+    server_dc1 = await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+    zero_token_cfg = cfg | {'join_ring': False}
+    server_dc2 = await manager.server_add(cmdline=['--smp', '2'], config=zero_token_cfg, property_file={"dc": "dc2", "rack": "rack1"})
+
+    cql, _ = await manager.get_ready_cql([server_dc1])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0} AND tablets = {'enabled': false}") as ks:
+        for t in ("t1", "t2"):
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+            stmt = cql.prepare(f"INSERT INTO {ks}.{t} (pk, c) VALUES (?, ?)")
+            await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(100)))
+
+        await manager.api.create_vnode_tablet_migration(server_dc1.ip_addr, ks, table="t1")
+        await manager.api.upgrade_node_to_tablets(server_dc1.ip_addr)
+        await manager.api.upgrade_node_to_tablets(server_dc2.ip_addr)
+
+        logger.info("Finalizing is refused until the zero-token node has restarted too")
+        await manager.server_restart(server_dc1.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql([server_dc1])
+        with pytest.raises(HTTPError, match="Restart the node|has not yet migrated"):
+            await manager.api.finalize_vnode_tablet_migration(server_dc1.ip_addr, ks, table="t1")
+
+        await manager.server_restart(server_dc2.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql([server_dc1])
+
+        await manager.api.finalize_vnode_tablet_migration(server_dc1.ip_addr, ks, table="t1")
+        await verify_data_integrity(cql, ks, "t1", 100)
+        await verify_data_integrity(cql, ks, "t2", 100)
+
+
+@pytest.mark.asyncio
+async def test_migration_table_level_rollback(manager: ScyllaClusterManager):
+    """A finalized table stays on tablets while an unfinalized one rolls back.
+
+    Rollback concerns the tables whose migration is still open. One that was
+    finalized is out of reach: it keeps its tablets across the restart that
+    reverts the other, which is what makes finalizing a one-way step.
+    """
+    cfg = {'num_tokens': 16, 'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    host_id = await manager.get_host_id(server.server_id)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        for t in ("t1", "t2"):
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+            stmt = cql.prepare(f"INSERT INTO {ks}.{t} (pk, c) VALUES (?, ?)")
+            await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(100)))
+
+        logger.info("Prepare both, restart once, finalize only t1")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks, table="t1")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks, table="t2")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks, table="t1")
+
+        logger.info("Roll back what is left: t2 returns to vnodes, t1 keeps its tablets")
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        await verify_migration_status(manager, server, ks, expected_status='vnodes',
+            expected_node_statuses={},
+            expected_tables={"t1": (True, True), "t2": (False, False)})
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 0 or res[0].initial_tablets is None, "keyspace flipped during a rollback"
+
+        # t1 is finalized, so the balancer owns it and is converging it to its
+        # pow2 layout: its tablet count is a moving target until that settles.
+        await wait_for_pow2_convergence(manager, server, ks, "t1")
+
+        # The tablet map in group0 would survive even if the node had quietly
+        # given t1 a vnode ERM, so ask the node instead: describe_ring answers
+        # per tablet when the table is tablet-flavoured there, and falls back to
+        # the vnode ring otherwise.
+        t1_tablets = await get_tablet_count(manager, server, ks, "t1")
+        t1_ranges = await manager.api.describe_ring(server.ip_addr, ks, table="t1")
+        assert len(t1_ranges) == t1_tablets, \
+            f"finalized table is not tablet-flavoured after a rollback restart: " \
+            f"{len(t1_ranges)} ranges for {t1_tablets} tablets"
+
+        t2_id = (await cql.run_async(
+            f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't2'"))[0].id
+        t2_rows = await cql.run_async(f"SELECT table_id FROM system.tablets WHERE table_id = {t2_id}")
+        assert len(t2_rows) == 0, "rolled-back table kept its tablet map"
+
+        for t in ("t1", "t2"):
+            await verify_data_integrity(cql, ks, t, 100)
+
+
+@pytest.mark.asyncio
+async def test_migration_table_level_finalized_survives_restart(manager: ScyllaClusterManager):
+    """A finalized table keeps its tablets after the storage modes are cleared.
+
+    Once a round ends the nodes carry no intended mode, so nothing but the flag
+    on the tablet map says the table runs on tablets. Restarting must not revert
+    it, and a later round must still be startable.
+    """
+    cfg = {'num_tokens': 16, 'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        for t in ("t1", "t2"):
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+            stmt = cql.prepare(f"INSERT INTO {ks}.{t} (pk, c) VALUES (?, ?)")
+            await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(100)))
+
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks, table="t1")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks, table="t1")
+
+        logger.info("Restart with no intended mode recorded anywhere")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        await verify_migration_status(manager, server, ks, expected_status='vnodes',
+            expected_node_statuses={},
+            expected_tables={"t1": (True, True), "t2": (False, False)})
+        await verify_data_integrity(cql, ks, "t1", 100)
+
+        logger.info("A later round still works")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks, table="t2")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks, table="t2")
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "keyspace did not flip after its last table was finalized"
+        for t in ("t1", "t2"):
+            await verify_data_integrity(cql, ks, t, 100)
+
+
+@pytest.mark.asyncio
+async def test_pow2_convergence_tasks_skip_prepared_tables(manager: ScyllaClusterManager):
+    """A table that is only prepared is not a running convergence task.
+
+    Preparing a table sets its pow2 target, but the balancer leaves a table
+    alone until its migration is finalized, so a prepared table cannot move a
+    single tablet towards that target. Reporting it through the task manager
+    shows an operator a task that is stuck for as long as the round lasts.
+
+    The task manager answers from its own code path, not from the migration
+    status API, so finalizing must switch the reporting on there too.
+    """
+    cfg = {'num_tokens': 16, 'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
+    tm = TaskManagerClient(manager.api)
+
+    async def pow2_tasks(ks: str):
+        # Scoped to this keyspace: the module lists every keyspace, and a
+        # native tablet keyspace may legitimately be converging alongside.
+        await read_barrier(manager.api, server.ip_addr)
+        tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
+        return {(t.scope, t.table) for t in tasks
+                if t.type == "pow2_convergence" and t.keyspace == ks}
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        for t in ("t1", "t2"):
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+            stmt = cql.prepare(f"INSERT INTO {ks}.{t} (pk, c) VALUES (?, ?)")
+            await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(200)))
+
+        assert await pow2_tasks(ks) == set(), \
+            "a vnode keyspace reports convergence tasks before any migration"
+
+        logger.info("Preparing t1 sets its pow2 target, but it cannot converge yet")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks, table="t1")
+
+        # The target is set by build_tablet_map_for_migration(), i.e. at prepare
+        # time, so a check that asks only whether a target exists would admit
+        # this table. Confirm the target really is set, or the assertion below
+        # would pass for the wrong reason.
+        target, _ = await get_pow2_tablet_counts(manager, server, ks, "t1")
+        assert target, "t1 has no pow2 target after prepare; this test no longer covers the case"
+
+        assert await pow2_tasks(ks) == set(), \
+            "a prepared but unfinalized table is reported as a converging task"
+
+        logger.info("Finalizing t1 hands it to the balancer, so now it converges")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks, table="t1")
+
+        assert await pow2_tasks(ks) == {("table", "t1"), ("keyspace", "")}, \
+            f"finalized t1 is not reported as converging: {await pow2_tasks(ks)}"
+
+        await wait_for_pow2_convergence(manager, server, ks, 't1')
+
+        assert await pow2_tasks(ks) == set(), \
+            "t1 is still reported as converging after it converged"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rbno_enabled", [
+    pytest.param(True, id="repair"),
+    pytest.param(False, id="range_streamer"),
+])
+async def test_replace_during_table_level_migration(manager: ScyllaClusterManager, rbno_enabled: bool):
+    """Replace a dead node while one table is finalized and another is still migrating.
+
+    Adapted from test_replace_during_migration, but the keyspace is migrated a
+    table at a time. By the time the node is replaced, t1 has been finalized -
+    so it runs on tablets for good and belongs to the load balancer - while t2
+    is mid-migration and belongs to the vnode replace flow. The two must not
+    both act on the same tablet map.
+    """
+    num_nodes = 3
+    num_shards = 2
+    num_keys = 200
+
+    cfg = {
+        'num_tokens': 16,
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        'enable_repair_based_node_ops': rbno_enabled,
+    }
+    cmdline = ['--smp', str(num_shards)]
+    property_file = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, num_nodes + 1)]
+    servers = await manager.servers_add(num_nodes, cmdline=cmdline, config=cfg, property_file=property_file)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async def upgrade_and_restart(srvs):
+        for s in srvs:
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+        for s in srvs:
+            await manager.server_restart(s.server_id)
+        await reconnect_driver(manager)
+
+    server_to_host_map = {s.server_id: await manager.get_host_id(s.server_id) for s in servers}
+    host_ids = set(server_to_host_map.values())
+
+    async with new_test_keyspace(manager,
+            f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {num_nodes}}} "
+            f"AND tablets = {{'enabled': false}}") as ks:
+        for t in ("t1", "t2"):
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+            stmt = cql.prepare(f"INSERT INTO {ks}.{t} (pk, c) VALUES (?, ?)")
+            stmt.consistency_level = ConsistencyLevel.ALL
+            await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        logger.info("Round one: migrate and finalize t1 only")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks, table="t1")
+        await upgrade_and_restart(servers)
+        cql, _ = await manager.get_ready_cql(servers)
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks, table="t1")
+
+        logger.info("Round two: prepare t2 and upgrade only two of the three nodes")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks, table="t2")
+        upgraded = servers[:2]
+        await upgrade_and_restart(upgraded)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # Confirm t1 really is fully migrated before the replace: it must have a
+        # tablet map with tablets in it, and be marked finalized.
+        t1_id = await manager.get_table_or_view_id(ks, "t1")
+        await read_barrier(manager.api, servers[1].ip_addr)
+        t1_rows = await cql.run_async(
+            f"SELECT tablet_count, migration_finalized FROM system.tablets WHERE table_id = {t1_id}")
+        logger.info(f"t1 before replace: {len(t1_rows)} rows, "
+                    f"tablet_count={t1_rows[0].tablet_count if t1_rows else None}, "
+                    f"finalized={t1_rows[0].migration_finalized if t1_rows else None}")
+        assert t1_rows and t1_rows[0].tablet_count and t1_rows[0].tablet_count > 0, \
+            f"t1 has no tablets before the replace: {t1_rows}"
+        assert t1_rows[0].migration_finalized, f"t1 is not finalized before the replace: {t1_rows}"
+
+        # The node round two did not upgrade still runs t2 on vnodes, and nothing
+        # may change that while it is up: a table's storage flavour is fixed when
+        # the table is created and changes only on restart, after resharding. If
+        # some later metadata change flipped it to tablets, its data would still
+        # be laid out for the static sharder and reads would silently miss rows.
+        not_upgraded = servers[2]
+        for table_name in ("t1", "t2"):
+            await verify_data_integrity(cql, ks, table_name, num_keys,
+                                        cl=ConsistencyLevel.LOCAL_ONE, server=not_upgraded)
+
+        replaced_server = upgraded[0]
+        replaced_host_id = server_to_host_map[replaced_server.server_id]
+        logger.info(f"Replacing node {replaced_server.server_id} mid-migration")
+        await manager.server_stop(replaced_server.server_id, convict=True)
+        replace_cfg = ReplaceConfig(replaced_id=replaced_server.server_id, reuse_ip_addr=False, use_host_id=True)
+        new_server = await manager.server_add(replace_cfg, cmdline=cmdline,
+                                              property_file=replaced_server.property_file(), config=cfg)
+        new_host_id = await manager.get_host_id(new_server.server_id)
+        await reconnect_driver(manager)
+        surviving = [s for s in servers if s.server_id != replaced_server.server_id] + [new_server]
+        cql, _ = await manager.get_ready_cql(surviving)
+
+        check_server = surviving[0]
+        expected_host_ids = (host_ids - {replaced_host_id}) | {new_host_id}
+
+        # RF equals the node count, so every tablet of both tables must end up
+        # replicated on the replacement node: t2 through the vnode replace flow,
+        # t1 - already finalized - through the load balancer.
+        async def tablet_replicas(table_name):
+            await read_barrier(manager.api, check_server.ip_addr)
+            host = cql.cluster.metadata.get_host(check_server.ip_addr)
+            table_id = await manager.get_table_or_view_id(ks, table_name)
+            rows = await cql.run_async(
+                "SELECT last_token, replicas, new_replicas, stage, transition "
+                f"FROM system.tablets WHERE table_id = {table_id}", host=host)
+            return rows
+
+        for table_name in ("t1", "t2"):
+            deadline = time.time() + 120
+            while True:
+                rows = await tablet_replicas(table_name)
+                settled = all(
+                    {str(h) for h, _ in r.replicas} == expected_host_ids
+                    and r.new_replicas is None and r.stage is None and r.transition is None
+                    for r in rows)
+                if settled or time.time() > deadline:
+                    break
+                await asyncio.sleep(1)
+            for r in rows:
+                replica_hosts = {str(h) for h, _ in r.replicas}
+                assert replica_hosts == expected_host_ids, \
+                    f"{table_name} tablet at {r.last_token}: expected {expected_host_ids}, got {replica_hosts}"
+                assert r.new_replicas is None and r.stage is None and r.transition is None, \
+                    f"{table_name} tablet at {r.last_token} left mid-transition: {r}"
+
+        # The replicas have settled, so the replacement node must hold both tables
+        # itself: t2 arrived by vnode streaming, t1 by tablet rebuild. Read only
+        # from that node to prove it, before any further topology change can move
+        # tablets again.
+        for table_name in ("t1", "t2"):
+            logger.info(f"Verifying {table_name} on the replacement node at LOCAL_ONE")
+            deadline = time.time() + 60
+            while True:
+                try:
+                    await verify_data_integrity(cql, ks, table_name, num_keys,
+                                                cl=ConsistencyLevel.LOCAL_ONE, server=new_server)
+                    break
+                except AssertionError:
+                    if time.time() > deadline:
+                        raise
+                    await asyncio.sleep(1)
+
+        logger.info("Finishing the migration: upgrade the remaining node and finalize t2")
+        remaining = [s for s in surviving if s.server_id not in {u.server_id for u in upgraded}]
+        await upgrade_and_restart(remaining)
+        cql, _ = await manager.get_ready_cql(surviving)
+        await manager.api.finalize_vnode_tablet_migration(check_server.ip_addr, ks, table="t2")
+
+        await read_barrier(manager.api, check_server.ip_addr)
+        host = cql.cluster.metadata.get_host(check_server.ip_addr)
+        res = await cql.run_async(
+            f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'", host=host)
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "keyspace did not flip after its last table was finalized"
+
+        for t in ("t1", "t2"):
+            await verify_data_integrity(cql, ks, t, num_keys)

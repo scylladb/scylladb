@@ -427,8 +427,11 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
 }
 
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_finalize_migration_data(
-        const sstring& ks_name) {
+        const sstring& ks_name, const std::optional<sstring>& table_name) {
     apply_atomic("finalize_migration_ks_name", ks_name);
+    if (table_name) {
+        apply_atomic("finalize_migration_table_name", *table_name);
+    }
     return *this;
 }
 

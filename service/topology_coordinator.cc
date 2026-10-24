@@ -468,7 +468,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             return false;
         }
         const auto& ks = _db.find_keyspace(t->schema()->ks_name());
-        return !ks.get_replication_strategy().uses_tablets();
+        if (ks.get_replication_strategy().uses_tablets()) {
+            return false;
+        }
+        // A table whose migration has been finalized is not migrating any more,
+        // even though its keyspace still replicates by vnodes. Every node runs it
+        // on tablets and the load balancer owns it, so the vnode replace flow must
+        // leave its tablet map alone.
+        return !get_token_metadata_ptr()->tablets().get_tablet_map(table).migration_finalized();
     }
 
     bool has_migrating_tablet_replicas_on_replaced_node(locator::host_id host) const {
@@ -1714,6 +1721,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             auto ks_name = *req_entry.finalize_migration_ks_name;
             utils::chunked_vector<canonical_mutation> updates;
             sstring error;
+            // What this command changes, which the metadata read below predates.
+            std::unordered_set<table_id> tables_acted_on;
+            bool flip_keyspace = false;
 
             if (_db.has_keyspace(ks_name)) {
                 try {
@@ -1724,14 +1734,33 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     auto tmptr = get_token_metadata_ptr();
                     const auto& tablet_metadata = tmptr->tablets();
-                    auto tables = ks.metadata()->tables();
+                    auto all_tables = ks.metadata()->tables();
 
-                    // Verify all tables have tablet maps.
-                    for (const auto& schema : tables) {
+                    // The tables this command acts on: the one named, or every
+                    // table prepared for migration and not finalized yet. With
+                    // table-level granularity only a subset of the keyspace may
+                    // be prepared, and an earlier round may already have
+                    // finalized some of what is prepared.
+                    const auto& table_name = req_entry.finalize_migration_table_name;
+                    std::vector<schema_ptr> tables;
+                    for (const auto& schema : all_tables) {
                         if (!tablet_metadata.has_tablet_map(schema->id())) {
-                            throw std::runtime_error(fmt::format(
-                                "Table {}.{} does not have a tablet map", ks_name, schema->cf_name()));
+                            continue;
                         }
+                        if (tablet_metadata.get_tablet_map(schema->id()).migration_finalized()) {
+                            continue;
+                        }
+                        if (table_name && schema->cf_name() != *table_name) {
+                            continue;
+                        }
+                        tables.push_back(schema);
+                    }
+                    if (tables.empty()) {
+                        throw std::runtime_error(table_name
+                            ? fmt::format("Table {}.{} has no tablet map, or its migration is already finalized",
+                                          ks_name, *table_name)
+                            : fmt::format("No table in keyspace '{}' has a tablet map that is not already finalized",
+                                          ks_name));
                     }
 
                     // Find the migration direction (tablets or rollback to vnodes).
@@ -1753,8 +1782,38 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                     bool rollback = *global_intended_mode == storage_mode::vnodes;
 
-                    rtlogger.info("Finalizing migration for keyspace '{}': direction={}",
-                        ks_name, rollback ? "rollback to vnodes" : "forward to tablets");
+                    // Flipping the keyspace is what makes every one of its tables
+                    // tablet-based, so it may only happen once every table has been
+                    // finalized - by an earlier command or by this one. A table left
+                    // on vnodes would get a tablet-based ERM with no tablet map.
+                    flip_keyspace = !rollback
+                            && std::ranges::all_of(all_tables, [&] (const auto& schema) {
+                        if (!tablet_metadata.has_tablet_map(schema->id())) {
+                            return false;
+                        }
+                        if (tablet_metadata.get_tablet_map(schema->id()).migration_finalized()) {
+                            return true;
+                        }
+                        return std::ranges::find(tables, schema) != tables.end();
+                    });
+
+                    if (!rollback && !table_name && !flip_keyspace) {
+                        // Finalizing the keyspace forward requires every table to be
+                        // prepared, as it always has. The check lives here because
+                        // only the coordinator knows the direction.
+                        for (const auto& schema : all_tables) {
+                            if (!tablet_metadata.has_tablet_map(schema->id())) {
+                                throw std::runtime_error(fmt::format(
+                                    "Table {}.{} does not have a tablet map; all tables in keyspace '{}'"
+                                    " must be prepared for migration before finalizing",
+                                    ks_name, schema->cf_name(), ks_name));
+                            }
+                        }
+                    }
+
+                    rtlogger.info("Finalizing migration for keyspace '{}': direction={}, {} of {} table(s) prepared",
+                        ks_name, rollback ? "rollback to vnodes" : "forward to tablets",
+                        tables.size(), all_tables.size());
 
                     co_await _tablet_load_stats_refresh.trigger();
 
@@ -1808,7 +1867,21 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
                     }
 
+                    for (const auto& schema : tables) {
+                        tables_acted_on.insert(schema->id());
+                    }
+
                     if (!rollback) {
+                        // Every node runs these tables on tablets now. Record it on
+                        // each tablet map: from here they are balanced and converge
+                        // to their pow2 layout, and they cannot be rolled back.
+                        for (const auto& schema : tables) {
+                            updates.emplace_back(replica::make_tablet_migration_finalized_mutation(
+                                    schema->id(), guard.write_timestamp()));
+                        }
+                    }
+
+                    if (flip_keyspace) {
                         // All nodes have been migrated. ALTER the keyspace to use tablets.
                         auto old_md = ks.metadata();
                         auto new_md = data_dictionary::keyspace_metadata::new_keyspace(
@@ -1830,8 +1903,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         for (auto& m : schema_muts) {
                             updates.emplace_back(m);
                         }
-                    } else {
-                        // Rollback: delete tablet maps for all tables in the keyspace.
+                    } else if (rollback) {
+                        // Rollback: delete the tablet maps of the tables being rolled
+                        // back. Tables finalized earlier are not among them.
                         for (const auto& schema : tables) {
                             updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
                         }
@@ -1852,28 +1926,33 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id);
 
             if (error.empty()) {
-                // Only clear the storage mode columns if no other keyspace is still under
-                // migration.
+                // Clear the storage mode columns once nothing is left mid-migration
+                // anywhere: a table still counts while it has a tablet map, its
+                // keyspace replicates by vnodes, and its migration has not been
+                // finalized. The metadata here predates this command, so what it
+                // finalizes, drops or flips is discounted.
                 auto tmptr = get_token_metadata_ptr();
                 const auto& tmd = tmptr->tablets();
-                bool has_other_migrating_ks = false;
+                bool migration_in_progress = false;
                 for (const auto& other_ks_name : _db.get_non_system_keyspaces()) {
-                    if (other_ks_name == ks_name) {
-                        continue;
-                    }
                     auto& other_ks = _db.find_keyspace(other_ks_name);
                     if (other_ks.uses_tablets()) {
                         continue;
                     }
-                    bool other_ks_has_tablet_map = std::ranges::any_of(other_ks.metadata()->tables(), [&](const auto& s) {
-                        return tmd.has_tablet_map(s->id());
+                    if (other_ks_name == ks_name && flip_keyspace) {
+                        continue;
+                    }
+                    migration_in_progress = std::ranges::any_of(other_ks.metadata()->tables(), [&](const auto& s) {
+                        if (!tmd.has_tablet_map(s->id()) || tables_acted_on.contains(s->id())) {
+                            return false;
+                        }
+                        return !tmd.get_tablet_map(s->id()).migration_finalized();
                     });
-                    if (other_ks_has_tablet_map) {
-                        has_other_migrating_ks = true;
+                    if (migration_in_progress) {
                         break;
                     }
                 }
-                if (!has_other_migrating_ks) {
+                if (!migration_in_progress) {
                     for (const auto& [node_id, _] : _topo_sm._topology.normal_nodes) {
                         // current_storage_mode goes with it: the mode is meaningful only
                         // while a migration is in progress, and a value left behind would

@@ -89,6 +89,7 @@ schema_ptr make_tablets_schema() {
             .with_column("isolated_tablet_for_merge", long_type, column_kind::static_column)
             .with_column("selected_tablets_for_merge", list_type_impl::get_instance(long_type, false), column_kind::static_column)
             .with_column("target_pow2_tablet_count", long_type, column_kind::static_column)
+            .with_column("migration_finalized", boolean_type, column_kind::static_column)
             .with_column("repair_time", timestamp_type)
             .with_column("repair_task_info", tablet_task_info_type)
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
@@ -282,6 +283,12 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
 
     if (tablets.target_pow2_tablet_count() > 0) {
         m.set_static_cell("target_pow2_tablet_count", data_value(int64_t(tablets.target_pow2_tablet_count())), ts);
+    }
+
+    // Every full rewrite starts with a partition tombstone, so a flag that is not
+    // re-emitted here is erased. Convergence rewrites the map of a finalized table.
+    if (tablets.migration_finalized()) {
+        m.set_static_cell("migration_finalized", data_value(true), ts);
     }
 
     tablet_id tid = tablets.first_tablet();
@@ -523,6 +530,17 @@ tablet_mutation_builder&
 tablet_mutation_builder::set_base_table(table_id base_table) {
     _m.set_static_cell("base_table", data_value(base_table.uuid()), _ts);
     return *this;
+}
+
+mutation make_tablet_migration_finalized_mutation(table_id id, api::timestamp_type ts) {
+    auto s = db::system_keyspace::tablets();
+    mutation m(s, partition_key::from_single_value(*s,
+        data_value(id.uuid()).serialize_nonnull()
+    ));
+    // A static-only mutation, so the tablet map itself is left alone. A later full
+    // rewrite re-emits the flag from the in-memory map, which this write updates.
+    m.set_static_cell("migration_finalized", data_value(true), ts);
+    return m;
 }
 
 mutation make_drop_tablet_map_mutation(table_id id, api::timestamp_type ts) {
@@ -931,6 +949,10 @@ struct tablet_metadata_builder {
                 if (count > 0) {
                     current->map.set_target_pow2_tablet_count(size_t(count));
                 }
+            }
+
+            if (row.has("migration_finalized")) {
+                current->map.set_migration_finalized(row.get_as<bool>("migration_finalized"));
             }
         }
 

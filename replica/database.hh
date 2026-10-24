@@ -2023,6 +2023,17 @@ public:
 
     std::optional<service::storage_mode> get_boot_storage_mode() const noexcept { return _boot_storage_mode; }
 
+    // Whether a table of a vnode-based keyspace is CREATED running on tablets on
+    // this node. It is when it has a tablet map and either its migration has been
+    // finalized - permanent, and the same answer on every node - or this node
+    // booted in tablets storage mode.
+    //
+    // This is the creation-time rule only. Once a table exists its flavour is
+    // fixed, because its storage group manager is: the flavour changes only on
+    // startup, after resharding. Ask an existing table itself.
+    bool table_runs_on_tablets(const locator::token_metadata& tm, table_id id,
+                               std::optional<service::storage_mode> boot_mode) const;
+
     locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
     locator::token_metadata_ptr get_token_metadata_ptr() const { return _shared_token_metadata.get(); }
     const locator::token_metadata& get_token_metadata() const { return *_shared_token_metadata.get(); }
