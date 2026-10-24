@@ -513,7 +513,7 @@ async def test_migration_rollback(manager: ManagerClient):
         await verify_data_integrity(cql, ks, "test", num_keys)
 
 
-async def test_migration_multinode(manager: ManagerClient):
+async def test_migration_multinode(manager: ManagerClient, scale_timeout):
     """Verify vnodes-to-tablets migration for a single table on a multi-node cluster with rolling restarts.
 
     Steps:
@@ -632,10 +632,14 @@ async def test_migration_multinode(manager: ManagerClient):
             expected_keys += num_nodes * 10
 
         logger.info("Verifying migration status after rolling restarts")
+        # Retry generously after the restart: the status comes from the coordinator's
+        # load stats, which pick up a restarted node only on the first refresh
+        # (every 1 s) after the coordinator sees it alive, plus the RPC latency
+        # of that refresh.
         await verify_migration_status(manager, servers[0], ks,
             expected_status='migrating_to_tablets',
             expected_node_statuses={host_id: ('tablets', 'tablets') for host_id in host_ids},
-            retries=1, retry_interval=1) # the status is derived from the topology coordinator's load stats which are refreshed every second; give it one retry after 1 second
+            retries=scale_timeout(10), retry_interval=1)
 
         logger.info("Finalizing tablets migration")
         await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
@@ -1236,7 +1240,7 @@ async def test_pow2_convergence_virtual_task(manager: ManagerClient):
             f"Expected no convergence tasks after completion, got {len(convergence_tasks)}"
 
 
-async def test_no_tablet_routing_before_finalization(manager: ManagerClient):
+async def test_no_tablet_routing_before_finalization(manager: ManagerClient, scale_timeout):
     """Tablet routing info must not reach CQL clients before the migration is finalized.
 
     Regression test for SCYLLADB-2396: an upgraded node stores the migrating table in tablets
@@ -1307,11 +1311,14 @@ async def test_no_tablet_routing_before_finalization(manager: ManagerClient):
             await reconnect_driver(manager)
             cql, _ = await manager.get_ready_cql(servers)
 
-        # The status comes from load stats refreshed every second; allow one retry.
+        # Retry generously after the restart: the status comes from the coordinator's
+        # load stats, which pick up a restarted node only on the first refresh
+        # (every 1 s) after the coordinator sees it alive, plus the RPC latency
+        # of that refresh.
         await verify_migration_status(manager, coordinator, ks,
             expected_status='migrating_to_tablets',
             expected_node_statuses={h: ('tablets', 'tablets') for h in host_ids.values()},
-            retries=1, retry_interval=1)
+            retries=scale_timeout(10), retry_interval=1)
 
         logger.info("Querying the key while the migration is not finalized")
         published = await tablet_routing_published(cql, coordinator, ks, 'test', key)
