@@ -229,6 +229,63 @@ async def test_alternator_tables_respect_compression_config(manager: ScyllaClust
         table.delete()
 
 
+async def test_alternator_tableclass_respects_compression_config(manager: ScyllaClusterManager):
+    """
+    Check that Alternator's TableClass option keeps the compression options
+    configured in `sstable_compression_user_table_options`: STANDARD uses the
+    configured compression, and STANDARD_INFREQUENT_ACCESS switches to zstd but
+    keeps the other configured options, such as the chunk length. Check this
+    for both CreateTable and UpdateTable, and for the table's GSI too.
+    """
+    compression_config = {
+        'sstable_compression_user_table_options': {
+            'sstable_compression': 'LZ4Compressor',
+            'chunk_length_in_kb': 16,
+        }
+    }
+    server = await manager.server_add(config=compression_config | alternator_config)
+
+    alternator = get_alternator(server.ip_addr)
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+
+    table = alternator.create_table(TableName='tableclass',
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'x', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'gsi_name',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ],
+        TableClass='STANDARD_INFREQUENT_ACCESS'
+    )
+
+    try:
+        ks = f"alternator_{table.name}"
+        async def check_compression(expected_algorithms):
+            for result in [
+                    await cql.run_async(f"SELECT compression FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{table.name}'"),
+                    await cql.run_async(f"SELECT compression FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{table.name}:gsi_name'")]:
+                assert len(result) == 1
+                compression = result[0].compression
+                # The dictionary compressors' names have no package prefix.
+                assert compression.get("sstable_compression").removeprefix("org.apache.cassandra.io.compress.") in expected_algorithms
+                assert int(compression.get("chunk_length_in_kb", 0)) == 16
+
+        # Whether zstd uses dictionaries depends on whether the cluster
+        # feature for them is already enabled, which this test doesn't need.
+        await check_compression(['ZstdCompressor', 'ZstdWithDictsCompressor'])
+        table.meta.client.update_table(TableName=table.name, TableClass='STANDARD')
+        await check_compression(['LZ4Compressor'])
+    finally:
+        table.delete()
+
+
 async def test_cql_base_tables_respect_compression_config(manager: ScyllaClusterManager):
     """
     Check that the default compression settings for CQL base tables are taken
