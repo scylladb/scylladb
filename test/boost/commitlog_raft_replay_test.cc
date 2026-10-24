@@ -34,6 +34,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
@@ -2202,7 +2203,8 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
         m.set_cell(clustering_key::make_empty(), "c", data_value(10), api::new_timestamp());
 
         raft::command cmd;
-        ser::serialize(cmd, service::strong_consistency::raft_command{.mutation = freeze(m)});
+        ser::serialize(cmd, service::strong_consistency::raft_command{
+                .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
 
         auto entry = make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = raft::term_t(1),
@@ -2224,9 +2226,10 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
                 const auto segments_before = log.get_active_segment_names();
                 BOOST_REQUIRE(!segments_before.empty());
 
+                service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
                 auto state_machine = service::strong_consistency::make_state_machine(
                         locator::global_tablet_id{schema->id(), locator::tablet_id(0)}, gid, db,
-                        env.migration_manager().local(), env.get_system_keyspace().local(), storage);
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker);
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 // Abort the apply after the handle is acquired and before the entry reaches a memtable.

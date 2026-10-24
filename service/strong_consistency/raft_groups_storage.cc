@@ -97,7 +97,8 @@ future<std::optional<raft::index_t>> raft_groups_storage::load_commit_idx_if_per
     co_return raft::index_t(static_row.get_or<int64_t>("commit_idx", raft::index_t{}.value()));
 }
 
-future<> raft_groups_storage::erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+future<> raft_groups_storage::erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+        api::timestamp_type min_timestamp) {
     // The order is what makes a crash in the middle harmless. load_snapshot_descriptor()
     // reads snapshot_id from raft_groups and only then expects exactly one row in
     // raft_groups_snapshots, so the state with the first present and the second gone would
@@ -105,9 +106,10 @@ future<> raft_groups_storage::erase_persisted_state(cql3::query_processor& qp, r
     // bootstrapped" instead, which is exactly what start_raft_group() needs in order to
     // bootstrap the group afresh if this shard ever hosts it again. The rows left behind by
     // a partial erase are overwritten by that bootstrap.
-    static const auto delete_group_cql = format("DELETE FROM system.{} WHERE shard = ? AND group_id = ?",
+    static const auto delete_group_cql = format("DELETE FROM system.{} USING TIMESTAMP ? WHERE shard = ? AND group_id = ?",
         db::system_keyspace::RAFT_GROUPS);
-    co_await qp.execute_internal(delete_group_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    const auto group_timestamp = std::max(api::new_timestamp(), min_timestamp + 1);
+    co_await qp.execute_internal(delete_group_cql, {group_timestamp, int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
 
     static const auto delete_snapshots_cql = format("DELETE FROM system.{} WHERE shard = ? AND group_id = ?",
         db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);

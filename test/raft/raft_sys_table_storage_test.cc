@@ -686,6 +686,33 @@ SEASTAR_TEST_CASE(test_groups_erase_persisted_state_isolation) {
     });
 }
 
+// Test that erase_persisted_state() deletes a resize marker stamped by a clock ahead of this
+// node's once it is given the marker's timestamp, and only then.
+SEASTAR_TEST_CASE(test_groups_erase_persisted_state_above_markers) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+        const auto ahead = api::new_timestamp()
+                + std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::hours(1)).count();
+
+        co_await qp.execute_internal(
+                "INSERT INTO system.raft_groups (shard, group_id, end_resize) VALUES (?, ?, true) USING TIMESTAMP ?",
+                {int16_t(test_shard), gid.id, ahead}, cql3::query_processor::cache_internal::no);
+        const auto marker_present = [&] () -> future<bool> {
+            auto rs = co_await qp.execute_internal(
+                    "SELECT end_resize FROM system.raft_groups WHERE shard = ? AND group_id = ?",
+                    {int16_t(test_shard), gid.id}, cql3::query_processor::cache_internal::no);
+            co_return !rs->empty() && rs->one().has("end_resize");
+        };
+
+        co_await raft_groups_storage::erase_persisted_state(qp, gid, test_shard);
+        BOOST_CHECK(co_await marker_present());
+
+        co_await raft_groups_storage::erase_persisted_state(qp, gid, test_shard, ahead);
+        BOOST_CHECK(!co_await marker_present());
+    });
+}
+
 // Test store_log_entries -> acquire_replay_position_handles_for roundtrip:
 // entries written to the commitlog produce valid replay position handles.
 SEASTAR_TEST_CASE(test_groups_store_and_get_replay_positions) {
