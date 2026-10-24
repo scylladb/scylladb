@@ -20,7 +20,6 @@
 #include "gms/gossiper.hh"
 #include "utils/log.hh"
 #include "cql3/query_processor.hh"
-#include "message/messaging_service.hh"
 
 using namespace seastar;
 
@@ -29,9 +28,9 @@ namespace cql_transport {
 static logging::logger logger("cql_server_controller");
 
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
-        sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
+        sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<cql_processor>& processor, sharded<service::memory_limiter>& ml,
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
-        sharded<netw::messaging_service>& ms, sharded<updateable_timeout_config>& timeout_config,
+        sharded<updateable_timeout_config>& timeout_config,
         const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket,
         seastar::scheduling_group sg)
     : protocol_server(sg)
@@ -42,9 +41,9 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
     , _lifecycle_notifier(elc_notif)
     , _gossiper(gossiper)
     , _qp(qp)
+    , _processor(processor)
     , _mem_limiter(ml)
     , _sl_controller(sl_controller)
-    , _messaging(ms)
     , _timeout_config(timeout_config)
     , _config(cfg)
     , _cql_opcode_stats_key(cql_opcode_stats_key)
@@ -241,9 +240,6 @@ future<> controller::do_start_server() {
         auto cserver = std::make_unique<sharded<cql_server>>();
 
         auto& cfg = _config;
-        smp_service_group_config cql_server_smp_service_group_config;
-        cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
-        auto bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get();
         auto get_cql_server_config = sharded_parameter([&] {
             std::optional<uint16_t> shard_aware_transport_port;
             if (cfg.native_shard_aware_transport_port.is_set()) {
@@ -263,7 +259,6 @@ future<> controller::do_start_server() {
               .shard_aware_transport_port = shard_aware_transport_port,
               .shard_aware_transport_port_ssl = shard_aware_transport_port_ssl,
               .allow_shard_aware_drivers = cfg.enable_shard_aware_drivers(),
-              .bounce_request_smp_service_group = bounce_request_smp_service_group,
               .max_concurrent_requests = cfg.max_concurrent_requests_per_shard,
               .cql_duplicate_bind_variable_names_refer_to_same_variable = cfg.cql_duplicate_bind_variable_names_refer_to_same_variable,
               .max_relations_in_where_clause = cfg.max_relations_in_where_clause,
@@ -273,7 +268,7 @@ future<> controller::do_start_server() {
             };
         });
 
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket, std::ref(_messaging)).get();
+        cserver->start(std::ref(_qp), std::ref(_processor), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket).get();
         auto on_error = defer([&cserver] noexcept { cserver->stop().get(); });
 
         subscribe_server(*cserver).get();

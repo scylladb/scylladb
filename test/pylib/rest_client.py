@@ -424,6 +424,14 @@ class ScyllaRESTAPIClient:
         """Drain the node (flush + stop listening for connections)"""
         await self.client.post("/storage_service/drain", host=node_ip)
 
+    async def disablebinary(self, node_ip: str) -> None:
+        """Stop the CQL server, like `nodetool disablebinary`"""
+        await self.client.delete("/storage_service/native_transport", host=node_ip)
+
+    async def enablebinary(self, node_ip: str) -> None:
+        """Start the CQL server, like `nodetool enablebinary`"""
+        await self.client.post("/storage_service/native_transport", host=node_ip)
+
     async def backup(self, node_ip: str, ks: str, table: str, tag: str, dest: str, bucket: str, prefix: str, **kwargs) -> str:
         """Backup keyspace's snapshot"""
         params = {"keyspace": ks,

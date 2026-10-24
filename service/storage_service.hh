@@ -222,6 +222,7 @@ private:
     sstring _operation_in_progress;
     seastar::metrics::metric_groups _metrics;
     std::vector<protocol_server*> _protocol_servers;
+    std::function<future<>()> _drain_forwarded_cql_requests;
     std::vector<std::any> _listeners;
     named_gate _async_gate;
 
@@ -513,6 +514,9 @@ public:
     future<bool> is_gossip_running();
 
     future<> register_protocol_server(protocol_server& server, bool start_instantly = false);
+    // Sets the function with which stop_transport() waits for the CQL requests
+    // which other nodes forwarded to this node.
+    void set_forwarded_cql_requests_drain(std::function<future<>()> drain);
 
     // All pointers are valid.
     const std::vector<protocol_server*>& protocol_servers() const {

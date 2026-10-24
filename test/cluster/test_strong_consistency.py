@@ -11,7 +11,7 @@ from typing import Tuple
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, wait_for, Host
 from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
-from test.pylib.internal_types import HostID, ServerInfo
+from test.pylib.internal_types import HostID, ServerInfo, ServerUpState
 from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import FallthroughRetryPolicy
@@ -3059,6 +3059,169 @@ async def test_write_paused_across_leadership_change(manager: ScyllaClusterManag
             sources = frozenset(event.source for event in trace.events)
             assert sources == frozenset([leader_server.ip_addr])
 
+
+async def test_forwarding_to_leader_with_disabled_cql(manager: ScyllaClusterManager):
+    """
+    Verifies that the requests forwarded to the Raft leader of a tablet are executed
+    after the CQL server of the leader is stopped with `nodetool disablebinary`.
+    """
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+                                        auto_rack_dc='my_dc')
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+            leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+            leader_idx = host_ids.index(leader_host_id)
+            leader_server = servers[leader_idx]
+            other_host = hosts[1 - leader_idx]
+
+            await manager.api.disablebinary(leader_server.ip_addr)
+            try:
+                await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 1)",
+                                                    retry_policy=FallthroughRetryPolicy()), host=other_host)
+                rows = await cql.run_async(SimpleStatement(f"SELECT v FROM {table} WHERE pk = 0",
+                                                           retry_policy=FallthroughRetryPolicy()), host=other_host)
+                assert [r.v for r in rows] == [1]
+            finally:
+                await manager.api.enablebinary(leader_server.ip_addr)
+
+
+async def test_forwarding_to_leader_without_cql_server(manager: ScyllaClusterManager):
+    """
+    Verifies that a node which never starts its CQL server executes the requests
+    forwarded to it as the Raft leader of a tablet.
+    """
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+                                        auto_rack_dc='my_dc')
+    cql, hosts = await manager.get_ready_cql(servers)
+    target, other_host = servers[0], hosts[1]
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            log = await manager.server_open_log(target.server_id)
+            await manager.server_stop_gracefully(target.server_id)
+            await manager.server_update_config(target.server_id, 'start_native_transport', False)
+            mark = await log.mark()
+            await manager.server_start(target.server_id, expected_server_up_state=ServerUpState.HOST_ID_QUERIED)
+            try:
+                await log.wait_for("initialization completed", from_mark=mark, timeout=60)
+                await ensure_raft_group_leader_on(manager, target, group_id)
+
+                await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 1)",
+                                                    retry_policy=FallthroughRetryPolicy()), host=other_host)
+                rows = await cql.run_async(SimpleStatement(f"SELECT v FROM {table} WHERE pk = 0",
+                                                           retry_policy=FallthroughRetryPolicy()), host=other_host)
+                assert [r.v for r in rows] == [1]
+            finally:
+                await manager.server_update_config(target.server_id, 'start_native_transport', True)
+                await manager.api.enablebinary(target.ip_addr)
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_forwarding_to_leader_before_auth_starts(manager: ScyllaClusterManager):
+    """
+    Verifies that a request forwarded to the Raft leader of a tablet, which has not
+    started its auth service yet, waits for the auth service to start, and times out
+    if the auth service does not start in time.
+    """
+    injection = "pause_before_starting_auth_service"
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG,
+                                        cmdline=DEFAULT_CMDLINE + ['--logger-log-level', 'cql_server=debug'],
+                                        auto_rack_dc='my_dc')
+    cql, hosts = await manager.get_ready_cql(servers)
+    target, other_host = servers[0], hosts[1]
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            await manager.server_stop_gracefully(target.server_id)
+            await manager.server_update_config(target.server_id, 'error_injections_at_startup', [injection])
+            await manager.server_start(target.server_id, expected_server_up_state=ServerUpState.HOST_ID_QUERIED)
+            try:
+                await manager.api.wait_for_injection_enter(target.ip_addr, injection)
+                await ensure_raft_group_leader_on(manager, target, group_id)
+
+                with pytest.raises(WriteTimeout):
+                    await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 1) USING TIMEOUT 1s",
+                                                        retry_policy=FallthroughRetryPolicy()), host=other_host)
+
+                log = await manager.server_open_log(target.server_id)
+                mark = await log.mark()
+                # The timed-out request can still be waiting too, so we write another key.
+                insert = cql.run_async(
+                        SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 2) USING TIMEOUT 60s",
+                                        retry_policy=FallthroughRetryPolicy()), host=other_host)
+                await log.wait_for("Forwarded CQL request waits for auth service to start", from_mark=mark, timeout=60)
+                await manager.api.message_injection(target.ip_addr, injection)
+                await insert
+
+                rows = await cql.run_async(f"SELECT v FROM {table} WHERE pk = 1", host=other_host)
+                assert [r.v for r in rows] == [2]
+            finally:
+                await manager.server_update_config(target.server_id, 'error_injections_at_startup', [])
+                await manager.api.message_injection(target.ip_addr, injection)
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_drain_waits_for_forwarded_requests(manager: ScyllaClusterManager):
+    """
+    Verifies that draining the Raft leader of a tablet waits for the requests forwarded
+    to it. A forwarded write which outlives the drain reaches Raft after the commitlog is
+    shut down, and the node aborts. With a single replica the leader cannot hand its
+    leadership over, so it stays the leader through the drain.
+    """
+    injection = "wait_before_handling_forwarded_request"
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+                                        auto_rack_dc='my_dc')
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+            [(leader_host_id, _)] = await get_tablet_replicas(manager, servers[0], ks, table_name, 0)
+            leader_idx = host_ids.index(leader_host_id)
+            leader_server = servers[leader_idx]
+            other_host = hosts[1 - leader_idx]
+            await wait_for_leader(manager, leader_server, group_id, expected_host_id=leader_host_id)
+
+            log = await manager.server_open_log(leader_server.server_id)
+            mark = await log.mark()
+            await manager.api.enable_injection(leader_server.ip_addr, injection, one_shot=True)
+            write = cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 1)",
+                                                  retry_policy=FallthroughRetryPolicy()), host=other_host)
+            await log.wait_for(f"{injection}: waiting for message", from_mark=mark, timeout=60)
+
+            drain = asyncio.create_task(manager.api.drain(leader_server.ip_addr))
+            await log.wait_for("Stop transport: shutdown messaging_service done", from_mark=mark, timeout=60)
+            assert not drain.done(), "The drain did not wait for the forwarded write"
+
+            await manager.api.message_injection(leader_server.ip_addr, injection)
+            await drain
+            # The write may fail, because messaging_service has shut down before it finished.
+            await asyncio.gather(write, return_exceptions=True)
+
+            await manager.server_stop_gracefully(leader_server.server_id)
+            assert not await log.grep("Aborting on shard", from_mark=mark)
+            await manager.server_start(leader_server.server_id)
 
 async def test_bootstrap_with_existing_sc_table(manager: ScyllaClusterManager):
     """
