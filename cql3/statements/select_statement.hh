@@ -196,6 +196,19 @@ protected:
     }
 
     bool needs_post_query_ordering() const;
+    // For a query which needs post-query ordering (needs_post_query_ordering()):
+    // sorts the rows, and drops those which can't be among the first "limit"
+    // rows of the result. Today, post-query ordering is needed only by queries
+    // with IN on the partition key and ORDER BY, whose rows from the different
+    // partitions must be sorted together, and by external search (e.g., vector
+    // search), whose rows are sorted by their score. Other queries read their
+    // rows already in the requested order, and never get here.
+    // The rows are left in _ordering_comparator's order, which is the reverse
+    // of the requested order if _is_reversed, so this can be called again
+    // after more rows are added (see order_post_query_rows()).
+    void trim_post_query_rows(result_set& rs, uint64_t limit) const;
+    // Like trim_post_query_rows(), but leaves the rows in the requested order.
+    void order_post_query_rows(result_set& rs, uint64_t limit) const;
     virtual void update_stats_rows_read(int64_t rows_read) const {
         _stats.rows_read += rows_read;
     }
