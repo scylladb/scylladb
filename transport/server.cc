@@ -1774,6 +1774,8 @@ maybe_rederive_with_pinned_plan(cql3::query_processor& qp, const service::client
             "Paging state pins another query plan; re-deriving the statement with that plan pinned");
     rederived.statement = qp.get_statement(stmt.raw_cql_statement, client_state, dialect,
             std::move(pinned), keyspace);
+    // It's still the statement the driver prepared.
+    rederived.statement->statement->set_may_use_token_aware_routing(stmt.may_use_token_aware_routing());
     // Counts the pages that got a statement back. A refusal pays the re-parse
     // too - it is thrown while preparing what was parsed - but serves no page.
     ++qp.get_cql_stats().select_paging_plan_rederivations;
@@ -2067,6 +2069,34 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     record_client_timestamp_drift(sg_stats, init_trace, request_start_timestamp, options.get_specific_options().timestamp);
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
+    }
+
+    if (client_state.is_protocol_extension_set(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
+        const utils::result_with_exception_ptr<uint16_t> routing_statement_index = in.read_short();
+        if (!routing_statement_index) [[unlikely]] {
+            return make_exception_future<cql_server::process_fn_return_type>(std::move(routing_statement_index).assume_error());
+        }
+        const utils::result_with_exception_ptr<int8_t> tablet_version_byte = in.read_byte();
+        if (!tablet_version_byte) [[unlikely]] {
+            return make_exception_future<cql_server::process_fn_return_type>(std::move(tablet_version_byte).assume_error());
+        }
+        const uint16_t index = routing_statement_index.assume_value();
+        if (index != cql3::query_options::no_routing_statement) {
+            if (index >= modifications.size()) [[unlikely]] {
+                return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(format(
+                        "Invalid routing statement index in BATCH message: {} for a batch of {} statements",
+                        index, modifications.size())));
+            }
+            // The driver can only compute the token from the partition key bind indices
+            // it got in the PREPARED metadata of the statement.
+            if (!modifications[index].statement->may_use_token_aware_routing()) [[unlikely]] {
+                return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(format(
+                        "Invalid routing statement index in BATCH message: "
+                        "the token can't be computed from statement {}", index)));
+            }
+        }
+        options.set_routing_statement_index(index);
+        options.set_tablet_version_block(locator::tablet_version_block{uint8_t(tablet_version_byte.assume_value())});
     }
 
     if (init_trace && trace_state) {

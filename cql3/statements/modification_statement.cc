@@ -348,7 +348,6 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     if (!prepared_stmt->has_conditions()) {
         ctx.clear_pk_function_calls_cache();
     }
-    prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
     return prepared_stmt;
 }
 

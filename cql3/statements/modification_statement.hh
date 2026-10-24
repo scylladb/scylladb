@@ -55,7 +55,6 @@ class modification_statement : public cql_statement {
 public:
     const statement_type type;
 private:
-    bool _may_use_token_aware_routing;
     const uint32_t _bound_terms;
     // If we have operation on list entries, such as adding or
     // removing an entry, the modification statement must prefetch
@@ -247,9 +246,6 @@ public:
     // How this modification reaches storage, chosen when the statement is
     // prepared; see cql3::statements::modification_executor.
     const modification_executor& executor() const { return _executor; }
-
-    // Whether a client can route the request by token.
-    bool may_use_token_aware_routing() const { return _may_use_token_aware_routing; }
 
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 

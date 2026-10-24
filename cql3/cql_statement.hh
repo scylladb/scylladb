@@ -52,6 +52,7 @@ using cql_warnings_vec = std::vector<sstring>;
 class cql_statement {
     timeout_config_selector _timeout_config_selector;
     audit::audit_info_ptr _audit_info;
+    bool _may_use_token_aware_routing = false;
 protected:
     // Result set metadata, unset for statements which return no result
     // set. E.g. conditional modification statements and batches return a
@@ -69,7 +70,7 @@ public:
 
     explicit cql_statement(timeout_config_selector timeout_selector) : _timeout_config_selector(timeout_selector) {}
     cql_statement(cql_statement&& o) = default;
-    cql_statement(const cql_statement& o) : _timeout_config_selector(o._timeout_config_selector), _audit_info(o._audit_info ? std::make_unique<audit::audit_info>(*o._audit_info) : nullptr), _metadata(o._metadata) { }
+    cql_statement(const cql_statement& o) : _timeout_config_selector(o._timeout_config_selector), _audit_info(o._audit_info ? std::make_unique<audit::audit_info>(*o._audit_info) : nullptr), _may_use_token_aware_routing(o._may_use_token_aware_routing), _metadata(o._metadata) { }
     virtual ~cql_statement()
     { }
 
@@ -160,6 +161,13 @@ public:
 
     audit::audit_info* get_audit_info() { return _audit_info.get(); }
     void set_audit_info(audit::audit_info_ptr&& info) { _audit_info = std::move(info); }
+
+    // Whether the driver can compute the token the statement is routed by. It
+    // can only if it got the partition key bind indices of the statement in its
+    // PREPARED metadata, so the flag is set when the statement is prepared for
+    // the driver, never for query text.
+    bool may_use_token_aware_routing() const { return _may_use_token_aware_routing; }
+    void set_may_use_token_aware_routing(bool value) { _may_use_token_aware_routing = value; }
 
     virtual void sanitize_audit_info() {}
 };

@@ -17,11 +17,16 @@
 #include "cql3/statements/eventual_consistency/modification_executor.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "db/large_data_handler.hh"
+#include "replica/database.hh"
 #include "service/storage_proxy.hh"
+#include "transport/cql_protocol_extension.hh"
+#include "utils/error_injection.hh"
 #include "utils/result.hh"
 #include "utils/unique_view.hh"
 
 #include <ranges>
+
+#include <seastar/coroutine/exception.hh>
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
@@ -30,7 +35,53 @@ namespace cql3::statements::eventual_consistency {
 
 namespace {
 
-future<utils::chunked_vector<mutation>> get_mutations(const batch_statement& batch,
+// The token of the partition the routing statement of a BATCH request writes,
+// given the spec of that statement. The driver computed the token from the
+// routing statement alone, so a batch spanning multiple partitions only gets
+// routing information for that one partition, and none if the routing
+// statement writes several partitions.
+std::optional<dht::token> routing_token_for(const modification_spec& spec) {
+    if (spec.keys.size() != 1) {
+        return std::nullopt;
+    }
+    return spec.keys.front().start()->value().token();
+}
+
+// Routing information for the tablet that owns the routing token, computed
+// once the batch has succeeded, so that it reflects the tablet map after the
+// write. The tablet version block belongs to the batch, so `options` must be
+// those of the batch, not those of the statement.
+std::optional<locator::tablet_routing_info_v2> routing_info_for(
+        const batch_statement& batch,
+        std::optional<dht::token> routing_token,
+        const service::query_state& qs,
+        const query_options& options) {
+    const bool eligible = routing_token
+            && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)
+            && options.get_tablet_version_block();
+    if (!eligible) {
+        return std::nullopt;
+    }
+
+    const auto index = options.routing_statement_index();
+    const schema& schema = *batch.get_statements()[index].statement->s;
+
+    // The table may have been dropped since the batch was written.
+    const replica::table* table = schema.maybe_table();
+    if (!table) {
+        return std::nullopt;
+    }
+
+    return table->tablet_routing_info_v2_for(*routing_token, *options.get_tablet_version_block());
+}
+
+// The mutations of a batch, and the token of its routing statement.
+struct batch_mutations {
+    utils::chunked_vector<mutation> mutations;
+    std::optional<dht::token> routing_token;
+};
+
+future<batch_mutations> get_mutations(const batch_statement& batch,
         query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout,
         bool local, api::timestamp_type now, service::query_state& query_state) {
     const auto& statements = batch.get_statements();
@@ -38,12 +89,16 @@ future<utils::chunked_vector<mutation>> get_mutations(const batch_statement& bat
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
     mutation_set_type result;
     result.reserve(statements.size());
+    std::optional<dht::token> routing_token;
     for (size_t i = 0; i != statements.size(); ++i) {
         auto&& statement = statements[i].statement;
         statement->inc_cql_stats(query_state.get_client_state().is_internal());
         auto&& statement_options = options.for_statement(i);
         auto timestamp = batch.get_timestamp(now, statement_options);
         modification_spec spec(*statement, statement_options);
+        if (i == options.routing_statement_index()) {
+            routing_token = routing_token_for(spec);
+        }
         auto more = co_await eventual_consistency::get_mutations(*statement, qp, statement_options, timeout, local, timestamp, query_state, std::move(spec));
 
         for (auto&& m : more) {
@@ -63,7 +118,7 @@ future<utils::chunked_vector<mutation>> get_mutations(const batch_statement& bat
     for (auto&& m : result) {
         vresult.push_back(std::move(m));
     }
-    co_return vresult;
+    co_return batch_mutations{std::move(vresult), routing_token};
 }
 
 future<coordinator_result<>> execute_without_conditions(const batch_statement& batch,
@@ -112,7 +167,7 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
     auto cl_for_learn = options.get_consistency();
     utils::result_with_exception_ptr<db::consistency_level> cl_for_paxos = options.check_serial_consistency();
     if (!cl_for_paxos) [[unlikely]] {
-        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(std::move(cl_for_paxos).assume_error());
+        co_await coroutine::return_exception_ptr(std::move(cl_for_paxos).assume_error());
     }
     std::unique_ptr<cas_request> request;
     schema_ptr schema;
@@ -124,6 +179,7 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
     auto read_timeout = now + cfg.read_timeout;   // Query timeout.
 
     computed_function_values cached_fn_calls;
+    std::optional<dht::token> routing_token;
 
     const auto& statements = batch.get_statements();
     for (size_t i = 0; i < statements.size(); ++i) {
@@ -144,6 +200,9 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
             throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple partitions");
         }
         cached_fn_calls.merge(std::move(const_cast<cql3::query_options&>(statement_options).take_cached_pk_function_calls()));
+        if (i == options.routing_statement_index()) {
+            routing_token = routing_token_for(spec);
+        }
 
         request->add_row_update(statement, std::move(spec), statement_options);
     }
@@ -153,23 +212,26 @@ future<shared_ptr<cql_transport::messages::result_message>> execute_with_conditi
 
     auto cas_shard = service::cas_shard(*statements[0].statement->s, request->key()[0].start()->value().as_decorated_key().token());
     if (!cas_shard.this_shard()) {
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                qp.bounce_to_shard(cas_shard.shard(), std::move(cached_fn_calls))
-            );
+        co_return qp.bounce_to_shard(cas_shard.shard(), std::move(cached_fn_calls));
     }
 
-    auto* request_ptr = request.get();
-    return qp.proxy().cas(schema, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
+    service::storage_proxy::cas_result cas_result = co_await qp.proxy().cas(schema, std::move(cas_shard), *request, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout).then([&batch, request = std::move(request)] (service::storage_proxy::cas_result cas_result) {
-        auto result = request->build_cas_result_set(batch.cas_result_metadata(), batch.columns_of_cas_result_set(), cas_result.is_applied);
-        // Surface any coordinator-side large data guardrail soft limit violations
-        // detected during the LWT to the client as a CQL warning.
-        if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
-            result->add_warning(std::move(warning));
-        }
-        return result;
-    });
+            std::move(cl_for_paxos).assume_value(), cl_for_learn, batch_timeout, cas_timeout);
+    auto result = request->build_cas_result_set(batch.cas_result_metadata(), batch.columns_of_cas_result_set(), cas_result.is_applied);
+    // Surface any coordinator-side large data guardrail soft limit violations
+    // detected during the LWT to the client as a CQL warning.
+    if (auto warning = db::large_data_soft_violation_warning(cas_result.large_data_violations); !warning.empty()) [[unlikely]] {
+        result->add_warning(std::move(warning));
+    }
+
+    if (routing_token) {
+        co_await utils::get_local_injector().inject("batch_statement_before_routing_info", utils::wait_for_message(std::chrono::minutes(5)));
+    }
+    if (auto routing_info = routing_info_for(batch, routing_token, qs, options)) {
+        result->add_tablet_info_v2(std::move(*routing_info));
+    }
+    co_return result;
 }
 
 } // namespace
@@ -244,7 +306,7 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
     const auto cl = options.get_consistency();
     const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl, query_state.get_client_state());
     if (guardrail_state == query_processor::write_consistency_guardrail_state::FAIL) {
-        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(
+        co_await coroutine::return_exception(
                 exceptions::invalid_request_exception(
                         format("Write consistency level {} is forbidden by the current configuration "
                                "setting of write_consistency_levels_disallowed. Please use a different "
@@ -260,39 +322,41 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
     if (batch.has_conditions()) {
         ++batch.stats().cas_batches;
         batch.stats().statements_in_cas_batches += statements.size();
-        return execute_with_conditions(batch, qp, options, query_state).then([guardrail_state, cl] (auto result) {
-            if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-                result->add_warning(format("Using write consistency level {} listed on the "
-                                           "write_consistency_levels_warned is not recommended.", cl));
-            }
-            return result;
-        });
+        auto result = co_await execute_with_conditions(batch, qp, options, query_state);
+        if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+            result->add_warning(format("Using write consistency level {} listed on the "
+                                       "write_consistency_levels_warned is not recommended.", cl));
+        }
+        co_return result;
     }
 
     ++batch.stats().batches;
     batch.stats().statements_in_batches += statements.size();
 
     auto timeout = db::timeout_clock::now() + batch.get_timeout(query_state.get_client_state(), options);
-    auto violations = make_lw_shared<db::large_data_violation_type>(db::large_data_violation_type::none);
+    db::large_data_violation_type violations = db::large_data_violation_type::none;
 
-    return get_mutations(batch, qp, options, timeout, local, now, query_state).then([&batch, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
-                    permit = query_state.get_permit(), violations] (utils::chunked_vector<mutation> ms) mutable {
-        return execute_without_conditions(batch, qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), violations.get());
-    }).then([guardrail_state, cl, violations] (coordinator_result<> res) {
-        if (!res) {
-            return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                    seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
-        }
-        auto result = make_shared<cql_transport::messages::result_message::void_message>();
-        if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-            result->add_warning(format("Using write consistency level {} listed on the "
-                                       "write_consistency_levels_warned is not recommended.", cl));
-        }
-        if (auto warning = db::large_data_soft_violation_warning(*violations); !warning.empty()) [[unlikely]] {
-            result->add_warning(std::move(warning));
-        }
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(result));
-    });
+    batch_mutations ms = co_await get_mutations(batch, qp, options, timeout, local, now, query_state);
+    coordinator_result<> res = co_await execute_without_conditions(batch, qp, std::move(ms.mutations), cl, timeout, query_state.get_trace_state(), query_state.get_permit(), &violations);
+    if (!res) {
+        co_return seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error());
+    }
+    auto result = make_shared<cql_transport::messages::result_message::void_message>();
+    if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+        result->add_warning(format("Using write consistency level {} listed on the "
+                                   "write_consistency_levels_warned is not recommended.", cl));
+    }
+    if (auto warning = db::large_data_soft_violation_warning(violations); !warning.empty()) [[unlikely]] {
+        result->add_warning(std::move(warning));
+    }
+
+    if (ms.routing_token) {
+        co_await utils::get_local_injector().inject("batch_statement_before_routing_info", utils::wait_for_message(std::chrono::minutes(5)));
+    }
+    if (auto routing_info = routing_info_for(batch, ms.routing_token, query_state, options)) {
+        result->add_tablet_info_v2(std::move(*routing_info));
+    }
+    co_return result;
 }
 
 const batch_executor& batch_executor::instance() {
