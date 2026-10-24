@@ -393,7 +393,7 @@ Instruct `configure.py` to generate build files for `coverage` mode:
 
 Build the tests you want to run, then run them via `test.py` (important!):
 
-    $ ./test.py --mode=coverage [...]
+    $ ./test.py --mode=coverage --coverage-report [...]
 
 Alternatively, you can run individual tests via `./scripts/coverage.py --run`.
 
