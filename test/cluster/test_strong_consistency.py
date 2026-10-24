@@ -3282,3 +3282,112 @@ async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterMa
         logger.info("Dropping the table removes the series of that node too")
         await cql.run_async(f"DROP TABLE {ks}.test")
         await wait_for_sc_raft_series_gone(manager, src)
+
+QUERY = {'insert': "INSERT INTO {table} (pk, c) VALUES ({key}, {i})",
+         'select': "SELECT c FROM {table} WHERE pk = {key}"}
+
+async def routing_counters(manager: ScyllaClusterManager, coordinator: ServerInfo, others: list[ServerInfo], kind: str) -> dict[str, float]:
+    NODE_BOUNCES = {'insert': 'scylla_strong_consistency_coordinator_write_node_bounces',
+                    'select': 'scylla_strong_consistency_coordinator_read_node_bounces'}
+    SHARD_BOUNCES = {'insert': 'scylla_strong_consistency_coordinator_write_shard_bounces',
+                    'select': 'scylla_strong_consistency_coordinator_read_shard_bounces'}
+
+    counters = {'redirected': (await manager.metrics.query(coordinator.ip_addr)).get('scylla_transport_requests_forwarded_redirected') or 0}
+    for s in others:
+        metrics = await manager.metrics.query(s.ip_addr)
+        counters[f'node_bounces@{s.ip_addr}'] = metrics.get(NODE_BOUNCES[kind]) or 0
+        counters[f'shard_bounces@{s.ip_addr}'] = metrics.get(SHARD_BOUNCES[kind]) or 0
+    return counters
+
+@pytest.mark.parametrize("kind", ['insert', 'select'])
+async def test_non_pure_pk_function_is_evaluated_once_per_request(manager: ScyllaClusterManager, kind: str):
+    """A request whose key comes from `uuid()` must be routed like a request with a plain key:
+    `uuid()` runs once, on the node that got the request from the client, and every later hop
+    uses that value.
+
+    2 nodes, RF=2, 8 tablets. Every request goes to the same node, which is a replica of
+    every tablet and so learns the leader from raft. A control run with plain keys shows what
+    a request costs: it goes straight to the leader, nobody redirects it and nobody bounces
+    it. The same requests with `uuid()` as the key must leave the counters just as they are.
+    """
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='dc1')
+    # A tablet that moves during the run is redirected for a reason that has nothing to do
+    # with uuid().
+    await manager.disable_tablet_balancing()
+    cql, hosts = await manager.get_ready_cql(servers)
+    coordinator, others = servers[0], servers[1:]
+    via = hosts[0]
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 8} AND consistency = 'global'"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        async with new_test_table(manager, ks, "pk uuid PRIMARY KEY, c int") as table:
+            def delta(before: dict[str, float], after: dict[str, float]) -> dict[str, float]:
+                return {k: after[k] - before[k] for k in before if after[k] != before[k]}
+
+            async def rerouted(n: int, key: str | None = None) -> dict[int, dict[str, float]]:
+                """Run n requests, each with `key` or a fresh literal; the counter deltas of the re-routed ones."""
+                found = {}
+                for i in range(n):
+                    before = await routing_counters(manager, coordinator, others, kind)
+                    query = QUERY[kind].format(table=table, key=key or uuid.uuid4(), i=i)
+                    rows = await cql.run_async(SimpleStatement(query, consistency_level=ConsistencyLevel.QUORUM), host=via)
+                    assert not rows, f"a read of a fresh key returned rows: {rows}"
+                    if d := delta(before, await routing_counters(manager, coordinator, others, kind)):
+                        found[i] = d
+                return found
+
+            # Control: literal keys. This is what "one key per request" costs.
+            CONTROL_STATEMENTS_CNT = 20
+            if control := await rerouted(CONTROL_STATEMENTS_CNT):
+                pytest.fail(f"premise: with literal keys the routing is not settled yet: {control}")
+
+            # The same requests, key computed by the server.
+            STATEMENTS_CNT = 30
+            offenders = await rerouted(STATEMENTS_CNT, 'uuid()')
+
+            logger.info(f"{kind} with uuid(): {len(offenders)} of {STATEMENTS_CNT} requests were re-routed after the coordinator: {offenders}")
+            assert not offenders, (
+                f"{len(offenders)} of {STATEMENTS_CNT} {kind}s with uuid() as the key were re-routed after the node the client "
+                f"talked to had routed them, while {CONTROL_STATEMENTS_CNT} {kind}s with literal keys were not: {offenders}")
+
+@pytest.mark.parametrize("kind", ['insert', 'select'])
+async def test_non_pure_pk_function_shard_bounce_is_at_most_one(manager: ScyllaClusterManager, kind: str):
+    """On one node, a request whose key comes from `uuid()` is sent to another shard at most
+    once. The token picks the shard, and the computed value travels with the request, so the
+    shard that receives it has nothing left to route.
+
+    One node, RF=1, 8 tablets spread over its shards. A text statement lands on a random
+    shard, so about half of the requests need one bounce. A second bounce for the same
+    request means the receiving shard ran `uuid()` again and got a different token.
+    """
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    # A tablet that moves between shards during the run is bounced twice for a reason that has
+    # nothing to do with uuid().
+    await manager.disable_tablet_balancing()
+    cql, _ = await manager.get_ready_cql([server])
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8} AND consistency = 'global'"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        async with new_test_table(manager, ks, "pk uuid PRIMARY KEY, c int") as table:
+            table_id = await manager.get_table_id(*table.split('.'))
+            shards = {r.replicas[0][1] for r in await cql.run_async(f"SELECT replicas FROM system.tablets WHERE table_id = {table_id}")}
+            if len(shards) < 2:
+                pytest.fail(f"premise: all tablets on one shard ({shards}), nothing to bounce between")
+
+            async def bounces() -> float:
+                SHARD_BOUNCES = {'insert': 'scylla_strong_consistency_coordinator_write_shard_bounces',
+                                'select': 'scylla_strong_consistency_coordinator_read_shard_bounces'}
+                return (await manager.metrics.query(server.ip_addr)).get(SHARD_BOUNCES[kind]) or 0
+
+            STATEMENTS_CNT = 30
+            offenders = {}
+            for i in range(STATEMENTS_CNT):
+                before = await bounces()
+                query = QUERY[kind].format(table=table, key='uuid()', i=i)
+                await cql.run_async(SimpleStatement(query, consistency_level=ConsistencyLevel.QUORUM))
+                if (d := await bounces() - before) > 1:
+                    offenders[i] = d
+
+            assert not offenders, (
+                f"{len(offenders)} of {STATEMENTS_CNT} {kind}s with uuid() as the key were bounced between shards more "
+                f"than once (bounces per request: {offenders}): the receiving shard evaluated uuid() again")

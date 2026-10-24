@@ -1927,10 +1927,10 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
         arguments.emplace_back(std::move(arg_val).to_managed_bytes_opt());
     }
 
-    bool has_cache_id = fun_call.lwt_cache_id.get() != nullptr && fun_call.lwt_cache_id->has_value();
+    bool has_cache_id = fun_call.lwt_cache_id.has_value();
     if (has_cache_id) {
         computed_function_values::mapped_type* cached_value =
-            inputs.options->find_cached_pk_function_call(**fun_call.lwt_cache_id);
+            inputs.options->find_cached_pk_function_call(*fun_call.lwt_cache_id);
         if (cached_value != nullptr) {
             return raw_value::make_value(*cached_value);
         }
@@ -1939,7 +1939,7 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
     managed_bytes_opt result = scalar_fun->execute(arguments);
 
     if (has_cache_id) {
-        inputs.options->cache_pk_function_call(**fun_call.lwt_cache_id, to_bytes_opt(result));
+        inputs.options->cache_pk_function_call(*fun_call.lwt_cache_id, to_bytes_opt(result));
     }
 
     if (!result.has_value()) {
