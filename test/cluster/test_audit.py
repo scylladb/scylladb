@@ -2634,6 +2634,34 @@ async def test_insert_failure_standalone(manager: ScyllaClusterManager):
     await CQLAuditTester(manager)._test_insert_failure_doesnt_report_success()
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_audit_write_timeout_follows_write_request_timeout(manager: ScyllaClusterManager):
+    """An audit write gets as long as a client write before it times out (SCYLLADB-5625)."""
+    server = await manager.server_add(config={
+        "audit": "table",
+        "authenticator": "AllowAllAuthenticator",
+        "authorizer": "AllowAllAuthorizer",
+        "write_request_timeout_in_ms": 20000,
+    })
+    cql, _ = await manager.get_ready_cql([server])
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+
+    await manager.api.enable_injection(server.ip_addr, "database_apply", one_shot=False,
+                                       parameters={"ks_name": "audit", "cf_name": "audit_log", "what": "wait"})
+    start = time.monotonic()
+    statement = cql.run_async("CREATE SERVICE LEVEL audit_write_timeout_sl WITH SHARES = 100")
+    try:
+        await log.wait_for("database_apply: wait", from_mark=mark, timeout=60)
+        logger.info("Holding the audit write past the 5s audit write timeout floor")
+        await asyncio.sleep(7)
+    finally:
+        await manager.api.disable_injection(server.ip_addr, "database_apply")
+    await statement
+    logger.info(f"Audited statement completed after {time.monotonic() - start:.1f}s")
+    assert not await log.grep("audit - Unexpected exception when writing", from_mark=mark)
+
+
 @verify_legacy_and_rules
 async def test_service_level_statements_standalone(manager: ScyllaClusterManager, rules_mode: bool):
     """audit=table, auth, cmdline=--smp 1 — standalone due to special cmdline."""
