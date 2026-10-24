@@ -60,6 +60,10 @@ namespace utils {
 class disk_space_monitor;
 }
 
+namespace tracing {
+class trace_state_ptr;
+}
+
 namespace service {
 
 class client_state;
@@ -154,9 +158,24 @@ public:
         cql3::raw_value_vector_with_unset values,
         db::consistency_level cl = db::consistency_level::ONE) = 0;
 
+    /// Executes the prepared statement as a traced query. The caller opens the tracing session and
+    /// closes it when the returned future resolves; the statement and its bound values are recorded
+    /// in the session here, where they are at hand.
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared(
+        cql3::prepared_cache_key_type id,
+        cql3::raw_value_vector_with_unset values,
+        db::consistency_level cl,
+        tracing::trace_state_ptr trace_state) = 0;
+
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared_with_qo(
         cql3::prepared_cache_key_type id,
         std::unique_ptr<cql3::query_options> qo) = 0;
+
+    /// The traced form of execute_prepared_with_qo(), see the traced execute_prepared().
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared_with_qo(
+        cql3::prepared_cache_key_type id,
+        std::unique_ptr<cql3::query_options> qo,
+        tracing::trace_state_ptr trace_state) = 0;
 
     virtual future<utils::chunked_vector<mutation>> get_modification_mutations(const sstring& text) = 0;
 

@@ -43,6 +43,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
+#include "tracing/trace_state.hh"
 #include "service/mapreduce_service.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "auth/service.hh"
@@ -236,14 +237,14 @@ private:
         };
     }
 
-    auto make_query_state() {
+    auto make_query_state(tracing::trace_state_ptr trace_state = {}) {
         // Only fall back to the default keyspace if the client state doesn't
         // have one yet, otherwise a keyspace selected with USE would be reset
         // before each statement.
         if (_core_local.local().client_state.get_raw_keyspace().empty() && _db.local().has_keyspace(ks_name)) {
             _core_local.local().client_state.set_keyspace(_db.local(), ks_name);
         }
-        return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
+        return ::make_shared<service::query_state>(_core_local.local().client_state, std::move(trace_state), empty_service_permit());
     }
 public:
     single_node_cql_env()
@@ -293,6 +294,14 @@ public:
         cql3::prepared_cache_key_type id,
         cql3::raw_value_vector_with_unset values,
         db::consistency_level cl = db::consistency_level::ONE) override {
+        return execute_prepared(id, std::move(values), cl, tracing::trace_state_ptr());
+    }
+
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared(
+        cql3::prepared_cache_key_type id,
+        cql3::raw_value_vector_with_unset values,
+        db::consistency_level cl,
+        tracing::trace_state_ptr trace_state) override {
 
         const auto& so = cql3::query_options::specific_options::DEFAULT;
         auto options = std::make_unique<cql3::query_options>(cl,
@@ -302,14 +311,22 @@ public:
                             db::consistency_level::SERIAL,
                             so.timestamp,
                         });
-        return execute_prepared_with_qo(id, std::move(options));
+        return execute_prepared_with_qo(id, std::move(options), std::move(trace_state));
     }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared_with_qo(
         cql3::prepared_cache_key_type id,
         std::unique_ptr<cql3::query_options> qo) override
     {
-        auto qs = make_query_state();
+        return execute_prepared_with_qo(id, std::move(qo), tracing::trace_state_ptr());
+    }
+
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared_with_qo(
+        cql3::prepared_cache_key_type id,
+        std::unique_ptr<cql3::query_options> qo,
+        tracing::trace_state_ptr trace_state) override
+    {
+        auto qs = make_query_state(std::move(trace_state));
         bool needs_authorization = false;
         // First, try to lookup in the cache of already authorized statements. If the corresponding entry is not found there
         // look for the prepared statement and then authorize it.
@@ -324,7 +341,11 @@ public:
         auto stmt = prepared->statement;
 
         SCYLLA_ASSERT(stmt->get_bound_terms() == qo->get_values_count());
+        // The CQL server records the statement and its bound values in the tracing session of an
+        // EXECUTE request. These are no-ops without a session.
+        tracing::add_prepared_statement(qs->get_trace_state(), prepared);
         qo->prepare(prepared->bound_names);
+        tracing::add_prepared_query_options(qs->get_trace_state(), *qo);
 
         auto& lqo = *qo;
         return local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), lqo, std::move(prepared), std::move(id), needs_authorization)

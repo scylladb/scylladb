@@ -76,6 +76,13 @@ public:
     }
 
     /**
+     * @return The CQL CREATE TABLE statement of the table
+     */
+    const sstring& create_cql() const {
+        return _create_cql;
+    }
+
+    /**
      * @return A pointer to the INSERT prepared statement
      */
     shared_ptr<cql3::statements::modification_statement> insert_stmt() const {
@@ -102,6 +109,13 @@ public:
 
     static future<> setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_strategy_name,
                                    sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables);
+
+    /**
+     * Creates the keyspace and the tables of the given CQL CREATE TABLE statements, those that
+     * don't exist yet, for a user that needs no table_helper of its tables.
+     */
+    static future<> setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_strategy_name,
+                                   sstring replication_factor, service::query_state& qs, std::vector<sstring> create_cqls);
 
     /**
      * Makes a monotonically increasing value in 100ns ("nanos") based on the given time
