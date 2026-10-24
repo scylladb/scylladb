@@ -60,7 +60,7 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
     auto result_or_redirect = co_await coordinator.get().query(_query_schema, *read_command,
         key_ranges, read_type, state.get_trace_state(), timeout, state.get_client_state().get_abort_source(),
-        tablet_version_block_for(state, options));
+        tablet_version_block_for(state, options, _may_use_token_aware_routing));
 
     using namespace service::strong_consistency;
     if (auto* redirect = get_if<need_redirect>(&result_or_redirect)) {

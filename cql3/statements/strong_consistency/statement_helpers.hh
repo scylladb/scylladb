@@ -34,6 +34,6 @@ void validate_write_consistency_level(const db::consistency_level& cl);
 // only for EXECUTE requests, which are the ones that carry a block. A QUERY request
 // targeting a single partition is served all the same, just without routing information.
 std::optional<locator::tablet_version_block> tablet_version_block_for(const service::query_state& qs,
-        const query_options& options);
+        const query_options& options, bool may_use_token_aware_routing);
 
 }
