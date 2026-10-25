@@ -977,6 +977,40 @@ def test_scylla_sstable_script(cql, request, test_keyspace, scylla_path, scylla_
         assert slice_lua_json == cxx_json
 
 
+# The gc_clock_time_point type of the Lua API is documented to support the ==,
+# < and <= operators. They used to fail with "attempt to index a nil value",
+# because the implementation read the second operand from an empty stack.
+def test_scylla_sstable_script_time_point_comparison(cql, test_keyspace, scylla_path, scylla_data_dir):
+    script_file = os.path.join(scylla_data_dir, '..', 'test_scylla_sstable_script_time_point_comparison.lua')
+    script = '''
+wr = Scylla.new_json_writer()
+
+function consume_stream_start(args)
+    a1 = Scylla.time_point_from_string("2024-11-03 05:30:00z")
+    a2 = Scylla.time_point_from_string("2024-11-03 05:30:00z")
+    b = Scylla.time_point_from_string("2024-11-03 06:30:00z")
+    wr:start_array()
+    for _, r in ipairs({a1 == a2, a1 == b, a1 < b, b < a1, a1 < a2, a1 <= b, b <= a1, a1 <= a2}) do
+        wr:bool(r)
+    end
+end
+
+function consume_stream_end()
+    wr:end_array()
+end
+'''
+    with open(script_file, 'w') as f:
+        f.write(script)
+    try:
+        with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
+            res = json.loads(subprocess.check_output([scylla_path, 'sstable', 'script', '--schema-file', schema_file, '--script-file', script_file] + sstables))
+            # Check the results of a1 == a2, a1 == b, a1 < b, b < a1, a1 < a2,
+            # a1 <= b, b <= a1 and a1 <= a2, where a1 and a2 are equal and b
+            # is later.
+            assert res == [True, False, True, False, False, True, False, True]
+    finally:
+        os.unlink(script_file)
+
 class TestScyllaSsstableSchemaLoadingBase:
 
     def check(self, scylla_path, extra_args, sstable, dump_reference, cwd=None, env=None):
