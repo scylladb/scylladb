@@ -379,7 +379,11 @@ future<> raft_group_registry::send_raft_read_barrier(raft::group_id gid, raft::s
 future<> raft_group_registry::start_server_for_group(raft_server_for_group new_grp, raft_ticker_type::duration tick_interval) {
     auto gid = new_grp.gid;
 
-    const auto is_group0 = this_shard_id() == 0 && !_group0_id;
+    const auto is_group0 = new_grp.is_group0;
+    if (is_group0 && (this_shard_id() != 0 || _group0_id)) {
+        on_fatal_internal_error(rslog, format("Attempt to start group 0 server of group {} on shard {} while group 0 is {}",
+                gid, this_shard_id(), _group0_id ? format("{}", *_group0_id) : "not set"));
+    }
 
     if (_servers.contains(gid)) {
         on_internal_error(rslog, format("Attempt to add the second instance of raft server with the same gid={}", gid));
