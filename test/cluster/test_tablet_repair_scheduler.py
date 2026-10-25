@@ -326,7 +326,7 @@ async def test_tablet_repair_hosts_filter(manager: ScyllaClusterManager, include
 
         res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
         assert len(res) == 1
-        assert res[str(token)].repair_hosts_filter.split(",").sort() == hosts_filter.split(",").sort()
+        assert sorted(res[str(token)].repair_hosts_filter.split(",")) == sorted(hosts_filter.split(","))
 
         await inject_error_off(manager, injection, servers)
 
@@ -373,7 +373,7 @@ async def test_tablet_repair_dcs_filter(manager: ScyllaClusterManager, dcs_filte
 
         res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
         assert len(res) == 1
-        assert res[str(token)].repair_dcs_filter.split(",").sort() == dcs_filter.split(",").sort()
+        assert sorted(res[str(token)].repair_dcs_filter.split(",")) == sorted(dcs_filter.split(","))
 
         await inject_error_off(manager, "delay_end_repair_update", servers)
 
@@ -402,7 +402,7 @@ async def test_tablet_repair_hosts_and_dcs_filter(manager: ScyllaClusterManager)
 
         res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
         assert len(res) == 1
-        assert res[str(token)].repair_dcs_filter.split(",").sort() == dcs_filter.split(",").sort()
+        assert sorted(res[str(token)].repair_dcs_filter.split(",")) == sorted(dcs_filter.split(","))
 
         await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
 
