@@ -805,6 +805,10 @@ database::setup_metrics() {
                 sm::description("Total number of view updates for which there were more view replicas than base replicas "
                     "and we had to generate an extra view update because the additional view replica wouldn't get paired with any base replica."
                     "Should only increase during RF change. Should stop increasing shortly after finishing the RF change.")).set_skip_when_empty(),
+
+        sm::make_counter("schema_change_commit_waits", [] { return local_schema_registry().commit_gen_waits(); },
+                sm::description("The number of requests which waited on this shard for a schema change to be committed here, "
+                    "after another shard had committed it.")).set_skip_when_empty(),
     });
     if (this_shard_id() == 0) {
         _metrics.add_group("database", {
