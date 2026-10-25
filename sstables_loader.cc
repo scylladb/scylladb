@@ -663,6 +663,23 @@ future<locator::effective_replication_map_ptr> sstables_loader::await_topology_q
     co_return std::move(erm);
 }
 
+// Loading only the primary replica relies on a repair to fill the others in, which a
+// strongly consistent table has no use for and refuses. Checked up front by the entry
+// points, before anything is downloaded or opened, and again by load_and_stream().
+//
+// TODO: thin replication (SCYLLADB-204): every sstable is streamed to every replica
+// of its tablet, and the tablet's thin replica must be left out.
+static void check_primary_replica_only_load(const replica::table& tbl, primary_replica_only primary) {
+    if (!primary || !tbl.uses_tablets()) {
+        return;
+    }
+    const auto& s = *tbl.schema();
+    if (tbl.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(s.id()).has_raft_info()) {
+        throw std::invalid_argument(format("Cannot load {}.{} with primary_replica_only: a strongly consistent table needs no repair to fill in the other replicas, load every replica instead",
+                s.ks_name(), s.cf_name()));
+    }
+}
+
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         ::table_id table_id, std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, bool unlink, stream_scope scope,
         shared_ptr<stream_progress> progress) {
@@ -679,6 +696,8 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     // already dropped before we got here.
     auto& tbl = _db.local().find_column_family(table_id);
     auto stream_guard = tbl.stream_in_progress();
+
+    check_primary_replica_only_load(tbl, primary);
 
     std::unique_ptr<sstable_streamer> streamer;
     if (tbl.uses_tablets()) {
@@ -724,6 +743,8 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
             ks_name, cf_name, load_and_stream_desc, primary, skip_cleanup, skip_reshape, scope);
     try {
         if (load_and_stream) {
+            check_primary_replica_only_load(_db.local().find_column_family(ks_name, cf_name), primary_replica_only(primary));
+
             ::table_id table_id;
             std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards;
             // Load-and-stream reads the entire content from SSTables, therefore it can afford to discard the bloom filter
@@ -918,6 +939,7 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
         throw std::invalid_argument(format("Cannot restore {}.{} with /storage_service/restore: the table keeps its sstables on object storage, use /storage_service/tablets/restore",
                 ks_name, cf_name));
     }
+    check_primary_replica_only_load(_db.local().find_column_family(ks_name, cf_name), primary_replica_only(primary_replica));
     llog.info("Restore sstables from {}({}) to {}.{} using scope={}, primary_replica={}", endpoint, prefix, ks_name, cf_name, scope, primary_replica);
 
     auto progress = make_lw_shared<download_progress>();
