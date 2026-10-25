@@ -773,9 +773,10 @@ public:
         return _log[idx.value()];
     }
 
-    // True if the applier fiber can shrink the log on its own: it snapshots
-    // once it applies past the snapshot index, and it applies only committed
-    // entries, so something has to be committed above the snapshot.
+    // True if the applier fiber can shrink the log on its own: it takes a
+    // snapshot whenever log_is_full() and it has applied past the snapshot
+    // index, and it applies only committed entries, so something has to be
+    // committed above the snapshot.
     //
     // While this is false append_entries() lets one entry through per request;
     // see max_follower_log_size for the bound that costs.
