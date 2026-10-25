@@ -266,7 +266,7 @@ async def tablet_routing_published(cql, server: ServerInfo, ks: str, table: str,
     return published
 
 
-async def test_migration(manager: ManagerClient):
+async def test_migration(manager: ManagerClient, scale_timeout):
     """Verify vnodes-to-tablets migration for a single table on a single-node cluster.
 
     Steps:
@@ -392,7 +392,7 @@ async def test_migration(manager: ManagerClient):
         await verify_migration_status(manager, server, ks, expected_status='tablets', expected_node_statuses={})
 
         logger.info("Waiting for pow2 convergence to complete")
-        await wait_for_pow2_convergence(manager, server, ks, 'test')
+        await wait_for_pow2_convergence(manager, server, ks, 'test', timeout=scale_timeout(120))
 
 
 async def test_migration_rollback(manager: ManagerClient):
@@ -513,7 +513,7 @@ async def test_migration_rollback(manager: ManagerClient):
         await verify_data_integrity(cql, ks, "test", num_keys)
 
 
-async def test_migration_multinode(manager: ManagerClient):
+async def test_migration_multinode(manager: ManagerClient, scale_timeout):
     """Verify vnodes-to-tablets migration for a single table on a multi-node cluster with rolling restarts.
 
     Steps:
@@ -660,7 +660,7 @@ async def test_migration_multinode(manager: ManagerClient):
         await verify_data_integrity(cql, ks, "test", expected_keys)
 
         logger.info("Waiting for pow2 convergence to complete")
-        await wait_for_pow2_convergence(manager, servers[0], ks, 'test')
+        await wait_for_pow2_convergence(manager, servers[0], ks, 'test', timeout=scale_timeout(120))
 
 
 async def setup_single_node(manager: ManagerClient):
@@ -927,7 +927,7 @@ async def test_migration_multiple_keyspaces(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_migration_multiple_tables(manager: ManagerClient):
+async def test_migration_multiple_tables(manager: ManagerClient, scale_timeout):
     """Verify vnodes-to-tablets migration on keyspace with multiple tables.
 
     The test verifies that all tables get correct tablet maps, that resharding
@@ -976,12 +976,12 @@ async def test_migration_multiple_tables(manager: ManagerClient):
             "keyspace is still using vnodes after migration finalization"
 
         logger.info("Waiting for pow2 convergence on both tables")
-        await wait_for_pow2_convergence(manager, server, ks, 't1')
-        await wait_for_pow2_convergence(manager, server, ks, 't2')
+        await wait_for_pow2_convergence(manager, server, ks, 't1', timeout=scale_timeout(120))
+        await wait_for_pow2_convergence(manager, server, ks, 't2', timeout=scale_timeout(120))
 
 
 @pytest.mark.asyncio
-async def test_tablet_status_in_migration_api(manager: ManagerClient):
+async def test_tablet_status_in_migration_api(manager: ManagerClient, scale_timeout):
     """"Verify the ?include=tablet_status query parameter in the migration API.
 
     When set, the migration API response is extended with a 'tablets' field that
@@ -1075,8 +1075,8 @@ async def test_tablet_status_in_migration_api(manager: ManagerClient):
         await manager.api.enable_tablet_balancing(server.ip_addr)
 
         logger.info("After pow2 convergence - verify all tables have converged")
-        await wait_for_pow2_convergence(manager, server, ks, 't1')
-        await wait_for_pow2_convergence(manager, server, ks, 't2')
+        await wait_for_pow2_convergence(manager, server, ks, 't1', timeout=scale_timeout(120))
+        await wait_for_pow2_convergence(manager, server, ks, 't2', timeout=scale_timeout(120))
 
         status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=True)
         pow2 = status['tablets']['pow2_convergence']
