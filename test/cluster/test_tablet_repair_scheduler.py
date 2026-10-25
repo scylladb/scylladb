@@ -359,7 +359,11 @@ async def test_tablet_repair_dcs_filter(manager: ScyllaClusterManager, dcs_filte
 
     token = -1
     async def repair_task():
-        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        # Keep the repair from ending - which removes its repair_task_info - until check_filter()
+        # has read it. Failing the repair RPC with repair_tablet_fail_on_rpc_call, as the other
+        # tests do, doesn't hold a repair whose filter selects no replica (DC3), since such a
+        # repair sends no RPC.
+        await inject_error_on(manager, "delay_end_repair_update", servers)
         await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, dcs_filter=dcs_filter)
 
     async def check_filter():
@@ -371,7 +375,7 @@ async def test_tablet_repair_dcs_filter(manager: ScyllaClusterManager, dcs_filte
         assert len(res) == 1
         assert res[str(token)].repair_dcs_filter.split(",").sort() == dcs_filter.split(",").sort()
 
-        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await inject_error_off(manager, "delay_end_repair_update", servers)
 
     await asyncio.gather(repair_task(), check_filter())
 
