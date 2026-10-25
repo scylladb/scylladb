@@ -2314,6 +2314,14 @@ static future<> segment_of_applied_entries_is_reclaimed_impl(const bool use_logs
 
         co_await coroutine::parallel_for_each(std::views::iota(1, 10), insert);
 
+        // A write returns once its raft entry is committed, which may be before
+        // the entry is applied. An entry which isn't applied yet still holds its
+        // segment, and if it is applied only after the flush below, its memtable
+        // does. So wait until all the entries are applied: a linearizable
+        // (QUORUM) read does a read barrier, which waits for that.
+        co_await env.execute_cql("SELECT c FROM test_ks.tbl WHERE pk = 0",
+                std::make_unique<cql3::query_options>(db::consistency_level::QUORUM, std::vector<cql3::raw_value>()));
+
         // The active segment, i.e. the one with the highest id, holds the entries. Older
         // segments may still be kept alive by the handles of the group's own entries,
         // which don't concern us here.
