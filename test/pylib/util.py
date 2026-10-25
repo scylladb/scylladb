@@ -229,15 +229,29 @@ class KeyGenerator:
         with self.pk_lock:
             return self.pk
 
-async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int = 3, ignore_errors=False):
-    logger.info(f"Starting to asynchronously write, concurrency = {concurrency}")
+async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int = 3, ignore_errors=False,
+                       key_count: Optional[int] = None):
+    """Write to the table until the returned finish() is called, and read each write back.
+
+    Each write goes to a new key, unless `key_count` is given: then the writes reuse the keys
+    0..key_count-1 in turn, which keeps the data size bounded however long the writes run.
+    finish() returns the number of keys written.
+    """
+    logger.info(f"Starting to asynchronously write, concurrency = {concurrency}, key_count = {key_count}")
 
     stop_event = asyncio.Event()
 
     warmup_writes = 128 // concurrency
     warmup_event = asyncio.Event()
 
-    stmt = cql.prepare(f"INSERT INTO {keyspace}.{table} (pk, c) VALUES (?, ?)")
+    if key_count is None:
+        stmt = cql.prepare(f"INSERT INTO {keyspace}.{table} (pk, c) VALUES (?, ?)")
+    else:
+        # Two writes to the same key can be in flight together, so a write cannot expect to read
+        # back its own value. The timestamp makes the later write win, so a read returns the value
+        # of this write or of a later one.
+        stmt = cql.prepare(f"INSERT INTO {keyspace}.{table} (pk, c) VALUES (?, ?) USING TIMESTAMP ?")
+        base_timestamp = int(time.time() * 1_000_000)
     stmt.consistency_level = ConsistencyLevel.QUORUM
     rd_stmt = cql.prepare(f"SELECT * FROM {keyspace}.{table} WHERE pk = ?")
     rd_stmt.consistency_level = ConsistencyLevel.QUORUM
@@ -262,18 +276,25 @@ async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int
 
         write_count = 0
         while not stop_event.is_set():
-            pk = key_gen.next_pk()
+            seq = key_gen.next_pk()
+            pk = seq if key_count is None else seq % key_count
 
             # Once next_pk() is produced, key_gen.last_key() is assumed to be in the database
             # hence we can't give up on it.
             while True:
                 start_time = time.time()
                 try:
-                    await cql.run_async(stmt, [pk, pk])
+                    if key_count is None:
+                        await cql.run_async(stmt, [pk, seq])
+                    else:
+                        await cql.run_async(stmt, [pk, seq, base_timestamp + seq])
                     # Check read-your-writes
                     rows = await run_retry_async(cql, rd_stmt, [pk])
                     assert(len(rows) == 1)
-                    assert(rows[0].c == pk)
+                    if key_count is None:
+                        assert(rows[0].c == seq)
+                    else:
+                        assert(rows[0].c >= seq and rows[0].c % key_count == pk)
                     write_count += 1
                     break
                 except Exception as e:
@@ -283,7 +304,7 @@ async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int
                         logger.error(f"Exception occurred during read/write operation for pk={pk} started {time.time() - start_time}s ago: {e}")
                         raise e
 
-            if pk == warmup_writes:
+            if seq == warmup_writes:
                 warmup_event.set()
 
         logger.info(f"Worker #{worker_id} did {write_count} successful writes")
@@ -298,9 +319,11 @@ async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int
         await asyncio.gather(*tasks)
 
         last = key_gen.last_pk()
-        if last is not None:
+        if last is None:
+            return 0
+        if key_count is None:
             return last + 1
-        return 0
+        return min(last + 1, key_count)
 
     return finish
 

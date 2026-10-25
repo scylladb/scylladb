@@ -472,7 +472,9 @@ async def test_node_failure_during_tablet_migration(manager: ScyllaClusterManage
                 await manager.remove_node(servers[via].server_id, servers[self.fail_idx].server_id)
                 logger.info(f"Done with {self.replica} {host_ids[self.fail_idx]}")
 
-        finish_writes = await start_writes(cql, ks, "test")
+        # Reuse a bounded set of keys: the writes run until the end of the test, and with a new key
+        # for each write they fill the small logstor disk of the logstor configurations.
+        finish_writes = await start_writes(cql, ks, "test", key_count=10000)
 
         failer = node_failer(fail_stage, fail_replica, ks)
         await failer.setup()
