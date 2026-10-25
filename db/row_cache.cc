@@ -14,6 +14,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/defer.hh>
 #include "replica/memtable.hh"
 #include <boost/version.hpp>
@@ -1232,8 +1233,11 @@ future<> row_cache::invalidate(external_updater eu, const dht::partition_range& 
 }
 
 future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::partition_range>&& ranges, cache_invalidation_filter filter) {
-    return do_update(std::move(eu), [this, ranges = std::move(ranges), filter = std::move(filter)] mutable {
-        return seastar::async([this, ranges = std::move(ranges), filter = std::move(filter)] {
+    return do_update(std::move(eu), [this, ranges_ = std::move(ranges), filter_ = std::move(filter)] () mutable -> future<> {
+            // Move the captures into the coroutine frame: the internal_updater
+            // contract keeps the closure alive only until the invocation returns.
+            auto ranges = std::move(ranges_);
+            auto filter = std::move(filter_);
             auto on_failure = defer([this] () noexcept {
                 this->clear_now();
                 _prev_snapshot_pos = {};
@@ -1242,7 +1246,7 @@ future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::p
 
             for (auto&& range : ranges) {
                 _prev_snapshot_pos = dht::ring_position_view::for_range_start(range);
-                seastar::thread::maybe_yield();
+                co_await coroutine::maybe_yield();
 
                 while (true) {
                     auto done = _update_section(_tracker.region(), [&] {
@@ -1281,12 +1285,11 @@ future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::p
                     }
                     // _prev_snapshot_pos must be updated at this point such that every position < _prev_snapshot_pos
                     // is already invalidated and >= _prev_snapshot_pos is not yet invalidated.
-                    seastar::thread::yield();
+                    co_await yield();
                 }
             }
 
             on_failure.cancel();
-        });
     });
 }
 
