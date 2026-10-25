@@ -981,6 +981,45 @@ async def test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, o
     await do_test_restore_tablets(build_mode, manager, object_storage, topology, num_tables, num_restore_nodes)
 
 
+async def test_restore_tablets_without_manifests_refused(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    """A tablet-aware restore location with no manifests is refused for an eventually consistent table.
+
+    Only a strongly consistent table may list a datacenter without manifests of its own,
+    whose replicas restore the other datacenters' copies from the shared location; for any
+    other table the REST API used to refuse it, and the loader does now.
+    """
+    topology = topo(rf = 1, nodes = 1, racks = 1, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int );")
+        locations = [{"datacenter": servers[0].datacenter, "endpoint": object_storage.address, "bucket": object_storage.bucket_name, "prefix": "nothing", "manifests": []}]
+        with pytest.raises(HTTPError, match="has no manifests"):
+            await manager.api.restore_tablets_multidc(servers[0].ip_addr, ks, 'test', 'nothing', locations)
+
+
+async def test_restore_tablets_without_any_manifests_refused_strongly_consistent(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    """A tablet-aware restore of a strongly consistent table whose locations name no manifest at all is refused.
+
+    A datacenter may list no manifests of its own, but some location must name one, or
+    there is nothing to restore; the request is refused before any location is registered,
+    rather than failing later on the tablet count of an empty backup.
+    """
+    topology = topo(rf = 1, nodes = 1, racks = 1, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage, extra_config=SC_CONFIG)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 1}}{ks_consistency_opts(True)}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int );")
+        locations = [{"datacenter": servers[0].datacenter, "endpoint": object_storage.address, "bucket": object_storage.bucket_name, "prefix": "nothing", "manifests": []}]
+        with pytest.raises(HTTPError, match="no backup location names a manifest"):
+            await manager.api.restore_tablets_multidc(servers[0].ip_addr, ks, 'test', 'nothing', locations)
+        stmt = SimpleStatement(f"SELECT * FROM system_distributed.snapshot_remote_locations WHERE snapshot_name = 'nothing' AND datacenter = '{servers[0].datacenter}'",
+                               consistency_level=ConsistencyLevel.ONE)
+        rows = list(cql.execute(stmt))
+        assert not rows, f"a refused restore registered its location: {rows}"
+
 @pytest.mark.parametrize("topology", [topo(rf = 2, nodes = 2, racks = 2, dcs = 1)])
 async def test_restore_tablets_completions_do_not_collide(build_mode: str, manager: ScyllaClusterManager,
                                                           s3_storage, topology):
