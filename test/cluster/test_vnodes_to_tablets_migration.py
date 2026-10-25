@@ -311,7 +311,7 @@ async def tablet_routing_published(cql, server: ServerInfo, ks: str, table: str,
     return published
 
 
-async def test_migration(manager: ScyllaClusterManager):
+async def test_migration(manager: ScyllaClusterManager, scale_timeout):
     """Verify vnodes-to-tablets migration for a single table on a single-node cluster.
 
     Steps:
@@ -437,7 +437,7 @@ async def test_migration(manager: ScyllaClusterManager):
         await verify_migration_status(manager, server, ks, expected_status='tablets', expected_node_statuses={})
 
         logger.info("Waiting for pow2 convergence to complete")
-        await wait_for_pow2_convergence(manager, server, ks, 'test')
+        await wait_for_pow2_convergence(manager, server, ks, 'test', timeout=scale_timeout(120))
 
 
 async def test_migration_rollback(manager: ScyllaClusterManager):
@@ -558,7 +558,7 @@ async def test_migration_rollback(manager: ScyllaClusterManager):
         await verify_data_integrity(cql, ks, "test", num_keys)
 
 
-async def test_migration_multinode(manager: ScyllaClusterManager):
+async def test_migration_multinode(manager: ScyllaClusterManager, scale_timeout):
     """Verify vnodes-to-tablets migration for a single table on a multi-node cluster with rolling restarts.
 
     Steps:
@@ -704,7 +704,7 @@ async def test_migration_multinode(manager: ScyllaClusterManager):
         await verify_data_integrity(cql, ks, "test", expected_keys)
 
         logger.info("Waiting for pow2 convergence to complete")
-        await wait_for_pow2_convergence(manager, servers[0], ks, 'test')
+        await wait_for_pow2_convergence(manager, servers[0], ks, 'test', timeout=scale_timeout(120))
 
 
 async def test_migration_multidc(manager: ScyllaClusterManager, scale_timeout):
@@ -1413,7 +1413,7 @@ async def test_migration_multiple_keyspaces(manager: ScyllaClusterManager):
                     f"intended_storage_mode should be cleared for node {row.host_id} after all migrations are done, got '{row.intended_storage_mode}'"
 
 
-async def test_migration_multiple_tables(manager: ScyllaClusterManager):
+async def test_migration_multiple_tables(manager: ScyllaClusterManager, scale_timeout):
     """Verify vnodes-to-tablets migration on keyspace with multiple tables.
 
     The test verifies that all tables get correct tablet maps, that resharding
@@ -1462,11 +1462,11 @@ async def test_migration_multiple_tables(manager: ScyllaClusterManager):
             "keyspace is still using vnodes after migration finalization"
 
         logger.info("Waiting for pow2 convergence on both tables")
-        await wait_for_pow2_convergence(manager, server, ks, 't1')
-        await wait_for_pow2_convergence(manager, server, ks, 't2')
+        await wait_for_pow2_convergence(manager, server, ks, 't1', timeout=scale_timeout(120))
+        await wait_for_pow2_convergence(manager, server, ks, 't2', timeout=scale_timeout(120))
 
 
-async def test_tablet_status_in_migration_api(manager: ScyllaClusterManager):
+async def test_tablet_status_in_migration_api(manager: ScyllaClusterManager, scale_timeout):
     """"Verify the ?include=tablet_status query parameter in the migration API.
 
     When set, the migration API response is extended with a 'tablets' field that
@@ -1560,8 +1560,8 @@ async def test_tablet_status_in_migration_api(manager: ScyllaClusterManager):
         await manager.api.enable_tablet_balancing(server.ip_addr)
 
         logger.info("After pow2 convergence - verify all tables have converged")
-        await wait_for_pow2_convergence(manager, server, ks, 't1')
-        await wait_for_pow2_convergence(manager, server, ks, 't2')
+        await wait_for_pow2_convergence(manager, server, ks, 't1', timeout=scale_timeout(120))
+        await wait_for_pow2_convergence(manager, server, ks, 't2', timeout=scale_timeout(120))
 
         status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks, with_tablet_status=True)
         pow2 = status['tablets']['pow2_convergence']
@@ -2051,7 +2051,7 @@ async def test_migration_status_api_with_rf_zero_dc(manager: ScyllaClusterManage
         await verify_data_integrity(cql, ks, "test", num_keys, cl=ConsistencyLevel.ONE)
 
 
-async def test_migration_status_reset_between_migrations(manager: ScyllaClusterManager):
+async def test_migration_status_reset_between_migrations(manager: ScyllaClusterManager, scale_timeout):
     """Verify that a node's recorded storage mode does not leak into the next migration.
 
     The mode a node runs in is recorded per node, not per keyspace, and it is cleared
@@ -2102,7 +2102,7 @@ async def test_migration_status_reset_between_migrations(manager: ScyllaClusterM
             # Let the post-finalization tablet merge settle, so the restarts below do
             # not land mid-merge.
             logger.info(f"Waiting for pow2 convergence of {ks1}")
-            await wait_for_pow2_convergence(manager, server, ks1, 'test')
+            await wait_for_pow2_convergence(manager, server, ks1, 'test', timeout=scale_timeout(120))
 
             logger.info("Verifying both storage mode columns are cleared after finalization")
             rows = await cql.run_async("SELECT intended_storage_mode, current_storage_mode FROM system.topology WHERE key = 'topology'")
@@ -3013,7 +3013,7 @@ async def _read_key(cql, ks: str, key: int, host) -> None:
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_request_routing_during_replace(manager: ScyllaClusterManager):
+async def test_request_routing_during_replace(manager: ScyllaClusterManager, scale_timeout):
     """Verify that CQL coordinators correctly route reads and writes to the
     replacing node during the write_both_read_old and write_both_read_new
     topology states if the table is undergoing vnodes-to-tablets migration.
@@ -3102,7 +3102,7 @@ async def test_request_routing_during_replace(manager: ScyllaClusterManager):
         # When this injection is hit, streaming has finished.
         # The following writes can reach s2' only via the CQL write path.
         logger.info(f"Waiting for injection {INJECTION_WBRO!r}")
-        await manager.api.wait_for_injection_enter(s1.ip_addr, INJECTION_WBRO)
+        await manager.api.wait_for_injection_enter(s1.ip_addr, INJECTION_WBRO, deadline=time.time() + scale_timeout(60))
 
         # Discover the replacement node's host ID from system.topology.
         # We cannot use get_host_id() because we don't have the new node's ServerNum yet.
@@ -3145,7 +3145,7 @@ async def test_request_routing_during_replace(manager: ScyllaClusterManager):
         # PAUSE 2: write_both_read_new
         # The replacing node s2' must be in the tablet read and write set.
         logger.info(f"Waiting for injection {INJECTION_WBRN!r}")
-        await manager.api.wait_for_injection_enter(s1.ip_addr, INJECTION_WBRN)
+        await manager.api.wait_for_injection_enter(s1.ip_addr, INJECTION_WBRN, deadline=time.time() + scale_timeout(60))
 
         logger.info("Checking tablet map: stage=write_both_read_new (before K3 write)")
         await _check_migrating_tablet_map(
@@ -3488,7 +3488,7 @@ async def verify_views_match_base(cql, ks: str, expected: dict[int, int], timeou
 
 
 @pytest.mark.parametrize("rf,num_nodes", [(1, 3), (3, 3)])
-async def test_migration_with_views(manager: ScyllaClusterManager, rf: int, num_nodes: int):
+async def test_migration_with_views(manager: ScyllaClusterManager, rf: int, num_nodes: int, scale_timeout):
     """Verify vnodes-to-tablets migration for a keyspace with views of both
     kinds: views co-located with their base table and views with a tablet map
     of their own.
@@ -3620,7 +3620,7 @@ async def test_migration_with_views(manager: ScyllaClusterManager, rf: int, num_
 
         logger.info("Waiting for pow2 convergence of every tablet map")
         for table_name in ('test', *NON_COLOCATED_VIEWS):
-            await wait_for_pow2_convergence(manager, server, ks, table_name)
+            await wait_for_pow2_convergence(manager, server, ks, table_name, timeout=scale_timeout(120))
 
         logger.info("Verifying that the views match the base table after pow2 convergence")
         await verify_views_match_base(cql, ks, expected)
