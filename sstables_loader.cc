@@ -1557,6 +1557,23 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
         co_await sth.insert_snapshot_remote_location(snap_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
     }
 
+    // A strongly consistent tablet can't be split or merged yet (its raft group would
+    // have to be split or merged too), so the balancer would never bring the table to
+    // the backup's tablet count and the restore would wait for that forever. Require
+    // the table to be created with the backup's tablet count instead.
+    //
+    // TODO: revert this change once tablet splits and merges are supported for
+    // strongly consistent tables.
+    {
+        const auto& tmap = _db.local().get_token_metadata_ptr()->tablets().get_tablet_map(tid);
+        if (tmap.has_raft_info() && tmap.tablet_count() != summary.tablet_count) {
+            throw std::invalid_argument(fmt::format("Cannot restore {}.{}: a strongly consistent table can't be resized, "
+                    "and the table has {} tablets while the backup has {}. Create the table with "
+                    "tablets = {{'min_tablet_count': {}, 'max_tablet_count': {}}} to restore this backup into it",
+                    keyspace, table, tmap.tablet_count(), summary.tablet_count, summary.tablet_count, summary.tablet_count));
+        }
+    }
+
     // Persist the schema of the target table in system_distributed.snapshot_tables
     // before the restore task pins the tablet hints, so the original hints survive a
     // crash of this node. If an entry for this snapshot and table already exists, this
