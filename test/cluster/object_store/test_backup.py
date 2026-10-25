@@ -2460,27 +2460,31 @@ async def do_test_snapshot_on_all_nodes(manager: ScyllaClusterManager,
                                         object_storage = None, 
                                         do_snapshot: bool = True,
                                         do_repair: bool = False,
-                                        topology = None):
+                                        topology = None,
+                                        strongly_consistent: bool = False):
     """
     Helper for tests of topology operation snapshot.
     """
     if topology is None:
         topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
 
-    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage,
+                                      extra_config=SC_CONFIG if strongly_consistent else None)
 
     snapshot_name = unique_name('snap_')
 
-    async with new_test_keyspace(manager, f"WITH REPLICATION = {{ 'replication_factor' : {topology.rf} }} AND tablets = {{'initial': 20 }}") as ks:
+    async with new_test_keyspace(manager, f"WITH REPLICATION = {{ 'replication_factor' : {topology.rf} }} AND tablets = {{'initial': 20 }}{ks_consistency_opts(strongly_consistent)}") as ks:
         async with new_test_table(manager, ks, "pk text primary key, value int", "") as tbl:
             cf = tbl.split('.')[1]
             cql = manager.get_cql()
             insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
-            insert_stmt.consistency_level = ConsistencyLevel.ALL
+            insert_stmt.consistency_level = write_cl(strongly_consistent)
             await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(100)))
             if do_repair:
                 await manager.api.repair(servers[0].ip_addr, ks, cf)
             if do_snapshot:
+                if strongly_consistent:
+                    await sc_catch_up(manager, servers, ks, [cf])
                 await manager.api.take_cluster_snapshot(servers[0].ip_addr, ks, tag=snapshot_name, tables=[cf])
             try:
                 await handle_snapshot(manager, snapshot_name, ks, cf, servers)
@@ -2705,6 +2709,16 @@ async def test_cluster_snapshot_backup_and_restore(manager: ScyllaClusterManager
     topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_clear_and_restore, object_storage, topology)
                                         , object_storage, True, True, topology)
+
+
+@pytest.mark.asyncio
+async def test_cluster_snapshot_single_copy_strongly_consistent(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests that a cluster backup of a strongly consistent table keeps one copy of each
+    tablet, without any repair: raft keeps the replicas in sync.
+    """
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_redundancy, object_storage),
+                                        object_storage, True, False, strongly_consistent=True)
 
 
 @pytest.mark.asyncio
