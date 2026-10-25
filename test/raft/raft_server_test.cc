@@ -1081,9 +1081,19 @@ SEASTAR_THREAD_TEST_CASE(test_conf_change_completed_by_a_snapshot) {
     // it. trigger_snapshot() keeps no trailing entries, so node 0's log tail
     // ends up below the new leader's first log index and it has to be sent the
     // snapshot rather than caught up with append_entries.
+    //
+    // The new leader has to be a member of C_new which has the joint entry.
+    // Node 0 committed that entry with a majority which needn't include all of
+    // them, and a member without it can never get it now that node 0 is cut
+    // off. The others reject its votes, as its log is behind theirs, while its
+    // vote requests keep resetting their election timers, so nobody would ever
+    // be elected. The committing majority guarantees at least one member of
+    // C_new other than node 0 has the entry.
     cluster.disconnect(0);
-    cluster.elect_new_leader(1).get();
-    auto& new_leader = cluster.get_server(1);
+    const auto has_joint_entry = [&cluster] (size_t i) { return cluster.get_server(i).get_configuration().is_joint(); };
+    const size_t new_leader_idx = *std::ranges::find_if(std::views::iota(size_t(1), size_t(4)), has_joint_entry);
+    cluster.elect_new_leader(new_leader_idx).get();
+    auto& new_leader = cluster.get_server(new_leader_idx);
     new_leader.add_entry(create_command(42), raft::wait_type::applied, nullptr).get();
     BOOST_REQUIRE(!new_leader.get_configuration().is_joint());
     BOOST_REQUIRE(new_leader.trigger_snapshot(nullptr).get());
