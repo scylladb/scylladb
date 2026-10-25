@@ -11,6 +11,7 @@
 #include <ranges>
 #include <seastar/core/format.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/core/memory.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/weak_ptr.hh>
@@ -318,6 +319,51 @@ auto duration_in_seconds(Func&& f) {
     auto end = clk::now();
     return std::chrono::duration_cast<std::chrono::duration<float>>(end - start);
 }
+
+// Wall time, retired instructions and cycles, and allocations of one synchronous call.
+struct perf_sample {
+    std::chrono::duration<double> time{};
+    uint64_t instructions = 0;
+    uint64_t cycles = 0;
+    uint64_t allocations = 0;
+
+    perf_sample& operator+=(const perf_sample& o) {
+        time += o.time;
+        instructions += o.instructions;
+        cycles += o.cycles;
+        allocations += o.allocations;
+        return *this;
+    }
+};
+
+// Header-only, so standalone perf tools need not link perf.cc.
+class perf_sampler {
+    linux_perf_event _instructions = linux_perf_event::user_instructions_retired();
+    linux_perf_event _cycles = linux_perf_event::user_cpu_cycles_retired();
+
+public:
+    perf_sampler() {
+        _instructions.enable();
+        _cycles.enable();
+    }
+
+    template <typename Func>
+    perf_sample measure(Func&& f) {
+        using clk = std::chrono::steady_clock;
+        auto allocations = memory::stats().mallocs();
+        auto instructions = _instructions.read();
+        auto cycles = _cycles.read();
+        auto start = clk::now();
+        f();
+        auto end = clk::now();
+        return perf_sample{
+                .time = end - start,
+                .instructions = _instructions.read() - instructions,
+                .cycles = _cycles.read() - cycles,
+                .allocations = memory::stats().mallocs() - allocations,
+        };
+    }
+};
 
 class scheduling_latency_measurer : public weakly_referencable<scheduling_latency_measurer> {
     using clk = std::chrono::steady_clock;
