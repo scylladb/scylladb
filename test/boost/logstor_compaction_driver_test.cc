@@ -126,7 +126,7 @@ public:
 };
 
 compaction_driver::candidate candidate_of(fake_group& group, const compaction_candidate_score& score) {
-    return compaction_driver::candidate{.group = &group, .segments = {}, .score = score};
+    return compaction_driver::candidate{.group = &group, .score = score};
 }
 
 // A threshold of a half, and a minimum at the threshold, so that the curve is flat above the anchor

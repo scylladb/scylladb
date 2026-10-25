@@ -10,7 +10,6 @@
 #include "replica/logstor/compaction_policy.hh"
 #include "replica/logstor/compaction_rate_controller.hh"
 #include "replica/logstor/segment_stats.hh"
-#include "replica/logstor/segment_types.hh"
 #include "utils/updateable_value.hh"
 #include <chrono>
 #include <cstddef>
@@ -35,10 +34,9 @@ class logstor_group;
 // start() until stop(), for the lifetime of the segment manager.
 class compaction_driver {
 public:
-    // A batch that one group offers, from a ranking.
+    // The score of the batch that one group offers, from a ranking. The job selects its batch again.
     struct candidate {
         logstor_group* group;
-        std::vector<log_segment_id> segments;
         compaction_candidate_score score;
     };
 
