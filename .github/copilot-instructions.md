@@ -136,6 +136,19 @@ ninja build/<mode>/scylla
 - When rebasing onto a new baseline, run `git submodule sync --recursive` and
   `git submodule update --init --recursive` afterwards so the submodules match the new baseline.
 
+## Pull Requests and Issues
+- Keep pull request descriptions, cover letters and issue reports short and focused. Verbose
+  text makes human review harder and contributes to review fatigue.
+- In a pull request description, do not include a commit list; the pull request already shows
+  one. Do not list the tests you ran locally either; CI runs them. Mention only what CI does
+  not run, such as manual perf runs (`perf_*`), and their results.
+- In an issue report, do reference the commits that matter, such as the one that introduced
+  the problem or a related fix, by URL.
+- Do not add sections the reader does not need.
+- Format for the reader, in comments as well as descriptions: break the text into short
+  paragraphs by topic and use a list where the items are parallel. Several sentences run
+  together on one line are as hard to read as a wall of text.
+
 ## External Communication
 - When an AI agent posts a comment on GitHub or Jira, it says so and names the model, and
   states on whose behalf it comments, e.g. `(<model name>, on behalf of @<user>)`.
