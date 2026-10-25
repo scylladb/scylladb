@@ -57,7 +57,12 @@ def test_describe_table_billing(test_table):
     # mode, so the table creation date should be the same as the billing
     # mode setting date.
     assert 'LastUpdateToPayPerRequestDateTime' in got['BillingModeSummary']
-    assert got['BillingModeSummary']['LastUpdateToPayPerRequestDateTime'] == got['CreationDateTime']
+    # boto3 returns these times as datetimes in the local time zone, each
+    # with its own tzlocal() object. Python considers comparing such
+    # datetimes an inter-zone comparison, and if the time is in the hour
+    # repeated when daylight saving time ends, == always returns False for
+    # it. So compare the timestamps instead.
+    assert got['BillingModeSummary']['LastUpdateToPayPerRequestDateTime'].timestamp() == got['CreationDateTime'].timestamp()
 
 # Test that DescribeTable correctly returns the table's creation time - 
 # timestamp in seconds as double with as much precision as the operating system will provide
@@ -99,8 +104,13 @@ def test_describe_table_creation_time(dynamodb):
             time3 = got3['CreationDateTime']
             time4 = got4['CreationDateTime']
 
-            assert time1 == time3, (time1, time1.timestamp(), time3, time3.timestamp())
-            assert time2 == time4, (time2, time2.timestamp(), time4, time4.timestamp())
+            # boto3 returns these times as datetimes in the local time zone,
+            # each with its own tzlocal() object. Python considers comparing
+            # such datetimes an inter-zone comparison, and if the time is in
+            # the hour repeated when daylight saving time ends, == always
+            # returns False for it. So compare the timestamps instead.
+            assert time1.timestamp() == time3.timestamp(), (time1, time1.timestamp(), time3, time3.timestamp())
+            assert time2.timestamp() == time4.timestamp(), (time2, time2.timestamp(), time4, time4.timestamp())
 
 # Test that DescribeTable returns the table's estimated item count
 # in the ItemCount attribute. Unfortunately, there's not much we can
