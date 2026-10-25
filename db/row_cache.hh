@@ -347,6 +347,7 @@ private:
     //
     // Must have strong failure guarantees. Upon failure, it should still leave the cache
     // in a state consistent with the update it is performing.
+    // As a last resort, if the updater fails, do_update() clears the whole cache.
     using internal_updater = std::function<future<>()>;
 
     // Atomically updates the underlying mutation source and synchronizes the cache.
