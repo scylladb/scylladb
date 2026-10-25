@@ -118,9 +118,11 @@ public:
     // Returns the part of the range from the minimum to the maximum compaction shares that
     // compaction asks for, in [0, 1].
     double shares_demand() const noexcept { return _rate_controller.space_pressure(); }
+    const compaction_rate_controller& rate_controller() const noexcept { return _rate_controller; }
     // Returns the threshold curve of the current configuration. Every input is live-updatable, so
     // the curve is built where it is used and not cached.
     utilization_threshold_curve threshold_curve() const noexcept;
+    size_t jobs_in_flight() const noexcept { return _jobs_in_flight.size(); }
     const driver_stats& stats() const noexcept { return _stats; }
 
 private:
