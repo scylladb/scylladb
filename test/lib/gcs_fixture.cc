@@ -116,6 +116,12 @@ static future<std::tuple<tp::process_fixture, int>> start_upload_validator(int u
             if (!matched && std::regex_search(line.begin(), line.end(), m, port_ex)) {
                 port_promise->set_value(std::stoi(m[1].str()));
                 matched = true;
+            } else if (!matched) {
+                // Before the port is reported, the validator's output can only
+                // explain why it failed to start (e.g., a Python traceback), so
+                // show it at any log level - the wait for the port below would
+                // otherwise just time out with no clue why.
+                std::cerr << line << std::endl;
             } else {
                 // surface rejections in the test log, they explain the failure
                 BOOST_TEST_MESSAGE(std::string(line));
@@ -133,7 +139,15 @@ static future<std::tuple<tp::process_fixture, int>> start_upload_validator(int u
     int port = 0;
 
     try {
-        port = co_await with_timeout(std::chrono::steady_clock::now() + 20s, std::move(port_future));
+        // Python starts in well under a second, but this wait once timed out
+        // after 20s in CI (SCYLLADB-5681), perhaps on a very loaded machine, so
+        // it is now as generous as the wait for the fake-gcs-server to start.
+        constexpr auto port_timeout = 120s;
+        try {
+            port = co_await with_timeout(std::chrono::steady_clock::now() + port_timeout, std::move(port_future));
+        } catch (timed_out_error&) {
+            throw std::runtime_error(fmt::format("GCS upload validator did not report its port within {}s", port_timeout.count()));
+        }
         if (port <= 0) {
             throw std::runtime_error("Invalid upload validator port");
         }
