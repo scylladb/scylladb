@@ -1488,11 +1488,18 @@ future<> row_cache::do_update(row_cache::external_updater eu, row_cache::interna
             return iu();
         }));
         {
+            if (f.failed()) {
+                // The internal updater is responsible for bringing the cache
+                // in sync with the new underlying mutation source. If it failed
+                // before completing, e.g. when it could not allocate memory for
+                // its continuation, entries made stale by the external update
+                // may still be in the cache. Clearing the whole cache does not
+                // allocate and restores consistency.
+                clogger.warn("Failure during cache update: {}. Clearing the cache.", f.get_exception());
+                clear_now();
+            }
             _prev_snapshot_pos = {};
             _prev_snapshot = {};
-            if (f.failed()) {
-                clogger.warn("Failure during cache update: {}", f.get_exception());
-            }
         }
     }
 }
