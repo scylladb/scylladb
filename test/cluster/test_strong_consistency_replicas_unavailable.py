@@ -169,6 +169,15 @@ async def test_no_quorum_times_out_and_relaxed_read_answers(manager: ScyllaClust
 
         await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 1)", host=host_of[leader])
         assert [r.c for r in await cql.run_async(quorum_read, host=host_of[leader])] == [1]
+        # The write and the QUORUM read need only a majority of the replicas, so a surviving
+        # follower may not have applied the row yet - and once the other replicas die, it never
+        # will, as nobody is left to replicate the row to it. Its CL=ONE read below expects the
+        # row, so wait until it has it (a CL=ONE read on a replica reads its local state). The
+        # leader already has the row, as it answered the QUORUM read.
+        if alive != leader:
+            async def survivor_has_row() -> bool | None:
+                return [r.c for r in await cql.run_async(relaxed_read, host=host_of[alive])] == [1] or None
+            await wait_for(survivor_has_row, time.time() + 60, label=f"{alive} to apply the row")
         relaxed_reads_before = await get_metric(manager, alive, READ_COUNT, {'read_type': 'non_linearizable'})
         write_timeouts_before = await get_metric(manager, alive, WRITE_ERRORS, {'reason': 'timeout'})
         read_timeouts_before = await get_metric(manager, alive, READ_ERRORS, {'reason': 'timeout'})
@@ -188,9 +197,11 @@ async def test_no_quorum_times_out_and_relaxed_read_answers(manager: ScyllaClust
                 assert elapsed >= 2.5, f"the write via {coordinator} failed after {elapsed:.1f}s, before its timeout"
                 _, elapsed = await expect_error(cql, quorum_read, coordinator, ReadTimeout)
                 assert elapsed >= 2.5, f"the QUORUM read via {coordinator} failed after {elapsed:.1f}s, before its timeout"
-                rows, elapsed = await attempt(cql, relaxed_read, coordinator)
+                # Returning the row at all shows that the read didn't wait for a leader: there is
+                # none, so such a read could only time out. Its latency isn't checked, as an
+                # overloaded node (e.g., in debug mode) can take over a second even for this read.
+                rows, _ = await attempt(cql, relaxed_read, coordinator)
                 assert rows == [1], f"the CL=ONE read via {coordinator} returned {rows!r}"
-                assert elapsed < 1.5, f"the CL=ONE read via {coordinator} took {elapsed:.1f}s"
 
             # Both relaxed reads and all four timeouts land on the survivor: the non-replica only
             # forwards the requests, and a forwarding timeout is not a coordinator error of its own.
