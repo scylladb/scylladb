@@ -358,6 +358,11 @@ private:
     // internal_updater is only kept alive until its invocation returns.
     future<> do_update(external_updater eu, internal_updater iu) noexcept;
 
+    // Fallback for invalidate() when the invalidation of specific ranges
+    // cannot be prepared: applies the external updater and clears the
+    // whole cache.
+    future<> clear_on_error(external_updater eu, std::exception_ptr ex) noexcept;
+
 public:
     ~row_cache();
     row_cache(schema_ptr, snapshot_source, cache_tracker&, is_continuous = is_continuous::no);
@@ -463,9 +468,16 @@ public:
     // Guarantees that readers created after invalidate()
     // completes will see all writes from the underlying
     // mutation source made prior to the call to invalidate().
-    future<> invalidate(external_updater, const dht::decorated_key&);
-    future<> invalidate(external_updater, const dht::partition_range& = query::full_partition_range, cache_invalidation_filter filter = [] (const auto&) { return true; });
-    future<> invalidate(external_updater, utils::chunked_vector<dht::partition_range>&&, cache_invalidation_filter filter = [] (const auto&) { return true; });
+    //
+    // The cache side of invalidate() does not fail: if the
+    // invalidation of the given ranges cannot be prepared or
+    // carried out, e.g. for lack of memory, the whole cache is
+    // cleared instead. Only a failure of external_updater::prepare()
+    // is propagated to the caller, and then nothing is modified.
+    // Failing to allocate the frame of the update itself is fatal.
+    future<> invalidate(external_updater, const dht::decorated_key&) noexcept;
+    future<> invalidate(external_updater, const dht::partition_range& = query::full_partition_range, cache_invalidation_filter filter = [] (const auto&) { return true; }) noexcept;
+    future<> invalidate(external_updater, utils::chunked_vector<dht::partition_range>&&, cache_invalidation_filter filter = [] (const auto&) { return true; }) noexcept;
 
     // Evicts entries from cache.
     //

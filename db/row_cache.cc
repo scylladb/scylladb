@@ -1224,16 +1224,29 @@ void row_cache::invalidate_locked(const dht::decorated_key& dk) {
     }
 }
 
-future<> row_cache::invalidate(external_updater eu, const dht::decorated_key& dk) {
-    return invalidate(std::move(eu), dht::partition_range::make_singular(dk));
+future<> row_cache::invalidate(external_updater eu, const dht::decorated_key& dk) noexcept {
+    try {
+        auto range = dht::partition_range::make_singular(dk);
+        return invalidate(std::move(eu), range);
+    } catch (...) {
+        return clear_on_error(std::move(eu), std::current_exception());
+    }
 }
 
-future<> row_cache::invalidate(external_updater eu, const dht::partition_range& range, cache_invalidation_filter filter) {
-    return invalidate(std::move(eu), utils::chunked_vector<dht::partition_range>({range}), std::move(filter));
+future<> row_cache::invalidate(external_updater eu, const dht::partition_range& range, cache_invalidation_filter filter) noexcept {
+    try {
+        utils::chunked_vector<dht::partition_range> ranges;
+        ranges.push_back(range);
+        return invalidate(std::move(eu), std::move(ranges), std::move(filter));
+    } catch (...) {
+        return clear_on_error(std::move(eu), std::current_exception());
+    }
 }
 
-future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::partition_range>&& ranges, cache_invalidation_filter filter) {
-    return do_update(std::move(eu), [this, ranges_ = std::move(ranges), filter_ = std::move(filter)] () mutable -> future<> {
+future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::partition_range>&& ranges, cache_invalidation_filter filter) noexcept {
+    internal_updater iu;
+    try {
+        iu = [this, ranges_ = std::move(ranges), filter_ = std::move(filter)] () mutable -> future<> {
             // Move the captures into the coroutine frame: the internal_updater
             // contract keeps the closure alive only until the invocation returns.
             auto ranges = std::move(ranges_);
@@ -1290,6 +1303,18 @@ future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::p
             }
 
             on_failure.cancel();
+        };
+    } catch (...) {
+        return clear_on_error(std::move(eu), std::current_exception());
+    }
+    return do_update(std::move(eu), std::move(iu));
+}
+
+future<> row_cache::clear_on_error(external_updater eu, std::exception_ptr ex) noexcept {
+    clogger.warn("Failed to prepare cache invalidation: {}. Clearing the cache instead.", ex);
+    return do_update(std::move(eu), [this] {
+        clear_now();
+        return make_ready_future<>();
     });
 }
 
