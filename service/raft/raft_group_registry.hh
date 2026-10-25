@@ -55,6 +55,10 @@ struct raft_server_for_group {
     raft_state_machine& state_machine;
     std::optional<seastar::shared_future<>> aborted;
     std::optional<utils::updateable_value<uint32_t>> default_op_timeout_in_ms;
+    // Whether this is the server of group 0. Group 0 is not necessarily the first
+    // group started on shard 0: the Raft-based recovery procedure sets group 0 up
+    // after the strongly consistent tablet groups have started at boot.
+    bool is_group0 = false;
 };
 
 class raft_operation_timeout_error : public std::runtime_error {
