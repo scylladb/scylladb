@@ -348,6 +348,9 @@ private:
     // Must have strong failure guarantees. Upon failure, it should still leave the cache
     // in a state consistent with the update it is performing.
     // As a last resort, if the updater fails, do_update() clears the whole cache.
+    //
+    // do_update() keeps the updater alive until the future it returned resolves,
+    // so an updater which is a coroutine lambda may use its captures throughout.
     using internal_updater = std::function<future<>()>;
 
     // Atomically updates the underlying mutation source and synchronizes the cache.
