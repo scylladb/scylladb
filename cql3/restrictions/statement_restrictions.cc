@@ -1642,6 +1642,10 @@ void select_restrictions::build_filters(const column_predicates& preds) {
     if (_analysis.has_multi_column) {
         _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), _analysis.clustering_columns_restrictions);
     }
+
+    // Compile LIKE patterns once, rather than for every filtered row.
+    _partition_level_filter = expr::optimize_like(_partition_level_filter);
+    _clustering_row_level_filter = expr::optimize_like(_clustering_row_level_filter);
 }
 
 void where_clause_analysis::build_key_range_fns() {
