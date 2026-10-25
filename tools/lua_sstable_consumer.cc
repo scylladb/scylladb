@@ -482,10 +482,11 @@ int partition_start_index_l(lua_State* l) {
 void push_gc_clock_time_point(lua_State* l, gc_clock::time_point tp) {
     auto t = gc_clock::to_time_t(tp);
     std::tm tm{};
-    // This time is actually UTC, but C API assumes local-times and there is no
-    // way to specify the TZ used. So we lie about it being local-time to avoid
-    // libC doing TZ adjustments.
-    localtime_r(&t, &tm);
+    // The time point is exposed in UTC. Converting through local time instead
+    // would make the fields depend on the TZ of the machine, and the conversion
+    // back (in get_gc_clock_time_point_l()) ambiguous in the hour repeated when
+    // daylight saving time ends.
+    gmtime_r(&t, &tm);
 
     lua_createtable(l, 0, 6);
     luaL_setmetatable(l, get_metatable_name<gc_clock_time_point>());
@@ -512,7 +513,6 @@ void push_gc_clock_time_point(lua_State* l, gc_clock::time_point tp) {
 // Reads the time point at the given index of the stack, and leaves it there.
 gc_clock::time_point get_gc_clock_time_point_l(lua_State* l, int index) {
     std::tm tm{};
-    tm.tm_isdst = -1;
 
     lua_getfield(l, index, "year");
     tm.tm_year = lua_tointeger(l, -1) - 1900;
@@ -538,7 +538,8 @@ gc_clock::time_point get_gc_clock_time_point_l(lua_State* l, int index) {
     tm.tm_sec = lua_tointeger(l, -1);
     lua_pop(l, 1);
 
-    return gc_clock::from_time_t(std::mktime(&tm));
+    // The fields are in UTC, see push_gc_clock_time_point().
+    return gc_clock::from_time_t(timegm(&tm));
 }
 
 template <typename Op>
