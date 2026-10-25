@@ -28,6 +28,7 @@ from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_
 from cassandra import ReadFailure, Unavailable
 from cassandra.cluster import ConsistencyLevel, NoHostAvailable
 from cassandra.query import SimpleStatement
+from test.pylib.scylla_cluster import ReplaceConfig
 from collections import Counter, defaultdict
 from test.pylib.util import wait_for
 from test.pylib.rest_client import HTTPError
@@ -614,9 +615,10 @@ class topo:
         self.racks = racks
         self.dcs = dcs
 
-async def create_cluster(topology, manager, logger, object_storage=None, extra_config=None, extra_cmdline=None):
+def cluster_config(topology, object_storage=None, extra_config=None, extra_cmdline=None):
+    '''The config and command line create_cluster() starts the nodes with. A node added
+    later, e.g. to replace a dead one, has to be started with the same ones.'''
     rf_rack_valid_keyspaces = (topology.rf <= topology.racks)
-    logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
 
     cfg = {'task_ttl_in_seconds': 300, 'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces}
     if object_storage:
@@ -628,6 +630,13 @@ async def create_cluster(topology, manager, logger, object_storage=None, extra_c
     cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=debug:sstable=debug:http=debug:api=info' ]
     if extra_cmdline:
         cmd += extra_cmdline
+    return cfg, cmd
+
+async def create_cluster(topology, manager, logger, object_storage=None, extra_config=None, extra_cmdline=None):
+    rf_rack_valid_keyspaces = (topology.rf <= topology.racks)
+    logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
+
+    cfg, cmd = cluster_config(topology, object_storage, extra_config, extra_cmdline)
 
     property_files = []
     cur_dc = 0
@@ -1067,8 +1076,24 @@ async def test_restore_tablets_completions_do_not_collide(build_mode: str, manag
         f"restore finished, so their removal did not stick: {leftover}")
 
 
-async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, object_storage, topology, num_tables, num_restore_nodes, with_views=False):
-    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+@pytest.mark.parametrize("topology", [
+        topo(rf = 1, nodes = 2, racks = 1, dcs = 1),
+        topo(rf = 2, nodes = 2, racks = 2, dcs = 1),
+        topo(rf = 2, nodes = 4, racks = 2, dcs = 2),
+    ])
+async def test_restore_tablets_strongly_consistent(build_mode: str, manager: ScyllaClusterManager, object_storage, topology):
+    '''Check that tablet-aware restore works for strongly consistent tables.
+
+    The restore attaches the backed up sstables to every replica of each tablet outside
+    of raft, into an empty table whose raft groups have started but committed nothing. The
+    restored data is then plain table data to raft: later writes apply on top of it and
+    reads see it.'''
+    await do_test_restore_tablets(build_mode, manager, object_storage, topology, num_tables=2, num_restore_nodes=2, strongly_consistent=True)
+
+
+async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, object_storage, topology, num_tables, num_restore_nodes, with_views=False, strongly_consistent=False):
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage,
+                                             extra_config=SC_CONFIG if strongly_consistent else None)
 
     cql = manager.get_cql()
 
@@ -1080,7 +1105,7 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
     view = 'test0_by_value'
 
     # Create the keyspace, populate multiple tables, and back them all up
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as src_ks:
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}{ks_consistency_opts(strongly_consistent)}") as src_ks:
         async def create_table(cf):
             # Restore copies the sstable components as they are, so leave every table
             # but the first uncompressed: the multi-table cases then restore both a
@@ -1088,7 +1113,7 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
             compression = '' if cf == tables[0] else " AND compression = {}"
             await cql.run_async(f"CREATE TABLE {src_ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}}{compression};")
             insert_stmt = cql.prepare(f"INSERT INTO {src_ks}.{cf} (pk, value) VALUES (?, ?)")
-            insert_stmt.consistency_level = ConsistencyLevel.ALL
+            insert_stmt.consistency_level = write_cl(strongly_consistent)
             await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
 
         await asyncio.gather(*(create_table(cf) for cf in tables))
@@ -1100,7 +1125,7 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
                             "WHERE value IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (value, pk)")
             await wait_for_view(cql, view, len(servers))
 
-        snap_name, _ = await take_snapshot(src_ks, servers, manager, logger)
+        snap_name, _ = await take_snapshot(src_ks, servers, manager, logger, strongly_consistent)
 
         # Use a common prefix across all backup locations so the tablet-aware-restore
         # API's own 'prefix' parameter (relative to which manifests are resolved) is
@@ -1114,14 +1139,18 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
         # is kept around to assert that the restore leaves it alone. The first destination table
         # declares a column on top of the backed up ones, which the sstables do not carry and
         # which therefore stays null.
-        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as dst_ks:
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}{ks_consistency_opts(strongly_consistent)}") as dst_ks:
+            # A strongly consistent target can't be resized by the restore, so it is created
+            # with the source's actual tablet count (the min_tablet_count hint rounds up to a
+            # power of two).
+            src_tablet_count = await get_tablet_count(manager, servers[0], src_ks, tables[0])
             async def create_dst_table(idx, cf):
                 extra_col = ', extra int' if idx == 0 else ''
-                await cql.run_async(f"CREATE TABLE {dst_ks}.{cf}_restored ( pk text primary key, value int{extra_col} );")
+                await cql.run_async(f"CREATE TABLE {dst_ks}.{cf}_restored ( pk text primary key, value int{extra_col} ){restore_target_tablet_opts(strongly_consistent, src_tablet_count)};")
 
             await asyncio.gather(*(create_dst_table(i, cf) for i, cf in enumerate(tables)))
             for cf in tables:
-                assert not await cql.run_async(f"SELECT pk FROM {dst_ks}.{cf}_restored;"), f'{dst_ks}.{cf}_restored is not empty before the restore'
+                assert not await read_rows(cql, dst_ks, f'{cf}_restored', range(num_keys), strongly_consistent, columns='pk'), f'{dst_ks}.{cf}_restored is not empty before the restore'
 
             # The view is re-created here too, before any data exists, so its initial build
             # is trivially over an empty table -- this is what distinguishes checking for
@@ -1140,19 +1169,36 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
             async def restore_table(idx, cf):
                 node = restore_nodes[idx % len(restore_nodes)]
                 logger.info(f'Restore table {cf} into {dst_ks}.{cf}_restored via {node.ip_addr}')
+                # A strongly consistent table restores from any replica's copy, so a backup
+                # of one replica per tablet (what a manager backing up a single copy would
+                # take) must restore every replica, in every DC: use the backups of one rack
+                # of the first DC, which holds one replica of every tablet, for the odd
+                # tables. The other DCs restore from the same location with no manifests of
+                # their own.
+                first_dc = servers[0].datacenter
+                def backup_servers(dc, dc_servers):
+                    if strongly_consistent and idx % 2 == 1:
+                        return [s for s in dc_servers if dc == first_dc and s.rack == dc_servers[0].rack]
+                    return dc_servers
                 locations = [
                     {
                         "datacenter": dc,
                         "endpoint": object_storage.address,
                         "bucket": object_storage.bucket_name,
                         "prefix": restore_prefix,
-                        "manifests": [f'{s.server_id}/{cf}/manifest.json' for s in dc_servers]
+                        "manifests": [f'{s.server_id}/{cf}/manifest.json' for s in backup_servers(dc, dc_servers)]
                     } for dc, dc_servers in servers_per_dc.items()
                 ]
                 if topology.dcs > 1:
                     # The locations must cover all the DCs the keyspace replicates to
                     with pytest.raises(HTTPError, match="don't match the datacenters"):
                         await manager.api.restore_tablets_multidc(node.ip_addr, dst_ks, f'{cf}_restored', snap_name, locations[:1])
+                if topology.dcs > 1 and strongly_consistent:
+                    # Every DC must restore from one location, or the DCs could attach
+                    # different copies of a tablet.
+                    with pytest.raises(HTTPError, match="restore all datacenters from one location"):
+                        await manager.api.restore_tablets_multidc(node.ip_addr, dst_ks, f'{cf}_restored', snap_name,
+                                                                  [locations[0]] + [loc | {"prefix": f'{restore_prefix}/other'} for loc in locations[1:]])
                 tid = await manager.api.restore_tablets_multidc(node.ip_addr, dst_ks, f'{cf}_restored', snap_name, locations)
                 status = await manager.api.wait_task(node.ip_addr, tid)
                 assert (status is not None) and (status['state'] == 'done'), f"Restore of {cf} via {node.ip_addr} failed: {status}"
@@ -1168,18 +1214,27 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
 
             await asyncio.gather(*(check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, dst_ks, f'{cf}_restored') for cf in tables))
 
-            res = await cql.run_async(f"SELECT extra FROM {dst_ks}.{tables[0]}_restored;")
+            res = (await read_rows(cql, dst_ks, f'{tables[0]}_restored', range(num_keys), strongly_consistent, columns='pk, extra')).values()
             assert res and all(x.extra is None for x in res), f'{dst_ks}.{tables[0]}_restored has {len(res)} rows and a non-null extra after restore'
 
             expected = {str(i): i for i in range(num_keys)}
             for cf in tables:
                 # check_mutation_replicas() above compares partition keys and replica counts, so
                 # the values are only checked here
-                restored = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {dst_ks}.{cf}_restored;")}
+                restored = {pk: row.value for pk, row in (await read_rows(cql, dst_ks, f'{cf}_restored', range(num_keys), strongly_consistent)).items()}
                 assert restored == expected, f'Unexpected contents of {dst_ks}.{cf}_restored after restore: {len(restored)} rows'
 
-                kept = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {src_ks}.{cf};")}
+                kept = {pk: row.value for pk, row in (await read_rows(cql, src_ks, cf, range(num_keys), strongly_consistent)).items()}
                 assert kept == expected, f'Restore into {dst_ks} modified the source table {src_ks}.{cf}: {len(kept)} rows'
+
+            if strongly_consistent:
+                # The restored data is ordinary table data to raft: a write after the
+                # restore goes through the group and lands on top of it.
+                for cf in tables:
+                    await cql.run_async(f"UPDATE {dst_ks}.{cf}_restored SET value = 100 WHERE pk = '0';")
+                    await cql.run_async(f"INSERT INTO {dst_ks}.{cf}_restored (pk, value) VALUES ('new', 1);")
+                    after = {pk: row.value for pk, row in (await read_rows(cql, dst_ks, f'{cf}_restored', [*range(num_keys), 'new'], strongly_consistent)).items()}
+                    assert after == expected | {'0': 100, 'new': 1}, f'Unexpected contents of {dst_ks}.{cf}_restored after a write on top of the restore: {after}'
 
             if with_views:
                 print('Check that the view eventually gets repopulated from the restored base table')
@@ -1242,6 +1297,102 @@ async def test_restore_tablets_strongly_consistent_refuses_requests(build_mode: 
         assert restored == expected, f'Unexpected contents of {ks}.{cf} after restore: {restored}'
         await cql.run_async(write_stmt)
         assert (await cql.run_async(read_stmt))[0].value == 100
+
+
+@pytest.mark.parametrize("strongly_consistent", [True])
+async def test_restore_tablets_after_majority_loss(build_mode: str, manager: ScyllaClusterManager, object_storage, strongly_consistent):
+    '''Recover a strongly consistent keyspace whose tablets lost a majority of their replicas.
+
+    A raft group that lost its majority can't make progress, so the surviving data in
+    it is not recoverable without data loss. The recovery is the simple one: drop the
+    keyspace, replace the dead nodes, re-create the keyspace with the backup's tablet
+    count and restore the cluster backup into it. The cluster keeps a group0 majority
+    throughout: 5 nodes, of which the 2 that die are replicas of the table's tablets.'''
+    topology = topo(rf = 3, nodes = 5, racks = 3, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage,
+                                             extra_config=SC_CONFIG if strongly_consistent else None)
+    cql = manager.get_cql()
+    num_keys = 20
+    tablet_count = 2
+    ks_opts = f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}} AND tablets = {{'initial': {tablet_count}}}{ks_consistency_opts(strongly_consistent)}"
+    cf = 'test'
+    expected = {str(i): i for i in range(num_keys)}
+    snapshot_name = unique_name('snap_')
+    prefix = unique_name('majority_loss_')
+
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = write_cl(strongly_consistent)
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+
+        if strongly_consistent:
+            await sc_catch_up(manager, servers, ks, [cf])
+        await manager.api.take_cluster_snapshot(servers[0].ip_addr, ks, tag=snapshot_name, tables=[cf])
+        await run_cluster_backup(object_storage, prefix, manager, snapshot_name, ks, cf, servers)
+
+        # Writes after the last scheduled backup: only a backup of the survivors can save them.
+        extra = {str(i): i for i in range(num_keys, 2 * num_keys)}
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys, 2 * num_keys)))
+        if strongly_consistent:
+            await sc_catch_up(manager, servers, ks, [cf])
+        expected |= extra
+
+        # Kill two replicas of the first tablet: its raft group has lost its majority.
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, cf)
+        assert len(replicas) == tablet_count
+        dead_host_ids = [host for host, _ in replicas[0].replicas[:2]]
+        dead = [s for s in servers if host_ids[s.server_id] in dead_host_ids]
+        assert len(dead) == 2
+        alive = [s for s in servers if s not in dead]
+        logger.info(f'Killing replicas {[s.ip_addr for s in dead]} of tablet {replicas[0]}')
+        for s in dead:
+            await manager.server_stop(s.server_id, convict=True)
+        await manager.servers_see_each_other(alive)
+        await reconnect_driver(manager)
+        cql = manager.get_cql()
+
+        # First step of the recovery: back the table up on the surviving replicas, whose
+        # copies hold every write they know is committed. Neither the snapshot nor the
+        # backup needs a quorum.
+        survivors = list(alive)
+        survivors_snapshot = unique_name('survivors_')
+        survivors_prefix = unique_name('survivors_backup_')
+        await asyncio.gather(*(manager.api.take_snapshot(s.ip_addr, ks, survivors_snapshot, [cf]) for s in survivors))
+        await asyncio.gather(*(do_backup(s, survivors_snapshot, f'{survivors_prefix}/{s.server_id}', ks, cf, object_storage, manager, logger) for s in survivors))
+
+        # The keyspace is gone, and the raft groups with it.
+        logger.info(f'Dropping {ks}')
+        await cql.run_async(f"DROP KEYSPACE {ks}")
+
+        cfg, cmd = cluster_config(topology, object_storage, SC_CONFIG if strongly_consistent else None)
+        remaining_dead = list(dead)
+        for s in dead:
+            remaining_dead.remove(s)
+            logger.info(f'Replacing {s.ip_addr}')
+            replace_cfg = ReplaceConfig(replaced_id=s.server_id, reuse_ip_addr=False, use_host_id=True, wait_dead=True,
+                                        ignore_dead_nodes=[host_ids[d.server_id] for d in remaining_dead])
+            new = await manager.server_add(replace_cfg=replace_cfg, config=cfg, cmdline=cmd, property_file=s.property_file())
+            alive.append(new)
+        await reconnect_driver(manager)
+        cql = manager.get_cql()
+
+        logger.info(f'Re-creating {ks} and restoring it from the survivors\' backup')
+        await cql.run_async(f"CREATE KEYSPACE {ks} {ks_opts}")
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
+        manifests = [f'{s.server_id}/manifest.json' for s in survivors]
+        tid = await manager.api.restore_tablets(alive[0].ip_addr, ks, cf, survivors_snapshot, alive[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, prefix=survivors_prefix)
+        status = await manager.api.wait_task(alive[0].ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done'), f"Restore of {ks}.{cf} failed: {status}"
+
+        restored = {pk: row.value for pk, row in (await read_rows(cql, ks, cf, range(2 * num_keys), strongly_consistent)).items()}
+        assert restored == expected, f'Unexpected contents of {ks}.{cf} after restore: {restored}'
+        await check_mutation_replicas(cql, manager, alive, range(2 * num_keys), topology, logger, ks, cf)
+
+        # The restored table takes writes
+        await cql.run_async(f"UPDATE {ks}.{cf} SET value = 100 WHERE pk = '0';")
+        after = {pk: row.value for pk, row in (await read_rows(cql, ks, cf, range(2 * num_keys), strongly_consistent)).items()}
+        assert after == expected | {'0': 100}
 
 
 @pytest.mark.xfail(reason="download_tablet_sstables()'s attach_sstable() hardcodes "
@@ -2784,7 +2935,7 @@ async def test_cluster_snapshot_backup_several_nodes_per_rack(manager: ScyllaClu
                                         object_storage, True, True, topology)
 
 
-async def run_cluster_backup_clear_and_restore(object_storage, topology, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+async def run_cluster_backup_clear_and_restore(object_storage, topology, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo], strongly_consistent=False):
     """
     Helper
     """
@@ -2804,6 +2955,8 @@ async def run_cluster_backup_clear_and_restore(object_storage, topology, manager
     assert status['progress_completed'] == status['progress_total']
 
     await check_mutation_replicas(cql, manager, servers, range(100), topology, logger, ks, cf)
+    restored = {pk: row.value for pk, row in (await read_rows(cql, ks, cf, range(100), strongly_consistent)).items()}
+    assert restored == {str(i): i for i in range(100)}, f'Unexpected contents of {ks}.{cf} after restore: {len(restored)} rows'
 
 
 @pytest.mark.asyncio
@@ -2825,6 +2978,17 @@ async def test_cluster_snapshot_single_copy_strongly_consistent(manager: ScyllaC
     """
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_redundancy, object_storage),
                                         object_storage, True, False, strongly_consistent=True)
+
+
+@pytest.mark.asyncio
+async def test_cluster_snapshot_backup_and_restore_strongly_consistent(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests that the single-copy cluster backup of a strongly consistent table can be
+    fully restored: each tablet's one copy is attached to every replica of the tablet.
+    """
+    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_clear_and_restore, object_storage, topology, strongly_consistent=True),
+                                        object_storage, True, False, topology, strongly_consistent=True)
 
 
 @pytest.mark.asyncio
