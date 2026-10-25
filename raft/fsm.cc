@@ -1033,8 +1033,7 @@ bool fsm::report_log_full() {
             logger.log(log_level::warn, _log_full_rate_limit,
                     "[{}]: in-memory log has no room for the next entry ({} bytes, usage {}, "
                     "limit {}), refusing further entries from the leader until a snapshot "
-                    "shrinks it. Committed but not yet applied entries: {}. This means the "
-                    "state machine is applying entries slower than the leader is producing them.",
+                    "shrinks it. Committed entries above the snapshot: {}.",
                     _tag, _refused_entry_size, _log.memory_usage(), _config.max_follower_log_size,
                     _commit_idx - _log.get_snapshot().idx);
         } else {
@@ -1088,16 +1087,15 @@ void fsm::append_entries(server_id from, append_request&& request) {
     advance_commit_idx(std::min(request.leader_commit_idx, request.prev_log_idx));
 
     // Refusing entries is only safe if our log shrinks on its own. The applier
-    // fiber takes a snapshot once it applies past the snapshot index, and it can
-    // only apply committed entries; max_follower_log_size is above
-    // snapshot_threshold_log_size, so the byte trigger for taking a snapshot is
-    // guaranteed to fire. If nothing is committed beyond the snapshot we cannot
-    // shrink, and refusing would deadlock the group: the leader needs us to
-    // accept entries in order to commit anything at all, in particular the dummy
-    // entry it appends on election, without which maybe_commit() does not
-    // advance the commit index at all. The dummy needs this even though it is
-    // zero-sized: it sits above the entries we are refusing, and the log stays
-    // contiguous, so it arrives only once they do.
+    // fiber takes a snapshot whenever log_is_full() and it has applied past the
+    // snapshot index, and it can only apply committed entries. If nothing is
+    // committed beyond the snapshot we cannot shrink, and refusing would
+    // deadlock the group: the leader needs us to accept entries in order to
+    // commit anything at all, in particular the dummy entry it appends on
+    // election, without which maybe_commit() does not advance the commit index
+    // at all. The dummy needs this even though it is zero-sized: it sits above
+    // the entries we are refusing, and the log stays contiguous, so it arrives
+    // only once they do.
     //
     // This is the same condition log_is_full() reports to the leader, so that
     // what we tell it agrees with what we actually do.

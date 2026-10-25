@@ -1849,3 +1849,170 @@ SEASTAR_THREAD_TEST_CASE(test_follower_reports_full_log_when_entries_do_not_fill
     BOOST_CHECK(eventually_true([&] { return !slow.get_status().log_full; }));
     BOOST_CHECK(eventually_true([&] { return leader.get_status().blocked.log_full == 0; }));
 }
+
+// A follower refuses an entry which does not fit into its log on the promise
+// that its applier fiber takes a snapshot to make room. With commands larger
+// than the gap between max_follower_log_size and snapshot_threshold_log_size,
+// the log is below the threshold when that happens, so the thresholds never
+// call for the snapshot. Node 2 is disconnected, so the leader needs the
+// follower to commit, and the entry commits only once the follower takes the
+// snapshot because its log is full.
+SEASTAR_THREAD_TEST_CASE(test_full_follower_below_snapshot_threshold_does_not_deadlock) {
+    const size_t small_size = sizeof(size_t);
+    const size_t max_log_size = 10 * small_size;
+    const size_t snapshot_trailing_size = small_size;
+    // The largest the configuration allows.
+    const size_t max_command_size = max_log_size - snapshot_trailing_size;
+
+    const auto follower_config = raft::server::configuration {
+        .snapshot_threshold = 1000,
+        .snapshot_threshold_log_size = 5 * small_size,
+        .snapshot_trailing = 1,
+        .snapshot_trailing_size = snapshot_trailing_size,
+        .max_log_size = max_log_size,
+        .enable_forwarding = false,
+        .max_command_size = max_command_size,
+    };
+    // The leader admits the large entry right away and takes no snapshot.
+    const auto leader_config = raft::server::configuration {
+        .snapshot_threshold = 10000,
+        .snapshot_threshold_log_size = 1000 * small_size,
+        .snapshot_trailing = 1,
+        .snapshot_trailing_size = snapshot_trailing_size,
+        .max_log_size = 1000 * small_size,
+        .enable_forwarding = false,
+        .max_command_size = max_command_size,
+    };
+    test_case test_config {
+        .nodes = 3,
+        .config = {leader_config, follower_config, leader_config},
+    };
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        1000,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& leader = cluster.get_server(0);
+    auto& follower = cluster.get_server(1);
+
+    // The follower applies a few small entries, too few for a snapshot, so
+    // they are committed above its snapshot index.
+    cluster.add_entries(3, 0).get();
+    follower.read_barrier(nullptr).get();
+    const size_t usage = follower.get_status().log_memory_usage;
+    const size_t bound = max_log_size + snapshot_trailing_size;
+    BOOST_TEST_MESSAGE(fmt::format("follower log memory usage: {} (bound {}, threshold {})",
+            usage, bound, follower_config.snapshot_threshold_log_size));
+    BOOST_REQUIRE_LT(usage, follower_config.snapshot_threshold_log_size);
+    BOOST_REQUIRE_GT(usage + max_command_size, bound);
+
+    cluster.disconnect(2);
+    auto large = create_command(size_t(100));
+    const std::string padding(max_command_size - large.size(), '\0');
+    large.write(padding.data(), padding.size());
+    with_timeout(std::chrono::steady_clock::now() + tick_delay * 200,
+            leader.add_entry(std::move(large), raft::wait_type::committed, nullptr)).get();
+
+    cluster.connect_all();
+}
+
+// A follower whose applier fiber has applied everything committed, and whose
+// log then fills up with uncommitted entries, takes the snapshot which makes
+// room: the thresholds are evaluated only when entries are applied, and none
+// are, since the leader needs the follower for a quorum to commit anything.
+//
+// The uncommitted entries have to be from an earlier term, which the leader
+// cannot commit by counting replicas: it needs an entry of its own term
+// accepted above them. So node 0 adds entries which node 1 receives but cannot
+// acknowledge, and is then re-elected in a new term.
+//
+// Reproduces SCYLLADB-5634.
+SEASTAR_THREAD_TEST_CASE(test_full_follower_with_everything_applied_does_not_deadlock) {
+    const size_t command_size = sizeof(size_t);
+    const size_t max_log_size = 10 * command_size;
+
+    test_case test_config {
+        .nodes = 3,
+        .config = std::vector<raft::server::configuration>(3,
+            raft::server::configuration {
+                // Only the byte threshold triggers a snapshot here.
+                .snapshot_threshold = 1000,
+                .snapshot_threshold_log_size = 5 * command_size,
+                .snapshot_trailing = 1,
+                .snapshot_trailing_size = command_size,
+                .max_log_size = max_log_size,
+                .enable_forwarding = false,
+                .max_command_size = command_size,
+            })
+    };
+    // Must exceed the number of entries added below, or the state machine's
+    // done promise fires early.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        1000,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& leader = cluster.get_server(0);
+    auto& follower = cluster.get_server(1);
+
+    // Node 1 applies a few entries, too few for a snapshot, so they are
+    // committed above its snapshot index.
+    cluster.add_entries(3, 0).get();
+    follower.read_barrier(nullptr).get();
+    const auto [follower_last_idx, follower_last_term] = follower.log_last_idx_term();
+
+    // Empty the leader's log, so that it admits max_log_size worth of new
+    // entries, more than node 1 has room for on top of the entries it keeps.
+    leader.trigger_snapshot(nullptr).get();
+
+    // Node 0 can reach only node 1, and hears nothing back from it, so the
+    // entries added below are not committed. Node 0 stays the leader, since
+    // its failure detector sees node 1 alive.
+    cluster.disconnect(2);
+    cluster.block_receive(0, 1);
+    std::vector<future<>> added;
+    for (size_t i = 0; i < max_log_size / command_size; ++i) {
+        added.push_back(leader.add_entry(create_command(100 + i), raft::wait_type::committed, nullptr));
+    }
+    // All of them are in the leader's log before it steps down: add_entry()
+    // refuses to append in a term other than the one it was called in.
+    const auto max_entries = raft::index_t{max_log_size / command_size};
+    leader.wait_log_idx_term({follower_last_idx + max_entries, follower_last_term}).get();
+    // Node 1 has room for 8 of them without a snapshot: max_log_size +
+    // snapshot_trailing_size is 11 commands, and it holds 3.
+    follower.wait_log_idx_term({follower_last_idx + raft::index_t{8}, follower_last_term}).get();
+
+    // Re-elect node 0 in a new term, with node 1's vote: node 0 has the longer
+    // log. Node 2 stays disconnected, so node 0 needs node 1 for a quorum.
+    cluster.pause_tickers();
+    cluster.disconnect(0);
+    leader.elapse_election();
+    // Step down: an election timeout has passed without a live quorum.
+    leader.tick();
+    leader.wait_until_candidate();
+    cluster.connect_all();
+    cluster.disconnect(2);
+    cluster.restart_tickers().get();
+    // Node 1 has a shorter log and node 2 is disconnected, so node 0 is the
+    // only node which can win an election.
+    leader.wait_for_leader(nullptr).get();
+    BOOST_REQUIRE(leader.is_leader());
+
+    // The leader commits an entry of its new term, and with it everything
+    // added above.
+    with_timeout(std::chrono::steady_clock::now() + tick_delay * 200,
+            leader.read_barrier(nullptr)).get();
+    when_all_succeed(added.begin(), added.end()).get();
+
+    cluster.connect_all();
+}
