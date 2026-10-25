@@ -101,4 +101,36 @@ PERF_TEST_F(frozen_mutation, deserialize_multi_kb)
     perf_tests::do_not_optimize(frozen);
 }
 
+class bytes_ostream_equality {
+    static std::pair<bytes_ostream, bytes_ostream> make(size_t size) {
+        bytes data(size, 0);
+        for (size_t i = 0; i < size; ++i) {
+            data[i] = int8_t(i * 7);
+        }
+        // Writer-built (default 512-byte doubling chunks) vs one reserved chunk.
+        bytes_ostream chunked;
+        for (size_t off = 0; off < size; off += 64) {
+            chunked.write(bytes_view(data).substr(off, 64));
+        }
+        bytes_ostream single;
+        single.reserve(size);
+        single.write(data);
+        throwing_assert(chunked == single);
+        return {std::move(chunked), std::move(single)};
+    }
+public:
+    std::pair<bytes_ostream, bytes_ostream> small = make(128);
+    std::pair<bytes_ostream, bytes_ostream> large = make(64 * 1024);
+};
+
+PERF_TEST_F(bytes_ostream_equality, small)
+{
+    perf_tests::do_not_optimize(small.first == small.second);
+}
+
+PERF_TEST_F(bytes_ostream_equality, large)
+{
+    perf_tests::do_not_optimize(large.first == large.second);
+}
+
 }
