@@ -549,6 +549,58 @@ async def test_repair_same_timestamp_tombstone_wins(manager: ScyllaClusterManage
         await check_converged(cql, hosts, f"{ks}.test", {1: Deleted(1000)})
 
 
+# Logstor installs a write over a stored record with the same timestamp by
+# replacing it, so a replica keeps whichever tied write reached it last, and a
+# replayed write undoes a repair. The test passes once the logstor write path
+# merges a write with a stored record of equal timestamp and writes nothing
+# when the stored record already contains it.
+xfail_until_logstor_merges_on_a_tie = pytest.mark.xfail(
+    reason="logstor replaces a record on an equal timestamp instead of merging with it",
+    strict=True)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@xfail_until_logstor_merges_on_a_tie
+async def test_repair_same_timestamp_write_replayed_after_repair(manager: ScyllaClusterManager):
+    """A same-timestamp write that reaches a replica after repair must not undo the repair.
+
+    Node1 has 'a' and node2 has 'b', both at timestamp 1000, and repair converges
+    them on 'b'. Then each write arrives once more, on the node that stored it
+    first: a client retry or a replayed hint carries its original timestamp, so it
+    ties with the repaired record. The replicas must stay on 'b', and the replay
+    must write nothing: the repaired record already contains the replayed write on
+    node1, and is the replayed write on node2.
+
+    The records are moved out of the active segment before the replay, so a record
+    the replay writes lands in a segment of its own and shows in log_segments().
+    """
+    servers, cql, hosts = await create_logstor_cluster(manager)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        write_a = f"INSERT INTO {ks}.test (pk, v) VALUES (1, 'a') USING TIMESTAMP 1000"
+        write_b = f"INSERT INTO {ks}.test (pk, v) VALUES (1, 'b') USING TIMESTAMP 1000"
+
+        await write_only_on(manager, servers, cql, hosts, ks, "test", 0, [write_a])
+        await write_only_on(manager, servers, cql, hosts, ks, "test", 1, [write_b])
+
+        await manager.api.repair(servers[0].ip_addr, ks, "test")
+        await check_converged(cql, hosts, f"{ks}.test", {1: {'v': 'b'}})
+
+        await flush_records_to_segments(manager, servers)
+        before = await read_all_records(cql, hosts, f"{ks}.test")
+
+        await write_only_on(manager, servers, cql, hosts, ks, "test", 0, [write_a])
+        await write_only_on(manager, servers, cql, hosts, ks, "test", 1, [write_b])
+
+        records = await check_converged(cql, hosts, f"{ks}.test", {1: {'v': 'b'}})
+        assert records[1].cell_timestamps() == {'v': 1000}
+        after = await read_all_records(cql, hosts, f"{ks}.test")
+        for host, before_records, after_records in zip(hosts, before, after):
+            assert log_segments(after_records) == log_segments(before_records), \
+                f"the replay rewrote the repaired record on {host}"
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_multishard_routing(manager: ScyllaClusterManager):
     """Test that repair works correctly with multiple shards and tablets.
