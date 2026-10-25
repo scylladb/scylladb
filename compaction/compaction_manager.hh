@@ -411,7 +411,11 @@ public:
             sstables::update_sstable_id update_id = sstables::update_sstable_id::yes);
 
     // Submit a table for major compaction.
-    future<> perform_major_compaction(compaction::compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data = false);
+    // With throw_if_stopping::yes, a major compaction which doesn't run to completion, because
+    // it is stopped or compaction is disabled, fails with compaction_stopped_exception, rather
+    // than completing as if it succeeded.
+    future<> perform_major_compaction(compaction::compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data = false,
+            throw_if_stopping do_throw_if_stopping = throw_if_stopping::no);
 
     // Splits a compaction group by segregating all its sstable according to the classifier[1].
     // [1]: See compaction_type_options::splitting::classifier.
