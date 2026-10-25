@@ -17,6 +17,7 @@
 #include "manifest.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
+#include "locator/tablets.hh"
 #include "replica/global_table_ptr.hh"
 #include "db/config.hh"
 #include "db/snapshot-ctl.hh"
@@ -167,6 +168,17 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         std::unordered_map<db::snapshot_dc_location, std::unordered_map<dht::token, dedup_state>> repair_masters;
         std::unordered_map<locator::host_id, std::tuple<size_t, size_t, std::string>> node_sstables_dc;
 
+        // Raft keeps the replicas of a strongly consistent tablet in sync: each
+        // replica's copy is a committed prefix of the tablet's log, and the restore
+        // attaches one copy to every replica. One copy per tablet is enough, and
+        // nothing ever repairs such a tablet, so repaired_at can't tell.
+        //
+        // TODO: thin replication (SCYLLADB-204) gives such a tablet a thin replica,
+        // which keeps only the data not yet applied by every replica, so its copy is
+        // partial. The kept copy must be a full replica's: skip the tablet's thin
+        // replica when choosing the owner below.
+        const bool strongly_consistent = db.get_token_metadata_ptr()->tablets().get_tablet_map(tid).has_raft_info();
+
         for (const db::snapshot_node_entry& node : nodes_for_location) {
             if (auto e = as.abort_requested_exception_ptr(); e) {
                 snap_log.warn("Abort {} requested when processing {}, {}:{}", snapshot_name, node.node, keyspace, table);
@@ -192,7 +204,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
                 }
                 auto& ti = tablets.at(e.tablet_id);
 
-                if (e.repaired_at < ti.repaired_at || e.repaired_at == 0) {
+                if (!strongly_consistent && (e.repaired_at < ti.repaired_at || e.repaired_at == 0)) {
                     return true; // must include
                 }
                 auto i = repair_master.find(ti.first_token);
@@ -319,7 +331,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
                 auto& tablet_map = dc_tablets.at(std::get<2>(node_sstables_dc.at(s.node)));
                 auto& ti = tablet_map.at(s.tablet_id);
                 // was this a de-duplicated sstable? If so, with mark additional nodes
-                if (s.repaired_at >= ti.repaired_at && s.repaired_at != 0) {
+                if (strongly_consistent || (s.repaired_at >= ti.repaired_at && s.repaired_at != 0)) {
                     auto i = repair_master.find(ti.first_token);
                     if (i != repair_master.end()) {
                         for (auto& n : i->second.others) {
