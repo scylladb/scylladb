@@ -73,8 +73,13 @@ RUN ARCH=$(uname -m) && \
 
 # Ensure clang uses the correct GCC toolchain by default
 # Config files are searched at <driver-path>/../etc/<driver-name>.cfg
+#
+# -fno-use-ctor-homing works around a clang trunk regression (llvm-project
+# df323e0189, #222263) that leaves some class types declaration-only in
+# DWARF when a constructor is called before its definition in the TU,
+# breaking scylla-gdb.py (SCYLLADB-5454). Remove once fixed upstream.
 RUN mkdir -p /usr/local/etc && \
-    echo "--gcc-toolchain=/usr/local" > /usr/local/etc/clang.cfg && \
+    printf -- '--gcc-toolchain=/usr/local\n-Xclang -fno-use-ctor-homing\n' > /usr/local/etc/clang.cfg && \
     cp /usr/local/etc/clang.cfg /usr/local/etc/clang++.cfg
 
 # Verify clang finds the correct libstdc++ headers and library
