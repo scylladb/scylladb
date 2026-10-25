@@ -62,7 +62,7 @@ frozen_mutation::frozen_mutation(bytes_ostream&& b)
     : _bytes(std::move(b))
     , _pk(deserialize_key())
 {
-    _bytes.reduce_chunk_count();
+    // Callers pass IDL-deserialized streams, already a single chunk up to max_chunk_size().
 }
 
 frozen_mutation::frozen_mutation(bytes_ostream&& b, partition_key pk)

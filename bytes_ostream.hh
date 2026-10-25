@@ -13,6 +13,7 @@
 #include "utils/managed_bytes.hh"
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/loop.hh>
+#include <algorithm>
 #include <bit>
 #include <concepts>
 #include <ranges>
@@ -127,9 +128,7 @@ private:
     //   - should not exceed max_alloc_size, unless data_size requires so
     //   - will be power-of-two so the allocated memory can be fully utilized.
     size_type next_alloc_size(size_t data_size) const {
-        auto next_size = _current
-                ? _current->size * 2
-                : _initial_chunk_size;
+        auto next_size = std::max<size_type>(_current ? _current->size * 2 : 0, _initial_chunk_size);
         next_size = std::min(next_size, max_alloc_size());
         auto r = std::max<size_type>(next_size, data_size + sizeof(chunk));
         return std::bit_ceil(r);
@@ -337,8 +336,18 @@ public:
         return _size == 0;
     }
 
+    // On an empty stream, allocates one exact-size chunk (capped at max_chunk_size()).
     void reserve(size_t size) {
-        // FIXME: implement
+        // FIXME: no-op on a non-empty stream
+        if (_current || !size) {
+            return;
+        }
+        auto data_size = std::min<size_t>(size, max_chunk_size());
+        auto space = malloc(data_size + sizeof(chunk));
+        if (!space) {
+            throw std::bad_alloc();
+        }
+        _current = new (space) chunk(&_begin, data_size, 0);
     }
 
     void append(const bytes_ostream& o) {
@@ -427,26 +436,26 @@ public:
     }
 
     bool operator==(const bytes_ostream& other) const {
+        if (_size != other._size) {
+            return false;
+        }
         auto as = fragments().begin();
-        auto as_end = fragments().end();
         auto bs = other.fragments().begin();
-        auto bs_end = other.fragments().end();
-
-        auto a = *as++;
-        auto b = *bs++;
-        while (!a.empty() || !b.empty()) {
+        bytes_view a, b;
+        for (size_type left = _size; left;) {
+            if (a.empty()) {
+                a = *as++;
+            }
+            if (b.empty()) {
+                b = *bs++;
+            }
             auto now = std::min(a.size(), b.size());
-            if (!std::equal(a.begin(), a.begin() + now, b.begin(), b.begin() + now)) {
+            if (!std::equal(a.begin(), a.begin() + now, b.begin())) {
                 return false;
             }
             a.remove_prefix(now);
-            if (a.empty() && as != as_end) {
-                a = *as++;
-            }
             b.remove_prefix(now);
-            if (b.empty() && bs != bs_end) {
-                b = *bs++;
-            }
+            left -= now;
         }
         return true;
     }
