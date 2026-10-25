@@ -788,7 +788,9 @@ async def collect_mutations(cql, server, manager, ks, cf):
     host = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 30)
     await read_barrier(manager.api, server.ip_addr)  # scylladb/scylladb#18199
     ret = defaultdict(list)
-    for frag in await cql.run_async(f"SELECT * FROM MUTATION_FRAGMENTS({ks}.{cf})", host=host[0]):
+    # The local replica is what this reads anyway; a strongly consistent table insists on it.
+    stmt = SimpleStatement(f"SELECT * FROM MUTATION_FRAGMENTS({ks}.{cf})", consistency_level=ConsistencyLevel.LOCAL_ONE)
+    for frag in await cql.run_async(stmt, host=host[0]):
         ret[frag.pk].append({'mutation_source': frag.mutation_source, 'partition_region': frag.partition_region, 'node': server.ip_addr})
     return ret
 
@@ -844,7 +846,48 @@ async def test_restore_with_streaming_scopes(build_mode: str, manager: ScyllaClu
     await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnObjectStorage(object_storage))
 
 
-async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManager, topology, sstables_storage):
+@pytest.mark.parametrize("topology", [
+        topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
+        topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
+    ])
+async def test_restore_with_streaming_scopes_strongly_consistent(build_mode: str, manager: ScyllaClusterManager, object_storage, topology):
+    '''Check that load-and-stream based restore works for a strongly consistent table.
+
+    The mutations are streamed straight into the replicas' memtables, outside of raft,
+    which is fine for an offline restore into an empty table: every replica gets the
+    same data. Primary-replica-only is left out: it relies on a repair afterwards, which
+    a strongly consistent table refuses.'''
+    await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnObjectStorage(object_storage), strongly_consistent=True)
+
+
+async def test_load_primary_replica_only_strongly_consistent_refused(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    '''A primary-replica-only load into a strongly consistent table is refused up front.
+
+    It relies on a repair to fill the other replicas in, which such a table refuses. The
+    restore endpoint fails before it starts a task or downloads anything, and nodetool
+    refresh fails before it scans the upload directory.'''
+    topology = topo(rf = 2, nodes = 2, racks = 2, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage, extra_config=SC_CONFIG)
+    cql = manager.get_cql()
+    cf = 'test'
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}} AND tablets = {{'initial': 1}}{ks_consistency_opts(True)}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int );")
+
+        # The sstable list is never looked at: the check comes first.
+        with pytest.raises(HTTPError, match='primary_replica_only'):
+            await manager.api.restore(servers[0].ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, 'nothing', ['nothing-TOC.txt'], primary_replica_only=True)
+        tasks = await TaskManagerClient(manager.api).list_tasks(servers[0].ip_addr, 'sstables_loader')
+        assert not [t for t in tasks if t.type == 'download_sstables'], f'a restore task was started: {tasks}'
+
+        with pytest.raises(HTTPError, match='primary_replica_only'):
+            await manager.api.load_new_sstables(servers[0].ip_addr, ks, cf, primary_replica=True, load_and_stream=True)
+
+        # Every other variant stays allowed: an empty load succeeds.
+        await manager.api.load_new_sstables(servers[0].ip_addr, ks, cf, primary_replica=False, load_and_stream=True)
+
+
+async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManager, topology, sstables_storage, strongly_consistent=False):
     '''
     This test creates a cluster specified by the topology parameter above,
     configurable number of nodes, tacks, datacenters, and replication factor.
@@ -860,7 +903,8 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
     This stage parses the logs and checks that the data was streamed to nodes within the configured scope.
     '''
 
-    servers, host_ids = await create_cluster(topology, manager, logger, sstables_storage.object_storage)
+    servers, host_ids = await create_cluster(topology, manager, logger, sstables_storage.object_storage,
+                                             extra_config=SC_CONFIG if strongly_consistent else None)
 
     await manager.disable_tablet_balancing()
     cql = manager.get_cql()
@@ -869,25 +913,28 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
     original_min_tablet_count=5
 
     scopes = ['rack', 'dc'] if build_mode in DEBUG_MODES else ['all', 'dc', 'rack', 'node']
-    pros = [ True, False ] # Primary Replica Only
+    pros = [ False ] if strongly_consistent else [ True, False ] # Primary Replica Only
     restored_min_tablet_counts = [original_min_tablet_count] if (build_mode in DEBUG_MODES or sstables_storage.object_storage is None) else [2, original_min_tablet_count, 10]
     
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}{ks_consistency_opts(strongly_consistent)}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {original_min_tablet_count}}};")
         insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
-        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        insert_stmt.consistency_level = write_cl(strongly_consistent)
         await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
 
-        # validate replicas assertions hold on fresh dataset
+        # validate replicas assertions hold on fresh dataset. The check reads each replica's
+        # local state, which for a strongly consistent tablet may still lack the last commits.
+        if strongly_consistent:
+            await sc_catch_up(manager, servers, ks)
         await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
-        snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+        snap_name, sstables = await take_snapshot(ks, servers, manager, logger, strongly_consistent)
         prefix = f'test/{snap_name}'
 
         await sstables_storage.save(manager, servers, snap_name, prefix, ks, 'test', logger)
 
     # Reuse keyspace and group by tablet_count to avoid DDL overhead
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}{ks_consistency_opts(strongly_consistent)}") as ks:
         for restored_min_tablet_count in restored_min_tablet_counts:
             await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {restored_min_tablet_count}}};")
 
@@ -909,6 +956,8 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
                 if pro:
                     await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', 'all', timeout=600)
                 await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
+                restored = {pk: row.value for pk, row in (await read_rows(cql, ks, 'test', range(num_keys), strongly_consistent)).items()}
+                assert restored == {str(i): i for i in range(num_keys)}, f'Unexpected contents of {ks}.test after restore with scope={scope}: {restored}'
                 if restored_min_tablet_count == original_min_tablet_count:
                     await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
 
