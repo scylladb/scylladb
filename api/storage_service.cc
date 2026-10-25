@@ -490,9 +490,9 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
                 std::views::transform([] (const auto& m) { return sstring(rjson::to_string_view(m)); }) |
                 std::ranges::to<utils::chunked_vector<sstring>>();
 
-            if (manifests.empty()) {
-                throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
-            }
+            // An empty list is allowed for a strongly consistent table whose datacenters
+            // share one location: the datacenter restores the other datacenters' copies.
+            // sstables_loader::restore_tablets() rejects it otherwise.
 
             apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
                         keyspace, table, snapshot, dc, endpoint, bucket, prefix, manifests.size());

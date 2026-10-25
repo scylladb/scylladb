@@ -222,7 +222,11 @@ struct manifest_summary {
 };
 
 // Manifests coming from a datacenter other than the expected one are rejected.
-// replicate_to_racks: register every sstable of the expected datacenter for each of these
-// racks too, not only for the rack it was backed up from. For a strongly consistent table
-// every replica may attach any replica's copy, and each picks one node's copy per tablet.
-future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl = db::consistency_level::EACH_QUORUM, std::vector<sstring> replicate_to_racks = {});
+// A datacenter and a rack.
+using dc_rack = std::pair<sstring, sstring>;
+
+// replicate_to: register every sstable of the expected datacenter for each of these
+// (datacenter, rack) pairs too, not only for the rack it was backed up from. For a
+// strongly consistent table every replica may attach any replica's copy, and each picks
+// one node's copy per tablet.
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl = db::consistency_level::EACH_QUORUM, std::vector<dc_rack> replicate_to = {});
