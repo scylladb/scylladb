@@ -33,6 +33,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/error_injection.hh"
+#include "test/lib/cql_assertions.hh"
 
 #include "replica/database.hh"
 #include "utils/assert.hh"
@@ -2854,6 +2855,91 @@ SEASTAR_TEST_CASE(test_lowering_dirty_memory_threshold_triggers_flush) {
         BOOST_REQUIRE(eventually_true([&] { return !dmm.region_group().over_unspooled_soft_limit(); }));
         BOOST_REQUIRE_LT(dmm.unspooled_dirty_memory(), dirty);
     });
+}
+
+// Flushing a memtable merges it into the row cache. If that fails
+// before the sstables are added, update_cache() falls back to
+// invalidating the cache, and if the invalidation fails as well,
+// the row cache clears itself. In all cases the flushed data must
+// be readable, and the fallbacks are recognized by leaving the
+// cache empty where a merge would have kept it populated.
+SEASTAR_TEST_CASE(test_update_cache_error_handling) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.error("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev)");
+    return make_ready_future<>();
+#else
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // Compaction would invalidate the cache concurrently with the reads below,
+        // and a read that spans a cache update does not populate the cache.
+        cquery_nofail(e, "create table t (part int, row int, val text, primary key(part, row)) with compaction = {'class': 'NullCompactionStrategy'}");
+
+        // The injections are scoped to table t so that cache updates of
+        // other tables on the same shard are not affected.
+        auto set_injection = [&] (std::string_view injection, bool enabled) {
+            e.db().invoke_on_all([injection, enabled] (replica::database&) {
+                auto& injector = utils::get_local_injector();
+                if (enabled) {
+                    injector.enable(injection, false, {{"table", "t"}});
+                } else {
+                    injector.disable(injection);
+                }
+            }).get();
+        };
+        auto disarm = defer([&] () noexcept {
+            for (auto name : {"row_cache_update_fail", "row_cache_invalidate_prepare_fail", "row_cache_invalidate_updater_fail"}) {
+                set_injection(name, false);
+            }
+        });
+        // The partition lives on a single shard, so the caches of the other shards stay empty.
+        auto cache_empty = [&] {
+            return e.db().map_reduce0([] (replica::database& db) {
+                return db.find_column_family("ks", "t").get_row_cache().empty();
+            }, true, std::logical_and<bool>()).get();
+        };
+        std::vector<std::vector<bytes_opt>> expected;
+        auto insert_and_flush = [&] (int row) {
+            cquery_nofail(e, format("insert into t (part, row, val) values (0, {}, '{}')", row, row));
+            expected.push_back({to_bytes(format("{}", row))});
+            replica::database::flush_table_on_all_shards(e.db(), "ks", "t").get();
+        };
+        auto check_rows = [&] {
+            require_rows(e, "select val from t where part = 0", expected);
+        };
+
+        insert_and_flush(1);
+        check_rows(); // populates the cache
+        BOOST_REQUIRE(!cache_empty());
+
+        // Control: a regular flush merges the memtable into the cache.
+        insert_and_flush(2);
+        BOOST_REQUIRE(!cache_empty());
+        check_rows();
+
+        // update() fails before executing the external updater:
+        // update_cache() falls back to invalidating the cache.
+        set_injection("row_cache_update_fail", true);
+        insert_and_flush(3);
+        BOOST_REQUIRE(cache_empty());
+        check_rows();
+        BOOST_REQUIRE(!cache_empty());
+
+        // ... and invalidate() fails to prepare its internal updater:
+        // the whole cache is cleared instead.
+        set_injection("row_cache_invalidate_prepare_fail", true);
+        insert_and_flush(4);
+        BOOST_REQUIRE(cache_empty());
+        check_rows();
+        BOOST_REQUIRE(!cache_empty());
+        set_injection("row_cache_invalidate_prepare_fail", false);
+
+        // ... and the internal updater of invalidate() fails:
+        // do_update() clears the whole cache.
+        set_injection("row_cache_invalidate_updater_fail", true);
+        insert_and_flush(5);
+        BOOST_REQUIRE(cache_empty());
+        check_rows();
+    });
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()

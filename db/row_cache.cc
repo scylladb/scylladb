@@ -30,6 +30,7 @@
 #include "utils/assert.hh"
 #include "utils/updateable_value.hh"
 #include "utils/labels.hh"
+#include "utils/error_injection.hh"
 #include "utils/chunked_vector.hh"
 
 namespace cache {
@@ -1125,6 +1126,10 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
 }
 
 future<> row_cache::update(external_updater eu, replica::memtable& m, preemption_source& preempt_src) {
+    // Simulates a failure before the external updater is executed, for the table named by the injection's "table" parameter.
+    if (utils::get_local_injector().inject_parameter<std::string_view>("row_cache_update_fail", "table") == std::string_view(_schema->cf_name())) [[unlikely]] {
+        throw std::runtime_error("row_cache_update_fail injected");
+    }
     m._merging_into_cache = true;
     return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
             row_cache::partitions_type::iterator cache_i, replica::memtable_entry& mem_e, partition_presence_checker& is_present,
@@ -1246,11 +1251,17 @@ future<> row_cache::invalidate(external_updater eu, const dht::partition_range& 
 future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::partition_range>&& ranges, cache_invalidation_filter filter) noexcept {
     internal_updater iu;
     try {
+        if (utils::get_local_injector().inject_parameter<std::string_view>("row_cache_invalidate_prepare_fail", "table") == std::string_view(_schema->cf_name())) [[unlikely]] {
+            throw std::runtime_error("row_cache_invalidate_prepare_fail injected");
+        }
         iu = [this, ranges_ = std::move(ranges), filter_ = std::move(filter)] () mutable -> future<> {
             // Move the captures into the coroutine frame: the internal_updater
             // contract keeps the closure alive only until the invocation returns.
             auto ranges = std::move(ranges_);
             auto filter = std::move(filter_);
+            if (utils::get_local_injector().inject_parameter<std::string_view>("row_cache_invalidate_updater_fail", "table") == std::string_view(_schema->cf_name())) [[unlikely]] {
+                throw std::runtime_error("row_cache_invalidate_updater_fail injected");
+            }
             auto on_failure = defer([this] () noexcept {
                 this->clear_now();
                 _prev_snapshot_pos = {};
