@@ -1971,26 +1971,30 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_ba
             })
             | std::ranges::to<std::vector<log_segment_id>>();
 
-    // with_closeable() returns the buffer to the pool on every way out, including the ones that
-    // throw - a compaction that fails part way through simply discards what it had buffered.
-    auto cb_stats = co_await with_closeable(
-            compaction_buffer(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg),
-            [this, &index, &nonempty_segments] (compaction_buffer& cb) -> future<compaction_buffer_stats> {
-        co_await _sm.for_each_record(nonempty_segments,
-            [&index, &cb] (record_location read_location, const record_header& header) -> want_data {
-                if (!index.is_record_alive(header.index_key(), read_location)) {
-                    cb.stats.records_skipped++;
-                    return want_data::no;
+    // A batch of dead segments has nothing to copy, so it does not take a buffer.
+    compaction_buffer_stats cb_stats;
+    if (!nonempty_segments.empty()) {
+        // with_closeable() returns the buffer to the pool on every way out, including the ones that
+        // throw - a compaction that fails part way through simply discards what it had buffered.
+        cb_stats = co_await with_closeable(
+                compaction_buffer(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg),
+                [this, &index, &nonempty_segments] (compaction_buffer& cb) -> future<compaction_buffer_stats> {
+            co_await _sm.for_each_record(nonempty_segments,
+                [&index, &cb] (record_location read_location, const record_header& header) -> want_data {
+                    if (!index.is_record_alive(header.index_key(), read_location)) {
+                        cb.stats.records_skipped++;
+                        return want_data::no;
+                    }
+                    return want_data::yes;
+                },
+                [&index, &cb] (record_location read_location, const record_header& header, log_record_bytes_view record_view) -> future<> {
+                    co_await cb.rewrite_record(index, read_location, header, record_view);
                 }
-                return want_data::yes;
-            },
-            [&index, &cb] (record_location read_location, const record_header& header, log_record_bytes_view record_view) -> future<> {
-                co_await cb.rewrite_record(index, read_location, header, record_view);
-            }
-        );
-        co_await cb.flush();
-        co_return cb.stats;
-    });
+            );
+            co_await cb.flush();
+            co_return cb.stats;
+        });
+    }
 
     const size_t compaction_segments_in = segments.size();
     const size_t compaction_segments_out = cb_stats.flush_count;
