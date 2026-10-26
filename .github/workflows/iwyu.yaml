@@ -4,6 +4,13 @@ on:
   pull_request:
     branches:
       - master
+    paths-ignore:
+      # .github/** is intentionally not ignored: a change to iwyu.yaml itself or
+      # to the toolchain selector it reads (read-toolchain.yaml) must re-run iwyu.
+      - '**/*.md'
+      - '**/*.rst'
+      - 'docs/**'
+      - 'licenses/**'
 
 env:
   BUILD_TYPE: RelWithDebInfo
