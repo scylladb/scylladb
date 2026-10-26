@@ -905,7 +905,12 @@ async def test_hints_rebalance(manager: ScyllaClusterManager):
     that the hint directories of shards which no longer exist are removed, and that the hints
     are still delivered afterwards.
     """
-    config = {"error_injections_at_startup": ["decrease_hint_segment_size", "decrease_hints_flush_period"]}
+    config = {"error_injections_at_startup": [
+        # Segments are only closed by explicit flushes, so we decide how many of them there are.
+        "hinted_handoff_skip_periodic_flush",
+        # Make the hint sender notice the closed segments faster.
+        "decrease_hints_flush_period"
+    ]}
     servers = await manager.servers_add(2, cmdline=["--smp", "1"], config=config, auto_rack_dc="dc1")
     s1, s2 = servers
 
@@ -927,23 +932,19 @@ async def test_hints_rebalance(manager: ScyllaClusterManager):
 
     # We cannot rely on glob listing the segments as some of them
     # may get removed by commitlog if they're redundant.
-    async def populate_segments(min_segment_count: int) -> None:
-        # This relies on the segment storing no more than 1 MiB of data.
-        inserts_per_segment = 4500
-        # Let's give ourselves some slack to make sure that we really
-        # create those segments.
-        insert_count = (inserts_per_segment + 1500) * min_segment_count
-        batch_size = 1000
-        batch_count = insert_count // batch_size
+    async def populate_segments(segment_count: int) -> int:
+        # Closing the segment we're writing to after each batch makes
+        # every batch land in a segment of its own.
+        inserts_per_segment = 10
+        insert_count = inserts_per_segment * segment_count
 
         insert_stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
         insert_stmt.consistency_level = ConsistencyLevel.ONE
 
-        for batch_idx in range(0, batch_count):
-            begin, end = batch_idx * batch_size, (batch_idx + 1) * batch_size
+        for segment_idx in range(segment_count):
+            begin, end = segment_idx * inserts_per_segment, (segment_idx + 1) * inserts_per_segment
             await gather_safely(*[cql.run_async(insert_stmt, (pk, pk)) for pk in range(begin, end)])
-            # Avoid overloading the server.
-            await wait_until_hint_writing_settled(manager, [s1])
+            await settle_and_flush_hints(manager, [s1])
 
         dropped = await get_hint_metrics(manager.metrics, s1.ip_addr, "dropped")
         errors = await get_hint_metrics(manager.metrics, s1.ip_addr, "errors")
