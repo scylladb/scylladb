@@ -637,7 +637,7 @@ def testFunctionExecutionExceptionNet(cql, test_keyspace):
 
 # Reproduces SCYLLADB-5141 (snake_case names of native functions) and
 # SCYLLADB-5183 (an empty int value passed to a function causes a server error)
-@pytest.mark.xfail(reason="SCYLLADB-5141, SCYLLADB-5183")
+@pytest.mark.xfail(reason="SCYLLADB-5183")
 def testEmptyString(cql, test_keyspace):
     with create_keyspace(cql, REPLICATION) as KEYSPACE_PER_TEST, create_table(cql, test_keyspace, "(key int primary key, sval text, aval ascii, bval blob, empty_int int)") as table:
         execute(cql, table, "INSERT INTO %s (key, sval, aval, bval, empty_int) VALUES (?, ?, ?, ?, blob_as_int(0x))", 1, "", "", b"")

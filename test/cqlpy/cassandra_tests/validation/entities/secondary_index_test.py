@@ -724,9 +724,6 @@ def testIndexesOnNonStaticColumnsWhereSchemaIncludesStaticColumns(cql, test_keys
 # restriction) and #8711 (Finding or filtering with an empty string with
 # a secondary index seems to be broken).
 @pytest.mark.xfail(reason="issue #4244")
-# Cassandra's test now uses the new function name text_as_blob(), which
-# Scylla doesn't support yet (SCYLLADB-5141). Cassandra still supports the
-# old name textAsBlob(), so we use it, to keep testing this test on Scylla.
 def testWithEmptyRestrictionValueAndSecondaryIndex(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk blob, c blob, v blob, PRIMARY KEY ((pk), c))") as table:
         execute(cql, table, "CREATE INDEX ON %s(c)")

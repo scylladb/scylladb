@@ -246,3 +246,77 @@ def test_native_function_in_system_keyspace_query(cql):
     list(cql.execute(stmt, [4]))
     # Fully-qualified call takes the single-candidate path; regression guard.
     list(cql.execute("SELECT system.intAsBlob(4) FROM system.local"))
+
+# Cassandra 5 (CASSANDRA-18037) gave snake_case names to the native functions
+# whose names were several words run together, e.g., to_timestamp instead of
+# totimestamp, and kept the old names as deprecated aliases. The old name is
+# always the new name without underscores. Check that each new name works, and
+# gives the same result as the old name. Each case is the new function name
+# and its arguments. test_snake_case_function_column_names checks the names of
+# the result columns.
+# Reproduces SCYLLADB-5141.
+@pytest.mark.parametrize('name,args', [
+    ('min_timeuuid', 't'), ('max_timeuuid', 't'),
+    ('to_date', 'u'), ('to_date', 't'),
+    ('to_timestamp', 'u'), ('to_timestamp', 'd'),
+    ('to_unix_timestamp', 'u'), ('to_unix_timestamp', 't'), ('to_unix_timestamp', 'd'),
+    ('ascii_as_blob', "'abc'"), ('blob_as_ascii', "asciiasblob('abc')"),
+    ('bigint_as_blob', '3'), ('blob_as_bigint', 'bigintasblob(3)'),
+    ('boolean_as_blob', 'true'), ('blob_as_boolean', 'booleanasblob(true)'),
+    ('date_as_blob', "'2024-01-02'"), ('blob_as_date', "dateasblob('2024-01-02')"),
+    ('decimal_as_blob', '1.5'), ('blob_as_decimal', 'decimalasblob(1.5)'),
+    ('double_as_blob', '1.5'), ('blob_as_double', 'doubleasblob(1.5)'),
+    ('duration_as_blob', '1h'), ('blob_as_duration', 'durationasblob(1h)'),
+    ('float_as_blob', '1.5'), ('blob_as_float', 'floatasblob(1.5)'),
+    ('inet_as_blob', "'1.2.3.4'"), ('blob_as_inet', "inetasblob('1.2.3.4')"),
+    ('int_as_blob', 'i'), ('blob_as_int', 'intasblob(i)'),
+    ('smallint_as_blob', '3'), ('blob_as_smallint', 'smallintasblob(3)'),
+    ('text_as_blob', 's'), ('blob_as_text', 'textasblob(s)'),
+    ('time_as_blob', "'01:02:03'"), ('blob_as_time', "timeasblob('01:02:03')"),
+    ('timestamp_as_blob', 't'), ('blob_as_timestamp', 'timestampasblob(t)'),
+    ('timeuuid_as_blob', 'u'), ('blob_as_timeuuid', 'timeuuidasblob(u)'),
+    ('tinyint_as_blob', '3'), ('blob_as_tinyint', 'tinyintasblob(3)'),
+    ('uuid_as_blob', '123e4567-e89b-12d3-a456-426614174000'), ('blob_as_uuid', 'uuidasblob(123e4567-e89b-12d3-a456-426614174000)'),
+    ('varchar_as_blob', "'abc'"), ('blob_as_varchar', "varcharasblob('abc')"),
+    ('varint_as_blob', '3'), ('blob_as_varint', 'varintasblob(3)'),
+])
+def test_snake_case_function_names(cql, table1, name, args):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (p, i, s, t, u, d) VALUES ({p}, 7, 'hello', '2024-01-02 03:04:05+0000', 5ad1d2e0-0a5b-11ef-8000-000000000000, '2024-01-02')")
+    old_name = name.replace('_', '')
+    [(new_value, old_value)] = list(cql.execute(f'SELECT {name}({args}), {old_name}({args}) FROM {table1} WHERE p = {p}'))
+    assert new_value == old_value
+
+# The name of a result column of a function call uses the name with which the
+# function was called - its new snake_case name or its old name (see
+# test_snake_case_function_names). We use column arguments, because Scylla
+# names the result of a call with only constant arguments by its value.
+# Reproduces SCYLLADB-5141.
+def test_snake_case_function_column_names(cql, table1):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p, i, u) VALUES ({p}, 7, 5ad1d2e0-0a5b-11ef-8000-000000000000)')
+    result = cql.execute(f'SELECT to_unix_timestamp(u), tounixtimestamp(u), int_as_blob(i), intasblob(i) FROM {table1} WHERE p = {p}')
+    assert result.column_names == ['system.to_unix_timestamp(u)', 'system.tounixtimestamp(u)', 'system.int_as_blob(i)', 'system.intasblob(i)']
+
+# The snake_case names of the functions which return the current time (see
+# test_snake_case_function_names) can't be compared to the old names'
+# results, because these change between calls, so just check that they work.
+# Reproduces SCYLLADB-5141.
+@pytest.mark.parametrize('name', ['current_timestamp', 'current_date', 'current_time', 'current_timeuuid'])
+def test_snake_case_current_time_function_names(cql, table1, name):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p) VALUES ({p})')
+    result = cql.execute(f'SELECT {name}() FROM {table1} WHERE p = {p}')
+    assert result.column_names[0] == f'system.{name}()'
+    [(value,)] = list(result)
+    assert value is not None
+
+# toJson() and fromJson() also got the snake_case names to_json() and
+# from_json() (see test_snake_case_function_names).
+# Reproduces SCYLLADB-5141.
+def test_snake_case_json_function_names(cql, table1):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (p, i) VALUES ({p}, from_json('17'))")
+    result = cql.execute(f'SELECT to_json(i), tojson(i) FROM {table1} WHERE p = {p}')
+    assert result.column_names[0] == 'system.to_json(i)'
+    assert list(result) == [('17', '17')]
