@@ -28,7 +28,10 @@ schema_ptr table_helper::parse_new_cf_statement(cql3::query_processor& qp, const
     // The input may contain trailing statements after the leading CREATE TABLE one,
     // e.g. a schema described with internals appends an ALTER TABLE statement for
     // each dropped column.
-    auto parsed_statements = cql3::query_processor::parse_statements(create_cql, cql3::dialect{});
+    // The CQL comes from Scylla, not from a client: a table defined in the code,
+    // or the DESCRIBE output restore stores for its target table. So client
+    // limits must not reject it.
+    auto parsed_statements = cql3::query_processor::parse_statements(create_cql, cql3::internal_dialect());
     if (parsed_statements.empty()) {
         throw std::runtime_error(format("Expected a CREATE TABLE statement, got no statements: {}", create_cql));
     }
