@@ -6,8 +6,8 @@
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.util import wait_for_cql_and_get_hosts, Host
-from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, create_table_insert_data_for_repair_multiple_rows, get_tablet_task_id, load_tablet_repair_task_infos
+from test.pylib.util import wait_for_cql_and_get_hosts, wait_for, Host
+from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, create_table_insert_data_for_repair_multiple_rows, get_tablet_task_id, load_tablet_repair_task_infos, load_tablet_sstables_repaired_at
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.cluster.util import create_new_test_keyspace
 
@@ -487,6 +487,12 @@ async def live_update_config(manager: ScyllaClusterManager, servers: list[Server
     hosts = await wait_for_cql_and_get_hosts(cql, servers, deadline = time.time() + 60)
     await asyncio.gather(*[cql.run_async("UPDATE system.config SET value=%s WHERE name=%s", [value, key], host=host) for host in hosts])
 
+# Large enough that the time-based trigger cannot fire: a tablet that was never repaired
+# carries repair_time == epoch, so the time since the last repair is the current unix time,
+# somewhat over 1.7e9 seconds. The option is an int32, so this is close to the largest value
+# that can be set.
+AUTO_REPAIR_THRESHOLD_NEVER_IN_SECONDS = 2000000000
+
 async def config_auto_repair(manager, servers, ks, table, auto_repair_enabled, auto_repair_threshold, config_per_table = False):
     if not config_per_table:
         await live_update_config(manager, servers, 'auto_repair_threshold_default_in_seconds', str(auto_repair_threshold))
@@ -602,6 +608,125 @@ async def test_tablet_auto_repair_cfg_enable_per_table_disable(manager: ScyllaCl
 
     repair_time = await load_tablet_repair_time(cql, hosts[0:1], table_id)
     assert all(v is None for v in repair_time.values()), f"auto repair ran on a table that disables it: {repair_time}"
+
+async def test_tablet_auto_repair_size_based_trigger(manager: ScyllaClusterManager):
+    """The size-based trigger repairs a tablet whose unrepaired data has grown past a
+    fraction of the tablet, well before the time-based threshold would fire."""
+    cmdline = ["--auto-repair-enabled-default", "0",
+               "--auto-repair-threshold-default-in-seconds", str(AUTO_REPAIR_THRESHOLD_NEVER_IN_SECONDS)]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(
+            manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    # Load stats only account for sstables, so the inserted data has to reach disk before the
+    # trigger can see it as unrepaired.
+    await asyncio.gather(*[manager.api.keyspace_flush(s.ip_addr, ks, "test") for s in servers])
+
+    # Every sstable is unrepaired at this point, so the unrepaired fraction is 1.0 and any
+    # threshold below that selects the tablet.
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH auto_repair_enabled = true "
+                        f"AND auto_repair_threshold_size_fraction = 0.5 "
+                        f"AND auto_repair_threshold_min_size_in_bytes = 1")
+
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+async def wait_for_repair_planning_rounds(manager, servers, count):
+    """Wait until the load balancer has built a repair plan at least `count` times, so that a
+    test asserting that nothing was selected knows the planner actually ran and declined,
+    rather than having simply not run yet. Requires the tablet_dump_repair_plan injection."""
+    async def enough_rounds():
+        for s in servers:
+            log = await manager.server_open_log(s.server_id)
+            if len(await log.grep(r"dump_repair_plans=")) >= count:
+                return True
+        return None
+    await wait_for(enough_rounds, time.time() + 60)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_auto_repair_size_based_trigger_only(manager: ScyllaClusterManager):
+    """A table can be repaired on size alone while a cluster-wide repair interval stands: it
+    sets its own interval to 0, which disables the time-based trigger for it, and a fraction,
+    which is then the only thing that can select its tablets.
+
+    The cluster-wide interval is set so large that it could not fire here anyway; what the
+    test shows is that disabling the interval per table does not disable auto repair for it,
+    the size-based trigger still applying."""
+    cmdline = ["--auto-repair-enabled-default", "0",
+               "--auto-repair-threshold-default-in-seconds", str(AUTO_REPAIR_THRESHOLD_NEVER_IN_SECONDS)]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(
+            manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    await asyncio.gather(*[manager.api.keyspace_flush(s.ip_addr, ks, "test") for s in servers])
+
+    await cql.run_async(f"ALTER CLUSTER WITH auto_repair_threshold_in_seconds = {AUTO_REPAIR_THRESHOLD_NEVER_IN_SECONDS}")
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH auto_repair_enabled = true "
+                        f"AND auto_repair_threshold_in_seconds = 0 "
+                        f"AND auto_repair_threshold_size_fraction = 0.5 "
+                        f"AND auto_repair_threshold_min_size_in_bytes = 1")
+
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_auto_repair_size_based_trigger_below_min_size(manager: ScyllaClusterManager):
+    """A tablet holding less unrepaired data than the configured floor is left to the
+    time-based trigger, even though its unrepaired fraction is 1.0."""
+    cmdline = ["--auto-repair-enabled-default", "0",
+               "--auto-repair-threshold-default-in-seconds", str(AUTO_REPAIR_THRESHOLD_NEVER_IN_SECONDS)]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(
+            manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
+
+    await asyncio.gather(*[manager.api.keyspace_flush(s.ip_addr, ks, "test") for s in servers])
+    await inject_error_on(manager, "tablet_dump_repair_plan", servers)
+
+    # The fraction alone would select every tablet; the floor is what holds them back.
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH auto_repair_enabled = true "
+                        f"AND auto_repair_threshold_size_fraction = 0.5 "
+                        f"AND auto_repair_threshold_min_size_in_bytes = 1099511627776")
+
+    # Let the planner run a few rounds and decline each one, rather than sleeping for a
+    # guessed interval.
+    await wait_for_repair_planning_rounds(manager, servers, 3)
+    m = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+    logger.info(f'repair times={m}')
+    assert all(v is None for v in m.values()), \
+            f"No tablet should have been repaired below the size floor, got {m}"
+
+    # Lowering the floor lets the same tablets through, which shows the floor was the only
+    # thing holding them back.
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH auto_repair_threshold_min_size_in_bytes = 1")
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+async def test_tablet_auto_repair_size_based_trigger_not_repeated(manager: ScyllaClusterManager):
+    """A size-triggered repair must not fire again while the load stats that triggered it are
+    still in flight. Load stats are refreshed periodically, so for a whole refresh interval
+    after a repair the coordinator still holds the pre-repair unrepaired sizes; without the
+    sstables_repaired_at carried alongside each measurement, the balancer would keep
+    re-selecting the tablet for the rest of that interval."""
+    refresh_interval = 5
+    cmdline = ["--auto-repair-enabled-default", "0",
+               "--auto-repair-threshold-default-in-seconds", str(AUTO_REPAIR_THRESHOLD_NEVER_IN_SECONDS),
+               "--tablet-load-stats-refresh-interval-in-seconds", str(refresh_interval)]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(
+            manager, cmdline=cmdline, fast_stats_refresh=False, disable_flush_cache_time=True)
+
+    await asyncio.gather(*[manager.api.keyspace_flush(s.ip_addr, ks, "test") for s in servers])
+
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH auto_repair_enabled = true "
+                        f"AND auto_repair_threshold_size_fraction = 0.5 "
+                        f"AND auto_repair_threshold_min_size_in_bytes = 1")
+
+    await check_has_repair_time(cql, hosts[0:1], table_id)
+
+    # Watch for longer than a refresh interval. Each tablet is repaired exactly once: the
+    # repair clears its unrepaired data, and the stale stats that still say otherwise are
+    # recognized as predating the repair and ignored.
+    deadline = time.time() + 2 * refresh_interval + 2
+    while time.time() < deadline:
+        m = await load_tablet_sstables_repaired_at(manager, cql, servers[0], hosts[0], table_id)
+        logger.info(f'sstables_repaired_at={m}')
+        for token, repaired_at in m.items():
+            assert repaired_at <= 1, \
+                    f"Tablet {token} was repaired {repaired_at} times, expected at most one size-triggered repair"
+        await asyncio.sleep(1)
 
 def parse_repair_plans(log_line):
     """
