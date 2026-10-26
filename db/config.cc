@@ -1900,6 +1900,22 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         {"backlog", "rate_matching"})
     , compaction_rate_matching_controller_shadow_mode(this, "compaction_rate_matching_controller_shadow_mode", value_status::Used, false,
         "Only for testing the rate-matching compaction controller. If set to true while the backlog controller sets the shares of regular compaction, the rate-matching one runs alongside it without setting them, logging the shares it would set and what led to them.")
+    , compaction_rate_matching_controller_rate_window_in_seconds(this, "compaction_rate_matching_controller_rate_window_in_seconds", value_status::Used, 1800,
+        "The window, in seconds, over which the ingestion rate the rate-matching compaction controller sets its target from is averaged. "
+        "A longer window smooths out bursts of flushes, but makes the controller follow a change in the workload more slowly. "
+        "Do not set this unless you know what you are doing.")
+    , compaction_rate_matching_controller_achieved_window_in_seconds(this, "compaction_rate_matching_controller_achieved_window_in_seconds", value_status::Used, 300,
+        "The window, in seconds, over which the rate regular compaction achieves, which the rate-matching compaction controller compares to its target, is averaged. "
+        "Shorter than the ingestion window: the target follows the table as it changes, and the comparison needs the rate compaction delivers now. "
+        "Do not set this unless you know what you are doing.")
+    , compaction_rate_matching_controller_alpha(this, "compaction_rate_matching_controller_alpha", value_status::Used, 0.3,
+        "At every update, the rate-matching compaction controller scales the shares of regular compaction by (target rate / achieved rate)^alpha. "
+        "Must be in (0, 1]: lower values move the shares more gradually. Do not set this unless you know what you are doing.")
+    , compaction_rate_matching_controller_max_step(this, "compaction_rate_matching_controller_max_step", value_status::Used, 2.0,
+        "The factor by which the rate-matching compaction controller can change the shares of regular compaction at most in an update, either way. "
+        "Must be greater than 1. Do not set this unless you know what you are doing.")
+    , compaction_normalization_factor(this, "compaction_normalization_factor", value_status::Used, 30,
+        "The normalized backlog (backlog divided by the shard's memory) at which the compaction controller reaches the maximum shares. Lower values make compaction more aggressive, favoring reads over writes. Must be greater than 1.5. Do not set this unless you know what you are doing. This option will be retired when the controller reaches more maturity.")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold.")
     , compaction_flush_all_tables_before_major_seconds(this, "compaction_flush_all_tables_before_major_seconds", value_status::Used, 86400,

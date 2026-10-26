@@ -629,9 +629,25 @@ void backlog_proportional_compaction_controller::set_max_shares(float max_shares
     _control_points.back().output = max_shares;
 }
 
-rate_matching_compaction_controller::rate_matching_compaction_controller(scheduling_group sg, float static_shares, std::optional<float> max_shares,
+void rate_matching_compaction_controller::config::validate() const {
+    if (rate_window < std::chrono::seconds(60)) {
+        throw std::invalid_argument(fmt::format("The window of the compaction rates must be at least 60 seconds, got {} seconds", rate_window.count()));
+    }
+    if (achieved_window < std::chrono::seconds(60)) {
+        throw std::invalid_argument(fmt::format("The window of the achieved compaction rate must be at least 60 seconds, got {} seconds", achieved_window.count()));
+    }
+    if (!(alpha > 0 && alpha <= 1)) {
+        throw std::invalid_argument(fmt::format("The alpha of the rate-matching compaction controller must be in (0, 1], got {}", alpha));
+    }
+    if (!(max_step > 1)) {
+        throw std::invalid_argument(fmt::format("The step limit of the rate-matching compaction controller must be greater than 1, got {}", max_step));
+    }
+}
+
+rate_matching_compaction_controller::rate_matching_compaction_controller(config cfg, scheduling_group sg, float static_shares, std::optional<float> max_shares,
         std::chrono::milliseconds interval, std::function<compaction::compaction_rates()> current_rates, dry_run dry_run)
-    : _scheduling_group(std::move(sg))
+    : _config(std::move(cfg))
+    , _scheduling_group(std::move(sg))
     , _current_rates(std::move(current_rates))
     , _static_shares(static_shares)
     , _dry_run(dry_run)
@@ -663,7 +679,7 @@ void rate_matching_compaction_controller::set_max_shares(float max_shares) {
     _shares = std::min(_shares, _max_shares);
 }
 
-float rate_matching_compaction_controller::next_shares(float shares, const compaction::compaction_rates& rates, float max_shares) {
+float rate_matching_compaction_controller::next_shares(const config& cfg, float shares, const compaction::compaction_rates& rates, float max_shares) {
     auto target = rates.target.per_second();
     auto achieved = rates.achieved.per_second();
     auto achieved_long = rates.achieved_long.per_second();
@@ -674,16 +690,16 @@ float rate_matching_compaction_controller::next_shares(float shares, const compa
         return max_shares;
     } else if (target <= 0) {
         // Nothing pending.
-        step = 1 / max_step;
+        step = 1 / cfg.max_step;
     } else if (achieved <= 0) {
         // Nothing running, for the shares to speed up.
         step = 1;
     } else if (target > std::max(achieved, achieved_long)) {
         // Behind now and over the rate window.
-        step = std::min(std::pow(target / std::max(achieved, achieved_long), alpha), max_step);
+        step = std::min(std::pow(target / std::max(achieved, achieved_long), cfg.alpha), cfg.max_step);
     } else if (target < std::min(achieved, achieved_long)) {
         // Ahead now and over the rate window.
-        step = std::max(std::pow(target / std::min(achieved, achieved_long), alpha), 1 / max_step);
+        step = std::max(std::pow(target / std::min(achieved, achieved_long), cfg.alpha), 1 / cfg.max_step);
     }
     // Otherwise the windows disagree, and the shares stay.
     return std::clamp(float(shares * step), min_shares, max_shares);
@@ -703,7 +719,7 @@ void rate_matching_compaction_controller::adjust() {
         // metrics show what the controller sees.
         rates = _current_rates();
         _last_rates = rates;
-        _shares = next_shares(_shares, rates, _max_shares);
+        _shares = next_shares(_config, _shares, rates, _max_shares);
     } catch (...) {
         // The shares are left as they are.
         dblog.warn("Failed to compute the compaction rates, leaving compaction shares at {}: {}", _shares, std::current_exception());

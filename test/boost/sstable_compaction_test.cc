@@ -5527,11 +5527,12 @@ SEASTAR_TEST_CASE(incremental_backlog_tracker_rates_test) {
 BOOST_AUTO_TEST_CASE(rate_matching_compaction_controller_next_shares) {
     using rate = utils::rate<utils::units::bytes>;
     using namespace std::chrono_literals;
-    auto next = [] (float shares, double target, double achieved, std::optional<double> achieved_long = {}, float max_shares = 1000) {
-        return rate_matching_compaction_controller::next_shares(shares, {.target = rate(target, 10s), .achieved = rate(achieved, 10s),
+    const rate_matching_compaction_controller::config cfg;
+    auto next = [&cfg] (float shares, double target, double achieved, std::optional<double> achieved_long = {}, float max_shares = 1000) {
+        return rate_matching_compaction_controller::next_shares(cfg, shares, {.target = rate(target, 10s), .achieved = rate(achieved, 10s),
                 .achieved_long = rate(achieved_long.value_or(achieved), 10s)}, max_shares);
     };
-    const auto alpha = rate_matching_compaction_controller::alpha;
+    const auto alpha = cfg.alpha;
     // Behind the target, or ahead of it.
     BOOST_REQUIRE_CLOSE(next(200, 1500, 1000), 200 * std::pow(1.5, alpha), 1e-4);
     BOOST_REQUIRE_CLOSE(next(200, 1000, 1500), 200 * std::pow(1 / 1.5, alpha), 1e-4);
@@ -5563,6 +5564,27 @@ BOOST_AUTO_TEST_CASE(rate_matching_compaction_controller_next_shares) {
     BOOST_REQUIRE_CLOSE(next(60, unknown, 1000), 1000, 1e-4);
     BOOST_REQUIRE_CLOSE(next(60, unknown, 0), 1000, 1e-4);
     BOOST_REQUIRE_CLOSE(next(60, unknown, 1000, {}, 1200), 1200, 1e-4);
+}
+
+// The settings of rate_matching_compaction_controller replace the defaults, and are rejected out of range.
+BOOST_AUTO_TEST_CASE(rate_matching_compaction_controller_config) {
+    using rate = utils::rate<utils::units::bytes>;
+    using namespace std::chrono_literals;
+    const rate_matching_compaction_controller::config cfg{.alpha = 1, .max_step = 4};
+    cfg.validate();
+    auto next = [&cfg] (float shares, double target, double achieved) {
+        return rate_matching_compaction_controller::next_shares(cfg, shares, {.target = rate(target, 10s), .achieved = rate(achieved, 10s),
+                .achieved_long = rate(achieved, 10s)}, 1000);
+    };
+    BOOST_REQUIRE_CLOSE(next(100, 3000, 1000), 300, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(100, 1e9, 1), 400, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(400, 0, 1000), 100, 1e-4);
+
+    BOOST_REQUIRE_THROW((rate_matching_compaction_controller::config{.rate_window = 0s}.validate()), std::invalid_argument);
+    BOOST_REQUIRE_THROW((rate_matching_compaction_controller::config{.achieved_window = 0s}.validate()), std::invalid_argument);
+    BOOST_REQUIRE_THROW((rate_matching_compaction_controller::config{.alpha = 0}.validate()), std::invalid_argument);
+    BOOST_REQUIRE_THROW((rate_matching_compaction_controller::config{.alpha = 1.5}.validate()), std::invalid_argument);
+    BOOST_REQUIRE_THROW((rate_matching_compaction_controller::config{.max_step = 1}.validate()), std::invalid_argument);
 }
 
 void test_major_does_not_miss_data_in_memtable_fn(test_env& env) {

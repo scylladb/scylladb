@@ -111,9 +111,8 @@ class compaction_group : public compaction::compaction_backlog_source {
     // The rates this group tracks share the start, so rates read from them at the same
     // time end together, whether their windows have filled or not. The flushed rates share
     // the window too, so they can be divided; the compacted rate has its own, shorter one.
-    // FIXME: make the windows configurable.
-    static constexpr lowres_db_clock::duration rate_window = std::chrono::minutes(30);
-    static constexpr lowres_db_clock::duration achieved_window = std::chrono::minutes(5);
+    lowres_db_clock::duration _rate_window;
+    lowres_db_clock::duration _achieved_window;
     // The window of what the regular compactions that ended read and wrote. Longer than the
     // rate window: the compactions of the largest tier are rare, about one an hour per shard in
     // round 8 write-heavy, and big, and keep the least, so over half an hour their ratio
@@ -122,19 +121,19 @@ class compaction_group : public compaction::compaction_backlog_source {
     lowres_db_clock::time_point _rates_start = lowres_db_clock::now();
     // Bytes flushed from memtables into this group, which the compaction controller
     // will use to match compaction to ingestion.
-    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _flushed_bytes{rate_window, _rates_start};
+    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _flushed_bytes{_rate_window, _rates_start};
     // Sum of the squared sizes of the flushed sstables, over the same flushes. Divided by
     // _flushed_bytes, the sum of their sizes, it gives their average size weighted by size,
     // which a storm of small flushes barely moves.
     struct squared_bytes;
-    utils::moving_average_rate<squared_bytes, double, lowres_db_clock> _flushed_squared_bytes{rate_window, _rates_start};
+    utils::moving_average_rate<squared_bytes, double, lowres_db_clock> _flushed_squared_bytes{_rate_window, _rates_start};
     // Bytes regular compaction compacted in this group, credited from the progress of the
     // compactions running at every update of the compaction controller, and in full once
     // they complete, so the rate follows compaction in flight rather than its completion,
     // which with tablets and incremental compaction happens every few GB at most.
-    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _compacted_bytes{achieved_window, _rates_start};
+    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _compacted_bytes{_achieved_window, _rates_start};
     // The same over the rate window.
-    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _compacted_bytes_long{rate_window, _rates_start};
+    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _compacted_bytes_long{_rate_window, _rates_start};
     // The data regular compactions read and wrote, as each ends.
     utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _completed_input_bytes{completed_window, _rates_start};
     utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _completed_output_bytes{completed_window, _rates_start};
@@ -144,7 +143,7 @@ class compaction_group : public compaction::compaction_backlog_source {
     // begins, should move it within a few updates, not a flush window. The group's main
     // set, which serves the reads of the keys the group owns, reports them to it, so no
     // read has to look the group up.
-    lw_shared_ptr<sstables::read_amplification_tracker> _point_read_amplification = make_lw_shared<sstables::read_amplification_tracker>(achieved_window, _rates_start);
+    lw_shared_ptr<sstables::read_amplification_tracker> _point_read_amplification = make_lw_shared<sstables::read_amplification_tracker>(_achieved_window, _rates_start);
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();
