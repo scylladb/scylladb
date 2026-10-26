@@ -23,7 +23,8 @@ from test.pylib.connect_options import add_cql_connection_options, add_s3_option
 from test.pylib.encryption_provider import KeyProvider, make_key_provider_factory
 from test.pylib.object_storage import Storage, StorageFactory, StorageKind, create_gs_server, create_s3_server, format_tuples
 from test.pylib.random_tables import RandomTables
-from test.pylib.runner import PHASE_REPORT_KEY, SEASTAR_IO_KEY, make_failed_test_dir
+from test.pylib.runner import PHASE_REPORT_KEY, SEASTAR_IO_KEY
+from test.pylib.testpy_logs import make_failed_test_dir
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_server import ScyllaVersionDescription, get_scylla_2025_1_description, get_scylla_2026_1_description
 from test.pylib.skip_types import skip_env
