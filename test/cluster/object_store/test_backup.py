@@ -25,8 +25,9 @@ from test.pylib.object_storage import keyspace_options
 from test.pylib.rest_client import read_barrier, HTTPError
 from test.pylib.util import unique_name, wait_all, wait_for_view
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
-from cassandra import ReadFailure
-from cassandra.cluster import ConsistencyLevel
+from cassandra import ReadFailure, Unavailable
+from cassandra.cluster import ConsistencyLevel, NoHostAvailable
+from cassandra.query import SimpleStatement
 from collections import Counter, defaultdict
 from test.pylib.util import wait_for
 from test.pylib.rest_client import HTTPError
@@ -40,10 +41,34 @@ logger = logging.getLogger(__name__)
 
 
 
-async def take_snapshot(ks, servers, manager, logger):
+async def sc_catch_up(manager, servers, ks, tables=None):
+    '''Makes every replica of the strongly consistent tables apply what their raft groups
+    committed so far, with a read barrier on each group on each server that hosts it.
+
+    A replica applies a committed write when it learns the commit index, so right after a
+    write the followers may still lack it, and a snapshot waits only for what the replica
+    already knows is committed. A test that expects the last writes in each replica's
+    snapshot or local state must wait for them.'''
+    cql = manager.get_cql()
+    if tables is None:
+        tables = [r.table_name for r in await cql.run_async(f"SELECT table_name FROM system_schema.tables WHERE keyspace_name = '{ks}'")]
+    for cf in tables:
+        table_id = await manager.get_table_id(ks, cf)
+        groups = [str(r.raft_group_id) for r in await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")]
+        async def barrier(s, gid):
+            try:
+                await read_barrier(manager.api, s.ip_addr, group_id=gid, timeout=60)
+            except HTTPError as e:
+                # The server hosts no replica of this tablet.
+                assert 'not found' in str(e), e
+        await asyncio.gather(*(barrier(s, gid) for s in servers for gid in groups))
+
+async def take_snapshot(ks, servers, manager, logger, strongly_consistent=False):
     logger.info(f'Take snapshot and collect sstables lists')
     snap_name = unique_name('backup_')
     sstables = dict()
+    if strongly_consistent:
+        await sc_catch_up(manager, servers, ks)
     await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
     await asyncio.gather(*(manager.api.take_snapshot(s.ip_addr, ks, snap_name) for s in servers))
     for s in servers:
@@ -552,6 +577,36 @@ async def test_abort_restore_with_rpc_error(manager: ScyllaClusterManager, objec
 
 
 # Helper class to parametrize the test below
+# Strongly consistent tables keep their replicas in sync with raft, which changes what a
+# backup and a restore of them have to do and what the tests can check:
+#  - the cluster needs the experimental feature;
+#  - the keyspace is created with consistency = 'global';
+#  - a strongly consistent table can't be split or merged yet, so a restore target must be
+#    created with the backup's tablet count instead of letting the restore resize it
+#    (TODO: simplify this once tablet splits and merges are supported);
+#  - a strongly consistent SELECT is single-partition only, so rows are checked one by one;
+#  - SELECT FROM MUTATION_FRAGMENTS() of such a table reads the local replica only and must
+#    use ONE/LOCAL_ONE.
+SC_CONFIG = {'experimental_features': ['strongly-consistent-tables']}
+
+def ks_consistency_opts(strongly_consistent: bool) -> str:
+    return " AND consistency = 'global'" if strongly_consistent else ""
+
+def restore_target_tablet_opts(strongly_consistent: bool, tablet_count: int) -> str:
+    return f" WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}}" if strongly_consistent else ""
+
+def write_cl(strongly_consistent: bool):
+    '''A strongly consistent write must use QUORUM/LOCAL_QUORUM.'''
+    return ConsistencyLevel.QUORUM if strongly_consistent else ConsistencyLevel.ALL
+
+async def read_rows(cql, ks, cf, keys, strongly_consistent: bool, columns='pk, value'):
+    '''Returns {pk: row} for the given keys. A strongly consistent table is read one
+    partition at a time, a regular one with a single scan.'''
+    if not strongly_consistent:
+        return {x.pk: x for x in await cql.run_async(f"SELECT {columns} FROM {ks}.{cf};")}
+    rows = await asyncio.gather(*(cql.run_async(f"SELECT {columns} FROM {ks}.{cf} WHERE pk = '{k}';") for k in keys))
+    return {x.pk: x for res in rows for x in res}
+
 class topo:
     def __init__(self, rf, nodes, racks, dcs):
         self.rf = rf
@@ -1026,6 +1081,61 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
                     res = await cql.run_async(f"SELECT COUNT(*) FROM {dst_ks}.{view}")
                     return (res[0][0] == num_keys) or None
                 await wait_for(view_repopulated, time.time() + 60)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_strongly_consistent_refuses_requests(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    '''A strongly consistent tablet serves no request while it is being restored.
+
+    The replicas attach the restored sstables at different moments, so a request
+    served meanwhile could read part of the restored data, or different data on
+    different replicas. The restore is offline: requests get Unavailable until it ends.'''
+    topology = topo(rf = 2, nodes = 2, racks = 2, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage, extra_config=SC_CONFIG)
+    cql = manager.get_cql()
+    num_keys = 10
+    cf = 'test'
+    expected = {str(i): i for i in range(num_keys)}
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}} AND tablets = {{'initial': 1}}{ks_consistency_opts(True)}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': 1, 'max_tablet_count': 1}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = write_cl(True)
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+        snap_name, _ = await take_snapshot(ks, servers, manager, logger, strongly_consistent=True)
+        prefix = f'refuse/{snap_name}'
+        await asyncio.gather(*(do_backup(s, snap_name, f'{prefix}/{s.server_id}', ks, cf, object_storage, manager, logger) for s in servers))
+        await cql.run_async(f"DROP TABLE {ks}.{cf}")
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': 1, 'max_tablet_count': 1}};")
+
+        # Park the single tablet's download on one replica: the tablet stays in the
+        # restore stage until the pause is released.
+        await manager.api.enable_injection(servers[1].ip_addr, "pause_tablet_restore", one_shot=True)
+        manifests = [f'{s.server_id}/manifest.json' for s in servers]
+        tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, cf, snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, prefix=prefix)
+        await manager.api.wait_for_injection_enter(servers[1].ip_addr, "pause_tablet_restore")
+
+        read_stmt = SimpleStatement(f"SELECT value FROM {ks}.{cf} WHERE pk = '0'", consistency_level=ConsistencyLevel.QUORUM)
+        write_stmt = SimpleStatement(f"UPDATE {ks}.{cf} SET value = 100 WHERE pk = '0'", consistency_level=ConsistencyLevel.QUORUM)
+        async def expect_unavailable(stmt, host):
+            # The driver reports the Unavailable itself, or wraps it as the one host's error.
+            with pytest.raises((Unavailable, NoHostAvailable)) as e:
+                await cql.run_async(stmt, host=host)
+            errors = [e.value] if isinstance(e.value, Unavailable) else list(e.value.errors.values())
+            assert errors and all(isinstance(err, Unavailable) and 'being restored' in str(err) for err in errors), errors
+        for s in servers:
+            host = (await wait_for_cql_and_get_hosts(cql, [s], time.time() + 30))[0]
+            await expect_unavailable(read_stmt, host)
+            await expect_unavailable(write_stmt, host)
+
+        await manager.api.message_injection(servers[1].ip_addr, "pause_tablet_restore")
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done'), f"Restore of {ks}.{cf} failed: {status}"
+
+        restored = {pk: row.value for pk, row in (await read_rows(cql, ks, cf, range(num_keys), True)).items()}
+        assert restored == expected, f'Unexpected contents of {ks}.{cf} after restore: {restored}'
+        await cql.run_async(write_stmt)
+        assert (await cql.run_async(read_stmt))[0].value == 100
 
 
 @pytest.mark.xfail(reason="download_tablet_sstables()'s attach_sstable() hardcodes "
