@@ -286,6 +286,9 @@ private:
         bool empty() const {
             return _admission_queue.empty() && _memory_queue.empty();
         }
+        bool has_admission_waiters() const {
+            return !_admission_queue.empty();
+        }
         void push_to_admission_queue(reader_permit::impl& p);
         void push_to_memory_queue(reader_permit::impl& p);
         reader_permit::impl& front();
@@ -634,6 +637,11 @@ public:
 
     void set_max_queue_length(size_t size) {
         _max_queue_length = size;
+    }
+
+    // True if reads are queued waiting for admission (a backlog); ready-list and memory waiters don't count.
+    bool has_admission_waiters() const noexcept {
+        return _wait_list.has_admission_waiters();
     }
 
     uint64_t active_reads() const noexcept {
