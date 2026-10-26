@@ -72,7 +72,7 @@ Only step 4 writes to the disk - all other steps only update in-memory metadata.
 **Automatic compaction:**
 1. A segment is a candidate when its utilization (live record bytes / segment size) is under the utilization threshold, `logstor_compaction_utilization_threshold` (default 0.5).
 2. The threshold is a function of the number of free segments on the shard, and it is linear between three points:
-   - At the space floor (1/32 of the disk, at least two batches) and below, the threshold is 1.
+   - At the space floor (`logstor_compaction_space_floor`, default 3% of the disk, at least two batches and at most a quarter of the disk) and below, the threshold is 1.
    - At the anchor (twice the space floor, at most half of the disk), the threshold is the configured value.
    - At the ceiling (one segment above the anchor) and above, the threshold is a minimum, `logstor_compaction_min_utilization_threshold` (default 0.1).
 
