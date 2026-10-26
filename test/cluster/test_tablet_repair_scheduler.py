@@ -6,10 +6,10 @@
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.util import wait_for_cql_and_get_hosts, Host
+from test.pylib.util import wait_for_cql_and_get_hosts, wait_for, Host
 from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, create_table_insert_data_for_repair_multiple_rows, get_tablet_task_id, load_tablet_repair_task_infos
-from test.pylib.rest_client import inject_error_one_shot, read_barrier
-from test.cluster.util import create_new_test_keyspace
+from test.pylib.rest_client import inject_error_one_shot, read_barrier, HTTPError
+from test.cluster.util import create_new_test_keyspace, new_test_keyspace
 
 from cassandra.cluster import Session as CassandraSession
 from cassandra.query import SimpleStatement, ConsistencyLevel
@@ -709,3 +709,38 @@ async def test_tablet_user_and_auto_repair_priority(manager: ScyllaClusterManage
     await manager.api.wait_task(servers[0].ip_addr, task_id)
 
     await check_repair_plan()
+
+
+async def test_tablet_repair_strongly_consistent(manager: ScyllaClusterManager):
+    """A strongly consistent table is never repaired: a user request is refused, and the
+    auto repair scheduler skips the table while it repairs an eventually consistent one."""
+    cmdline = ["--auto-repair-enabled-default", "1", "--auto-repair-threshold-default-in-seconds", "1"]
+    config = {'experimental_features': ['strongly-consistent-tables'], 'tablet_load_stats_refresh_interval_in_seconds': 1}
+    property_file = [{"dc": "dc1", "rack": f"r{i}"} for i in range(3)]
+    servers = await manager.servers_add(3, cmdline=cmdline, config=config, property_file=property_file)
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}"
+    async with new_test_keyspace(manager, opts) as ec_ks, new_test_keyspace(manager, f"{opts} AND consistency = 'global'") as sc_ks:
+        await cql.run_async(f"CREATE TABLE {ec_ks}.test (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE TABLE {sc_ks}.test (pk int PRIMARY KEY, c int)")
+        ec_table_id = await manager.get_table_id(ec_ks, "test")
+        sc_table_id = await manager.get_table_id(sc_ks, "test")
+
+        with pytest.raises(HTTPError, match="strongly consistent table needs no repair"):
+            await manager.api.tablet_repair(servers[0].ip_addr, sc_ks, "test", -1)
+
+        # The eventually consistent table is auto repaired every second or so. Once it has
+        # been repaired twice, the scheduler has had rounds in which it could have picked
+        # the strongly consistent table, and it must not have.
+        await check_has_repair_time(cql, hosts, ec_table_id)
+        map1 = await load_tablet_repair_time(cql, hosts[0:1], ec_table_id)
+        async def repaired_again():
+            map2 = await load_tablet_repair_time(cql, hosts[0:1], ec_table_id)
+            return all(map2[k] > v for k, v in map1.items()) or None
+        await wait_for(repaired_again, time.time() + 300, period=1)
+
+        sc_map = await load_tablet_repair_time(cql, hosts[0:1], sc_table_id)
+        assert all(v is None for v in sc_map.values()), f"strongly consistent tablets were repaired: {sc_map}"
+        assert await load_tablet_repair_task_infos(cql, hosts[0], sc_table_id) == {}

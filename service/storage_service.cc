@@ -6203,6 +6203,10 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         throw std::runtime_error("The TABLET_REPAIR_SCHEDULER feature is not enabled on the cluster yet");
     }
 
+    if (get_token_metadata_ptr()->tablets().get_tablet_map(table).has_raft_info()) {
+        throw std::invalid_argument(fmt::format("Cannot repair table {}: a strongly consistent table needs no repair, raft keeps its replicas in sync", table));
+    }
+
     auto repair_task_info = locator::tablet_task_info::make_user_repair_request(hosts_filter, dcs_filter, incremental_mode);
     auto res = std::unordered_map<sstring, sstring>{{sstring("tablet_task_id"), repair_task_info.tablet_task_id.to_sstring()}};
 
