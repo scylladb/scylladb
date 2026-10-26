@@ -12,6 +12,7 @@
 #include "utils/log.hh"
 #include "lang/wasm.hh"
 #include "utils/managed_string.hh"
+#include "types/concrete_types.hh"
 
 #include <seastar/core/thread.hh>
 
@@ -27,6 +28,30 @@ user_function::user_function(function_name name, std::vector<data_type> arg_type
     : abstract_function(std::move(name), std::move(arg_types), std::move(return_type)),
       _arg_names(std::move(arg_names)), _body(std::move(body)), _language(std::move(language)),
       _called_on_null_input(called_on_null_input), _ctx(std::move(ctx)) {}
+
+template <typename T>
+constexpr bool is_emptyable = false;
+template <typename T>
+constexpr bool is_emptyable<emptyable<T>> = true;
+
+// Most types allow an "empty" (zero-length) value, which is not the same as
+// null. For some types, like text and blob, the empty value is an ordinary
+// value of the type (an empty string). For the others, like int, it isn't,
+// so a function receives an empty value of such a type as a null.
+static bool empty_value_is_null(const abstract_type& type) {
+    return visit(type, [] <typename T> (const T& t) {
+        if constexpr (std::is_same_v<T, reversed_type_impl>) {
+            return empty_value_is_null(*t.underlying_type());
+        } else if constexpr (std::is_same_v<T, counter_type_impl>) {
+            // A counter has no native_type, but its values are bigints.
+            return true;
+        } else if constexpr (requires { typename T::native_type; }) {
+            return is_emptyable<typename T::native_type>;
+        } else {
+            return false;
+        }
+    });
+}
 
 bool user_function::is_pure() const { return true; }
 
@@ -45,9 +70,14 @@ managed_bytes_opt user_function::execute(std::span<const managed_bytes_opt> para
     if (!seastar::thread::running_in_thread()) {
         on_internal_error(log, "User function cannot be executed in this context");
     }
-    for (auto& param : parameters) {
-        if (!param && !_called_on_null_input) {
-            return std::nullopt;
+    auto is_null = [&] (size_t i) {
+        return !parameters[i] || (parameters[i]->empty() && empty_value_is_null(*types[i]));
+    };
+    if (!_called_on_null_input) {
+        for (size_t i = 0; i < parameters.size(); ++i) {
+            if (is_null(i)) {
+                return std::nullopt;
+            }
         }
     }
     return to_managed_bytes_opt(seastar::visit(_ctx,
@@ -56,15 +86,14 @@ managed_bytes_opt user_function::execute(std::span<const managed_bytes_opt> para
             values.reserve(parameters.size());
             for (int i = 0, n = types.size(); i != n; ++i) {
                 const data_type& type = types[i];
-                const managed_bytes_opt& bytes = parameters[i];
-                values.push_back(bytes ? type->deserialize(managed_bytes_view(*bytes)) : data_value::make_null(type));
+                values.push_back(is_null(i) ? data_value::make_null(type) : type->deserialize(managed_bytes_view(*parameters[i])));
             }
             return lua::run_script(lua::bitcode_view{ctx.bitcode}, values, return_type(), ctx.cfg).get();
         },
         [&] (wasm::context& ctx) -> bytes_opt {
             // FIXME: change wasm::run_script to accept fragmented buffers
-            auto linear_parameters = parameters
-                    | std::views::transform([] (const managed_bytes_opt& parameter) { return to_bytes_opt(parameter); })
+            auto linear_parameters = std::views::iota(size_t(0), parameters.size())
+                    | std::views::transform([&] (size_t i) { return is_null(i) ? bytes_opt() : to_bytes_opt(parameters[i]); })
                     | std::ranges::to<std::vector>();
             try {
                 return wasm::run_script(name(), ctx, arg_types(), linear_parameters, return_type(), _called_on_null_input).get();

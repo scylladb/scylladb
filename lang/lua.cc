@@ -994,6 +994,13 @@ struct to_lua_visitor {
         lua_createtable(l, 0, v->size());
         for (const auto& p : *v) {
             push_argument(l, p.first);
+            if (lua_isnil(l, -1)) {
+                // An empty key, e.g., an empty int, becomes nil (see
+                // push_argument()), which can't be a key of a Lua table, so
+                // this entry is left out.
+                lua_pop(l, 1);
+                continue;
+            }
             push_argument(l, p.second);
             lua_rawset(l, -3);
         }
@@ -1014,6 +1021,13 @@ struct to_lua_visitor {
         lua_createtable(l, 0, v->size());
         for (const data_value& dv : *v) {
             push_argument(l, dv);
+            if (lua_isnil(l, -1)) {
+                // An empty element, e.g., an empty int, becomes nil (see
+                // push_argument()), which can't be a key of a Lua table, so
+                // it is left out.
+                lua_pop(l, 1);
+                continue;
+            }
             lua_pushboolean(l, true);
             lua_rawset(l, -3);
         }
@@ -1098,12 +1112,37 @@ struct to_lua_visitor {
 };
 }
 
+namespace {
+// An empty value of a type for which the empty value isn't an ordinary value
+// of the type - such as an empty int, unlike an empty string - is passed to
+// the function as nil, like a null. user_function::execute() does this for
+// the function's arguments themselves, and this visitor for the values
+// nested in them, such as list elements or tuple components.
+struct to_lua_empty_as_nil_visitor {
+    lua_State* l;
+
+    template <typename Type, typename T>
+    void operator()(const Type& t, const emptyable<T>* v) {
+        if (v->empty()) {
+            lua_pushnil(l);
+        } else {
+            to_lua_visitor{l}(t, v);
+        }
+    }
+
+    template <typename Type, typename T>
+    void operator()(const Type& t, const T* v) {
+        to_lua_visitor{l}(t, v);
+    }
+};
+}
+
 static void push_argument(lua_State* l, const data_value& arg) {
     if (arg.is_null()) {
         lua_pushnil(l);
         return;
     }
-    ::visit(arg, to_lua_visitor{l});
+    ::visit(arg, to_lua_empty_as_nil_visitor{l});
 }
 
 // run the script for at most max_instructions
