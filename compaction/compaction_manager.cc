@@ -806,12 +806,17 @@ compaction_reenabler::~compaction_reenabler() {
         cmlog.debug("Reenabling compaction for {}", *_table);
         try {
             _cm.submit(*_table);
-            if (_cm._awaiting_automatic_scrub.contains(_table) && automatic_scrub_enabled(*_table)) {
-                _cm.reevaluate_automatic_scrub();
-            }
         } catch (...) {
             cmlog.warn("compaction_reenabler could not reenable compaction for {}: {}",
                     *_table, std::current_exception());
+        }
+        try {
+            if (std::exchange(_compaction_state->automatic_scrub_blocked, false) && automatic_scrub_enabled(*_table)) {
+                _cm.schedule_table_for_automatic_scrub(_table);
+                _cm.reevaluate_automatic_scrub();
+            }
+        } catch (...) {
+            cmlog.warn("compaction_reenabler could not reenable automatic scrub for {}: {}", *_table, std::current_exception());
         }
     }
 }
@@ -1279,7 +1284,7 @@ std::function<void()> compaction_manager::automatic_scrub_submission_callback() 
             return;
         }
         for (auto& [table, state] : _compaction_state) {
-            if (automatic_scrub_enabled(*table)) {
+            if (automatic_scrub_enabled(*table) && !state.automatic_scrub_blocked) {
                 schedule_table_for_automatic_scrub(table);
             }
         }
@@ -2327,13 +2332,15 @@ public:
         co_await coroutine::switch_to(_cm.maintenance_sg());
         compaction_group_view& t = *_compacting_table;
 
-        for (;;) {
+        // Whatever the reason for exiting, if compaction is disabled for the view,
+        // leave it to the reenabler to reschedule the automatic scrub.
+        auto mark_blocked = defer([this] () noexcept {
             if (_compaction_state.compaction_disabled()) {
-                _cm.schedule_table_for_automatic_scrub(&t);
-
-                co_return std::nullopt;
+                _compaction_state.automatic_scrub_blocked = true;
             }
+        });
 
+        for (;;) {
             if (!can_proceed()) {
                 co_return std::nullopt;
             }

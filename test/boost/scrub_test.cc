@@ -2377,7 +2377,8 @@ SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_rescheduled_after_compaction_reena
         cm.get_compaction_manager().run_with_compaction_disabled(ts, [&cm, &ts, &table] () -> future<> {
             cm.get_awaiting_automatic_scrub().insert(&ts);
             co_await cm.reevaluate_automatic_scrub();
-            BOOST_REQUIRE(cm.get_awaiting_automatic_scrub().contains(&ts));
+            BOOST_REQUIRE(!cm.get_awaiting_automatic_scrub().contains(&ts));
+            BOOST_REQUIRE(cm.get_compaction_state().at(&ts).automatic_scrub_blocked);
             for (auto& sst : *table->get_sstables()) {
                 BOOST_REQUIRE(sst->get_scrub_time() == db_clock::from_time_t(0));
             }
