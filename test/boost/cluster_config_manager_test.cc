@@ -30,6 +30,7 @@
 #include "replica/database.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
+#include "transport/messages/result_message.hh"
 
 BOOST_AUTO_TEST_SUITE(cluster_config_manager_test)
 
@@ -236,6 +237,151 @@ SEASTAR_TEST_CASE(test_cluster_config_registry_rejects_integer_value_out_of_rang
         BOOST_REQUIRE_THROW(
             e.execute_cql("ALTER CLUSTER WITH test_ranged_option = 101").get(),
             exceptions::invalid_request_exception);
+    });
+}
+
+// A stored value the write path would reject (rules differ across versions) is treated as
+// not set at its scope, for every reader.
+SEASTAR_TEST_CASE(test_cluster_config_invalid_stored_value_is_treated_as_unset) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        namespace reg = db::cluster_config_registry;
+        constexpr auto scopes = reg::scope_set::of<reg::scope::cluster, reg::scope::keyspace, reg::scope::table>();
+        reg::add_test_only_option_on_all_shards(e.get_feature_service(), reg::option{
+            .name = "test_stored_int",
+            .scopes = scopes,
+            .default_value = int64_t(7),
+            .valid_range = reg::integer_range{.min = 1, .max = 100},
+        }).get();
+        reg::add_test_only_option_on_all_shards(e.get_feature_service(), reg::option{
+            .name = "test_stored_text",
+            .scopes = scopes,
+            .default_value = std::string_view("dflt"),
+        }).get();
+        auto clear_test_options = seastar::defer([] noexcept {
+            reg::clear_test_only_options_on_all_shards().get();
+        });
+
+        e.execute_cql("CREATE KEYSPACE ks_bad WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_bad.t (pk int PRIMARY KEY)").get();
+        auto& mgr = e.cluster_config_manager().local();
+        const auto table = e.local_db().find_schema("ks_bad", "t")->id();
+        const db::cluster_config_manager::lookup_context ctx{.keyspace_name = "ks_bad", .table_name = "t"};
+
+        auto store = [&] (const char* table_name, const char* where, const char* name, const sstring& value) {
+            e.local_qp().execute_internal(seastar::format("UPDATE system_schema.{} SET configs['{}'] = '{}' WHERE {}",
+                    table_name, name, value, where), cql3::query_processor::cache_internal::no).get();
+            mgr.refresh().get();
+        };
+        auto at_cluster = [&] (const char* name, const sstring& v) { store("scylla_clusters", "cluster_name = 'cluster'", name, v); };
+        auto at_keyspace = [&] (const char* name, const sstring& v) { store("scylla_keyspaces", "keyspace_name = 'ks_bad'", name, v); };
+        auto at_table = [&] (const char* name, const sstring& v) { store("scylla_tables", "keyspace_name = 'ks_bad' AND table_name = 't'", name, v); };
+        auto resolved = [&] { return mgr.resolve_integer_config("test_stored_int", ctx); };
+
+        // Only an invalid value stored: the default applies, and the _no_default resolver reports absence.
+        for (auto bad : {"101", "0", "abc"}) {
+            at_cluster("test_stored_int", bad);
+            BOOST_REQUIRE_EQUAL(resolved(), 7);
+        }
+        at_table("test_stored_int", "abc");
+        at_keyspace("test_stored_int", "101");
+        BOOST_REQUIRE_EQUAL(resolved(), 7);
+        BOOST_REQUIRE(!mgr.resolve_integer_config_no_default("test_stored_int", table));
+
+        // An invalid value falls through to the next less-specific scope's valid value.
+        at_cluster("test_stored_int", "50");
+        BOOST_REQUIRE_EQUAL(resolved(), 50);
+        BOOST_REQUIRE_EQUAL(mgr.resolve_integer_config_no_default("test_stored_int", table).value_or(-1), 50);
+        at_keyspace("test_stored_int", "20");
+        for (auto bad : {"0", "101", "abc"}) {
+            at_table("test_stored_int", bad);
+            BOOST_REQUIRE_EQUAL(resolved(), 20);
+        }
+        at_table("test_stored_int", "30");
+        BOOST_REQUIRE_EQUAL(resolved(), 30);
+
+        // Text is validated too: a line break is rejected on write, so a stored one is dropped.
+        at_cluster("test_stored_text", "ok");
+        at_table("test_stored_text", "two\nlines");
+        const auto* text_opt = reg::find("test_stored_text");
+        BOOST_REQUIRE_EQUAL(mgr.resolve_text_config(*text_opt, ctx), "ok");
+        at_cluster("test_stored_text", "one\ntwo");
+        BOOST_REQUIRE_EQUAL(mgr.resolve_text_config(*text_opt, ctx), "dflt");
+
+        // A boolean that does not parse leaves the caller's scylla.yaml fallback in effect.
+        e.db_config().auto_repair_enabled_default(true);
+        at_table(reg::option_name::auto_repair_enabled.data(), "yes");
+        BOOST_REQUIRE(!mgr.resolve_boolean_config_no_default(reg::option_name::auto_repair_enabled, table));
+        BOOST_REQUIRE(mgr.resolve_boolean_config_no_default(reg::option_name::auto_repair_enabled, table)
+                .value_or(e.db_config().auto_repair_enabled_default()));
+
+        // DESCRIBE treats an invalid stored value as unset too: no live pinned line and no
+        // raw value anywhere in the output, provenance trailer included.
+        auto describe_table = [&] {
+            auto msg = e.execute_cql("DESCRIBE TABLE ks_bad.t").get();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+            BOOST_REQUIRE(rows);
+            sstring out;
+            for (const auto& row : rows->rs().result_set().rows()) {
+                if (row[3]) {
+                    out += value_cast<sstring>(utf8_type->deserialize(*row[3]));
+                }
+            }
+            return out;
+        };
+        at_cluster("test_stored_text", "ok");
+        at_keyspace("test_stored_text", "ends */ here");
+        at_table("test_stored_text", "two\nlines");
+        auto out = describe_table();
+        BOOST_REQUIRE_MESSAGE(out.contains("\n    AND test_stored_int = 30"), out);
+        BOOST_REQUIRE_MESSAGE(out.contains("-- AND test_stored_text = 'ok'"), out);
+        BOOST_REQUIRE_MESSAGE(out.contains("from cluster (table=NULL, keyspace=NULL, cluster='ok')"), out);
+        BOOST_REQUIRE_MESSAGE(!out.contains("\n    AND test_stored_text"), out);
+        BOOST_REQUIRE_MESSAGE(!out.contains("lines") && !out.contains("*/ here"), out);
+
+        // An all-invalid chain has no live line, provenance or raw value, only a comment
+        // naming the ignored table-scope option.
+        at_cluster("test_stored_text", "one\ntwo");
+        out = describe_table();
+        BOOST_REQUIRE_MESSAGE(out.contains("\n-- ignored invalid stored value for config 'test_stored_text' at table scope\n"), out);
+        BOOST_REQUIRE_MESSAGE(!out.contains(" AND test_stored_text") && !out.contains("two"), out);
+        BOOST_REQUIRE_MESSAGE(!out.contains("AND auto_repair_enabled"), out);
+    });
+}
+
+// An invalid value at a datacenter, rack or node scope falls back to the next
+// less-specific scope's valid value.
+SEASTAR_TEST_CASE(test_cluster_config_invalid_node_oriented_stored_value_falls_back) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto clear_test_options = inject_node_oriented_test_option(e);
+        const auto& topo = e.shared_token_metadata().local().get()->get_topology();
+        const sstring dc = topo.get_datacenter();
+        const sstring rack = topo.get_rack();
+        const auto node_uuid = topo.my_host_id().uuid();
+        auto& mgr = e.cluster_config_manager().local();
+        const auto& opt = *db::cluster_config_registry::find("test_node_only_option");
+        db::cluster_config_manager::lookup_context ctx{.dc_name = dc, .rack_name = rack, .node_uuid = node_uuid};
+
+        e.execute_cql("ALTER CLUSTER WITH test_node_only_option = 1").get();
+        e.execute_cql(seastar::format("ALTER DATACENTER \"{}\" WITH test_node_only_option = 2", dc)).get();
+        e.execute_cql(seastar::format("ALTER RACK \"{}\" \"{}\" WITH test_node_only_option = 3", dc, rack)).get();
+        e.execute_cql(seastar::format("ALTER NODE {} WITH test_node_only_option = 4", node_uuid)).get();
+        mgr.refresh().get();
+        BOOST_REQUIRE_EQUAL(mgr.resolve_integer_config(opt, ctx), 4);
+
+        auto corrupt = [&] (const sstring& table_name, const sstring& where) {
+            e.local_qp().execute_internal(seastar::format("UPDATE system_schema.{} SET configs['test_node_only_option'] = 'abc' WHERE {}",
+                    table_name, where), cql3::query_processor::cache_internal::no).get();
+            mgr.refresh().get();
+        };
+        corrupt("scylla_nodes", seastar::format("host_id = {}", node_uuid));
+        BOOST_REQUIRE_EQUAL(mgr.resolve_integer_config(opt, ctx), 3);
+        corrupt("scylla_racks", seastar::format("dc_name = '{}' AND rack_name = '{}'", dc, rack));
+        BOOST_REQUIRE_EQUAL(mgr.resolve_integer_config(opt, ctx), 2);
+        corrupt("scylla_datacenters", seastar::format("dc_name = '{}'", dc));
+        BOOST_REQUIRE_EQUAL(mgr.resolve_integer_config(opt, ctx), 1);
+        corrupt("scylla_clusters", "cluster_name = 'cluster'");
+        BOOST_REQUIRE(!mgr.resolve_config("test_node_only_option", ctx).has_value());
+        BOOST_REQUIRE_EQUAL(mgr.resolve_integer_config(opt, ctx), 0);
     });
 }
 
@@ -1040,14 +1186,18 @@ SEASTAR_TEST_CASE(test_db_config_backed_option_applies_to_db_config_and_restores
         value_on_every_shard(300);
 
         // A stored value this node does not accept, as written by a binary with other rules
-        // during an upgrade, is ignored and the current override stays in effect.
+        // during an upgrade, counts as unset: the pre-cluster value is restored.
         for (auto bad : {"0", "4294967296", "fast"}) {
             e.local_qp().execute_internal(seastar::format("UPDATE system_schema.scylla_clusters SET configs['tablets_per_shard_goal'] = '{}' "
                     "WHERE cluster_name = 'cluster'", bad), cql3::query_processor::cache_internal::no).get();
             mgr.local().refresh().get();
-            value_on_every_shard(300);
-            BOOST_REQUIRE(entry.source() == config_source::ClusterConfig);
+            value_on_every_shard(50);
+            BOOST_REQUIRE(entry.source() == config_source::SettingsFile);
         }
+        e.execute_cql("ALTER CLUSTER WITH tablets_per_shard_goal = 300").get();
+        mgr.local().refresh().get();
+        value_on_every_shard(300);
+        BOOST_REQUIRE(entry.source() == config_source::ClusterConfig);
 
         // A yaml reload leaves an overridden entry alone and does not refresh the baseline:
         // `= null` below restores 50, not 60.

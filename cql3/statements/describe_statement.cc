@@ -129,6 +129,20 @@ bool is_index(const data_dictionary::database& db, const schema_ptr& schema) {
     return db.find_column_family(schema->view_info()->base_id()).get_index_manager().is_index(*schema);
 }
 
+// An invalid stored value is unset, the same as for the manager's caches. Each dropped
+// option is reported in `ignored` as a CQL comment line (the value is left out, it may not
+// be comment-safe), so a dump still shows that it was there.
+std::map<sstring, sstring> drop_invalid_configs(std::string_view scope, std::map<sstring, sstring> configs, sstring& ignored) {
+    std::erase_if(configs, [&] (const auto& entry) {
+        if (db::cluster_config_registry::is_usable_stored_value(scope, entry.first, entry.second)) {
+            return false;
+        }
+        ignored += format("-- ignored invalid stored value for config '{}' at {} scope\n", entry.first, scope);
+        return true;
+    });
+    return configs;
+}
+
 future<std::map<sstring, sstring>> table_config_options(query_processor& qp, const sstring& ks, const sstring& table) {
     return read_configs_column(qp,
             format("SELECT configs FROM system_schema.{} WHERE keyspace_name = ? AND table_name = ?", db::schema_tables::SCYLLA_TABLES),
@@ -167,12 +181,20 @@ class config_snapshot {
     std::optional<std::map<sstring, sstring>> _cluster;
     std::map<sstring, std::map<sstring, sstring>> _keyspaces;
     std::map<std::pair<sstring, sstring>, std::map<sstring, sstring>> _tables;
+    // Comment lines for the invalid values dropped per row, see drop_invalid_configs().
+    sstring _cluster_ignored;
+    std::map<sstring, sstring> _keyspaces_ignored;
+    std::map<std::pair<sstring, sstring>, sstring> _tables_ignored;
+    sstring _no_ignored;
+    // False for WITH INTERNALS: the raw stored map is a backup and must restore as stored.
+    bool _drop_invalid;
 public:
-    explicit config_snapshot(query_processor& qp) : _qp(qp) {}
+    config_snapshot(query_processor& qp, bool drop_invalid) : _qp(qp), _drop_invalid(drop_invalid) {}
 
     future<std::reference_wrapper<const std::map<sstring, sstring>>> cluster() {
         if (!_cluster) {
-            _cluster = co_await cluster_config_options(_qp);
+            auto configs = co_await cluster_config_options(_qp);
+            _cluster = _drop_invalid ? drop_invalid_configs("cluster", std::move(configs), _cluster_ignored) : std::move(configs);
         }
         co_return std::cref(*_cluster);
     }
@@ -180,8 +202,13 @@ public:
     future<std::reference_wrapper<const std::map<sstring, sstring>>> keyspace(const sstring& ks) {
         auto it = _keyspaces.find(ks);
         if (it == _keyspaces.end()) {
+            sstring ignored;
             auto configs = co_await keyspace_config_options(_qp, ks);
+            if (_drop_invalid) {
+                configs = drop_invalid_configs("keyspace", std::move(configs), ignored);
+            }
             it = _keyspaces.emplace(ks, std::move(configs)).first;
+            _keyspaces_ignored.emplace(ks, std::move(ignored));
         }
         co_return std::cref(it->second);
     }
@@ -190,12 +217,40 @@ public:
         auto key = std::pair(ks, table);
         auto it = _tables.find(key);
         if (it == _tables.end()) {
+            sstring ignored;
             auto configs = co_await table_config_options(_qp, ks, table);
+            if (_drop_invalid) {
+                configs = drop_invalid_configs("table", std::move(configs), ignored);
+            }
+            _tables_ignored.emplace(key, std::move(ignored));
             it = _tables.emplace(std::move(key), std::move(configs)).first;
         }
         co_return std::cref(it->second);
     }
+
+    // Empty until the matching row was read through cluster()/keyspace()/table().
+    const sstring& cluster_ignored() const { return _cluster_ignored; }
+    const sstring& keyspace_ignored(const sstring& ks) const {
+        auto it = _keyspaces_ignored.find(ks);
+        return it == _keyspaces_ignored.end() ? _no_ignored : it->second;
+    }
+    const sstring& table_ignored(const sstring& ks, const sstring& table) const {
+        auto it = _tables_ignored.find(std::pair(ks, table));
+        return it == _tables_ignored.end() ? _no_ignored : it->second;
+    }
 };
+
+// Appends comment lines after a plain-tier CREATE statement; its final newline is needed
+// by the COMMENT lexer token (Cql.g). Not used for WITH INTERNALS, which stays pure CQL.
+void append_ignored_comments(description& desc, const sstring& ignored) {
+    if (ignored.empty() || !desc.create_statement) {
+        return;
+    }
+    auto create_statement = desc.create_statement->linearize();
+    create_statement += "\n";
+    create_statement += ignored;
+    desc.create_statement = managed_string(create_statement);
+}
 
 // A scope in a table-oriented option's resolution chain, used to annotate
 // DESCRIBE output with the value's provenance.
@@ -249,14 +304,15 @@ sstring format_config_option_value(std::string_view name, const sstring& value) 
 // domain chain visible at the described scope, most specific first, unconditionally; each
 // entry shows the override stored at exactly that scope, or NULL. The effective value is
 // the resolution of exactly the printed chain (the leftmost non-NULL entry) and the scope
-// after "from" names where it comes from, so the two can never disagree. Values are
+// after "from" names where it comes from, so the two can never disagree. The snapshot has
+// already dropped invalid stored values, so the chain only holds valid ones. Values are
 // rendered as CQL literals (text quoted) so the effective value can sit on the right-hand
 // side of a property assignment. The trailer contains neither ';' nor a newline, so
 // appending it after "-- " keeps the whole tail one valid inline comment, both before and
 // after a user uncomments the property it annotates; the newline half of that holds
-// because cluster_config_registry::validate_value() rejects a line break (and "*/", which
-// would end the block comment a described CDC log or paxos table is wrapped in) in a text
-// value. All-NULL chains never reach this function (such options emit nothing).
+// because validate_value() rejects a line break (and "*/", which would end the block comment
+// a described CDC log or paxos table is wrapped in) and invalid values never get here.
+// All-NULL chains never reach this function (such options emit nothing).
 struct config_provenance {
     sstring effective;
     sstring trailer;
@@ -416,10 +472,11 @@ struct scope_chain_entry {
 // misleading. An option unknown to this node's registry gets a line only if it is stored
 // at the described scope itself (its scope mask cannot be checked, but its presence
 // proves a registry that knew it accepted it here). WITH INTERNALS output stays pure
-// replayable CQL: stored options only, no comments. Returns an empty string when there is
-// nothing to say.
+// replayable CQL: stored options only, no provenance comments. `ignored` (comment lines for
+// invalid stored values at the described scope) leads the commented output; WITH INTERNALS
+// passes none. Returns an empty string when there is nothing to say.
 managed_string make_scope_create_statement(const sstring& alter_target, db::cluster_config_registry::scope described_scope,
-        const std::vector<scope_chain_entry>& chain, bool with_comments) {
+        const std::vector<scope_chain_entry>& chain, bool with_comments, const sstring& ignored) {
     std::string result;
     if (with_comments) {
         std::set<sstring> option_names;
@@ -465,7 +522,7 @@ managed_string make_scope_create_statement(const sstring& alter_target, db::clus
             result.resize(result.size() - 1);
         }
     }
-    return managed_string(result);
+    return managed_string(std::string(ignored.data(), ignored.size()) + result);
 }
 
 // With config_rows, the keyspace's stored overrides are left out of the CREATE statement:
@@ -488,6 +545,9 @@ future<description> keyspace_description(config_snapshot& snapshot, const lw_sha
     }
 
     append_create_statement_options(desc, options, !with_internals);
+    if (!with_internals) {
+        append_ignored_comments(desc, snapshot.keyspace_ignored(ks_meta->name()));
+    }
     co_return desc;
 }
 
@@ -516,7 +576,7 @@ description make_config_description(std::string_view type, std::optional<sstring
         .keyspace = std::move(keyspace),
         .type = sstring(type),
         .name = std::move(name),
-        .create_statement = make_scope_create_statement(alter_target, scope, chain, false),
+        .create_statement = make_scope_create_statement(alter_target, scope, chain, false, {}),
     };
 }
 
@@ -799,6 +859,9 @@ future<utils::chunked_vector<description>> table(config_snapshot& snapshot, cons
         }
         if (!table_config_options.empty()) {
             append_create_statement_options(table_desc, table_config_options, !with_internals);
+        }
+        if (!with_internals) {
+            append_ignored_comments(table_desc, snapshot.table_ignored(ks_meta->name(), name));
         }
     }
     if (cdc::is_log_for_some_table(db.real_database(), ks_meta->name(), name)) {
@@ -1143,7 +1206,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
     auto db = qp.db();
     // One config snapshot per DESCRIBE execution: every described object is annotated
     // against the same config state, read at most once per config-tables row.
-    config_snapshot snapshot(qp);
+    config_snapshot snapshot(qp, !_with_internals);
 
     auto result = co_await std::visit(overloaded_functor{
         [&] (const schema_desc& config) -> future<utils::chunked_vector<description>> {
@@ -1174,7 +1237,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
                         .keyspace = std::nullopt,
                         .type = sstring(cluster_config_type),
                         .name = "cluster",
-                        .create_statement = make_scope_create_statement("ALTER CLUSTER", db::cluster_config_registry::scope::cluster, chain, !_with_internals),
+                        .create_statement = make_scope_create_statement("ALTER CLUSTER", db::cluster_config_registry::scope::cluster, chain, !_with_internals, snapshot.cluster_ignored()),
                     });
                 }
             }
@@ -1247,7 +1310,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> listing_describe_statement::
     }
 
     utils::chunked_vector<description> result;
-    config_snapshot snapshot(qp);
+    config_snapshot snapshot(qp, !_with_internals);
     for (auto&& ks: keyspaces) {
         auto ks_result = co_await list_elements(snapshot, db, ks, _element);
         result.insert(result.end(), std::make_move_iterator(ks_result.begin()), std::make_move_iterator(ks_result.end()));
@@ -1278,7 +1341,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> element_describe_statement::
         throw exceptions::invalid_request_exception("No keyspace specified and no current keyspace");
     }
     
-    config_snapshot snapshot(qp);
+    config_snapshot snapshot(qp, !_with_internals);
     co_return serialize_descriptions(co_await describe_element(snapshot, qp.db(), ks, _element, _name, _with_internals));
 }
 
@@ -1298,7 +1361,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> generic_describe_statement::
     auto& replica_db = db.real_database();
     auto raw_ks = client_state.get_raw_keyspace();
     auto ks_name = (_keyspace) ? *_keyspace : raw_ks;
-    config_snapshot snapshot(qp);
+    config_snapshot snapshot(qp, !_with_internals);
 
     if (!_keyspace) {
         auto ks = db.try_find_keyspace(_name);

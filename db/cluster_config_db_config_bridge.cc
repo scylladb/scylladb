@@ -63,9 +63,9 @@ class db_config_binding final : public cluster_config_db_config_bridge::binding 
     std::optional<baseline> _baseline;
     cluster_config_manager::config_callback_registration _registration;
 
-    // on_change() checked the stored text with validate_value(), and for an integral T bind()
-    // checked that the option's valid_range fits T, so the registry converters cannot fall back
-    // to the default and the cast cannot wrap.
+    // The manager only delivers values that passed validate_value() when its caches were loaded,
+    // and for an integral T bind() checked that the option's valid_range fits T, so the registry
+    // converters cannot fall back to the default and the cast cannot wrap.
     T parse(const std::optional<sstring>& value) const {
         if constexpr (std::is_same_v<T, bool>) {
             return cluster_config_registry::to_boolean(_opt, value);
@@ -88,14 +88,6 @@ class db_config_binding final : public cluster_config_db_config_bridge::binding 
     void on_change(const std::optional<sstring>& value) {
         const bool owns_source = this_shard_id() == 0;
         if (value) {
-            // ALTER validated the value on its coordinator, whose binary may have other rules
-            // during an upgrade or rollback. Keep the current value rather than apply it.
-            if (auto error = cluster_config_registry::validate_value(_opt, *value)) {
-                if (owns_source) {
-                    bridge_logger.warn("Ignoring cluster config override {} = {}: {}", _opt.name, *value, *error);
-                }
-                return;
-            }
             const T parsed = parse(value);
             // Recorded only once the apply succeeded, so a rejected value leaves no baseline.
             std::optional<baseline> snapshot;
