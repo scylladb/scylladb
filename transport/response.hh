@@ -79,6 +79,8 @@ public:
     void write_bytes(bytes b);
     void write_short_bytes(bytes_view b);
     void write_inet(socket_address inet);
+    // Writes an [inetaddr]: the address size followed by the address, without a port.
+    void write_inetaddr(const net::inet_address& addr);
     void write_consistency(db::consistency_level c);
     void write_string_map(std::map<sstring, sstring> string_map);
     void write_string_multimap(std::multimap<sstring, sstring> string_map);
