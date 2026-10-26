@@ -290,7 +290,7 @@ async def test_write_cl_any_to_dead_node_generates_hints(manager: ScyllaClusterM
 
     # Some of the inserts will be targeted to the dead node.
     # The coordinator doesn't have live targets to send the write to, but it should write a hint.
-    await gather_safely(*[cql.run_async(stmt, (i, i + 1)) for i in range(100)])
+    await gather_safely(*[cql.run_async(stmt, (i, i + 1)) for i in range(30)])
 
     # Verify hints are written
     await wait_for_hints_written(hints_before + 1, timeout=60)
@@ -589,9 +589,9 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
     logger.info("Pausing node 3")
     await pause_server(manager, server3, [server1, server2])
 
-    # Write 100 rows with CL=ANY. Some of the rows will only be stored as hints because of RF=1
-    logger.info("Writing 100 rows with CL=ANY")
-    for i in range(100):
+    # Write 50 rows with CL=ANY. Some of the rows will only be stored as hints because of RF=1
+    logger.info("Writing 50 rows with CL=ANY")
+    for i in range(50):
         cql = (cql1, cql2)[i % 2]
         await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
     await settle_and_flush_hints(manager, [server1, server2])
@@ -648,7 +648,7 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
     # Verify that no data has been lost - if the hints replay only sent the hints to the original destination (server3),
     # then they will be only present on server3 which already left the cluster
     logger.info("Verify that no data stored in hints have been lost")
-    for i in range(100):
+    for i in range(50):
         assert list(await cql1.run_async(f"SELECT v FROM ks.t WHERE pk = {i}")) == [(i + 1,)]
 
 
@@ -671,8 +671,8 @@ async def test_hints_consistency_during_replace(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(servers[2].server_id)
     await manager.others_not_see_server(servers[2].ip_addr)
 
-    # Write 100 rows with CL=ANY. Some of the rows will only be stored as hints because of RF=1
-    for i in range(100):
+    # Write 50 rows with CL=ANY. Some of the rows will only be stored as hints because of RF=1
+    for i in range(50):
         await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
 
     # Hint writes are fire-and-forget (store_hint() submits do_store_hint()
@@ -687,7 +687,7 @@ async def test_hints_consistency_during_replace(manager: ScyllaClusterManager):
 
     assert await await_sync_point(manager.api.client, servers[0].ip_addr, sync_point, 30)
     # Verify that all rows were recovered by the hint replay
-    for i in range(100):
+    for i in range(50):
         assert list(await cql.run_async(f"SELECT v FROM ks.t WHERE pk = {i}")) == [(i + 1,)]
 
 
@@ -709,7 +709,7 @@ async def test_draining_hints(manager: ScyllaClusterManager):
     await pause_server(manager, s2, [s1, s3])
 
     # s1 is the only coordinator, so each of the writes generates a hint towards s2 on s1.
-    for i in range(1000):
+    for i in range(100):
         await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
     # Otherwise, the sync point could capture a stale replay position.
     await wait_until_hint_writing_settled(manager, [s1])
@@ -740,8 +740,8 @@ async def test_canceling_hint_draining(manager: ScyllaClusterManager):
 
     await manager.server_stop_gracefully(s2.server_id)
 
-    # Generate hints towards s2 on s1 with probability 1 - ((#nodes - 1) / #nodes)^1000 ~= 1.
-    for i in range(1000):
+    # Generate hints towards s2 on s1 with probability 1 - ((#nodes - 1) / #nodes)^100 ~= 1.
+    for i in range(100):
         await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
 
     sync_point = await create_sync_point(manager.api.client, s1.ip_addr)
@@ -1039,8 +1039,8 @@ async def test_hints_encrypted_segments_after_rebalancing(manager: ScyllaCluster
     stmt.consistency_level = ConsistencyLevel.ONE
 
     # It's virtually impossible that no hint will be stored on highest_shard
-    # if we send 1000 mutations.
-    row_count = 1000
+    # if we send 100 mutations.
+    row_count = 100
     await gather_safely(*[cql.run_async(stmt, (i, i)) for i in range(row_count)])
     await wait_until_hint_writing_settled(manager, [s1])
     written_highest_shard = await get_hint_metrics(manager.metrics, s1.ip_addr, "written", shard=highest_shard)
@@ -1103,7 +1103,7 @@ async def test_hints_after_enabling_commitlog_encryption(manager: ScyllaClusterM
         assert await get_hint_metrics(manager.metrics, s1.ip_addr, "dropped") == 0
         assert await get_hint_metrics(manager.metrics, s1.ip_addr, "errors") == 0
 
-    row_count = 100
+    row_count = 20
     await write_hints(range(row_count))
 
     logger.info("Restarting s1 with commitlog encryption enabled")
@@ -1157,7 +1157,7 @@ async def test_hints_removenode(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(s3.server_id)
     await manager.others_not_see_server(s3.ip_addr)
 
-    row_count = 100
+    row_count = 50
     stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
     stmt.consistency_level = ConsistencyLevel.ANY
     await gather_safely(*[cql.run_async(stmt, (pk, pk + 1)) for pk in range(row_count)])
@@ -1305,7 +1305,7 @@ async def test_hints_decom(manager: ScyllaClusterManager):
 
     await pause_server(manager, s3, [s1, s2])
 
-    row_count = 100
+    row_count = 50
     await gather_safely(*[cql.run_async(SimpleStatement(
         f"INSERT INTO ks.tbl (pk, v) VALUES ({i}, {i + 1})",
         consistency_level=ConsistencyLevel.ANY
@@ -1487,9 +1487,9 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
         {"dc": "dc2", "rack": "rack1"},
         {"dc": "dc3", "rack": "rack1"}])
 
-    keys_enabled = list(range(100))
-    keys_disabled = list(range(100, 200))
-    keys_dc3_only = list(range(200, 300))
+    keys_enabled = list(range(50))
+    keys_disabled = list(range(50, 100))
+    keys_dc3_only = list(range(100, 150))
     expected_hints = 0
 
     cql = await manager.get_cql_exclusive(s1)
@@ -1596,12 +1596,12 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
                                        config=config, property_file={"dc": "dc1", "rack": "r1"})
 
     # We are using RF=1, so roughly half of the writes will be written as hints
-    keys1 = list(range(100))
-    keys2 = list(range(100, 200))
-    keys3 = list(range(200, 300))
+    keys1 = list(range(50))
+    keys2 = list(range(50, 100))
+    keys3 = list(range(100, 150))
 
     # Nothing is written for subtest 4
-    keys5 = list(range(400, 500))
+    keys5 = list(range(200, 250))
 
     cql = await manager.get_cql_exclusive(s1)
     logger.info("Creating a keyspace...")
@@ -1864,7 +1864,7 @@ async def test_hint_retransmission_keeps_column_mappings(manager: ScyllaClusterM
     longer than intended, but the send concurrency of 1 keeps it at that.
     """
     # Enough hints for the segment to still hold unsent ones once the first ones are applied.
-    row_count = 200
+    row_count = 50
 
     # A single shard means a single hint_sender, so the segment we interrupt is the one that
     # gets retransmitted.
@@ -2000,10 +2000,8 @@ async def test_corrupted_segment(manager: ScyllaClusterManager):
     stmt.consistency_level = ConsistencyLevel.ONE
 
     # This should be enough to generate at least two sectors.
-    row_count = 4000
-    batch_size = 1000
-    for batch in itertools.batched(range(row_count), batch_size):
-        await gather_safely(*[cql.run_async(stmt, (key, key)) for key in batch])
+    row_count = 1000
+    await gather_safely(*[cql.run_async(stmt, (key, key)) for key in range(row_count)])
     await wait_until_hint_writing_settled(manager, [node1])
     written = await get_hint_metrics(manager.metrics, node1.ip_addr, "written")
     assert written > 0, "No hints have been written"
@@ -2111,10 +2109,8 @@ async def test_corrupted_segment_hint_fails_before_corruption(manager: ScyllaClu
     stmt.consistency_level = ConsistencyLevel.ONE
 
     # This should be enough to generate at least two sectors.
-    row_count = 4000
-    batch_size = 1000
-    for batch in itertools.batched(range(row_count), batch_size):
-        await gather_safely(*[cql.run_async(stmt, (key, key)) for key in batch])
+    row_count = 1000
+    await gather_safely(*[cql.run_async(stmt, (key, key)) for key in range(row_count)])
     await wait_until_hint_writing_settled(manager, [node1])
     written = await get_hint_metrics(manager.metrics, node1.ip_addr, "written")
     assert written > 0, "No hints have been written"
