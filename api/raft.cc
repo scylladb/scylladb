@@ -117,6 +117,12 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
                 co_return;
             }
             found_srv = true;
+            if (!timeout.value) {
+                // Only group 0 defines a default operation timeout; asking the
+                // registry for one on another group is an internal error.
+                co_await raft_gr.get_server(gid).read_barrier(nullptr);
+                co_return;
+            }
             co_await raft_gr.get_server_with_timeouts(gid).read_barrier(nullptr, timeout);
         });
 

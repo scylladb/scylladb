@@ -663,6 +663,23 @@ future<locator::effective_replication_map_ptr> sstables_loader::await_topology_q
     co_return std::move(erm);
 }
 
+// Loading only the primary replica relies on a repair to fill the others in, which a
+// strongly consistent table has no use for and refuses. Checked up front by the entry
+// points, before anything is downloaded or opened, and again by load_and_stream().
+//
+// TODO: thin replication (SCYLLADB-204): every sstable is streamed to every replica
+// of its tablet, and the tablet's thin replica must be left out.
+static void check_primary_replica_only_load(const replica::table& tbl, primary_replica_only primary) {
+    if (!primary || !tbl.uses_tablets()) {
+        return;
+    }
+    const auto& s = *tbl.schema();
+    if (tbl.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(s.id()).has_raft_info()) {
+        throw std::invalid_argument(format("Cannot load {}.{} with primary_replica_only: a strongly consistent table needs no repair to fill in the other replicas, load every replica instead",
+                s.ks_name(), s.cf_name()));
+    }
+}
+
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         ::table_id table_id, std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, bool unlink, stream_scope scope,
         shared_ptr<stream_progress> progress) {
@@ -679,6 +696,8 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     // already dropped before we got here.
     auto& tbl = _db.local().find_column_family(table_id);
     auto stream_guard = tbl.stream_in_progress();
+
+    check_primary_replica_only_load(tbl, primary);
 
     std::unique_ptr<sstable_streamer> streamer;
     if (tbl.uses_tablets()) {
@@ -724,6 +743,8 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
             ks_name, cf_name, load_and_stream_desc, primary, skip_cleanup, skip_reshape, scope);
     try {
         if (load_and_stream) {
+            check_primary_replica_only_load(_db.local().find_column_family(ks_name, cf_name), primary_replica_only(primary));
+
             ::table_id table_id;
             std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards;
             // Load-and-stream reads the entire content from SSTables, therefore it can afford to discard the bloom filter
@@ -918,6 +939,7 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
         throw std::invalid_argument(format("Cannot restore {}.{} with /storage_service/restore: the table keeps its sstables on object storage, use /storage_service/tablets/restore",
                 ks_name, cf_name));
     }
+    check_primary_replica_only_load(_db.local().find_column_family(ks_name, cf_name), primary_replica_only(primary_replica));
     llog.info("Restore sstables from {}({}) to {}.{} using scope={}, primary_replica={}", endpoint, prefix, ks_name, cf_name, scope, primary_replica);
 
     auto progress = make_lw_shared<download_progress>();
@@ -1024,16 +1046,46 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         co_return;
     }
 
-    // Skip sstables either not uploaded (de-duplicated by backup) or a previous restore attempt 
-    // already fetched so a re-entered or retried restore doesn't re-download what's already in place.
-    auto pending = sst_infos | std::views::filter([] (const auto& si) { 
-        return si.state >= db::snapshot_state::remote_and_local && si.downloaded == db::is_downloaded::no; 
+    // Skip sstables not uploaded (de-duplicated by backup).
+    auto uploaded = sst_infos | std::views::filter([] (const auto& si) {
+        return si.state >= db::snapshot_state::remote_and_local;
     });
-    auto [ fully, partially ] = co_await get_sstables_for_tablet(pending, tablet_range, [] (const auto& si) { return si.first_token; }, [] (const auto& si) { return si.last_token; });
+    auto [ fully, partially ] = co_await get_sstables_for_tablet(uploaded, tablet_range, [] (const auto& si) { return si.first_token; }, [] (const auto& si) { return si.last_token; });
     if (!partially.empty()) {
         llog.debug("Sstable {} is partially contained", partially.front().sstable_id);
         throw std::logic_error("sstables_partially_contained");
     }
+
+    if (tmap.has_raft_info()) {
+        // The replicas of a strongly consistent tablet hold the same data, and the
+        // backup may hold a copy from each of them (restore_tablets() registers every
+        // copy for every rack). Attach one copy only, the same on every replica: that
+        // of the lowest node, or of the lowest manifest where a per-node backup names no
+        // node. Mixing copies taken at different points of the raft log could give the
+        // replicas different contents, which nothing reconciles for such a table.
+        //
+        // TODO: thin replication (SCYLLADB-204): the tablet's thin replica keeps only
+        // the data not yet applied by every replica, so its copy is partial and must
+        // not be chosen, and the thin replica itself must attach no copy. A per-node
+        // backup made on a thin replica names no node, so its manifest has to record
+        // that the copy is partial, or the backup has to leave it out.
+        using copy_key = std::pair<utils::UUID, sstring>;
+        std::optional<copy_key> chosen;
+        for (const auto& si : fully) {
+            copy_key key{si.node.uuid(), si.prefix};
+            if (!chosen || key < *chosen) {
+                chosen = key;
+            }
+        }
+        if (chosen) {
+            llog.debug("Attaching the copy of {}/{} for strongly consistent tablet {}", chosen->first, chosen->second, tid);
+            std::erase_if(fully, [&] (const auto& si) { return copy_key{si.node.uuid(), si.prefix} != *chosen; });
+        }
+    }
+
+    // Skip sstables a previous restore attempt already fetched so a re-entered or retried
+    // restore doesn't re-download what's already in place.
+    std::erase_if(fully, [] (const auto& si) { return si.downloaded != db::is_downloaded::no; });
     llog.debug("{} SSTables filtered by range {} for tablet {}", fully.size(), tablet_range, tid);
     co_await utils::get_local_injector().inject("pause_tablet_restore", utils::wait_for_message(60s));
 
@@ -1190,7 +1242,7 @@ future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_test
 static future<manifest_summary> process_manifest(input_stream<char>& is, sstring keyspace, sstring table,
                                  const sstring& expected_snapshot_name, const sstring& expected_datacenter,
                                  const sstring& manifest_prefix, db::system_distributed_keyspace& sys_dist_ks,
-                                 db::consistency_level cl) {
+                                 db::consistency_level cl, const std::vector<dc_rack>& replicate_to) {
     // Read the entire JSON content
     rjson::chunked_content content = co_await util::read_entire_stream(is);
 
@@ -1315,6 +1367,22 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
             co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, sstring(tdc), sstring(trc), id, first_token, last_token,
                                                  toc_name, prefix, host, tablet_id, db::snapshot_state::remote,
                                                  repaired_at, data_size, index_size, cl);
+            // Every rack may attach this copy; the node and prefix stay those of the copy,
+            // which is what the restore picks a tablet's copy by.
+            for (const auto& [other_dc, other_rack] : replicate_to) {
+                if (other_dc == tdc && other_rack == trc) {
+                    continue;
+                }
+                co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, other_dc, other_rack, id, first_token, last_token,
+                                                     toc_name, prefix, host, tablet_id, db::snapshot_state::remote,
+                                                     repaired_at, data_size, index_size, cl);
+            }
+        }
+
+        if (!replicate_to.empty()) {
+            // The copy is registered for every rack already, the manifest's own
+            // re-duplication list is subsumed.
+            continue;
         }
 
         if (auto additional_nodes = rjson::find(sstable_entry, "additional_nodes")) {
@@ -1347,7 +1415,7 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
     co_return manifest_summary{tablet_count, sstables->Size()};
 }
 
-future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl, std::vector<dc_rack> replicate_to) {
     if (manifest_prefixes.empty()) {
         throw std::invalid_argument("manifest prefixes list must not be empty");
     }
@@ -1365,7 +1433,7 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
         sstables::object_name name(bucket, join_path(prefix, manifest_prefix));
         auto source = client->make_download_source(name);
         return seastar::with_closeable(input_stream<char>(std::move(source)), [&] (input_stream<char>& is) {
-            return process_manifest(is, keyspace, table, expected_snapshot_name, expected_datacenter, manifest_prefix, sys_dist_ks, cl).then([&](manifest_summary ms) {
+            return process_manifest(is, keyspace, table, expected_snapshot_name, expected_datacenter, manifest_prefix, sys_dist_ks, cl, replicate_to).then([&](manifest_summary ms) {
                 size_t count = ms.tablet_count;
                 if (!tablet_count) {
                     tablet_count = count;
@@ -1528,6 +1596,27 @@ static void check_endpoints(const replica::table& t, const std::vector<tablet_re
     }
 }
 
+// A strongly consistent tablet has one raft group across all datacenters (global
+// consistency), so every replica in every datacenter must attach the same copy of it.
+// A replica downloads from its own datacenter's location only, so the copies can be
+// shared across datacenters only when every datacenter restores from the same location.
+// A local consistency (a raft group per datacenter) may not need this: each datacenter
+// would restore its own copies, and the datacenters would be reconciled by whatever
+// keeps them in sync.
+static void check_one_location_for_strongly_consistent(const replica::table& t, const std::vector<tablet_restore_location>& locations) {
+    if (!t.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(t.schema()->id()).has_raft_info()) {
+        return;
+    }
+    for (const auto& loc : locations) {
+        const auto& first = locations.front();
+        if (loc.endpoint != first.endpoint || loc.bucket != first.bucket || loc.prefix != first.prefix) {
+            throw std::invalid_argument(fmt::format("Backup location of datacenter '{}' ({}/{}/{}) differs from that of datacenter '{}' ({}/{}/{}), but table {}.{} is strongly consistent "
+                    "with global consistency, so every replica in every datacenter must attach the same copy of its tablet: restore all datacenters from one location",
+                    loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, first.datacenter, first.endpoint, first.bucket, first.prefix, t.schema()->ks_name(), t.schema()->cf_name()));
+        }
+    }
+}
+
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations) {
     if (!_db.local().features().tablet_aware_restore) {
         throw std::runtime_error("Cannot restore tablets. Feature 'TABLET_AWARE_RESTORE' is not available in cluster");
@@ -1539,12 +1628,48 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
 
     check_datacenter_coverage(_db.local().find_column_family(tid), locations);
     check_endpoints(_db.local().find_column_family(tid), locations);
+    check_one_location_for_strongly_consistent(_db.local().find_column_family(tid), locations);
 
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
     manifest_summary summary = { .tablet_count = 0, .nr_sstables = 0 };
 
+    // The replicas of a strongly consistent tablet hold the same data, in every
+    // datacenter (the consistency is global: one raft group per tablet), so any replica's
+    // copy of it suits every replica, whichever rack or datacenter it was backed up
+    // from: register each copy for every rack that can reach it, and let each replica
+    // pick one copy per tablet (download_tablet_sstables()). That restores a backup of
+    // all replicas, of one replica per tablet, or of a single node alike, with every
+    // replica attaching the same copy.
+    //
+    // Every datacenter restores from the same location
+    // (check_one_location_for_strongly_consistent()), so each copy is offered to every
+    // rack of every datacenter and the one copy per tablet is picked globally.
+    const bool strongly_consistent = _db.local().get_token_metadata_ptr()->tablets().get_tablet_map(tid).has_raft_info();
+    std::vector<dc_rack> replicate_to;
+    if (strongly_consistent) {
+        const auto& dc_racks = _db.local().get_token_metadata_ptr()->get_topology().get_datacenter_racks();
+        for (const auto& loc : locations) {
+            if (auto it = dc_racks.find(loc.datacenter); it != dc_racks.end()) {
+                for (const auto& rack : it->second | std::views::keys) {
+                    replicate_to.emplace_back(loc.datacenter, rack);
+                }
+            }
+        }
+    }
+
     for (auto& loc : locations) {
-        auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, loc.datacenter, std::move(loc.manifests));
+        if (loc.manifests.empty()) {
+            if (!strongly_consistent) {
+                throw std::invalid_argument(fmt::format("Backup location of datacenter {} has no manifests", loc.datacenter));
+            }
+            // The datacenter's replicas get their copies from the other datacenters'
+            // manifests, in the shared location: a backup of one replica per tablet
+            // need not have one in every datacenter.
+            co_await sth.insert_snapshot_remote_location(snap_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
+            continue;
+        }
+        auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, loc.datacenter, std::move(loc.manifests),
+                db::consistency_level::EACH_QUORUM, replicate_to);
         if (summary.tablet_count == 0) {
             summary.tablet_count = loc_summary.tablet_count;
         } else if (summary.tablet_count != loc_summary.tablet_count) {
@@ -1555,6 +1680,23 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
 
         // TODO: update state when all restored...
         co_await sth.insert_snapshot_remote_location(snap_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
+    }
+
+    // A strongly consistent tablet can't be split or merged yet (its raft group would
+    // have to be split or merged too), so the balancer would never bring the table to
+    // the backup's tablet count and the restore would wait for that forever. Require
+    // the table to be created with the backup's tablet count instead.
+    //
+    // TODO: revert this change once tablet splits and merges are supported for
+    // strongly consistent tables.
+    {
+        const auto& tmap = _db.local().get_token_metadata_ptr()->tablets().get_tablet_map(tid);
+        if (tmap.has_raft_info() && tmap.tablet_count() != summary.tablet_count) {
+            throw std::invalid_argument(fmt::format("Cannot restore {}.{}: a strongly consistent table can't be resized, "
+                    "and the table has {} tablets while the backup has {}. Create the table with "
+                    "tablets = {{'min_tablet_count': {}, 'max_tablet_count': {}}} to restore this backup into it",
+                    keyspace, table, tmap.tablet_count(), summary.tablet_count, summary.tablet_count, summary.tablet_count));
+        }
     }
 
     // Persist the schema of the target table in system_distributed.snapshot_tables
