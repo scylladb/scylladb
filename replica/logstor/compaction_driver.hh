@@ -72,6 +72,8 @@ public:
         // Upper bound on the batch cap; the cap actually used is derived from the compaction
         // space floor by make_compaction_limits().
         size_t max_segments_per_compaction;
+        // The space floor as a fraction of the disk, see compaction_space_floor().
+        utils::updateable_value<double> space_floor;
         // See utilization_threshold_curve.
         utils::updateable_value<double> utilization_threshold;
         utils::updateable_value<double> threshold_anchor;
@@ -127,17 +129,19 @@ private:
     bool _stopping{false};
     stats _stats;
 
-    // compaction_space_floor() for this disk, and the limits derived from it. The segment count and
-    // the configured batch bound are fixed for the lifetime of the segment manager, so both are
-    // computed once, in start().
+    // compaction_space_floor() for this disk, and the limits derived from it. set_space_floor()
+    // computes them again when the configuration changes.
     uint64_t _space_floor{0};
     compaction_limits _limits{};
+    std::optional<utils::observer<double>> _space_floor_observer;
 
     // The driver, run(): started once, for the lifetime of the shard.
     shared_future<> _completion{make_ready_future<>()};
-    // Sized for the static maximum; the driver holds back the difference between it and the derived
-    // parallelism, see run().
+    // Sized for the static maximum. The driver holds back the difference between it and the
+    // parallelism that the space floor allows, so that a split compaction never queues behind
+    // automatic jobs, and the jobs in flight never hold more than the space floor.
     seastar::semaphore _sem{max_auto_compaction_parallelism};
+    semaphore_units<> _held_back{consume_units(_sem, 0)};
     // The scores of the automatic jobs in flight, for the marginal admission gate.
     std::list<compaction_candidate_score> _jobs_in_flight;
 
@@ -145,15 +149,19 @@ private:
     // waits for signals _work_wanted, so the timeout is only a fallback.
     static constexpr auto wait_timeout = std::chrono::seconds(10);
     // What the driver is waiting for, and the condition variable it waits on. A controller tick
-    // signals it when the backlog changes, and notify_group_idle() when a group can be ranked again.
+    // signals it when the backlog changes, notify_group_idle() when a group can be ranked again, and
+    // the end of a job when the marginal admission gate waits for one.
     enum class wait_reason {
         nothing,
         candidates,
+        job_end,
     };
     wait_reason _wait{wait_reason::nothing};
     seastar::condition_variable _work_wanted;
     // Counts the calls of notify_group_idle(), so that a call while the driver ranks is not lost.
     uint64_t _idle_notifications{0};
+    // Counts the automatic jobs that ended, for the marginal admission gate.
+    uint64_t _jobs_ended{0};
     // What can make a group a candidate: the segments under the threshold, as the backlog estimates
     // them, and the dead segments, which do not wait for a minimum batch and which the estimate
     // cannot see die in the lowest bucket.
@@ -175,6 +183,7 @@ private:
     compaction_rate_controller _rate_controller;
     timer<lowres_clock> _rate_timer;
 
+    void set_space_floor(double fraction) noexcept;
     void tick_rate_controller() noexcept;
     future<> wait_for_work(wait_reason);
     future<> run();

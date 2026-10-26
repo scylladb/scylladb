@@ -178,35 +178,42 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_marginal_compaction_admission) {
 // A job frees its inputs only when it ends, so the jobs in flight must fit in the space floor, and
 // each batch must still be large enough to reclaim.
 SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_limits_fit_the_space_floor) {
-    uint64_t previous_space_floor = 0;
-    for (uint64_t segment_count : {32u, 128u, 1024u, 8192u, 100000u}) {
-        const auto space_floor = compaction_space_floor(segment_count);
-        BOOST_TEST_CONTEXT("segment_count=" << segment_count) {
-            // A small part of the disk, which does not decrease as the disk grows.
-            BOOST_REQUIRE_GE(space_floor, 1u);
-            BOOST_REQUIRE_LE(space_floor, segment_count / 4);
-            BOOST_REQUIRE_GE(space_floor, previous_space_floor);
-            for (size_t cap : {1u, 8u, 32u, 1024u}) {
-                const auto limits = make_compaction_limits(space_floor, cap);
-                BOOST_TEST_CONTEXT("cap=" << cap) {
-                    BOOST_REQUIRE_GE(limits.auto_parallelism, 1u);
-                    BOOST_REQUIRE_LE(limits.auto_parallelism, max_auto_compaction_parallelism);
-                    // A smaller batch cannot reclaim, so a cap below it is raised.
-                    BOOST_REQUIRE_GE(limits.batch_cap, min_segments_per_compaction);
-                    BOOST_REQUIRE_LE(limits.batch_cap, std::max<size_t>(cap, min_segments_per_compaction));
-                    if (space_floor >= min_segments_per_compaction) {
-                        BOOST_REQUIRE_LE(limits.auto_parallelism * limits.batch_cap, space_floor);
+    const auto nan = std::numeric_limits<double>::quiet_NaN();
+    for (double fraction : {nan, -0.1, 0.0, 0.001, 0.03, 0.2, max_space_floor_fraction, 1.5}) {
+        uint64_t previous_space_floor = 0;
+        for (uint64_t segment_count : {32u, 128u, 1024u, 8192u, 100000u}) {
+            const auto space_floor = compaction_space_floor(segment_count, fraction);
+            BOOST_TEST_CONTEXT("fraction=" << fraction << " segment_count=" << segment_count) {
+                // A small part of the disk, which does not decrease as the disk grows.
+                BOOST_REQUIRE_GE(space_floor, 1u);
+                BOOST_REQUIRE_LE(space_floor, segment_count / 4);
+                BOOST_REQUIRE_GE(space_floor, previous_space_floor);
+                for (size_t cap : {1u, 8u, 32u, 1024u}) {
+                    const auto limits = make_compaction_limits(space_floor, cap);
+                    BOOST_TEST_CONTEXT("cap=" << cap) {
+                        BOOST_REQUIRE_GE(limits.auto_parallelism, 1u);
+                        BOOST_REQUIRE_LE(limits.auto_parallelism, max_auto_compaction_parallelism);
+                        // A smaller batch cannot reclaim, so a cap below it is raised.
+                        BOOST_REQUIRE_GE(limits.batch_cap, min_segments_per_compaction);
+                        BOOST_REQUIRE_LE(limits.batch_cap, std::max<size_t>(cap, min_segments_per_compaction));
+                        if (space_floor >= min_segments_per_compaction) {
+                            BOOST_REQUIRE_LE(limits.auto_parallelism * limits.batch_cap, space_floor);
+                        }
                     }
                 }
             }
+            previous_space_floor = space_floor;
         }
-        previous_space_floor = space_floor;
     }
 
     // A large disk runs at the full parallelism and the full batch cap.
-    const auto large = make_compaction_limits(compaction_space_floor(100000), 32);
+    const auto large = make_compaction_limits(compaction_space_floor(100000, 0.03), 32);
     BOOST_REQUIRE_EQUAL(large.auto_parallelism, max_auto_compaction_parallelism);
     BOOST_REQUIRE_EQUAL(large.batch_cap, 32u);
+
+    // A larger fraction gives a larger space floor, up to the maximum.
+    BOOST_REQUIRE_LT(compaction_space_floor(100000, 0.03), compaction_space_floor(100000, 0.2));
+    BOOST_REQUIRE_EQUAL(compaction_space_floor(100000, 1.5), compaction_space_floor(100000, max_space_floor_fraction));
 }
 
 // A job runs on a full batch while there is no space pressure, on fewer candidates as the pressure

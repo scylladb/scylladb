@@ -54,6 +54,9 @@ struct segment_manager_config {
     bool sparse_files = false;
     bool compaction_enabled = true;
     size_t max_segments_per_compaction = 32;
+    // The free segments that compaction keeps for itself, as a fraction of the disk, see
+    // compaction_space_floor().
+    utils::updateable_value<double> compaction_space_floor{0.03};
     // A segment is a candidate for automatic compaction while its utilization is under this.
     // Anything outside [0, 1) disables automatic compaction.
     utils::updateable_value<double> compaction_utilization_threshold{0.5};

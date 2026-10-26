@@ -58,10 +58,15 @@ constexpr double compaction_marginal_admission_ratio = 0.75;
 
 // The space floor: the free segments that compaction keeps for itself. The jobs in flight can hold
 // this many segments, and at this free level the space pressure is 1, see
-// compaction_space_pressure(). It is 1/32 of the disk, with a minimum of two batches for a small
-// disk. It has no upper limit, because on a large disk it is the room that the write path has for a
-// burst while compaction catches up.
-uint64_t compaction_space_floor(uint64_t segment_count) noexcept;
+// compaction_space_pressure(). It is `fraction` of the disk, logstor_compaction_space_floor, with a
+// minimum of two batches for a small disk. It is a fraction and not a number of segments, because
+// on a large disk it is the room that the write path has for a burst while compaction catches up.
+// A larger `fraction` is limited to max_space_floor_fraction.
+uint64_t compaction_space_floor(uint64_t segment_count, double fraction) noexcept;
+
+// The largest space floor, as a fraction of the disk. With the default anchor at twice the space
+// floor, it leaves at least half of the disk for data.
+constexpr double max_space_floor_fraction = 0.25;
 
 // How much automatic compaction can take at the same time, derived from the space floor. The
 // defaults are the smallest limits that make_compaction_limits() returns, so that limits that are

@@ -26,11 +26,11 @@ compaction_driver::compaction_driver(host& h, config cfg)
 
 void compaction_driver::start(disk_geometry geometry) {
     _geometry = geometry;
-    _space_floor = compaction_space_floor(_geometry.segment_count);
-    _limits = make_compaction_limits(_space_floor, _cfg.max_segments_per_compaction);
-
-    logstor_logger.debug("Compaction space floor {} segments, compaction parallelism {}, up to {} segments per compaction",
-            _space_floor, _limits.auto_parallelism, _limits.batch_cap);
+    set_space_floor(_cfg.space_floor());
+    _space_floor_observer.emplace(_cfg.space_floor.observe([this] (double fraction) {
+        logstor_logger.info("Updating logstor compaction space floor to {}", fraction);
+        set_space_floor(fraction);
+    }));
 
     // Tick once now, so that the state of the controller is defined from the start.
     tick_rate_controller();
@@ -48,6 +48,29 @@ void compaction_driver::request_stop() noexcept {
     _stopping = true;
     _rate_timer.cancel();
     _work_wanted.broken();
+}
+
+void compaction_driver::set_space_floor(double fraction) noexcept {
+    if (fraction > max_space_floor_fraction) {
+        logstor_logger.warn("logstor_compaction_space_floor {} is above the maximum of {}. The maximum is used",
+                fraction, max_space_floor_fraction);
+    }
+    _space_floor = compaction_space_floor(_geometry.segment_count, fraction);
+    _limits = make_compaction_limits(_space_floor, _cfg.max_segments_per_compaction);
+
+    // The jobs in flight keep their slots. When the parallelism decreases, the semaphore goes below
+    // zero, and no job starts until enough of them end. After the stop, run() waits for all the slots.
+    if (!_stopping) {
+        const auto held_back = max_auto_compaction_parallelism - _limits.auto_parallelism;
+        if (_held_back.count() > held_back) {
+            _held_back.return_units(_held_back.count() - held_back);
+        } else {
+            _held_back.adopt(consume_units(_sem, held_back - _held_back.count()));
+        }
+    }
+
+    logstor_logger.debug("Compaction space floor {} segments, compaction parallelism {}, up to {} segments per compaction",
+            _space_floor, _limits.auto_parallelism, _limits.batch_cap);
 }
 
 future<> compaction_driver::stop() {
@@ -114,12 +137,6 @@ future<> compaction_driver::wait_for_work(wait_reason reason) {
 }
 
 future<> compaction_driver::run() {
-    // The difference between the semaphore's static size and the parallelism the space floor
-    // allows, held for the lifetime of the driver: a split compaction must never queue behind
-    // automatic jobs, and the jobs in flight must never hold more than the space floor.
-    const auto parallelism = _limits.auto_parallelism;
-    auto held_back = co_await get_units(_sem, max_auto_compaction_parallelism - parallelism);
-
     std::vector<candidate> pending;
     // The limits that ranked `pending`. Its jobs select their batches by these limits and not by
     // the limits of a later tick, so that a job selects by the rule its candidate was ranked by.
@@ -151,7 +168,7 @@ future<> compaction_driver::run() {
             // ranking wakes the driver.
             const auto candidates_before_ranking = _candidate_counts;
             const auto idle_notifications_before_ranking = _idle_notifications;
-            auto ranked = co_await _host.find_top_compaction_candidates(limits, parallelism);
+            auto ranked = co_await _host.find_top_compaction_candidates(limits, _limits.auto_parallelism);
             if (_stopping) {
                 break;
             }
@@ -198,9 +215,15 @@ future<> compaction_driver::run() {
             }
             if (bar && refuse_marginal(c, *bar)) {
                 // The ranking is best first, so no later candidate passes either, and the bar does
-                // not change until a job ends. Wait for one job to end, and then rank again.
+                // not change until a job ends. Wait for one job to end, and then rank again. The
+                // wait counts the jobs that end, and not the free slots, because a change of the
+                // space floor also changes the slots.
                 pending.clear();
-                auto job_ended = co_await get_units(_sem, _sem.available_units() + 1);
+                units.return_all();
+                const auto jobs_ended = _jobs_ended;
+                while (_jobs_ended == jobs_ended && !_stopping) {
+                    co_await wait_for_work(wait_reason::job_end);
+                }
                 continue;
             }
         }
@@ -216,7 +239,7 @@ future<> compaction_driver::run() {
     }
 
     // Wait for the jobs still in flight, which is what makes this future the driver's completion.
-    held_back.return_all();
+    _held_back.return_all();
     co_await get_units(_sem, max_auto_compaction_parallelism);
 }
 
@@ -239,6 +262,10 @@ void compaction_driver::start_job(candidate c, compaction_batch_limits limits, s
         logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
     }).finally([this, job, units = std::move(units)] {
         _jobs_in_flight.erase(job);
+        ++_jobs_ended;
+        if (_wait == wait_reason::job_end) {
+            _work_wanted.signal();
+        }
         notify_group_idle();
     });
 }

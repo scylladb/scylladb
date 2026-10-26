@@ -14,11 +14,14 @@
 
 namespace replica::logstor {
 
-uint64_t compaction_space_floor(uint64_t segment_count) noexcept {
+uint64_t compaction_space_floor(uint64_t segment_count, double fraction) noexcept {
+    // The fraction is a config value with no range check at the config layer. Anything that is not
+    // a fraction leaves only the minimum.
+    fraction = std::isfinite(fraction) ? std::clamp(fraction, 0.0, max_space_floor_fraction) : 0.0;
     // At least two batches, so that a job can hold one batch while the write path has the other.
     // The minimum has its own limit, so that the space floor is not most of a small disk.
     const auto minimum = std::min<uint64_t>(2 * min_segments_per_compaction, std::max<uint64_t>(1, segment_count / 8));
-    return std::max<uint64_t>(segment_count / 32, minimum);
+    return std::max(static_cast<uint64_t>(fraction * double(segment_count)), minimum);
 }
 
 compaction_limits make_compaction_limits(uint64_t space_floor, size_t max_batch_cap) noexcept {

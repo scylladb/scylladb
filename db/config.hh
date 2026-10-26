@@ -279,6 +279,7 @@ public:
     named_value<uint32_t> logstor_file_size_in_mb;
     named_value<bool> logstor_format_on_startup;
     named_value<bool> logstor_sparse_files;
+    named_value<double> logstor_compaction_space_floor;
     named_value<double> logstor_compaction_utilization_threshold;
     named_value<double> logstor_compaction_min_utilization_threshold;
     named_value<float> logstor_compaction_min_shares;

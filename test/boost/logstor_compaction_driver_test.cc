@@ -8,6 +8,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/with_timeout.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
 
@@ -134,6 +135,7 @@ compaction_driver::candidate candidate_of(fake_group& group, const compaction_ca
 compaction_driver::config make_config(utils::updateable_value<double> threshold = utils::updateable_value<double>(0.5)) {
     return compaction_driver::config{
         .max_segments_per_compaction = 32,
+        .space_floor = utils::updateable_value<double>(1.0 / 32),
         .utilization_threshold = threshold,
         .threshold_anchor = utils::updateable_value<double>(0),
         .threshold_ceiling = utils::updateable_value<double>(0),
@@ -339,6 +341,79 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_driver_job_runs_under_its_ranki
     BOOST_REQUIRE_EQUAL(used.max_utilization, ranked.max_utilization);
 
     stop(driver, host);
+}
+
+// A change of the space floor changes the parallelism at once. The jobs in flight continue, and a
+// new job starts only when fewer jobs than the new parallelism run.
+SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_driver_space_floor_update) {
+    fake_host host;
+    fake_group a, b, c, d, e, f;
+    host.rankings = {
+        {candidate_of(a, rich), candidate_of(b, rich), candidate_of(c, rich), candidate_of(d, rich)},
+        {candidate_of(e, rich), candidate_of(f, rich)},
+    };
+    utils::updateable_value_source<double> space_floor(1.0 / 32);
+    auto cfg = make_config();
+    cfg.space_floor = utils::updateable_value<double>(space_floor);
+    compaction_driver driver(host, std::move(cfg));
+    start(driver);
+
+    BOOST_REQUIRE(wait_until([&] { return host.jobs.size() == 4; }));
+
+    // 16 segments: 2 jobs of up to 8 segments.
+    space_floor.set(1.0 / 64);
+    end_job(host, 0);
+    end_job(host, 1);
+    seastar::sleep(50ms).get();
+    BOOST_REQUIRE_EQUAL(host.jobs.size(), 4u);
+
+    end_job(host, 2);
+    BOOST_REQUIRE(wait_until([&] { return host.jobs.size() == 5; }));
+    BOOST_REQUIRE_EQUAL(host.jobs[4]->group, &e);
+    seastar::sleep(50ms).get();
+    BOOST_REQUIRE_EQUAL(host.jobs.size(), 5u);
+
+    space_floor.set(1.0 / 32);
+    BOOST_REQUIRE(wait_until([&] { return host.jobs.size() == 6; }));
+    BOOST_REQUIRE_EQUAL(host.jobs[5]->group, &f);
+
+    stop(driver, host);
+}
+
+// A smaller space floor can take the slots of the jobs in flight, which leaves the semaphore below
+// zero. A batch that the gate refuses then still waits for a job to end, and a stop ends the wait.
+SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_driver_refusal_after_the_space_floor_decreases) {
+    fake_host host;
+    fake_group a, b, c, d;
+    host.rankings = {
+        {candidate_of(a, rich), candidate_of(b, rich), candidate_of(c, rich)},
+        {candidate_of(d, poor)},
+    };
+    host.ranking_gate.emplace();
+    utils::updateable_value_source<double> space_floor(1.0 / 32);
+    auto cfg = make_config();
+    cfg.space_floor = utils::updateable_value<double>(space_floor);
+    compaction_driver driver(host, std::move(cfg));
+    start(driver);
+
+    BOOST_REQUIRE(wait_until([&] { return host.ranking_limits.size() == 1; }));
+    host.open_ranking_gate();
+    host.ranking_gate.emplace();
+    BOOST_REQUIRE(wait_until([&] { return host.ranking_limits.size() == 2; }));
+    BOOST_REQUIRE_EQUAL(host.jobs.size(), 3u);
+
+    // 2 jobs: with the slot that the driver holds for the ranking, 2 slots fewer than in use.
+    space_floor.set(1.0 / 64);
+    host.open_ranking_gate();
+    BOOST_REQUIRE(wait_until([&] { return driver.get_stats().batches_refused == 1; }));
+    seastar::sleep(50ms).get();
+    BOOST_REQUIRE_EQUAL(host.ranking_limits.size(), 2u);
+
+    driver.request_stop();
+    for (size_t i = 0; i < host.jobs.size(); ++i) {
+        end_job(host, i);
+    }
+    seastar::with_timeout(lowres_clock::now() + 5s, driver.stop()).get();
 }
 
 // A stop that comes while a ranking runs starts no job from that ranking.
