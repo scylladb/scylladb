@@ -256,6 +256,9 @@ add_scylla_test(service_level_controller_test
   KIND SEASTAR)
 add_scylla_test(small_vector_test
   KIND SEASTAR)
+add_scylla_test(api_test
+  KIND SEASTAR
+  LIBRARIES api)
 add_scylla_test(snitch_reset_test
   KIND SEASTAR)
 add_scylla_test(sorting_test

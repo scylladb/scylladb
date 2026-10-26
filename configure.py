@@ -647,6 +647,7 @@ scylla_tests = set([
     'test/boost/serialized_action_test',
     'test/boost/service_level_controller_test',
     'test/boost/small_vector_test',
+    'test/boost/api_test',
     'test/boost/snitch_reset_test',
     'test/boost/sorting_test',
     'test/boost/sstable_3_x_test',
@@ -1861,6 +1862,7 @@ deps['test/boost/linearizing_input_stream_test'] = [
     "test/boost/linearizing_input_stream_test.cc",
     "test/lib/log.cc",
 ]
+deps['test/boost/api_test'] += api
 deps['test/boost/expr_test'] = ['test/boost/expr_test.cc', 'test/lib/expr_test_utils.cc'] + scylla_core + alternator
 deps['test/boost/rate_limiter_test'] = ['test/boost/rate_limiter_test.cc', 'db/rate_limiter.cc', 'utils/rate_limiter.cc']
 deps['test/boost/exceptions_optimized_test'] = ['test/boost/exceptions_optimized_test.cc', 'utils/exceptions.cc']
