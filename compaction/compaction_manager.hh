@@ -166,6 +166,8 @@ private:
     std::unique_ptr<compaction_controller> _shadow_compaction_controller;
 
     std::unique_ptr<compaction_controller_v2> make_compaction_controller_v2(compaction_controller_v2::dry_run dry_run);
+    // compaction_controller_v2, whether it sets the shares or runs in a dry run, if any.
+    const compaction_controller_v2* get_compaction_controller_v2() const noexcept;
     void stop_compaction_controller(std::unique_ptr<compaction_controller> controller);
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;

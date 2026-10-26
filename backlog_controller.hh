@@ -210,6 +210,8 @@ private:
     // group's default, the maximum, e.g. when the node switches to this controller, or
     // starts it in shadow mode, early at startup.
     float _shares = min_shares;
+    // The rates at the last update, compared only if regular compaction ran.
+    compaction::compaction_rates _last_rates;
     dry_run _dry_run;
     // A dry run logs its updates at most this often, so as not to flood the logs.
     seastar::logger::rate_limit _dry_run_log_limit{std::chrono::seconds(30)};
@@ -223,6 +225,15 @@ public:
     future<> shutdown() override;
     future<> update_static_shares(float static_shares) override;
     void set_max_shares(float max_shares) override;
+
+    // The shares the controller set, or would set in a dry run.
+    float shares() const noexcept {
+        return _shares;
+    }
+    // The rates at the last update, compared only if regular compaction ran.
+    const compaction::compaction_rates& last_rates() const noexcept {
+        return _last_rates;
+    }
 
     // The shares after an update from `shares`, given the rates. A target above what
     // compaction achieves raises them, a target below lowers them. With nothing to

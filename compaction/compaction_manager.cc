@@ -962,6 +962,13 @@ std::unique_ptr<compaction_controller_v2> compaction_manager::make_compaction_co
             dry_run);
 }
 
+const compaction_controller_v2* compaction_manager::get_compaction_controller_v2() const noexcept {
+    if (auto v2 = dynamic_cast<const compaction_controller_v2*>(_compaction_controller.get())) {
+        return v2;
+    }
+    return dynamic_cast<const compaction_controller_v2*>(_shadow_compaction_controller.get());
+}
+
 void compaction_manager::stop_compaction_controller(std::unique_ptr<compaction_controller> controller) {
     // The controller stops right away, and is destroyed once its shutdown completes.
     auto shutdown = controller->shutdown().finally([controller = std::move(controller)] {});
@@ -1269,6 +1276,19 @@ void compaction_manager::register_metrics() {
                        sm::description("Holds the sum of normalized compaction backlog for all tables in the system. Backlog is normalized by dividing backlog by shard's available memory.")),
         sm::make_counter("validation_errors", [this] { return _validation_errors; },
                        sm::description("Holds the number of encountered validation errors.")).set_skip_when_empty(),
+        // Of compaction_controller_v2, whether it sets the shares or runs in a dry run.
+        sm::make_gauge("controller_v2_shares", [this] { auto v2 = get_compaction_controller_v2(); return v2 ? v2->shares() : 0; },
+                       sm::description("Holds the shares of regular compaction compaction_controller_v2 set, or would set in shadow mode.")),
+        sm::make_gauge("controller_v2_target_bytes_per_second", [this] {
+                           auto v2 = get_compaction_controller_v2();
+                           return v2 ? v2->last_rates().target.per_second() : 0;
+                       },
+                       sm::description("Holds the rate regular compaction has to run at, as compaction_controller_v2 saw it at its last update.")),
+        sm::make_gauge("controller_v2_achieved_bytes_per_second", [this] {
+                           auto v2 = get_compaction_controller_v2();
+                           return v2 ? v2->last_rates().achieved.per_second() : 0;
+                       },
+                       sm::description("Holds the rate regular compaction achieved, as compaction_controller_v2 saw it at its last update.")),
     });
 }
 
