@@ -129,22 +129,30 @@ bool is_index(const data_dictionary::database& db, const schema_ptr& schema) {
     return db.find_column_family(schema->view_info()->base_id()).get_index_manager().is_index(*schema);
 }
 
+// An invalid stored value is unset, the same as for the manager's caches.
+std::map<sstring, sstring> drop_invalid_configs(std::string_view scope, std::map<sstring, sstring> configs) {
+    std::erase_if(configs, [scope] (const auto& entry) {
+        return !db::cluster_config_registry::is_usable_stored_value(scope, entry.first, entry.second);
+    });
+    return configs;
+}
+
 future<std::map<sstring, sstring>> table_config_options(query_processor& qp, const sstring& ks, const sstring& table) {
-    return read_configs_column(qp,
+    co_return drop_invalid_configs("table", co_await read_configs_column(qp,
             format("SELECT configs FROM system_schema.{} WHERE keyspace_name = ? AND table_name = ?", db::schema_tables::SCYLLA_TABLES),
-            {ks, table});
+            {ks, table}));
 }
 
 future<std::map<sstring, sstring>> keyspace_config_options(query_processor& qp, const sstring& ks) {
-    return read_configs_column(qp,
+    co_return drop_invalid_configs("keyspace", co_await read_configs_column(qp,
             format("SELECT configs FROM system_schema.{} WHERE keyspace_name = ?", db::schema_tables::SCYLLA_KEYSPACES),
-            {ks});
+            {ks}));
 }
 
 future<std::map<sstring, sstring>> cluster_config_options(query_processor& qp) {
-    return read_configs_column(qp,
+    co_return drop_invalid_configs("cluster", co_await read_configs_column(qp,
             format("SELECT configs FROM system_schema.{} WHERE cluster_name = ?", db::schema_tables::SCYLLA_CLUSTERS),
-            {sstring(db::schema_tables::CLUSTER_CONFIG_SINGLETON_KEY)});
+            {sstring(db::schema_tables::CLUSTER_CONFIG_SINGLETON_KEY)}));
 }
 
 std::optional<sstring> get_config_option(const std::map<sstring, sstring>& configs, std::string_view config_name) {
@@ -249,14 +257,15 @@ sstring format_config_option_value(std::string_view name, const sstring& value) 
 // domain chain visible at the described scope, most specific first, unconditionally; each
 // entry shows the override stored at exactly that scope, or NULL. The effective value is
 // the resolution of exactly the printed chain (the leftmost non-NULL entry) and the scope
-// after "from" names where it comes from, so the two can never disagree. Values are
+// after "from" names where it comes from, so the two can never disagree. The snapshot has
+// already dropped invalid stored values, so the chain only holds valid ones. Values are
 // rendered as CQL literals (text quoted) so the effective value can sit on the right-hand
 // side of a property assignment. The trailer contains neither ';' nor a newline, so
 // appending it after "-- " keeps the whole tail one valid inline comment, both before and
 // after a user uncomments the property it annotates; the newline half of that holds
-// because cluster_config_registry::validate_value() rejects a line break (and "*/", which
-// would end the block comment a described CDC log or paxos table is wrapped in) in a text
-// value. All-NULL chains never reach this function (such options emit nothing).
+// because validate_value() rejects a line break (and "*/", which would end the block comment
+// a described CDC log or paxos table is wrapped in) and invalid values never get here.
+// All-NULL chains never reach this function (such options emit nothing).
 struct config_provenance {
     sstring effective;
     sstring trailer;

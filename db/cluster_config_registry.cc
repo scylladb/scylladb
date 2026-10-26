@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -389,6 +390,20 @@ std::optional<seastar::sstring> validate_value(const option& opt, std::string_vi
     }
 
     __builtin_unreachable();
+}
+
+bool is_usable_stored_value(std::string_view scope, std::string_view name, std::string_view value) {
+    const auto* opt = find(name);
+    if (!opt) {
+        return true;
+    }
+    auto error = validate_value(*opt, value);
+    if (error) {
+        static thread_local logger::rate_limit rate_limit(std::chrono::seconds(60));
+        cluster_config_registry_logger.log(logging::log_level::warn, rate_limit,
+                "Ignoring invalid stored value '{}' for config '{}' at {} scope: {}", value, name, scope, *error);
+    }
+    return !error;
 }
 
 bool to_boolean(const option& opt, const std::optional<seastar::sstring>& value) {
