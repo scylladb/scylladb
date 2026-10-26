@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -96,6 +97,33 @@ static_assert(all_registry_options_are_single_domain(),
         "A cluster config option must not mix table-oriented (KEYSPACE/TABLE) and "
         "node-oriented (DATACENTER/RACK/NODE) scopes");
 
+// Bounds are for integer options only, must not be inverted, and must admit the default.
+constexpr bool has_valid_integer_bounds(const option& opt) {
+    if (!opt.min_integer && !opt.max_integer) {
+        return true;
+    }
+    if (opt.type() != value_type::integer) {
+        return false;
+    }
+    const auto def = std::get<int64_t>(opt.default_value);
+    return (!opt.min_integer || *opt.min_integer <= def)
+            && (!opt.max_integer || def <= *opt.max_integer)
+            && (!opt.min_integer || !opt.max_integer || *opt.min_integer <= *opt.max_integer);
+}
+
+constexpr bool all_registry_options_have_valid_integer_bounds() {
+    for (const auto& opt : registry_options) {
+        if (!has_valid_integer_bounds(opt)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(all_registry_options_have_valid_integer_bounds(),
+        "Integer bounds of a cluster config option must be set on an integer option only, "
+        "satisfy min <= max, and admit the default value");
+
 // The feature names of options removed from the registry; see retired_feature_names().
 constexpr std::array<std::string_view, 0> retired_option_features = {};
 
@@ -158,8 +186,24 @@ std::optional<seastar::sstring> validate_with(T (*parse)(std::string_view), std:
     }
 }
 
-std::optional<seastar::sstring> validate_integer(std::string_view value) {
-    return validate_with(parse_integer, "64-bit integer", value);
+bool in_integer_bounds(const option& opt, int64_t v) {
+    return (!opt.min_integer || v >= *opt.min_integer) && (!opt.max_integer || v <= *opt.max_integer);
+}
+
+std::optional<seastar::sstring> validate_integer(const option& opt, std::string_view value) {
+    if (auto err = validate_with(parse_integer, "64-bit integer", value)) {
+        return err;
+    }
+    if (in_integer_bounds(opt, parse_integer(value))) {
+        return std::nullopt;
+    }
+    if (opt.min_integer && opt.max_integer) {
+        return fmt::format("expected an integer in [{}, {}], got '{}'", *opt.min_integer, *opt.max_integer, value);
+    }
+    if (opt.min_integer) {
+        return fmt::format("expected an integer >= {}, got '{}'", *opt.min_integer, value);
+    }
+    return fmt::format("expected an integer <= {}, got '{}'", *opt.max_integer, value);
 }
 
 std::optional<seastar::sstring> validate_floating_point(std::string_view value) {
@@ -194,13 +238,17 @@ std::optional<seastar::sstring> validate_text(std::string_view value) {
     return std::nullopt;
 }
 
-// Shared implementation of the typed to_*() accessors: checks that the option was registered
-// with the type the accessor reads, applies the registered default when no override is stored,
-// and degrades an unparsable stored value (a row corrupted or written out-of-band) to the
-// default with a warning. One definition, so the per-type accessors cannot drift apart in how
-// they report a mismatched call or a bad row.
+// Resolved on every balancer pass, so a bad stored value warns at most once a minute per option.
+logger::rate_limit& warn_limit(std::string_view option_name) {
+    static thread_local std::unordered_map<std::string, logger::rate_limit> limits;
+    return limits.try_emplace(std::string(option_name), std::chrono::seconds(60)).first->second;
+}
+
+// Parses the stored value: nullopt when no override is stored, or when it is unparsable (a row
+// corrupted or written out-of-band; logged). Reports an internal error when the option was
+// registered with a different type than the accessor reads.
 template <typename T>
-T to_native(const option& opt, value_type expected_type, std::string_view type_name,
+std::optional<T> parse_stored(const option& opt, value_type expected_type, std::string_view type_name,
         const std::optional<seastar::sstring>& value,
         T (*parse)(std::string_view)) {
     if (opt.type() != expected_type) {
@@ -209,16 +257,26 @@ T to_native(const option& opt, value_type expected_type, std::string_view type_n
                 opt.name, type_name));
     }
     if (!value) {
-        return std::get<T>(opt.default_value);
+        return std::nullopt;
     }
     try {
         return parse(*value);
     } catch (const marshal_exception& e) {
-        cluster_config_registry_logger.warn(
-                "Ignoring unparsable stored value '{}' for {} config '{}', using default: {}",
+        cluster_config_registry_logger.log(log_level::warn, warn_limit(opt.name),
+                "Ignoring unparsable stored value '{}' for {} config '{}': {}",
                 *value, type_name, opt.name, e.what());
-        return std::get<T>(opt.default_value);
+        return std::nullopt;
     }
+}
+
+// Shared implementation of the typed to_*() accessors: the stored value, or the registered
+// default when none is stored or it is unparsable. One definition, so the per-type accessors
+// cannot drift apart in how they report a mismatched call or a bad row.
+template <typename T>
+T to_native(const option& opt, value_type expected_type, std::string_view type_name,
+        const std::optional<seastar::sstring>& value,
+        T (*parse)(std::string_view)) {
+    return parse_stored<T>(opt, expected_type, type_name, value, parse).value_or(std::get<T>(opt.default_value));
 }
 
 }
@@ -276,7 +334,7 @@ std::optional<seastar::sstring> validate_value(const option& opt, std::string_vi
     case value_type::text:
         return validate_text(value);
     case value_type::integer:
-        return validate_integer(value);
+        return validate_integer(opt, value);
     case value_type::floating_point:
         return validate_floating_point(value);
     case value_type::boolean:
@@ -291,7 +349,13 @@ bool to_boolean(const option& opt, const std::optional<seastar::sstring>& value)
 }
 
 int64_t to_integer(const option& opt, const std::optional<seastar::sstring>& value) {
-    return to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    const auto v = parse_stored<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    if (v && !in_integer_bounds(opt, *v)) {
+        cluster_config_registry_logger.log(log_level::warn, warn_limit(opt.name),
+                "Ignoring out-of-range stored value '{}' for integer config '{}', using default", *value, opt.name);
+        return std::get<int64_t>(opt.default_value);
+    }
+    return v.value_or(std::get<int64_t>(opt.default_value));
 }
 
 double to_floating_point(const option& opt, const std::optional<seastar::sstring>& value) {
@@ -339,6 +403,9 @@ void add_test_only_option(option opt) {
     if (!is_single_domain(opt.scopes)) {
         utils::on_internal_error(fmt::format(
                 "test-only cluster config option '{}' mixes table-oriented and node-oriented scopes", opt.name));
+    }
+    if (!has_valid_integer_bounds(opt)) {
+        utils::on_internal_error(fmt::format("test-only cluster config option '{}' has invalid integer bounds", opt.name));
     }
     if (g_options_with_test_overrides.empty()) {
         g_options_with_test_overrides.reserve(registry_options.size() + max_test_only_options);

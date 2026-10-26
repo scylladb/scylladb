@@ -205,6 +205,63 @@ auto inject_text_test_option(cql_test_env& e) {
 
 }
 
+// Integer bounds are inclusive and apply to every write path; a stored value outside them
+// (only reachable out-of-band) resolves to the default.
+SEASTAR_TEST_CASE(test_cluster_config_registry_enforces_integer_bounds) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        db::cluster_config_registry::add_test_only_option_on_all_shards(e.get_feature_service(), db::cluster_config_registry::option{
+            .name = "test_bounded_option",
+            .scopes = db::cluster_config_registry::scope_set::of<db::cluster_config_registry::scope::cluster>(),
+            .default_value = int64_t(15),
+            .min_integer = 10,
+            .max_integer = 20,
+        }).get();
+        db::cluster_config_registry::add_test_only_option_on_all_shards(e.get_feature_service(), db::cluster_config_registry::option{
+            .name = "test_min_only_option",
+            .scopes = db::cluster_config_registry::scope_set::of<db::cluster_config_registry::scope::cluster>(),
+            .default_value = int64_t(5),
+            .min_integer = 0,
+        }).get();
+        auto clear_test_options = seastar::defer([] noexcept {
+            db::cluster_config_registry::clear_test_only_options_on_all_shards().get();
+        });
+
+        const auto& opt = *db::cluster_config_registry::find("test_bounded_option");
+        BOOST_REQUIRE(!db::cluster_config_registry::validate_value(opt, "10"));
+        BOOST_REQUIRE(!db::cluster_config_registry::validate_value(opt, "20"));
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(opt, "9"));
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(opt, "21"));
+        // Not an integer at all: still the parse error, not a bounds one.
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(opt, "abc"));
+
+        const auto& min_only = *db::cluster_config_registry::find("test_min_only_option");
+        BOOST_REQUIRE(!db::cluster_config_registry::validate_value(min_only, "0"));
+        BOOST_REQUIRE(!db::cluster_config_registry::validate_value(min_only, "9223372036854775807"));
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(min_only, "-1"));
+
+        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH test_bounded_option = 10").get());
+        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH test_bounded_option = 20").get());
+        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH test_bounded_option = 12").get());
+        BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql("ALTER CLUSTER WITH test_bounded_option = 21").get(),
+            exceptions::invalid_request_exception, [] (const exceptions::invalid_request_exception& ex) {
+            return std::string_view(ex.what()).find("expected an integer in [10, 20], got '21'") != std::string_view::npos;
+        });
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER CLUSTER WITH test_bounded_option = 9").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER CLUSTER WITH test_min_only_option = -1").get(), exceptions::invalid_request_exception);
+
+        // The rejected writes left the accepted value in place.
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(opt, {}), 12);
+        });
+
+        BOOST_REQUIRE_EQUAL(db::cluster_config_registry::to_integer(opt, sstring("18")), 18);
+        BOOST_REQUIRE_EQUAL(db::cluster_config_registry::to_integer(opt, sstring("21")), 15);
+        BOOST_REQUIRE_EQUAL(db::cluster_config_registry::to_integer(opt, std::nullopt), 15);
+        BOOST_REQUIRE_EQUAL(db::cluster_config_registry::to_integer(opt, sstring("abc")), 15);
+    });
+}
+
 // DESCRIBE echoes every effective value back both as a property right-hand side and inside
 // a "-- from <scope> (...)" provenance comment, and it wraps a described CDC log or paxos
 // table in a /* ... */ block. A CQL string literal has no escape for a line break or for
