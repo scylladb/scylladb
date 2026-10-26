@@ -310,6 +310,7 @@ public:
      * page_size - maximum page size
      * f - a function to be run on each row of the query result,
      *     if the function returns stop_iteration::yes the iteration will stop
+     * qs - optional query state (default: std::nullopt)
      *
      * \note This function is optimized for convenience, not performance.
      */
@@ -318,12 +319,27 @@ public:
             db::consistency_level cl,
             const data_value_list& values,
             int32_t page_size,
-            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f,
+            std::optional<service::query_state> qs = std::nullopt);
 
     // The page size used by the convenience overload of query_internal below.
     // Callers which need to pass values have to use the overload above, and
     // should use this unless they have a reason to page differently.
     static constexpr int32_t default_internal_page_size = 1000;
+
+    /*
+     * \brief iterate over all cql results using paging, bounded by a deadline
+     * Like the above, but every page fetch runs with the time left until
+     * deadline as its read timeout, so the query fails with a read timeout
+     * once the deadline has passed. db::no_timeout means no bound.
+     */
+    future<> query_internal(
+            const sstring& query_string,
+            db::consistency_level cl,
+            const data_value_list& values,
+            int32_t page_size,
+            db::timeout_clock::time_point deadline,
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
 
     /*
      * \brief iterate over all cql results using paging
@@ -490,7 +506,9 @@ private:
             const sstring& query_string,
             db::consistency_level,
             const data_value_list& values,
-            int32_t page_size);
+            int32_t page_size,
+            std::optional<service::query_state> qs = std::nullopt,
+            db::timeout_clock::time_point deadline = db::no_timeout);
 
     /*!
      * \brief run a query using paging
