@@ -482,3 +482,12 @@ class ScyllaMetrics:
                 if shard != 'total' and not has_or_label:
                     break
         return result
+    def label_values(self, name, label):
+        values = set()
+        for l in self._lines:
+            if l.startswith(name + '{'):
+                for kv in l[l.find('{') + 1:l.find('}')].split(','):
+                    key, val = kv.split('=')
+                    if key == label:
+                        values.add(val.strip('"'))
+        return values
