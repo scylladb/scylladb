@@ -1255,6 +1255,7 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
     timer<seastar::lowres_clock> _progress_update_timer;
 
     future<> update_progress() {
+<<<<<<< HEAD
         auto& loader = _loader.local();
         auto& db = loader._db.local();
         auto s = db.find_schema(_tid);
@@ -1273,6 +1274,42 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
             progress.total += p.nr_sstables;
             progress.completed += p.nr_downloaded_sstables;
         });
+||||||| parent of 31660e3f0e (sstables_loader: don't let a stuck progress read hang a tablet restore)
+        auto s = _db.find_schema(_tid);
+        auto md = _db.get_token_metadata_ptr();
+        const auto& topo = md->get_topology();
+
+        db::snapshot_table_helper sth(_sys_dist_ks.qp());
+        tasks::task_manager::task::progress progress = {};
+        for (const auto& [dc, racks] : topo.get_datacenter_racks()) {
+            co_await max_concurrent_for_each(racks, 16, [&](const auto& rack_entry) -> future<> {
+                auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first);
+                progress.total += p.nr_sstables;
+                progress.completed += p.nr_downloaded_sstables;
+            });
+        }
+=======
+        auto s = _db.find_schema(_tid);
+        // Copy the racks instead of holding the token metadata across the reads
+        // below: a global topology barrier waits until every node releases all
+        // older versions of the token metadata, so holding one during a slow read
+        // would block the topology coordinator - which also has to finish the
+        // restore that we are tracking.
+        std::vector<std::pair<sstring, sstring>> dc_racks;
+        for (const auto& [dc, racks] : _db.get_token_metadata().get_topology().get_datacenter_racks()) {
+            for (const auto& rack : racks | std::views::keys) {
+                dc_racks.emplace_back(dc, rack);
+            }
+        }
+
+        db::snapshot_table_helper sth(_sys_dist_ks.qp());
+        tasks::task_manager::task::progress progress = {};
+        co_await max_concurrent_for_each(dc_racks, 16, [&](const auto& dc_rack) -> future<> {
+            auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc_rack.first, dc_rack.second);
+            progress.total += p.nr_sstables;
+            progress.completed += p.nr_downloaded_sstables;
+        });
+>>>>>>> 31660e3f0e (sstables_loader: don't let a stuck progress read hang a tablet restore)
         _progress = progress;
     }
 
@@ -1289,7 +1326,9 @@ public:
         , _original_max_tablet_count(original_max_tablet_count)
         , _progress_update_timer([this] {
             if (auto gh = _gate.try_hold()) {
-                std::ignore = update_progress().finally([this, gh = std::move(*gh)] {
+                std::ignore = update_progress().handle_exception([] (std::exception_ptr ep) {
+                    llog.warn("Failed to update the progress of a tablet restore, will retry: {}", ep);
+                }).finally([this, gh = std::move(*gh)] {
                     if (!_gate.is_closed()) {
                         _progress_update_timer.rearm(lowres_clock::now() + 5s);
                     }
