@@ -213,6 +213,17 @@ async def flush_hints(client: TCPRESTClient, server_ip: IPAddress) -> None:
     await client.post("/hinted_handoff_test/flush", host=server_ip, port=10_000)
 
 
+async def settle_and_flush_hints(manager: ScyllaClusterManager, servers: list[ServerInfo]) -> None:
+    """
+    Wait until the hints being written on `servers` have settled and close the segments they're
+    written to. Otherwise, hint senders would only learn about them after the periodic flush.
+
+    Only available in non-release modes.
+    """
+    await wait_until_hint_writing_settled(manager, servers)
+    await gather_safely(*[flush_hints(manager.api.client, srv.ip_addr) for srv in servers])
+
+
 async def update_hh_enabled_via_http_api(manager: ScyllaClusterManager, server: ServerInfo, new_value: str) -> None:
     """Change hint generation options at runtime and verify the change is visible."""
     if new_value in ("true", "false"):
@@ -312,6 +323,8 @@ async def test_limited_concurrency_of_writes(manager: ScyllaClusterManager):
             for _, err in e.errors.items():
                 assert err.summary == "Coordinator node overloaded" and re.match(r"Too many in flight hints: \d+", err.message)
 
+
+@pytest.mark.skip_mode(mode='release', reason='error injections and the hinted handoff test API are not available in release mode')
 async def test_sync_point(manager: ScyllaClusterManager):
     """
     We want to verify that the sync point API is compliant with its design.
@@ -320,7 +333,8 @@ async def test_sync_point(manager: ScyllaClusterManager):
     live nodes.
     """
     node_count = 3
-    [node1, node2, node3] = await manager.servers_add(node_count, auto_rack_dc="dc1")
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    [node1, node2, node3] = await manager.servers_add(node_count, config=config, auto_rack_dc="dc1")
 
     # The driver must not route any request to the paused nodes.
     cql = await manager.get_cql_exclusive(node1)
@@ -348,6 +362,7 @@ async def test_sync_point(manager: ScyllaClusterManager):
 
     deadline = time.time() + 30
     await wait_for(lambda: check_written_hints(2 * mutation_count), deadline)
+    await flush_hints(manager.api.client, node1.ip_addr)
 
     sync_point1 = await create_sync_point(manager.api.client, node1.ip_addr)
 
@@ -579,6 +594,7 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
     for i in range(100):
         cql = (cql1, cql2)[i % 2]
         await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+    await settle_and_flush_hints(manager, [server1, server2])
 
     # Temporarily pause hints replay, we will unpause it after decommission starts and streaming is done,
     # but before switching to writing to new nodes
@@ -663,12 +679,7 @@ async def test_hints_consistency_during_replace(manager: ScyllaClusterManager):
     # asynchronously via a gate). Wait for all pending hint writes to complete
     # before creating the sync point, otherwise it may capture a stale
     # replay position and miss some hints.
-    async def no_pending_hint_writes():
-        size = await get_hint_metrics(manager.metrics, servers[0].ip_addr, "size_of_hints_in_progress")
-        if size == 0:
-            return True
-        return None
-    await wait_for(no_pending_hint_writes, time.time() + 30)
+    await settle_and_flush_hints(manager, [servers[0]])
 
     sync_point = await create_sync_point(manager.api.client, servers[0].ip_addr)
 
@@ -700,6 +711,8 @@ async def test_draining_hints(manager: ScyllaClusterManager):
     # s1 is the only coordinator, so each of the writes generates a hint towards s2 on s1.
     for i in range(1000):
         await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+    # Otherwise, the sync point could capture a stale replay position.
+    await wait_until_hint_writing_settled(manager, [s1])
 
     sync_point = await create_sync_point(manager.api.client, s1.ip_addr)
     await unpause_server(manager, s2, [s1, s3])
@@ -767,7 +780,8 @@ async def test_hint_to_pending(manager: ScyllaClusterManager):
     is induced using error injections.
     At the end, we verify that the hint was successfully applied.
     """
-    servers = await manager.servers_add(2, property_file=[
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    servers = await manager.servers_add(2, config=config, property_file=[
         {"dc": "dc1", "rack": "r1"},
         {"dc": "dc1", "rack": "r1"},
     ])
@@ -785,6 +799,7 @@ async def test_hint_to_pending(manager: ScyllaClusterManager):
     await pause_server(manager, servers[1], [servers[0]])
 
     await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (0, 0)", consistency_level=ConsistencyLevel.ANY))
+    await settle_and_flush_hints(manager, [servers[0]])
 
     await manager.api.enable_injection(servers[0].ip_addr, "hinted_handoff_pause_hint_replay", False)
     await unpause_server(manager, servers[1], [servers[0]])
@@ -853,6 +868,7 @@ async def test_hint_to_leaving_when_reducing_rf(manager: ScyllaClusterManager):
     # https://scylladb.atlassian.net/browse/SCYLLADB-1192
     await manager.api.disable_injection(servers[0].ip_addr, 'drop_hint_for_host')
     await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (1, 1)", consistency_level=ConsistencyLevel.ANY))
+    await settle_and_flush_hints(manager, [servers[0]])
 
     await manager.api.enable_injection(servers[0].ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
     await gather_safely(*[unpause_server(manager, srv, [servers[0]]) for srv in servers[1:]])
@@ -1182,7 +1198,7 @@ async def test_hints_basic_check(manager: ScyllaClusterManager):
 
     await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (0, 1)",
                                         consistency_level=ConsistencyLevel.ONE))
-    await wait_until_hint_writing_settled(manager, [s1])
+    await settle_and_flush_hints(manager, [s1])
     assert hint_dir_exists(s1_hints_dir, s2_host_id)
 
     written = await get_hint_metrics(manager.metrics, s1.ip_addr, "written")
@@ -1207,7 +1223,8 @@ async def test_hints_counter(manager: ScyllaClusterManager):
     being one ("orphaned" hints) - the two use different code paths when being sent. Counters
     are not idempotent, so an incorrectly replayed hint is immediately visible in the values.
     """
-    s1, s2 = await manager.servers_add(2, auto_rack_dc="dc1")
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    s1, s2 = await manager.servers_add(2, config=config, auto_rack_dc="dc1")
 
     cql = await manager.get_cql_exclusive(s1)
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
@@ -1221,6 +1238,7 @@ async def test_hints_counter(manager: ScyllaClusterManager):
     stmt.consistency_level = ConsistencyLevel.ONE
     expected = {pk: 100 * pk for pk in range(100)}
     await gather_safely(*[cql.run_async(stmt, (value, pk)) for pk, value in expected.items()])
+    await settle_and_flush_hints(manager, [s1])
 
     await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
 
@@ -1373,6 +1391,7 @@ async def validate_max_hinted_handoff_concurrency(manager: ScyllaClusterManager,
         f"expected max_hinted_handoff_concurrency to be {expected_value} on {server.ip_addr}, got {value}"
 
 
+@pytest.mark.skip_mode(mode="release", reason="error injections and the hinted handoff test API aren't available in release mode")
 @pytest.mark.parametrize("max_hinted_handoff_concurrency,cmdline", [
     (0, None),
     (64, None),
@@ -1387,9 +1406,9 @@ async def test_support_max_hh_concurrency_param(manager: ScyllaClusterManager,
     hints must still be delivered when the concurrency is capped.
     """
     # 0 is the default and means "8 * shard_count", so it's deliberately left unset.
-    config = None
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
     if cmdline is None and max_hinted_handoff_concurrency != 0:
-        config = {"max_hinted_handoff_concurrency": max_hinted_handoff_concurrency}
+        config["max_hinted_handoff_concurrency"] = max_hinted_handoff_concurrency
 
     servers = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
     s1, s2 = servers
@@ -1406,6 +1425,7 @@ async def test_support_max_hh_concurrency_param(manager: ScyllaClusterManager,
     stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
     stmt.consistency_level = ConsistencyLevel.ONE
     await gather_safely(*[cql.run_async(stmt, (pk, pk + 1)) for pk in range(row_count)])
+    await settle_and_flush_hints(manager, [s2])
 
     await unpause_server(manager, s1, [s2])
 
@@ -1449,6 +1469,7 @@ async def test_ignore_invalid_hint_directories(manager: ScyllaClusterManager):
     assert list_hint_target_dirs(hints_dir) == {hint_dir_name}
 
 
+@pytest.mark.skip_mode(mode="release", reason="error injections and the hinted handoff test API aren't available in release mode")
 async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaClusterManager):
     """
     Enabling, disabling and DC-filtering hinted handoff through the HTTP API must take effect
@@ -1459,7 +1480,8 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
     # the configuration file and would prevent the option from being reloaded at runtime.
     # Multiple shards are used so that we also check that the filtering is updated on all of them.
     cmdline = ["--smp", "3", "--logger-log-level", "hints_manager=trace"]
-    config = {"hinted_handoff_enabled": "false"}
+    config = {"hinted_handoff_enabled": "false",
+              "error_injections_at_startup": ["decrease_hints_flush_period"]}
     s1, s2, s3 = await manager.servers_add(3, cmdline=cmdline, config=config, property_file=[
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc2", "rack": "rack1"},
@@ -1496,6 +1518,7 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
     await update_hh_enabled_via_http_api(manager, s1, ",".join([s3.datacenter, "some-dc", "some-other-dc"]))
     await insert(keys_dc3_only)
     expected_hints += len(keys_dc3_only)
+    await settle_and_flush_hints(manager, [s1])
 
     await gather_safely(*[unpause_server(manager, srv, [s1]) for srv in (s2, s3)])
 
@@ -1544,7 +1567,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     async def get_sync_point() -> str:
         # Wait until all hints have been written. Otherwise, the created sync point
         # could capture an unstable state, which could lead to some flakiness in the test.
-        await wait_until_hint_writing_settled(manager, [s1])
+        await settle_and_flush_hints(manager, [s1])
         sync_point_id = await create_sync_point(manager.api.client, s1.ip_addr, target_hosts=s2.ip_addr)
         assert isinstance(sync_point_id, str)
         logger.info(f"Created a sync point on {s1.server_id} / {s1.ip_addr}: {sync_point_id}")
@@ -1568,8 +1591,9 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
             else:
                 pytest.fail(f"Got unexpected failure: {e}")
 
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
     s1, s2 = await manager.servers_add(2, cmdline=["--smp", "3", "--logger-log-level", "hints_manager=trace"],
-                                       property_file={"dc": "dc1", "rack": "r1"})
+                                       config=config, property_file={"dc": "dc1", "rack": "r1"})
 
     # We are using RF=1, so roughly half of the writes will be written as hints
     keys1 = list(range(100))
@@ -1753,6 +1777,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await assert_rows_present(cql, "ks.t", "pk", keys5, present=True)
 
 
+@pytest.mark.skip_mode(mode="release", reason="error injections and the hinted handoff test API aren't available in release mode")
 async def test_hint_storage_proxy_metrics(manager: ScyllaClusterManager):
     """
     The hint metrics of the sender and of the receiver must agree: what the sender counts as
@@ -1763,7 +1788,8 @@ async def test_hint_storage_proxy_metrics(manager: ScyllaClusterManager):
     received_total_metric = "scylla_storage_proxy_replica_received_hints_total"
     received_bytes_total_metric = "scylla_storage_proxy_replica_received_hints_bytes_total"
 
-    s1, s2 = await manager.servers_add(2, auto_rack_dc="dc1")
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    s1, s2 = await manager.servers_add(2, config=config, auto_rack_dc="dc1")
 
     cql = await manager.get_cql_exclusive(s1)
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
@@ -1773,7 +1799,7 @@ async def test_hint_storage_proxy_metrics(manager: ScyllaClusterManager):
 
     await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (0, 1)",
                                         consistency_level=ConsistencyLevel.ONE))
-    await wait_until_hint_writing_settled(manager, [s1])
+    await settle_and_flush_hints(manager, [s1])
     written = await get_hint_metrics(manager.metrics, s1.ip_addr, "written")
     assert written > 0
 
@@ -1877,7 +1903,7 @@ async def test_hint_retransmission_keeps_column_mappings(manager: ScyllaClusterM
     stmt.consistency_level = ConsistencyLevel.ONE
     await gather_safely(*(cql.run_async(stmt, [i, i + 1]) for i in range(row_count)))
 
-    await wait_until_hint_writing_settled(manager, [node1])
+    await settle_and_flush_hints(manager, [node1])
     written = await get_hint_metrics(manager.metrics, node1.ip_addr, "written")
     assert written > 0
 
