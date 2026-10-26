@@ -262,7 +262,7 @@ def test_like_on_column_without_pattern_index_uses_filtering(cql, pattern_table)
 def test_equality_operator_on_indexed_column_uses_filtering(cql, pattern_table):
     """The index serves only LIKE, so an equality on the indexed column is
     filtered as it would be without the index."""
-    with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+    with pytest.raises(InvalidRequest, match="cannot serve this restriction"):
         cql.execute(f"SELECT * FROM {pattern_table} WHERE title = 'hello world'")
     assert len(list(cql.execute(f"SELECT * FROM {pattern_table} WHERE title = 'hello world' ALLOW FILTERING"))) == 1
 
@@ -272,7 +272,7 @@ def test_like_on_fulltext_indexed_column_uses_filtering(cql, test_keyspace):
     schema = 'p int primary key, content text'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
-        with pytest.raises(InvalidRequest, match="ALLOW FILTERING"):
+        with pytest.raises(InvalidRequest, match="cannot serve this restriction"):
             cql.execute(f"SELECT * FROM {table} WHERE content LIKE '%hello%' LIMIT 10")
 
 
