@@ -395,6 +395,7 @@ add_scylla_test(combined_tests
     large_paging_state_test.cc
     largest_k_test.cc
     loading_cache_test.cc
+    logstor_compaction_policy_test.cc
     memtable_test.cc
     multishard_combining_reader_as_mutation_source_test.cc
     multishard_query_test.cc
