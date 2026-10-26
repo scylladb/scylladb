@@ -184,3 +184,8 @@ Available options
        acknowledged at consistency level ``ANY`` that only hints hold is lost. Hints for
        materialized views are never discarded. Default: ``true``, in effect once every node knows
        the option.
+   * - ``max_type_nesting``
+     - integer
+     - ``CLUSTER``
+     - Maximum nesting depth of a type in a client statement. Collections, tuples, vectors and
+       user types each add a level. Default: ``32``.
