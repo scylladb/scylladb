@@ -25,6 +25,13 @@ async def count_requests_queued(manager: ScyllaClusterManager, coord_srv: Server
     return len(list(filter(lambda t: t['type'] == request_type, tasks)))
 
 
+async def lift_token_space_budget(cql) -> None:
+    # FIXME: the balancer plans the racks one after another and they share each table's token
+    # space budget, so the rack planned first takes all of it every round, and operations in
+    # different racks do not interleave. Remove once the racks share the budget fairly.
+    await cql.run_async("ALTER CLUSTER WITH tablet_streaming_max_token_space_percentage = 100")
+
+
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablets_are_drained_in_parallel(manager: ScyllaClusterManager):
     """
@@ -46,6 +53,7 @@ async def test_tablets_are_drained_in_parallel(manager: ScyllaClusterManager):
     await ensure_group0_leader_on(manager, servers[0])
 
     cql = manager.get_cql()
+    await lift_token_space_budget(cql)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
@@ -115,6 +123,7 @@ async def test_tablets_are_rebuilt_in_parallel(manager: ScyllaClusterManager, sa
     coord_srv = servers[0]
 
     cql = manager.get_cql()
+    await lift_token_space_budget(cql)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")

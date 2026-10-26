@@ -64,6 +64,9 @@ namespace option_name {
 
 inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
 inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
+inline constexpr std::string_view tablet_streaming_min_batch_size_in_bytes = "tablet_streaming_min_batch_size_in_bytes";
+inline constexpr std::string_view tablet_streaming_max_token_space_percentage = "tablet_streaming_max_token_space_percentage";
+inline constexpr std::string_view tablet_streaming_max_transitions_per_shard = "tablet_streaming_max_transitions_per_shard";
 
 }
 
