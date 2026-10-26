@@ -211,6 +211,23 @@ replica_set_view serving_replicas(const locator::tablet_info& tinfo, const locat
         case revert_migration:
             return current_set(tinfo);
 
+        case restore:
+            // A restore attaches sstables to every current replica outside of raft, and
+            // the replicas attach them at different moments. A request served meanwhile
+            // could read part of the restored data, or different data on different
+            // replicas, which no raft entry orders. A restore is an offline operation:
+            // refuse the request until it is over.
+            //
+            // FIXME: this only covers the requests this coordinator serves. Anything
+            // that appends a raft entry without going through it, like TRUNCATE
+            // TABLE, needs its own check, or a general one where entries are
+            // appended to a tablet's group.
+            //
+            // FIXME: the consistency level is a placeholder, like in the other errors
+            // of this coordinator: the request's level isn't passed down to it.
+            throw exceptions::unavailable_exception("The strongly consistent tablet is being restored",
+                    db::consistency_level::ONE, 1, 0);
+
         case write_both_read_old_fallback_cleanup:
             // A strongly consistent migration that fails at sc_become_voter rolls
             // back through sc_rollback instead.
@@ -221,9 +238,8 @@ replica_set_view serving_replicas(const locator::tablet_info& tinfo, const locat
         case end_repair:
             // A strongly consistent tablet needs no repair: raft keeps its replicas
             // in sync.
-        case restore:
-            // FIXME: nothing refuses to schedule a repair or a restore of a strongly
-            // consistent tablet yet.
+            // FIXME: nothing refuses to schedule a repair of a strongly consistent
+            // tablet yet.
             break;
     }
     on_internal_error(logger, format("serving_replicas: unexpected transition stage {} "
