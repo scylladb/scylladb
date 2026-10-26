@@ -2206,6 +2206,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
         auto my_host_id = _query_processor.local().proxy().get_token_metadata_ptr()->get_topology().my_host_id();
         if (target_host == my_host_id) {
             // Shard bounce
+            tracing::trace(trace_state, "Bouncing to shard {}", shard);
             auto sg = _config.bounce_request_smp_service_group;
             auto gcs = client_state.move_to_other_shard();
             auto gt = tracing::global_trace_state_ptr(trace_state);
