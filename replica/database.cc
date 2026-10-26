@@ -698,7 +698,10 @@ void rate_matching_compaction_controller::adjust() {
     compaction::compaction_rates rates;
     auto previous_shares = _shares;
     try {
+        // The rates are computed even when the shares aren't updated, so the logs and the
+        // metrics show what the controller sees.
         rates = _current_rates();
+        _last_rates = rates;
         _shares = next_shares(_shares, rates, _max_shares);
     } catch (...) {
         // The shares are left as they are.
