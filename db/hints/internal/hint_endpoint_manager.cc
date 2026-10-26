@@ -342,6 +342,15 @@ future<> hint_endpoint_manager::flush_current_hints() noexcept {
     return make_ready_future<>();
 }
 
+future<> hint_endpoint_manager::flush_current_hints_unless_stopping() noexcept {
+    // stop() closes the gate before it closes the store.
+    const auto holder = _store_gate.try_hold();
+    if (!holder) {
+        co_return;
+    }
+    co_await flush_current_hints();
+}
+
 future<> hint_endpoint_manager::with_file_update_mutex(noncopyable_function<future<> ()> func) {
     return with_lock(*_file_update_mutex_ptr, std::move(func)).finally(
             [lock_ptr = _file_update_mutex_ptr] {/* extend lifetime of the lock */});
