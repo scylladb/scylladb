@@ -2183,6 +2183,13 @@ async def test_drop_keyspace_during_tablet_restore(manager: ScyllaClusterManager
     await manager.api.message_injection(servers[1].ip_addr, injection)
     await drop_task
 
+    # The DROP won the race, so the restore must have given up rather than carried on
+    # against a table which is gone. It has already done so by the time the DROP returns,
+    # since the DROP waits for the restore to let go of the table.
+    status = await manager.api.wait_task(servers[0].ip_addr, tid)
+    assert status['state'] == 'failed' and 'was dropped during restore' in status.get('error', ''), \
+        f"Expected the restore to fail on the dropped table, got {status}"
+
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_table_during_backup(manager: ScyllaClusterManager, object_storage):
