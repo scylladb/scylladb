@@ -197,6 +197,11 @@ Available options
        at that scope even if a broader scope enabled it, whereas ``NULL`` removes the value and
        falls back to the broader scope. See
        :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.
+   * - ``max_type_nesting``
+     - integer
+     - ``CLUSTER``
+     - Maximum nesting depth of a type in a client statement. Collections, tuples, vectors and
+       user types each add a level. Accepts ``1`` to ``4294967295``. Default: ``32``.
 
 .. _cql-cluster-config-yaml-options:
 
