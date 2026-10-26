@@ -768,7 +768,10 @@ future<> compaction_manager::run_custom_job(compaction_group_view& t, compaction
 
 future<> compaction_manager::update_static_shares(float static_shares) {
     cmlog.info("Updating static shares to {}", static_shares);
-    return _compaction_controller->update_static_shares(static_shares);
+    if (_shadow_compaction_controller) {
+        co_await _shadow_compaction_controller->update_static_shares(static_shares);
+    }
+    co_await _compaction_controller->update_static_shares(static_shares);
 }
 
 compaction_reenabler::compaction_reenabler(compaction_manager& cm, compaction_group_view& t)
@@ -941,13 +944,10 @@ inline std::unique_ptr<compaction_controller> make_compaction_controller(const c
     return std::make_unique<compaction_controller_v1>(csg, static_shares, max_shares, 250ms, std::move(fn));
 }
 
-void compaction_manager::use_compaction_controller_v2() {
-    if (dynamic_cast<compaction_controller_v2*>(_compaction_controller.get())) {
-        return;
-    }
+std::unique_ptr<compaction_controller_v2> compaction_manager::make_compaction_controller_v2(compaction_controller_v2::dry_run dry_run) {
     // Updated every minute: often enough to follow compactions completing, rarely enough
     // for the rates, averaged over minutes, to respond to the shares.
-    auto controller = std::make_unique<compaction_controller_v2>(compaction_sg(), static_shares(), max_shares(), 1min,
+    return std::make_unique<compaction_controller_v2>(compaction_sg(), static_shares(), max_shares(), 1min,
             [this] { return _backlog_manager.rates(); },
             // Regular compaction ran since the last update if one is running, or one started
             // since: most complete well within an update interval.
@@ -958,14 +958,37 @@ void compaction_manager::use_compaction_controller_v2() {
                 });
                 started = _stats.started_regular_compactions;
                 return ran;
-            });
-    // The replaced controller stops right away, so that it doesn't set the shares anymore.
-    auto replaced = std::exchange(_compaction_controller, std::move(controller));
-    auto shutdown = replaced->shutdown().finally([replaced = std::move(replaced)] {});
+            },
+            dry_run);
+}
+
+void compaction_manager::stop_compaction_controller(std::unique_ptr<compaction_controller> controller) {
+    // The controller stops right away, and is destroyed once its shutdown completes.
+    auto shutdown = controller->shutdown().finally([controller = std::move(controller)] {});
     _replaced_compaction_controller_shutdown = _replaced_compaction_controller_shutdown.then([shutdown = std::move(shutdown)] () mutable {
         return std::move(shutdown);
     });
+}
+
+void compaction_manager::use_compaction_controller_v2() {
+    if (dynamic_cast<compaction_controller_v2*>(_compaction_controller.get())) {
+        return;
+    }
+    // The replaced controller stops right away, so that it doesn't set the shares anymore.
+    // So does the shadow one, if any: there is nothing left to compare v2 with.
+    stop_compaction_controller(std::exchange(_compaction_controller, make_compaction_controller_v2(compaction_controller_v2::dry_run::no)));
+    if (_shadow_compaction_controller) {
+        stop_compaction_controller(std::move(_shadow_compaction_controller));
+    }
     cmlog.info("Using compaction controller v2");
+}
+
+void compaction_manager::shadow_compaction_controller_with_v2() {
+    if (_shadow_compaction_controller || dynamic_cast<compaction_controller_v2*>(_compaction_controller.get())) {
+        return;
+    }
+    _shadow_compaction_controller = make_compaction_controller_v2(compaction_controller_v2::dry_run::yes);
+    cmlog.info("Running compaction controller v2 in a dry run alongside the compaction controller");
 }
 
 compaction::compaction_state::~compaction_state() {
@@ -1194,6 +1217,9 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _compaction_max_shares_observer(_cfg.max_shares.observe([this] (const float& max_shares) {
         cmlog.info("Updating max shares to {}", max_shares);
         _compaction_controller->set_max_shares(max_shares);
+        if (_shadow_compaction_controller) {
+            _shadow_compaction_controller->set_max_shares(max_shares);
+        }
     }))
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
@@ -1460,6 +1486,9 @@ future<> compaction_manager::really_do_stop() noexcept {
     _weight_tracker.clear();
     _compaction_submission_timer.cancel();
     co_await _compaction_controller->shutdown();
+    if (_shadow_compaction_controller) {
+        co_await _shadow_compaction_controller->shutdown();
+    }
     co_await std::move(_replaced_compaction_controller_shutdown);
     co_await _update_compaction_static_shares_action.join();
     cmlog.info("Stopped");

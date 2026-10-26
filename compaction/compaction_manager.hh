@@ -159,8 +159,14 @@ private:
     config _cfg;
     timer<lowres_clock> _compaction_submission_timer;
     std::unique_ptr<compaction_controller> _compaction_controller;
-    // The shutdown of the controller _compaction_controller replaced, if any.
+    // The shutdown of the controllers that stopped, if any.
     future<> _replaced_compaction_controller_shutdown = make_ready_future<>();
+    // compaction_controller_v2 in a dry run alongside _compaction_controller, if any, for
+    // comparing the shares they would set.
+    std::unique_ptr<compaction_controller> _shadow_compaction_controller;
+
+    std::unique_ptr<compaction_controller_v2> make_compaction_controller_v2(compaction_controller_v2::dry_run dry_run);
+    void stop_compaction_controller(std::unique_ptr<compaction_controller> controller);
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
     future<> update_history(compaction_group_view& t, compaction_result&& res, const compaction_data& cdata);
@@ -328,9 +334,17 @@ public:
     // Replaces the compaction controller with compaction_controller_v2, which picks up the
     // shares where the replaced one left them.
     void use_compaction_controller_v2();
+    // Runs compaction_controller_v2 in a dry run alongside the compaction controller, which
+    // keeps setting the shares, logging the shares v2 would set and what led to them.
+    // For testing compaction_controller_v2 only.
+    void shadow_compaction_controller_with_v2();
 
     const compaction_controller& get_compaction_controller() const noexcept {
         return *_compaction_controller;
+    }
+
+    const compaction_controller* get_shadow_compaction_controller() const noexcept {
+        return _shadow_compaction_controller.get();
     }
 
     uint32_t throughput_mbs() const noexcept {

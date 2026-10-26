@@ -2871,4 +2871,18 @@ SEASTAR_TEST_CASE(compaction_controller_is_selected_by_config_test) {
     }, cfg);
 }
 
+// In shadow mode, compaction_controller_v2 runs in a dry run alongside v1, which keeps setting
+// the shares.
+SEASTAR_TEST_CASE(compaction_controller_v2_shadow_mode_test) {
+    cql_test_config cfg;
+    cfg.db_config->compaction_controller_v2_shadow_mode.set(true);
+    co_await do_with_cql_env_thread([] (cql_test_env& e) {
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& cm = db.get_compaction_manager();
+            BOOST_REQUIRE(dynamic_cast<const compaction_controller_v1*>(&cm.get_compaction_controller()));
+            BOOST_REQUIRE(dynamic_cast<const compaction_controller_v2*>(cm.get_shadow_compaction_controller()));
+        }).get();
+    }, cfg);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -1884,6 +1884,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The controller of the shares of regular compaction. Can be set to the following values:\n"
         "\tv1: Sets the shares from the compaction backlog.\n"
         "\tv2: Matches compaction to the work ingestion produces. Takes effect once all nodes of the cluster support it.")
+    , compaction_controller_v2_shadow_mode(this, "compaction_controller_v2_shadow_mode", value_status::Used, false,
+        "Only for testing compaction_controller v2. If set to true while v1 controls the shares of regular compaction, v2 runs alongside it without setting them, logging the shares it would set and what led to them.")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold.")
     , compaction_flush_all_tables_before_major_seconds(this, "compaction_flush_all_tables_before_major_seconds", value_status::Used, 86400,

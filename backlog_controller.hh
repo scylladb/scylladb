@@ -11,6 +11,8 @@
 #include <seastar/core/timer.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/file.hh>
+#include <seastar/util/bool_class.hh>
+#include <seastar/util/log.hh>
 #include <chrono>
 #include <cmath>
 
@@ -183,6 +185,9 @@ public:
 class compaction_controller_v2 final : public compaction_controller {
 public:
     using scheduling_group = seastar::scheduling_group;
+    // In a dry run, the controller computes the shares, and logs them and what led to
+    // them, but doesn't set them: another controller does.
+    using dry_run = seastar::bool_class<struct dry_run_tag>;
 
     static constexpr float min_shares = 50;
     static constexpr double alpha = 0.3;
@@ -202,15 +207,18 @@ private:
     float _max_shares = default_compaction_maximum_shares;
     // Start at the minimum and rise as the rates show compaction falls behind, rather than
     // from the scheduling group's shares: until a controller sets them, they are the
-    // group's default, the maximum, e.g. when the node switches to this controller, early
-    // at startup.
+    // group's default, the maximum, e.g. when the node switches to this controller, or
+    // starts it in shadow mode, early at startup.
     float _shares = min_shares;
+    dry_run _dry_run;
+    // A dry run logs its updates at most this often, so as not to flood the logs.
+    seastar::logger::rate_limit _dry_run_log_limit{std::chrono::seconds(30)};
     timer<> _update_timer;
 
     void adjust();
 public:
     compaction_controller_v2(scheduling_group sg, float static_shares, std::optional<float> max_shares, std::chrono::milliseconds interval,
-            std::function<compaction::compaction_rates()> current_rates, std::function<bool()> compacting);
+            std::function<compaction::compaction_rates()> current_rates, std::function<bool()> compacting, dry_run dry_run = dry_run::no);
 
     future<> shutdown() override;
     future<> update_static_shares(float static_shares) override;

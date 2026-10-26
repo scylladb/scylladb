@@ -513,6 +513,9 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
 
     // The nodes of a cluster switch to compaction_controller_v2 together, once all of them
     // have it.
+    if (_cfg.compaction_controller_v2_shadow_mode()) {
+        _compaction_manager.shadow_compaction_controller_with_v2();
+    }
     if (_cfg.compaction_controller() == db::compaction_controller_t::type::v2) {
         _listeners.push_back(_feat.compaction_controller_v2.when_enabled([this] {
             _compaction_manager.use_compaction_controller_v2();
@@ -612,11 +615,12 @@ void compaction_controller_v1::set_max_shares(float max_shares) {
 }
 
 compaction_controller_v2::compaction_controller_v2(scheduling_group sg, float static_shares, std::optional<float> max_shares,
-        std::chrono::milliseconds interval, std::function<compaction::compaction_rates()> current_rates, std::function<bool()> compacting)
+        std::chrono::milliseconds interval, std::function<compaction::compaction_rates()> current_rates, std::function<bool()> compacting, dry_run dry_run)
     : _scheduling_group(std::move(sg))
     , _current_rates(std::move(current_rates))
     , _compacting(std::move(compacting))
     , _static_shares(static_shares)
+    , _dry_run(dry_run)
     , _update_timer([this] { adjust(); })
 {
     if (max_shares) {
@@ -659,17 +663,40 @@ float compaction_controller_v2::next_shares(float shares, const compaction::comp
 
 void compaction_controller_v2::adjust() {
     if (_static_shares > 0) {
-        _scheduling_group.set_shares(_static_shares);
+        if (!_dry_run) {
+            _scheduling_group.set_shares(_static_shares);
+        }
         return;
     }
+    bool compacting = false;
+    compaction::compaction_rates rates;
+    auto previous_shares = _shares;
     try {
-        if (_compacting()) {
-            _shares = next_shares(_shares, _current_rates(), _max_shares);
+        // The rates are computed even when the shares aren't updated, so the logs show what
+        // the controller sees.
+        rates = _current_rates();
+        compacting = _compacting();
+        if (compacting) {
+            _shares = next_shares(_shares, rates, _max_shares);
         }
     } catch (...) {
         // The shares are left as they are, as with unknown rates.
         dblog.warn("Failed to compute the compaction rates, leaving compaction shares at {}: {}", _shares, std::current_exception());
     }
+    if (_dry_run) {
+        dblog.log(log_level::info, _dry_run_log_limit,
+                "compaction controller v2 dry run: would set shares from {:.1f} to {:.1f}, while they are {:.1f}; "
+                "regular compaction ran: {}, target {:.0f} bytes/s over {:.0f}s, achieved {:.0f} bytes/s over {:.0f}s",
+                previous_shares, _shares, _scheduling_group.get_shares(), compacting,
+                rates.target.per_second(), rates.target.interval().count(),
+                rates.achieved.per_second(), rates.achieved.interval().count());
+        return;
+    }
+    dblog.debug("compaction controller v2: setting shares from {:.1f} to {:.1f}; "
+            "regular compaction ran: {}, target {:.0f} bytes/s over {:.0f}s, achieved {:.0f} bytes/s over {:.0f}s",
+            previous_shares, _shares, compacting,
+            rates.target.per_second(), rates.target.interval().count(),
+            rates.achieved.per_second(), rates.achieved.interval().count());
     _scheduling_group.set_shares(_shares);
 }
 
