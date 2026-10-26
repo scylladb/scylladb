@@ -1054,7 +1054,7 @@ inline std::unique_ptr<compaction_controller> make_compaction_controller(const c
 std::unique_ptr<rate_matching_compaction_controller> compaction_manager::make_rate_matching_compaction_controller(rate_matching_compaction_controller::dry_run dry_run) {
     // Updated every minute: often enough to follow compactions completing, rarely enough
     // for the rates, averaged over minutes, to respond to the shares.
-    return std::make_unique<rate_matching_compaction_controller>(compaction_sg(), static_shares(), max_shares(), 1min,
+    return std::make_unique<rate_matching_compaction_controller>(_cfg.rate_matching_controller, compaction_sg(), static_shares(), max_shares(), 1min,
             [this] {
                 auto credited = credit_compaction_progress();
                 auto rates = _backlog_manager.rates();
@@ -1373,6 +1373,8 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     }))
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
+    _cfg.rate_matching_controller.validate();
+    backlog_proportional_compaction_controller::validate_normalization_factor(_cfg.normalization_factor);
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
 }

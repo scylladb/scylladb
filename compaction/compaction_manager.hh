@@ -92,6 +92,7 @@ public:
         float normalization_factor = backlog_proportional_compaction_controller::normalization_factor;
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
         std::chrono::seconds flush_all_tables_before_major = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(1));
+        rate_matching_compaction_controller::config rate_matching_controller;
     };
 
 public:
@@ -375,6 +376,10 @@ public:
 
     float max_shares() const noexcept {
         return _cfg.max_shares.get();
+    }
+
+    const rate_matching_compaction_controller::config& rate_matching_controller_config() const noexcept {
+        return _cfg.rate_matching_controller;
     }
 
     // Replace the compaction controller with backlog_proportional_compaction_controller or

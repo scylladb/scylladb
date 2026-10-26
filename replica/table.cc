@@ -3612,6 +3612,8 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _repair_sstable_classifier(std::move(repair_classifier))
     , _logstor_state(t.uses_logstor() ? std::make_unique<compaction_group_logstor_state>(*this) : nullptr)
     , _lowest_rp(db::replay_position::max)
+    , _rate_window(t.get_compaction_manager().rate_matching_controller_config().rate_window)
+    , _achieved_window(t.get_compaction_manager().rate_matching_controller_config().achieved_window)
 {
     // Once the group's read amplification tracker exists, for the set to report to.
     _main_sstables = make_lw_shared<sstables::sstable_set>(make_main_sstable_set());
