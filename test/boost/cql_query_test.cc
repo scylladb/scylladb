@@ -525,7 +525,7 @@ bool has_tablet_routing(::shared_ptr<cql_transport::messages::result_message> re
 }
 
 SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_insert) {
-    BOOST_ASSERT(this_smp_shard_count() == 2);
+    BOOST_REQUIRE_GE(this_smp_shard_count(), 2u);
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create keyspace ks_tablet with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } and tablets = {'initial': 8};").get();
         e.execute_cql("create table ks_tablet.test_tablet (pk int, ck int, v int, PRIMARY KEY (pk, ck));").get();
@@ -533,14 +533,14 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_insert) {
         smp::submit_to(0, [&] {
             return seastar::async([&] {
                 auto result = e.execute_cql("insert into ks_tablet.test_tablet (pk, ck, v) VALUES (1, 2, 3);").get();
-                BOOST_ASSERT(!has_tablet_routing(result));
+                BOOST_REQUIRE(!has_tablet_routing(result));
             });
         }).get();
 
         smp::submit_to(1, [&] {
             return seastar::async([&] {
                 auto result = e.execute_cql("insert into ks_tablet.test_tablet (pk, ck, v) VALUES (1, 2, 3);").get();
-                BOOST_ASSERT(!has_tablet_routing(result));
+                BOOST_REQUIRE(!has_tablet_routing(result));
             });
         }).get();
     }, tablet_cql_test_config());
@@ -555,14 +555,14 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_unprepared_select) {
         smp::submit_to(0, [&] {
             return seastar::async([&] {
                 auto result = e.execute_cql("select pk, ck, v FROM ks_tablet.test_tablet WHERE pk = 1;").get();
-                BOOST_ASSERT(!has_tablet_routing(result));
+                BOOST_REQUIRE(!has_tablet_routing(result));
             });
         }).get();
 
         smp::submit_to(1, [&] {
             return seastar::async([&] {
                 auto result = e.execute_cql("select pk, ck, v FROM ks_tablet.test_tablet WHERE pk = 1;").get();
-                BOOST_ASSERT(!has_tablet_routing(result));
+                BOOST_REQUIRE(!has_tablet_routing(result));
             });
         }).get();
     }, tablet_cql_test_config());
@@ -588,7 +588,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_insert) {
         smp::submit_to(local_shard, [&] {
             return seastar::async([&] { 
                 auto result = e.execute_prepared(insert, raw_values).get();
-                BOOST_ASSERT(!has_tablet_routing(result));
+                BOOST_REQUIRE(!has_tablet_routing(result));
             });
         }).get();
 
@@ -605,7 +605,7 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_insert) {
         smp::submit_to(foreign_shard, [&] { 
             return seastar::async([&] {
                 auto result = e.execute_prepared(insert, raw_values2).get();
-                BOOST_ASSERT(has_tablet_routing(result));
+                BOOST_REQUIRE(has_tablet_routing(result));
             });
         }).get();
     }, tablet_cql_test_config());
@@ -631,14 +631,14 @@ SEASTAR_TEST_CASE(test_sending_tablet_info_select) {
         smp::submit_to(local_shard, [&] { 
             return seastar::async([&] {
                 auto result = e.execute_prepared(select, raw_values).get();
-                BOOST_ASSERT(!has_tablet_routing(result));
+                BOOST_REQUIRE(!has_tablet_routing(result));
             });
         }).get();
 
         smp::submit_to(foreign_shard, [&] { 
             return seastar::async([&] {
                 auto result = e.execute_prepared(select, raw_values).get();
-                BOOST_ASSERT(has_tablet_routing(result));
+                BOOST_REQUIRE(has_tablet_routing(result));
             });
         }).get();
     }, tablet_cql_test_config());
