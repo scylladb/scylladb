@@ -835,6 +835,12 @@ static do_find_idx_result do_find_idx(
             "used to continue the query that produced it.");
 }
 
+void throw_needs_filtering() {
+    throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
+        "thus may have unpredictable performance. If you want to execute "
+        "this query despite the performance unpredictability, use ALLOW FILTERING");
+}
+
 // Id of the view backing an index - what identifies it across DROP/CREATE.
 // std::nullopt for indexes with no view, which are never pinned this way.
 static std::optional<table_id> index_view_id(
@@ -1547,9 +1553,7 @@ void select_restrictions::plan_query(
         if (_has_queriable_regular_index && _analysis.partition_range_is_simple) {
             _uses_secondary_indexing = true;
         } else if (!_allow_filtering) {
-            throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
-                "thus may have unpredictable performance. If you want to execute "
-                "this query despite the performance unpredictability, use ALLOW FILTERING");
+            throw_needs_filtering();
         }
         search_groups.push_back({preds.other, _analysis.nonprimary_key_restrictions});
     }
@@ -1888,9 +1892,7 @@ void select_restrictions::process_partition_key_restrictions() {
 
     if (_analysis.pk_restrictions_need_filtering()) {
         if (!_allow_filtering && !_has_queriable_pk_index) {
-            throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
-                "thus may have unpredictable performance. If you want to execute "
-                "this query despite the performance unpredictability, use ALLOW FILTERING");
+            throw_needs_filtering();
         }
         _is_key_range = true;
         _uses_secondary_indexing = _has_queriable_pk_index;
