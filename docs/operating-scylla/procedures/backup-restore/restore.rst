@@ -11,13 +11,15 @@ Choosing a restore method
 
 ScyllaDB supports several restore methods. Choose the one that matches where your backup files are and whether the cluster topology changed since the backup was taken:
 
+* :ref:`Restore a cluster backup <restore-cluster-backup>` - restore a backup made with :doc:`nodetool cluster backup </operating-scylla/nodetool-commands/backup>` into a tablet-based table. Each replica downloads the SSTables of its own tablets straight from object storage, with no streaming between nodes. Runs on a running cluster.
+
 * :ref:`Restore from object storage <restore-object-storage>` - restore SSTables backed up to S3-compatible object storage with :doc:`nodetool backup </operating-scylla/nodetool-commands/backup>`. Runs on a running cluster and works regardless of cluster topology changes since the backup.
 
 * :ref:`Restore with load and stream <restore-load-and-stream>` - upload backed-up SSTable files to a running cluster; the data is streamed to the nodes owning it. Works regardless of cluster topology changes since the backup.
 
 * :ref:`Restore to an identical cluster <restore-procedure>` - copy snapshot files back in place and restart the nodes. Requires a cluster with the same number of nodes and the same token distribution as at the time of the backup, and each node must be restored from the backup of the **same node**. Suitable for vnode-based keyspaces only.
 
-For cluster-wide backup and restore, use `ScyllaDB Manager <https://manager.docs.scylladb.com/stable/restore/>`_, which orchestrates the process across the cluster.
+`ScyllaDB Manager <https://manager.docs.scylladb.com/stable/restore/>`_ can also back up and restore the whole cluster, orchestrating the process across the nodes.
 
 .. _restore-prerequisites:
 
@@ -48,6 +50,56 @@ The following steps and notes apply to all restore methods.
 .. note::
 
    If you are restoring :doc:`encrypted backup files </operating-scylla/security/encryption-at-rest>`, make sure ScyllaDB is configured with the same keys that were used to encrypt the data before starting the restore process.
+
+.. _restore-cluster-backup:
+
+------------------------
+Restore a cluster backup
+------------------------
+
+Use this method to restore a backup made with :ref:`nodetool cluster backup <backup-native-backup>` into a tablet-based table.
+The restore runs as a topology operation: the replicas of each tablet download the SSTables that belong to the tablet
+directly from object storage and attach them, so no data is streamed between nodes. Repaired data that the backup
+stored as a single copy is restored to every replica it was taken from.
+
+The object storage endpoint must be configured on the nodes, as described in :ref:`Configuring Object Storage <object-storage-configuration>`.
+
+The backup holds the SSTables and their manifests only. It does not include the schema, so the keyspace and table
+must exist before the restore starts: recreate them from the schema backup taken with ``DESC SCHEMA WITH INTERNALS AND PASSWORDS``,
+as described in the :ref:`prerequisites <restore-prerequisites>`.
+
+There is no nodetool command for this restore yet. It is started through the REST API
+(see the :doc:`storage_service API reference </reference/api/storage-service>`), with
+``POST /storage_service/tablets/restore``. The query parameters are the destination ``keyspace`` and ``table``
+and the ``snapshot`` name. The request body is a JSON array with one entry per datacenter the keyspace replicates to,
+each giving the ``datacenter``, the ``endpoint``, ``bucket`` and ``prefix`` of the backup location, and ``manifests``,
+the paths of the table's backup manifests relative to that prefix.
+
+**Procedure**
+
+#. Complete the :ref:`prerequisites <restore-prerequisites>`. The destination table must use tablets; restoring into a vnode-based table fails.
+
+#. Start the restore. For example, for a backup taken with ``--location mydc,s3.us-east-2.amazonaws.com,bucket-foo,backups/mysnapshot``:
+
+   .. code-block:: shell
+
+      curl -X POST -H 'Content-Type: application/json' \
+        'http://<node>:10000/storage_service/tablets/restore?keyspace=mykeyspace&table=team_roster&snapshot=mysnapshot' \
+        -d '[{"datacenter": "mydc",
+              "endpoint": "s3.us-east-2.amazonaws.com",
+              "bucket": "bucket-foo",
+              "prefix": "backups/mysnapshot",
+              "manifests": ["snapshots/mykeyspace/team_roster/mysnapshot/manifest.json"]}]'
+
+   The call returns the ID of the restore task.
+
+#. Monitor the restore with the :doc:`nodetool tasks </operating-scylla/nodetool-commands/tasks/index>` commands, for example
+   ``nodetool tasks wait <task ID>`` to wait for it to finish, or ``nodetool tasks status <task ID>`` to see its progress.
+
+.. note::
+
+   A replica that is down cannot restore its tablets, so the restore fails rather than wait for it.
+   Bring the node back, or remove it from the cluster, and run the restore again.
 
 .. _restore-object-storage:
 
