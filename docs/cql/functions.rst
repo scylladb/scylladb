@@ -227,6 +227,34 @@ A number of functions are provided to “convert” the native types into binary
 takes a 64-bit ``blob`` argument and converts it to a ``bigint`` value. For example, ``bigintAsBlob(3)`` is
 ``0x0000000000000003`` and ``blobAsBigint(0x0000000000000003)`` is ``3``.
 
+.. _format-functions:
+
+Formatting functions
+````````````````````
+The functions ``format_bytes`` and ``format_time`` format a number as a human-readable size or duration, for example
+``1.46 GiB`` or ``2.5 h``:
+
+- ``format_bytes(value [, source_unit] [, target_unit])`` interprets ``value`` as a size in ``source_unit``, or in
+  bytes if no ``source_unit`` is given, and converts it to ``target_unit``. If no ``target_unit`` is given,
+  it uses the largest unit for which the result is more than 1. The units are ``B``, ``KiB``, ``MiB`` and ``GiB``.
+- ``format_time(value [, source_unit] [, target_unit])`` does the same for a duration, which is in milliseconds if no
+  ``source_unit`` is given. If no ``target_unit`` is given, it uses the largest unit for which the result is at
+  least 1, from ``s`` to ``d`` (or ``ms``). The units are ``ns``, ``us`` (or ``µs``), ``ms``, ``s``, ``m``, ``h`` and ``d``.
+
+When only two arguments are given, the second one is the ``target_unit``. Unit names are not case-sensitive.
+
+The ``value`` can be an ``int``, ``tinyint``, ``smallint``, ``bigint``, ``varint``, ``ascii`` or ``text`` - a string
+must be an integer, like ``'1024'`` - and must not be negative. The units are ``text`` strings. The result is a
+``text``: the converted value, rounded to at most two decimal places, followed by a space and the unit.
+If ``value`` is null, the result is null; a null unit is an error.
+
+For example::
+
+    SELECT format_bytes(1563401650), format_bytes(1, 'GiB', 'MiB'), format_time(9000000), format_time(90, 's', 'm')
+        FROM system.local;
+
+returns ``1.46 GiB``, ``1024 MiB``, ``2.5 h`` and ``1.5 m``.
+
 
 .. _vector-similarity-functions:
 
