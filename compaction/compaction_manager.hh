@@ -201,6 +201,8 @@ private:
 
     std::unique_ptr<compaction_controller> make_backlog_proportional_compaction_controller();
     std::unique_ptr<rate_matching_compaction_controller> make_rate_matching_compaction_controller(rate_matching_compaction_controller::dry_run dry_run);
+    // rate_matching_compaction_controller, whether it sets the shares or runs in a dry run, if any.
+    const rate_matching_compaction_controller* get_rate_matching_compaction_controller() const noexcept;
     // The time regular compaction was busy, i.e. at least one ran, so far.
     seastar::lowres_clock::duration regular_compaction_busy_time() const noexcept;
     void stop_compaction_controller(std::unique_ptr<compaction_controller> controller);

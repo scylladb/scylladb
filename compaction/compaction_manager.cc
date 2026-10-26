@@ -1087,6 +1087,13 @@ lowres_clock::duration compaction_manager::regular_compaction_busy_time() const 
     return busy_time;
 }
 
+const rate_matching_compaction_controller* compaction_manager::get_rate_matching_compaction_controller() const noexcept {
+    if (auto controller = dynamic_cast<const rate_matching_compaction_controller*>(_compaction_controller.get())) {
+        return controller;
+    }
+    return dynamic_cast<const rate_matching_compaction_controller*>(_shadow_compaction_controller.get());
+}
+
 void compaction_manager::stop_compaction_controller(std::unique_ptr<compaction_controller> controller) {
     // The controller stops right away, and is destroyed once its shutdown completes.
     auto shutdown = controller->shutdown().finally([controller = std::move(controller)] {});
@@ -1412,6 +1419,19 @@ void compaction_manager::register_metrics() {
                        sm::description("Holds the sum of normalized compaction backlog for all tables in the system. Backlog is normalized by dividing backlog by shard's available memory.")),
         sm::make_counter("validation_errors", [this] { return _validation_errors; },
                        sm::description("Holds the number of encountered validation errors.")).set_skip_when_empty(),
+        // Of rate_matching_compaction_controller, whether it sets the shares or runs in a dry run.
+        sm::make_gauge("rate_matching_controller_shares", [this] { auto controller = get_rate_matching_compaction_controller(); return controller ? controller->shares() : 0; },
+                       sm::description("Holds the shares of regular compaction the rate-matching compaction controller set, or would set in shadow mode.")),
+        sm::make_gauge("rate_matching_controller_target_bytes_per_second", [this] {
+                           auto controller = get_rate_matching_compaction_controller();
+                           return controller ? controller->last_rates().target.per_second() : 0;
+                       },
+                       sm::description("Holds the rate regular compaction has to run at, as the rate-matching compaction controller saw it at its last update.")),
+        sm::make_gauge("rate_matching_controller_achieved_bytes_per_second", [this] {
+                           auto controller = get_rate_matching_compaction_controller();
+                           return controller ? controller->last_rates().achieved.per_second() : 0;
+                       },
+                       sm::description("Holds the rate regular compaction achieved, as the rate-matching compaction controller saw it at its last update.")),
     });
 }
 
