@@ -9,10 +9,13 @@
 #include "db/view/base_info.hh"
 #include "utils/assert.hh"
 #include <seastar/core/sharded.hh>
+#include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/try_future.hh>
 
 #include "schema_registry.hh"
 #include "utils/error_injection.hh"
 #include "utils/log.hh"
+#include "utils/exceptions.hh"
 #include "db/schema_tables.hh"
 #include "view_info.hh"
 #include "replica/database.hh"
@@ -286,46 +289,96 @@ void schema_registry_entry::mark_synced() {
     slogger.debug("Marked {} as synced", _version);
 }
 
+void schema_registry::advance_commit_gen(uint64_t gen) {
+    if (gen <= _commit_gen) {
+        on_internal_error(slogger, format("advance_commit_gen: generation {} is not newer than the current one, {}", gen, _commit_gen));
+    }
+    _commit_gen = gen;
+    _commit_gen_advanced.broadcast();
+}
+
+future<> schema_registry::wait_for_commit_gen(uint64_t gen, db::timeout_clock::time_point timeout) {
+    if (_commit_gen >= gen) {
+        co_return;
+    }
+    ++_commit_gen_waits;
+    slogger.debug("Waiting for schema commit generation {}, current: {}", gen, _commit_gen);
+    auto reached = [this, gen] { return _commit_gen >= gen; };
+    if (timeout == db::no_timeout) {
+        co_await _commit_gen_advanced.wait(reached);
+        co_return;
+    }
+    auto f = co_await coroutine::as_future(_commit_gen_advanced.wait(timeout, reached));
+    if (f.failed()) {
+        auto ex = f.get_exception();
+        if (try_catch<condition_variable_timed_out>(ex)) {
+            // Let is_timeout_exception() recognize it.
+            co_await coroutine::return_exception(timed_out_error());
+        }
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+}
+
 schema_registry& local_schema_registry() {
     return registry;
 }
 
-global_schema_ptr::global_schema_ptr(const global_schema_ptr& o)
-    : global_schema_ptr(o.get())
-{ }
+global_schema_ptr::global_schema_ptr(const global_schema_ptr& o) {
+    throwing_assert(o._cpu_of_origin == this_shard_id());
+    _ptr = o._ptr;
+    _cpu_of_origin = o._cpu_of_origin;
+    _origin_gen = o._origin_gen;
+    _origin_synced = o._origin_synced;
+}
 
 global_schema_ptr::global_schema_ptr(global_schema_ptr&& o) noexcept {
     auto current = this_shard_id();
     SCYLLA_ASSERT(o._cpu_of_origin == current);
     _ptr = std::move(o._ptr);
     _cpu_of_origin = current;
+    _origin_gen = o._origin_gen;
+    _origin_synced = o._origin_synced;
 }
 
-schema_ptr global_schema_ptr::get() const {
-    if (this_shard_id() == _cpu_of_origin) {
-        return _ptr;
-    } else {
-        auto registered_schema = [](const schema_registry_entry& e) -> schema_ptr {
-            schema_ptr ret = local_schema_registry().get_or_null(e.version());
-            if (!ret) {
-                ret = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) -> extended_frozen_schema {
-                    return e.extended_frozen();
-                });
-            }
-            return ret;
-        };
-
-        // the following code contains registry entry dereference of a foreign shard
-        // however, it is guaranteed to succeed since we made sure in the constructor
-        // that _ptr will have a registry on the foreign shard where this
-        // object originated so as long as this object lives the registry entries lives too
-        // and it is safe to reference them on foreign shards.
-        schema_ptr s = registered_schema(*_ptr->registry_entry());
-        if (_ptr->registry_entry()->is_synced()) {
-            s->registry_entry()->mark_synced();
+schema_ptr global_schema_ptr::get_on_this_shard() const {
+    auto registered_schema = [](const schema_registry_entry& e) -> schema_ptr {
+        schema_ptr ret = local_schema_registry().get_or_null(e.version());
+        if (!ret) {
+            ret = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) -> extended_frozen_schema {
+                return e.extended_frozen();
+            });
         }
-        return s;
+        return ret;
+    };
+
+    // the following code contains registry entry dereference of a foreign shard
+    // however, it is guaranteed to succeed since we made sure in the constructor
+    // that _ptr will have a registry on the foreign shard where this
+    // object originated so as long as this object lives the registry entries lives too
+    // and it is safe to reference them on foreign shards.
+    schema_ptr s = registered_schema(*_ptr->registry_entry());
+    if (_origin_synced) {
+        s->registry_entry()->mark_synced();
     }
+    return s;
+}
+
+future<schema_ptr> global_schema_ptr::get(db::timeout_clock::time_point timeout) const {
+    if (this_shard_id() == _cpu_of_origin) {
+        return make_ready_future<schema_ptr>(_ptr);
+    }
+    // Having reached the origin's generation, this shard has applied every schema change the
+    // origin had, so it agrees with the origin on whether the schema is synced. Being ahead is
+    // correct too: the request's schema is then upgraded to the newer schema of this shard.
+    if (local_schema_registry().commit_gen() >= _origin_gen) [[likely]] {
+        return futurize_invoke([this] { return get_on_this_shard(); });
+    }
+    return wait_and_get(timeout);
+}
+
+future<schema_ptr> global_schema_ptr::wait_and_get(db::timeout_clock::time_point timeout) const {
+    co_await coroutine::try_future(local_schema_registry().wait_for_commit_gen(_origin_gen, timeout));
+    co_return get_on_this_shard();
 }
 
 global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
@@ -344,4 +397,8 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
     };
 
     _ptr = ensure_registry_entry(ptr);
+    // Read after the schema is obtained, so that the generation covers the change which made the
+    // schema synced here, if any.
+    _origin_gen = local_schema_registry().commit_gen();
+    _origin_synced = _ptr->registry_entry()->is_synced();
 }

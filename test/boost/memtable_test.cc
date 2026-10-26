@@ -1289,7 +1289,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
                 return env.migration_manager().invoke_on(0, [s = global_schema_ptr(std::move(s))] (service::migration_manager& mm) -> future<> {
                     auto group0_guard = co_await mm.start_group0_operation();
                     auto ts = group0_guard.write_timestamp();
-                    auto announcement = co_await service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s, ts);
+                    auto announcement = co_await service::prepare_new_column_family_announcement(mm.get_storage_proxy(), co_await s.get(db::no_timeout), ts);
                     co_await mm.announce(std::move(announcement), std::move(group0_guard), "");
                 });
             }

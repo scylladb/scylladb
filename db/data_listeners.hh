@@ -89,23 +89,6 @@ struct toppartitions_global_item_key {
     dht::decorated_key key;
 
     toppartitions_global_item_key(toppartitions_item_key&& tik) : schema(std::move(tik.schema)), key(std::move(tik.key)) {}
-    operator toppartitions_item_key() const {
-        return toppartitions_item_key(schema, key);
-    }
-
-    struct hash {
-        size_t operator()(const toppartitions_global_item_key& k) const {
-            return std::hash<dht::token>()(k.key.token());
-        }
-    };
-
-    struct comp {
-        bool operator()(const toppartitions_global_item_key& k1, const toppartitions_global_item_key& k2) const {
-            return k1.schema.get()->id() == k2.schema.get()->id() && k1.key.equal(*k2.schema.get(), k2.key);
-        }
-    };
-
-    explicit operator sstring() const;
 };
 
 class toppartitions_data_listener : public data_listener, public weakly_referencable<toppartitions_data_listener> {
@@ -117,10 +100,16 @@ class toppartitions_data_listener : public data_listener, public weakly_referenc
 
 public:
     using top_k = utils::space_saving_top_k<toppartitions_item_key, toppartitions_item_key::hash, toppartitions_item_key::comp>;
-    using global_top_k = utils::space_saving_top_k<toppartitions_global_item_key, toppartitions_global_item_key::hash, toppartitions_global_item_key::comp>;
+    // Like top_k::results, but can be transported across shards.
+    struct global_top_k_result {
+        toppartitions_global_item_key item;
+        unsigned count;
+        unsigned error;
+    };
+    using global_top_k_results = utils::chunked_vector<global_top_k_result>;
 public:
-    static global_top_k::results globalize(top_k::results&& r);
-    static top_k::results localize(const global_top_k::results& r);
+    static global_top_k_results globalize(top_k::results&& r);
+    static future<top_k::results> localize(const global_top_k_results& r);
 private:
     top_k _top_k_read;
     top_k _top_k_write;

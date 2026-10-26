@@ -805,6 +805,10 @@ database::setup_metrics() {
                 sm::description("Total number of view updates for which there were more view replicas than base replicas "
                     "and we had to generate an extra view update because the additional view replica wouldn't get paired with any base replica."
                     "Should only increase during RF change. Should stop increasing shortly after finishing the RF change.")).set_skip_when_empty(),
+
+        sm::make_counter("schema_change_commit_waits", [] { return local_schema_registry().commit_gen_waits(); },
+                sm::description("The number of requests which waited on this shard for a schema change to be committed here, "
+                    "after another shard had committed it.")).set_skip_when_empty(),
     });
     if (this_shard_id() == 0) {
         _metrics.add_group("database", {
@@ -4043,7 +4047,7 @@ class tablet_streaming_reader : public mutation_reader::impl {
         auto remote = co_await _db.invoke_on(t.shard,
                 [gs = global_schema_ptr(_schema), &remote_ranges = t.ranges, compaction_time = _compaction_time, buffer_size = _buffer_size] (replica::database& db)
                         -> future<foreign_ptr<std::unique_ptr<mutation_reader>>> {
-            auto s = gs.get();
+            auto s = co_await gs.get(db::no_timeout);
             // Copy here, so that the copy is allocated on this shard.
             auto ranges = remote_ranges;
             auto& cf = db.find_column_family(s);
@@ -4177,10 +4181,11 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
     auto erm = s->table().get_effective_replication_map();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
-        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout, tombstone_gc_enabled] (replica::database& db) mutable {
-            return db.query_mutations(gs, cmd, pr, {}, timeout, tombstone_gc_enabled).then([] (std::tuple<reconcilable_result, cache_temperature>&& res) {
-                return make_foreign(make_lw_shared<reconcilable_result>(std::move(std::get<0>(res))));
-            });
+        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout, tombstone_gc_enabled] (replica::database& db) mutable
+                -> future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> {
+            auto schema = co_await coroutine::try_future(gs.get(timeout));
+            auto res = co_await coroutine::try_future(db.query_mutations(std::move(schema), cmd, pr, {}, timeout, tombstone_gc_enabled));
+            co_return make_foreign(make_lw_shared<reconcilable_result>(std::move(std::get<0>(res))));
         });
     } else {
         auto prs = dht::partition_range_vector{pr};
@@ -4202,10 +4207,11 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> query_data(
     auto erm = s->table().get_effective_replication_map();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
-        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout] (replica::database& db) mutable {
-            return db.query(gs, cmd, opts, prs, {}, timeout).then([] (std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& res) {
-                return make_foreign(std::move(std::get<0>(res)));
-            });
+        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout] (replica::database& db) mutable
+                -> future<foreign_ptr<lw_shared_ptr<query::result>>> {
+            auto schema = co_await coroutine::try_future(gs.get(timeout));
+            auto res = co_await coroutine::try_future(db.query(std::move(schema), cmd, opts, prs, {}, timeout));
+            co_return make_foreign(std::move(std::get<0>(res)));
         });
     } else {
         auto&& [res, _] = co_await query_data_on_all_shards(db, std::move(s), cmd, prs, opts, {}, timeout);
