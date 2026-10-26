@@ -2973,4 +2973,18 @@ SEASTAR_TEST_CASE(compaction_controller_is_selected_by_config_test) {
     }, cfg);
 }
 
+// In shadow mode, rate_matching_compaction_controller runs in a dry run alongside the backlog controller, which keeps setting
+// the shares.
+SEASTAR_TEST_CASE(rate_matching_compaction_controller_shadow_mode_test) {
+    cql_test_config cfg;
+    cfg.db_config->compaction_rate_matching_controller_shadow_mode.set(true);
+    co_await do_with_cql_env_thread([] (cql_test_env& e) {
+        e.db().invoke_on_all([] (replica::database& db) {
+            auto& cm = db.get_compaction_manager();
+            BOOST_REQUIRE(dynamic_cast<const backlog_proportional_compaction_controller*>(&cm.get_compaction_controller()));
+            BOOST_REQUIRE(dynamic_cast<const rate_matching_compaction_controller*>(cm.get_shadow_compaction_controller()));
+        }).get();
+    }, cfg);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

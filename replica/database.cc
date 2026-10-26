@@ -531,6 +531,9 @@ void database::use_compaction_controller(std::string_view controller) {
         return;
     }
     _compaction_manager.use_backlog_proportional_compaction_controller();
+    if (_cfg.compaction_rate_matching_controller_shadow_mode()) {
+        _compaction_manager.shadow_compaction_controller_with_rate_matching();
+    }
 }
 
 const db::extensions& database::extensions() const {
@@ -627,10 +630,11 @@ void backlog_proportional_compaction_controller::set_max_shares(float max_shares
 }
 
 rate_matching_compaction_controller::rate_matching_compaction_controller(scheduling_group sg, float static_shares, std::optional<float> max_shares,
-        std::chrono::milliseconds interval, std::function<compaction::compaction_rates()> current_rates)
+        std::chrono::milliseconds interval, std::function<compaction::compaction_rates()> current_rates, dry_run dry_run)
     : _scheduling_group(std::move(sg))
     , _current_rates(std::move(current_rates))
     , _static_shares(static_shares)
+    , _dry_run(dry_run)
     , _update_timer([this] { adjust(); })
 {
     if (max_shares) {
@@ -687,7 +691,9 @@ float rate_matching_compaction_controller::next_shares(float shares, const compa
 
 void rate_matching_compaction_controller::adjust() {
     if (_static_shares > 0) {
-        _scheduling_group.set_shares(_static_shares);
+        if (!_dry_run) {
+            _scheduling_group.set_shares(_static_shares);
+        }
         return;
     }
     compaction::compaction_rates rates;
@@ -702,6 +708,16 @@ void rate_matching_compaction_controller::adjust() {
     // What the shares were derived from: the ratio the step is a power of, so the
     // logs tell a step held back by the limits from no error.
     auto ratio = rates.achieved.per_second() > 0 ? rates.target.per_second() / rates.achieved.per_second() : std::numeric_limits<double>::infinity();
+    if (_dry_run) {
+        dblog.log(log_level::info, _dry_run_log_limit,
+                "rate-matching compaction controller dry run: would set shares from {:.1f} to {:.1f}, while they are {:.1f}; "
+                "target {:.0f} bytes/s over {:.0f}s, achieved {:.0f} bytes/s over {:.0f}s and {:.0f} bytes/s over {:.0f}s, target/achieved {:.2f}",
+                previous_shares, _shares, _scheduling_group.get_shares(),
+                rates.target.per_second(), rates.target.interval().count(),
+                rates.achieved.per_second(), rates.achieved.interval().count(),
+                rates.achieved_long.per_second(), rates.achieved_long.interval().count(), ratio);
+        return;
+    }
     // On the rates' logger, so that enabling it shows the decision with its inputs.
     compaction::compaction_rates_logger.debug("rate-matching compaction controller: setting shares from {:.1f} to {:.1f}; "
             "target {:.0f} bytes/s over {:.0f}s, achieved {:.0f} bytes/s over {:.0f}s and {:.0f} bytes/s over {:.0f}s, target/achieved {:.2f}",

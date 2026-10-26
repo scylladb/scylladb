@@ -1898,6 +1898,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\tbacklog: Sets the shares from the compaction backlog.\n"
         "\trate_matching: Matches compaction to the work ingestion produces.",
         {"backlog", "rate_matching"})
+    , compaction_rate_matching_controller_shadow_mode(this, "compaction_rate_matching_controller_shadow_mode", value_status::Used, false,
+        "Only for testing the rate-matching compaction controller. If set to true while the backlog controller sets the shares of regular compaction, the rate-matching one runs alongside it without setting them, logging the shares it would set and what led to them.")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold.")
     , compaction_flush_all_tables_before_major_seconds(this, "compaction_flush_all_tables_before_major_seconds", value_status::Used, 86400,
