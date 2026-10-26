@@ -54,3 +54,23 @@ BOOST_AUTO_TEST_CASE(test_parsing_map_from_null) {
     BOOST_REQUIRE(map1 == map2);
     BOOST_REQUIRE(map1 == empty_map);
 }
+
+// A string can contain U+0000; comparison must use all of its bytes.
+BOOST_AUTO_TEST_CASE(test_single_value_comp_string_with_nul) {
+    const auto a = rjson::from_string(std::string_view("a"));
+    const auto a0 = rjson::from_string(std::string_view("a\0", 2));
+    const auto ab = rjson::from_string(std::string_view("a\0b", 3));
+    const auto ac = rjson::from_string(std::string_view("a\0c", 3));
+    rjson::single_value_comp less;
+    BOOST_REQUIRE(less(ab, ac));
+    BOOST_REQUIRE(!less(ac, ab));
+    BOOST_REQUIRE(!less(ab, ab));
+    BOOST_REQUIRE(less(a, a0));
+    BOOST_REQUIRE(less(a0, ab));
+    BOOST_REQUIRE(!less(a0, a));
+    // Long enough to be stored out of line, not inside the JSON value.
+    const auto long_b = rjson::from_string(std::string_view("0123456789\0abcdefghib", 21));
+    const auto long_c = rjson::from_string(std::string_view("0123456789\0abcdefghic", 21));
+    BOOST_REQUIRE(less(long_b, long_c));
+    BOOST_REQUIRE(!less(long_c, long_b));
+}
