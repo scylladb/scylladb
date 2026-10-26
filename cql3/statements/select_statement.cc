@@ -38,7 +38,6 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
-#include "index/secondary_index.hh"
 #include "validation.hh"
 #include "db/system_keyspace.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
@@ -78,11 +77,6 @@ bool is_internal_keyspace(std::string_view name);
 namespace cql3 {
 
 namespace statements {
-namespace {
-
-constexpr std::string_view ANN_CUSTOM_INDEX_OPTION = "vector_index";
-
-} // namespace
 
 static logging::logger logger("select_statement");
 
@@ -1090,11 +1084,6 @@ view_indexed_table_select_statement::prepare(data_dictionary::database db,
 
     if (!index_opt) {
         throw std::runtime_error("No index found.");
-    }
-
-    auto it = index_opt->metadata().options().find(db::index::secondary_index::custom_class_option_name);
-    if (it != index_opt->metadata().options().end() && it->second == ANN_CUSTOM_INDEX_OPTION) {
-        throw exceptions::invalid_request_exception("Vector indexes only support ANN queries");
     }
 
     schema_ptr view_schema = restrictions->get_view_schema();
