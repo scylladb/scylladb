@@ -244,6 +244,8 @@ The cost is one feature name per option, about fifty bytes, in gossip and in `sy
 
 Config values are stored and transported as text, regardless of an option's declared type. The registry type is the single point of validation: before any mutation is generated, the textual value is validated against it (`text`, `integer`, `floating_point`, `boolean`), and an invalid value is rejected before any schema mutation.
 
+A stored integer outside the option's `valid_range`, only reachable out-of-band, is logged and treated as absent like an unparsable one.
+
 For an option whose value cannot be expressed as a registry type, the option may instead declare a per-option parser and validator.
 
 ### Storage Model

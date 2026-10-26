@@ -104,7 +104,8 @@ struct option {
     std::string_view custom_expected_description = "";
     option_kind kind = option_kind::native;
     // When set, validate_value() rejects an integer value outside this range. Only valid for
-    // an integer option, and the default must fall within it. A db_config option bound to an
+    // an integer option, and the default must fall within it. A stored value outside it (only
+    // reachable out-of-band) is ignored by to_integer(). A db_config option bound to an
     // integral db::config entry narrower than int64_t must declare one that fits the entry's type.
     std::optional<integer_range> valid_range = std::nullopt;
 
