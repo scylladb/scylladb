@@ -5304,10 +5304,11 @@ SEASTAR_TEST_CASE(incremental_backlog_tracker_rates_test) {
 BOOST_AUTO_TEST_CASE(compaction_controller_v2_next_shares) {
     using rate = utils::rate<utils::units::bytes>;
     using namespace std::chrono_literals;
-    auto next = [] (float shares, double target, double achieved, float max_shares = 1000, double busy = 1) {
-        return compaction_controller_v2::next_shares(shares, {.target = rate(target, 10s), .achieved = rate(achieved, 10s)}, busy, max_shares);
+    const compaction_controller_v2::config cfg;
+    auto next = [&cfg] (float shares, double target, double achieved, float max_shares = 1000, double busy = 1) {
+        return compaction_controller_v2::next_shares(cfg, shares, {.target = rate(target, 10s), .achieved = rate(achieved, 10s)}, busy, max_shares);
     };
-    const auto alpha = compaction_controller_v2::alpha;
+    const auto alpha = cfg.alpha;
     // Behind the target, or ahead of it.
     BOOST_REQUIRE_CLOSE(next(200, 1500, 1000), 200 * std::pow(1.5, alpha), 1e-4);
     BOOST_REQUIRE_CLOSE(next(200, 1000, 1500), 200 * std::pow(1 / 1.5, alpha), 1e-4);
@@ -5326,11 +5327,32 @@ BOOST_AUTO_TEST_CASE(compaction_controller_v2_next_shares) {
     BOOST_REQUIRE_CLOSE(next(60, 0, 1000), compaction_controller_v2::min_shares, 1e-4);
     // Compaction idle part of the interval is held back by the work available, so its
     // shares are only lowered; idle all of it, they are left as they are.
-    const auto min_busy = compaction_controller_v2::min_busy_fraction_to_raise;
+    const auto min_busy = cfg.min_busy_fraction_to_raise;
     BOOST_REQUIRE_CLOSE(next(200, 1500, 1000, 1000, min_busy), 200 * std::pow(1.5, alpha), 1e-4);
     BOOST_REQUIRE_CLOSE(next(200, 1500, 1000, 1000, min_busy / 2), 200, 1e-4);
     BOOST_REQUIRE_CLOSE(next(200, 1000, 1500, 1000, min_busy / 2), 200 * std::pow(1 / 1.5, alpha), 1e-4);
     BOOST_REQUIRE_CLOSE(next(200, 1000, 1500, 1000, 0), 200, 1e-4);
+}
+
+// The settings of compaction_controller_v2 replace the defaults, and are rejected out of range.
+BOOST_AUTO_TEST_CASE(compaction_controller_v2_config) {
+    using rate = utils::rate<utils::units::bytes>;
+    using namespace std::chrono_literals;
+    const compaction_controller_v2::config cfg{.alpha = 1, .max_step = 4, .min_busy_fraction_to_raise = 0.9};
+    cfg.validate();
+    auto next = [&cfg] (float shares, double target, double achieved, double busy = 1) {
+        return compaction_controller_v2::next_shares(cfg, shares, {.target = rate(target, 10s), .achieved = rate(achieved, 10s)}, busy, 1000);
+    };
+    BOOST_REQUIRE_CLOSE(next(100, 3000, 1000), 300, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(100, 1e9, 1), 400, 1e-4);
+    BOOST_REQUIRE_CLOSE(next(100, 3000, 1000, 0.8), 100, 1e-4);
+
+    BOOST_REQUIRE_THROW((compaction_controller_v2::config{.rate_window = 0min}.validate()), std::invalid_argument);
+    BOOST_REQUIRE_THROW((compaction_controller_v2::config{.alpha = 0}.validate()), std::invalid_argument);
+    BOOST_REQUIRE_THROW((compaction_controller_v2::config{.alpha = 1.5}.validate()), std::invalid_argument);
+    BOOST_REQUIRE_THROW((compaction_controller_v2::config{.max_step = 1}.validate()), std::invalid_argument);
+    BOOST_REQUIRE_THROW((compaction_controller_v2::config{.min_busy_fraction_to_raise = -0.1}.validate()), std::invalid_argument);
+    BOOST_REQUIRE_THROW((compaction_controller_v2::config{.min_busy_fraction_to_raise = 1.1}.validate()), std::invalid_argument);
 }
 
 void test_major_does_not_miss_data_in_memtable_fn(test_env& env) {

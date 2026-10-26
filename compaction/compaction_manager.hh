@@ -90,6 +90,7 @@ public:
         utils::updateable_value<float> max_shares = utils::updateable_value<float>(0);
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
         std::chrono::seconds flush_all_tables_before_major = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(1));
+        compaction_controller_v2::config controller_v2;
     };
 
 public:
@@ -337,6 +338,10 @@ public:
 
     float max_shares() const noexcept {
         return _cfg.max_shares.get();
+    }
+
+    const compaction_controller_v2::config& controller_v2_config() const noexcept {
+        return _cfg.controller_v2;
     }
 
     // Replaces the compaction controller with compaction_controller_v2, which picks up the

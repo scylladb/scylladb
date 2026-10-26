@@ -108,23 +108,22 @@ class compaction_group : public compaction::compaction_backlog_source {
     // The rates this group tracks share the window and the start, so rates read from them
     // at the same time cover the same interval, whether the window has filled or not, and
     // can be compared and combined.
-    // FIXME: make the window configurable.
-    static constexpr lowres_db_clock::duration rate_window = std::chrono::minutes(30);
+    lowres_db_clock::duration _rate_window;
     lowres_db_clock::time_point _rates_start = lowres_db_clock::now();
     // Bytes flushed from memtables into this group, which the compaction controller
     // will use to match compaction to ingestion.
-    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _flushed_bytes{rate_window, _rates_start};
+    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _flushed_bytes{_rate_window, _rates_start};
     // Sum of bytes * ln(sstable size) over the same flushes. Divided by _flushed_bytes, it gives
     // the byte-weighted mean of ln(flush size), the flush size the write amplification estimate
     // is based on. Weighting by bytes keeps a storm of small flushes, which carry few bytes, from
     // dragging the flush size down.
     struct bytes_log_size;
-    utils::moving_average_rate<bytes_log_size, double, lowres_db_clock> _flushed_bytes_log_size{rate_window, _rates_start};
+    utils::moving_average_rate<bytes_log_size, double, lowres_db_clock> _flushed_bytes_log_size{_rate_window, _rates_start};
     // Bytes regular compaction compacted in this group. Accounted when compactions complete,
     // which with tablets and incremental compaction happens every few GB at most.
-    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _compacted_bytes{rate_window, _rates_start};
+    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _compacted_bytes{_rate_window, _rates_start};
     // Single-partition reads served from this group's sstables, and the sstables they read.
-    sstables::read_amplification_tracker _point_read_amplification{rate_window, _rates_start};
+    sstables::read_amplification_tracker _point_read_amplification{_rate_window, _rates_start};
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();

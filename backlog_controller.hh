@@ -190,16 +190,26 @@ public:
     using dry_run = seastar::bool_class<struct dry_run_tag>;
 
     static constexpr float min_shares = 50;
-    static constexpr double alpha = 0.3;
-    // An update changes the shares by up to this factor, either way.
-    static constexpr double max_step = 2;
-    // The shares are only raised if regular compaction was busy for at least this
-    // fraction of the interval since the last update. Compaction that is idle part of the
-    // time is held back by the work available, not by its shares, so raising them would
-    // only wind them up for the next large compaction, which then runs at shares way
-    // above what it needs.
-    static constexpr double min_busy_fraction_to_raise = 0.5;
+    struct config {
+        // The window the rates are averaged over. It sets how quickly the controller
+        // follows a change in the workload: the rates reflect a new ingestion rate only
+        // once the window covers it, so the shares settle within about a window.
+        std::chrono::minutes rate_window{30};
+        double alpha = 0.3;
+        // An update changes the shares by up to this factor, either way.
+        double max_step = 2;
+        // The shares are only raised if regular compaction was busy for at least this
+        // fraction of the interval since the last update. Compaction that is idle part of
+        // the time is held back by the work available, not by its shares, so raising them
+        // would only wind them up for the next large compaction, which then runs at shares
+        // way above what it needs.
+        double min_busy_fraction_to_raise = 0.5;
+
+        // Throws std::invalid_argument if a setting is out of its range.
+        void validate() const;
+    };
 private:
+    config _config;
     scheduling_group _scheduling_group;
     std::function<compaction::compaction_rates()> _current_rates;
     // The fraction of the interval since the last update during which regular compaction
@@ -225,7 +235,7 @@ private:
 
     void adjust();
 public:
-    compaction_controller_v2(scheduling_group sg, float static_shares, std::optional<float> max_shares, std::chrono::milliseconds interval,
+    compaction_controller_v2(config cfg, scheduling_group sg, float static_shares, std::optional<float> max_shares, std::chrono::milliseconds interval,
             std::function<compaction::compaction_rates()> current_rates, std::function<double()> busy, dry_run dry_run = dry_run::no);
 
     future<> shutdown() override;
@@ -246,5 +256,5 @@ public:
     // raises them, if compaction was busy for most of the interval; a target below lowers
     // them, if compaction was busy at all. With nothing to compare, e.g. unknown rates,
     // they are left as they are.
-    static float next_shares(float shares, const compaction::compaction_rates& rates, double busy, float max_shares);
+    static float next_shares(const config& cfg, float shares, const compaction::compaction_rates& rates, double busy, float max_shares);
 };

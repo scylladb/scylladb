@@ -614,9 +614,26 @@ void compaction_controller_v1::set_max_shares(float max_shares) {
     _control_points.back().output = max_shares;
 }
 
-compaction_controller_v2::compaction_controller_v2(scheduling_group sg, float static_shares, std::optional<float> max_shares,
+void compaction_controller_v2::config::validate() const {
+    if (rate_window < std::chrono::minutes(1)) {
+        throw std::invalid_argument(fmt::format("The window of the compaction rates must be at least 1 minute, got {} minutes", rate_window.count()));
+    }
+    if (!(alpha > 0 && alpha <= 1)) {
+        throw std::invalid_argument(fmt::format("The alpha of compaction controller v2 must be in (0, 1], got {}", alpha));
+    }
+    if (!(max_step > 1)) {
+        throw std::invalid_argument(fmt::format("The step limit of compaction controller v2 must be greater than 1, got {}", max_step));
+    }
+    if (!(min_busy_fraction_to_raise >= 0 && min_busy_fraction_to_raise <= 1)) {
+        throw std::invalid_argument(fmt::format("The busy fraction compaction controller v2 raises the shares at must be in [0, 1], got {}",
+                min_busy_fraction_to_raise));
+    }
+}
+
+compaction_controller_v2::compaction_controller_v2(config cfg, scheduling_group sg, float static_shares, std::optional<float> max_shares,
         std::chrono::milliseconds interval, std::function<compaction::compaction_rates()> current_rates, std::function<double()> busy, dry_run dry_run)
-    : _scheduling_group(std::move(sg))
+    : _config(std::move(cfg))
+    , _scheduling_group(std::move(sg))
     , _current_rates(std::move(current_rates))
     , _busy(std::move(busy))
     , _static_shares(static_shares)
@@ -649,7 +666,7 @@ void compaction_controller_v2::set_max_shares(float max_shares) {
     _shares = std::min(_shares, _max_shares);
 }
 
-float compaction_controller_v2::next_shares(float shares, const compaction::compaction_rates& rates, double busy, float max_shares) {
+float compaction_controller_v2::next_shares(const config& cfg, float shares, const compaction::compaction_rates& rates, double busy, float max_shares) {
     if (busy <= 0) {
         return shares;
     }
@@ -657,11 +674,11 @@ float compaction_controller_v2::next_shares(float shares, const compaction::comp
     auto achieved = rates.achieved.per_second();
     double step = 1;
     if (achieved > 0) {
-        step = std::clamp(std::pow(target / achieved, alpha), 1 / max_step, max_step);
+        step = std::clamp(std::pow(target / achieved, cfg.alpha), 1 / cfg.max_step, cfg.max_step);
     } else if (target > 0) {
-        step = max_step;
+        step = cfg.max_step;
     }
-    if (step > 1 && busy < min_busy_fraction_to_raise) {
+    if (step > 1 && busy < cfg.min_busy_fraction_to_raise) {
         return shares;
     }
     return std::clamp(float(shares * step), min_shares, max_shares);
@@ -683,7 +700,7 @@ void compaction_controller_v2::adjust() {
         rates = _current_rates();
         _last_rates = rates;
         busy = _busy();
-        _shares = next_shares(_shares, rates, busy, _max_shares);
+        _shares = next_shares(_config, _shares, rates, busy, _max_shares);
     } catch (...) {
         // The shares are left as they are, as with unknown rates.
         dblog.warn("Failed to compute the compaction rates, leaving compaction shares at {}: {}", _shares, std::current_exception());

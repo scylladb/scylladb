@@ -1365,6 +1365,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     .max_shares = cfg->compaction_max_shares,
                     .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
                     .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
+                    .controller_v2 = {
+                        .rate_window = std::chrono::minutes(cfg->compaction_controller_v2_rate_window_in_minutes()),
+                        .alpha = cfg->compaction_controller_v2_alpha(),
+                        .max_step = cfg->compaction_controller_v2_max_step(),
+                        .min_busy_fraction_to_raise = cfg->compaction_controller_v2_min_busy_fraction_to_raise(),
+                    },
                 };
             });
             cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager)).get();

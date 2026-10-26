@@ -3546,6 +3546,7 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _repair_sstable_classifier(std::move(repair_classifier))
     , _logstor_state(t.uses_logstor() ? std::make_unique<compaction_group_logstor_state>(*this) : nullptr)
     , _lowest_rp(db::replay_position::max)
+    , _rate_window(t.get_compaction_manager().controller_v2_config().rate_window)
 {
     // Must go through register_backlog_tracker(), otherwise this group's backlog would
     // be tracked but never accounted by the compaction backlog manager. Groups created

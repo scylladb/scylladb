@@ -1886,6 +1886,19 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\tv2: Matches compaction to the work ingestion produces. Takes effect once all nodes of the cluster support it.")
     , compaction_controller_v2_shadow_mode(this, "compaction_controller_v2_shadow_mode", value_status::Used, false,
         "Only for testing compaction_controller v2. If set to true while v1 controls the shares of regular compaction, v2 runs alongside it without setting them, logging the shares it would set and what led to them.")
+    , compaction_controller_v2_rate_window_in_minutes(this, "compaction_controller_v2_rate_window_in_minutes", value_status::Used, 30,
+        "The window, in minutes, over which the ingestion and compaction rates compaction_controller v2 compares are averaged. "
+        "A longer window smooths out bursts of flushes and compactions, but makes the controller follow a change in the workload more slowly. "
+        "Do not set this unless you know what you are doing.")
+    , compaction_controller_v2_alpha(this, "compaction_controller_v2_alpha", value_status::Used, 0.3,
+        "At every update, compaction_controller v2 scales the shares of regular compaction by (target rate / achieved rate)^alpha. "
+        "Must be in (0, 1]: lower values move the shares more gradually. Do not set this unless you know what you are doing.")
+    , compaction_controller_v2_max_step(this, "compaction_controller_v2_max_step", value_status::Used, 2.0,
+        "The factor by which compaction_controller v2 can change the shares of regular compaction at most in an update, either way. "
+        "Must be greater than 1. Do not set this unless you know what you are doing.")
+    , compaction_controller_v2_min_busy_fraction_to_raise(this, "compaction_controller_v2_min_busy_fraction_to_raise", value_status::Used, 0.5,
+        "compaction_controller v2 only raises the shares of regular compaction if it was busy for at least this fraction of the time since its last update. "
+        "Must be in [0, 1]. Do not set this unless you know what you are doing.")
     , compaction_enforce_min_threshold(this, "compaction_enforce_min_threshold", liveness::LiveUpdate, value_status::Used, false,
         "If set to true, enforce the min_threshold option for compactions strictly. If false (default), Scylla may decide to compact even if below min_threshold.")
     , compaction_flush_all_tables_before_major_seconds(this, "compaction_flush_all_tables_before_major_seconds", value_status::Used, 86400,

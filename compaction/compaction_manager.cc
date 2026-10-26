@@ -947,7 +947,7 @@ inline std::unique_ptr<compaction_controller> make_compaction_controller(const c
 std::unique_ptr<compaction_controller_v2> compaction_manager::make_compaction_controller_v2(compaction_controller_v2::dry_run dry_run) {
     // Updated every minute: often enough to follow compactions completing, rarely enough
     // for the rates, averaged over minutes, to respond to the shares.
-    return std::make_unique<compaction_controller_v2>(compaction_sg(), static_shares(), max_shares(), 1min,
+    return std::make_unique<compaction_controller_v2>(_cfg.controller_v2, compaction_sg(), static_shares(), max_shares(), 1min,
             [this] { return _backlog_manager.rates(); },
             // The fraction of the interval since the last update regular compaction was busy.
             [this, last_busy_time = regular_compaction_busy_time(), last_update = lowres_clock::now()] () mutable {
@@ -1240,6 +1240,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     }))
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
+    _cfg.controller_v2.validate();
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
 }
