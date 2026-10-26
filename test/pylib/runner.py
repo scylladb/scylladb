@@ -16,7 +16,6 @@ import shutil
 import signal
 import sys
 import time
-import urllib.parse
 from argparse import BooleanOptionalAction
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -33,7 +32,7 @@ import yaml
 from _pytest.junitxml import xml_key
 
 
-from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
+from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
@@ -74,7 +73,6 @@ CPP_TEST_LOG_KEPT = "cpp_test_log_kept"
 REPEATING_FILES = pytest.StashKey[set[pathlib.Path]]()
 BUILD_MODE = pytest.StashKey[str]()
 RUN_ID = pytest.StashKey[int]()
-PYTEST_LOG_FILE = pytest.StashKey[str]()
 
 EXIT_MAXFAIL_REACHED = 11
 
@@ -82,6 +80,23 @@ logger = logging.getLogger(__name__)
 
 # Store pytest config globally so we can access it in hooks that only receive report
 _pytest_config: pytest.Config | None = None
+
+
+class TestpyHookspecs:
+    @pytest.hookspec
+    def pytest_testpy_phase_failed(self, item: pytest.Item, report: pytest.TestReport,
+                                   clusters: list[ScyllaCluster]) -> None:
+        """Called from pytest_runtest_makereport when a phase report failed:
+        after the report exists, before the files of the clusters recycled
+        during the phase are deleted, and before pytest_runtest_logreport.
+
+        `clusters` holds the item's cluster, if it still has one, and the
+        clusters recycled during the phase; it may be empty.
+        """
+
+
+def pytest_addhooks(pluginmanager: pytest.PytestPluginManager) -> None:
+    pluginmanager.add_hookspecs(TestpyHookspecs)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -156,6 +171,11 @@ CLUSTER_KEY = pytest.StashKey[ScyllaCluster | None]()
 # then deletes their files.
 RECYCLED_CLUSTERS_KEY = pytest.StashKey[list[ScyllaCluster]]()
 
+# The number of clusters the sweep at session finish disposed of: set by
+# pytest_sessionfinish, read by the testpy_logs plugin's pytest_sessionfinish,
+# which keeps the session log when the sweep found any.
+SWEPT_CLUSTERS_KEY = pytest.StashKey[int]()
+
 # Set by the `manager` fixture from after_test()'s result: this test's seastar
 # IO counter totals, keyed by metric name (SeastarIOMetricName).
 # Picked up by pytest_runtest_protocol to store with the per-test metrics.
@@ -174,37 +194,6 @@ def make_failed_test_dir(config: pytest.Config, build_mode: str, test_name: str)
             / test_name.translate(str.maketrans('[]', '()')))
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def record_failed_test_artifacts(config: pytest.Config,
-                                 properties: list[tuple[str, object]],
-                                 failed_test_dir_path: pathlib.Path,
-                                 longreprtext: str,
-                                 when: str) -> None:
-    """Common failed-test bookkeeping: append the phase traceback to
-    stacktrace.txt and record the clickable TEST_LOGS / PYTEST_LOG links.
-
-    Fires once per failed phase, so the traceback is always appended while the
-    links are recorded only once (idempotent).
-    """
-    with open(failed_test_dir_path / "stacktrace.txt", "a") as f:
-        f.write(f"----- {when} -----\n{longreprtext}\n")
-
-    artifacts_dir_url = config.getoption("artifacts_dir_url", None)
-    if artifacts_dir_url is None or any(name == "TEST_LOGS" for name, _ in properties):
-        return
-
-    def _artifact_link(path: pathlib.Path | str) -> str:
-        # URL-encoded so test names with ::/[]/() don't 404; the junit plugin
-        # linkifies http(s) values.
-        posix = pathlib.Path(path).as_posix()
-        return urllib.parse.urljoin(artifacts_dir_url + "/", urllib.parse.quote(posix[posix.find("testlog"):]))
-
-    # TEST_LOGS -> failed_test folder (server logs + traceback);
-    # PYTEST_LOG -> this worker's session log.
-    properties.append(("TEST_LOGS", _artifact_link(failed_test_dir_path) + "/"))
-    if PYTEST_LOG_FILE in config.stash:
-        properties.append(("PYTEST_LOG", _artifact_link(config.stash[PYTEST_LOG_FILE])))
 
 
 def _build_test_mock(item: pytest.Item) -> SimpleNamespace:
@@ -588,16 +577,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         return
 
     swept = asyncio.run(recycle_leftover_clusters(session))
-
-    # If all tests passed, remove the log file to save space and avoid confusion with logs from failed runs.
-    # We check this at the end of the session to ensure that we have the complete log available for any failed tests.
-    # An interrupted session counts no failures, and a sweep that had to dispose of a cluster is
-    # recorded nowhere else, so the log stays in both cases.
-    if (session.testsfailed == 0 and session.exitstatus == 0 and not swept
-            and not session.config.getoption("--save-log-on-success")):
-        # Use missing_ok=True because the log file is only created on first write,
-        # so it may never have been written if nothing was logged.
-        pathlib.Path(session.config.stash[PYTEST_LOG_FILE]).unlink(missing_ok=True)
+    session.config.stash[SWEPT_CLUSTERS_KEY] = swept
 
     asyncio.run(artifacts.cleanup_before_exit())
 
@@ -623,40 +603,10 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
     _pytest_config = config
-    log_file_format = config.getini("log_file_format") or config.getini("log_format") or "%(asctime)s %(levelname)s %(name)s> %(message)s"
-    log_file_level = config.getini("log_file_level") or config.getini("log_level") or "INFO"
-
-    pytest_log_dir = pathlib.Path(_pytest_config.getoption("--tmpdir")).absolute() / PYTEST_LOG_FOLDER
-    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
-    # If this is an xdist worker, set up logging to a separate file for this worker. Otherwise, set up logging for the main process.
-    if worker_id is not None:
-        _pytest_config.stash[PYTEST_LOG_FILE] = f"{pytest_log_dir}/pytest_{worker_id}_{HOST_ID}.log"
-    else:
-        # For the main process, we want to clean up old logs before the run, so we create the log directory and remove any existing log files.
-        pytest_log_dir.mkdir(parents=True, exist_ok=True)
-        if not _pytest_config.getoption("--save-log-on-success"):
-            for file in pytest_log_dir.glob("*"):
-                # This will help in case framework tests are executed with test.py event if it's the wrong way to run them.
-                # test_no_bare_skip_markers_in_collection uses a subprocess to run a collection that has lead to race
-                # condition, especially with repeat.
-                file.unlink(missing_ok=True)
-
-        _pytest_config.stash[PYTEST_LOG_FILE] = f"{pytest_log_dir}/pytest_main_{HOST_ID}.log"
-
-    # Explicitly configure the root logger to write exclusively to a file.
-    # logging.basicConfig() is a no-op when the root logger already has handlers
-    # (e.g. added by pytest or any early import), which would leave a StreamHandler
-    # in place and cause all log records — including noisy third-party DEBUG messages
-    # like urllib3.connectionpool or asyncio — to appear on the terminal.
-    root_logger = logging.getLogger()
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-        handler.close()
-
-    file_handler = logging.FileHandler(_pytest_config.stash[PYTEST_LOG_FILE])
-    file_handler.setFormatter(logging.Formatter(log_file_format))
-    root_logger.addHandler(file_handler)
-    root_logger.setLevel(log_file_level)
+    # The plugin's pytest_configure is replayed here, so the test logs are
+    # set up before anything below logs.
+    from test.pylib.test_logs_plugin import TestLogsPlugin
+    config.pluginmanager.register(TestLogsPlugin(), "testpy_logs")
 
     if exe_url := config.getoption("--exe-url"):
         if config.getoption("--exe-path"):
@@ -709,6 +659,8 @@ def pytest_configure(config: pytest.Config) -> None:
     # so there is nothing new to record.
     if os.environ.get("PYTEST_XDIST_WORKER") is None and not config.getoption("--collect-only"):
         temp_dir = pathlib.Path(config.getoption("--tmpdir")).absolute()
+        # Not left to testpy_logs: -p no:testpy_logs must still work on a fresh tree.
+        temp_dir.mkdir(parents=True, exist_ok=True)
         writer = SQLiteWriter(temp_dir / DEFAULT_DB_NAME)
         try:
             writer.write_row_if_not_exist(gather_host_info(), HOST_INFO_TABLE, id_column="host_id")
@@ -791,8 +743,9 @@ async def recycle_leftover_clusters(session: pytest.Session) -> int:
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Post-test hook to store test result in stash, optionally save logs and
-    delete the files of the clusters recycled during the phase.
+    """Post-test hook to store test result in stash, let the plugins save the
+    logs of a failed phase and delete the files of the clusters recycled
+    during the phase.
 
     Stores each phase's report in item.stash[PHASE_REPORT_KEY][phase] so
     fixtures and hooks can access the test outcome per phase.  `item.stash`
@@ -804,19 +757,6 @@ def pytest_runtest_makereport(item, call):
     # Store report per phase for use by fixtures and hooks
     item.stash.setdefault(PHASE_REPORT_KEY, {})[report.when] = report
 
-    # Optionally save test failure logs to files
-    if report.failed or item.config.getoption("--save-log-on-success"):
-        log_file = (
-            pathlib.Path(item.config.getoption("--tmpdir")).absolute() /
-            PYTEST_TESTS_LOGS_FOLDER /
-            f"{item._nodeid.replace('::', '-').replace('/', '-')}-{report.when}-{HOST_ID}.log"
-        )
-        with log_file.open("a", encoding="utf-8") as f:
-            f.write(report.longreprtext + "\n")
-            for section in report.sections:
-                f.write(section[0] + "\n")
-                f.write(section[1] + "\n")
-
     recycled = item.config.stash.get(RECYCLED_CLUSTERS_KEY, [])
     if report.failed:
         # The item's cluster, if it still has one, and the clusters recycled
@@ -824,25 +764,10 @@ def pytest_runtest_makereport(item, call):
         clusters = list(recycled)
         if cluster := get_cluster_from_pytest_node(item):
             clusters.append(cluster)
-        if clusters:
-            try:
-                failed_test_dir_path = make_failed_test_dir(item.config, item.stash[BUILD_MODE], item.name)
-                # For a call-phase failure the manager fixture's teardown
-                # copies the server logs again (and attaches them to allure);
-                # the copy here also covers the phases with no manager to
-                # gather them, e.g. a failure during fixture setup.
-                for server in chain.from_iterable(cluster.servers.values() for cluster in clusters):
-                    if server.log_filename.is_file():
-                        shutil.copyfile(server.log_filename, failed_test_dir_path / server.log_filename.name)
-                record_failed_test_artifacts(
-                    config=item.config,
-                    properties=item.user_properties,
-                    failed_test_dir_path=failed_test_dir_path,
-                    longreprtext=report.longreprtext,
-                    when=report.when,
-                )
-            except Exception:
-                logger.warning("Failed to collect logs for failed test %s", item.name, exc_info=True)
+        try:
+            item.ihook.pytest_testpy_phase_failed(item=item, report=report, clusters=clusters)
+        except Exception:
+            logger.warning("pytest_testpy_phase_failed failed for test %s", item.name, exc_info=True)
 
     # Not before the logs above are copied, since the phase that recycled a
     # cluster may be the one that failed, and not at exit either, so that a

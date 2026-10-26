@@ -337,6 +337,11 @@ log.
 Tests run in parallel via `pytest-xdist` workers (`gw0`, `gw1`, ...).
 Each worker writes its log to `testlog/pytest_log/pytest_gw{N}_{HOST_ID}.log`.
 This log contains cluster lifecycle messages and test pass/fail status.
+These test logs come from the `testpy_logs` plugin. `-p no:testpy_logs` turns
+it off: no session or per-test logs, and a failed test gets no `stacktrace.txt`
+or server log copies in `failed_test/` (the `manager` fixture of `test/cluster`
+still gathers its own logs) and no `TEST_LOGS`/`PYTEST_LOG` JUnit links.
+Cluster files are still cleaned up.
 
 For example, imagine `cqlpy/test_null.py` fails. The relevant lines
 in the worker log will be:

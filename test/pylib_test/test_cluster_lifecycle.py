@@ -142,14 +142,18 @@ HARNESS_CONFTEST = textwrap.dedent("""\
 
     import pytest
 
-    from test.pylib.runner import (BUILD_MODE, TEST_SUITE, pytest_runtest_makereport, scylla_cluster,
-                                   testpy_cluster_factory)
+    from test.pylib.runner import (BUILD_MODE, TEST_SUITE, pytest_addhooks, pytest_runtest_makereport,
+                                   scylla_cluster, testpy_cluster_factory)
+    from test.pylib.test_logs_plugin import TestLogsPlugin
 
     def pytest_addoption(parser):
         parser.addoption("--tmpdir")
         parser.addoption("--save-log-on-success", action="store_true", dest="save_log_on_success")
         parser.addoption("--coverage", action="store_true")
         parser.addoption("--extra-scylla-cmdline-options", default="")
+
+    def pytest_configure(config):
+        config.pluginmanager.register(TestLogsPlugin(), "testpy_logs")
 
     def pytest_collection_modifyitems(items):
         for item in items:
@@ -206,11 +210,15 @@ class LogWritingCluster:
             server.cmd.returncode = -signal.SIGKILL if self.exit_status is None else self.exit_status
 
 
-def run_with_stub_clusters(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, exit_status: int | None = None,
+def run_with_stub_clusters(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, *args: str,
+                           exit_status: int | None = None,
                            **modules: str) -> tuple[pytest.RunResult, list[str], pathlib.Path]:
-    """Run the modules against the harness, with every server ending with exit_status when recycled, or with
-    SIGKILL's if it is None; return the result, the cluster events and the failed_test dir."""
+    """Run the modules against the harness with the extra pytest args, with every server ending with exit_status
+    when recycled, or with SIGKILL's if it is None; return the result, the cluster events and the failed_test dir."""
     events = []
+    # An outer xdist run leaks its worker id, which would make the inner session log as a worker into a
+    # pytest_log/ dir that only the main process creates.
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
     monkeypatch.setattr(runner, "ScyllaCluster", partial(LogWritingCluster, events, exit_status))
     pytester.makeconftest(HARNESS_CONFTEST)
     pytester.makeini(
@@ -222,7 +230,20 @@ def run_with_stub_clusters(pytester: pytest.Pytester, monkeypatch: pytest.Monkey
     pytester.makepyfile(**modules)
     tmpdir = pytester.path / "testlog"
     (tmpdir / "pytest_tests_logs").mkdir(parents=True)
-    return pytester.runpytest(f"--tmpdir={tmpdir}"), events, tmpdir / "dev" / "failed_test"
+    return pytester.runpytest(f"--tmpdir={tmpdir}", *args), events, tmpdir / "dev" / "failed_test"
+
+
+# A module whose last teardown fails after its cluster was recycled.
+FAILING_TEARDOWN_MODULE = textwrap.dedent("""\
+    import pytest
+
+    @pytest.fixture(scope="module")
+    def failing_teardown(scylla_cluster):
+        yield
+        raise RuntimeError("deliberate teardown failure")
+
+    def test_b(failing_teardown): pass
+    """)
 
 
 def test_failed_teardown_keeps_the_logs_of_a_recycled_cluster(pytester: pytest.Pytester,
@@ -234,16 +255,7 @@ def test_failed_teardown_keeps_the_logs_of_a_recycled_cluster(pytester: pytest.P
     result, events, failed_test_dir = run_with_stub_clusters(
         pytester, monkeypatch,
         test_a="def test_a(scylla_cluster): pass\n",
-        test_b=textwrap.dedent("""\
-            import pytest
-
-            @pytest.fixture(scope="module")
-            def failing_teardown(scylla_cluster):
-                yield
-                raise RuntimeError("deliberate teardown failure")
-
-            def test_b(failing_teardown): pass
-            """),
+        test_b=FAILING_TEARDOWN_MODULE,
     )
 
     result.assert_outcomes(passed=2, errors=1)
@@ -268,3 +280,19 @@ def test_module_whose_server_exited_on_its_own_fails(pytester: pytest.Pytester,
     result.stdout.fnmatch_lines(["E *RuntimeError: namespace(*) exited with status code -6"])
     assert (failed_test_dir / "test_c" / "test_c.log").read_text() == "server log\n"
     assert sorted(p.name for p in failed_test_dir.parent.iterdir()) == ["failed_test"]
+
+
+def test_cluster_files_are_deleted_without_testpy_logs(pytester: pytest.Pytester,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the testpy_logs plugin blocked, a failed teardown gets no failed_test/ copy, but the recycled
+    cluster's files are still deleted."""
+    result, _, failed_test_dir = run_with_stub_clusters(
+        pytester, monkeypatch, "-p", "no:testpy_logs",
+        test_b=FAILING_TEARDOWN_MODULE,
+    )
+
+    result.assert_outcomes(passed=1, errors=1)
+    assert not failed_test_dir.exists()
+    assert not (failed_test_dir.parent / "test_b.log").exists()
+    assert not (failed_test_dir.parent / "test_b").exists()
+    assert not (failed_test_dir.parent.parent / "pytest_log").exists()
