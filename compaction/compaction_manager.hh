@@ -193,10 +193,14 @@ private:
     timer<lowres_clock> _automatic_scrub_submission_timer;
 
     std::unique_ptr<compaction_controller> _compaction_controller;
-    // The shutdown of the controller _compaction_controller replaced, if any.
+    // The shutdown of the controllers that stopped, if any.
     future<> _replaced_compaction_controller_shutdown = make_ready_future<>();
+    // rate_matching_compaction_controller in a dry run alongside _compaction_controller, if any, for
+    // comparing the shares they would set.
+    std::unique_ptr<compaction_controller> _shadow_compaction_controller;
+
     std::unique_ptr<compaction_controller> make_backlog_proportional_compaction_controller();
-    std::unique_ptr<rate_matching_compaction_controller> make_rate_matching_compaction_controller();
+    std::unique_ptr<rate_matching_compaction_controller> make_rate_matching_compaction_controller(rate_matching_compaction_controller::dry_run dry_run);
     // The time regular compaction was busy, i.e. at least one ran, so far.
     seastar::lowres_clock::duration regular_compaction_busy_time() const noexcept;
     void stop_compaction_controller(std::unique_ptr<compaction_controller> controller);
@@ -375,9 +379,17 @@ public:
     // rate_matching_compaction_controller. The replaced one stops setting the shares at once.
     void use_backlog_proportional_compaction_controller();
     void use_rate_matching_compaction_controller();
+    // Runs rate_matching_compaction_controller in a dry run alongside the compaction controller, which
+    // keeps setting the shares, logging the shares it would set and what led to them.
+    // For testing rate_matching_compaction_controller only.
+    void shadow_compaction_controller_with_rate_matching();
 
     const compaction_controller& get_compaction_controller() const noexcept {
         return *_compaction_controller;
+    }
+
+    const compaction_controller* get_shadow_compaction_controller() const noexcept {
+        return _shadow_compaction_controller.get();
     }
 
     uint32_t throughput_mbs() const noexcept {

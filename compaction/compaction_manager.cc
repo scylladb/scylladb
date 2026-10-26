@@ -867,7 +867,10 @@ future<> compaction_manager::run_custom_job(compaction_group_view& t, compaction
 
 future<> compaction_manager::update_static_shares(float static_shares) {
     cmlog.info("Updating static shares to {}", static_shares);
-    return _compaction_controller->update_static_shares(static_shares);
+    if (_shadow_compaction_controller) {
+        co_await _shadow_compaction_controller->update_static_shares(static_shares);
+    }
+    co_await _compaction_controller->update_static_shares(static_shares);
 }
 
 compaction_reenabler::compaction_reenabler(compaction_manager& cm, compaction_group_view& t)
@@ -1048,7 +1051,7 @@ inline std::unique_ptr<compaction_controller> make_compaction_controller(const c
     return std::make_unique<backlog_proportional_compaction_controller>(csg, static_shares, max_shares, normalization_factor, 250ms, std::move(fn));
 }
 
-std::unique_ptr<rate_matching_compaction_controller> compaction_manager::make_rate_matching_compaction_controller() {
+std::unique_ptr<rate_matching_compaction_controller> compaction_manager::make_rate_matching_compaction_controller(rate_matching_compaction_controller::dry_run dry_run) {
     // Updated every minute: often enough to follow compactions completing, rarely enough
     // for the rates, averaged over minutes, to respond to the shares.
     return std::make_unique<rate_matching_compaction_controller>(compaction_sg(), static_shares(), max_shares(), 1min,
@@ -1073,7 +1076,8 @@ std::unique_ptr<rate_matching_compaction_controller> compaction_manager::make_ra
                             credited, fmt::join(running, ", "));
                 }
                 return rates;
-            });
+            },
+            dry_run);
 }
 
 lowres_clock::duration compaction_manager::regular_compaction_busy_time() const noexcept {
@@ -1120,8 +1124,20 @@ void compaction_manager::use_rate_matching_compaction_controller() {
         return;
     }
     // The replaced controller stops right away, so that it doesn't set the shares anymore.
-    stop_compaction_controller(std::exchange(_compaction_controller, make_rate_matching_compaction_controller()));
+    // So does the shadow one, if any: there is nothing left to compare it with.
+    stop_compaction_controller(std::exchange(_compaction_controller, make_rate_matching_compaction_controller(rate_matching_compaction_controller::dry_run::no)));
+    if (_shadow_compaction_controller) {
+        stop_compaction_controller(std::move(_shadow_compaction_controller));
+    }
     cmlog.info("Using the rate-matching compaction controller");
+}
+
+void compaction_manager::shadow_compaction_controller_with_rate_matching() {
+    if (_shadow_compaction_controller || dynamic_cast<rate_matching_compaction_controller*>(_compaction_controller.get())) {
+        return;
+    }
+    _shadow_compaction_controller = make_rate_matching_compaction_controller(rate_matching_compaction_controller::dry_run::yes);
+    cmlog.info("Running the rate-matching compaction controller in a dry run alongside the compaction controller");
 }
 
 compaction::compaction_state::~compaction_state() {
@@ -1344,6 +1360,9 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _compaction_max_shares_observer(_cfg.max_shares.observe([this] (const float& max_shares) {
         cmlog.info("Updating max shares to {}", max_shares);
         _compaction_controller->set_max_shares(max_shares);
+        if (_shadow_compaction_controller) {
+            _shadow_compaction_controller->set_max_shares(max_shares);
+        }
     }))
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
@@ -1737,6 +1756,9 @@ future<> compaction_manager::really_do_stop() noexcept {
     _compaction_submission_timer.cancel();
     _automatic_scrub_submission_timer.cancel();
     co_await _compaction_controller->shutdown();
+    if (_shadow_compaction_controller) {
+        co_await _shadow_compaction_controller->shutdown();
+    }
     co_await std::move(_replaced_compaction_controller_shutdown);
     co_await _update_compaction_static_shares_action.join();
     cmlog.info("Stopped");
