@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -291,13 +292,16 @@ static T custom_parse_as(const option& opt, std::string_view value) {
     }
 }
 
-// Shared implementation of the typed to_*() accessors: checks that the option was registered
-// with the type the accessor reads, applies the registered default when no override is stored,
-// and degrades an unparsable stored value (a row corrupted or written out-of-band) to the
-// default with a warning. One definition, so the per-type accessors cannot drift apart in how
-// they report a mismatched call or a bad row.
+// Resolved on every balancer pass, so a bad stored value warns at most once a minute per option.
+logger::rate_limit& warn_limit(std::string_view option_name) {
+    static thread_local std::unordered_map<std::string, logger::rate_limit> limits;
+    return limits.try_emplace(std::string(option_name), std::chrono::seconds(60)).first->second;
+}
+
+// nullopt when no override is stored or it is unparsable (logged); an accessor/registry
+// type mismatch is an internal error.
 template <typename T>
-T to_native(const option& opt, value_type expected_type, std::string_view type_name,
+std::optional<T> parse_stored(const option& opt, value_type expected_type, std::string_view type_name,
         const std::optional<seastar::sstring>& value,
         T (*parse)(std::string_view)) {
     if (opt.type() != expected_type) {
@@ -306,7 +310,7 @@ T to_native(const option& opt, value_type expected_type, std::string_view type_n
                 opt.name, type_name));
     }
     if (!value) {
-        return std::get<T>(opt.default_value);
+        return std::nullopt;
     }
     try {
         if (opt.custom_parser) {
@@ -314,11 +318,20 @@ T to_native(const option& opt, value_type expected_type, std::string_view type_n
         }
         return parse(*value);
     } catch (const marshal_exception& e) {
-        cluster_config_registry_logger.warn(
-                "Ignoring unparsable stored value '{}' for {} config '{}', using default: {}",
+        cluster_config_registry_logger.log(log_level::warn, warn_limit(opt.name),
+                "Ignoring unparsable stored value '{}' for {} config '{}': {}",
                 *value, type_name, opt.name, e.what());
-        return std::get<T>(opt.default_value);
+        return std::nullopt;
     }
+}
+
+// One implementation for all typed to_*() accessors, so they can't drift apart on bad rows
+// or mismatched calls.
+template <typename T>
+T to_native(const option& opt, value_type expected_type, std::string_view type_name,
+        const std::optional<seastar::sstring>& value,
+        T (*parse)(std::string_view)) {
+    return parse_stored<T>(opt, expected_type, type_name, value, parse).value_or(std::get<T>(opt.default_value));
 }
 
 }
@@ -394,8 +407,18 @@ bool to_boolean(const option& opt, const std::optional<seastar::sstring>& value)
     return to_native<bool>(opt, value_type::boolean, "boolean", value, parse_boolean);
 }
 
+std::optional<int64_t> stored_integer(const option& opt, const std::optional<seastar::sstring>& value) {
+    const auto v = parse_stored<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    if (v && opt.valid_range && (*v < opt.valid_range->min || *v > opt.valid_range->max)) {
+        cluster_config_registry_logger.log(log_level::warn, warn_limit(opt.name),
+                "Ignoring out-of-range stored value '{}' for integer config '{}'", *value, opt.name);
+        return std::nullopt;
+    }
+    return v;
+}
+
 int64_t to_integer(const option& opt, const std::optional<seastar::sstring>& value) {
-    return to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    return stored_integer(opt, value).value_or(std::get<int64_t>(opt.default_value));
 }
 
 double to_floating_point(const option& opt, const std::optional<seastar::sstring>& value) {

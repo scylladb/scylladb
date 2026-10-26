@@ -236,6 +236,16 @@ SEASTAR_TEST_CASE(test_cluster_config_registry_rejects_integer_value_out_of_rang
         BOOST_REQUIRE_THROW(
             e.execute_cql("ALTER CLUSTER WITH test_ranged_option = 101").get(),
             exceptions::invalid_request_exception);
+
+        // A stored value outside the range (only reachable out-of-band) resolves to the default.
+        BOOST_REQUIRE_EQUAL(db::cluster_config_registry::to_integer(*opt, sstring("7")), 7);
+        BOOST_REQUIRE_EQUAL(db::cluster_config_registry::to_integer(*opt, sstring("101")), 0);
+        BOOST_REQUIRE_EQUAL(db::cluster_config_registry::to_integer(*opt, sstring("abc")), 0);
+        // Without a default applied, a bad value is absent, so a caller's own fallback applies.
+        BOOST_REQUIRE_EQUAL(db::cluster_config_registry::stored_integer(*opt, sstring("7")).value_or(-1), 7);
+        BOOST_REQUIRE(!db::cluster_config_registry::stored_integer(*opt, sstring("101")));
+        BOOST_REQUIRE(!db::cluster_config_registry::stored_integer(*opt, sstring("abc")));
+        BOOST_REQUIRE(!db::cluster_config_registry::stored_integer(*opt, std::nullopt));
     });
 }
 

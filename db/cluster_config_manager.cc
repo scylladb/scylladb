@@ -661,11 +661,8 @@ std::optional<int64_t> cluster_config_manager::resolve_integer_config_no_default
     if (!ctx) {
         return std::nullopt;
     }
-    auto value = resolve_config(config_name, *ctx);
-    if (!value) {
-        return std::nullopt;
-    }
-    return cluster_config_registry::to_integer(opt, value);
+    // A bad stored value counts as absent, so the caller's own fallback applies.
+    return cluster_config_registry::stored_integer(opt, resolve_config(config_name, *ctx));
 }
 
 // An option's default is compiled in, so these are usable before the cluster enables the
