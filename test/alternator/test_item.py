@@ -763,6 +763,38 @@ def test_null_in_string(test_table_s):
     test_table_s.put_item(Item={'p': p, 'val': val})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'val': val}
 
+# Set operations compare elements by all their bytes, so two strings that
+# differ only after a null character are two different elements.
+def test_null_in_string_set_add(test_table_s):
+    p = random_string()
+    ab, ac = 'a\x00b', 'a\x00c'
+    test_table_s.put_item(Item={'p': p, 'a': {ab}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='ADD a :v',
+        ExpressionAttributeValues={':v': {ac}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == {ab, ac}
+
+def test_null_in_string_set_delete(test_table_s):
+    p = random_string()
+    ab, ac = 'a\x00b', 'a\x00c'
+    test_table_s.put_item(Item={'p': p, 'a': {ab, ac, 'z'}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='DELETE a :v',
+        ExpressionAttributeValues={':v': {'z'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == {ab, ac}
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='DELETE a :v',
+        ExpressionAttributeValues={':v': {ac}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == {ab}
+
+def test_null_in_string_set_condition_eq(test_table_s):
+    p = random_string()
+    ab, ac = 'a\x00b', 'a\x00c'
+    test_table_s.put_item(Item={'p': p, 'a': {ab}})
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET b = :one',
+            ConditionExpression='a = :v', ExpressionAttributeValues={':one': 1, ':v': {ac}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET b = :one',
+        ConditionExpression='a = :v', ExpressionAttributeValues={':one': 1, ':v': {ab}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 1
+
 def test_null_in_bytes(test_table_b):
     p = random_bytes() + bytes([0]) + random_bytes()
     val = random_bytes() + bytes([0]) + random_bytes()
