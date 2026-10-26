@@ -94,9 +94,13 @@ public:
     // The table UUID is returned too.
     static future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
             get_sstables_from_upload_dir(sharded<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg);
+    // Makes the options to open the sstables with. Called once per shard, so that the
+    // options may refer to shard-local state -- the abort source which makes the
+    // opening and the later reads abortable.
+    using storage_options_maker = std::function<data_dictionary::storage_options()>;
     static future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
-            get_sstables_from_object_store(sharded<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables, sstring endpoint, sstring type, sstring bucket, sstring prefix, sstables::sstable_open_config cfg, std::function<seastar::abort_source*()> = {},
-                    data_dictionary::storage_options::object_storage_layout layout = data_dictionary::storage_options::object_storage_layout::foreign);
+            get_sstables_from_object_store(sharded<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables,
+                    storage_options_maker make_storage_options, sstables::sstable_open_config cfg);
     static future<> process_upload_dir(sharded<replica::database>& db, sharded<db::view::view_builder>& vb, sharded<db::view::view_building_worker>& vbw, sstring ks_name, sstring cf_name, bool skip_cleanup, bool skip_reshape);
 };
 

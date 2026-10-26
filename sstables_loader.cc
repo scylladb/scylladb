@@ -827,9 +827,9 @@ future<> sstables_loader::download_and_stream(download_progress& progress, const
 
     auto ep_type = _storage_manager.get_endpoint_type(endpoint);
     std::vector<seastar::abort_source> shard_aborts(this_smp_shard_count());
-    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_db, ks, cf, sstable_names, endpoint, ep_type, bucket, prefix, cfg, [&] {
-        return &shard_aborts[this_shard_id()];
-    });
+    auto [ table_id, sstables_on_shards ] = co_await replica::distributed_loader::get_sstables_from_object_store(_db, ks, cf, sstable_names, [&] {
+        return data_dictionary::make_object_storage_options(endpoint, ep_type, bucket, prefix, &shard_aborts[this_shard_id()]);
+    }, cfg);
     llog.debug("Streaming sstables from {}({}/{})", endpoint, bucket, prefix);
     std::exception_ptr ex;
     named_gate g("sstables_loader::download_and_stream");
@@ -1083,10 +1083,12 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
 
     auto sstables_on_shards = co_await map_reduce(toc_names_by_prefix, [&] (auto ent) {
         return replica::distributed_loader::get_sstables_from_object_store(_db, s->ks_name(), s->cf_name(),
-                std::move(ent.second), snapshot_info.endpoint, ep_type, snapshot_info.bucket, std::move(ent.first), cfg, [&] {
-                    return &shard_aborts[this_shard_id()];
-                }, in_place ? data_dictionary::storage_options::object_storage_layout::unified
-                            : data_dictionary::storage_options::object_storage_layout::foreign).then_unpack([] (table_id, auto sstables) {
+                std::move(ent.second), [&, prefix = std::move(ent.first)] {
+                    return data_dictionary::make_object_storage_options(snapshot_info.endpoint, ep_type, snapshot_info.bucket, prefix,
+                            &shard_aborts[this_shard_id()],
+                            in_place ? data_dictionary::storage_options::object_storage_layout::unified
+                                     : data_dictionary::storage_options::object_storage_layout::foreign);
+                }, cfg).then_unpack([] (table_id, auto sstables) {
                     return make_ready_future<std::vector<sstables_col>>(std::move(sstables));
                 });
     }, std::vector<prefix_sstables>(this_smp_shard_count()), [&] (std::vector<prefix_sstables> a, std::vector<sstables_col> b) {
