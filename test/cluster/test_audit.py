@@ -1429,6 +1429,33 @@ class CQLAuditTester(AuditTester):
                     ks="",
                 )
 
+            # A hashed password is masked too.
+            hashed_password = "$6$aaaabbbbccccdddd$47PHiBMQlMZ2bZrMSCBtJfD9XDivV/QICFRGlvQ9MCHNKevtLomBfhrHjuVqdit0ZE5wOS6MaloqwKlunupPo0"
+            self.execute_and_validate_new_audit_entry(
+                session,
+                f"CREATE ROLE role3 WITH HASHED PASSWORD = '{hashed_password}'",
+                category="DCL",
+                expected_operation="CREATE ROLE role3 WITH HASHED PASSWORD = '***'",
+                user="cassandra",
+                ks="",
+            )
+            # ALTER ROLE doesn't support HASHED PASSWORD yet and fails with a
+            # server error (SCYLLADB-5229), but the failed statement is
+            # audited, and its hash must be masked too.
+            expected_entry = AuditEntry(category="DCL", cl="ONE", error=True, ks="", table="", user="cassandra",
+                                        statement="ALTER ROLE role3 WITH HASHED PASSWORD = '***'")
+            with self.assert_entries_were_added(session, [expected_entry]):
+                # The driver wraps the server error in NoHostAvailable.
+                with pytest.raises(NoHostAvailable, match="Server error"):
+                    session.execute(f"ALTER ROLE role3 WITH HASHED PASSWORD = '{hashed_password}'")
+            self.execute_and_validate_new_audit_entry(
+                session,
+                "DROP ROLE role3",
+                category="DCL",
+                user="cassandra",
+                ks="",
+            )
+
     async def _test_login(self):
         """
         USER LOGIN
