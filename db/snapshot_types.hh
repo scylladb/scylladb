@@ -51,6 +51,16 @@ struct snapshot_sstable_entry {
     int64_t index_size;
 };
 
+// One snapshot_sstables row as needed by residue cleanup code in
+// storage_proxy::remote::cleanup_object_storage_snapshot_residue()
+struct snapshot_sstable_cleanup_entry {
+    sstables::sstable_id sstable_id;
+    dht::token first_token;
+    sstring toc_name;
+    locator::host_id node;
+    int64_t write_timestamp;
+};
+
 struct snapshot_sstables_progress {
     size_t nr_sstables;
     size_t nr_downloaded_sstables;
@@ -112,6 +122,16 @@ struct snapshot_table_entry {
     std::string tablet_layout;
 
     constexpr bool operator==(const snapshot_table_entry& o) const noexcept = default;
+};
+
+struct snapshot_tablet_cleanup_entry {
+    dht::token first_token;
+    int64_t write_timestamp;
+};
+
+struct snapshot_schema_cleanup_info {
+    utils::chunked_vector<std::pair<sstring, sstring>> tables;
+    int64_t max_write_timestamp = 0;
 };
 
 // Tablet as of the time of snapshot
