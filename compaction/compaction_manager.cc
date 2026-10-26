@@ -1691,6 +1691,39 @@ private:
                 fmt::format("Failed to quarantine {}: {}", sst, std::current_exception()));
         }
     }
+
+    future<> maybe_validate_component_digests(std::span<const sstables::shared_sstable> sstables) {
+        compaction_group_view& t = *_compacting_table;
+        if (!automatic_scrub_enabled(t)) {
+            co_return;
+        }
+
+        co_await coroutine::parallel_for_each(sstables, [this, &t] (const sstables::shared_sstable& sst) -> future<> {
+            if (!compaction_manager::should_be_automatically_scrubbed(t, sst, compaction_manager::for_regular_compaction::yes)) {
+                co_return;
+            }
+
+            std::exception_ptr ex;
+            bool aborted = false;
+            try {
+                co_await sst->validate_digests(sstables::sstable::skip_data_digest::yes, _compaction_data.abort);
+            } catch (const sstables::malformed_sstable_exception&) {
+                ex = std::current_exception();
+            } catch (const abort_requested_exception&) {
+                aborted = true;
+            }
+
+            if (aborted) [[unlikely]] {
+                co_await coroutine::return_exception(make_compaction_stopped_exception());
+            }
+
+            if (ex) [[unlikely]] {
+                _cm._validation_errors++;
+                co_await coroutine::return_exception_ptr(sstables::maybe_attribute_malformed_sstable_exception(std::move(ex), sst->generation()));
+            }
+        });
+    }
+
 protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         if (!is_system_keyspace(_compacting_table->schema()->ks_name())) {
@@ -1765,6 +1798,9 @@ protected:
             std::exception_ptr ex;
 
             try {
+                // The scrub time will be updated by creating new sstables.
+                co_await maybe_validate_component_digests(descriptor.sstables);
+
                 compaction_result res = co_await compact_sstables(std::move(descriptor), _compaction_data, on_replace);
                 cmlog.debug("Finished minor compaction old_sstables={} new_sstables={} sstables_reapired_at={} range={} uuid={} compaction_uuid={}",
                         old_sstables, res.new_sstables, compacting_table()->get_sstables_repaired_at(), compacting_table()->token_range(), uuid, _compaction_data.compaction_uuid);
@@ -2231,10 +2267,12 @@ private:
 
         try {
             // A no-op for the sstables which have no component digests to begin with.
-            co_await sst->validate_digests(sstables::sstable::skip_data_digest::yes);
+            co_await sst->validate_digests(sstables::sstable::skip_data_digest::yes, _compaction_data.abort);
         } catch (const sstables::malformed_sstable_exception& e) {
             cmlog.warn("Automatic scrub in abort mode found sstable {} invalid due to: {}", sst, e);
             valid_component_digests = false;
+        } catch (const abort_requested_exception&) {
+            ex = std::make_exception_ptr(make_compaction_stopped_exception());
         } catch (...) {
             ex = std::current_exception();
         }

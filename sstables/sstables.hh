@@ -795,18 +795,18 @@ private:
     void validate_max_local_deletion_time();
     void validate_partitioner();
     // Read component data and validate the digest.
-    future<> compute_and_validate_component_digest(component_type type);
+    future<> compute_and_validate_component_digest(component_type type, std::optional<abort_source&> as = std::nullopt);
     future<> validate_scylla_digest_value();
 public:
     void validate_component_digest(component_type type, uint32_t computed_digest) const;
     using skip_data_digest = bool_class<struct skip_data_digest_tag>;
-    future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no);
+    future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no, std::optional<abort_source&> as = std::nullopt);
 private:
     // Read the Scylla component self-digest from file.
     // Should only be called by sstables which have a Scylla file digest.
     future<uint32_t> read_scylla_file_digest() const;
-    future<uint32_t> compute_component_file_digest(component_type type) const;
-    future<uint32_t> compute_component_file_digest(file f, size_t size) const;
+    future<uint32_t> compute_component_file_digest(component_type type, std::optional<abort_source&> as = std::nullopt) const;
+    future<uint32_t> compute_component_file_digest(file f, size_t size, std::optional<abort_source&> as = std::nullopt) const;
 
     // Loads first and last partition keys from appropriate components into `_first` and `_last`.
     void set_first_and_last_keys();

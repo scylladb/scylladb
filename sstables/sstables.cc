@@ -1342,28 +1342,31 @@ future<uint32_t> sstable::read_scylla_file_digest() const {
     co_return digest;
 }
 
-future<uint32_t> sstable::compute_component_file_digest(component_type type) const {
+future<uint32_t> sstable::compute_component_file_digest(component_type type, std::optional<abort_source&> as) const {
     auto f = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
     auto size = co_await f.size();
     if (type == component_type::Scylla && _components->scylla_metadata->digest) {
         // For Scylla metadata, the digest is stored at the end of the file, so we need to exclude it from the checksum calculation.
         size -= sizeof(uint32_t);
     }
-    co_return co_await compute_component_file_digest(std::move(f), size);
+    co_return co_await compute_component_file_digest(std::move(f), size, as);
 }
 
-static future<uint32_t> do_compute_component_file_digest(file f, size_t size, file_input_stream_options options) {
-    return with_closeable(make_file_input_stream(std::move(f), 0, size, options), [] (input_stream<char>& in) -> future<uint32_t> {
+static future<uint32_t> do_compute_component_file_digest(file f, size_t size, file_input_stream_options options, std::optional<abort_source&> as = std::nullopt) {
+    co_return co_await with_closeable(make_file_input_stream(std::move(f), 0, size, options), coroutine::lambda([&as] (input_stream<char>& in) -> future<uint32_t> {
         uint32_t digest = crc32_utils::init_checksum();
         while (auto buf = co_await in.read()) {
+            if (as) {
+                as->check();
+            }
             digest = crc32_utils::checksum(digest, buf.get(), buf.size());
         }
         co_return digest;
-    });
+    }));
 }
 
-future<uint32_t> sstable::compute_component_file_digest(file f, size_t size) const {
-    return do_compute_component_file_digest(std::move(f), size, {.buffer_size = sstable_buffer_size});
+future<uint32_t> sstable::compute_component_file_digest(file f, size_t size, std::optional<abort_source&> as) const {
+    return do_compute_component_file_digest(std::move(f), size, {.buffer_size = sstable_buffer_size}, as);
 }
 
 void sstable::validate_component_digest(component_type type, uint32_t computed_digest) const {
@@ -1380,13 +1383,13 @@ void sstable::validate_component_digest(component_type type, uint32_t computed_d
     }
 }
 
-future<> sstable::compute_and_validate_component_digest(component_type type) {
+future<> sstable::compute_and_validate_component_digest(component_type type, std::optional<abort_source&> as) {
     auto stored_digest = get_component_digest(type);
     if (!stored_digest.has_value()) {
         co_return;
     }
 
-    auto computed_digest = co_await compute_component_file_digest(type);
+    auto computed_digest = co_await compute_component_file_digest(type, as);
     validate_component_digest(type, computed_digest);
 }
 
@@ -1410,12 +1413,12 @@ future<> sstable::validate_scylla_digest_value() {
     }
 }
 
-future<> sstable::validate_digests(sstable::skip_data_digest skip_data) {
+future<> sstable::validate_digests(sstable::skip_data_digest skip_data, std::optional<abort_source&> as) {
     co_await validate_scylla_digest_value();
 
     for (const auto& type : _recognized_components) {
         if (type != component_type::Data || !skip_data) {
-            co_await compute_and_validate_component_digest(type);
+            co_await compute_and_validate_component_digest(type, as);
         }
     }
 }
