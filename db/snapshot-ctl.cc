@@ -163,6 +163,10 @@ future<> snapshot_ctl::take_cluster_column_family_snapshot(std::vector<sstring> 
     if (tag.empty()) {
         throw std::invalid_argument("You must supply a snapshot name.");
     }
+    if (tag.find('/') != sstring::npos) {
+        // Restore stages its catalog rows under "<tag>/restore/...", avoid early potential collisions
+        throw std::invalid_argument(fmt::format("Invalid snapshot tag '{}': must not contain '/'", tag));
+    }
     if (ks_names.size() != 1 && !tables.empty()) {
         throw std::invalid_argument("Cannot name tables when doing multiple keyspaces snapshot");
     }
@@ -361,6 +365,10 @@ future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstr
 
     if (tag.empty()) {
         throw std::invalid_argument("You must supply a snapshot name.");
+    }
+    if (tag.find('/') != sstring::npos) {
+        // Restore stages its metadata catalog rows under "<tag>/restore/...", avoid early potential collisions 
+        throw std::invalid_argument(fmt::format("Invalid backup tag '{}': must not contain '/'", tag));
     }
     if (ks_names.size() != 1 && !tables.empty()) {
         throw std::invalid_argument("Cannot name tables when doing multiple keyspaces snapshot backup");
