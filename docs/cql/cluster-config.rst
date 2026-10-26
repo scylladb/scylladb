@@ -228,6 +228,13 @@ Available options
        the default, for example after a node stayed down for a long time. Must be between ``1``
        and ``315360000`` (ten years). Default: ``300``, in effect once every node runs a version
        that knows the option.
+   * - ``max_type_nesting``
+     - integer
+     - ``CLUSTER``
+     - Maximum nesting depth of a type in a client statement. Collections, tuples, vectors and
+       user types each add a level. Accepts ``1`` to ``4294967295``. Default: ``32``.
+       Raise the limit only for an existing schema with deeper types, and only to the depth of
+       those types. A type nested much deeper can crash a node.
 
 .. _cql-cluster-config-yaml-options:
 
