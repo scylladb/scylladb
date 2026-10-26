@@ -977,6 +977,125 @@ def test_scylla_sstable_script(cql, request, test_keyspace, scylla_path, scylla_
         assert slice_lua_json == cxx_json
 
 
+# The gc_clock_time_point type of the Lua API is documented to support the ==,
+# < and <= operators. They used to fail with "attempt to index a nil value",
+# because the implementation read the second operand from an empty stack.
+def test_scylla_sstable_script_time_point_comparison(cql, test_keyspace, scylla_path, scylla_data_dir):
+    script_file = os.path.join(scylla_data_dir, '..', 'test_scylla_sstable_script_time_point_comparison.lua')
+    script = '''
+wr = Scylla.new_json_writer()
+
+function consume_stream_start(args)
+    a1 = Scylla.time_point_from_string("2024-11-03 05:30:00z")
+    a2 = Scylla.time_point_from_string("2024-11-03 05:30:00z")
+    b = Scylla.time_point_from_string("2024-11-03 06:30:00z")
+    wr:start_array()
+    for _, r in ipairs({a1 == a2, a1 == b, a1 < b, b < a1, a1 < a2, a1 <= b, b <= a1, a1 <= a2}) do
+        wr:bool(r)
+    end
+end
+
+function consume_stream_end()
+    wr:end_array()
+end
+'''
+    with open(script_file, 'w') as f:
+        f.write(script)
+    try:
+        with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
+            res = json.loads(subprocess.check_output([scylla_path, 'sstable', 'script', '--schema-file', schema_file, '--script-file', script_file] + sstables))
+            # Check the results of a1 == a2, a1 == b, a1 < b, b < a1, a1 < a2,
+            # a1 <= b, b <= a1 and a1 <= a2, where a1 and a2 are equal and b
+            # is later.
+            assert res == [True, False, True, False, False, True, False, True]
+    finally:
+        os.unlink(script_file)
+
+# The gc_clock_time_point type of the Lua API is documented to be in UTC, so
+# its fields, and its conversion back to a time (as in tostring()), must not
+# depend on the time zone of the machine running the tool. The tool used to
+# convert through local time, so the fields were in local time, and in the
+# hour repeated when daylight saving time ends, tostring() could be off by an
+# hour. This test runs the tool in a time zone with daylight saving time
+# (given as a POSIX TZ rule, which needs no time zone database), and uses two
+# time points at the same local time in the repeated hour: 01:30 EDT (05:30
+# UTC) and 01:30 EST (06:30 UTC) on November 3rd, 2024. Converting through
+# local time can't get both of them right.
+# Reproduces SCYLLADB-5662.
+def test_scylla_sstable_script_time_point_is_utc(cql, test_keyspace, scylla_path, scylla_data_dir):
+    script_file = os.path.join(scylla_data_dir, '..', 'test_scylla_sstable_script_time_point_is_utc.lua')
+    script = '''
+wr = Scylla.new_json_writer()
+
+function consume_stream_start(args)
+    wr:start_array()
+    for _, s in ipairs({"2024-11-03 05:30:00z", "2024-11-03 06:30:00z"}) do
+        tp = Scylla.time_point_from_string(s)
+        wr:start_object()
+        wr:key("hour")
+        wr:int(tp.hour)
+        wr:key("str")
+        wr:string(tostring(tp))
+        wr:end_object()
+    end
+end
+
+function consume_stream_end()
+    wr:end_array()
+end
+'''
+    with open(script_file, 'w') as f:
+        f.write(script)
+    try:
+        with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
+            env = dict(os.environ, TZ='EST5EDT,M3.2.0,M11.1.0')
+            res = json.loads(subprocess.check_output([scylla_path, 'sstable', 'script', '--schema-file', schema_file, '--script-file', script_file] + sstables, env=env))
+            # Check that the fields are in UTC, and that converting the time
+            # point back to a time (in tostring()) returns the original time.
+            assert res == [
+                {'hour': 5, 'str': '2024-11-03 05:30:00z'},
+                {'hour': 6, 'str': '2024-11-03 06:30:00z'},
+            ]
+    finally:
+        os.unlink(script_file)
+
+
+def one_partition_tombstone_table(cql, keyspace):
+    table = util.unique_name()
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v int) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+    cql.execute(schema)
+    cql.execute(f'DELETE FROM {keyspace}.{table} WHERE pk = 1')
+    nodetool.flush(cql, f'{keyspace}.{table}')
+    return table, schema
+
+
+# The purgeable.lua script counts the tombstones deleted more than
+# GC_GRACE_SECONDS ago. It used to pass a tombstone's deletion_time to
+# os.time(), which takes the fields as local time - but they are in UTC, so
+# the deletion time it calculated was off by the offset of the local time
+# zone. This test runs the script in time zones 14 hours ahead of UTC and 14
+# hours behind it, on a tombstone deleted just now: with a grace period of 10
+# hours it must not be purgeable, and with a grace period of -10 hours it
+# must be.
+def test_scylla_sstable_script_purgeable_time_zone(cql, test_keyspace, scylla_path, scylla_data_dir):
+    script_file = os.path.realpath(os.path.join(__file__, '../../../tools/scylla-sstable-scripts/purgeable.lua'))
+    with scylla_sstable(one_partition_tombstone_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
+        # POSIX TZ offsets have the opposite sign: 'UTC-14' is 14 hours ahead
+        # of UTC.
+        for tz in ['UTC-14', 'UTC+14']:
+            for grace_seconds, expected_purgeable in [(36000, 0), (-36000, 1)]:
+                env = dict(os.environ, TZ=tz, GC_GRACE_SECONDS=str(grace_seconds))
+                out = subprocess.check_output([scylla_path, 'sstable', 'script', '--schema-file', schema_file, '--script-file', script_file] + sstables, env=env, text=True)
+                # The tombstones line has the total, live, dead and purgeable
+                # counts.
+                tombstones = [line.split() for line in out.splitlines() if line.split()[:1] == ['tombstones']]
+                assert len(tombstones) == 1
+                # Check that the tombstone is purgeable exactly when it was
+                # deleted more than the grace period ago.
+                assert tombstones[0][1] == '1'
+                assert tombstones[0][4] == str(expected_purgeable), f'TZ={tz}, GC_GRACE_SECONDS={grace_seconds}'
+
+
 class TestScyllaSsstableSchemaLoadingBase:
 
     def check(self, scylla_path, extra_args, sstable, dump_reference, cwd=None, env=None):
