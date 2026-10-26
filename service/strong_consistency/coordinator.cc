@@ -296,8 +296,6 @@ replica_set_view serving_replicas(const locator::tablet_info& tinfo, const locat
         case end_repair:
             // A strongly consistent tablet needs no repair: raft keeps its replicas
             // in sync.
-            // FIXME: nothing refuses to schedule a repair of a strongly consistent
-            // tablet yet.
             break;
     }
     on_internal_error(logger, format("serving_replicas: unexpected transition stage {} "
