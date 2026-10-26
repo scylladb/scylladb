@@ -223,11 +223,21 @@ static bytes from_json_object_aux(const tuple_type_impl& t, const rjson::value& 
         throw marshal_exception(
                 format("Too many values ({}) for tuple with size {}", value.Size(), t.all_types().size()));
     }
+    if (value.Size() < t.all_types().size()) {
+        throw marshal_exception(
+                format("Too few values ({}) for tuple with size {}", value.Size(), t.all_types().size()));
+    }
     std::vector<bytes_opt> raw_tuple;
     raw_tuple.reserve(value.Size());
     auto ti = t.all_types().begin();
     for (auto vi = value.Begin(); vi != value.End(); ++vi, ++ti) {
-        raw_tuple.emplace_back(from_json_object(**ti, *vi));
+        // A JSON null sets this component to null, as in a user type (but
+        // unlike in a list or set, whose elements cannot be null).
+        if (vi->IsNull()) {
+            raw_tuple.emplace_back(std::nullopt);
+        } else {
+            raw_tuple.emplace_back(from_json_object(**ti, *vi));
+        }
     }
     return t.build_value(std::move(raw_tuple));
 }
@@ -495,6 +505,15 @@ static sstring to_json_string_aux(const tuple_type_impl& t, bytes_view bv) {
         }
         ++ti;
         ++vi;
+    }
+    // A tuple value may be serialized with fewer components than its type
+    // has (e.g., when written as the CQL literal (1) for a tuple<int, text>).
+    // The missing components are null, so print them as such.
+    for (; ti != t.all_types().end(); ++ti) {
+        if (ti != t.all_types().begin()) {
+            out << ", ";
+        }
+        out << "null";
     }
 
     out << ']';

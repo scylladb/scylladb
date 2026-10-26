@@ -148,7 +148,7 @@ def testReuseName(cql, test_keyspace):
 
 # Reproduces SCYLLADB-5141 (snake_case names of native functions - here,
 # from_json()) and #7954 (from_json() can't set a tuple element to null).
-@pytest.mark.xfail(reason="SCYLLADB-5141, #7954")
+@pytest.mark.xfail(reason="SCYLLADB-5141")
 def testAllTypes(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int, b uuid, c set<text>)") as myType, \
          create_table(cql, test_keyspace, "(" +
@@ -498,7 +498,10 @@ def testAllTypes(cql, test_keyspace):
 
         execute(cql, table, "INSERT INTO %s (k, frozenmapval) VALUES (?, from_json(?))", 0, "{\"b\": 2, \"a\": 3}")
         assert_rows(execute(cql, table, "SELECT k, frozenmapval FROM %s WHERE k = ?", 0), row(0, {"a": 3, "b": 2}))
-        assert_rows(execute(cql, table, "SELECT k, frozenmapval FROM %s WHERE k = ?", 0), row(0, {"a": 3, "b": 2}))
+        # The Java test repeats the above check of the base table here, by
+        # mistake - we check the view, like the tuple test below does.
+        assert_empty(execute(cql, mv["frozenmapval"], "SELECT k, textval FROM %s WHERE frozenmapval = from_json(?)", "{\"a\": 1, \"b\": 2}"))
+        assert_rows(execute(cql, mv["frozenmapval"], "SELECT k, textval FROM %s WHERE frozenmapval = from_json(?)", "{\"a\": 3, \"b\": 2}"), row(0, "abcd"))
 
         # ================ tuples ================
         execute(cql, table, "INSERT INTO %s (k, tupleval) VALUES (?, from_json(?))", 0, "[1, \"foobar\", \"6bddc89a-5644-11e4-97fc-56847afe9799\"]")

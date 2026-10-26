@@ -386,7 +386,6 @@ def test_fromjson_map_key_timestamp(cql, table1):
 # that a normal value is allowed. For example, it cannot be given as an
 # element of a list.
 # Reproduces #7954.
-@pytest.mark.xfail(reason="issue #7954")
 def test_fromjson_null_constant(cql, table1):
     p = unique_key_int()
     # Check that a "null" JSON constant can be used to unset a column
@@ -708,3 +707,44 @@ def test_insert_json_invalid(cql, table1):
     # A null bound value is also an InvalidRequest error.
     with pytest.raises(InvalidRequest):
         cql.execute(stmt, [None])
+
+# A JSON value for a tuple column must have all the tuple's components, so
+# a JSON array which has fewer items than the tuple type is rejected, both
+# in INSERT JSON and in fromJson(). (An explicit null component, e.g.
+# ["hi", null], should be allowed, but that's a different issue, #7954).
+# Reproduces SCYLLADB-5260.
+def test_json_tuple_missing_components(cql, table1):
+    p = unique_key_int()
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "tup": ["hi"]}}'""")
+    with pytest.raises(FunctionFailure):
+        cql.execute(f"""INSERT INTO {table1} (p, tup) VALUES ({p}, fromJson('["hi"]'))""")
+
+# A JSON null in a JSON array for a tuple column sets that component of the
+# tuple to null - in INSERT JSON just like in fromJson() (which is checked
+# by test_fromjson_null_constant above).
+# Reproduces #7954.
+def test_insert_json_tuple_null_component(cql, table1):
+    p = unique_key_int()
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "tup": ["a", null]}}'""")
+    assert list(cql.execute(f"SELECT tup FROM {table1} WHERE p = {p}")) == [(('a', None),)]
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "tup": [null, 2]}}'""")
+    assert list(cql.execute(f"SELECT tup FROM {table1} WHERE p = {p}")) == [((None, 2),)]
+
+# Scylla accepts a tuple literal with fewer components than the tuple type,
+# e.g., ('a') for a tuple<text, int> column, and stores a shorter tuple whose
+# missing components are null. SELECT JSON should print these components as
+# null, so its output has all the tuple's components - and can be inserted
+# back with INSERT JSON. This test is Scylla-only because Cassandra 6 rejects
+# such a short tuple literal, and Cassandra 5 accepts it but then fails
+# SELECT JSON with a server error.
+def test_select_json_short_tuple(cql, table1, scylla_only):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (p, tup) VALUES ({p}, ('a'))")
+    assert list(cql.execute(f"SELECT tup FROM {table1} WHERE p = {p}")) == [(('a', None),)]
+    [(j,)] = cql.execute(f"SELECT JSON p, tup FROM {table1} WHERE p = {p}")
+    assert json.loads(j) == {"p": p, "tup": ["a", None]}
+    # Insert the JSON back, into a different row, and read it back.
+    p2 = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} JSON '{json.dumps({'p': p2, 'tup': json.loads(j)['tup']})}'")
+    assert list(cql.execute(f"SELECT tup FROM {table1} WHERE p = {p2}")) == [(('a', None),)]
