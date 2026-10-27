@@ -5110,7 +5110,7 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/snapshot.html")),
                 {
                     typed_option<sstring>("table", "The table(s) to snapshot, multiple ones can be joined with ','"),
-                    typed_option<sstring>("keyspace-table-list", "The keyspace.table pair(s) to snapshot, multiple ones can be joined with ','"),
+                    typed_option<sstring>("keyspace-table-list", "The keyspaces to snapshot (joined with ','), or a single keyspace.table pair"),
                     typed_option<sstring>("tag,t", "The name of the snapshot"),
                     typed_option<>("skip-flush", "Do not flush memtables before snapshotting (snapshot will not contain unflushed data)"),
                     typed_option<sstring>("ttl", "The TTL for the snapshot, optionally followed by 's' for seconds (the default), 'm' for minutes, 'h' for hours, or 'd' for days. Missing TTL, or 0, means no TTL"),

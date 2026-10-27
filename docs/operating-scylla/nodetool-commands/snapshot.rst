@@ -14,10 +14,10 @@ SYNOPSIS
               nodetool [(-h <host> | --host <host>)] [(-p <port> | --port <port>)]
                    [(-pp | --print-port)] [(-pw <password> | --password <password>)]
                    [(-pwf <passwordFilePath> | --password-file <passwordFilePath>)]
-                   [(-u <username> | --username <username>)] [cluster] snapshot
+                   [(-u <username> | --username <username>)] snapshot
                    [(-cf <table> | --column-family <table> | --table <table>)]
                    [(-kc <kclist> | --kc.list <kclist>)]
-                   [(-sf | --skip-flush)] [(-t <tag> | --tag <tag>)] [--ttl <ttl>] [--] [<keyspaces...>]
+                   [--skip-flush] [(-t <tag> | --tag <tag>)] [--ttl <ttl>] [--] [<keyspaces...>]
 
 OPTIONS
 .......
@@ -31,11 +31,11 @@ Parameter                                                             Descriptio
 --------------------------------------------------------------------  -------------------------------------------------------------------------------------
 ``-h <host>`` / ``--host <host>``                                     Node hostname or ip address
 --------------------------------------------------------------------  -------------------------------------------------------------------------------------
-``-kc <ktlist>``, ``--kc.list <ktlist>``                              The list of Keyspaces to take snapshot
+``-kc <ktlist>``, ``--kc.list <ktlist>``                              A comma-separated list of keyspaces to snapshot, or a single ``<keyspace>.<table>`` pair
 --------------------------------------------------------------------  -------------------------------------------------------------------------------------
 ``-p <port>`` / ``--port <port>``                                     The port of the REST API of the ScyllaDB node.
 --------------------------------------------------------------------  -------------------------------------------------------------------------------------
-``-sf`` / ``--skip-flush``                                            Do not flush memtables before snapshotting (snapshot will not contain unflushed data)
+``--skip-flush``                                                      Do not flush memtables before snapshotting (snapshot will not contain unflushed data)
 --------------------------------------------------------------------  -------------------------------------------------------------------------------------
 ``-t <tag>`` / ``--tag <tag>``                                        The name of the snapshot
 --------------------------------------------------------------------  -------------------------------------------------------------------------------------
@@ -49,7 +49,12 @@ Parameter                                                             Descriptio
 ``[<keyspaces...>]`` List of keyspaces. By default, all keyspaces.
 
 The 'cluster snapshot' version of this command will issue the snapshot on all nodes in the cluster, whereas 
-the non-cluster version only operates on the destination node. 
+the non-cluster version only operates on the destination node. The 'cluster snapshot' version supports only the
+``--table`` and ``-t``/``--tag`` options and the list of keyspaces:
+
+.. code-block:: shell
+
+   nodetool cluster snapshot [--table <table>] [(-t <tag> | --tag <tag>)] [<keyspaces...>]
 
 Examples
 ........
@@ -59,7 +64,7 @@ Snapshot **all** the keyspaces
 .. code-block:: shell
 
    > nodetool snapshot
-   Requested creating snapshot(s) for [all keyspaces] with snapshot name [1564577645291] and options {skipFlush=false}
+   Requested creating snapshot(s) for [all keyspaces] with snapshot name [1564577645291] and options {skipFlush=false, ttl=0}
    Snapshot directory: 1564577645291
     
 
@@ -68,7 +73,7 @@ Snapshot **a** keyspace (mykeyspace)
 .. code-block:: shell
 
    > nodetool snapshot mykeyspace;
-   Requested creating snapshot(s) for [mykeyspace] with snapshot name [1564577611409] and options {skipFlush=false}
+   Requested creating snapshot(s) for [mykeyspace] with snapshot name [1564577611409] and options {skipFlush=false, ttl=0}
    Snapshot directory: 1564577611409
 
 Snapshot a **list** of keyspaces
@@ -76,7 +81,7 @@ Snapshot a **list** of keyspaces
 .. code-block:: shell
 
    >nodetool snapshot -kc mykeyspace,yourkeyspace
-   Requested creating snapshot(s) for [mykeyspace,yourkeyspace] with snapshot name [1564639559884] and options {skipFlush=false}
+   Requested creating snapshot(s) for [mykeyspace,yourkeyspace] with snapshot name [1564639559884] and options {skipFlush=false, ttl=0}
    Snapshot directory: 1564639559884
 
 Snapshot **a** table (heartrate)
@@ -84,7 +89,7 @@ Snapshot **a** table (heartrate)
 .. code-block:: shell
 
    > nodetool snapshot --table heartrate mykeyspace;
-   Requested creating snapshot(s) for [mykeyspace] with snapshot name [1564577586524] and options {skipFlush=false}
+   Requested creating snapshot(s) for [mykeyspace] with snapshot name [1564577586524] and options {skipFlush=false, ttl=0}
    Snapshot directory: 1564577586524
 
 
