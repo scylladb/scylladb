@@ -895,9 +895,30 @@ def run_cmake_configure(repo_root, mode, tmpdir, quiet=False):
     build_dir = tmpdir / f"cmake-{mode}"
     ninja = _find_ninja()
 
+    # CMake finds Conan-provided packages through the config files that
+    # configure.py generates, so install them before configuring.
+    deps_cmd = [
+        sys.executable, str(repo_root / "configure.py"),
+        "--use-cmake",
+        "--mode", mode,
+        "--build-dir", str(build_dir),
+        "--install-dependencies-only",
+    ]
+    if not quiet:
+        print(f"  $ {' '.join(deps_cmd)}")
+    result = subprocess.run(deps_cmd, cwd=str(repo_root),
+                            capture_output=quiet, text=True)
+    if result.returncode != 0:
+        print(f"ERROR: Conan dependency install failed for mode '{mode}' "
+              f"(exit {result.returncode})", file=sys.stderr)
+        if quiet and result.stderr:
+            print(result.stderr, file=sys.stderr)
+        return None
+
     cmd = [
         "cmake",
         f"-DCMAKE_BUILD_TYPE={cmake_type}",
+        f"-DCMAKE_PREFIX_PATH={build_dir / 'conan' / 'cmake'}",
         f"-DCMAKE_MAKE_PROGRAM={ninja}",
         "-DCMAKE_C_COMPILER=clang",
         "-DCMAKE_CXX_COMPILER=clang++",
