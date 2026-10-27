@@ -3095,7 +3095,7 @@ future<> storage_service::do_drain() {
     //
     // This has to happen before stop_transport() below: the transfer is done with Raft RPCs,
     // which need messaging_service to be up. That is also why it is not a part of
-    // groups_manager::stop(), which runs only after the transport is gone.
+    // groups_manager::stop(), which runs only once the transport is stopped.
     try {
         co_await _groups_manager.container().invoke_on_all(
                 &strong_consistency::groups_manager::stepdown_leaders);
@@ -3106,6 +3106,16 @@ future<> storage_service::do_drain() {
 
     // Need to stop transport before group0, otherwise RPCs may fail with raft_group_not_found.
     co_await stop_transport();
+
+    // The raft groups of strongly consistent tablets sit above group0 and the database:
+    // their state machines take group0 barriers, and their persistence appends the raft
+    // log to the commitlog. So they are torn down here, before either goes away.
+    // Nothing else waits for them: messaging_service::shutdown() above doesn't wait for
+    // the RPC handlers already running, and the io and applier fibers of a group run on
+    // their own. A group alive past database::drain() would write to a shut down
+    // commitlog and kill its fibers with an internal error. main.cc does the same for
+    // an initialization that fails before this drain is registered.
+    co_await _groups_manager.drain();
 
     // Cancel write handlers that have pending remote targets so they release
     // their ERMs (and the associated token_metadata versions). Without this,
