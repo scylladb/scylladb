@@ -171,19 +171,14 @@ def test_grant_revoke_data_permissions(cql, test_keyspace):
                 check_enforced(cql, username, permission='DROP', resource='ALL KEYSPACES', function=drop_table_idempotent)
 
 # Test that permissions for user-defined functions are serialized in a Cassandra-compatible way
-def test_udf_permissions_serialization(cql):
+def test_udf_permissions_serialization(cql, has_java_udf):
     schema = "a int primary key"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace, new_user(cql) as user:
         with new_test_table(cql, keyspace, schema) as table:
             # Creating a bilingual function makes this test case work for both Scylla and Cassandra
             div_body_lua = "(b bigint, i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return b//i'"
             div_body_java = "(b bigint, i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return b/i;'"
-            div_body = div_body_lua
-            try:
-                with new_function(cql, keyspace, div_body) as div_fun:
-                    pass
-            except:
-                div_body = div_body_java
+            div_body = div_body_java if has_java_udf else div_body_lua
             with new_function(cql, keyspace, div_body) as div_fun:
                 applicable_permissions = {
                     'all functions': ['create', 'alter', 'drop', 'authorize', 'execute'],
@@ -208,19 +203,14 @@ def test_udf_permissions_serialization(cql):
 # Test that names that require quoting (e.g. due to having nonorthodox characters)
 # are properly handled, with right permissions granted.
 # Cassandra doesn't quote names properly, so the test fails
-def test_udf_permissions_quoted_names(cassandra_bug, cql):
+def test_udf_permissions_quoted_names(cassandra_bug, cql, has_java_udf):
     udt_name = f'"{unique_name()}weird_udt[t^t]a^b^[]"'
     schema = f"a frozen<{udt_name}> primary key"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_type(cql, keyspace, "(a text, b int)", udt_name) as udt, new_test_table(cql, keyspace, schema) as table:
             fun_body_lua = f"(i {udt}) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
             fun_body_java = f"(i {udt}) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42;'"
-            fun_body = fun_body_lua
-            try:
-                with new_function(cql, keyspace, fun_body):
-                    pass
-            except:
-                fun_body = fun_body_java
+            fun_body = fun_body_java if has_java_udf else fun_body_lua
             with new_function(cql, keyspace, fun_body, f'"{unique_name()}weird[name1^name2]x^y"') as weird_fun:
                 with new_user(cql) as username:
                     with new_session(cql, username) as user_session:
@@ -247,20 +237,14 @@ def test_udf_permissions_quoted_names(cassandra_bug, cql):
 # regardless of whether some of the overloads have or don't have drop
 # permissions. Cassandra erroneously reports the unrelated missing permissions.
 # Reported to Cassandra as CASSANDRA-19005.
-def test_drop_udf_with_same_name(cql, cassandra_bug):
+def test_drop_udf_with_same_name(cql, cassandra_bug, has_java_udf):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         body1_lua = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
         body1_java = "(i int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42L;'"
         body2_lua = "(i int, j int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 42;'"
         body2_java = "(i int, j int) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 42L;'"
-        body1 = body1_lua
-        body2 = body2_lua
-        try:
-            with new_function(cql, keyspace, body1):
-                pass
-        except:
-            body1 = body1_java
-            body2 = body2_java
+        body1 = body1_java if has_java_udf else body1_lua
+        body2 = body2_java if has_java_udf else body2_lua
         fun = "fun43"
         cql.execute(f"CREATE FUNCTION {keyspace}.{fun}{body1}")
         cql.execute(f"CREATE FUNCTION {keyspace}.{fun}{body2}")
@@ -286,18 +270,13 @@ def test_drop_udf_with_same_name(cql, cassandra_bug):
 
 # Test that permissions set for user-defined functions are enforced
 # Tests for ALTER are separate, because they are qualified as cassandra_bug
-def test_grant_revoke_udf_permissions(cql):
+def test_grant_revoke_udf_permissions(cql, has_java_udf):
     schema = "a int primary key, b list<int>"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
             fun_body_lua = "(i int, l list<int>) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
             fun_body_java = "(i int, l list<int>) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
-            fun_body = fun_body_lua
-            try:
-                with new_function(cql, keyspace, fun_body) as fun:
-                    pass
-            except:
-                fun_body = fun_body_java
+            fun_body = fun_body_java if has_java_udf else fun_body_lua
             with new_user(cql) as username:
                 with new_session(cql, username) as user_session:
                     fun = "fun42"
@@ -332,18 +311,13 @@ def test_grant_revoke_udf_permissions(cql):
 # because it's qualified as cassandra_bug - the documentation quotes that ALTER is needed on
 # functions if the definition is replaced (CREATE OR REPLACE FUNCTION (...)),
 # and yet it's not enforced
-def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
+def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql, has_java_udf):
     schema = "a int primary key"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
             fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
             fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
-            fun_body = fun_body_lua
-            try:
-                with new_function(cql, keyspace, fun_body) as fun:
-                    pass
-            except:
-                fun_body = fun_body_java
+            fun_body = fun_body_java if has_java_udf else fun_body_lua
             with new_user(cql) as username:
                 with new_session(cql, username) as user_session:
                     fun = "fun42"
@@ -366,7 +340,7 @@ def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
 # Test that granting permissions on non-existent UDFs fails
 # This test is marked cassandra_bug because it exposes a small error-path
 # bug in their parser CASSANDRA-19006 (see comment below).
-def test_grant_perms_on_nonexistent_udf(cql, cassandra_bug):
+def test_grant_perms_on_nonexistent_udf(cql, cassandra_bug, has_java_udf):
     keyspace = "ks"
     fun_name = "fun42"
     with new_user(cql) as username:
@@ -391,12 +365,7 @@ def test_grant_perms_on_nonexistent_udf(cql, cassandra_bug):
 
         fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
         fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
-        fun_body = fun_body_lua
-        try:
-            with new_function(cql, keyspace, fun_body) as fun:
-                pass
-        except:
-            fun_body = fun_body_java
+        fun_body = fun_body_java if has_java_udf else fun_body_lua
         with new_function(cql, keyspace, fun_body, fun_name):
             grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun_name}(int)', username)
         cql.execute(f"DROP KEYSPACE IF EXISTS {keyspace}")
@@ -457,7 +426,7 @@ def test_grant_revoke_uda_permissions(scylla_only, cql):
 # EXECUTE on any one of them the query must be rejected.
 # Reproduces SCYLLADB-1756.
 @pytest.mark.parametrize("missing_func", ["sfunc", "finalfunc", "reducefunc"])
-def test_uda_subfunc_permission_enforced(cql, missing_func):
+def test_uda_subfunc_permission_enforced(cql, missing_func, has_java_udf):
     # REDUCEFUNC is a Scylla extension; skip on Cassandra.
     if missing_func == "reducefunc" and not is_scylla(cql):
         skip_env("REDUCEFUNC is a Scylla extension")
@@ -466,20 +435,14 @@ def test_uda_subfunc_permission_enforced(cql, missing_func):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
             # Choose the UDF language depending on the backend.
-            acc_body_lua = "(a bigint, b bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return a+b'"
-            red_body_lua = "(a bigint, b bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return a+b'"
-            fin_body_lua = "(a bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return a'"
-            acc_body = acc_body_lua
-            red_body = red_body_lua
-            fin_body = fin_body_lua
-            try:
-                with new_function(cql, keyspace, acc_body):
-                    pass
-            except:
-                # Cassandra — fall back to Java.
+            if has_java_udf:
                 acc_body = "(a bigint, b bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return a+b;'"
                 red_body = "(a bigint, b bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return a+b;'"
                 fin_body = "(a bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return a;'"
+            else:
+                acc_body = "(a bigint, b bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return a+b'"
+                red_body = "(a bigint, b bigint) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return a+b'"
+                fin_body = "(a bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return a'"
 
             with new_function(cql, keyspace, acc_body) as acc, \
                  new_function(cql, keyspace, fin_body) as fin:
@@ -518,19 +481,14 @@ def _check_uda_subfunc_permission(cql, keyspace, table, my_sum, acc, fin, red, m
                     function=lambda: user_session.execute(f"SELECT {keyspace}.{my_sum}(v) FROM {table}"))
 
 # Test that permissions for user-defined functions created on top of user-defined types work
-def test_udf_permissions_with_udt(cql):
+def test_udf_permissions_with_udt(cql, has_java_udf):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_type(cql, keyspace, '(v int)') as udt:
             schema = f"a frozen<{udt}> primary key"
             with new_test_table(cql, keyspace, schema) as table:
                 fun_body_lua = f"(i {udt}) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
                 fun_body_java = f"(i {udt}) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
-                fun_body = fun_body_lua
-                try:
-                    with new_function(cql, keyspace, fun_body) as fun:
-                        pass
-                except:
-                    fun_body = fun_body_java
+                fun_body = fun_body_java if has_java_udf else fun_body_lua
                 with new_user(cql) as username:
                     with new_session(cql, username) as user_session:
                         with new_function(cql, keyspace, fun_body) as fun:
@@ -540,18 +498,13 @@ def test_udf_permissions_with_udt(cql):
                             user_session.execute(f'SELECT {keyspace}.{fun}(a) FROM {table}')
 
 # Test that permissions on user-defined functions with no arguments work
-def test_udf_permissions_no_args(cql):
+def test_udf_permissions_no_args(cql, has_java_udf):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema="a int primary key") as table, new_user(cql) as username:
             with new_session(cql, username) as user_session:
                 fun_body_lua = f"() CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
                 fun_body_java = f"() CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
-                fun_body = fun_body_lua
-                try:
-                    with new_function(cql, keyspace, fun_body):
-                        pass
-                except:
-                    fun_body = fun_body_java
+                fun_body = fun_body_java if has_java_udf else fun_body_lua
                 with new_function(cql, keyspace, fun_body) as fun:
                     grant(cql, 'SELECT', table, username)
                     check_enforced(cql, username, permission='EXECUTE', resource=f'function {keyspace}.{fun}()',
@@ -564,19 +517,14 @@ def test_udf_permissions_no_args(cql):
 # we do not allow permissions on non-existent Functions, so the CREATE permission on a specific function is meaningless,
 # because granting it would only be allowed if the function was already created before.
 # Reproduces #13822
-def test_create_on_single_function(cql):
+def test_create_on_single_function(cql, has_java_udf):
     schema = "a int primary key"
     user = "cassandra"
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
             fun_body_lua = f"(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return a + b;'"
             fun_body_java = f"(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return a + b;'"
-            fun_body = fun_body_lua
-            try:
-                with new_function(cql, keyspace, fun_body):
-                    pass
-            except:
-                fun_body = fun_body_java
+            fun_body = fun_body_java if has_java_udf else fun_body_lua
             with new_function(cql, keyspace, fun_body) as fun:
                 with pytest.raises(SyntaxException):
                     grant(cql, 'CREATE', f'FUNCTION {keyspace}.{fun}(int, int)', user)

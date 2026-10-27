@@ -9,7 +9,7 @@
 
 import pytest
 from cassandra.protocol import InvalidRequest, ConfigurationException
-from .util import unique_name, new_test_keyspace, new_test_table, new_function, new_aggregate, new_type, is_scylla
+from .util import unique_name, new_test_keyspace, new_test_table, new_function, new_aggregate, new_type
 
 # Test that computing an average by hand works the same as
 # the built-in function
@@ -234,26 +234,22 @@ def test_drop_keyspace_with_uda(scylla_only, cql):
 # Test that replacing the state function, reduce function or the final function successfully changes the function used by the aggregate.
 # When the state or final function is replaced, the new function should be used in following calls to the aggregate. Cassandra keeps using
 # the old function, which we consider a cassandra bug.
-def test_replace_sfunc_ffunc(cql, test_keyspace, cassandra_bug):
+def test_replace_sfunc_ffunc(cql, test_keyspace, cassandra_bug, has_java_udf):
     schema = "id bigint primary key"
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"INSERT INTO {table} (id) VALUES (1)")
         cql.execute(f"INSERT INTO {table} (id) VALUES (2)")
         cql.execute(f"INSERT INTO {table} (id) VALUES (3)")
-        sum_partial_body = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state + val'"
-        sum_partial_body2 = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state + 2 * val'"
-        sum_final_body = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state'"
-        sum_final_body2 = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 3 * state'"
-        try:
-            # Check if we can use lua, i.e. we're in Scylla
-            with new_function(cql, test_keyspace, sum_partial_body):
-                pass
-        except:
-            # We're in Cassandra, use java instead
+        if has_java_udf:
             sum_partial_body = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state + val'"
             sum_partial_body2 = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state + 2 * val'"
             sum_final_body = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return state'"
             sum_final_body2 = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE java AS 'return 3 * state'"
+        else:
+            sum_partial_body = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state + val'"
+            sum_partial_body2 = "(state bigint, val bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state + 2 * val'"
+            sum_final_body = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return state'"
+            sum_final_body2 = "(state bigint) CALLED ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return 3 * state'"
 
         with new_function(cql, test_keyspace, sum_partial_body) as sum_partial, new_function(cql, test_keyspace, sum_final_body) as sum_final:
             custom_sum_body = f"(bigint) SFUNC {sum_partial} STYPE bigint FINALFUNC {sum_final} INITCOND 0"
@@ -289,13 +285,12 @@ def test_aggregate_with_udt_keyspace_isolation(cql, test_keyspace):
 # with "Unknown field 'a'", so this test is marked cassandra_bug.
 # Reproduces SCYLLADB-5270 (the field name wasn't quoted, so reading the saved
 # literal back failed, which stopped group 0).
-def test_uda_initcond_udt_case_sensitive_field(cql, test_keyspace, cassandra_bug):
+def test_uda_initcond_udt_case_sensitive_field(cql, test_keyspace, cassandra_bug, has_java_udf):
     # A state function adding x to the UDT's only field.
-    # Scylla supports Lua functions, Cassandra supports Java functions
-    if is_scylla(cql):
-        body = "LANGUAGE lua AS 'for k, v in pairs(s) do s[k] = v + x end return s'"
-    else:
+    if has_java_udf:
         body = "LANGUAGE java AS 's.setInt(0, s.getInt(0) + x); return s;'"
+    else:
+        body = "LANGUAGE lua AS 'for k, v in pairs(s) do s[k] = v + x end return s'"
     with new_type(cql, test_keyspace, '("A" int)') as udt:
         with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, x int') as table:
             cql.execute(f'INSERT INTO {table} (p, x) VALUES (1, 2)')
