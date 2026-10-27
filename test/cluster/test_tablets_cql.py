@@ -12,7 +12,7 @@ from cassandra.protocol import InvalidRequest
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot
 from test.cluster.util import disable_schema_agreement_wait, parse_replication_options, create_new_test_keyspace, \
-    new_test_keyspace, get_replication
+    new_test_keyspace, get_replication, reconnect_driver
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,10 @@ async def test_alter_dropped_tablets_keyspace(manager: ScyllaClusterManager) -> 
 
     logger.info("starting a second node (the follower)")
     servers += [await manager.server_add(config=config)]
+
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    await manager.get_ready_cql(servers)
 
     ks = await create_new_test_keyspace(manager.get_cql(), "with "
                                       "replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} and "
@@ -79,6 +83,10 @@ async def test_alter_tablets_keyspace_concurrent_modification(manager: ScyllaClu
 
     logger.info("starting a second node (the follower)")
     servers += [await manager.server_add(config=config, property_file={"dc": this_dc, "rack": "r2"})]
+
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', "
                                           f"'{this_dc}': ['r1']"
