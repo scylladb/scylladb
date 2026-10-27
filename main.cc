@@ -1922,6 +1922,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {
                 tablet_allocator.stop().get();
             });
+            tablet_allocator.invoke_on_all([&raft_gr] (service::tablet_allocator& ta) {
+                ta.set_group0_leader_provider([&raft_gr] { return raft_gr.local().group0_leader(); });
+            }).get();
 
             checkpoint(stop_signal, "starting mapreduce service");
             mapreduce_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(stop_signal.as_sharded_abort_source())).get();
@@ -1972,7 +1975,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // XXX: stop_raft has to happen before query_processor and migration_manager
             // is stopped, since some groups keep using the query
             // processor until are stopped inside stop_raft.
-            auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr] {
+            auto stop_raft = defer_verbose_shutdown("Raft", [&raft_gr, &tablet_allocator] {
+                // The provider references raft_gr, which is stopped before the tablet allocator.
+                tablet_allocator.invoke_on_all([] (service::tablet_allocator& ta) {
+                    ta.set_group0_leader_provider({});
+                }).get();
                 raft_gr.stop().get();
             });
 

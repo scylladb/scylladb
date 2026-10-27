@@ -304,13 +304,16 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
     return do_make_replication_map(table, shared_from_this(), std::move(tm), _rep_factor);
 }
 
-future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, size_t tablet_count) const {
-    co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count, get_consistency() != data_dictionary::consistency_config_option::eventual));
+future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, size_t tablet_count, const group0_leader_shard_skew& skew) const {
+    co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count, get_consistency() != data_dictionary::consistency_config_option::eventual), skew);
 }
 
-future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets) const {
+future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets, const group0_leader_shard_skew& skew) const {
     natural_endpoints_tracker::check_enough_endpoints(*tm, _dc_rep_factor);
     load_sketch load(tm);
+    load.set_group0_leader_shard_skew(skew);
+    // No load stats: node capacities are synthetic, so only the sketch's relative floor applies to shard 0.
+    load.set_min_shard0_capacity(0);
     co_await load.populate_with_normalized_load();
     co_await load.populate(std::nullopt, s->id());
 

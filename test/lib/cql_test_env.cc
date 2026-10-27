@@ -1004,6 +1004,9 @@ private:
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [this] {
                 _tablet_allocator.stop().get();
             });
+            _tablet_allocator.invoke_on_all([this] (service::tablet_allocator& ta) {
+                ta.set_group0_leader_provider([this] { return _group0_registry.local().group0_leader(); });
+            }).get();
 
             _view_building_state_machine.start().get();
             auto stop_view_building_state_machine = defer_verbose_shutdown("view building state machine", [this] {

@@ -227,10 +227,13 @@ The registry is the source of truth for:
 - a one-line description
 - declared value type, derived from the type of the built-in default
 - allowed scopes
+- optional inclusive bounds of an integer option
 - the cluster feature advertised for it, derived from its name
 - validation of textual values before persistence
 
 An option's allowed scopes must belong to a single resolution domain: a scope set may combine `CLUSTER` with the table-oriented scopes (`KEYSPACE`, `TABLE`) or with the node-oriented scopes (`DATACENTER`, `RACK`, `NODE`), but never mix the two. A mixed-domain set is a registration error, rejected when the registry is built, so every option resolves through exactly one of the two precedence chains with no ambiguity about which one wins.
+
+An integer option may also declare inclusive `min_integer`/`max_integer` bounds. They are checked when the registry is built (integer options only, `min <= max`, default within bounds), and `validate_value()` rejects an out-of-range override before any mutation is generated.
 
 ### Feature Gating
 
@@ -243,6 +246,8 @@ The cost is one feature name per option, about fifty bytes, in gossip and in `sy
 ### Value Encoding And Type Validation
 
 Config values are stored and transported as text, regardless of an option's declared type. The registry type is the single point of validation: before any mutation is generated, the textual value is validated against it (`text`, `integer`, `floating_point`, `boolean`), and an invalid value is rejected before any schema mutation.
+
+An integer option's registered bounds are part of that validation: `ALTER ... WITH <name> = 101` on an option bounded to `[0, 100]` fails with `expected an integer in [0, 100], got '101'`. A stored value outside the bounds, only reachable out-of-band, is logged and treated as absent like an unparsable one.
 
 For an option whose value cannot be expressed as a registry type, the option may instead declare a per-option parser and validator.
 
@@ -506,6 +511,8 @@ ALTER TABLE ks.tbl WITH auto_repair_enabled = true;
 ```
 
 `auto_repair_threshold_in_seconds` (integer seconds counted from the start of the last successful unfiltered repair, default `86400`, `0` disables time-based repair) is registered the same way and is set through the same forms.
+
+`tablets_group0_leader_shard_ratio` (integer percentage, bounded to `[0, 100]`, default `100`) is registered for the `CLUSTER` scope only, since there is one group0 leader: `ALTER CLUSTER WITH tablets_group0_leader_shard_ratio = 50` gives shard 0 of the leader half the normal per-shard tablet capacity, and the tablet allocator reads it on demand when it balances or allocates tablets.
 
 #### Consumer: The Tablet Repair Scheduler
 

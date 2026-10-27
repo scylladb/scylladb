@@ -587,6 +587,10 @@ int64_t cluster_config_manager::resolve_integer_config(const cluster_config_regi
     return cluster_config_registry::to_integer(opt, resolve_config(opt.name, ctx));
 }
 
+int64_t cluster_config_manager::resolve_integer_config(std::string_view config_name, const lookup_context& ctx) const {
+    return resolve_integer_config(find_registered_option(config_name), ctx);
+}
+
 double cluster_config_manager::resolve_floating_point_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
     return cluster_config_registry::to_floating_point(opt, resolve_config(opt.name, ctx));
 }

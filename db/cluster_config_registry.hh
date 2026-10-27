@@ -65,6 +65,7 @@ namespace option_name {
 inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
 inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
 inline constexpr std::string_view repair_hints_batchlog_flush_discard_unreplayed_hints = "repair_hints_batchlog_flush_discard_unreplayed_hints";
+inline constexpr std::string_view tablets_group0_leader_shard_ratio = "tablets_group0_leader_shard_ratio";
 
 }
 
@@ -75,6 +76,10 @@ struct option {
     // The value a consumer gets when no scope stores an override. Its alternative also
     // defines the option's type. Read it through the to_* converters, not directly.
     config_value default_value;
+    // Inclusive bounds, for value_type::integer only. A value outside them is rejected by
+    // validate_value() and, if stored out-of-band, ignored by to_integer().
+    std::optional<int64_t> min_integer;
+    std::optional<int64_t> max_integer;
 
     constexpr value_type type() const {
         return static_cast<value_type>(default_value.index());

@@ -3142,7 +3142,7 @@ alter_result alter_replication(cql_test_env& e,
     auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", params, tmptr->get_topology());
     auto s = e.local_db().find_schema(table);
-    auto new_tablet_map = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, tmptr, old_tablets.clone_gently().get()).get();
+    auto new_tablet_map = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, tmptr, old_tablets.clone_gently().get(), {}).get();
     return alter_result{std::move(new_tablet_map), std::move(new_options)};
 }
 
@@ -4434,6 +4434,493 @@ SEASTAR_THREAD_TEST_CASE(test_drain_with_forced_capacity_based_balancing_with_in
             BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(h), 2); // 16 tablets / 8 shards = 2 tablets / shard
             BOOST_REQUIRE_EQUAL(load.get_shard_tablet_count_imbalance(h), 0);
         }
+    }, std::move(cfg)).get();
+}
+
+static void set_group0_leader_shard_ratio(cql_test_env& e, unsigned ratio) {
+    e.execute_cql(format("ALTER CLUSTER WITH tablets_group0_leader_shard_ratio = {}", ratio)).get();
+    e.cluster_config_manager().local().refresh().get();
+}
+
+// Regression test: force_capacity_based_balancing + tablets_group0_leader_shard_ratio != 100
+// gives same-node shards unequal capacity, which could make is_balanced()'s exact-equality
+// check unreachable and oscillate forever. rebalance_tablets() throws if it never converges.
+SEASTAR_THREAD_TEST_CASE(test_group0_leader_shard_ratio_converges_with_forced_capacity_based_balancing) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->force_capacity_based_balancing.set(true);
+
+    do_with_cql_env_thread([] (auto& e) {
+        set_group0_leader_shard_ratio(e, 50);
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
+
+        auto local_host = e.get_storage_service().local().get_token_metadata_ptr()->get_topology().my_host_id();
+        unsigned shard_count = 4;
+        const uint64_t capacity_unit = 100UL * 1024UL * 1024UL * 1024UL;
+
+        locator::endpoint_dc_rack dc_rack{"dc_local", "rack_local"};
+        auto& stm = e.shared_token_metadata().local();
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            tm.update_topology(local_host, dc_rack, node::state::normal, shard_count);
+            return make_ready_future<>();
+        }).get();
+
+        shared_load_stats stats;
+        stats.set_capacity(local_host, capacity_unit);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}}, 0);
+        auto table1 = add_table(e, ks_name).get();
+
+        // Start from a maximally imbalanced state: every tablet crammed onto shard 0.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(32);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set { tablet_replica {local_host, 0} }
+                });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        // Must converge to an empty plan. Without the fix, this throws
+        // "convergence not reached within limit" due to perpetual oscillation.
+        rebalance_tablets(e, &stats);
+
+        std::vector<unsigned> shard_counts(shard_count, 0);
+        auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+        tmap.for_each_tablet([&] (tablet_id, const tablet_info& ti) -> future<> {
+            for (auto& r : ti.replicas) {
+                if (r.host == local_host) {
+                    shard_counts[r.shard]++;
+                }
+            }
+            return make_ready_future<>();
+        }).get();
+
+        testlog.info("Final per-shard tablet counts on local host: {}", shard_counts);
+
+        // Peer shards (deweighting only targets shard 0) should be balanced among themselves.
+        for (unsigned i = 2; i < shard_count; ++i) {
+            BOOST_REQUIRE_LE(std::abs(int(shard_counts[i]) - int(shard_counts[1])), 1);
+        }
+        // Shard 0 (ratio=50) should have noticeably fewer tablets than its peers.
+        BOOST_REQUIRE_LT(shard_counts[0], shard_counts[1]);
+    }, std::move(cfg)).get();
+}
+
+// With ratio=0 the floored shard 0 is the least-loaded dst almost always; a rejected
+// (src, shard 0) pair must not end the node's balancing, so peer shards 1-3 still converge.
+SEASTAR_THREAD_TEST_CASE(test_group0_leader_shard_ratio_peer_shards_still_converge) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->force_capacity_based_balancing.set(true);
+
+    do_with_cql_env_thread([] (auto& e) {
+        set_group0_leader_shard_ratio(e, 0);
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
+
+        auto local_host = e.get_storage_service().local().get_token_metadata_ptr()->get_topology().my_host_id();
+        unsigned shard_count = 4;
+        // Node capacity is 100x the target tablet size per shard, so shard 0's one-tablet-size
+        // floor (ratio=0) is well below the uniform share and the skew is not a no-op.
+        const uint64_t capacity_unit = 400UL * service::default_target_tablet_size;
+
+        locator::endpoint_dc_rack dc_rack{"dc_local", "rack_local"};
+        auto& stm = e.shared_token_metadata().local();
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            tm.update_topology(local_host, dc_rack, node::state::normal, shard_count);
+            return make_ready_future<>();
+        }).get();
+
+        shared_load_stats stats;
+        stats.set_capacity(local_host, capacity_unit);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}}, 0);
+        auto table1 = add_table(e, ks_name).get();
+
+        // Imbalanced across peer shards 1-3; shard 0 starts empty.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(8);
+            unsigned shard_for_index[8] = {1, 1, 1, 1, 1, 1, 2, 2};
+            unsigned i = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set { tablet_replica {local_host, shard_for_index[i++]} }
+                });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        rebalance_tablets(e, &stats);
+
+        std::vector<unsigned> shard_counts(shard_count, 0);
+        auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+        tmap.for_each_tablet([&] (tablet_id, const tablet_info& ti) -> future<> {
+            for (auto& r : ti.replicas) {
+                if (r.host == local_host) {
+                    shard_counts[r.shard]++;
+                }
+            }
+            return make_ready_future<>();
+        }).get();
+
+        testlog.info("Final per-shard tablet counts on local host: {}", shard_counts);
+
+        // Peer shards 1-3 must converge among themselves, regardless of shard 0's low capacity.
+        for (unsigned i = 2; i < shard_count; ++i) {
+            BOOST_REQUIRE_LE(std::abs(int(shard_counts[i]) - int(shard_counts[1])), 1);
+        }
+    }, std::move(cfg)).get();
+}
+
+// Forced-capacity balancing with a heavily skewed leader: shard 0 keeps at most one tablet
+// (its floored, one-tablet capacity), and the peer shards stay balanced.
+SEASTAR_THREAD_TEST_CASE(test_group0_leader_shard_ratio_forced_capacity_low_ratios) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->force_capacity_based_balancing.set(true);
+
+    do_with_cql_env_thread([] (auto& e) {
+        auto local_host = e.get_storage_service().local().get_token_metadata_ptr()->get_topology().my_host_id();
+        unsigned shard_count = 4;
+        const uint64_t capacity_unit = 400UL * service::default_target_tablet_size;
+
+        locator::endpoint_dc_rack dc_rack{"dc_local", "rack_local"};
+        auto& stm = e.shared_token_metadata().local();
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            tm.update_topology(local_host, dc_rack, node::state::normal, shard_count);
+            return make_ready_future<>();
+        }).get();
+
+        shared_load_stats stats;
+        stats.set_capacity(local_host, capacity_unit);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}}, 0);
+        auto table1 = add_table(e, ks_name).get();
+
+        for (unsigned ratio : {0u, 10u}) {
+            set_group0_leader_shard_ratio(e, ratio);
+
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map tmap(32);
+                for (auto tid : tmap.tablet_ids()) {
+                    tmap.set_tablet(tid, tablet_info { tablet_replica_set { tablet_replica {local_host, 0} } });
+                }
+                tmeta.set_tablet_map(table1, std::move(tmap));
+                co_return;
+            });
+
+            rebalance_tablets(e, &stats);
+
+            std::vector<unsigned> shard_counts(shard_count, 0);
+            stm.get()->tablets().get_tablet_map(table1).for_each_tablet([&] (tablet_id, const tablet_info& ti) -> future<> {
+                for (auto& r : ti.replicas) {
+                    if (r.host == local_host) {
+                        shard_counts[r.shard]++;
+                    }
+                }
+                return make_ready_future<>();
+            }).get();
+
+            testlog.info("ratio={}: per-shard tablet counts on local host: {}", ratio, shard_counts);
+
+            BOOST_REQUIRE_LE(shard_counts[0], 1u);
+            for (unsigned i = 2; i < shard_count; ++i) {
+                BOOST_REQUIRE_LE(std::abs(int(shard_counts[i]) - int(shard_counts[1])), 1);
+            }
+        }
+    }, std::move(cfg)).get();
+}
+
+// Shard 0 (1 tablet) vs peers (5 each): no move strictly reduces the imbalance, so the node is
+// left alone even though the loads aren't exactly equal.
+SEASTAR_THREAD_TEST_CASE(test_group0_leader_shard_ratio_forced_capacity_gap_within_one_tablet) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->force_capacity_based_balancing.set(true);
+
+    do_with_cql_env_thread([] (auto& e) {
+        set_group0_leader_shard_ratio(e, 30);
+        auto local_host = e.get_storage_service().local().get_token_metadata_ptr()->get_topology().my_host_id();
+        unsigned shard_count = 4;
+        const uint64_t capacity_unit = 400UL * service::default_target_tablet_size;
+
+        locator::endpoint_dc_rack dc_rack{"dc_local", "rack_local"};
+        auto& stm = e.shared_token_metadata().local();
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            tm.update_topology(local_host, dc_rack, node::state::normal, shard_count);
+            return make_ready_future<>();
+        }).get();
+
+        shared_load_stats stats;
+        stats.set_capacity(local_host, capacity_unit);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}}, 0);
+        auto table1 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            // A power of two: replacing the table's initial map must stay mergeable.
+            tablet_map tmap(16);
+            unsigned shard_for_index[16] = {0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3};
+            unsigned i = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info { tablet_replica_set { tablet_replica {local_host, shard_for_index[i++]} } });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        rebalance_tablets(e, &stats);
+
+        std::vector<unsigned> shard_counts(shard_count, 0);
+        stm.get()->tablets().get_tablet_map(table1).for_each_tablet([&] (tablet_id, const tablet_info& ti) -> future<> {
+            for (auto& r : ti.replicas) {
+                if (r.host == local_host) {
+                    shard_counts[r.shard]++;
+                }
+            }
+            return make_ready_future<>();
+        }).get();
+
+        testlog.info("Final per-shard tablet counts on local host: {}", shard_counts);
+        BOOST_REQUIRE_EQUAL(shard_counts, (std::vector<unsigned>{1, 5, 5, 5}));
+    }, std::move(cfg)).get();
+}
+
+// Tablets moving onto the leader must be placed on shards that can hold them, not first on the
+// empty deweighted shard 0 and then moved off it by an intranode migration.
+SEASTAR_THREAD_TEST_CASE(test_group0_leader_shard_ratio_inter_node_migrations_do_not_churn) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->force_capacity_based_balancing.set(true);
+
+    do_with_cql_env_thread([] (auto& e) {
+        set_group0_leader_shard_ratio(e, 0);
+
+        auto local_host = e.get_storage_service().local().get_token_metadata_ptr()->get_topology().my_host_id();
+        unsigned shard_count = 4;
+        const uint64_t capacity_unit = 400UL * service::default_target_tablet_size;
+        locator::endpoint_dc_rack dc_rack{"dc_local", "rack_local"};
+
+        topology_builder topo(e);
+        auto other_host = topo.add_node(node_state::normal, shard_count, dc_rack);
+        // A group0 mutation, not a token_metadata poke: the latter is reverted by the next topology reload.
+        topo.modify_topology([&] (service::topology_mutation_builder& builder) {
+            builder.with_node(raft::server_id(local_host.uuid()))
+                    .set("datacenter", dc_rack.dc)
+                    .set("rack", dc_rack.rack)
+                    .set("shard_count", (uint32_t) shard_count);
+        });
+        auto& stm = e.shared_token_metadata().local();
+
+        shared_load_stats stats;
+        stats.set_capacity(local_host, capacity_unit);
+        stats.set_capacity(other_host, capacity_unit);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}}, 0);
+        auto table1 = add_table(e, ks_name).get();
+
+        // All tablets start on the other node, evenly across its shards.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(32);
+            unsigned i = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info { tablet_replica_set { tablet_replica {other_host, i++ % shard_count} } });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        size_t inter_node_migrations_to_leader = 0;
+        size_t intranode_migrations_off_shard0 = 0;
+        rebalance_tablets(e, &stats, {}, [&] (const migration_plan& plan) {
+            for (const auto& mig : plan.migrations()) {
+                if (mig.kind == tablet_transition_kind::intranode_migration && mig.src->host == local_host && mig.src->shard == 0) {
+                    intranode_migrations_off_shard0++;
+                }
+                if (mig.kind == tablet_transition_kind::migration && mig.dst->host == local_host) {
+                    inter_node_migrations_to_leader++;
+                }
+            }
+            return false;
+        });
+
+        std::vector<unsigned> shard_counts(shard_count, 0);
+        stm.get()->tablets().get_tablet_map(table1).for_each_tablet([&] (tablet_id, const tablet_info& ti) -> future<> {
+            for (auto& r : ti.replicas) {
+                if (r.host == local_host) {
+                    shard_counts[r.shard]++;
+                }
+            }
+            return make_ready_future<>();
+        }).get();
+
+        testlog.info("leader per-shard tablet counts: {}, inter-node migrations to leader: {}, intranode migrations off shard 0: {}",
+                shard_counts, inter_node_migrations_to_leader, intranode_migrations_off_shard0);
+
+        BOOST_REQUIRE_GT(inter_node_migrations_to_leader, 0u);
+        BOOST_REQUIRE_EQUAL(intranode_migrations_off_shard0, 0u);
+        BOOST_REQUIRE_LE(shard_counts[0], 1u);
+        for (unsigned i = 2; i < shard_count; ++i) {
+            BOOST_REQUIRE_LE(std::abs(int(shard_counts[i]) - int(shard_counts[1])), 1);
+        }
+    }, std::move(cfg)).get();
+}
+
+// Size-based balancing, ratio=0: shard 0 (floored to one tablet) and shard 1 reject their
+// candidates onto the least-loaded shard 3. The next dst for shard 1 is shard 0, which is more
+// loaded than shard 1 or within the balance threshold of it; that must not end the node's
+// balancing: shard 2's smaller tablet can still move to shard 3.
+static void test_group0_leader_shard_ratio_rejected_source(uint64_t shard0_tablet_size) {
+    auto cfg = tablet_cql_test_config();
+
+    do_with_cql_env_thread([shard0_tablet_size] (auto& e) {
+        set_group0_leader_shard_ratio(e, 0);
+
+        auto local_host = e.get_storage_service().local().get_token_metadata_ptr()->get_topology().my_host_id();
+        unsigned shard_count = 4;
+        const uint64_t T = service::default_target_tablet_size;
+        // Shard capacities: shard 0 = T (the floor), shards 1-3 = 7T/3.
+        const uint64_t capacity = 8 * T;
+        locator::endpoint_dc_rack dc_rack{"dc_local", "rack_local"};
+
+        auto& stm = e.shared_token_metadata().local();
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            tm.update_topology(local_host, dc_rack, node::state::normal, shard_count);
+            return make_ready_future<>();
+        }).get();
+
+        shared_load_stats stats;
+        stats.set_capacity(local_host, capacity);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}}, 0);
+        auto table1 = add_table(e, ks_name).get();
+
+        // shard -> {tablet count, tablet size}. Loads: shard 0: shard0_tablet_size / T, shard 1: 0.95, shard 2: 0.9, shard 3: 0.7.
+        std::vector<std::pair<unsigned, uint64_t>> layout = {
+            {1, shard0_tablet_size}, {2, T * 133 / 120}, {6, T * 42 / 120}, {7, T * 28 / 120},
+        };
+        std::vector<unsigned> shard_for_index;
+        std::vector<uint64_t> size_for_index;
+        for (unsigned shard = 0; shard < shard_count; ++shard) {
+            for (unsigned i = 0; i < layout[shard].first; ++i) {
+                shard_for_index.push_back(shard);
+                size_for_index.push_back(layout[shard].second);
+            }
+        }
+        BOOST_REQUIRE_EQUAL(shard_for_index.size(), 16u);
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(16);
+            unsigned i = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info { tablet_replica_set { tablet_replica {local_host, shard_for_index[i++]} } });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+        {
+            auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+            unsigned i = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                stats.set_tablet_size(local_host, locator::range_based_tablet_id{table1, tmap.get_token_range(tid)}, size_for_index[i++]);
+            }
+        }
+
+        std::vector<unsigned> migrated_src_shards;
+        rebalance_tablets(e, &stats, {}, [&] (const migration_plan& plan) {
+            for (const auto& mig : plan.migrations()) {
+                BOOST_REQUIRE(mig.kind == tablet_transition_kind::intranode_migration);
+                migrated_src_shards.push_back(mig.src->shard);
+            }
+            return true;
+        });
+
+        testlog.info("first plan intranode migration source shards: {}", migrated_src_shards);
+        BOOST_REQUIRE(std::ranges::contains(migrated_src_shards, 2u));
+    }, std::move(cfg)).get();
+}
+
+// Shard 0 is more loaded than shard 1 (1.0 vs 0.95).
+SEASTAR_THREAD_TEST_CASE(test_group0_leader_shard_ratio_rejected_source_does_not_stop_other_sources) {
+    test_group0_leader_shard_ratio_rejected_source(service::default_target_tablet_size);
+}
+
+// Shard 0 is just below shard 1 (0.945 vs 0.95), within size_based_balance_threshold.
+SEASTAR_THREAD_TEST_CASE(test_group0_leader_shard_ratio_rejected_source_dst_within_threshold) {
+    test_group0_leader_shard_ratio_rejected_source(service::default_target_tablet_size * 189 / 200);
+}
+
+// Verifies tablets_group0_leader_shard_ratio is live-updatable (no restart needed),
+// using default (size-based) balancing, not just the force_capacity_based_balancing path.
+SEASTAR_THREAD_TEST_CASE(test_group0_leader_shard_ratio_is_live_updatable) {
+    auto cfg = tablet_cql_test_config();
+
+    do_with_cql_env_thread([] (auto& e) {
+        auto local_host = e.get_storage_service().local().get_token_metadata_ptr()->get_topology().my_host_id();
+        unsigned shard_count = 4;
+        locator::endpoint_dc_rack dc_rack{"dc_local", "rack_local"};
+
+        auto& stm = e.shared_token_metadata().local();
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            tm.update_topology(local_host, dc_rack, node::state::normal, shard_count);
+            return make_ready_future<>();
+        }).get();
+
+        shared_load_stats stats;
+        stats.set_capacity(local_host, 100UL * 1024UL * 1024UL * 1024UL);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}}, 0);
+        auto table1 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(32);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info { tablet_replica_set { tablet_replica {local_host, 0} } });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+        stats.set_default_tablet_sizes(stm.get());
+
+        auto shard_counts = [&] {
+            std::vector<unsigned> counts(shard_count, 0);
+            auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+            tmap.for_each_tablet([&] (tablet_id, const tablet_info& ti) -> future<> {
+                for (auto& r : ti.replicas) {
+                    if (r.host == local_host) {
+                        counts[r.shard]++;
+                    }
+                }
+                return make_ready_future<>();
+            }).get();
+            return counts;
+        };
+        auto require_peers_balanced = [&] (const std::vector<unsigned>& counts) {
+            for (unsigned i = 2; i < shard_count; ++i) {
+                BOOST_REQUIRE_LE(std::abs(int(counts[i]) - int(counts[1])), 1);
+            }
+        };
+
+        // Default ratio (100): all shards are balanced.
+        rebalance_tablets(e, &stats);
+        auto counts = shard_counts();
+        testlog.info("ratio=100: per-shard tablet counts: {}", counts);
+        BOOST_REQUIRE_LE(std::abs(int(counts[0]) - int(counts[1])), 1);
+        require_peers_balanced(counts);
+
+        // Live-update to 0, on an already-running, already-balanced environment.
+        set_group0_leader_shard_ratio(e, 0);
+        rebalance_tablets(e, &stats);
+        counts = shard_counts();
+        testlog.info("ratio=0: per-shard tablet counts: {}", counts);
+        BOOST_REQUIRE_LE(counts[0], 1u);
+        require_peers_balanced(counts);
+
+        // Live-update back: all shards are balanced again.
+        set_group0_leader_shard_ratio(e, 100);
+        rebalance_tablets(e, &stats);
+        counts = shard_counts();
+        testlog.info("ratio=100 again: per-shard tablet counts: {}", counts);
+        BOOST_REQUIRE_LE(std::abs(int(counts[0]) - int(counts[1])), 1);
+        require_peers_balanced(counts);
     }, std::move(cfg)).get();
 }
 
@@ -6937,7 +7424,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         return make_ready_future<>();
     }).get();
 
-    auto allocated_map = tablet_aware_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count).get();
+    auto allocated_map = tablet_aware_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count, {}).get();
 
     BOOST_REQUIRE_EQUAL(allocated_map.tablet_count(), tablet_count);
 
@@ -6982,7 +7469,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         tablet_map old_tablets = stm.get()->tablets().get_tablet_map(s->id()).clone_gently().get();
         locator::replication_strategy_params params{test_config.new_dc_rep_factor, old_tablets.tablet_count(), std::nullopt};
         auto new_strategy = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, stm.get()->get_topology());
-        auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), std::move(old_tablets)).get();
+        auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), std::move(old_tablets), {}).get();
 
         auto const& ts = tmap.tablets();
         BOOST_REQUIRE_EQUAL(ts.size(), tablet_count);
