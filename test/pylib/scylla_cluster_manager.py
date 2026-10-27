@@ -486,7 +486,8 @@ class ScyllaClusterManager:
                          seeds: list[IPAddress] | None = None,
                          server_encryption: str = "none",
                          expected_error: str | None = None,
-                         expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> ServerInfo:
+                         expected_server_up_state: ServerUpState = ServerUpState.SERVING,
+                         cluster_config: dict[str, Any] | None = None) -> ServerInfo:
         """Add a new server."""
 
         return await self.cluster.add_server(
@@ -500,6 +501,7 @@ class ScyllaClusterManager:
             server_encryption=server_encryption,
             expected_error=expected_error,
             expected_server_up_state=expected_server_up_state,
+            cluster_config=cluster_config,
         )
 
     @manager_op(timeout=None)
@@ -512,11 +514,12 @@ class ScyllaClusterManager:
                            start: bool = True,
                            seeds: list[IPAddress] | None = None,
                            server_encryption: str = "none",
-                           expected_error: str | None = None) -> list[ServerInfo]:
+                           expected_error: str | None = None,
+                           cluster_config: dict[str, Any] | None = None) -> list[ServerInfo]:
         """Add new servers concurrently."""
 
         return await self.cluster.add_servers(servers_num, cmdline, config, version, property_file,
-                                              start, seeds, server_encryption, expected_error)
+                                              start, seeds, server_encryption, expected_error, cluster_config)
 
     @manager_op(timeout=None)
     async def _remove_node(self,
@@ -1194,7 +1197,8 @@ class ScyllaClusterManager:
                          timeout: float | None = ScyllaServer.TOPOLOGY_TIMEOUT,
                          server_encryption: str = "none",
                          expected_server_up_state: ServerUpState = ServerUpState.SERVING,
-                         connect_driver: bool = True) -> ServerInfo:
+                         connect_driver: bool = True,
+                         cluster_config: dict[str, Any] | None = None) -> ServerInfo:
         """Add a new server.
 
         When start=True and expected_error is None, waits until Scylla reports
@@ -1203,6 +1207,11 @@ class ScyllaClusterManager:
         earlier. When start=False or expected_error is set, no readiness wait is
         performed. When connect_driver=False, the effective wait state is capped
         at HOST_ID_QUERIED regardless of expected_server_up_state.
+
+        `cluster_config` holds cluster config options, set with ALTER CLUSTER on
+        the next server of the cluster that reaches CQL, on top of the suite's
+        extra_scylla_cluster_config_options. `config` cannot set them: a native
+        cluster config option has no scylla.yaml form.
         """
         if expected_error is not None:
             self.ignore_log_patterns.append(re.escape(expected_error))
@@ -1233,6 +1242,7 @@ class ScyllaClusterManager:
                     server_encryption=server_encryption,
                     expected_error=expected_error,
                     expected_server_up_state=expected_server_up_state,
+                    cluster_config=cluster_config,
                 )
         except Exception as exc:
             raise RuntimeError("Failed to add server") from exc
@@ -1255,13 +1265,14 @@ class ScyllaClusterManager:
                           driver_connect_opts: dict[str, Any] | None = None,
                           expected_error: str | None = None,
                           server_encryption: str = "none",
-                          auto_rack_dc: str | None = None) -> list[ServerInfo]:
+                          auto_rack_dc: str | None = None,
+                          cluster_config: dict[str, Any] | None = None) -> list[ServerInfo]:
         """Add new servers concurrently.
 
         When start=True and expected_error is None, waits until Scylla reports
         that all configured listeners (including any non-default ports) are ready
         (ServerUpState.SERVING). When start=False or expected_error is set, no
-        readiness wait is performed.
+        readiness wait is performed. `cluster_config` is as in server_add().
 
         This function can be called only if the cluster uses consistent topology changes, which support
         concurrent bootstraps. If your test does not fulfill this condition, and you want to add multiple
@@ -1288,6 +1299,7 @@ class ScyllaClusterManager:
                     seeds=seeds,
                     server_encryption=server_encryption,
                     expected_error=expected_error,
+                    cluster_config=cluster_config,
                 )
         except Exception as exc:
             raise RuntimeError("Failed to add servers") from exc

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, NamedTuple, Optiona
 
 import psutil
 
+from test.pylib.driver_utils import cql_literal
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.rest_client import ScyllaRESTAPIClient
@@ -64,13 +65,16 @@ class ScyllaCluster:
                  config_options: dict[str, Any],
                  append_env: dict[str, str],
                  scylla_exe: str,
-                 save_log_on_success: bool = False) -> None:
+                 save_log_on_success: bool = False,
+                 cluster_config_options: dict[str, Any] | None = None) -> None:
         self.logger = logger
         self.vardir = vardir
         self.mode = mode
         self.cmdline_options = [cmdline_options] if isinstance(cmdline_options, str) else cmdline_options
         self.cmdline_options_override = cmdline_options_override
         self.config_options = config_options
+        # Cluster config options not yet set with ALTER CLUSTER; see _apply_cluster_config().
+        self.pending_cluster_config: dict[str, Any] = dict(cluster_config_options or {})
         self.append_env = append_env
         self.scylla_exe = scylla_exe
         self.save_log_on_success = save_log_on_success
@@ -98,6 +102,9 @@ class ScyllaCluster:
            the server log files and sockets and release the used IPs.  The
            servers' directories and log files stay.
         """
+        if self.pending_cluster_config:
+            self.logger.warning("Cluster %s never applied cluster config options %s: no server reached CQL under the framework",
+                                self, self.pending_cluster_config)
         await self.stop()
         for srv in self.servers.values():
             if srv.log_file is not None:
@@ -147,11 +154,19 @@ class ScyllaCluster:
                          seeds: Optional[List[IPAddress]] = None,
                          server_encryption: str = "none",
                          expected_error: Optional[str] = None,
-                         expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> ServerInfo:
-        """Add a new server to the cluster"""
+                         expected_server_up_state: ServerUpState = ServerUpState.SERVING,
+                         cluster_config: Optional[dict[str, Any]] = None) -> ServerInfo:
+        """Add a new server to the cluster.
+
+        `cluster_config` adds to (or overrides) the cluster's cluster config
+        options; see _apply_cluster_config().
+        """
 
         assert start or not expected_error, \
             f"add_server: cannot add a stopped server and expect an error"
+
+        if cluster_config:
+            self.pending_cluster_config |= cluster_config
 
         # Deep copy: the test keeps the dict (and add_servers() shares it between
         # servers), while ScyllaServer.__init__ writes to it and the server keeps
@@ -287,8 +302,38 @@ class ScyllaCluster:
             else:
                 self.stopped[server.server_id] = server
             self.logger.info("Cluster %s added %s", self, server)
+            if start:
+                await self._apply_cluster_config(server)
 
         return server.server_info()
+
+    async def _apply_cluster_config(self, server: ScyllaServer) -> None:
+        """Set the pending cluster config options with ALTER CLUSTER on `server`,
+           which just reached CQL. A native option has no yaml or command-line
+           form, so this is the only way the suite's extra_scylla_cluster_config_options
+           and add_server()'s `cluster_config` reach the cluster. Servers that
+           cannot run the statement are skipped and the options stay pending:
+           no control connection (a lower up state), maintenance mode, another
+           executable than the one under test, or a running server on another
+           executable (an upgrade in progress rejects the option).
+        """
+        if not self.pending_cluster_config:
+            return
+        if server.control_connection is None or server.in_maintenance_mode() \
+                or server.exe != pathlib.Path(self.scylla_exe).resolve() \
+                or any(other.exe != server.exe for other in self.running.values() if other is not server):
+            self.logger.info("Cluster %s not applying cluster config on %s", self, server)
+            return
+        # Take the pending options before the first await: add_servers() runs
+        # add_server() concurrently.
+        options, self.pending_cluster_config = self.pending_cluster_config, {}
+        for name, value in options.items():
+            statement = f"ALTER CLUSTER WITH {name} = {cql_literal(value)}"
+            self.logger.info("Cluster %s applying cluster config on %s: %s", self, server, statement)
+            try:
+                await asyncio.to_thread(server.control_connection.execute, statement)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to apply cluster config on {server}: {statement}: {exc}") from exc
 
     async def add_servers(self, servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,
@@ -298,7 +343,8 @@ class ScyllaCluster:
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
                           server_encryption: str = "none",
-                          expected_error: Optional[str] = None) -> List[ServerInfo]:
+                          expected_error: Optional[str] = None,
+                          cluster_config: Optional[dict[str, Any]] = None) -> List[ServerInfo]:
         """Add multiple servers to the cluster concurrently"""
         assert servers_num > 0, f"add_servers: cannot add {servers_num} servers"
 
@@ -311,7 +357,8 @@ class ScyllaCluster:
                 assert type(property_file) is list and len(property_file) == servers_num
                 return property_file[i]
 
-        return await gather_safely(*(self.add_server(None, cmdline, config, version, get_property_file(i), start, seeds, server_encryption, expected_error)
+        return await gather_safely(*(self.add_server(None, cmdline, config, version, get_property_file(i), start, seeds, server_encryption, expected_error,
+                                                     cluster_config=cluster_config)
                                       for i in range(servers_num)))
 
     def endpoint(self) -> str:
@@ -434,6 +481,8 @@ class ScyllaCluster:
         if expected_error is not None:
             self.running.pop(server_id)
             self.stopped[server_id] = server
+        else:
+            await self._apply_cluster_config(server)
 
     def server_pause(self, server_id: ServerNum) -> None:
         """Pause a running server process."""

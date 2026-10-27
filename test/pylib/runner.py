@@ -383,6 +383,7 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
             append_env=base_env,
             scylla_exe=scylla_binary,
             save_log_on_success=options.save_log_on_success,
+            cluster_config_options=suite_config.cfg.get("extra_scylla_cluster_config_options", {}),
         )
         testpy_logger.info("Created Scylla cluster %s for test %s", cluster, test_name)
         try:
