@@ -17,7 +17,7 @@ Where:
 ``[upgrade target]`` indicates what you are upgrading and can be any of the following:
 
 * ``--include-all-sstables | -a`` - Upgrades all SSTables by force, including those already in the new SSTable format.
-* ``--jobs <jobs> | -j <jobs>`` - Indicates the number of SSTables you want to upgrade simultaneously. Setting this parameter to ``0`` uses all available compaction threads.
+* ``--jobs <jobs> | -j <jobs>`` - Accepted for compatibility, ignored.
 * ``keyspace-name`` - Updates all SSTables for all tables in the indicated keyspace
 * ``table-name`` - Updates all SSTables for the indicated table or tables, with each table separated by a space. To specify a table, you must include the ``keyspace-name`` and the ``table-name`` separated by a space. 
 * ``--`` Separator which can be used to separate an option from an argument. For example, if you are using the ``-a`` flag, use the separator between the flag and the ``keyspace-name``
@@ -45,11 +45,11 @@ To upgrade all three tables (A, B, and E) you add the `-a` flag which forces an 
 
 To upgrade all old format tables in both keyspaces:
 
-``nodetool upgradesstables KeyspaceA KeyspaceB``
+``nodetool upgradesstables KeyspaceA`` and ``nodetool upgradesstables KeyspaceB``
 
 To upgrade all tables (old and new format) in both keyspaces:
 
-``nodetool upgradesstables -a -- KeyspaceA KeyspaceB``
+``nodetool upgradesstables -a -- KeyspaceA`` and ``nodetool upgradesstables -a -- KeyspaceB``
 
 Additional References
 ---------------------
