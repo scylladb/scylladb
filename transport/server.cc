@@ -974,7 +974,8 @@ std::unique_ptr<cql_server::response> cql_server::handle_exception(int16_t strea
 cql_protocol_extension_enum_set cql_server::connection::supported_cql_protocol_extensions() const {
     auto exts = cql_protocol_extension_enum_set::full();
     const bool strongly_consistent_tables = _server._query_processor.local().db().get_config().check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES);
-    if (!strongly_consistent_tables) {
+    // The protocol extension is only available on CQLv4.
+    if (!strongly_consistent_tables || _version != 4) {
         exts.remove(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL);
     }
     return exts;

@@ -34,6 +34,13 @@ VALUES_FLAG = 0x01
 
 PROTOCOL_ERROR = 0x000A
 
+# The options the server advertises in SUPPORTED.
+def supported_options(sock: socket.socket, version: int = 4) -> dict[str, list[str]]:
+    response = cql_frames.request(sock, cql_frames.OPTIONS, b'', version)
+    assert response.opcode == cql_frames.SUPPORTED
+    return response.body.read_string_multimap()
+
+
 # Opens a connection to the server. It negotiates the protocol extension unless
 # told otherwise.
 @pytest.fixture(scope="module")
@@ -42,20 +49,19 @@ def connect(request, host, scylla_only):
         skip_env("The tests talk to the server over a plain socket")
     port = int(request.config.getoption("--port"))
     with cql_frames.connection(host, port) as sock:
-        response = cql_frames.request(sock, cql_frames.OPTIONS, b'')
-        assert response.opcode == cql_frames.SUPPORTED
-        supported = response.body.read_string_multimap()
+        supported = supported_options(sock)
     if EXTENSION not in supported:
         skip_env(f"The server doesn't support {EXTENSION}")
 
-    def open_connection(negotiate: bool = True):
-        return cql_frames.connection(host, port, {EXTENSION: ""} if negotiate else {})
+    def open_connection(negotiate: bool = True, version: int = 4):
+        return cql_frames.connection(host, port, {EXTENSION: ""} if negotiate else {}, version)
     return open_connection
 
 
 # Sends an EXECUTE request of a prepared statement with the given int values.
 # `block` is the tablet version block, or None to leave it out.
-def execute(sock: socket.socket, statement_id: bytes, values: list[int], block: int | None) -> cql_frames.Response:
+def execute(sock: socket.socket, statement_id: bytes, values: list[int], block: int | None,
+            version: int = 4) -> cql_frames.Response:
     body = cql_frames.encode_short_bytes(statement_id)
     body += cql_frames.encode_short(CL_QUORUM)
     body += cql_frames.encode_byte(VALUES_FLAG)
@@ -63,7 +69,7 @@ def execute(sock: socket.socket, statement_id: bytes, values: list[int], block: 
     body += b''.join(cql_frames.encode_bytes(cql_frames.encode_int(value)) for value in values)
     if block is not None:
         body += cql_frames.encode_byte(block)
-    return cql_frames.request(sock, cql_frames.EXECUTE, body)
+    return cql_frames.request(sock, cql_frames.EXECUTE, body, version)
 
 
 # The tablets-routing-v2 payload: a tuple (first token: bigint, last token:
@@ -148,6 +154,23 @@ def test_execute_without_tablet_version_block(cql, connect, test_keyspace):
         response = execute(sock, statement_id, [1, 1], None)
     assert response.opcode == cql_frames.ERROR
     assert response.body.read_int() == PROTOCOL_ERROR
+
+
+# Protocol v3 has no custom payload to carry the routing information, so the
+# server doesn't advertise the extension on a v3 connection. Reproduces
+# SCYLLADB-5742.
+def test_not_advertised_on_protocol_v3(connect):
+    with connect(negotiate=False, version=3) as sock:
+        assert EXTENSION not in supported_options(sock, version=3)
+
+
+# Nor does the server enable the extension on a v3 connection if the driver
+# asks for it anyway: an EXECUTE request carries no tablet version block, and
+# its response carries no routing information. Reproduces SCYLLADB-5742.
+def test_not_negotiated_on_protocol_v3(cql, connect, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table, connect(version=3) as sock:
+        statement_id = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)").query_id
+        assert routing_information_of(execute(sock, statement_id, [1, 1], None, version=3)) is None
 
 
 # Whichever block of the tablet version the driver sends, the server returns

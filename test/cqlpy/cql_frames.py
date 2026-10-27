@@ -37,9 +37,9 @@ TRACING_FLAG = 0x02
 CUSTOM_PAYLOAD_FLAG = 0x04
 WARNING_FLAG = 0x08
 
-def build_frame(*, opcode: int, stream: int, body: bytes) -> bytearray:
+def build_frame(*, opcode: int, stream: int, body: bytes, version: int = 4) -> bytearray:
     frame = bytearray()
-    frame += struct.pack("!B", 0x04)         # version 4
+    frame += struct.pack("!B", version)      # version
     frame += struct.pack("!B", 0x00)         # flags
     frame += struct.pack("!H", stream)       # stream
     frame += struct.pack("!B", opcode)       # opcode
@@ -47,8 +47,8 @@ def build_frame(*, opcode: int, stream: int, body: bytes) -> bytearray:
     frame += body
     return frame
 
-def send_frame(sock: socket.socket, *, opcode: int, stream: int, body: bytes) -> None:
-    sock.sendall(build_frame(opcode=opcode, stream=stream, body=body))
+def send_frame(sock: socket.socket, *, opcode: int, stream: int, body: bytes, version: int = 4) -> None:
+    sock.sendall(build_frame(opcode=opcode, stream=stream, body=body, version=version))
 
 def recv_frame(sock: socket.socket) -> bytes:
     return sock.recv(4096)
@@ -177,20 +177,20 @@ def read_frame(sock: socket.socket) -> Response:
     return Response(opcode, flags, _recv_exactly(sock, length))
 
 # Sends a request and returns the response to it.
-def request(sock: socket.socket, opcode: int, body: bytes) -> Response:
-    send_frame(sock, opcode=opcode, stream=3, body=body)
+def request(sock: socket.socket, opcode: int, body: bytes, version: int = 4) -> Response:
+    send_frame(sock, opcode=opcode, stream=3, body=body, version=version)
     return read_frame(sock)
 
 # A connection ready for queries. It's started with the given STARTUP options
 # on top of CQL_VERSION, and authenticated with the default superuser
 # credentials if the server requires it.
 @contextmanager
-def connection(host: str, port: int, startup_options: dict[str, str] = {}):
+def connection(host: str, port: int, startup_options: dict[str, str] = {}, version: int = 4):
     sock = socket.create_connection((host, port))
     try:
-        response = request(sock, STARTUP, encode_string_map({"CQL_VERSION": "3.0.0", **startup_options}))
+        response = request(sock, STARTUP, encode_string_map({"CQL_VERSION": "3.0.0", **startup_options}), version)
         if response.opcode == AUTHENTICATE:
-            response = request(sock, AUTH_RESPONSE, b'\x00cassandra\x00cassandra')
+            response = request(sock, AUTH_RESPONSE, b'\x00cassandra\x00cassandra', version)
             assert response.opcode == AUTH_SUCCESS, f"expected AUTH_SUCCESS, got {hex(response.opcode)}"
         else:
             assert response.opcode == READY, f"expected READY or AUTHENTICATE, got {hex(response.opcode)}"

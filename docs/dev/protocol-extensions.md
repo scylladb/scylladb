@@ -350,6 +350,8 @@ Unlike `TABLETS_ROUTING_V1`, the server advertises
 experimental feature is enabled. The `_EXPERIMENTAL` suffix indicates the
 feature is still under development and its format may change.
 
+The extension is only available in protocol v4.
+
 ## Negotiate sending metadata id
 
 This extension allows the driver to inform the database that it is aware of
