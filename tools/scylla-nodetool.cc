@@ -1085,7 +1085,7 @@ void compactionstats_operation(scylla_rest_client& client, const bpo::variables_
         }
     }
     fmt::print("\n");
-    report_compaction_table(client, vm["human-readable"].as<bool>());
+    report_compaction_table(client, vm.contains("human-readable"));
 }
 
 void decommission_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -3503,10 +3503,10 @@ void table_stats_operation(scylla_rest_client& client, const bpo::variables_map&
     if (vm.contains("tables")) {
         match_set = vm["tables"].as<std::vector<sstring>>();
     }
-    table_filter is_included(vm["ignore"].as<bool>(), match_set);
+    table_filter is_included(vm.contains("ignore"), match_set);
 
     const auto format = vm["format"].as<sstring>();
-    const auto human_readable = vm["human-readable"].as<bool>();
+    const auto human_readable = vm.contains("human-readable");
     if (format == "json") {
         table_stats_print<json_writer>(client, is_included, human_readable);
     } else if (format == "yaml") {
@@ -4334,7 +4334,7 @@ fmt::format(R"(
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/compactionstats.html")),
                 {
-                    typed_option<bool>("human-readable,H", false, "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
+                    typed_option<>("human-readable,H", "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
                 },
             },
             {
@@ -5260,8 +5260,8 @@ fmt::format(R"(
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tablestats.html")),
                 {
-                    typed_option<bool>("ignore,i", false, "Ignore the list of tables and display the remaining tables"),
-                    typed_option<bool>("human-readable,H", false, "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
+                    typed_option<>("ignore,i", "Ignore the list of tables and display the remaining tables"),
+                    typed_option<>("human-readable,H", "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
                     typed_option<sstring>("format,F", "plain", "Output format (json, yaml)"),
                 },
                 {

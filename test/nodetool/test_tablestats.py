@@ -14,6 +14,7 @@ from collections import defaultdict
 from textwrap import indent
 from typing import NamedTuple
 from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import format_size
 
 
 class Table(NamedTuple):
@@ -222,20 +223,23 @@ class table_stats:
             self.req('tombstone_scanned_histogram', self.tombstone_scanned_histogram),
         ]
 
-    def format(self):
+    def format(self, human_readable=False):
+        def size(v):
+            return format_size(v) if human_readable else v
+
         return f'''\
 Table: {self.cf}
 SSTable count: {self.live_ss_table_count}
 SSTables in each level: [{self.sstables_in_each_level}]
-Space used (live): {self.live_disk_space_used}
-Space used (total): {self.total_disk_space_used}
-Space used by snapshots (total): {self.snapshots_size}
-Off heap memory used (total): {self.total_off_heap_memory_used}
+Space used (live): {size(self.live_disk_space_used)}
+Space used (total): {size(self.total_disk_space_used)}
+Space used by snapshots (total): {size(self.snapshots_size)}
+Off heap memory used (total): {size(self.total_off_heap_memory_used)}
 SSTable Compression Ratio: {self.compression_ratio:.2f}
 Number of partitions (estimate): {self.estimated_row_count}
 Memtable cell count: {self.memtable_columns_count}
 Memtable data size: {self.memtable_live_data_size}
-Memtable off heap memory used: {self.memtable_off_heap_size}
+Memtable off heap memory used: {size(self.memtable_off_heap_size)}
 Memtable switch count: {self.memtable_switch_count}
 Local read count: {self.read}
 Local read latency: {self.local_read_latency / 1000:.3f} ms
@@ -245,10 +249,10 @@ Pending flushes: {self.pending_flushes}
 Percent repaired: {self.percent_repaired}
 Bloom filter false positives: {self.bloom_filter_false_positives}
 Bloom filter false ratio: {self.recent_bloom_filter_false_ratio:.5f}
-Bloom filter space used: {self.bloom_filter_disk_space_used}
-Bloom filter off heap memory used: {self.bloom_filter_off_heap_memory_used}
-Index summary off heap memory used: {self.index_summary_off_heap_memory_used}
-Compression metadata off heap memory used: {self.compression_metadata_off_heap_memory_used}
+Bloom filter space used: {size(self.bloom_filter_disk_space_used)}
+Bloom filter off heap memory used: {size(self.bloom_filter_off_heap_memory_used)}
+Index summary off heap memory used: {size(self.index_summary_off_heap_memory_used)}
+Compression metadata off heap memory used: {size(self.compression_metadata_off_heap_memory_used)}
 Compacted partition minimum bytes: {self.min_row_size}
 Compacted partition maximum bytes: {self.max_row_size}
 Compacted partition mean bytes: {self.mean_row_size}
@@ -354,14 +358,18 @@ class keyspace_stats:
         }
 
 
-@pytest.mark.parametrize('command,args,tables_to_print',
+@pytest.mark.parametrize('command,args,tables_to_print,human_readable',
                          [
-                             ('tablestats', [], ['keyspace1.standard1', 'system.local']),
-                             ('tablestats', ['keyspace1'], ['keyspace1.standard1']),
-                             ('tablestats', ['keyspace1.standard1'], ['keyspace1.standard1']),
-                             ('cfstats', [], ['keyspace1.standard1', 'system.local']),
+                             ('tablestats', [], ['keyspace1.standard1', 'system.local'], False),
+                             ('tablestats', ['keyspace1'], ['keyspace1.standard1'], False),
+                             ('tablestats', ['keyspace1.standard1'], ['keyspace1.standard1'], False),
+                             ('tablestats', ['-i', 'system'], ['keyspace1.standard1'], False),
+                             ('tablestats', ['--ignore', 'keyspace1.standard1'], ['system.local'], False),
+                             ('tablestats', ['-H'], ['keyspace1.standard1', 'system.local'], True),
+                             ('tablestats', ['--human-readable'], ['keyspace1.standard1', 'system.local'], True),
+                             ('cfstats', [], ['keyspace1.standard1', 'system.local'], False),
                          ])
-def test_plain_text_output(nodetool, command, args, tables_to_print):
+def test_plain_text_output(nodetool, command, args, tables_to_print, human_readable):
     tables = [Table('keyspace1', 'standard1', 'ColumnFamilies'),
               Table('system', 'local', 'ColumnFamilies')]
     expected_requests = [expected_request(
@@ -397,7 +405,7 @@ Keyspace : {ks_name}
 '''
         for table in keyspace.tables:
             expected_requests.extend(table.expected_details_requests())
-            expected_output += indent(table.format(), '\t\t')
+            expected_output += indent(table.format(human_readable), '\t\t')
         expected_output += '----------------\n'
 
     res = nodetool(command, *args, expected_requests=expected_requests)
