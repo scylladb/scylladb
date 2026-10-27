@@ -200,6 +200,9 @@ As the base table grows or shrinks, its tablets may be split or merged.
 When that happens, a new CDC stream set is created for the table, with a new stream ID for each new tablet, and it replaces the old stream set.
 Each stream set has an associated timestamp that indicates when the stream set starts operating.
 
+If the keyspace was :doc:`migrated from vnodes to tablets </operating-scylla/procedures/config-change/migrate-vnodes-to-tablets>`, the table's first stream set starts operating shortly after the migration was finalized.
+Changes with earlier timestamps are in the streams of the CDC generations of vnode-based keyspaces.
+
 Example: Tablet Split
 ^^^^^^^^^^^^^^^^^^^^^
 
