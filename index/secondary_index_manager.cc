@@ -39,7 +39,7 @@ index::index(const sstring& target_column, const index_metadata& im)
     , _target_type{cql3::statements::index_target::from_target_string(target_column)}
     , _target_column{cql3::statements::index_target::column_name_from_target_string(target_column)}
     , _columns{secondary_index_manager::is_custom_index<vector_index>(im)
-            ? vector_index::get_all_target_columns(im.options().at(cql3::statements::index_target::target_option_name))
+            ? external_index::get_all_target_columns(im.options().at(cql3::statements::index_target::target_option_name))
             : std::vector<sstring>{_target_column}}
 {}
 

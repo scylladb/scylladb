@@ -9,9 +9,11 @@
 #pragma once
 
 #include <algorithm>
+#include <vector>
 
 #include "schema/schema.hh"
 
+#include "cql3/statements/index_target.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "index/secondary_index.hh"
 #include "index/secondary_index_manager.hh"
@@ -35,7 +37,14 @@ public:
         return has_index_impl<external_index>(s);
     }
 
+    static sstring serialize_targets(const std::vector<::shared_ptr<cql3::statements::index_target>>& targets);
+    static sstring get_target_column(const sstring& targets);
+    // The target column, the columns of the partition of a local index and the filtering columns.
+    static std::vector<sstring> get_all_target_columns(const sstring& targets);
+    static bool is_local(const sstring& target_string);
+
 protected:
+    static sstring targets_to_cql(const sstring& targets);
     void check_uses_tablets(const schema& schema, const data_dictionary::database& db) const;
     void check_regular_column(const column_definition& column) const;
 
