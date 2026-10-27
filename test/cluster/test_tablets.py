@@ -502,9 +502,11 @@ async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager:
     await manager.servers_add(2, config=config, auto_rack_dc="dc1")
     await manager.servers_add(2, config=config, auto_rack_dc="dc2")
 
-    cql = manager.get_cql()
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
     servers = await manager.running_servers()
-    host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    cql, hosts = await manager.get_ready_cql(servers)
+    host = hosts[0]
 
     async def check_rf(ks: str, expected_dc1_rf: int, expected_dc2_rf: int):
         await read_barrier(manager.api, servers[0].ip_addr)
@@ -552,8 +554,10 @@ async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest
 
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
 
-    cql = manager.get_cql()
-    host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, hosts = await manager.get_ready_cql(servers)
+    host = hosts[0]
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks1.t (pk int primary key);")
@@ -1327,7 +1331,9 @@ async def test_failed_tablet_rebuild_is_retried_on_alter(manager: ScyllaClusterM
                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'})]
 
-    cql = manager.get_cql()
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(servers)
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']}} and tablets = {{'initial': 4}};")
     await cql.run_async("create table ks1.t (pk int primary key);")
@@ -1906,7 +1912,9 @@ async def test_excludenode(manager: ScyllaClusterManager):
     servers = await manager.servers_add(servers_num=3, auto_rack_dc='dc1')
     await manager.server_add(property_file={'dc': 'dc1', 'rack': 'rack2'})
 
-    cql = manager.get_cql()
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(await manager.running_servers())
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', "
                                           "'dc1': ['rack1', 'rack2']} AND tablets = { 'initial': 8 }") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
@@ -1952,7 +1960,9 @@ async def test_excludenode_shrink_rf(manager: ScyllaClusterManager):
     # path instead of relying on stale cached stats.
     await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "force_down_node_load_stats_invalid", one_shot=False) for s in dc1_servers))
 
-    cql = manager.get_cql()
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(dc1_servers + [dc2_server])
     async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', "
                                           "'dc1': 1, 'dc2': 1} AND tablets = { 'initial': 4 }") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
