@@ -1368,4 +1368,25 @@ SEASTAR_TEST_CASE(test_prepare_rejects_cdc_tables_without_feature) {
     }, cfg);
 }
 
+// SCYLLADB-1166: enabling CDC creates the CDC log table, so it's rejected in a
+// keyspace undergoing migration, like CREATE TABLE. A log table that already
+// exists was prepared for the migration with the keyspace, so disabling and
+// re-enabling CDC is allowed.
+SEASTAR_TEST_CASE(test_block_enabling_cdc_during_migration) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks = sstring("test_migration_ks");
+        create_vnode_keyspace_with_table(e, ks);
+        e.execute_cql(format("CREATE TABLE {}.t2 (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled': true}}", ks)).get();
+        e.get_storage_service().local().prepare_for_tablets_migration(ks).get();
+
+        require_rejected_during_migration(e, format("ALTER TABLE {}.t WITH cdc = {{'enabled': true}}", ks));
+        BOOST_REQUIRE(!e.local_db().has_schema(ks, cdc::log_name("t")));
+
+        e.execute_cql(format("ALTER TABLE {}.t2 WITH cdc = {{'enabled': false}}", ks)).get();
+        e.execute_cql(format("ALTER TABLE {}.t2 WITH cdc = {{'enabled': true}}", ks)).get();
+        e.execute_cql(format("INSERT INTO {}.t2 (pk, v) VALUES (1, 1)", ks)).get();
+        assert_that(e.execute_cql(format("SELECT * FROM {}.{}", ks, cdc::log_name("t2"))).get()).is_rows().with_size(1);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -23,6 +23,7 @@
 #include "bytes.hh"
 #include "index/external_index.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
 #include "locator/topology.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
@@ -253,6 +254,9 @@ public:
             if (!db.features().cdc_with_tablets) {
                 ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema, db.get_token_metadata().get_topology());
             }
+            if (!log_schema) {
+                ensure_that_keyspace_is_not_undergoing_tablets_migration(db, *keyspace.metadata(), new_schema);
+            }
 
             std::optional<table_id> maybe_id = log_schema ? std::make_optional(log_schema->id()) : std::nullopt;
             auto new_log_schema = create_log_schema(new_schema, db, *keyspace.metadata(), timestamp, std::move(maybe_id), log_schema);
@@ -332,6 +336,13 @@ private:
         if (is_log_for_some_table(db, schema.ks_name(), cf_name_view)) {
             throw exceptions::invalid_request_exception(format("Cannot create a CDC log for a table {}.{}, because creating nested CDC logs is not allowed",
                     schema.ks_name(), schema.cf_name()));
+        }
+    }
+
+    static void ensure_that_keyspace_is_not_undergoing_tablets_migration(replica::database& db, const keyspace_metadata& ksm, const schema& schema) {
+        if (locator::is_keyspace_undergoing_tablets_migration(db.get_token_metadata().tablets(), ksm)) {
+            throw exceptions::invalid_request_exception(format("Cannot enable CDC for table {}.{}: keyspace {} is undergoing vnodes-to-tablets migration",
+                    schema.ks_name(), schema.cf_name(), ksm.name()));
         }
     }
 
