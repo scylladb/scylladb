@@ -4946,10 +4946,12 @@ For more information, see: {}
         {
             {
                 "resetlocalschema",
-                "Reset node's local schema and resync",
-R"(
-For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/resetlocalschema.html
-)",
+                "Reset node's local schema and resync (no longer supported)",
+fmt::format(R"(
+This operation is no longer supported.
+
+For more information, see: {}
+)", doc_link("operating-scylla/nodetool-commands/resetlocalschema.html")),
                 { },
                 { },
             },
