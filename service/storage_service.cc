@@ -7553,7 +7553,10 @@ future<> storage_service::register_protocol_server(protocol_server& server, bool
 }
 
 std::vector<table_id> storage_service::get_tables_with_cdc_tablet_streams() const {
-    return _cdc_gens.local().get_cdc_metadata().get_tables_with_cdc_tablet_streams();
+    const auto& cdc_metadata = _cdc_gens.local().get_cdc_metadata();
+    return cdc_metadata.get_tables_with_cdc_tablet_streams()
+            | std::views::filter([&] (table_id table) { return !cdc_metadata.has_only_vnode_streams_set(table); })
+            | std::ranges::to<std::vector<table_id>>();
 }
 
 future<> storage_service::query_cdc_timestamps(table_id table, bool ascending, noncopyable_function<future<>(db_clock::time_point)> f) {
