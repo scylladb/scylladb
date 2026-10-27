@@ -70,7 +70,7 @@ class index {
     // All columns the index depends on.
     std::vector<sstring> _columns;
 public:
-    index(const sstring& target_column, const index_metadata& im);
+    explicit index(const index_metadata& im);
     bool depends_on(const column_definition& cdef) const;
     struct supports_expression_v {
         enum class value_type {
