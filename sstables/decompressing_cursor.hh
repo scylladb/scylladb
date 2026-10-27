@@ -119,8 +119,8 @@ class decompressing_cursor final : public data_consumer::continuous_data_consume
     // adds it to the digest.
     void verify_chunk(const framed_chunk& chunk);
     // Decompresses `chunk`, the chunk at _stream_position, into memory paid by
-    // `units`, and makes it the loaded chunk.
-    void install_chunk(const framed_chunk& chunk, reader_permit::resource_units units);
+    // `units`, and makes it the loaded chunk. `backing` holds the bytes of `chunk`.
+    void install_chunk(const framed_chunk& chunk, temporary_buffer<char>& backing, reader_permit::resource_units units);
     void add_to_digest(uint64_t chunk_start, const framed_chunk& chunk, uint32_t checksum);
     future<> ensure_chunk_if_not_eof(std::optional<sstable_position> end);
     // Moves the position by `n` bytes forward within the current chunk. Steps

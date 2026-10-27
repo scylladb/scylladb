@@ -55,6 +55,10 @@ public:
         return metadata ? &*metadata : nullptr;
     }
 
+    const compression& _compression() {
+        return _sst->_components->compression;
+    }
+
     std::unique_ptr<index_reader> make_index_reader(reader_permit permit) {
         return std::make_unique<index_reader>(_sst, std::move(permit));
     }
