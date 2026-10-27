@@ -336,9 +336,13 @@ async def test_tablet_repair_hosts_filter(manager: ScyllaClusterManager, include
     check_repairs(row_num_before, row_num_after, [0, 1] if included_host_count == 2 else [])
 
 async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
-    servers = [await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
-               await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R2'}),
-               await manager.server_add(property_file = {'dc': 'DC2', 'rack' : 'R3'})]
+    # Refresh the load stats every second, like create_table_insert_data_for_repair() does. A refresh
+    # wakes the topology coordinator, which a test needs after it turns off an injection holding a
+    # repair, or the repair waits for the next refresh, 60 seconds by default.
+    config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = [await manager.server_add(config=config, property_file = {'dc': 'DC1', 'rack' : 'R1'}),
+               await manager.server_add(config=config, property_file = {'dc': 'DC1', 'rack' : 'R2'}),
+               await manager.server_add(config=config, property_file = {'dc': 'DC2', 'rack' : 'R3'})]
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
                   "'DC1': 2, 'DC2': 1} AND tablets = {'initial': 8};")
