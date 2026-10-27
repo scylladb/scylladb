@@ -4646,7 +4646,8 @@ For more information, see: {}
                 "listsnapshots",
                 "Lists all the snapshots along with the size on disk and true size",
 fmt::format(R"(
-Dropped tables (column family) will not be part of the listsnapshots.
+Snapshots of dropped tables (for example, the automatic snapshot taken on
+DROP TABLE) are also listed.
 
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/listsnapshots.html")),
