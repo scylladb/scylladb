@@ -4762,9 +4762,10 @@ This operation is not supported.
             {
                 "netstats",
                 "Print network information on provided host (connecting node by default)",
-fmt::format(R"(
-For more information, see: {}
-)", doc_link("operating-scylla/nodetool-commands/netstats.html")),
+R"(
+Prints the node's operation mode, the progress of ongoing streaming sessions,
+read repair statistics and messaging statistics.
+)",
                 {
                     typed_option<>("human-readable,H", "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
                 },
