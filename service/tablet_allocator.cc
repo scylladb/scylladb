@@ -3087,16 +3087,26 @@ public:
         return true;
     }
 
-    // Precondition: all migration streaming info have same source and destination.
+    // Siblings co-located on one replica may differ on the others, so the load is summed per replica.
     bool can_accept_load(const migration_streaming_info_vector& infos) const {
-        // Since all migration info have the same source and destination, the load check can be done
-        // once with the combined stream weight.
-        auto info = infos[0];
-        info.stream_weight = 0;
-        for (auto& i : infos) {
-            info.stream_weight += i.stream_weight;
+        std::unordered_map<tablet_replica, streaming_shard_load> added;
+        for (auto& info : infos) {
+            for (auto&& replica : info.read_from) {
+                added[replica].read_load += info.stream_weight;
+            }
+            for (auto&& replica : info.written_to) {
+                added[replica].write_load += info.stream_weight;
+            }
         }
-        return can_accept_load(info);
+        for (auto& [r, add] : added) {
+            auto load = streaming_load(r);
+            if ((add.read_load > 0 && load.read_load > 0 && load.read_load + add.read_load > max_read_streaming_load)
+                    || (add.write_load > 0 && load.write_load > 0 && load.write_load + add.write_load > max_write_streaming_load)) {
+                lblogger.debug("Migration skipped because of streaming load limit on {}", r);
+                return false;
+            }
+        }
+        return true;
     }
 
     bool in_shuffle_mode() const {
