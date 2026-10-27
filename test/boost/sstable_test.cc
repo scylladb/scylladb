@@ -41,6 +41,8 @@
 #include "sstables/exceptions.hh"
 #include "sstables/decompressing_cursor.hh"
 #include "sstables/consumer.hh"
+#include "sstables/sstable_compressor_factory.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 
 #include <boost/range/combine.hpp>
 
@@ -835,7 +837,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         sstables::compression c;
         // this initializes "c"
         auto os = make_file_output_stream(f, file_output_stream_options()).get();
-        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, version, cp, make_lz4_sstable_compressor_for_tests(), 0);
+        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, version, cp, 0, make_lz4_sstable_compressor_for_tests(), 0);
 
         // Make sure that amount of written data is a multiple of chunk_len so that we hit #2143.
         temporary_buffer<char> buf1(c.uncompressed_chunk_length());
@@ -933,6 +935,339 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         expect_eof(in);
       }
       }
+    });
+}
+
+namespace {
+
+// tests::random::get_bytes() yields 0..127 only, which zstd compresses by more than 10%.
+bytes incompressible_bytes(size_t n) {
+    bytes b(bytes::initialized_later(), n);
+    std::ranges::generate(b, [] { return bytes::value_type(tests::random::get_int<uint8_t>()); });
+    return b;
+}
+
+struct raw_chunks_file {
+    tmpdir tmp;
+    sstables::compression c;
+    uint64_t uncompressed_size = 0;
+    sstring path;
+    sstables::sstable_version_types version = sstables::sstable_version_types::mu;
+    std::optional<std::vector<uint64_t>> lens;
+};
+
+// The stored length of every chunk, excluding frames and checksum. `mu` only has a sample
+// of the offsets in CompressionInfo.db, so walk the headers.
+std::vector<uint64_t> read_stored_chunk_lens(const sstables::compression& c, sstables::sstable_version_types version, const sstring& path) {
+    std::vector<uint64_t> lens;
+    const auto codec = sstables::framed_chunk_codec(version, c.uncompressed_chunk_length());
+    auto f = open_file_dma(path, open_flags::ro).get();
+    auto in = make_file_input_stream(f);
+    auto data = seastar::util::read_entire_stream_contiguous(in).get();
+    in.close().get();
+    for (size_t pos = 0; pos < data.size();) {
+        auto len = codec.decode_header(std::string_view(data).substr(pos)).compressed_len;
+        lens.push_back(len);
+        pos += codec.extent(len);
+    }
+    return lens;
+}
+
+// The dictionary compressors need a sharded factory; a random dictionary leaves random data incompressible.
+struct raw_chunks_factory {
+    sharded<default_sstable_compressor_factory> factory;
+    table_id table = table_id::create_random_id();
+    raw_chunks_factory() {
+        factory.start().get();
+        auto dict = incompressible_bytes(4096);
+        factory.local().set_recommended_dict(table, std::as_bytes(std::span(dict))).get();
+    }
+    ~raw_chunks_factory() {
+        factory.stop().get();
+    }
+};
+
+// Writes chunks through the compressing sink; incompressible chunks are random, the others are zeros.
+void write_raw_chunks_file(raw_chunks_factory& rcf, raw_chunks_file& rf, compression_parameters::algorithm algo, int saving_percent, unsigned chunk_kb,
+        const std::vector<bytes>& chunks, size_t tail_len, sstables::raw_chunk_heuristic heuristic = {},
+        std::optional<uint64_t> partition_boundary = {}) {
+    rf.path = (rf.tmp.path() / "test").string();
+    auto f = open_file_dma(rf.path, open_flags::create | open_flags::wo).get();
+    compression_parameters cp({
+        { compression_parameters::SSTABLE_COMPRESSION, sstring(compression_parameters::algorithm_to_name(algo)) },
+        { compression_parameters::CHUNK_LENGTH_KB, std::to_string(chunk_kb) },
+    });
+    auto& factory = rcf.factory.local();
+    auto compressor = factory.make_compressor_for_writing_for_tests(cp, rcf.table).get();
+    auto os = make_file_output_stream(f, file_output_stream_options()).get();
+    auto out = make_compressed_file_m_format_output_stream(std::move(os), &rf.c, rf.version, cp, saving_percent, std::move(compressor), 0, {}, heuristic);
+    if (partition_boundary) {
+        rf.c.note_partition_boundary(*partition_boundary);
+    }
+    for (const auto& b : chunks) {
+        BOOST_REQUIRE_EQUAL(b.size(), rf.c.uncompressed_chunk_length());
+        out.write(reinterpret_cast<const char*>(b.data()), b.size()).get();
+        rf.uncompressed_size += b.size();
+    }
+    if (tail_len) {
+        auto b = incompressible_bytes(tail_len);
+        out.write(reinterpret_cast<const char*>(b.data()), b.size()).get();
+        rf.uncompressed_size += b.size();
+    }
+    out.close().get();
+    rf.c.update(seastar::file_size(rf.path).get());
+    // The reader rebuilds the threshold from the stored options, as when loading an sstable.
+    auto stored_opts = rf.c.options;
+    auto reader = factory.make_compressor_for_reading(rf.c).get();
+    rf.c.set_compressor(std::move(reader));
+    rf.c.options = std::move(stored_opts);
+    rf.c.init_min_compression_saving_percent_from_options();
+}
+
+bytes read_raw_chunks_file(raw_chunks_file& rf, reader_permit permit, uint64_t pos = 0) {
+    const auto codec = sstables::framed_chunk_codec(rf.version, rf.c.uncompressed_chunk_length());
+    // The cursor reads from the start; skip to `pos`.
+    const auto size = seastar::file_size(rf.path).get();
+    const auto ucl = rf.c.uncompressed_chunk_length();
+    const auto last_len = rf.uncompressed_size ? (rf.uncompressed_size - 1) % ucl + 1 : 0;
+    auto opener = [path = rf.path, size] () -> future<data_source> {
+        auto f = co_await open_file_dma(path, open_flags::ro);
+        file_input_stream_options options;
+        options.read_ahead = 0;
+        co_return make_file_data_source(std::move(f), 0, size, std::move(options));
+    };
+    compressed_reader in(sstables::make_decompressing_cursor(sstables::decompressing_cursor_source_opener(std::move(opener)),
+            sstables::disk_read_range(sstables::sstable_position::from_physical(0, 0, 0), sstables::sstable_position::from_physical(size, 0, 0)),
+            rf.c.get_compressor(), codec.with_raw_chunks(rf.c.max_compressed_length(), last_len), size, std::move(permit), std::nullopt));
+    bytes ret;
+    while (auto b = in.read().get()) {
+        ret += bytes(reinterpret_cast<const int8_t*>(b.get()), b.size());
+    }
+    return ret.substr(std::min<size_t>(pos, ret.size()));
+}
+
+// Incompressible chunks are random, the others are zeros.
+std::vector<bytes> make_chunks(const std::vector<bool>& incompressible, unsigned chunk_kb) {
+    return incompressible | std::views::transform([chunk_kb] (bool inc) {
+        return inc ? incompressible_bytes(chunk_kb * 1024) : bytes(chunk_kb * 1024, int8_t(0));
+    }) | std::ranges::to<std::vector>();
+}
+
+uint64_t stored_chunk_len(raw_chunks_file& rf, size_t i) {
+    if (!rf.lens) {
+        rf.lens = read_stored_chunk_lens(rf.c, rf.version, rf.path);
+    }
+    return rf.lens->at(i);
+}
+
+uint64_t count_raw_chunks(const sstables::compression& c, sstables::sstable_version_types version, const sstring& path) {
+    if (!c.max_compressed_length()) {
+        return 0;
+    }
+    return std::ranges::count_if(read_stored_chunk_lens(c, version, path), [&] (uint64_t len) {
+        return len >= c.max_compressed_length();
+    });
+}
+
+uint64_t count_raw_chunks(raw_chunks_file& rf) {
+    return count_raw_chunks(rf.c, rf.version, rf.path);
+}
+
+}
+
+// Every incompressible chunk is stored raw, compressible ones aren't, and the data reads back intact.
+SEASTAR_THREAD_TEST_CASE(test_raw_chunks_roundtrip) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    raw_chunks_factory rcf;
+    using algo = compression_parameters::algorithm;
+    const std::vector<bool> pattern{true, false, true, false, false, true};
+    for (auto a : {algo::lz4, algo::lz4_with_dicts, algo::zstd, algo::zstd_with_dicts, algo::snappy, algo::deflate}) {
+        for (unsigned chunk_kb : {4, 16, 64, 128}) {
+            const size_t chunk = chunk_kb * 1024;
+            const size_t max = (chunk * 90 + 99) / 100; // 10% saving
+            // Short last chunk: tiny (compresses below max), just under max (raw, padded), above max (raw, unpadded).
+            for (size_t tail : {size_t(0), size_t(1), max - 1, chunk - 100}) {
+                testlog.info("algo={} chunk_kb={} tail={}", compression_parameters::algorithm_to_name(a), chunk_kb, tail);
+                raw_chunks_file rf;
+                write_raw_chunks_file(rcf, rf, a, 10, chunk_kb, make_chunks(pattern, chunk_kb), tail);
+                const auto& c = rf.c;
+                BOOST_REQUIRE_EQUAL(c.max_compressed_length(), max);
+                for (size_t i = 0; i < pattern.size(); ++i) {
+                    BOOST_REQUIRE_MESSAGE((stored_chunk_len(rf, i) >= max) == pattern[i], fmt::format("algo={} chunk_kb={} tail={} chunk={} stored={} max={} chunks={}",
+                            compression_parameters::algorithm_to_name(a), chunk_kb, tail, i, stored_chunk_len(rf, i), max, c.chunk_count()));
+                }
+                if (tail == 1) {
+                    BOOST_REQUIRE_LT(stored_chunk_len(rf, pattern.size()), max);
+                } else if (tail) {
+                    BOOST_REQUIRE_EQUAL(stored_chunk_len(rf, pattern.size()), std::max(tail, max));
+                }
+                auto data = read_raw_chunks_file(rf, semaphore.make_permit());
+                BOOST_REQUIRE_EQUAL(data.size(), rf.uncompressed_size);
+                // Data read from `pos` onward must equal the tail of a full read.
+                const uint64_t pos = c.uncompressed_chunk_length() / 2;
+                BOOST_REQUIRE(read_raw_chunks_file(rf, semaphore.make_permit(), pos) == bytes_view(data).substr(pos));
+            }
+        }
+    }
+}
+
+// Without the option, output is unchanged: nothing is stored raw.
+SEASTAR_THREAD_TEST_CASE(test_raw_chunks_off_by_default) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    raw_chunks_factory rcf;
+    raw_chunks_file rf;
+    write_raw_chunks_file(rcf, rf, compression_parameters::algorithm::lz4, 0, 4, make_chunks({true, true, true, true}, 4), 0);
+    BOOST_REQUIRE_EQUAL(rf.c.max_compressed_length(), 0);
+    BOOST_REQUIRE_EQUAL(count_raw_chunks(rf), 0);
+    BOOST_REQUIRE(std::ranges::none_of(rf.c.options.elements, [] (const auto& o) {
+        return o.key.value == to_bytes(sstables::min_compression_saving_percent_option);
+    }));
+    BOOST_REQUIRE_EQUAL(read_raw_chunks_file(rf, semaphore.make_permit()).size(), rf.uncompressed_size);
+}
+
+// After a raw streak the sink stops trying, and probes periodically and after a large partition.
+SEASTAR_THREAD_TEST_CASE(test_raw_chunks_skip_heuristic) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    raw_chunks_factory rcf;
+    const sstables::raw_chunk_heuristic h{.skip_after = 2, .probe_interval = 4};
+    // 2 raw chunks start the streak; chunks 2..4 are skipped (stored raw although compressible), chunk 5 is probed.
+    std::vector<bool> pattern{true, true, false, false, false, false, false};
+    {
+        raw_chunks_file rf;
+        write_raw_chunks_file(rcf, rf, compression_parameters::algorithm::lz4, 10, 4, make_chunks(pattern, 4), 0, h);
+        const auto max = rf.c.max_compressed_length();
+        for (size_t i = 0; i < pattern.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(stored_chunk_len(rf, i) >= max, i < 5);
+        }
+        BOOST_REQUIRE_EQUAL(read_raw_chunks_file(rf, semaphore.make_permit()).size(), rf.uncompressed_size);
+    }
+    {
+        // A partition starting inside chunk 1 makes chunk 2, the first chunk wholly after it, a probe that ends the streak.
+        raw_chunks_file rf;
+        write_raw_chunks_file(rcf, rf, compression_parameters::algorithm::lz4, 10, 4, make_chunks(pattern, 4), 0, h, 4096 + 100);
+        const auto max = rf.c.max_compressed_length();
+        for (size_t i = 0; i < pattern.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(stored_chunk_len(rf, i) >= max, i < 2);
+        }
+    }
+    {
+        // A short last chunk is compressed even mid-streak, rather than padded to max.
+        raw_chunks_file rf;
+        write_raw_chunks_file(rcf, rf, compression_parameters::algorithm::lz4, 10, 4, make_chunks({true, true, true}, 4), 1, h);
+        BOOST_REQUIRE_LT(stored_chunk_len(rf, 3), rf.c.max_compressed_length());
+        BOOST_REQUIRE_EQUAL(read_raw_chunks_file(rf, semaphore.make_permit()).size(), rf.uncompressed_size);
+    }
+}
+
+// A raw chunk with an impossible length is rejected rather than misread.
+SEASTAR_THREAD_TEST_CASE(test_raw_chunks_strict_reader) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+    raw_chunks_factory rcf;
+    {
+        // Last chunk: the stored chunks pretend to belong to a file whose last chunk is short.
+        raw_chunks_file rf;
+        write_raw_chunks_file(rcf, rf, compression_parameters::algorithm::lz4, 10, 4, make_chunks({true, true}, 4), 0);
+        rf.c.set_uncompressed_file_length(rf.uncompressed_size - 1);
+        rf.uncompressed_size -= 1;
+        BOOST_REQUIRE_THROW(read_raw_chunks_file(rf, semaphore.make_permit()), malformed_sstable_exception);
+    }
+    {
+        // Middle chunk: a half-compressible chunk is stored compressed; demanding more saving makes it look raw.
+        raw_chunks_file rf;
+        auto chunks = make_chunks({true, false, true}, 4);
+        std::copy_n(incompressible_bytes(2048).begin(), 2048, chunks[1].begin());
+        write_raw_chunks_file(rcf, rf, compression_parameters::algorithm::lz4, 10, 4, chunks, 0);
+        BOOST_REQUIRE_LT(stored_chunk_len(rf, 1), rf.c.max_compressed_length());
+        rf.c.set_min_compression_saving_percent(60);
+        BOOST_REQUIRE_GE(stored_chunk_len(rf, 1), rf.c.max_compressed_length());
+        BOOST_REQUIRE_THROW(read_raw_chunks_file(rf, semaphore.make_permit()), malformed_sstable_exception);
+    }
+    {
+        // A raw chunk is still checksummed: one flipped byte is caught, not returned.
+        raw_chunks_file rf;
+        write_raw_chunks_file(rcf, rf, compression_parameters::algorithm::lz4, 10, 4, make_chunks({true, true}, 4), 0);
+        BOOST_REQUIRE_GE(stored_chunk_len(rf, 0), rf.c.max_compressed_length());
+        auto f = open_file_dma(rf.path, open_flags::rw).get();
+        auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), f.disk_write_dma_alignment());
+        BOOST_REQUIRE_EQUAL(f.dma_read(0, buf.get_write(), buf.size()).get(), buf.size());
+        buf.get_write()[100] ^= 1;
+        f.dma_write(0, buf.get(), buf.size()).get();
+        f.close().get();
+        BOOST_REQUIRE_EXCEPTION(read_raw_chunks_file(rf, semaphore.make_permit()), malformed_sstable_exception,
+                exception_predicate::message_contains("failed checksum"));
+    }
+}
+
+// Old binaries must refuse an sstable carrying the option, not misread it: compression_parameters,
+// which they build from the on-disk options, doesn't know the key.
+SEASTAR_THREAD_TEST_CASE(test_raw_chunks_option_parsing) {
+    BOOST_REQUIRE_THROW(compression_parameters({{compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor"},
+            {sstring(sstables::min_compression_saving_percent_option), "10"}}), exceptions::configuration_exception);
+}
+
+// Full sstables with blob cells: `mu` stores raw chunks, keeps the setting and reads back; other formats ignore the option.
+SEASTAR_TEST_CASE(test_raw_chunks_sstable) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (auto version : writable_sstable_versions) {
+            auto s = schema_builder(this_smp_shard_count(), "ks", "raw_chunks")
+                    .with_column("pk", int32_type, column_kind::partition_key)
+                    .with_column("ck", int32_type, column_kind::clustering_key)
+                    .with_column("v", bytes_type)
+                    .set_compressor_params(compression_parameters(compression_parameters::algorithm::lz4))
+                    .build();
+            env.manager().plug_min_compression_saving_percent([] (const schema&) { return 10; });
+            utils::chunked_vector<mutation> muts;
+            for (int pk = 0; pk < 3; ++pk) {
+                mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(pk)));
+                for (int ck = 0; ck < 4; ++ck) {
+                    // Alternate a random 64 KiB blob and a compressible one.
+                    auto v = ck % 2 ? incompressible_bytes(64 * 1024) : bytes(64 * 1024, int8_t(ck));
+                    m.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(ck)), "v", data_value(v), 1);
+                }
+                muts.push_back(std::move(m));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), muts).get();
+            if (version != sstables::sstable_version_types::mu) {
+                // Raw chunks are a `mu` feature: other formats ignore the option and store nothing raw.
+                const auto& c = sstables::test(sst)._compression();
+                BOOST_REQUIRE_EQUAL(c.max_compressed_length(), 0);
+                BOOST_REQUIRE(std::ranges::none_of(c.options.elements, [] (const auto& o) {
+                    return o.key.value == to_bytes(sstables::min_compression_saving_percent_option);
+                }));
+                BOOST_REQUIRE_EQUAL(count_raw_chunks(c, version, sst->get_filename().format()), 0);
+                BOOST_REQUIRE(sstables::validate_checksums_and_digests(sst, env.make_reader_permit()).get().status == validate_checksums_status::valid);
+                auto rd = assert_that(sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit()));
+                std::vector<mutation> sorted(muts.begin(), muts.end());
+                std::ranges::sort(sorted, mutation_decorated_key_less_comparator());
+                for (const auto& m : sorted) {
+                    rd.produces(m);
+                }
+                rd.produces_end_of_stream();
+                continue;
+            }
+            BOOST_REQUIRE_GT(count_raw_chunks(sstables::test(sst)._compression(), version, sst->get_filename().format()), 0);
+            BOOST_REQUIRE(sstables::validate_checksums_and_digests(sst, env.make_reader_permit()).get().status == validate_checksums_status::valid);
+            // Reload from disk: the threshold must come from CompressionInfo.db.
+            auto reloaded = env.reusable_sst(sst).get();
+            BOOST_REQUIRE_EQUAL(sstables::test(reloaded)._compression().max_compressed_length(), (4096 * (100 - 10) + 99) / 100);
+            for (const auto& x : {sst, reloaded}) {
+                // Stored on disk, but not handed to compression_parameters.
+                BOOST_REQUIRE(std::ranges::any_of(x->get_compression().options.elements, [] (const auto& o) {
+                    return o.key.value == to_bytes(sstables::min_compression_saving_percent_option) && o.value.value == to_bytes("10");
+                }));
+                auto opts = options_from_compression(x->get_compression());
+                BOOST_REQUIRE(!opts.contains(sstring(sstables::min_compression_saving_percent_option)));
+                BOOST_REQUIRE_EQUAL(opts.at("crc_check_chance"), "1.0");
+            }
+            auto rd = assert_that(reloaded->as_mutation_source().make_mutation_reader(s, env.make_reader_permit()));
+            std::vector<mutation> sorted(muts.begin(), muts.end());
+            std::ranges::sort(sorted, mutation_decorated_key_less_comparator());
+            for (const auto& m : sorted) {
+                rd.produces(m);
+            }
+            rd.produces_end_of_stream();
+        }
     });
 }
 

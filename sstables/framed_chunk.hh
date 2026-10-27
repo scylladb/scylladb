@@ -143,6 +143,11 @@ class framed_chunk_codec {
     uint32_t _uncompressed_chunk_length;
     // The size of the largest frame. 0 for unframed chunks.
     uint32_t _max_frame_len;
+    // Raw chunks (see min_compression_saving_percent): a chunk whose compressed
+    // length is at least this holds the data as-is. 0 means no raw chunks.
+    uint32_t _max_compressed_len = 0;
+    // The uncompressed size of the last chunk of the file; known when _max_compressed_len is set.
+    uint32_t _last_chunk_len = 0;
 
     framed_chunk_codec(uint32_t uncompressed_chunk_length, bool framed);
 public:
@@ -210,8 +215,23 @@ public:
     // header doesn't hold `compressed_len`.
     framed_chunk parse_before_footer(std::string_view front, uint64_t compressed_len) const;
 
-    // Decompresses the chunk. Doesn't verify its checksum.
-    temporary_buffer<char> decompress(const compressor& c, const framed_chunk& chunk) const;
+    // Makes the codec recognize raw chunks. `last_chunk_len` is the uncompressed size of the
+    // last chunk of the file, which is the only one that can be shorter than a chunk.
+    framed_chunk_codec with_raw_chunks(uint32_t max_compressed_len, uint32_t last_chunk_len) const noexcept {
+        auto c = *this;
+        c._max_compressed_len = max_compressed_len;
+        c._last_chunk_len = last_chunk_len;
+        return c;
+    }
+
+    // Whether the chunk holds its data uncompressed.
+    bool is_raw(const framed_chunk& chunk) const noexcept {
+        return _max_compressed_len && chunk.compressed.size() >= _max_compressed_len;
+    }
+
+    // Decompresses the chunk. Doesn't verify its checksum. `last` tells whether it is the last
+    // chunk of the file; it matters only for a raw chunk, which is zero-padded when short.
+    temporary_buffer<char> decompress(const compressor& c, const framed_chunk& chunk, bool last) const;
 
     // Framed chunks only. Writes the header of a chunk with `compressed_len`
     // bytes of compressed data. Writes frame_len(compressed_len) bytes at

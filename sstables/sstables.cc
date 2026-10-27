@@ -1406,6 +1406,10 @@ future<> sstable::read_compression() {
     }
 
     co_await read_simple_and_verify_digest<component_type::CompressionInfo>(_components->compression);
+    // Raw chunks exist only in framed formats; other versions keep the threshold at 0.
+    if (chunk_has_length_framing(_version)) {
+        _components->compression.init_min_compression_saving_percent_from_options();
+    }
     compressor_ptr compressor;
     try {
         // Interprets the algorithm name and options read from the component.
@@ -3138,7 +3142,11 @@ bool sstable::uses_physical_positions() const {
 }
 
 framed_chunk_codec sstable::get_chunk_codec() const {
-    return framed_chunk_codec(_version, get_compression().uncompressed_chunk_length());
+    const auto& c = get_compression();
+    const uint64_t ucl = c.uncompressed_chunk_length();
+    const uint64_t len = c.uncompressed_file_length();
+    // Every chunk but the last is full.
+    return framed_chunk_codec(_version, ucl).with_raw_chunks(c.max_compressed_length(), len ? (len - 1) % ucl + 1 : 0);
 }
 
 trie::bti_position_encoding sstable::get_bti_position_encoding() const {

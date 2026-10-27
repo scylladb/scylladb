@@ -296,7 +296,7 @@ void decompressing_cursor::verify_chunk(const framed_chunk& chunk) {
 void decompressing_cursor::install_chunk(const framed_chunk& parsed, reader_permit::resource_units units) {
     auto& pos = _stream_position.position.as_physical();
     const uint64_t chunk_start = pos.chunk_position;
-    auto data = make_tracked_temporary_buffer(_codec.decompress(_compressor, parsed), std::move(units));
+    auto data = make_tracked_temporary_buffer(_codec.decompress(_compressor, parsed, chunk_start + parsed.extent() == _compressed_file_length), std::move(units));
     check_offset_within_chunk(chunk_start, pos.offset_within_chunk, data.size());
     _chunk = chunk{chunk_start, parsed.extent(), std::move(data)};
     pos.extent_hint = parsed.extent();
