@@ -15,7 +15,7 @@ Data ownership is not changed, and the nodes are still cluster members,
 so have to be eventually removed or replaced.
 
 After nodes are excluded, there is no need to pass them in the list of ignored
-nodes to removnenode, replace, or repair.
+nodes to removenode, replace, or repair.
 
 Prerequisites
 ------------------------
