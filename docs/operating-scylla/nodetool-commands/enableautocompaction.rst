@@ -27,7 +27,7 @@ nodetool enableautocompaction takes the following parameters:
    * - ``<keyspace>``
      - The keyspace to operate on.  If omitted, auto-compaction will be enabled in all keyspaces.
    * - ``<tables>...``
-     - A comma-separated list of one or more tables to operate on.  Tables may be specified only if a keyspace is given.  If omitted, auto-compaction will be enabled in all tables in the specified keyspace.
+     - One or more tables to operate on, separated by spaces.  Tables may be specified only if a keyspace is given.  If omitted, auto-compaction will be enabled in all tables in the specified keyspace.
 
 .. include:: nodetool-index.rst  
 
