@@ -3174,7 +3174,7 @@ def test_desc_removed_driver_service_level(cql, scylla_only):
         for recreate_statement in desc_iter:
             cql.execute(recreate_statement.create_statement)
 
-def test_desc_restore(cql):
+def test_desc_restore(cql, has_java_udf):
     """
     Verify that restoring the schema, auth and service levels works correctly. We create entities
     of each relevant kind, describe the schema, and drop everything. Then we restore it by
@@ -3206,19 +3206,18 @@ def test_desc_restore(cql):
         else:
             cql.execute(f"CREATE INDEX myindex ON {ks}.some_other_table (c1)")
 
-        # Scylla supports UDFs with Lua. Cassandra supports UDFs with Java.
-        if is_scylla(cql):
-            cql.execute(f"""CREATE FUNCTION {ks}.my_udf(val1 int, val2 int)
-                            RETURNS NULL ON NULL INPUT
-                            RETURNS int
-                            LANGUAGE lua
-                            AS $$ return val1 + val2 $$""")
-        else:
+        if has_java_udf:
             cql.execute(f"""CREATE FUNCTION {ks}.my_udf(val1 int, val2 int)
                             RETURNS NULL ON NULL INPUT
                             RETURNS int
                             LANGUAGE java
                             AS $$ return val1 + val2; $$""")
+        else:
+            cql.execute(f"""CREATE FUNCTION {ks}.my_udf(val1 int, val2 int)
+                            RETURNS NULL ON NULL INPUT
+                            RETURNS int
+                            LANGUAGE lua
+                            AS $$ return val1 + val2 $$""")
 
         cql.execute(f"""CREATE AGGREGATE {ks}.my_aggregate(int)
                             SFUNC my_udf
@@ -3376,9 +3375,8 @@ def test_describe_udf_with_udt(cql, test_keyspace, scylla_only):
 # aggregate. This is the same as test_describe_udf_with_udt, for aggregates.
 # Reproduces SCYLLADB-5277 (the UDT was printed as frozen<...>, which CREATE
 # AGGREGATE rejects).
-def test_describe_uda_with_udt(cql, test_keyspace):
-    # Scylla supports Lua functions, Cassandra supports Java functions
-    body = "LANGUAGE lua AS 'return x'" if is_scylla(cql) else "LANGUAGE java AS 'return x;'"
+def test_describe_uda_with_udt(cql, test_keyspace, has_java_udf):
+    body = "LANGUAGE java AS 'return x;'" if has_java_udf else "LANGUAGE lua AS 'return x'"
     with new_type(cql, test_keyspace, '(a int)') as udt:
         with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, u frozen<{udt}>') as table:
             cql.execute(f'INSERT INTO {table} (p, u) VALUES (1, {{a: 5}})')
@@ -3543,11 +3541,11 @@ def test_desc_view_type(cql, test_keyspace):
 # Reproduces SCYLLADB-5191 (DESCRIBE's type of a view, and names of
 # functions, differ from Cassandra's).
 @pytest.mark.xfail(reason="SCYLLADB-5191")
-def test_desc_function_name_with_argument_types(cql, test_keyspace):
-    if is_scylla(cql):
-        body = "LANGUAGE lua AS 'return \"hello\"'"
-    else:
+def test_desc_function_name_with_argument_types(cql, test_keyspace, has_java_udf):
+    if has_java_udf:
         body = "LANGUAGE java AS 'return \"hello\";'"
+    else:
+        body = "LANGUAGE lua AS 'return \"hello\"'"
     with new_function(cql, test_keyspace, f"(i int, a ascii) RETURNS NULL ON NULL INPUT RETURNS text {body}", args="int, ascii") as fn:
         result = cql.execute(f"DESCRIBE FUNCTION {test_keyspace}.{fn}").one()
         assert result.name == f"{fn}(int, ascii)"
