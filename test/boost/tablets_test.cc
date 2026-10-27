@@ -8993,10 +8993,9 @@ SEASTAR_THREAD_TEST_CASE(test_stepdown_leaders_during_raft_group_restart) {
         // Must skip the group rather than touch its destroyed server.
         stepdown_leaders_on_home();
 
-        // Moving the tablet by rewriting its map leaves the group's commit
-        // index in system.raft_groups, while its log died with the server;
-        // raft::server::start() rejects a commit index ahead of the log.
-        // Drop it so the restart can finish.
+        // Moving the tablet by rewriting its map skips the tablet cleanup, so
+        // the group's row stays in system.raft_groups. Drop it, as the cleanup
+        // would, so the restart bootstraps the group afresh.
         e.execute_cql(format("delete from system.raft_groups where shard = {} and group_id = {}",
                 home.shard, group_id)).get();
         start_pause.reset();

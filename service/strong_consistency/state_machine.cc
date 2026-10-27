@@ -7,7 +7,6 @@
  */
 
 #include <seastar/core/abort_source.hh>
-#include <seastar/util/defer.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "state_machine.hh"
@@ -56,28 +55,21 @@ public:
     {
     }
 
+    // Report a batch as applied when it never will be, because its table or
+    // keyspace is gone. A record is released only once its last command applies,
+    // so without the report the record stays at the front of the queue for good.
+    // Releases are front-first, so the whole queue freezes behind it and every segment
+    // the group holds stays dirty. Safe: no memtable holds this batch's data.
+    void note_batch_discarded(const raft::log_entry_ptr_list& command) {
+        if (!command.empty()) {
+            _persistence.note_applied(command.back()->idx);
+        }
+    }
+
     future<> apply(raft::log_entry_ptr_list command) override {
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
-        // Handing a replay position handle to a memtable makes the memtable the
-        // owner of the commitlog segment holding the entry. Handles of entries
-        // that we haven't applied must be released, not destroyed: destroying
-        // them lets the commitlog reclaim segments which still hold committed
-        // entries that have to be replayed after a restart. Releasing keeps
-        // those segments.
-        std::vector<index_and_replay_position> replay_positions;
-        auto release_unapplied = defer([&replay_positions] noexcept {
-            for (auto& rp : replay_positions) {
-                if (rp.replay_position_handle) {
-                    rp.replay_position_handle.release();
-                }
-            }
-        });
         try {
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
-            // Get replay positions for the commands.
-            replay_positions = _persistence.acquire_replay_position_handles_for(command);
-            // Make sure we got replay positions for all commands.
-            throwing_assert(replay_positions.size() == command.size());
             // One store for the whole batch, so that commands written with the same
             // schema version resolve their schema only once.
             schema_store schemas(_db, _sys_ks, [this]() -> future<> {
@@ -90,19 +82,19 @@ public:
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
             for (size_t i = 0; i < command.size(); ++i) {
-                throwing_assert(replay_positions[i].index == command[i]->idx);
                 auto mut = detail::deserialize_to_frozen_mutation(command[i]);
                 auto schema = co_await schemas.resolve_and_upgrade(mut);
+                // Taken after the schema resolution, which may yield on the
+                // group0 barrier.
+                auto commitlog_pin = _persistence.pin_for_apply(command[i]->idx);
                 if (utils::get_local_injector().enter("strong_consistency_state_machine_abort_before_apply_in_memory")) {
                     throw std::runtime_error("strong_consistency_state_machine_abort_before_apply_in_memory");
                 }
                 // Concurrent apply_in_memory() calls can complete out of order under memory pressure
                 // (suspended at run_when_memory_available()), making mutations visible out of Raft log order.
                 // Therefore we must await each apply_in_memory() sequentially to preserve Raft log order.
-                co_await _db.apply_in_memory(mut, std::move(schema), std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance());
-                // The entry has been applied, but the handle hasn't necessarily
-                // been consumed. Prevent releasing the handle by destroying it.
-                replay_positions[i].replay_position_handle = db::rp_handle{};
+                co_await _db.apply_in_memory(mut, std::move(schema), std::move(commitlog_pin), db::no_timeout, db::noop_large_data_guardrail::instance());
+                _persistence.note_applied(command[i]->idx);
             }
         } catch (replica::no_such_column_family&) {
             // If the table doesn't exist, it means it was already dropped.
@@ -110,9 +102,8 @@ public:
             // because the state machine is created only after the table is created
             // (see `schema_applier::commit_on_shard()` and `storage_service::commit_token_metadata_change()`).
             // In this case, we should just ignore mutations without throwing an error.
-            // The entries are discarded on purpose, so let their segments be reclaimed.
-            release_unapplied.cancel();
             logger.log(log_level::warn, rate_limit, "apply(): table {} was already dropped, ignoring mutations", _tablet.table);
+            note_batch_discarded(command);
         } catch (replica::no_such_keyspace&) {
             // Thrown when DROP KEYSPACE races with the raft applier fiber.
             // The path: schema_store::resolve_and_upgrade() calls
@@ -124,11 +115,16 @@ public:
             // if the keyspace was concurrently dropped.
             // Safe to ignore: the table's raft group is about to be destroyed
             // by schedule_raft_group_deletion() anyway.
-            release_unapplied.cancel();
             logger.log(log_level::warn, rate_limit, "apply(): keyspace for table {} was already dropped, ignoring mutations", _tablet.table);
+            note_batch_discarded(command);
         } catch (const abort_requested_exception& ex) {
             // The exception can be thrown by schema_store::resolve_and_upgrade.
             // It means that the Raft group is being removed.
+            //
+            // No note_batch_discarded() here, unlike the two arms above. abort() is
+            // called only while the group is torn down, and the teardown gives up the
+            // whole queue (raft_commitlog::release_all(), or the destructor), so no
+            // record is left waiting for the batch.
             //
             // Technically, throwing an exception from a state machine
             // may result in killing the corresponding Raft instance:
