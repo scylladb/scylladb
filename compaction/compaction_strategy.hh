@@ -130,6 +130,17 @@ public:
     // SSTables that can be added into a single job.
     compaction_descriptor get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const;
 
+    // Picks groups of disjoint runs, out of the given ones, which are better off being treated
+    // as a single run, because the strategy would otherwise waste effort on compacting them
+    // together, e.g. runs of the two halves of a merged tablet.
+    // Each returned group holds at least two runs, which don't overlap with one another.
+    // Splicing them, i.e. giving them all the run identifier of the first one, is up to the caller.
+    std::vector<std::vector<sstables::frozen_sstable_run>> get_runs_to_splice(std::vector<sstables::frozen_sstable_run> runs) const;
+
+    // Returns false if get_runs_to_splice() never picks any runs, so callers can skip
+    // gathering the runs for it.
+    bool may_splice_runs() const;
+
 };
 
 // Creates a compaction_strategy object from one of the strategies available.
