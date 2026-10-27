@@ -5154,7 +5154,7 @@ For more information, see: {}
                 },
                 {
                     typed_option<sstring>("keyspace", "The keyspace name", 1),
-                    typed_option<sstring>("table", "The table name (needed to display load information, if the keyspace uses tablets)", 1),
+                    typed_option<sstring>("table", "The table name (needed to display token count and effective ownership, if the keyspace uses tablets)", 1),
                 },
             },
             {
