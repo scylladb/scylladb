@@ -2023,6 +2023,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
                 cluster_config_manager.stop().get();
             });
+            static sharded<db::cluster_config_manager::config_callback_registration> aggregated_metrics_callbacks;
+            db::plug_aggregated_metrics(db, cluster_config_manager, aggregated_metrics_callbacks).get();
+            auto unplug_aggregated_metrics = defer_verbose_shutdown("aggregated_metrics", [&db] {
+                db::unplug_aggregated_metrics(db, aggregated_metrics_callbacks).get();
+            });
 
             static sharded<std::optional<db::cluster_config_manager::config_callback_registration>> scrub_period_registrations;
             scrub_period_registrations.start(std::nullopt).get();

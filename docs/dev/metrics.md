@@ -112,7 +112,9 @@ but the metrics relabel rules (see `relabel_config_file`) can match them
 to single these series out. The tables of internal keyspaces are left
 out. This set is controlled by the `enable_node_aggregated_table_metrics`
 flag, which only applies while `enable_keyspace_column_family_metrics`
-is off.
+is off. The `aggregated_metrics` cluster config option overrides the
+flag per cluster, keyspace or table, without a restart; materialized
+views and secondary indexes follow their base table.
 
 In short, the two flags pick one of three behaviours:
 

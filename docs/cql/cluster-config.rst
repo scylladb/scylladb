@@ -194,3 +194,11 @@ Available options
        at that scope even if a broader scope enabled it, whereas ``NULL`` removes the value and
        falls back to the broader scope. See
        :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.
+   * - ``aggregated_metrics``
+     - boolean
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - Report a table's per-table metrics, aggregated across shards into one series per node;
+       ``false`` drops them for the table. Materialized views and secondary indexes follow their
+       base table; a CDC log table has its own setting. When no scope sets it, the node's
+       ``enable_node_aggregated_table_metrics`` applies. Has no effect while
+       ``enable_keyspace_column_family_metrics`` is set. Default: ``true``.
