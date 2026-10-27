@@ -1272,11 +1272,7 @@ def test_udf_with_overloads_permissions(cql, test_keyspace, scylla_only):
             raise
 
 # Test that DROP KEYSPACE cleans up function-level permissions
-# Scylla currently does not clean up function-level permissions when dropping a keyspace
-@pytest.mark.skip_bug(
-    link="https://github.com/scylladb/scylladb/issues/13820",
-    reason="Scylla does not clean up function-level permissions on DROP KEYSPACE",
-)
+# Reproduces #13820.
 def test_drop_keyspace_cleans_up_function_level_permissions(cql, scylla_only):
     ks = unique_name()
     cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class':'NetworkTopologyStrategy', 'replication_factor':1}}")
