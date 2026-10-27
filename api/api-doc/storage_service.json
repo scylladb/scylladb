@@ -3374,10 +3374,59 @@
                          "paramType":"body"
                       }
                   ]
+              }          ]
+      },
+      {
+          "path":"/storage_service/tablets/backup/list",
+          "operations":[
+              {
+                  "method":"POST",
+                  "summary":"List metadata on existing backup from an endpoint location",
+                  "type":"string",
+                  "nickname":"list_global_backup",
+                  "produces":[
+                      "application/json"
+                  ],
+                  "parameters":[
+                      {
+                          "name":"snapshot",
+                          "description":"Name of a snapshot to list",
+                          "required":false,
+                          "allowMultiple":false,
+                          "type":"string",
+                          "paramType":"query"
+                      },
+                      {
+                         "name":"keyspace",
+                         "description":"Keyspace(s) to include. Multiple keyspaces can be provided using a comma-separated list. If omitted, include all keyspaces.",
+                         "required":false,
+                         "allowMultiple":false,
+                         "type":"string",
+                         "paramType":"query"
+                      },
+                      {
+                         "name":"table",
+                         "description":"Table(s) in snapshot include. Multiple tables (in a single keyspace) can be provided using a comma-separated list. If omitted, include all tables in the given keyspace(s).",
+                         "required":false,
+                         "allowMultiple":false,
+                         "type":"string",
+                         "paramType":"query"
+                      },
+                      {
+                         "name":"backup_location",
+                         "description":"JSON array of backup location objects. Each object must contain: 'endpoint' (string), 'bucket' (string), and 'prefix' (string). 'manifests' must not be set.",
+                         "required":true,
+                         "allowMultiple":false,
+                         "type":"array",
+                         "items":{
+                            "$ref":"backup_location"
+                         },
+                         "paramType":"body"
+                      }
+                  ]
               }
           ]
       },
-
       {
          "path":"/storage_service/quiesce_topology",
          "operations":[
