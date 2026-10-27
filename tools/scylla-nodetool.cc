@@ -5284,7 +5284,7 @@ For more information, see: {}
                 "",
                 { },
                 {
-                    typed_option<sstring>("command", "The uuid of a task", 1),
+                    typed_option<sstring>("command", "The name of the subcommand", 1),
                 },
                 {
                         {
