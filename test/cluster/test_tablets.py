@@ -437,7 +437,9 @@ async def test_arbitrary_multi_rf_change_fails(manager: ScyllaClusterManager):
     await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc2", "rack": "r4"})
     await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc3", "rack": "r7"})
 
-    cql = manager.get_cql()
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(await manager.running_servers())
 
     err_msg = "Only one DC's RF can be changed at a time and not by more than 1"
 
@@ -763,8 +765,10 @@ async def test_multi_rf_change_multi_dc_0_N(request: pytest.FixtureRequest, mana
     dc1_host_ids = [await manager.get_host_id(s.server_id) for s in servers[0:3]]
     dc2_host_ids = [await manager.get_host_id(s.server_id) for s in servers[3:6]]
 
-    cql = manager.get_cql()
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, hosts = await manager.get_ready_cql(servers)
+    dc1_host = hosts[0]
 
     # Create keyspace with RF=3 in dc1 only.
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1c']}} and tablets = {{'initial': 4}};")
@@ -820,9 +824,11 @@ async def test_multi_rf_change_colocated_tables_0_N(request: pytest.FixtureReque
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'}),
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2c'})]
 
-    cql = manager.get_cql()
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, hosts = await manager.get_ready_cql(servers)
 
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
+    dc1_host = hosts[0]
 
     await cql.run_async("create keyspace ks1 with replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']} and tablets = {'initial': 4};")
     await cql.run_async("create table ks1.t (pk int primary key, v int);")
@@ -864,7 +870,9 @@ async def test_multi_rf_change_0_N(request: pytest.FixtureRequest, manager: Scyl
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2a'}),
                 await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc2', 'rack': 'rack2b'})]
 
-    cql = manager.get_cql()
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b']} AND tablets = {'initial': 4}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY)")
@@ -1040,9 +1048,11 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
 
     dc2_host_ids = [await manager.get_host_id(s.server_id) for s in servers[2:4]]
 
-    cql = manager.get_cql()
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, hosts = await manager.get_ready_cql(servers)
 
-    dc1_host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + scale_timeout(30)))[0]
+    dc1_host = hosts[0]
 
     await cql.run_async(f"create keyspace ks1 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']}} and tablets = {{'initial': 1}};")
     await cql.run_async("create table ks1.t (pk int primary key, v int);")
