@@ -5073,8 +5073,8 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/setlogginglevel.html")),
                 { },
                 {
-                    typed_option<sstring>("logger", "The logger to set the log level for, if unspecified, all loggers are reset to the default level", 1),
-                    typed_option<sstring>("level", "The log level to set, one of (trace, debug, info, warn and error), if unspecified, default level is reset to default log level", 1),
+                    typed_option<sstring>("logger", "The logger to set the log level for", 1),
+                    typed_option<sstring>("level", "The log level to set, one of (trace, debug, info, warn and error)", 1),
                 },
             },
             {
