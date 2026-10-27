@@ -186,6 +186,8 @@ private:
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
     directory_semaphore& _dir_semaphore;
     std::unique_ptr<sstables::sstables_registry> _sstables_registry;
+    // Resolves the min_compression_saving_percent cluster config option for a table.
+    std::function<int(const schema&)> _min_compression_saving_percent;
     // This function is bound to token_metadata.get_my_id() in the database constructor,
     // it can return unset value (bool(host_id) == false) until host_id is loaded
     // after system_keyspace initialization.
@@ -326,6 +328,17 @@ public:
     std::vector<std::filesystem::path> get_local_directories(const data_dictionary::storage_options::local& so) const;
 
     sstable_compressor_factory& get_compressor_factory() const { return _compressor_factory; }
+
+    // Unplugged (tools, tests, system tables) means 0: chunks are always kept compressed.
+    void plug_min_compression_saving_percent(std::function<int(const schema&)> fn) noexcept {
+        _min_compression_saving_percent = std::move(fn);
+    }
+    void unplug_min_compression_saving_percent() noexcept {
+        _min_compression_saving_percent = nullptr;
+    }
+    int min_compression_saving_percent(const schema& s) const {
+        return _min_compression_saving_percent ? _min_compression_saving_percent(s) : 0;
+    }
 
     // unsubscribe happens automatically when the handler is destroyed
     void subscribe(sstables_manager_event_handler& handler);

@@ -25,6 +25,7 @@
 #include "db/schema_tables.hh"
 #include "locator/topology.hh"
 #include "replica/database.hh"
+#include "sstables/sstables_manager.hh"
 #include "utils/on_internal_error.hh"
 
 namespace db {
@@ -593,6 +594,22 @@ double cluster_config_manager::resolve_floating_point_config(const cluster_confi
 
 sstring cluster_config_manager::resolve_text_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
     return cluster_config_registry::to_text(opt, resolve_config(opt.name, ctx));
+}
+
+future<> plug_min_compression_saving_percent(sharded<replica::database>& db, sharded<cluster_config_manager>& ccm) {
+    return db.invoke_on_all([&ccm] (replica::database& db) {
+        db.get_user_sstables_manager().plug_min_compression_saving_percent([&ccm = ccm.local()] (const schema& s) {
+            const auto* opt = cluster_config_registry::find(cluster_config_registry::option_name::min_compression_saving_percent);
+            // Resolved by name: a table being created isn't in the database's table list yet.
+            return opt ? int(ccm.resolve_integer_config(*opt, {.keyspace_name = s.ks_name(), .table_name = s.cf_name()})) : 0;
+        });
+    });
+}
+
+future<> unplug_min_compression_saving_percent(sharded<replica::database>& db) {
+    return db.invoke_on_all([] (replica::database& db) {
+        db.get_user_sstables_manager().unplug_min_compression_saving_percent();
+    });
 }
 
 }

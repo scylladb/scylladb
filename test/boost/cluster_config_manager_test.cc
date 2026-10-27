@@ -205,6 +205,19 @@ auto inject_text_test_option(cql_test_env& e) {
 
 }
 
+// An integer option's bounds are enforced on write and, for a value stored out-of-band, on read.
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_integer_bounds) {
+    namespace reg = db::cluster_config_registry;
+    const auto* opt = reg::find(reg::option_name::min_compression_saving_percent);
+    BOOST_REQUIRE(opt != nullptr);
+    BOOST_REQUIRE(!reg::validate_value(*opt, "0"));
+    BOOST_REQUIRE(!reg::validate_value(*opt, "99"));
+    BOOST_REQUIRE(reg::validate_value(*opt, "100"));
+    BOOST_REQUIRE(reg::validate_value(*opt, "-1"));
+    BOOST_REQUIRE_EQUAL(reg::to_integer(*opt, sstring("99")), 99);
+    BOOST_REQUIRE_EQUAL(reg::to_integer(*opt, sstring("100")), 0);
+}
+
 // DESCRIBE echoes every effective value back both as a property right-hand side and inside
 // a "-- from <scope> (...)" provenance comment, and it wraps a described CDC log or paxos
 // table in a /* ... */ block. A CQL string literal has no escape for a line break or for
