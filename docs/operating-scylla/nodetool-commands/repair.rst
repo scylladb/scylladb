@@ -43,7 +43,7 @@ ScyllaDB nodetool repair command supports the following options:
         nodetool repair -dc US_DC
         nodetool repair --in-dc US_DC
 
-- ``-et`` ``--end-token`` executes a repair on the specified node/s starting with the first token and ending with the specified UUID token. 
+- ``-et`` ``--end-token`` executes a repair on the specified node/s starting with the first token and ending with the specified token. 
 
   For example: 
 
@@ -52,7 +52,7 @@ ScyllaDB nodetool repair command supports the following options:
      nodetool repair -et 90874935784
      nodetool repair --end-token 90874935784
      
-- ``-hosts`` ``--in-hosts`` syncs the **repair master** data subset only between a list of nodes, using host ID or Address. The list *must* include the **repair master**.
+- ``-hosts`` ``--in-hosts`` syncs the **repair master** data subset only between a list of nodes, using their IP addresses. The list *must* include the **repair master**.
 
   .. warning:: this command leaves part of the data subset (on nodes that are *not* listed) out of sync.
   
@@ -62,7 +62,6 @@ ScyllaDB nodetool repair command supports the following options:
 
      nodetool repair -hosts 172.17.0.2,172.17.0.3,172.17.0.4
      nodetool repair --in-hosts 172.17.0.2,172.17.0.3,172.17.0.4
-     nodetool repair --in-hosts cdc295d7-c076-4b07-af69-1385fefdb40b,2dbdf288-9e73-11ea-bb37-0242ac130002,3a5993f8-9e73-11ea-bb37-0242ac130002
 
 - ``-local`` ``--in-local-dc`` executes a repair on the nodes in the local datacenter only.                                                                                    
 
@@ -73,7 +72,7 @@ ScyllaDB nodetool repair command supports the following options:
      nodetool repair -local
      nodetool repair --in-local-dc
 
-- ``-pr`` ``--partitioner-range`` executes a repair only on the primary replica returned by the partitioner.                                                                          
+- ``-pr`` ``--partitioner-range`` repairs only the token ranges for which this node is the primary replica. Run it on all nodes to repair the whole cluster.                                                                          
 
   For example: 
   
@@ -89,7 +88,7 @@ ScyllaDB nodetool repair command supports the following options:
   ::
 
      nodetool repair -st 10474535988
-     nodetool repair --start-token
+     nodetool repair --start-token 10474535988
 
 - ``keyspace`` executes a repair on a specific keyspace. The default is all keyspaces.   
 

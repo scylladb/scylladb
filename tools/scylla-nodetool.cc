@@ -4928,7 +4928,7 @@ For more information, see: {}
                     typed_option<std::vector<sstring>>("in-hosts", "Constrain repair to the specific host(s)"),
                     typed_option<>("ignore-unreplicated-keyspaces", "Ignore keyspaces which are not replicated, without this repair will fail on such keyspaces"),
                     typed_option<unsigned>("job-threads,j", "Number of threads to run repair on"),
-                    typed_option<>("partitioner-range", "Repair only the first range returned by the partitioner"),
+                    typed_option<>("partitioner-range", "Repair only the token ranges for which this node is the primary replica"),
                     typed_option<>("pull", "Fix local node only"),
                     typed_option<>("sequential", "Perform repair sequentially"),
                     typed_option<uint64_t>("start-token", "Repair data starting from this token"),
