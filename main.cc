@@ -2022,6 +2022,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
                 cluster_config_manager.stop().get();
             });
+            db::plug_min_compression_saving_percent(db, cluster_config_manager).get();
+            auto unplug_min_compression_saving_percent = defer_verbose_shutdown("min_compression_saving_percent", [&db] {
+                db::unplug_min_compression_saving_percent(db).get();
+            });
 
             checkpoint(stop_signal, "starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;

@@ -1006,6 +1006,9 @@ available:
  ``crc_check_chance``      1.0             Not implemented (option value is ignored).
 ========================= =============== =============================================================================
 
+To store blocks that don't compress well uncompressed, see the ``min_compression_saving_percent``
+:doc:`cluster config option </cql/cluster-config>`.
+
 .. crc_check_chance was promoted to a top-level table option since Cassandra 3.0, but we didn't do this.
 
 For example, to enable compression:

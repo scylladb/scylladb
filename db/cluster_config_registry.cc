@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <cctype>
 #include <string>
 #include <string_view>
@@ -80,6 +81,14 @@ constexpr std::array registry_options = {
         .description = "Discard the regular hints a repair gave up waiting for, so that the next repair does not wait for them again. This covers every hint on the node, for all tables and destinations; a write acknowledged at consistency level ANY that only hints hold is lost. View hints are never discarded",
         .scopes = scope_set::of<scope::cluster>(),
         .default_value = true,
+    },
+    option{
+        .name = option_name::min_compression_saving_percent,
+        .description = "Store an sstable chunk uncompressed unless compression saves at least this percentage (0-99) of its size, saving compressor CPU for data that doesn't compress, such as encrypted values. Applies to sstables written afterwards. 0 disables it",
+        .scopes = table_oriented_scopes,
+        .default_value = int64_t(0),
+        .min_value = 0,
+        .max_value = 99,
     },
 };
 
@@ -160,6 +169,15 @@ std::optional<seastar::sstring> validate_with(T (*parse)(std::string_view), std:
 
 std::optional<seastar::sstring> validate_integer(std::string_view value) {
     return validate_with(parse_integer, "64-bit integer", value);
+}
+
+std::optional<seastar::sstring> validate_integer_bounds(const option& opt, int64_t value) {
+    if ((opt.min_value && value < *opt.min_value) || (opt.max_value && value > *opt.max_value)) {
+        return fmt::format("must be between {} and {}, got {}",
+                opt.min_value.value_or(std::numeric_limits<int64_t>::min()),
+                opt.max_value.value_or(std::numeric_limits<int64_t>::max()), value);
+    }
+    return std::nullopt;
 }
 
 std::optional<seastar::sstring> validate_floating_point(std::string_view value) {
@@ -276,7 +294,10 @@ std::optional<seastar::sstring> validate_value(const option& opt, std::string_vi
     case value_type::text:
         return validate_text(value);
     case value_type::integer:
-        return validate_integer(value);
+        if (auto err = validate_integer(value)) {
+            return err;
+        }
+        return validate_integer_bounds(opt, parse_integer(value));
     case value_type::floating_point:
         return validate_floating_point(value);
     case value_type::boolean:
@@ -291,7 +312,12 @@ bool to_boolean(const option& opt, const std::optional<seastar::sstring>& value)
 }
 
 int64_t to_integer(const option& opt, const std::optional<seastar::sstring>& value) {
-    return to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    const auto v = to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    if (auto err = validate_integer_bounds(opt, v)) {
+        cluster_config_registry_logger.warn("Ignoring stored value for integer config '{}', using default: {}", opt.name, *err);
+        return std::get<int64_t>(opt.default_value);
+    }
+    return v;
 }
 
 double to_floating_point(const option& opt, const std::optional<seastar::sstring>& value) {

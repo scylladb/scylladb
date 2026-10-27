@@ -267,4 +267,9 @@ private:
     std::vector<config_callback> _config_callbacks;
 };
 
+// Make each shard's user sstables manager write sstables with the min_compression_saving_percent
+// resolved for their table. Unplug before stopping `ccm`.
+future<> plug_min_compression_saving_percent(sharded<replica::database>& db, sharded<cluster_config_manager>& ccm);
+future<> unplug_min_compression_saving_percent(sharded<replica::database>& db);
+
 }
