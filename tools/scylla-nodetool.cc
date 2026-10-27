@@ -4864,7 +4864,7 @@ For more information, see: {}
                     typed_option<sstring>("ignore-dead-nodes", "Comma-separated list of dead node host IDs to ignore during removenode"),
                 },
                 {
-                    typed_option<sstring>("remove-operation", "status|force|$HOST_ID - show status of current node removal, force completion of pending removal, or remove provided ID", 1),
+                    typed_option<sstring>("remove-operation", "The host ID of the node to remove", 1),
                 },
             },
             {
