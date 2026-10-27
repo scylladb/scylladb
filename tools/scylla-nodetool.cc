@@ -4798,8 +4798,10 @@ For more information, see: {}
                 "rebuild",
                 "Rebuilds a node’s data by streaming data from other nodes in the cluster (similarly to bootstrap)",
 fmt::format(R"(
-Rebuild operates on multiple nodes in a Scylla cluster. It streams data from a
-single source replica when rebuilding a token range. When executing the command,
+Rebuild operates on multiple nodes in a Scylla cluster. When rebuild is enabled
+in repair-based node operations (the default), data is rebuilt by repairing
+against all source replicas of each token range. Otherwise, it streams data from
+a single source replica when rebuilding a token range. When executing the command,
 Scylla first figures out which ranges the local node (the one we want to rebuild)
 is responsible for. Then which node in the cluster contains the same ranges.
 Finally, Scylla streams the data to the local node.
