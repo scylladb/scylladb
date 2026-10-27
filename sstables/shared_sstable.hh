@@ -15,27 +15,18 @@
 
 #include <fmt/format.h>
 
-#include <seastar/core/shared_ptr.hh>
+#include <boost/smart_ptr/intrusive_ptr.hpp>
 
 namespace sstables {
 
 class sstable;
 
-};
+// Reference counting hooks for boost::intrusive_ptr. They are defined out of
+// line so that shared_sstable can be used with an incomplete sstable class.
+void intrusive_ptr_add_ref(sstable* sst) noexcept;
+void intrusive_ptr_release(sstable* sst) noexcept;
 
-// Customize deleter so that lw_shared_ptr can work with an incomplete sstable class
-namespace seastar {
-
-template <>
-struct lw_shared_ptr_deleter<sstables::sstable> {
-    static void dispose(sstables::sstable* sst);
-};
-
-}
-
-namespace sstables {
-
-using shared_sstable = seastar::lw_shared_ptr<sstable>;
+using shared_sstable = boost::intrusive_ptr<sstable>;
 using sstable_list = std::unordered_set<shared_sstable>;
 
 std::string to_string(const shared_sstable& sst, bool include_origin = true);

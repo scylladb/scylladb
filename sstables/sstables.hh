@@ -201,7 +201,7 @@ public:
 
 class sstable_stream_sink_impl;
 
-class sstable : public enable_lw_shared_from_this<sstable> {
+class sstable {
     friend ::sstable_assertions;
 public:
     using version_types = sstable_version_types;
@@ -693,7 +693,17 @@ public:
     const sstables_manager& manager() const { return _manager; }
 
     static future<std::pair<std::vector<sstring>, uint32_t>> read_and_parse_toc(file f);
+
+    shared_sstable shared_from_this() noexcept {
+        return shared_sstable(this);
+    }
+    // Number of shared_sstable references to this sstable
+    long use_count() const noexcept {
+        return _refcount;
+    }
 private:
+    // Number of shared_sstable references to this sstable; see intrusive_ptr_add_ref()/intrusive_ptr_release()
+    long _refcount = 0;
     void unused(); // Called when reference count drops to zero
     future<file> open_file(component_type, open_flags, file_open_options = {}) const noexcept;
 
@@ -1245,7 +1255,8 @@ public:
     template <typename DataConsumeRowsContext>
     friend future<std::unique_ptr<DataConsumeRowsContext>>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, integrity_check);
-    friend void lw_shared_ptr_deleter<sstables::sstable>::dispose(sstable* s);
+    friend void intrusive_ptr_add_ref(sstable* sst) noexcept;
+    friend void intrusive_ptr_release(sstable* sst) noexcept;
     gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
     gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
 
