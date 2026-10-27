@@ -3236,6 +3236,42 @@ async def test_sc_raft_metrics_disabled(manager: ScyllaClusterManager):
             assert not sc_raft_metric_lines(metrics)
             assert metrics.lines_by_prefix('scylla_raft_add_entries')
 
+async def test_sc_raft_metrics_follow_aggregated_metrics(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async def wait_for_leaders_series(ks: str, cf: str, present: bool):
+        async def check():
+            metrics = await manager.metrics.query(servers[0].ip_addr)
+            return True if (metrics.get(f'{SC_RAFT_METRICS_PREFIX}leaders', {'ks': ks, 'cf': cf}) is not None) == present else None
+        await wait_for(check, time.time() + 60)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH aggregated_metrics = false")
+        await cql.run_async(f"CREATE TABLE {ks}.control (pk int PRIMARY KEY, c int)")
+        await wait_for_leader(manager, servers[0], await get_table_raft_group_id(manager, ks, 'test'))
+        await wait_for_leader(manager, servers[0], await get_table_raft_group_id(manager, ks, 'control'))
+
+        logger.info("A table override set at creation leaves out the raft metrics of that table only")
+        await wait_for_leaders_series(ks, 'control', True)
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        assert metrics.get(f'{SC_RAFT_METRICS_PREFIX}leaders', {'ks': ks, 'cf': 'test'}) is None
+
+        logger.info("Changing the table override takes effect at runtime")
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH aggregated_metrics = true")
+        await wait_for_leaders_series(ks, 'test', True)
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        assert metrics.get(f'{SC_RAFT_METRICS_PREFIX}leaders', {'ks': ks, 'cf': 'test'}) == 1
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH aggregated_metrics = false")
+        await wait_for_leaders_series(ks, 'test', False)
+
+        logger.info("Without a table override, the yaml default applies, then the keyspace setting")
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH aggregated_metrics = null")
+        await wait_for_leaders_series(ks, 'test', True)
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH aggregated_metrics = false")
+        await wait_for_leaders_series(ks, 'test', False)
+        await wait_for_leaders_series(ks, 'control', False)
+
 async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterManager):
     servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     cql = manager.get_cql()

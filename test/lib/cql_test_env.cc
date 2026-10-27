@@ -1049,6 +1049,9 @@ private:
                 _groups_manager.invoke_on_all(&service::strong_consistency::groups_manager::uninit_messaging_service).get();
                 _groups_manager.stop().get();
             });
+            _groups_manager.invoke_on_all([this] (service::strong_consistency::groups_manager& m) {
+                m.watch_aggregated_metrics(_cluster_config_manager.local());
+            }).get();
 
             _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper)).get();
             auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [this] {

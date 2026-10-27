@@ -44,13 +44,25 @@ table_metrics::sample table_metrics::sweep() const {
     return result;
 }
 
-table_metrics::table_metrics(const sstring& ks_name, const sstring& cf_name, reporting mode) {
+table_metrics::table_metrics(const sstring& ks_name, const sstring& cf_name, reporting mode)
+        : _ks_name(ks_name)
+        , _cf_name(cf_name) {
+    set_reporting(mode);
+}
+
+void table_metrics::set_reporting(reporting mode) {
+    if (_mode == mode) {
+        return;
+    }
+    _metrics.clear();
+    _mode.reset();
     if (mode == reporting::none) {
+        _mode = mode;
         return;
     }
     raft_metrics_options options {
         .group_name = "strong_consistency_raft",
-        .labels = {ks_label(ks_name), cf_label(cf_name)},
+        .labels = {ks_label(_ks_name), cf_label(_cf_name)},
         .skip_when_empty = true,
     };
     if (mode == reporting::per_node) {
@@ -60,6 +72,7 @@ table_metrics::table_metrics(const sstring& ks_name, const sstring& cf_name, rep
     register_raft_server_stats_metrics(_metrics, *_server_stats, options);
     register_raft_rpc_stats_metrics(_metrics, *_rpc_stats, options);
     register_table_gauges(options);
+    _mode = mode;
 }
 
 // The gauges of the table itself, summed over its servers by _sample.get().

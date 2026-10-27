@@ -16,6 +16,7 @@
 #include "service/strong_consistency/table_metrics.hh"
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
+#include "db/cluster_config_manager.hh"
 #include "utils/hash.hh"
 
 #include <seastar/util/noncopyable_function.hh>
@@ -171,6 +172,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     tablet_group_leader_cache _leader_cache;
 
+    // Last, so that it's unregistered before anything its callback touches is destroyed.
+    db::cluster_config_manager::config_callback_registration _aggregated_metrics_callback;
+
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
@@ -297,6 +301,9 @@ public:
     future<> stepdown_leaders();
 
     future<> wait_for_groups_to_start(lowres_clock::time_point timeout);
+
+    // Re-registers a table's metrics when the aggregated_metrics option changes for it.
+    void watch_aggregated_metrics(db::cluster_config_manager& ccm);
 
     // Called by tablet cleanup, the point at which a replica has definitively left the
     // group, before the tablet's storage is removed.

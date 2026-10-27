@@ -19,6 +19,7 @@
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_timeout.hh"
 #include "service/storage_proxy.hh"
+#include "db/cluster_config_registry.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "service/topology_state_machine.hh"
@@ -349,11 +350,11 @@ std::optional<raft_server> groups_manager::try_acquire_server(raft_group_state& 
     return raft_server(state, std::move(*h));
 }
 
-static table_metrics::reporting table_metrics_reporting(const db::config& cfg) {
-    if (cfg.enable_keyspace_column_family_metrics()) {
+static table_metrics::reporting table_metrics_reporting(const replica::database& db, const schema& s) {
+    if (db.get_config().enable_keyspace_column_family_metrics()) {
         return table_metrics::reporting::per_shard;
     }
-    if (cfg.enable_node_aggregated_table_metrics()) {
+    if (db.aggregated_metrics(s)) {
         return table_metrics::reporting::per_node;
     }
     return table_metrics::reporting::none;
@@ -361,7 +362,20 @@ static table_metrics::reporting table_metrics_reporting(const db::config& cfg) {
 
 table_metrics& groups_manager::get_table_metrics(const schema& s) {
     return _table_metrics.try_emplace(std::make_pair(s.ks_name(), s.cf_name()), s.ks_name(), s.cf_name(),
-        table_metrics_reporting(_db.get_config())).first->second;
+        table_metrics_reporting(_db, s)).first->second;
+}
+
+void groups_manager::watch_aggregated_metrics(db::cluster_config_manager& ccm) {
+    _aggregated_metrics_callback = ccm.register_config_callback(sstring(db::cluster_config_registry::option_name::aggregated_metrics),
+            [this] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring>) {
+        if (ctx.keyspace_name && ctx.table_name) {
+            auto it = _table_metrics.find(std::make_pair(*ctx.keyspace_name, *ctx.table_name));
+            if (it != _table_metrics.end() && _db.has_schema(*ctx.keyspace_name, *ctx.table_name)) {
+                it->second.set_reporting(table_metrics_reporting(_db, *_db.find_schema(*ctx.keyspace_name, *ctx.table_name)));
+            }
+        }
+        return make_ready_future<>();
+    });
 }
 
 void groups_manager::drop_dropped_tables_metrics() {
@@ -1064,6 +1078,7 @@ future<> groups_manager::stepdown_leaders() {
 }
 
 future<> groups_manager::stop() {
+    _aggregated_metrics_callback.unregister();
     if (!_started) {
         co_return;
     }

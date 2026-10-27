@@ -2103,6 +2103,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 groups_manager.invoke_on_all(&service::strong_consistency::groups_manager::uninit_messaging_service).get();
                 groups_manager.stop().get();
             });
+            groups_manager.invoke_on_all([] (service::strong_consistency::groups_manager& m) {
+                m.watch_aggregated_metrics(cluster_config_manager.local());
+            }).get();
 
             checkpoint(stop_signal, "initializing strongly consistent coordinator");
             sharded<service::strong_consistency::coordinator> sc_coordinator;
