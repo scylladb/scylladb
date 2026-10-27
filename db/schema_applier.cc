@@ -795,6 +795,7 @@ static bool types_changed(const query::result_set_row& row, const sstring& keysp
 // row. If its argument types refer to a user type altered by this schema
 // change, the old version is registered under the old argument types.
 static void replace_function(cql3::functions::change_batch& batch, const std::vector<data_type>& old_arg_types, shared_ptr<cql3::functions::function> func) {
+    batch.replaced_functions.emplace_back(func->name(), func->arg_types(), func->is_aggregate());
     if (func->arg_types() == old_arg_types) {
         batch.replace_function(std::move(func));
     } else {
@@ -1337,6 +1338,13 @@ future<> schema_applier::post_commit() {
                 co_await notifier.drop_aggregate(func.name, func.arg_types);
             } else {
                 co_await notifier.drop_function(func.name, func.arg_types);
+            }
+        }
+        for (const auto& func : _functions_batch.local().replaced_functions) {
+            if (func.aggregate) {
+                co_await notifier.update_aggregate(func.name, func.arg_types);
+            } else {
+                co_await notifier.update_function(func.name, func.arg_types);
             }
         }
 

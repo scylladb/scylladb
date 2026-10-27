@@ -514,3 +514,58 @@ def test_uda_initcond_alter_type(cql, test_keyspace):
             # Without an aggregate using the type in its initial condition,
             # its field can be renamed.
             cql.execute(f'ALTER TYPE {udt} RENAME a TO c')
+
+# Returns the definition of a function (s int, a int) returning s + n * a,
+# in Lua for Scylla and in Java for Cassandra.
+def sum_function(cql, n):
+    if is_scylla(cql):
+        return f"(s int, a int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return s + {n} * a'"
+    return f"(s int, a int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return s + {n} * a;'"
+
+# Test that a prepared statement calling an aggregate uses the new version of
+# the aggregate after CREATE OR REPLACE AGGREGATE replaced it.
+# Reproduces SCYLLADB-5272 (the prepared statement kept using the old version).
+def test_uda_prepared_after_replace(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        cql.execute(f'INSERT INTO {table} (p, v) VALUES (1, 3)')
+        with new_function(cql, test_keyspace, sum_function(cql, 1)) as sf:
+            with new_aggregate(cql, test_keyspace, f'(int) SFUNC {sf} STYPE int INITCOND 0') as agg:
+                stmt = cql.prepare(f'SELECT {test_keyspace}.{agg}(v) FROM {table}')
+                assert list(cql.execute(stmt)) == [(3,)]
+                cql.execute(f'CREATE OR REPLACE AGGREGATE {test_keyspace}.{agg}(int) SFUNC {sf} STYPE int INITCOND 10')
+                assert list(cql.execute(stmt)) == [(13,)]
+
+# Test that a prepared statement calling an aggregate fails after the
+# aggregate was dropped.
+# Reproduces SCYLLADB-5272 (the prepared statement kept using the dropped
+# aggregate).
+def test_uda_prepared_after_drop(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        cql.execute(f'INSERT INTO {table} (p, v) VALUES (1, 3)')
+        with new_function(cql, test_keyspace, sum_function(cql, 1)) as sf:
+            agg = f'{test_keyspace}.{unique_name()}'
+            cql.execute(f'CREATE AGGREGATE {agg}(int) SFUNC {sf} STYPE int INITCOND 0')
+            try:
+                stmt = cql.prepare(f'SELECT {agg}(v) FROM {table}')
+                assert list(cql.execute(stmt)) == [(3,)]
+                cql.execute(f'DROP AGGREGATE {agg}')
+                with pytest.raises(InvalidRequest, match='nknown function'):
+                    cql.execute(stmt)
+            finally:
+                cql.execute(f'DROP AGGREGATE IF EXISTS {agg}')
+
+# Test that a prepared statement calling an aggregate uses the new version of
+# the aggregate's state function after CREATE OR REPLACE FUNCTION replaced
+# it. Cassandra keeps using the old state function even in an unprepared
+# statement (CASSANDRA-21786), so this test fails there.
+# Reproduces SCYLLADB-5272 (the prepared statement kept using the old version
+# of the aggregate, with the old state function).
+def test_uda_prepared_after_replace_sfunc(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        cql.execute(f'INSERT INTO {table} (p, v) VALUES (1, 3)')
+        with new_function(cql, test_keyspace, sum_function(cql, 1)) as sf:
+            with new_aggregate(cql, test_keyspace, f'(int) SFUNC {sf} STYPE int INITCOND 0') as agg:
+                stmt = cql.prepare(f'SELECT {test_keyspace}.{agg}(v) FROM {table}')
+                assert list(cql.execute(stmt)) == [(3,)]
+                cql.execute(f'CREATE OR REPLACE FUNCTION {test_keyspace}.{sf} {sum_function(cql, 2)}')
+                assert list(cql.execute(stmt)) == [(6,)]

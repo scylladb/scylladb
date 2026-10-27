@@ -18,6 +18,7 @@
 #include "service/raft/group0_fwd.hh"
 #include "audit/audit.hh"
 #include "utils/chunked_string.hh"
+#include "cql3/functions/function_name.hh"
 
 namespace service {
 
@@ -61,6 +62,10 @@ protected:
 public:
     // CQL statement text
     utils::chunked_string raw_cql_statement;
+
+    // The user-defined functions and aggregates which this statement uses,
+    // recorded when it was prepared (see functions::used_functions_recorder).
+    std::vector<functions::function_name> used_user_functions;
 
     // Returns true for statements that needs guard to be taken before the execution
     virtual bool needs_guard(query_processor& qp, service::query_state& state) const {
