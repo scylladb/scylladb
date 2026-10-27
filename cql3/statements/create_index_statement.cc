@@ -212,9 +212,10 @@ static bool maybe_rewrite_sai_index(
         "use a secondary index for non-vector columns");
 }
 
-static bool is_vector_index(const index_options_map& options) {
+static bool is_external_index(const index_options_map& options) {
     auto class_it = options.find(db::index::secondary_index::custom_class_option_name);
-    return class_it != options.end() && is_vector_capable_class(class_it->second);
+    return class_it != options.end()
+            && secondary_index::secondary_index_manager::is_custom_index_class<secondary_index::external_index>(class_it->second);
 }
 
 // Returns true if the custom class name refers to an index that does not
@@ -857,7 +858,7 @@ index_metadata create_index_statement::make_index_metadata(const std::vector<::s
                                                            const index_options_map& options)
 {
     index_options_map new_options = options;
-    auto target_option = is_vector_index(options)
+    auto target_option = is_external_index(options)
         ? secondary_index::external_index::serialize_targets(targets)
         : secondary_index::target_parser::serialize_targets(targets);
     new_options.emplace(index_target::target_option_name, target_option);
