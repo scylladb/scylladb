@@ -184,3 +184,12 @@ Available options
        acknowledged at consistency level ``ANY`` that only hints hold is lost. Hints for
        materialized views are never discarded. Default: ``true``, in effect once every node knows
        the option.
+   * - ``min_compression_saving_percent``
+     - integer
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - Store a compressed sstable block uncompressed unless compressing it saves at least this
+       percentage (0-99) of its size, e.g. ``10`` stores blocks that compress by less than 10% as-is.
+       For tables holding encrypted or already-compressed data, this saves CPU when flushing,
+       compacting and reading. Applies to sstables written afterwards; ``nodetool upgradesstables -a``
+       rewrites existing ones. sstables written with it can't be read by versions that don't know
+       the option. Default: ``0`` (off).

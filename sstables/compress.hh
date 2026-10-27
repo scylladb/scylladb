@@ -300,6 +300,13 @@ private:
     // accessed via uncompressed_chunk_length()/set_uncompressed_chunk_length().
     uint32_t chunk_len = 0;
     uint32_t _full_checksum = 0;
+    // Stored chunk length at or above which a chunk holds raw data; 0 means no raw chunks.
+    uint32_t _max_compressed_len = 0;
+    // Index of the next chunk the writer wants compressed despite a streak; 0 means none.
+    // Wraps only past 16 TiB of 4 KiB chunks, which merely mistimes one probe.
+    uint32_t _probe_chunk = 0;
+    // Chunks this writer stored raw, so its debug log needn't walk the offsets.
+    uint64_t _raw_chunks_written = 0;
     compressor_ptr _compressor;
 public:
     // Set the compressor algorithm, please check the definition of enum compressor.
@@ -352,6 +359,35 @@ public:
         _compressed_file_length = compressed_file_length;
     }
 
+    // Derives the raw-chunk threshold from min_compression_saving_percent; needs the chunk length set first.
+    void set_min_compression_saving_percent(int percent);
+    // Same, from the min_compression_saving_percent entry of the on-disk options (absent means off).
+    void init_min_compression_saving_percent_from_options();
+    uint32_t max_compressed_length() const noexcept {
+        return _max_compressed_len;
+    }
+    void note_raw_chunk_written() noexcept {
+        ++_raw_chunks_written;
+    }
+    uint64_t raw_chunks_written() const noexcept {
+        return _raw_chunks_written;
+    }
+    // Set by the writer when a partition of at least a chunk ends, so a skip streak re-checks the next one.
+    void note_partition_boundary(uint64_t offset) noexcept {
+        // Boundaries only grow, so a pending probe is the earlier one; keep it.
+        if (!_probe_chunk) {
+            _probe_chunk = (offset + chunk_len - 1) / chunk_len;
+        }
+    }
+    // Whether the chunk starting at uncompressed_file_length() must be compressed despite a streak.
+    bool consume_probe() noexcept {
+        if (!_probe_chunk || data_len < uint64_t(_probe_chunk) * chunk_len) {
+            return false;
+        }
+        _probe_chunk = 0;
+        return true;
+    }
+
     uint32_t get_full_checksum() const {
         return _full_checksum;
     }
@@ -385,10 +421,23 @@ input_stream<char> make_compressed_file_m_format_input_stream(stream_creator_fn 
 input_stream<char> make_compressed_raw_file_input_stream(sstables::stream_creator_fn stream_creator, sstables::compression *cm,
         file_input_stream_options options, reader_permit permit, std::optional<uint32_t> digest);
 
+// The CompressionInfo.db option holding the saving percent that marks raw chunks.
+inline constexpr std::string_view min_compression_saving_percent_option = "min_compression_saving_percent";
+
+// After skip_after consecutive chunks that didn't compress enough, further chunks are
+// stored raw without trying, except every probe_interval-th one.
+struct raw_chunk_heuristic {
+    uint8_t skip_after = 2;
+    uint8_t probe_interval = 16;
+};
+
+// min_compression_saving_percent: see compression::set_min_compression_saving_percent(); 0 means off.
 output_stream<char> make_compressed_file_m_format_output_stream(output_stream<char> out,
                 sstables::compression* cm,
                 const compression_parameters& cp,
-                compressor_ptr);
+                int min_compression_saving_percent,
+                compressor_ptr,
+                raw_chunk_heuristic heuristic = {});
 
 
 std::map<sstring, sstring> options_from_compression(const compression& c);

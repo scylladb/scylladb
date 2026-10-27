@@ -1022,6 +1022,7 @@ void writer::init_file_writers() {
                 output_stream<char>(std::move(out)),
                 &_sst._components->compression,
                 _sst._schema->get_compressor_params(),
+                _sst.manager().min_compression_saving_percent(*_sst._schema),
                 std::move(compressor)), _sst.get_filename());
     }
 
@@ -1802,6 +1803,10 @@ stop_iteration writer::consume_end_of_partition() {
 
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
+    // Checked here: _c_stats, and with it the partition's start offset, is reset below.
+    if (_compression_enabled && _c_stats.partition_size >= _sst._components->compression.uncompressed_chunk_length()) {
+        _sst._components->compression.note_partition_boundary(_data_writer->offset());
+    }
 
     maybe_record_large_partitions(_sst, *_partition_key, _c_stats.partition_size, _c_stats.rows_count, _c_stats.range_tombstones_count, _c_stats.dead_rows_count);
 
@@ -1863,6 +1868,10 @@ void writer::consume_end_of_stream() {
     _sst.write_filter();
     _sst.write_statistics();
     _sst.write_compression();
+    if (sstlog.is_enabled(log_level::debug) && _sst._components->compression.max_compressed_length()) {
+        sstlog.debug("{}: stored {} of {} chunks raw", _sst.get_filename(),
+                _sst._components->compression.raw_chunks_written(), _sst._components->compression.offsets.size());
+    }
     // Note: during the SSTable write, the `compressor` object in `_sst._components->compression`
     // can only compress, not decompress. We have to create a decompressing `compressor` here.
     // (The reason we split the two is that we don't want to keep the compressor-specific compression
