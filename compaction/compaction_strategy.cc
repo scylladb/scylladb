@@ -90,6 +90,11 @@ compaction_strategy_impl::get_reshaping_job(std::vector<sstables::shared_sstable
     return compaction_descriptor();
 }
 
+std::vector<std::vector<sstables::frozen_sstable_run>>
+compaction_strategy_impl::get_runs_to_splice(std::vector<sstables::frozen_sstable_run> runs) const {
+    return {};
+}
+
 std::optional<sstring> compaction_strategy_impl::get_value(const std::map<sstring, sstring>& options, const sstring& name) {
     auto it = options.find(name);
     if (it == options.end()) {
@@ -743,6 +748,15 @@ compaction_backlog_tracker compaction_strategy::make_backlog_tracker() const {
 compaction_descriptor
 compaction_strategy::get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
     return _compaction_strategy_impl->get_reshaping_job(std::move(input), schema, cfg);
+}
+
+std::vector<std::vector<sstables::frozen_sstable_run>>
+compaction_strategy::get_runs_to_splice(std::vector<sstables::frozen_sstable_run> runs) const {
+    return _compaction_strategy_impl->get_runs_to_splice(std::move(runs));
+}
+
+bool compaction_strategy::may_splice_runs() const {
+    return _compaction_strategy_impl->may_splice_runs();
 }
 
 uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate, schema_ptr schema) const {

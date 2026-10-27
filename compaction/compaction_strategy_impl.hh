@@ -91,5 +91,11 @@ public:
     }
 
     virtual compaction_descriptor get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const;
+
+    virtual bool may_splice_runs() const {
+        return false;
+    }
+
+    virtual std::vector<std::vector<sstables::frozen_sstable_run>> get_runs_to_splice(std::vector<sstables::frozen_sstable_run> runs) const;
 };
 }
