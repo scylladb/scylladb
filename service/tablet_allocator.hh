@@ -23,6 +23,10 @@ class system_keyspace;
 class cluster_config_manager;
 }
 
+namespace gms {
+class feature_service;
+}
+
 namespace locator {
 class tablet_aware_replication_strategy;
 class network_topology_strategy;
@@ -452,6 +456,13 @@ future<> validate_keyspace_views_for_tablets_migration(
         replica::database& db,
         db::system_keyspace& sys_ks,
         const topology& topology,
+        const sstring& ks_name);
+
+/// Checks that the CDC log tables of the keyspace can be migrated.
+/// Throws like validate_keyspace_for_migration().
+void validate_keyspace_cdc_for_tablets_migration(
+        const replica::database& db,
+        const gms::feature_service& features,
         const sstring& ks_name);
 
 /// Builds the initial tablet map of a table being migrated from vnodes to tablets: one

@@ -14,6 +14,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "keys/keys.hh"
+#include "mutation/async_utils.hh"
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "db/schema_tables.hh"
@@ -687,6 +688,28 @@ future<> generation_service::generate_tablet_resize_update(service::group0_updat
     auto diff = co_await _cdc_metadata.generate_stream_diff(current_streams.streams, new_streams);
     auto mut = co_await get_switch_streams_mutation(table, new_ts, std::move(diff), ts);
     co_await muts.add(std::move(mut));
+}
+
+future<mutation> get_vnodes_to_tablets_switch_mutation(table_id table, db_clock::time_point stream_ts, const locator::tablet_map& tablet_map, api::timestamp_type ts) {
+    cdc_stream_diff diff;
+    diff.closed_streams.push_back(vnode_streams_set_stream());
+    co_await utils::reserve_gently(diff.opened_streams, tablet_map.tablet_count());
+    for (auto tid : tablet_map.tablet_ids()) {
+        diff.opened_streams.emplace_back(tablet_map.get_last_token(tid), 0);
+        co_await coroutine::maybe_yield();
+    }
+    co_return co_await get_switch_streams_mutation(table, stream_ts, std::move(diff), ts);
+}
+
+future<> generation_service::generate_vnodes_to_tablets_switch(utils::chunked_vector<canonical_mutation>& muts, table_id table, const locator::tablet_map& tablet_map, api::timestamp_type ts) {
+    if (!_cdc_metadata.has_only_vnode_streams_set(table)) {
+        on_internal_error(cdc_log, format("generate_vnodes_to_tablets_switch: CDC log table {} doesn't have the vnode streams set", table));
+    }
+
+    auto new_ts = new_generation_timestamp(true, _cfg.ring_delay);
+    cdc_log.info("Switching the CDC log table {} from the vnode-based CDC generations to {} tablet streams at {}", table, tablet_map.tablet_count(), new_ts);
+    auto mut = co_await get_vnodes_to_tablets_switch_mutation(table, new_ts, tablet_map, ts);
+    muts.emplace_back(co_await make_canonical_mutation_gently(mut));
 }
 
 future<utils::chunked_vector<mutation>> get_cdc_stream_gc_mutations(table_id table, db_clock::time_point base_ts, const utils::chunked_vector<cdc::stream_id>& base_stream_set, api::timestamp_type ts) {

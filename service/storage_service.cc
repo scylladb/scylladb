@@ -97,6 +97,7 @@
 #include <seastar/core/metrics.hh>
 #include "cdc/generation.hh"
 #include "cdc/generation_service.hh"
+#include "cdc/log.hh"
 #include "repair/repair.hh"
 #include "repair/row_level.hh"
 #include "gms/generation-number.hh"
@@ -4192,6 +4193,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                     " availability.", ks_name);
         }
         co_await validate_keyspace_views_for_tablets_migration(db, get_system_keyspace(), _topology_state_machine._topology, ks_name);
+        validate_keyspace_cdc_for_tablets_migration(db, _feature_service, ks_name);
 
         // A keyspace whose tables all have a map has nothing left to prepare, so don't
         // queue a request which would do nothing.
@@ -4206,15 +4208,17 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // Every table which has no tablet map yet, co-located views included: the request
         // records them, together with their targets.
         std::vector<std::pair<table_id, sstring>> unmapped_tables;
-        // The views among them which are co-located with their base table, keyed by the
-        // base table. They share its tablet map, so they are sized together with it.
+        // The views and CDC log tables among them which are co-located with their base
+        // table, keyed by the base table. They share its tablet map, so they are sized
+        // together with it.
         std::unordered_map<table_id, std::vector<table_id>> tables_to_colocate;
         for (const auto& [name, schema] : cf_meta_data) {
             if (tablet_metadata.has_tablet_map(schema->id())) {
                 continue;
             }
             unmapped_tables.push_back({schema->id(), name});
-            if (auto base_id = schema->is_view() ? db.get_base_table_for_tablet_colocation(*schema, {}) : std::nullopt) {
+            bool may_colocate = schema->is_view() || cdc::is_log_schema(*schema);
+            if (auto base_id = may_colocate ? db.get_base_table_for_tablet_colocation(*schema, {}) : std::nullopt) {
                 tables_to_colocate[*base_id].push_back(schema->id());
             }
         }
