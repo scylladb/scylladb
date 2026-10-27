@@ -1155,11 +1155,27 @@ void groups_manager::request_flush(db::cf_id_type id, db::replay_position pos) {
     });
 }
 
+future<> groups_manager::drain() {
+    logger.debug("drain(): unregistering the RPC handlers on all shards");
+    co_await container().invoke_on_all(&groups_manager::uninit_messaging_service);
+    logger.debug("drain(): stopping all shards");
+    co_await container().invoke_on_all(&groups_manager::stop);
+    logger.debug("drain(): done");
+}
+
 future<> groups_manager::stop() {
     if (!_started) {
         co_return;
     }
+    if (!_stop) {
+        _stop.emplace(do_stop());
+    } else {
+        logger.debug("stop(): joining the stop that has run");
+    }
+    co_await _stop->get_future();
+}
 
+future<> groups_manager::do_stop() {
     logger.info("stop() enter");
 
     // The segments must survive so replay can recover the log.
