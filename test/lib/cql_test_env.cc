@@ -18,6 +18,7 @@
 #include "test/lib/test_utils.hh"
 #include "cdc/generation_service.hh"
 #include "cdc/cdc_partitioner.hh"
+#include "cql3/cql3_type.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
@@ -233,6 +234,7 @@ private:
             .duplicate_bind_variable_names_refer_to_same_variable = _db.local().get_config().cql_duplicate_bind_variable_names_refer_to_same_variable(),
             .max_relations_in_where_clause = _db.local().get_config().max_relations_in_where_clause(),
             .in_bind_variable_name_uses_uppercase_operator = _db.local().get_config().cql_in_bind_variable_name_uses_uppercase_operator(),
+            .max_type_nesting = cql3::cql3_type::max_nesting(_cluster_config_manager.local()),
         };
     }
 
@@ -252,10 +254,14 @@ public:
     }
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(std::string_view text) override {
+        return execute_cql(text, test_dialect());
+    }
+
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(std::string_view text, cql3::dialect d) override {
         testlog.trace("{}(\"{}\")", __FUNCTION__, text);
         auto qs = make_query_state();
         auto qo = make_shared<cql3::query_options>(cql3::query_options::DEFAULT);
-        return local_qp().execute_direct_without_checking_exception_message(text, *qs, test_dialect(), *qo).then([qs, qo] (auto msg) {
+        return local_qp().execute_direct_without_checking_exception_message(text, *qs, d, *qo).then([qs, qo] (auto msg) {
             return cql_transport::messages::propagate_exception_as_future(std::move(msg));
         });
     }

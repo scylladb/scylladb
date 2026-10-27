@@ -35,6 +35,7 @@
 #include "cql3/query_options.hh"
 #include "mutation/timestamp.hh"
 #include "cql3/dialect.hh"
+#include "db/cluster_config_manager.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/chunked_vector.hh"
 #include "exceptions/coordinator_result.hh"
@@ -244,6 +245,8 @@ private:
     gms::gossiper& _gossiper;
     scheduling_group_key _stats_key;
     maintenance_socket_enabled _used_by_maintenance_socket;
+    unsigned _max_type_nesting;
+    db::cluster_config_manager::config_callback_registration _max_type_nesting_callback;
 public:
     cql_server(sharded<cql3::query_processor>& qp, auth::service&,
             service::memory_limiter& ml,
@@ -252,7 +255,8 @@ public:
             gms::gossiper& g,
             scheduling_group_key stats_key,
             maintenance_socket_enabled used_by_maintenance_socket,
-            netw::messaging_service& ms);
+            netw::messaging_service& ms,
+            db::cluster_config_manager& ccm);
     ~cql_server();
     future<> stop();
 

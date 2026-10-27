@@ -11,6 +11,8 @@
 #include "cql3/statements/create_type_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/functions/functions.hh"
+#include "cql3/functions/user_function.hh"
 #include "prepared_statement.hh"
 #include "schema/schema_builder.hh"
 #include "mutation/mutation.hh"
@@ -66,6 +68,35 @@ future<utils::chunked_vector<mutation>> alter_type_statement::prepare_announceme
     }
 
     auto&& updated = make_updated_type(sp.data_dictionary(), to_update->second);
+    // Types, columns and functions that contain the altered type change with it. None may
+    // end up past the nesting limit, unless it is past it already (a schema created before
+    // the limit) and does not get deeper.
+    auto max_nesting = get_prepare_context().get_dialect().max_type_nesting;
+    auto check_dependent = [&] (const data_type& type, auto describe) {
+        if (auto updated_type = type->update_user_type(updated)) {
+            auto depth = cql3_type::nesting(**updated_type);
+            if (depth > std::max(max_nesting, cql3_type::nesting(*type))) {
+                throw exceptions::invalid_request_exception(format("Cannot alter type {}: {} would be nested too deeply: {} levels, the limit is {}",
+                        _name.to_cql_string(), describe(), depth, max_nesting));
+            }
+        }
+    };
+    for (auto&& type : all_types | std::views::values) {
+        check_dependent(type, [&] { return format("type {}.{}", type->_keyspace, type->get_name_as_string()); });
+    }
+    for (auto&& schema : ks.metadata()->cf_meta_data() | std::views::values) {
+        for (auto&& column : schema->all_columns()) {
+            check_dependent(column.type, [&] { return format("column {} of table {}.{}", column.name_as_text(), schema->ks_name(), schema->cf_name()); });
+        }
+    }
+    // User aggregates take their types from these functions.
+    for (auto&& f : functions::instance().get_user_functions(keyspace())) {
+        auto describe = [&] { return format("function {}", f->name()); };
+        for (auto&& arg_type : f->arg_types()) {
+            check_dependent(arg_type, describe);
+        }
+        check_dependent(f->return_type(), describe);
+    }
     // Now, we need to announce the type update to basically change it for new tables using this type,
     // but we also need to find all existing user types and CF using it and change them.
     auto res = co_await service::prepare_update_type_announcement(sp, updated, ts);

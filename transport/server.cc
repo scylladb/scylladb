@@ -9,6 +9,8 @@
 #include "server.hh"
 #include "gms/gossiper.hh"
 
+#include "cql3/cql3_type.hh"
+#include "db/cluster_config_registry.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
@@ -326,7 +328,8 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
         service::memory_limiter& ml, cql_server_config config,
         qos::service_level_controller& sl_controller, gms::gossiper& g, scheduling_group_key stats_key,
         maintenance_socket_enabled used_by_maintenance_socket,
-        netw::messaging_service& ms)
+        netw::messaging_service& ms,
+        db::cluster_config_manager& ccm)
     : server("CQLServer", clogger, generic_server::config{std::move(config.uninitialized_connections_semaphore_cpu_concurrency), config.request_timeout_on_shutdown_in_seconds})
     , _query_processor(qp)
     , _ms(ms)
@@ -339,6 +342,11 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
     , _gossiper(g)
     , _stats_key(stats_key)
     , _used_by_maintenance_socket(used_by_maintenance_socket)
+    , _max_type_nesting(cql3::cql3_type::max_nesting(ccm))
+    , _max_type_nesting_callback(ccm.register_config_callback(sstring(db::cluster_config_registry::option_name::max_type_nesting), [this, &ccm] (const auto&, std::optional<sstring>) {
+        _max_type_nesting = cql3::cql3_type::max_nesting(ccm);
+        return make_ready_future<>();
+    }))
 {
     namespace sm = seastar::metrics;
 
@@ -2237,6 +2245,7 @@ cql_server::connection::get_dialect() const {
         .duplicate_bind_variable_names_refer_to_same_variable = _server._config.cql_duplicate_bind_variable_names_refer_to_same_variable,
         .max_relations_in_where_clause = _server._config.max_relations_in_where_clause,
         .in_bind_variable_name_uses_uppercase_operator = _server._config.cql_in_bind_variable_name_uses_uppercase_operator,
+        .max_type_nesting = _server._max_type_nesting,
     };
 }
 

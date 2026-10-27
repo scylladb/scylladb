@@ -2165,7 +2165,9 @@ future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr ss
             sstable_schema->id(),
             schema->id());
 
-    co_await env.execute_cql(schema_create_statement);
+    // This CREATE TABLE is the DESCRIBE output of the sstables' schema, not client
+    // input, so like the schema loader, it runs under the internal dialect.
+    co_await env.execute_cql(schema_create_statement, cql3::internal_dialect());
 
     // Make the keyspace implicit for all subsequent queries, so users don't
     // have to qualify the table name with it.

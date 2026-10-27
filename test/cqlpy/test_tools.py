@@ -612,6 +612,34 @@ def test_scylla_sstable_write_cql_large_input(scylla_path):
         assert sorted(actual_json, key=lambda x: x['pk']) == expected_json
 
 
+# The tool recreates the table from its described CREATE TABLE. The table
+# exists, so a type nested deeper than the default max_type_nesting of 32
+# must not stop it.
+def test_scylla_sstable_type_above_default_nesting_limit(scylla_path):
+    lists_40 = 'frozen<list<' * 40 + 'int' + '>>' * 40
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file = os.path.join(tmp_dir, 'schema.cql')
+        with open(schema_file, 'w') as f:
+            f.write(f"CREATE TABLE ks.tbl (pk int PRIMARY KEY, v {lists_40})")
+
+        input_file = os.path.join(tmp_dir, 'input.cql')
+        with open(input_file, 'w') as f:
+            f.write("INSERT INTO scylla_sstable.tbl (pk) VALUES (0);")
+
+        generation = subprocess.check_output([scylla_path, "sstable", "write",
+                                              "--schema-file", schema_file,
+                                              "--input-format", "cql",
+                                              "--input-file", input_file,
+                                              "--output-dir", tmp_dir], text=True).strip()
+        sstable_files = glob.glob(os.path.join(tmp_dir, f"*-{generation}-big-Data.db"))
+        assert len(sstable_files) == 1
+
+        result = json.loads(subprocess.check_output([scylla_path, "sstable", "query",
+                                                      "--schema-file", schema_file,
+                                                      "--output-format", "json", sstable_files[0]], text=True))
+        assert [row['pk'] for row in result] == [0]
+
+
 def test_scylla_sstable_write_validation(cql, scylla_path):
     """Check that invalid queries are rejected."""
     keyspace_name = "ks"
