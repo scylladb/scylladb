@@ -858,7 +858,7 @@ index_metadata create_index_statement::make_index_metadata(const std::vector<::s
 {
     index_options_map new_options = options;
     auto target_option = is_vector_index(options)
-        ? secondary_index::vector_index::serialize_targets(targets)
+        ? secondary_index::external_index::serialize_targets(targets)
         : secondary_index::target_parser::serialize_targets(targets);
     new_options.emplace(index_target::target_option_name, target_option);
 

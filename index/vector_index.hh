@@ -31,16 +31,10 @@ public:
             const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs,
         const data_dictionary::database& db) const override;
     static bool has_index(const schema& s) { return has_index_impl<vector_index>(s); }
-    static bool is_local(const sstring& target_string);
     static bool is_vector_index_on_column(const index_metadata& im, const sstring& target_name);
     static void check_cdc_options(const schema& s) {
         check_cdc_options_impl<vector_index>(s);
     }
-
-    static sstring serialize_targets(const std::vector<::shared_ptr<cql3::statements::index_target>>& targets);
-    static sstring get_target_column(const sstring& targets);
-    // The vector column, the columns of the partition of a local index and the filtering columns.
-    static std::vector<sstring> get_all_target_columns(const sstring& targets);
 
     static bool is_rescoring_enabled(const index_options_map& properties);
     static float get_oversampling(const index_options_map& properties);

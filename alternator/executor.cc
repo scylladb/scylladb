@@ -1944,7 +1944,7 @@ static search_schema_info validate_search_schema(
 
 // Builds the value of a vector index's "target" index-option (the same
 // option, and the same JSON encoding, used by CQL vector indexes - see
-// secondary_index::vector_index::serialize_targets()) out of the vector
+// secondary_index::external_index::serialize_targets()) out of the vector
 // attribute's name, the SearchSchema (search_schema_info parsed by
 // validate_search_schema()) and the Projection (extra_fc_attributes
 // returned by compute_extra_fc_attributes()).

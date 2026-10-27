@@ -69,7 +69,7 @@
 #include "data_dictionary/user_types_metadata.hh"
 
 #include "index/target_parser.hh"
-#include "index/vector_index.hh"
+#include "index/external_index.hh"
 #include "lang/lua.hh"
 #include "lang/manager.hh"
 
@@ -2675,7 +2675,7 @@ static index_metadata create_index_from_index_row(const query::result_set_row& r
     auto class_it = options.find("class_name");
     bool is_vector = class_it != options.end() && class_it->second == "vector_index";
     const index_metadata::is_local_index is_local(
-        is_vector ? secondary_index::vector_index::is_local(target_string)
+        is_vector ? secondary_index::external_index::is_local(target_string)
                   : secondary_index::target_parser::is_local(target_string));
     return index_metadata{index_name, options, kind, is_local};
 }
