@@ -22,10 +22,15 @@
 #include "replica/database_fwd.hh"
 #include "locator/host_id.hh"
 #include "service/topology_guard.hh"
+#include "streaming/stream_reason.hh"
 #include "sstables/open_info.hh"
 
 #include <fmt/core.h>
 #include <fmt/ostream.h>
+
+namespace seastar::metrics {
+class metric_groups;
+}
 
 namespace db {
 namespace view {
@@ -108,6 +113,7 @@ public:
     service::frozen_topology_guard topo_guard;
     std::optional<sstables::sstable_state> sstable_state;
     std::optional<stream_sstable_meta> sstable_meta;
+    streaming::stream_reason reason = streaming::stream_reason::unspecified;
     // We can extend this verb to send arbitrary blob of data
 };
 
@@ -173,6 +179,7 @@ public:
     dht::token_range range;
     std::vector<streaming::node_and_shard> targets;
     service::frozen_topology_guard topo_guard;
+    streaming::stream_reason reason = streaming::stream_reason::unspecified;
 };
 
 class clone_sstable_request {
@@ -200,7 +207,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
 future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, const gms::feature_service& features, streaming::clone_sstable_request req);
 
 // Ask the src node to stream sstables to dst node for table in the given token range using TABLET_STREAM_FILES verb.
-future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id, replica::table& table, const dht::token_range& range, const locator::host_id& src, const locator::host_id& dst, seastar::shard_id dst_shard_id, netw::messaging_service& ms, abort_source& as, service::frozen_topology_guard topo_guard);
+future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id, replica::table& table, const dht::token_range& range, const locator::host_id& src, const locator::host_id& dst, seastar::shard_id dst_shard_id, netw::messaging_service& ms, abort_source& as, service::frozen_topology_guard topo_guard, stream_reason reason);
 
 // Exposed for testability
 future<size_t> tablet_stream_files(netw::messaging_service& ms,
@@ -209,8 +216,13 @@ future<size_t> tablet_stream_files(netw::messaging_service& ms,
     table_id table,
     file_stream_id ops_id,
     service::frozen_topology_guard topo_guard,
+    stream_reason reason,
     bool may_inject_errors = false
     );
+
+uint64_t get_tablet_streaming_total_outgoing_bytes(stream_reason reason);
+uint64_t get_tablet_streaming_total_incoming_bytes(stream_reason reason);
+void register_tablet_streaming_metrics(seastar::metrics::metric_groups& metrics);
 
 
 future<> mark_tablet_stream_start(file_stream_id);
