@@ -163,6 +163,11 @@ public:
         auto custom_class = get_custom_class(im);
         return custom_class && dynamic_cast<T*>(custom_class->get()) != nullptr;
     }
+    template <typename T>
+    static bool is_custom_index_class(const sstring& class_name) {
+        auto factory = get_custom_class_factory(class_name);
+        return factory && dynamic_cast<T*>((*factory)().get()) != nullptr;
+    }
 private:
     void add_index(const index_metadata& im);
 };
