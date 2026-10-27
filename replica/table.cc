@@ -4002,6 +4002,12 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
                     co_await main_group->merge_sstables_from(*group);
                     co_await main_group->merge_logstor_segments_from(*group);
                 }
+                // Runs of the merged groups cover disjoint token ranges, and similar sizes are to be
+                // expected on both sides of the merge, which would make the compaction strategy
+                // compact them together for no gain. Done while compaction is still disabled.
+                if (sz > 0) {
+                    co_await main_group->splice_sstable_runs();
+                }
                 co_await sg.remove_empty_merging_groups();
                 tlogger.debug("Merge compaction groups for table={}.{} group_id={} range={} finished",
                         ks_name, cf_name, main_group->group_id(), main_group->token_range());
