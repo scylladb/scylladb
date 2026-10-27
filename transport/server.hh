@@ -120,7 +120,6 @@ struct cql_server_config {
     std::optional<uint16_t> shard_aware_transport_port;
     std::optional<uint16_t> shard_aware_transport_port_ssl;
     bool allow_shard_aware_drivers = true;
-    smp_service_group bounce_request_smp_service_group = default_smp_service_group();
     utils::updateable_value<uint32_t> max_concurrent_requests;
     utils::updateable_value<bool> cql_duplicate_bind_variable_names_refer_to_same_variable;
     utils::updateable_value<uint32_t> max_relations_in_where_clause;
@@ -209,6 +208,62 @@ public:
 // The <reason_map> of Read_failure and Write_failure: the address of each failed replica and its failure code.
 using failure_reason_map = std::vector<std::pair<net::inet_address, uint16_t>>;
 
+// Executes the QUERY, EXECUTE and BATCH requests of cql_server, bouncing each of
+// them to the shard or node which should handle it, and turns the exceptions
+// thrown by requests into CQL error responses.
+class cql_processor : public seastar::peering_sharded_service<cql_processor> {
+public:
+    using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<response>>>;
+    using result_with_bounce = foreign_ptr<seastar::shared_ptr<messages::result_message::bounce>>;
+    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, result_with_bounce>;
+    using handling_node_bounce = bool_class<class handling_node_bounce_class>;
+    // Returns the abort source, on the current shard, of the caller of process().
+    // process() calls it on every shard to which it bounces a request.
+    using abort_source_getter = std::function<seastar::abort_source&()>;
+private:
+    struct processor_stats {
+        uint64_t requests_forwarded_successfully = 0;
+        uint64_t requests_forwarded_failed = 0;
+        uint64_t requests_forwarded_redirected = 0;
+        uint64_t requests_forwarded_prepared_not_found = 0;
+
+        std::unordered_map<exceptions::exception_code, uint64_t> errors;
+    };
+
+    sharded<cql3::query_processor>& _query_processor;
+    netw::messaging_service& _ms;
+    gms::gossiper& _gossiper;
+    semaphore& _memory_available;
+    smp_service_group _bounce_request_smp_service_group;
+    processor_stats _stats;
+    seastar::metrics::metric_groups _metrics;
+public:
+    cql_processor(sharded<cql3::query_processor>& qp, netw::messaging_service& ms, gms::gossiper& g, service::memory_limiter& ml,
+            smp_service_group bounce_request_smp_service_group, maintenance_socket_enabled used_by_maintenance_socket);
+
+    // Executes a QUERY, EXECUTE or BATCH request, following its bounces to other shards and nodes.
+    // The request is accounted in the cql_sg_stats selected by stats_key.
+    // If bounced is handling_node_bounce::yes, a bounce to another node is returned as
+    // a result_with_bounce instead of being followed.
+    future<process_fn_return_type>
+    process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state,
+            cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect, api::timestamp_type request_start_timestamp,
+            scheduling_group_key stats_key, abort_source_getter get_abort_source,
+            cql3::computed_function_values cached_fn_calls = {}, handling_node_bounce bounced = handling_node_bounce::no);
+
+    std::unique_ptr<response> handle_exception(int16_t stream, std::exception_ptr eptr, const tracing::trace_state_ptr& trace_state, cql_protocol_version_type version, const service::client_state& client_state);
+    // Counts an error response which was not made by handle_exception().
+    void count_error(exceptions::exception_code code) noexcept;
+    std::optional<seastar::lowres_clock::time_point> timeout_for_sleep(std::exception_ptr eptr) const;
+    future<foreign_ptr<std::unique_ptr<response>>> sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, foreign_ptr<std::unique_ptr<response>>&& resp, seastar::abort_source& as);
+private:
+    void register_forwarding_and_error_metrics();
+    std::optional<failure_reason_map> make_failure_reason_map(const exceptions::request_failure_exception& ex, const service::client_state& client_state) const;
+    future<foreign_ptr<std::unique_ptr<cql_transport::response>>> forward_cql(locator::host_id target_host, unsigned target_shard, seastar::lowres_clock::time_point timeout,
+            bool is_write, uint16_t stream, tracing::trace_state_ptr trace_state, forward_cql_execute_request req, seastar::abort_source& as,
+            const locator::host_id_or_exception_callback& on_forwarding_finished = {});
+};
+
 class cql_server : public seastar::peering_sharded_service<cql_server>, public generic_server::server {
 private:
     struct transport_stats {
@@ -219,13 +274,6 @@ private:
         uint32_t requests_serving = 0;
         uint64_t requests_blocked_memory = 0;
         uint64_t requests_shed = 0;
-        // forwarding stats
-        uint64_t requests_forwarded_successfully = 0;
-        uint64_t requests_forwarded_failed = 0;
-        uint64_t requests_forwarded_redirected = 0;
-        uint64_t requests_forwarded_prepared_not_found = 0;
-
-        std::unordered_map<exceptions::exception_code, uint64_t> errors;
     };
 private:
     class event_notifier;
@@ -233,6 +281,7 @@ private:
     static constexpr cql_protocol_version_type current_version = cql_serialization_format::latest_version;
 
     sharded<cql3::query_processor>& _query_processor;
+    cql_processor& _processor;
     netw::messaging_service& _ms;
     cql_server_config _config;
     semaphore& _memory_available;
@@ -248,7 +297,7 @@ private:
     scheduling_group_key _stats_key;
     maintenance_socket_enabled _used_by_maintenance_socket;
 public:
-    cql_server(sharded<cql3::query_processor>& qp, auth::service&,
+    cql_server(sharded<cql3::query_processor>& qp, cql_processor& processor, auth::service&,
             service::memory_limiter& ml,
             cql_server_config config,
             qos::service_level_controller& sl_controller,
@@ -258,14 +307,12 @@ public:
             netw::messaging_service& ms);
     ~cql_server();
     future<> stop();
-private:
-    void register_forwarding_and_error_metrics();
 
 public:
     using response = cql_transport::response;
-    using result_with_foreign_response_ptr = exceptions::coordinator_result<foreign_ptr<std::unique_ptr<cql_server::response>>>;
-    using result_with_bounce = foreign_ptr<seastar::shared_ptr<messages::result_message::bounce>>;
-    using process_fn_return_type = std::variant<result_with_foreign_response_ptr, result_with_bounce>;
+    using result_with_foreign_response_ptr = cql_processor::result_with_foreign_response_ptr;
+    using result_with_bounce = cql_processor::result_with_bounce;
+    using process_fn_return_type = cql_processor::process_fn_return_type;
 
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;
@@ -286,12 +333,6 @@ private:
     friend class connection;
     friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
             const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata);
-
-    std::optional<failure_reason_map> make_failure_reason_map(const exceptions::request_failure_exception& ex, const service::client_state& client_state) const;
-
-    std::unique_ptr<cql_server::response> handle_exception(int16_t stream, std::exception_ptr eptr, const tracing::trace_state_ptr& trace_state, cql_protocol_version_type version, const service::client_state& client_state);
-    std::optional<seastar::lowres_clock::time_point> timeout_for_sleep(std::exception_ptr eptr) const;
-    future<foreign_ptr<std::unique_ptr<cql_server::response>>> sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, foreign_ptr<std::unique_ptr<cql_server::response>>&& resp, seastar::abort_source& as);
 
     class connection : public generic_server::connection {
         cql_server& _server;
@@ -373,7 +414,7 @@ private:
         friend event_notifier;
     };
 
-    using handling_node_bounce = bool_class<class handling_node_bounce_class>;
+    using handling_node_bounce = cql_processor::handling_node_bounce;
     // Helper functions to encapsulate bounce processing for query, execute and batch verbs
     future<process_fn_return_type>
     process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state,
@@ -386,10 +427,6 @@ private:
     void init_messaging_service();
     future<> uninit_messaging_service();
     future<forward_cql_execute_response> handle_forward_execute(service::query_state& qs, forward_cql_execute_request& req);
-
-    future<foreign_ptr<std::unique_ptr<cql_transport::response>>> forward_cql(locator::host_id target_host, unsigned target_shard, seastar::lowres_clock::time_point timeout,
-            bool is_write, uint16_t stream, tracing::trace_state_ptr trace_state, forward_cql_execute_request req, seastar::abort_source& as,
-            const locator::host_id_or_exception_callback& on_forwarding_finished = {});
 
     virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override;
     scheduling_group get_scheduling_group_for_new_connection() const override {
