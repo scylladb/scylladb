@@ -142,7 +142,7 @@ Operations that are not listed below are currently not available.
 * **tablehistograms** see :doc:`cfhistograms <nodetool-commands/cfhistograms/>`
 * :doc:`tablestats </operating-scylla/nodetool-commands/tablestats/>` - Provides in-depth diagnostics regard table. 
 * :doc:`tasks </operating-scylla/nodetool-commands/tasks/index>` - Manage tasks manager tasks.
-* :doc:`toppartitions </operating-scylla/nodetool-commands/toppartitions/>` - Samples cluster writes and reads and reports the most active partitions in a specified table and time frame.
+* :doc:`toppartitions </operating-scylla/nodetool-commands/toppartitions/>` - Samples the writes and reads on the node and reports the most active partitions in the specified table(s) and time frame.
 * :doc:`upgradesstables </operating-scylla/nodetool-commands/upgradesstables>` - Upgrades each table that is not running the latest ScyllaDB version, by rewriting SSTables.
 * :doc:`version </operating-scylla/nodetool-commands/version>` - Print the DB version.
 * :doc:`viewbuildstatus </operating-scylla/nodetool-commands/viewbuildstatus/>` - Shows the progress of a materialized view build.
