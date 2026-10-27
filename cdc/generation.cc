@@ -121,6 +121,13 @@ stream_id::stream_id(bytes b)
     }
 }
 
+stream_id vnode_streams_set_stream() {
+    bytes b(bytes::initialized_later(), 2 * sizeof(int64_t));
+    copy_int_to_bytes(dht::token::to_int64(dht::last_token()), 0, b);
+    copy_int_to_bytes(int64_t(stream_id::version_1) << stream_id_version_shift, sizeof(int64_t), b);
+    return stream_id(std::move(b));
+}
+
 bool stream_id::is_set() const {
     return !_value.empty();
 }

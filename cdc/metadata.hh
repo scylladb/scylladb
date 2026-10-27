@@ -49,7 +49,7 @@ class metadata final {
 
     container_t::const_iterator gen_used_at(api::timestamp_type ts) const;
 
-    const utils::chunked_vector<stream_id>& get_tablet_stream_set(table_id tid, api::timestamp_type ts) const;
+    table_streams::const_iterator get_tablet_stream_set(const table_streams& table_streams, table_id tid, api::timestamp_type ts) const;
 
 public:
     /* Is a generation with the given timestamp already known or obsolete? It is obsolete if and only if
@@ -77,6 +77,11 @@ public:
     /* Similar to get_vnode_stream but for tablet-based keyspaces.
      * In addition to the base partition token and timestamp, the stream also depends on the table id because each table
      * has its own set of streams.
+     *
+     * If the table's keyspace was migrated from vnodes and `ts` falls before the table's tablet streams, i.e. into its
+     * vnode streams set (see `vnode_streams_timestamp`), the stream comes from `get_vnode_stream`. Such writes are
+     * treated like writes to a previous generation: once the tablet streams start operating, they're rejected unless
+     * `ts` is within `get_generation_leeway()` of the current time.
      */
     stream_id get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok);
 
@@ -110,6 +115,9 @@ public:
     }
 
     std::vector<table_id> get_tables_with_cdc_tablet_streams() const;
+
+    /* Does the table only have the vnode streams set, i.e. is its keyspace being migrated from vnodes to tablets? */
+    bool has_only_vnode_streams_set(table_id tid) const;
 
     static future<utils::chunked_vector<stream_id>> construct_next_stream_set(
         const utils::chunked_vector<cdc::stream_id>& prev_stream_set,

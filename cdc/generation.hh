@@ -143,6 +143,20 @@ struct cdc_stream_diff {
 
 using table_streams = std::map<api::timestamp_type, committed_stream_set>;
 
+// The timestamp of the vnode streams set: the stream set that a CDC log table
+// gets when its keyspace is prepared for the migration from vnodes to tablets.
+// Until the next stream set, the table's log writes use the vnode-based CDC
+// generations, so the stream of this set is never written to. Real stream
+// sets are never this old.
+constexpr db_clock::time_point vnode_streams_timestamp{};
+
+// The only stream of every vnode streams set.
+stream_id vnode_streams_set_stream();
+
+inline bool is_vnode_streams_set(const committed_stream_set& s) {
+    return s.ts == vnode_streams_timestamp;
+}
+
 /*
  * Checks if the CDC generation is optimal, which is true if its `topology_description` is consistent
  * with `token_metadata`.

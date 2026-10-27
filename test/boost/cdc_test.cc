@@ -2709,4 +2709,95 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_gc_get_new_base) {
     }
 }
 
+// SCYLLADB-1166: the CDC log table of a keyspace migrated from vnodes to
+// tablets starts with the vnode streams set. Writes that fall into it use the
+// vnode-based CDC generations, like writes to a previous generation once the
+// table's tablet streams are in use.
+SEASTAR_THREAD_TEST_CASE(test_cdc_tablet_stream_of_migrated_table) {
+    using namespace std::chrono_literals;
+    auto to_ts = [] (db_clock::time_point tp) {
+        return std::chrono::duration_cast<api::timestamp_clock::duration>(tp.time_since_epoch()).count();
+    };
+
+    // Every token maps to the only stream of the generation, or of a stream set.
+    auto vnode_stream = cdc::stream_id(dht::token::from_int64(0), 0);
+    auto tablet_stream = cdc::stream_id(dht::last_token(), 0);
+    auto tok = dht::token::from_int64(42);
+
+    cdc::metadata md;
+    auto now = db_clock::now();
+    utils::chunked_vector<cdc::token_range_description> entries;
+    entries.push_back(cdc::token_range_description{dht::last_token(), {vnode_stream}, 0});
+    BOOST_REQUIRE(md.insert(now - 1h, cdc::topology_description(std::move(entries))));
+
+    auto load = [&] (std::vector<db_clock::time_point> stream_set_tps) {
+        auto tid = table_id(utils::UUID_gen::get_time_UUID());
+        cdc::table_streams streams;
+        for (auto tp : stream_set_tps) {
+            streams[to_ts(tp)] = cdc::committed_stream_set{tp, {tablet_stream}};
+        }
+        md.load_tablet_streams_map(tid, std::move(streams));
+        return tid;
+    };
+    auto require_from_the_past = [&] (table_id tid, db_clock::time_point tp) {
+        BOOST_REQUIRE_EXCEPTION(md.get_tablet_stream(tid, to_ts(tp), tok), exceptions::invalid_request_exception,
+                exception_predicate::message_contains("from the past"));
+    };
+
+    // Preparing the migration, or finalizing it before the switch is loaded:
+    // the vnode streams set is the only one.
+    {
+        auto tid = load({cdc::vnode_streams_timestamp});
+        BOOST_REQUIRE(md.has_only_vnode_streams_set(tid));
+        BOOST_REQUIRE(md.get_tablet_stream(tid, to_ts(now), tok) == vnode_stream);
+        BOOST_REQUIRE(md.get_tablet_stream(tid, to_ts(now - 30min), tok) == vnode_stream);
+    }
+
+    // Finalized, the switch to the tablet streams is in the future.
+    {
+        auto tid = load({cdc::vnode_streams_timestamp, now + 1min});
+        BOOST_REQUIRE(!md.has_only_vnode_streams_set(tid));
+        BOOST_REQUIRE(md.get_tablet_stream(tid, to_ts(now), tok) == vnode_stream);
+        BOOST_REQUIRE(md.get_tablet_stream(tid, to_ts(now - 30min), tok) == vnode_stream);
+    }
+
+    // The switch was a moment ago: writes in the near past still go to the
+    // vnode streams, older ones are rejected.
+    {
+        auto tid = load({cdc::vnode_streams_timestamp, now - 1s});
+        BOOST_REQUIRE(md.get_tablet_stream(tid, to_ts(now), tok) == tablet_stream);
+        BOOST_REQUIRE(md.get_tablet_stream(tid, to_ts(now - 1s - 1ms), tok) == vnode_stream);
+        require_from_the_past(tid, now - 30s);
+    }
+
+    // The switch was long ago.
+    {
+        auto tid = load({cdc::vnode_streams_timestamp, now - 10min});
+        BOOST_REQUIRE(md.get_tablet_stream(tid, to_ts(now), tok) == tablet_stream);
+        BOOST_REQUIRE(md.get_tablet_stream(tid, to_ts(now - 10min), tok) == tablet_stream);
+        require_from_the_past(tid, now - 10min - 1ms);
+    }
+
+    // A table created with tablets has no vnode streams set: writes before its
+    // first stream set are rejected, not sent to the vnode streams.
+    {
+        auto tid = load({now - 2s});
+        BOOST_REQUIRE(!md.has_only_vnode_streams_set(tid));
+        BOOST_REQUIRE(md.get_tablet_stream(tid, to_ts(now), tok) == tablet_stream);
+        BOOST_REQUIRE_EXCEPTION(md.get_tablet_stream(tid, to_ts(now - 3s), tok), exceptions::invalid_request_exception,
+                exception_predicate::message_contains("The oldest timestamp CDC accepts"));
+    }
+
+    // The vnode streams set is garbage collected once the switch is older than
+    // the CDC TTL, like any stream set that was replaced.
+    {
+        cdc::table_streams streams;
+        for (auto tp : {cdc::vnode_streams_timestamp, now - 10min}) {
+            streams[to_ts(tp)] = cdc::committed_stream_set{tp, {tablet_stream}};
+        }
+        BOOST_REQUIRE(cdc::get_new_base_for_gc(streams, 1h) == streams.begin());
+        BOOST_REQUIRE(cdc::get_new_base_for_gc(streams, 1min) == std::next(streams.begin()));
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
