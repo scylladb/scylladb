@@ -815,12 +815,20 @@ async def test_forward_cql_exception_passthrough(manager: ScyllaClusterManager):
             # Now test that we get correct exception if the cross-node forwarding RPC times out.
             logger.info("Verify that timeout of the forwarding RPC is returned as the correct exception to the client")
             await manager.api.enable_injection(leader_host.address, "wait_before_handling_forwarded_request", one_shot=False)
-            with pytest.raises(WriteTimeout):
-                await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, value) VALUES (1, 1) USING TIMEOUT 500ms", retry_policy=FallthroughRetryPolicy()), host=non_leader_replica_host)
+            # The forwarding node has no responses to count, so the error must still
+            # carry the request's consistency level for the driver's retry policy.
+            with pytest.raises(WriteTimeout) as e:
+                await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, value) VALUES (1, 1) USING TIMEOUT 500ms",
+                                                    consistency_level=ConsistencyLevel.QUORUM, retry_policy=FallthroughRetryPolicy()), host=non_leader_replica_host)
+            assert e.value.consistency == ConsistencyLevel.QUORUM
+            assert e.value.received_responses < e.value.required_responses
 
             await manager.api.enable_injection(non_leader_replica_host.address, "wait_before_handling_forwarded_request", one_shot=False)
-            with pytest.raises(ReadTimeout):
-                await cql.run_async(SimpleStatement(f"SELECT * FROM {table} WHERE pk = 1 USING TIMEOUT 500ms", retry_policy=FallthroughRetryPolicy()), host=non_replica_host)
+            with pytest.raises(ReadTimeout) as e:
+                await cql.run_async(SimpleStatement(f"SELECT * FROM {table} WHERE pk = 1 USING TIMEOUT 500ms",
+                                                    consistency_level=ConsistencyLevel.QUORUM, retry_policy=FallthroughRetryPolicy()), host=non_replica_host)
+            assert e.value.consistency == ConsistencyLevel.QUORUM
+            assert e.value.received_responses < e.value.required_responses
 
             await manager.api.message_injection(leader_host.address, "wait_before_handling_forwarded_request")
             await manager.api.message_injection(non_leader_replica_host.address, "wait_before_handling_forwarded_request")
@@ -2384,11 +2392,19 @@ async def test_leader_not_among_tablet_replicas(manager: ScyllaClusterManager):
 
             await manager.api.enable_injection(servers[0].ip_addr, "sc_report_stale_leader", one_shot=False)
 
-            with pytest.raises(WriteTimeout, match=f"Query timed out for {table}"):
-                await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (7, 23) USING TIMEOUT 100ms")
+            # The timeout must report the consistency level of the request:
+            # drivers read it back from the error and hand it to their retry policy.
+            with pytest.raises(WriteTimeout, match=f"Query timed out for {table}") as e:
+                await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (7, 23) USING TIMEOUT 100ms",
+                                                    consistency_level=ConsistencyLevel.QUORUM))
+            assert e.value.consistency == ConsistencyLevel.QUORUM
+            assert e.value.received_responses < e.value.required_responses
 
-            with pytest.raises(ReadTimeout, match=f"Query timed out for {table}"):
-                await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0 USING TIMEOUT 100ms")
+            with pytest.raises(ReadTimeout, match=f"Query timed out for {table}") as e:
+                await cql.run_async(SimpleStatement(f"SELECT * FROM {table} WHERE pk = 0 USING TIMEOUT 100ms",
+                                                    consistency_level=ConsistencyLevel.QUORUM))
+            assert e.value.consistency == ConsistencyLevel.QUORUM
+            assert e.value.received_responses < e.value.required_responses
 
             await manager.api.disable_injection(servers[0].ip_addr, "sc_report_stale_leader")
 

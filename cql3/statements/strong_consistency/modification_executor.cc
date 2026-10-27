@@ -55,6 +55,7 @@ modification_executor::commit(const modification_statement& stmt, query_processo
 
     auto mutate_result = co_await coordinator.get().mutate(stmt.s,
         token,
+        options.get_consistency(),
         [&](api::timestamp_type ts) {
             return get_mutation(stmt, options, ts, spec);
         }, timeout, qs.get_client_state().get_abort_source(), tablet_version_block_for(qs, options));
@@ -62,7 +63,7 @@ modification_executor::commit(const modification_statement& stmt, query_processo
     using namespace service::strong_consistency;
     if (auto* redirect = get_if<need_redirect>(&mutate_result)) {
         bool is_write = true;
-        co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, coordinator.get().get_stats(), std::move(redirect->on_forwarding_finished));
+        co_return co_await redirect_statement(qp, options, redirect->target, timeout, is_write, options.get_consistency(), coordinator.get().get_stats(), std::move(redirect->on_forwarding_finished));
     }
     utils::get_local_injector().inject("sc_modification_statement_timeout", [&] {
         throw exceptions::mutation_write_timeout_exception{"", "", options.get_consistency(), 0, 0, db::write_type::SIMPLE};

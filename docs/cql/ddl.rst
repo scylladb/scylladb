@@ -336,6 +336,15 @@ consistency is guaranteed for operations going to all DCs. Note that
 `local` or `global` consistencies are guaranteed only for requests that
 are going to the same partition.
 
+A strongly consistent write that times out has an unknown outcome: it may
+already be committed, or still be in the replication log and commit later,
+so a read that does not find it does not prove it failed. A retry can apply
+the write twice. Run strongly consistent writes with a retry policy that
+never retries (for example ``FallthroughRetryPolicy``) and retry in the
+application only writes that are safe to apply twice. Timeouts report the
+consistency level of the original request, so a retry policy that does retry
+never downgrades it.
+
 .. _use-statement:        
         
 USE
