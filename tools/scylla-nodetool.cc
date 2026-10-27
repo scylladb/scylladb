@@ -5038,7 +5038,7 @@ which can spread the compaction or can get in a fail-retry loop. It also makes
 corrupt sstables easy to find and retrieve for investigation.
 
 It is possible to opt-out from quarantining sstables by passing
---quarantine-invalid-sstables=false to scrub.
+--mode=VALIDATE --quarantine-invalid-sstables=false to scrub.
 
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/scrub.html")),

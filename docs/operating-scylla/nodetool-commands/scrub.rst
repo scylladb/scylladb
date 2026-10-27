@@ -21,7 +21,8 @@ SYNOPSIS
                    [(-m <scrub_mode> | --mode <scrub_mode>)]
                    [(-q <quarantine_mode> | --quarantine-mode <quarantine_mode>)]
                    [--drop-unfixable-sstables]
-                   [--] <keyspace> [<table...>]
+                   [--quarantine-invalid-sstables <true|false>]
+                   [--] [<keyspace> [<table...>]]
 
    Supported scrub modes: VALIDATE, ABORT, SKIP, SEGREGATE
    Supported quarantine modes: INCLUDE, EXCLUDE, ONLY
@@ -48,7 +49,7 @@ Parameter                                                             Descriptio
 
 ``--`` This option can be used to separate command-line options from the list of argument, (useful when arguments might be mistaken for command-line options.
 
-``<keyspace>`` The keyspace to scrub.
+``<keyspace>`` The keyspace to scrub. By default, all keyspaces are scrubbed.
 
 ``[<table...>]`` Optional. One or more tables to scrub.  By default, all tables in the keyspace are scrubbed.
 
@@ -162,7 +163,7 @@ Quarantined SSTables are handled distinctly:
 
 The purpose of the quarantine is to keep corrupt SSTables out of compaction, which can spread the compaction or can get in a fail-retry loop. It also makes corrupt SSTables easy to find and retrieve for investigation.
 
-It is possible to opt-out from quarantining SSTables by passing ``--quarantine-invalid-sstables=false`` to nodetool.
+It is possible to opt-out from quarantining SSTables by passing ``--mode=VALIDATE --quarantine-invalid-sstables=false`` to nodetool.
 
 
 **Step 2** (Optional): Preserve quarantined SSTables for analysis:
