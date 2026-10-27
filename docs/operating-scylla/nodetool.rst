@@ -75,7 +75,9 @@ The ``nodetool`` utility provides a simple command-line interface to the followi
 Nodetool generic options
 ========================
 
-* ``-p <port>`` or ``--port <port>`` - The port of the REST API of the ScyllaDB node.
+* ``-h <host>`` or ``--host <host>`` - The hostname or IP address of the ScyllaDB node (default: ``localhost``).
+* ``-p <port>`` or ``--port <port>`` - The port of the REST API of the ScyllaDB node (default: ``10000``).
+* ``--rest-api-port <port>`` - The port of the REST API of the ScyllaDB node; takes precedence over ``--port``.
 * ``--`` - Separates command-line options from the list of argument(useful when an argument might be mistaken for a command-line option).
 
 Supported Nodetool operations
@@ -117,14 +119,15 @@ Operations that are not listed below are currently not available.
 * :doc:`help </operating-scylla/nodetool-commands/help/>` - Display list of available nodetool commands.
 * :doc:`info </operating-scylla/nodetool-commands/info/>` - Print node information
 * :doc:`listsnapshots </operating-scylla/nodetool-commands/listsnapshots/>` - Lists all the snapshots along with the size on disk and true size.
-* **move** :code:`<new token>`- Move node on the token ring to a new token
+* :doc:`migrate-to-tablets </operating-scylla/procedures/config-change/migrate-vnodes-to-tablets>` - Manage vnodes-to-tablets migration (subcommands: start, upgrade, downgrade, status, finalize).
+* **move** - Not supported.
 * **netstats** - Print network information on provided host (connecting node by default)
 * :doc:`proxyhistograms </operating-scylla/nodetool-commands/proxyhistograms/>` - Print statistic histograms for network operations
 * :doc:`rebuild </operating-scylla/nodetool-commands/rebuild/>` :code:`[<src-dc-name>]`- Rebuild data by streaming from other nodes
 * :doc:`refresh </operating-scylla/nodetool-commands/refresh/>`- Load newly placed SSTables to the system without restart
 * :doc:`removenode </operating-scylla/nodetool-commands/removenode/>`- Remove node with the provided ID
 * :doc:`repair <nodetool-commands/repair/>`  :code:`<keyspace>` :code:`<table>` - Repair one or more vnode tables.
-* :doc:`resetlocalschema </operating-scylla/nodetool-commands/resetlocalschema/>` - Reset the node's local schema.
+* :doc:`resetlocalschema </operating-scylla/nodetool-commands/resetlocalschema/>` - Reset the node's local schema (no longer supported).
 * :doc:`restore </operating-scylla/nodetool-commands/restore/>` - Load SSTables from a designated bucket in object store into a specified keyspace or table
 * :doc:`ring <nodetool-commands/ring/>` - The nodetool ring command display the token ring information.
 * :doc:`scrub </operating-scylla/nodetool-commands/scrub>` :code:`[-m mode] [--no-snapshot] <keyspace> [<table>...]` - Scrub the SSTable files in the specified keyspace or table(s)
@@ -144,6 +147,6 @@ Operations that are not listed below are currently not available.
 * :doc:`tasks </operating-scylla/nodetool-commands/tasks/index>` - Manage tasks manager tasks.
 * :doc:`toppartitions </operating-scylla/nodetool-commands/toppartitions/>` - Samples the writes and reads on the node and reports the most active partitions in the specified table(s) and time frame.
 * :doc:`upgradesstables </operating-scylla/nodetool-commands/upgradesstables>` - Upgrades each table that is not running the latest ScyllaDB version, by rewriting SSTables.
-* :doc:`version </operating-scylla/nodetool-commands/version>` - Print the DB version.
+* :doc:`version </operating-scylla/nodetool-commands/version>` - Print the Apache Cassandra version that ScyllaDB is most compatible with (not the ScyllaDB version).
 * :doc:`viewbuildstatus </operating-scylla/nodetool-commands/viewbuildstatus/>` - Shows the progress of a materialized view build.
 
