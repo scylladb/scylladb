@@ -177,6 +177,7 @@ private:
     sharded<db::batchlog_manager> _batchlog_manager;
     sharded<db::cluster_config_manager> _cluster_config_manager;
     sharded<db::cluster_config_db_config_bridge> _cluster_config_db_config_bridge;
+    sharded<db::cluster_config_manager::config_callback_registration> _aggregated_metrics_callbacks;
     sharded<gms::gossiper> _gossiper;
     sharded<service::raft_group_registry> _group0_registry;
     sharded<db::system_keyspace> _sys_ks;
@@ -842,6 +843,11 @@ private:
             _cluster_config_db_config_bridge.start(std::ref(_cluster_config_manager), std::ref(*cfg)).get();
             auto stop_cluster_config_db_config_bridge = defer_verbose_shutdown("cluster config db::config bridge", [this] {
                 _cluster_config_db_config_bridge.stop().get();
+            });
+
+            db::plug_aggregated_metrics(_db, _cluster_config_manager, _aggregated_metrics_callbacks).get();
+            auto unplug_aggregated_metrics = defer_verbose_shutdown("aggregated_metrics", [this] {
+                db::unplug_aggregated_metrics(_db, _aggregated_metrics_callbacks).get();
             });
 
             _elc_notif.start().get();
