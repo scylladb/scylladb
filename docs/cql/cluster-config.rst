@@ -228,6 +228,17 @@ Available options
        the default, for example after a node stayed down for a long time. Must be between ``1``
        and ``315360000`` (ten years). Default: ``300``, in effect once every node runs a version
        that knows the option.
+   * - ``min_compression_saving_percent``
+     - integer
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - Store a compressed sstable block uncompressed unless compressing it saves at least this
+       percentage (0-99) of its size, e.g. ``10`` stores blocks that compress by less than 10% as-is.
+       For tables holding encrypted or already-compressed data, this saves CPU when flushing,
+       compacting and reading. Takes effect only for sstables written in the ``mu`` format, and only
+       for those written afterwards; ``nodetool upgradesstables -a``
+       rewrites existing ones. sstables written with it can't be read by versions that don't know
+       the option. Materialized views, secondary indexes and CDC log tables use their base table's
+       value. Default: ``0`` (off).
 
 .. _cql-cluster-config-yaml-options:
 

@@ -284,7 +284,7 @@ future<> decompressing_cursor::load_chunk(direction dir, std::optional<sstable_p
     auto raw = co_await _source->read_chunk(pos.chunk_position, pos.extent_hint, dir, forward_limit);
     const auto parsed = _codec.parse_after_header(raw.compressed_len, std::string_view(raw.rest.get(), raw.rest.size()));
     verify_chunk(parsed);
-    install_chunk(parsed, co_await _permit.request_memory(_codec.uncompressed_chunk_length()));
+    install_chunk(parsed, raw.rest, co_await _permit.request_memory(_codec.uncompressed_chunk_length()));
 }
 
 void decompressing_cursor::verify_chunk(const framed_chunk& chunk) {
@@ -293,10 +293,10 @@ void decompressing_cursor::verify_chunk(const framed_chunk& chunk) {
     add_to_digest(chunk_start, chunk, checksum);
 }
 
-void decompressing_cursor::install_chunk(const framed_chunk& parsed, reader_permit::resource_units units) {
+void decompressing_cursor::install_chunk(const framed_chunk& parsed, temporary_buffer<char>& backing, reader_permit::resource_units units) {
     auto& pos = _stream_position.position.as_physical();
     const uint64_t chunk_start = pos.chunk_position;
-    auto data = make_tracked_temporary_buffer(_codec.decompress(_compressor, parsed), std::move(units));
+    auto data = make_tracked_temporary_buffer(_codec.decompress(_compressor, parsed, chunk_start + parsed.extent() == _compressed_file_length, backing), std::move(units));
     check_offset_within_chunk(chunk_start, pos.offset_within_chunk, data.size());
     _chunk = chunk{chunk_start, parsed.extent(), std::move(data)};
     pos.extent_hint = parsed.extent();
@@ -380,7 +380,7 @@ future<temporary_buffer<char>> decompressing_cursor::read_backwards_up_to(size_t
             pos.chunk_position -= parsed.extent();
             pos.extent_hint = parsed.extent();
             verify_chunk(parsed);
-            install_chunk(parsed, co_await _permit.request_memory(_codec.uncompressed_chunk_length()));
+            install_chunk(parsed, raw.front, co_await _permit.request_memory(_codec.uncompressed_chunk_length()));
         }
     }
     if (!has_current_chunk()) {

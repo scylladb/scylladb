@@ -316,6 +316,8 @@ private:
     // accessed via uncompressed_chunk_length()/set_uncompressed_chunk_length().
     uint32_t chunk_len = 0;
     uint32_t _full_checksum = 0;
+    // Stored chunk length at or above which a chunk holds raw data; 0 means no raw chunks.
+    uint32_t _max_compressed_len = 0;
     compressor_ptr _compressor;
     // `mu` only. CompressionInfo.db holds a random sample of the chunk offsets.
     // The writer keeps each chunk with probability 1 / _sampling_denominator,
@@ -385,6 +387,14 @@ public:
     }
     void set_compressed_file_length(uint64_t compressed_file_length) {
         _compressed_file_length = compressed_file_length;
+    }
+
+    // Derives the raw-chunk threshold from min_compression_saving_percent; needs the chunk length set first.
+    void set_min_compression_saving_percent(int percent);
+    // Same, from the min_compression_saving_percent entry of the on-disk options (absent means off).
+    void init_min_compression_saving_percent_from_options();
+    uint32_t max_compressed_length() const noexcept {
+        return _max_compressed_len;
     }
 
     uint32_t get_full_checksum() const {
@@ -501,6 +511,17 @@ input_stream<char> make_compressed_file_m_format_input_stream(stream_creator_fn 
 input_stream<char> make_compressed_raw_file_input_stream(sstables::stream_creator_fn stream_creator, sstables::compression *cm,
         sstable_version_types version, file_input_stream_options options, reader_permit permit, std::optional<uint32_t> digest);
 
+// The CompressionInfo.db option holding the saving percent that marks raw chunks.
+inline constexpr std::string_view min_compression_saving_percent_option = "min_compression_saving_percent";
+
+// After skip_after consecutive chunks that didn't compress enough, further chunks are
+// stored raw without trying, except every probe_interval-th one. A short interval bounds the
+// compressible chunks stored raw after an incompressible run; a long one saves more CPU.
+struct raw_chunk_heuristic {
+    uint8_t skip_after = 2;
+    uint8_t probe_interval = 4;
+};
+
 // Observer invoked after each compressed chunk is written, with the chunk's
 // post-compression position, its pre-compression position (the sum of the
 // lengths of all prior buffers), its post-compression size and its
@@ -526,9 +547,11 @@ output_stream<char> make_compressed_file_m_format_output_stream(output_stream<ch
                 sstables::compression* cm,
                 sstable_version_types version,
                 const compression_parameters& cp,
+                int min_compression_saving_percent,
                 compressor_ptr,
                 uint64_t sampling_seed,
-                compressed_chunk_observer observer = {});
+                compressed_chunk_observer observer = {},
+                raw_chunk_heuristic heuristic = {});
 
 
 std::map<sstring, sstring> options_from_compression(const compression& c);

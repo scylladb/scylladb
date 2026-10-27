@@ -1117,6 +1117,8 @@ void writer::init_file_writers() {
                 &_sst._components->compression,
                 _sst.get_version(),
                 _sst._schema->get_compressor_params(),
+                // Raw chunks exist only in the framed format.
+                _sst.uses_physical_positions() ? _sst.manager().min_compression_saving_percent(*_sst._schema) : 0,
                 std::move(compressor),
                 // A deterministic seed lets a test failure be reproduced.
                 std::hash<generation_type>{}(_sst.generation()),

@@ -7,9 +7,12 @@
 # Tests for configuration of compressed sstables
 #############################################################################
 
+import glob
+import os
+import time
 import pytest
 from . import nodetool
-from .util import new_test_table, new_materialized_view, is_scylla
+from .util import new_test_table, new_materialized_view, is_scylla, config_value_context
 from cassandra.protocol import ConfigurationException, SyntaxException
 
 # In older Cassandra and Scylla, the name of the compression algorithm was
@@ -134,3 +137,35 @@ def test_aux_tables_compression_parity(cql, test_keyspace):
                 cdc_compression = r[0].compression
                 assert view_compression == cdc_compression
             assert base_compression == view_compression
+
+# Chunks whose compression saves less than min_compression_saving_percent are stored raw.
+# Only `mu` sstables have raw chunks; their CompressionInfo.db records the option.
+def test_min_compression_saving_percent(cql, test_keyspace, scylla_only, scylla_data_dir):
+    with config_value_context(cql, 'sstable_format', 'mu'), \
+            new_test_table(cql, test_keyspace, "p int primary key, v blob", "with min_compression_saving_percent = 10") as table:
+        assert "min_compression_saving_percent = 10" in cql.execute(f"DESC TABLE {table}").one().create_statement
+        blob = os.urandom(64 * 1024)
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, 0x{blob.hex()})")
+        ks, cf = table.split('.')
+        # The option reaches the writer once the node's cluster config cache refreshes; rewrite until then.
+        deadline = time.time() + 60
+        while True:
+            nodetool.compact(cql, table)
+            infos = glob.glob(os.path.join(scylla_data_dir, ks, f"{cf}-*", "mu-*-CompressionInfo.db"))
+            if infos and all(b"min_compression_saving_percent" in open(f, "rb").read() for f in infos):
+                break
+            assert time.time() < deadline, f"no mu sstable with raw chunks: {infos}"
+            time.sleep(0.1)
+        assert cql.execute(f"SELECT v FROM {table} WHERE p = 1 BYPASS CACHE").one().v == blob
+
+# It's a cluster config option, not a compression option.
+def test_min_compression_saving_percent_not_in_compression(cql, test_keyspace, scylla_only):
+    with pytest.raises(ConfigurationException, match='min_compression_saving_percent'):
+        with new_test_table(cql, test_keyspace, "p int primary key", f"with compression = {{ '{sstable_compression}': 'LZ4Compressor', 'min_compression_saving_percent': 10 }}"):
+            pass
+
+@pytest.mark.parametrize("bad", ["100", "-1", "'abc'", "10.9"])
+def test_min_compression_saving_percent_invalid(cql, test_keyspace, scylla_only, bad):
+    with pytest.raises(ConfigurationException, match='min_compression_saving_percent'):
+        with new_test_table(cql, test_keyspace, "p int primary key", f"with min_compression_saving_percent = {bad}"):
+            pass
