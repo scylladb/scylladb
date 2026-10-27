@@ -16,14 +16,17 @@ if len(sys.argv) > 1 and sys.argv[1] == '--release':
     exe = run.download_precompiled_scylla(release)
     cmd = lambda pid, dir: run.run_precompiled_scylla_cmd(exe, pid, dir)
     check_cql = run.check_cql
+    ssl_context = None
     sys.argv = sys.argv[0:1] + sys.argv[3:]
     os.environ['SCYLLA'] = exe # so find_scylla() prints the right one
 elif '--ssl' in sys.argv:
     cmd = run.run_scylla_ssl_cql_cmd
     check_cql = run.check_ssl_cql
+    ssl_context = run.ssl_client_context()
 else:
     cmd = run.run_scylla_cmd
     check_cql = run.check_cql
+    ssl_context = None
 
 print('Scylla is: ' + run.find_scylla() + '.')
 
@@ -71,6 +74,7 @@ run.wait_for_services(pid, [
     lambda: run.check_rest_api(ip),
     lambda: check_cql(ip)
 ])
+run.set_cluster_config(ip, run.cluster_config_options, ssl_context)
 success = run.run_pytest(sys.path[0], ['--no-s3']+['--host=' + ip] + sys.argv[1:])
 
 run.summary = 'Scylla tests pass' if success else 'Scylla tests failure'

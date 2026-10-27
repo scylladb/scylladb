@@ -151,6 +151,7 @@ run.wait_for_services(pid, [
     lambda: run.check_cql(ip),
     lambda: check_alternator(alternator_url),
 ])
+run.set_cluster_config(ip, run.cluster_config_options)
 
 # test/alternator/run --interactive will not run any test. It will instead
 # leave the server running and allow the user to interact with it. The user
