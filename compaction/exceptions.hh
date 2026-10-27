@@ -41,4 +41,12 @@ public:
         : compaction_job_exception(format("Compaction for {}/{} was aborted due to: {}", ks, cf, reason)) {}
 };
 
+// Thrown by the scrub compaction, when the abort
+// was caused by a validation error with the sstable.
+class scrub_compaction_aborted_exception : public compaction_aborted_exception {
+public:
+    scrub_compaction_aborted_exception(sstring ks, sstring cf, sstring reason)
+        : compaction_aborted_exception(std::move(ks), std::move(cf), std::move(reason)) {}
+};
+
 } // namespace compaction

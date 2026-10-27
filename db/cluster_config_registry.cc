@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -58,6 +59,10 @@ constexpr bool is_single_domain(scope_set scopes) {
     return !(scopes.intersects(table_only_scopes) && scopes.intersects(node_only_scopes));
 }
 
+// Defined below, with the other parsers and validators.
+// Declared here so that the automatic scrub period option may take their address.
+config_value parse_auto_scrub_period_seconds(std::string_view value);
+
 // The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
 // When no scope stores an override it falls back to the deprecated yaml options
 // auto_repair_enabled_default and auto_repair_threshold_default_in_seconds instead of the
@@ -80,6 +85,16 @@ constexpr std::array registry_options = {
         .description = "Discard the regular hints a repair gave up waiting for, so that the next repair does not wait for them again. This covers every hint on the node, for all tables and destinations; a write acknowledged at consistency level ANY that only hints hold is lost. View hints are never discarded",
         .scopes = scope_set::of<scope::cluster>(),
         .default_value = true,
+
+    },
+    option{
+        .name = option_name::auto_scrub_period_seconds,
+        .description = "If set to a positive value, every sstable which was written or validated more than this "
+                "many seconds ago will be scheduled for automatic scrub. Set to 0 to disable automatic scrub",
+        .scopes = table_oriented_scopes,
+        .default_value = int64_t(0),
+        .custom_parser = parse_auto_scrub_period_seconds,
+        .custom_expected_description = "0 or an integer from 3600 to 4294967295",
     },
 };
 
@@ -170,6 +185,21 @@ std::optional<seastar::sstring> validate_boolean(std::string_view value) {
     return validate_with(parse_boolean, "'true' or 'false'", value);
 }
 
+config_value parse_auto_scrub_period_seconds(std::string_view value) {
+    constexpr int64_t min_auto_scrub_period_seconds = 3600;
+    constexpr int64_t max_auto_scrub_period_seconds = std::numeric_limits<uint32_t>::max();
+
+    auto parsed = parse_integer(value);
+    if (parsed != 0 && (parsed < min_auto_scrub_period_seconds || parsed > max_auto_scrub_period_seconds)) {
+        throw marshal_exception("expected 0 or an integer between 3600 and 4294967295");
+    }
+    return parsed;
+}
+
+static std::optional<seastar::sstring> validate_with_custom_parser(const option& opt, std::string_view value) {
+    return validate_with(opt.custom_parser, opt.custom_expected_description, value);
+}
+
 // Nothing above the registry bounds a text value (it is a map cell in a schema table), and it
 // is echoed by DESCRIBE, so cap it here.
 constexpr size_t max_text_value_length = 4096;
@@ -194,6 +224,18 @@ std::optional<seastar::sstring> validate_text(std::string_view value) {
     return std::nullopt;
 }
 
+template <typename T>
+static T custom_parse_as(const option& opt, std::string_view value) {
+    auto parsed = opt.custom_parser(value);
+    try {
+        return std::get<T>(parsed);
+    } catch (const std::bad_variant_access&) {
+        utils::on_internal_error(fmt::format(
+                   "cluster config '{}' has a custom parser returning a type other than the one it declares",
+                   opt.name));
+    }
+}
+
 // Shared implementation of the typed to_*() accessors: checks that the option was registered
 // with the type the accessor reads, applies the registered default when no override is stored,
 // and degrades an unparsable stored value (a row corrupted or written out-of-band) to the
@@ -212,6 +254,9 @@ T to_native(const option& opt, value_type expected_type, std::string_view type_n
         return std::get<T>(opt.default_value);
     }
     try {
+        if (opt.custom_parser) {
+            return custom_parse_as<T>(opt, *value);
+        }
         return parse(*value);
     } catch (const marshal_exception& e) {
         cluster_config_registry_logger.warn(
@@ -272,6 +317,10 @@ bool is_supported(const option& opt, const gms::feature_service& features) {
 }
 
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value) {
+    if (opt.custom_parser) {
+        return validate_with_custom_parser(opt, value);
+    }
+
     switch (opt.type()) {
     case value_type::text:
         return validate_text(value);
@@ -318,7 +367,13 @@ seastar::sstring canonicalize_value(const option& opt, std::string_view value) {
     case value_type::boolean:
         // Only reached after validate_value() accepted the input, so the parse cannot fail.
         try {
-            return parse_boolean(value) ? "true" : "false";
+            bool parsed;
+            if (opt.custom_parser) {
+                parsed = custom_parse_as<bool>(opt, value);
+            } else {
+                parsed = parse_boolean(value);
+            }
+            return parsed ? "true" : "false";
         } catch (const marshal_exception& e) {
             utils::on_internal_error(fmt::format(
                     "canonicalize_value() called for boolean config '{}' with a value that did not pass validation: '{}': {}",

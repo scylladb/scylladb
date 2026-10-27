@@ -138,6 +138,17 @@ public:
 // compaction behavior through its available member fields.
 future<compaction_result> compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor);
 
+// For compactions bypassing the `compaction` class, like scrub in validate
+// mode or component rewrite. Must be called before the input sstables are
+// replaced or moved.
+compaction_result initialize_compaction_result(const compaction_descriptor& descriptor);
+
+// For compactions bypassing the `compaction` class.
+// `bloom_filter_checks`, `reader_statistics` and `tombstone_purge_stats` are
+// default initialized, as neither scrub validate nor component rewrite would
+// populate them.
+compaction_result finalize_compaction_result(compaction_result result);
+
 // Return list of expired sstables for column family cf.
 // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its
 // max timestamp is lower than any other relevant sstable.
