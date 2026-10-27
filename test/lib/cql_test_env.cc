@@ -1065,6 +1065,9 @@ private:
             auto early_stop_sc_groups = defer_verbose_shutdown("strongly consistent groups", [this] {
                 _groups_manager.local().stop_all_shards().get();
             });
+            _groups_manager.invoke_on_all([this] (service::strong_consistency::groups_manager& m) {
+                m.watch_aggregated_metrics(_cluster_config_manager.local());
+            }).get();
 
             _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper), sc_coordinator_stats_key).get();
             auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [this] {
