@@ -5235,8 +5235,8 @@ For more information, see: {}
                 "Provides statistics about a table",
 fmt::format(R"(
 Provides statistics about a table, including number of SSTables, read/write
-latency, partition size and column count. cfhistograms covers all operations
-since the last time you ran the nodetool cfhistograms command.
+latency, partition size and column count. Read/write latencies are computed
+over a recent moving window.
 
 Also invokable as "cfhistograms".
 
@@ -5244,7 +5244,7 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/cfhistograms.html")),
                 { },
                 {
-                    typed_option<std::vector<sstring>>("table", "<keyspace> <table>, <keyspace>.<table> or <keyspace>-<table>", 2),
+                    typed_option<std::vector<sstring>>("table", "<keyspace> <table>, <keyspace>.<table> or <keyspace>/<table>", 2),
                 }
             },
             {
