@@ -239,6 +239,17 @@ public:
     // Merges all logstor segments from another group into this one.
     future<> merge_logstor_segments_from(compaction_group& group);
 
+    // Splices disjoint runs of the main set which the compaction strategy would otherwise
+    // compact together for no gain (see compaction_strategy::get_runs_to_splice()), by giving
+    // their sstables a common run identifier. That's done only in memory, leaving the sstables
+    // and their identity (relied upon by backup deduplication) untouched, so it has to be
+    // redone whenever the sstables are loaded. Runs which compaction cannot pick at the moment,
+    // and runs with sstables in more than one view, are left alone. Compaction should be disabled
+    // on the group while this runs. Otherwise, a compaction which starts meanwhile may still
+    // compact the runs being spliced together. Failures are logged and ignored, since splicing
+    // is just an optimization.
+    future<> splice_sstable_runs() noexcept;
+
     const lw_shared_ptr<sstables::sstable_set>& main_sstables() const noexcept;
     // compaction_backlog_source: the sstables the group's backlog is computed on
     lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override;

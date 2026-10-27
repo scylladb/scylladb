@@ -1260,6 +1260,8 @@ public:
                                         tasks::task_info info,
                                         do_flush = do_flush::yes);
     future<unsigned> estimate_pending_compactions() const;
+    // See compaction_group::splice_sstable_runs().
+    future<> splice_sstable_runs();
 
     void set_compaction_strategy(compaction::compaction_strategy_type strategy);
     const compaction::compaction_strategy& get_compaction_strategy() const {
