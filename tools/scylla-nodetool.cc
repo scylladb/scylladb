@@ -5584,7 +5584,7 @@ Print throughput cap for streaming in the system in megabits
         {
             {
                 "setstreamthroughput",
-                "Set compaction IO throughput",
+                "Set streaming IO throughput",
 R"(
 Set the MiB/s throughput for streaming, or 0 to disable throttling
 )",
