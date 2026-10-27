@@ -62,7 +62,7 @@ class Outcome(StrEnum):
     """Status recorded for an operation in the Porcupine history.
 
     These strings are the checker's vocabulary, not ours: scylladb/porcupine_validator
-    accepts exactly "ok", "fail" and "unknown".
+    accepts exactly "ok", "fail", "unknown" and, for a cas only, "not_applied".
 
     (Jepsen calls the indeterminate outcome ``:info``; the checker calls it
     ``unknown``.  Same thing, different word.)
@@ -71,6 +71,9 @@ class Outcome(StrEnum):
     OK = "ok"
     FAIL = "fail"
     UNKNOWN = "unknown"
+    #: A cas the server ran and did not apply, recorded with the value it saw.
+    #: A cas refused before it ran is ``FAIL``, like a write: no effect.
+    NOT_APPLIED = "not_applied"
 
     #: ``UNKNOWN`` is what a policy *returns*; it is never written into the
     #: history as a status.  See :meth:`RegisterWorkload.record_failure` for how
@@ -82,7 +85,7 @@ class FailureContext:
     """Everything a policy may need to classify one failed operation."""
 
     workload: "RegisterWorkload"
-    op: str  # "read" or "write"
+    op: str  # "read", "write" or "cas"
     client_id: int
     key: int
     t_call_ns: int
@@ -90,7 +93,7 @@ class FailureContext:
 
     @property
     def is_write(self) -> bool:
-        return self.op == "write"
+        return self.op in ("write", "cas")
 
 
 # Returns the status to record, or None if the exception is not expected —
