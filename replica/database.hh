@@ -637,6 +637,8 @@ private:
 public:
     void on_flush_timer();
     void deregister_metrics();
+    // Switches between per-shard and node-aggregated table metrics.
+    void set_aggregated_metrics(bool enabled);
 
     data_dictionary::table as_data_dictionary() const;
 
@@ -1801,6 +1803,8 @@ private:
 
     cache_tracker _row_cache_tracker;
     seastar::shared_ptr<db::view::view_update_generator> _view_update_generator;
+    // Resolves the aggregated_metrics cluster config option for a table.
+    std::function<std::optional<bool>(const schema&)> _aggregated_metrics;
 
     inheriting_concrete_execution_stage<
             future<db::large_data_violation_type>,
@@ -1903,6 +1907,11 @@ public:
 
     void plug_snapshot_ctl(db::snapshot_ctl& snapshot_ctl) noexcept;
     void unplug_snapshot_ctl() noexcept;
+
+    void plug_aggregated_metrics(std::function<std::optional<bool>(const schema&)> fn) noexcept;
+    void unplug_aggregated_metrics() noexcept;
+    // Whether the table's metrics are aggregated across shards: the plugged option, else enable_node_aggregated_table_metrics.
+    bool aggregated_metrics(const schema& s) const;
 
 private:
     future<> flush_non_system_column_families();
