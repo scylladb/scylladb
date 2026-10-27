@@ -1,7 +1,7 @@
 Nodetool getendpoints
 =====================
 **getendpoints** - :code:`<keyspace>` :code:`<table>` :code:`<key>`- Print the end-points IP or name of the nodes that own the partition key.
-**getendpoints** - :code:`<keyspace>` :code:`<table>` :code:`<key-components>` - Print the end-points IP or name of the nodes that own the partition key.
+**getendpoints** - :code:`<keyspace>` :code:`<table>` :code:`--key-components <component>` [:code:`--key-components <component>` ...] - Print the end-points IP or name of the nodes that own the partition key.
 
 Use this command to know which node holds the specific partition key.
 
@@ -43,7 +43,7 @@ ScyllaDB does not support *getendpoints* for a partition key with a frozen UDT.
 
 .. code-block:: bash
 
-   nodetool getendpoints "superheroes" "peter"
+   nodetool getendpoints "mykeyspace" "superheroes" "peter"
 
 This retrieves the nodes responsible for the partition key ``peter`` in the ``superheroes`` table.
 
