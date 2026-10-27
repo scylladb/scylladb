@@ -33,6 +33,8 @@ Supported compaction types:
      - Reshape compactions
    * - ``SPLIT``
      - Tablet split compactions
+   * - ``REWRITE_COMPONENT``
+     - SSTable component rewrites
 
 Stopping a compaction by id (``--id <id>``) is not implemented.
 
