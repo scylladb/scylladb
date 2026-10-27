@@ -184,3 +184,11 @@ Available options
        acknowledged at consistency level ``ANY`` that only hints hold is lost. Hints for
        materialized views are never discarded. Default: ``true``, in effect once every node knows
        the option.
+   * - ``aggregated_metrics``
+     - boolean
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - Report a table's per-table metrics, aggregated across shards into one series per node;
+       ``false`` drops them for the table. Materialized views and secondary indexes follow their
+       base table; a CDC log table has its own setting. When no scope sets it, the node's
+       ``enable_node_aggregated_table_metrics`` applies. Has no effect while
+       ``enable_keyspace_column_family_metrics`` is set. Default: ``true``.

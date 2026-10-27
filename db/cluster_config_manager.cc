@@ -26,6 +26,7 @@
 #include "locator/topology.hh"
 #include "replica/database.hh"
 #include "utils/on_internal_error.hh"
+#include "view_info.hh"
 
 namespace db {
 
@@ -593,6 +594,51 @@ double cluster_config_manager::resolve_floating_point_config(const cluster_confi
 
 sstring cluster_config_manager::resolve_text_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
     return cluster_config_registry::to_text(opt, resolve_config(opt.name, ctx));
+}
+
+future<> plug_aggregated_metrics(sharded<replica::database>& db, sharded<cluster_config_manager>& ccm,
+        sharded<cluster_config_manager::config_callback_registration>& callbacks) {
+    co_await db.invoke_on_all([&ccm] (replica::database& db) {
+        db.plug_aggregated_metrics([&ccm = ccm.local()] (const schema& s) -> std::optional<bool> {
+            const auto* opt = cluster_config_registry::find(cluster_config_registry::option_name::aggregated_metrics);
+            if (!opt) {
+                return std::nullopt;
+            }
+            // Views can't hold an override, so they follow their base table. Resolved by name:
+            // a table being created isn't in the database's table list yet.
+            const auto& table_name = s.is_view() ? s.view_info()->base_name() : s.cf_name();
+            auto value = ccm.resolve_config(opt->name, {.keyspace_name = s.ks_name(), .table_name = table_name});
+            return value ? std::optional(cluster_config_registry::to_boolean(*opt, value)) : std::nullopt;
+        });
+    });
+    co_await callbacks.start();
+    co_await callbacks.invoke_on_all([&db, &ccm] (cluster_config_manager::config_callback_registration& registration) {
+        auto& local_db = db.local();
+        registration = ccm.local().register_config_callback(sstring(cluster_config_registry::option_name::aggregated_metrics),
+                [&local_db] (const cluster_config_manager::lookup_context& ctx, std::optional<sstring>) {
+            if (!ctx.keyspace_name || !ctx.table_name || !local_db.has_schema(*ctx.keyspace_name, *ctx.table_name)) {
+                return make_ready_future<>();
+            }
+            // The delivered value is this target's own chain; a view must follow its base instead,
+            // and a base table's override reaches its views only through this loop.
+            auto& t = local_db.find_column_family(*ctx.keyspace_name, *ctx.table_name);
+            t.set_aggregated_metrics(local_db.aggregated_metrics(*t.schema()));
+            for (const auto& v : t.views()) {
+                if (local_db.column_family_exists(v->id())) {
+                    local_db.find_column_family(v->id()).set_aggregated_metrics(local_db.aggregated_metrics(*v));
+                }
+            }
+            return make_ready_future<>();
+        });
+    });
+}
+
+future<> unplug_aggregated_metrics(sharded<replica::database>& db,
+        sharded<cluster_config_manager::config_callback_registration>& callbacks) {
+    co_await callbacks.stop();
+    co_await db.invoke_on_all([] (replica::database& db) {
+        db.unplug_aggregated_metrics();
+    });
 }
 
 }
