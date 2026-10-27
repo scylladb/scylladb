@@ -1273,11 +1273,12 @@ def test_udf_with_overloads_permissions(cql, test_keyspace, scylla_only):
 
 # Test that DROP KEYSPACE cleans up function-level permissions
 # Reproduces #13820.
-def test_drop_keyspace_cleans_up_function_level_permissions(cql, scylla_only):
+def test_drop_keyspace_cleans_up_function_level_permissions(cql, has_java_udf):
+    body = "LANGUAGE java AS 'return input + 1;'" if has_java_udf else "LANGUAGE lua AS 'return input + 1'"
     ks = unique_name()
     cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class':'NetworkTopologyStrategy', 'replication_factor':1}}")
     try:
-        cql.execute(f"CREATE FUNCTION {ks}.plus_one (input int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return input + 1'")
+        cql.execute(f"CREATE FUNCTION {ks}.plus_one (input int) CALLED ON NULL INPUT RETURNS int {body}")
         with new_user(cql) as mike:
             grant(cql, 'EXECUTE', f'FUNCTION {ks}.plus_one(int)', mike)
             ensure_updated_permissions(cql)
