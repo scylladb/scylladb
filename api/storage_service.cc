@@ -56,6 +56,7 @@
 #include "replica/database.hh"
 #include "db/extensions.hh"
 #include "db/snapshot-ctl.hh"
+#include "db/snapshot/cluster_backup.hh"
 #include "transport/controller.hh"
 #include "locator/token_metadata.hh"
 #include "cdc/generation_service.hh"
@@ -2135,6 +2136,116 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 
+    ss::list_global_backup.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto column_families = split(req->get_query_param("table"), ",");
+        std::vector<sstring> keynames = split(req->get_query_param("keyspace"), ",");
+        auto snapshot_name = req->get_query_param("snapshot");
+
+        rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
+        rjson::value parsed = rjson::parse(std::move(content));
+        if (!parsed.IsArray()) {
+            throw httpd::bad_param_exception("backup locations (in body) must be a JSON array");
+        }
+
+        std::vector<db::snapshot_dc_location> dclocs;
+
+        const auto& locations = parsed.GetArray();
+        for (auto& location : locations) {
+            if (!location.IsObject()) {
+                throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
+            }
+            if (location.HasMember("manifests")) {
+                throw httpd::bad_param_exception("backup location 'manifests' must not be set for listing");
+            }
+            if (location.HasMember("datacenter")) {
+                throw httpd::bad_param_exception("backup location 'datacenter' must not be set for listing");
+            }
+
+            auto endpoint = rjson::to_string(location["endpoint"]);
+            auto bucket = rjson::to_string(location["bucket"]);
+            auto prefix = rjson::to_string(location["prefix"]);
+
+            dclocs.emplace_back(db::snapshot_dc_location {
+                .endpoint = endpoint,
+                .bucket = bucket,
+                .prefix = prefix,
+            });
+        }
+
+        auto& ctl = snap_ctl.local();
+        auto infos = co_await ctl.list_global_backups(std::move(dclocs), std::move(keynames), std::move(column_families), std::move(snapshot_name));
+
+        json::json_return_type::body_writer_type writer = [infos = std::move(infos)](output_stream<char>&& sin) -> future<> {
+            auto s = std::move(sin);
+            using sv_map = std::unordered_map<std::string_view, std::string_view>;
+
+            class json_stream_func : public json::jsonable {
+            public:
+                using write_func = std::function<future<>(output_stream<char>&)>;
+            private:
+                write_func _func;
+            public:
+                json_stream_func(write_func f) 
+                    : _func(std::move(f))
+                {}
+                std::string to_json() const override {
+                    throw std::logic_error("Should not reach");
+                }
+                future<> write(output_stream<char>& s) const override {
+                    co_await _func(s);
+                }
+            };
+
+            using sf_map = std::unordered_map<std::string_view, json_stream_func>;
+
+            co_await json::formatter::write(s, infos | std::views::transform([](const db::snapshot::backup_location_info& linfo) {
+                return json_stream_func([&linfo](output_stream<char>& s) -> future<> {
+                    co_await json::formatter::write(s, sf_map({
+                        { "location", json_stream_func([&](output_stream<char>& s) -> future<> {
+                            co_await json::formatter::write(s, sv_map({
+                                { "endpoint", linfo.location.endpoint },
+                                { "bucket", linfo.location.bucket },
+                                { "prefix", linfo.location.prefix },
+                            }));
+                        })},
+                        { "dcs", json_stream_func([&](output_stream<char>& s) -> future<> {
+                            return json::formatter::write(s, linfo.dcs);
+                        })},
+                        { "manifests", json_stream_func([&](output_stream<char>& s) -> future<> {
+                            return json::formatter::write(s, linfo.manifests | std::views::transform([](const db::snapshot::backup_manifest_info& minfo) {
+                                return json_stream_func([&minfo](output_stream<char>& s) -> future<> {
+                                    co_await json::formatter::write(s, sf_map({
+                                        { "table", json_stream_func([&](output_stream<char>& s) -> future<> {
+                                            co_await json::formatter::write(s, sv_map({
+                                                { "name", minfo.table_info.table_name },
+                                                { "keyspace", minfo.table_info.keyspace_name },
+                                            }));
+                                        })},
+                                        { "name", json_stream_func([&](output_stream<char>& s) -> future<> { 
+                                            return json::formatter::write(s, minfo.table_info.snapshot_name);
+                                        })},
+                                        { "size", json_stream_func([&](output_stream<char>& s) -> future<> { 
+                                            return json::formatter::write(s, minfo.size);
+                                        })},
+                                        { "num_sstables", json_stream_func([&](output_stream<char>& s) -> future<> { 
+                                            return json::formatter::write(s, minfo.num_sstables);
+                                        })},
+                                        { "num_nodes", json_stream_func([&](output_stream<char>& s) -> future<> { 
+                                            return json::formatter::write(s, minfo.num_nodes);
+                                        })},
+                                    }));
+                                });
+                            }));
+                        })},
+                    }));
+                });
+            }));
+            co_await s.flush();
+            co_await s.close();
+        };
+        co_return json::json_return_type(std::move(writer));
+    });
+
     cf::get_true_snapshots_size.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) {
         auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
         return snap_ctl.local().true_snapshots_size(std::move(ks), std::move(cf)).then([] (int64_t res) {
@@ -2159,6 +2270,8 @@ void unset_snapshot(http_context& ctx, routes& r) {
     cf::get_true_snapshots_size.unset(r);
     cf::get_all_true_snapshots_size.unset(r);
     ss::decommission.unset(r);
+    ss::start_global_backup.unset(r);
+    ss::list_global_backup.unset(r);
 }
 
 }

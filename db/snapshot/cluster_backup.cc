@@ -12,6 +12,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/util/short_streams.hh>
 
 #include "cluster_backup.hh"
 #include "manifest.hh"
@@ -31,6 +32,7 @@
 #include "utils/error_injection.hh"
 #include "utils/upload_progress.hh"
 #include "utils/memory_data_sink.hh"
+#include "utils/rjson.hh"
 #include "idl/snapshot_backup.dist.hh"
 
 extern logging::logger snap_log;
@@ -47,6 +49,11 @@ struct std::hash<db::snapshot_dc_location> {
 std::string db::snapshot::sstables_location(std::string_view prefix) {
     auto pp = prefix.empty() ? "" : "/";
     return fmt::format("{}{}{}",  prefix, pp, "sstables");
+}
+
+static std::string snapshot_meta_location(std::string_view prefix) {
+    auto pp = prefix.empty() ? "" : "/";
+    return fmt::format("{}{}{}",  prefix, pp, "snapshots");
 }
 
 std::string db::snapshot::snapshot_meta_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
@@ -571,3 +578,117 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
         }
     });
 }
+
+future<std::vector<db::snapshot::backup_location_info>>
+db::snapshot::list_backups(sstables::storage_manager& sstm, std::string snapshot_name, std::unordered_multimap<sstring, sstring> ks_tables, std::vector<snapshot_dc_location> locations, abort_source* as) {
+    std::vector<backup_location_info> result;
+
+    co_await coroutine::parallel_for_each(locations, [&](this auto, const snapshot_dc_location& loc) -> future<> {
+        auto client = sstm.get_endpoint_client(loc.endpoint);
+        std::vector<std::string> prefixes;
+        {
+            auto prefix = ::snapshot_meta_location(loc.prefix);
+
+            for (auto& [ks, cf] : ks_tables) {
+                if (cf.empty()) {
+                    prefixes.emplace_back(fmt::format("{}/{}", prefix, ks));
+                } else {
+                    // ok if snapshot name is empty here
+                    prefixes.emplace_back(fmt::format("{}/{}/{}{}{}", prefix, ks, cf, snapshot_name.empty() ? "" : "/", snapshot_name));
+                }
+            }
+            if (ks_tables.empty()) {
+                prefixes.emplace_back(prefix);
+            }
+        }
+
+        backup_location_info blinfo = {
+            .location = loc
+        };
+
+        co_await coroutine::parallel_for_each(prefixes, [&](this auto, const std::string& prefix) -> future<> {
+            auto l = client->make_object_lister(loc.bucket, prefix, [&](const fs::path& path, const directory_entry& entry) {
+                return entry.name.ends_with("manifest.json");
+            });
+
+            co_await with_closeable(std::move(l), [&] (this auto, abstract_lister& lister) -> future<> {
+                while (auto entry = co_await lister.get()) {
+                    std::string_view ename = entry->name;
+                    while (!ename.empty() && ename.starts_with("/")) {
+                        ename.remove_prefix(1);
+                    }
+                    sstables::object_name name(loc.bucket, prefix, ename);
+                    co_await seastar::with_closeable(input_stream<char>(client->make_download_source(name, as)), [&] (this auto, input_stream<char>& is) -> future<> {
+                        rjson::chunked_content content = co_await util::read_entire_stream(is);
+                        rjson::value parsed = rjson::parse(std::move(content));
+
+                        auto& snapshot_obj = rjson::get(parsed, "snapshot");
+                        auto& table_obj = rjson::get(parsed, "table");
+                        auto name = rjson::get<std::string>(snapshot_obj, "name");
+
+                        if (!snapshot_name.empty() && snapshot_name != name) {
+                            co_return; // not our snap
+                        }
+
+                        backup_manifest_info minfo = {
+                            .size = 0,
+                            .num_sstables = 0,
+                            .num_nodes = 0,
+                        };
+
+                        minfo.table_info.snapshot_name = name;
+                        minfo.table_info.keyspace_name = rjson::get<std::string>(table_obj, "keyspace_name");
+                        minfo.table_info.table_name = rjson::get<std::string>(table_obj, "table_name");
+                        minfo.table_info.table_id = table_id(utils::UUID{std::string_view(rjson::get<std::string>(table_obj, "table_id"))});
+                        minfo.table_info.tablet_layout = rjson::get<std::string>(table_obj, "tablets_type");
+                        // TODO: type and schema not recorded atm. Do we need?
+                        minfo.table_info.type = snapshot_table_type::cql_table;
+
+                        if (!ks_tables.empty()) {
+                            auto r = ks_tables.equal_range(minfo.table_info.keyspace_name);
+                            if (!std::any_of(r.first, r.second, [&](auto& p) { return p.second == minfo.table_info.table_name || p.second.empty(); })) {
+                                co_return;
+                            }
+                        }
+
+                        static auto ensure_array = [](const rjson::value& v, std::string_view elem) {
+                            if (auto arr = rjson::find(v, elem)) {
+                                if (!arr->IsArray()) {
+                                    throw std::invalid_argument(fmt::format("Malformed manifest, '{}' is not array", elem));
+                                }
+                                return arr->GetArray();
+                            }
+                            throw std::out_of_range(fmt::format("Malformed manifest, no '{}' array", elem));
+                        };
+
+                        auto nodes = ensure_array(parsed, "nodes");
+                        minfo.num_nodes = nodes.Size();
+
+                        for (auto& n : nodes) {
+                            blinfo.dcs.emplace(rjson::get<std::string>(n, "datacenter"));
+                        }
+
+                        try {
+                            auto sstables = ensure_array(parsed, "sstables");
+                            minfo.num_sstables = sstables.Size();
+                            for (auto& sstable : sstables) {
+                                auto data_size = rjson::get_opt<int64_t>(sstable, "data_size").value_or(0);
+                                auto index_size = rjson::get_opt<int64_t>(sstable, "index_size").value_or(0);
+
+                                minfo.size += (data_size + index_size); // not quite accurate, but close enough
+                            }
+                        } catch (std::out_of_range&) {
+                        }
+
+                        blinfo.manifests.emplace_back(std::move(minfo));
+                    });
+                }
+            });
+        });
+
+        result.emplace_back(std::move(blinfo));
+    });
+
+    co_return result;
+}
+
