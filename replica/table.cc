@@ -4500,6 +4500,8 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                         .tablet_id = ssm.tablet_id.value_or(0),
                         .state = db::snapshot_state::local,
                         .repaired_at = ssm.repaired_at,
+                        .data_size = int64_t(ssm.data_size),
+                        .index_size = int64_t(ssm.index_size),
                     };
                 }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
 
