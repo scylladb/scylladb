@@ -181,6 +181,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     boost::intrusive::list<raft_group_state, boost::intrusive::constant_time_size<false>> _starting_groups;
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
+    // Set by drain() on every shard before it does anything else, and by stop(),
+    // even before start(). Token metadata keeps coming until group0 is aborted,
+    // which the drain precedes, and must not start a group any more: with the
+    // transport down, a new group would wait for a leader for a minute before its
+    // deletion could run, holding up the shutdown.
+    bool _stopping = false;
     // Engaged by the first stop() of a started manager, which it then stands for.
     std::optional<shared_future<>> _stop;
 
@@ -317,7 +323,9 @@ public:
 
     // The shutdown of the groups of every shard, from any shard: unregisters the
     // RPC handlers on every shard, waiting for those still running, and then stops
-    // every shard. Idempotent.
+    // every shard. Has to run once the transport is stopped, before group0 and the
+    // database are drained, which the groups' state machines and persistence use;
+    // see storage_service::do_drain(). Idempotent.
     future<> drain();
 
     // Deletes every raft::server of this shard and waits for that. Idempotent, and
@@ -329,9 +337,9 @@ public:
     // tablet group hosted on this shard which this node currently leads.
     //
     // Transferring leadership takes a round of Raft RPCs with the other replicas,
-    // so it must run while messaging_service is still up. stop() runs late in the
-    // shutdown sequence, after storage_service::do_drain() has already shut the
-    // transport down, so we need a separate entry point to trigger stepdown().
+    // so it must run while messaging_service is still up. stop() runs only once
+    // storage_service::do_drain() has shut the transport down, so we need a
+    // separate entry point to trigger stepdown().
     future<> stepdown_leaders();
 
     future<> wait_for_groups_to_start(lowres_clock::time_point timeout);

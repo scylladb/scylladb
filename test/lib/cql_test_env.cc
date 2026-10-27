@@ -1187,6 +1187,15 @@ private:
                 _ss.local().wait_for_group0_stop().get();
             });
 
+            // As in storage_service::do_drain(): the groups sit above group0 and the
+            // database, so they go before either. The stop registered at their start
+            // stays for an initialization that fails before this point. drain() expects
+            // the transport to be stopped, so that no request reaches acquire_server();
+            // this env runs a single node and no CQL server, so none can.
+            auto drain_groups_manager = defer_verbose_shutdown("strongly consistent groups manager drain", [this] {
+                _groups_manager.local().drain().get();
+            });
+
             if (!group0_service.maintenance_mode() && _sys_ks.local().bootstrap_complete()) {
                 group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
                 group0_service.enable_group0_state_machine().get();

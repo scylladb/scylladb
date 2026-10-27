@@ -951,6 +951,10 @@ void groups_manager::update(token_metadata_ptr new_tm) {
     if (!_features.strongly_consistent_tables) {
         return;
     }
+    if (_stopping) {
+        logger.debug("update(): ignoring token metadata version {}, the manager is stopping", new_tm->get_version());
+        return;
+    }
 
     if (!_started) {
         _pending_tm = new_tm;
@@ -1025,10 +1029,12 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     // cannot be closed if the table exists.
     //
     // Node shutdown also closes gates (groups_manager::stop() closes every gate
-    // regardless of table existence), but it cannot race with us either: the
-    // strongly consistent coordinator is destroyed before groups_manager::stop()
-    // runs, and the RPC handlers that call this are unregistered on every shard
-    // before it; see uninit_messaging_service().
+    // regardless of table existence) and erases the groups, but it cannot race with
+    // us either. Every caller is a CQL request, and stop() runs from
+    // storage_service::do_drain() only after stop_transport(), which waits for the
+    // CQL server to finish all of its requests, forwarded ones included. The RPC
+    // handlers that call this are unregistered on every shard before stop(); see
+    // drain().
     if (!_db.column_family_exists(table_id)) {
         return make_exception_future<raft_server>(
             replica::no_such_column_family(table_id));
@@ -1156,6 +1162,9 @@ void groups_manager::request_flush(db::cf_id_type id, db::replay_position pos) {
 }
 
 future<> groups_manager::drain() {
+    co_await container().invoke_on_all([] (groups_manager& gm) {
+        gm._stopping = true;
+    });
     logger.debug("drain(): unregistering the RPC handlers on all shards");
     co_await container().invoke_on_all(&groups_manager::uninit_messaging_service);
     logger.debug("drain(): stopping all shards");
@@ -1164,6 +1173,7 @@ future<> groups_manager::drain() {
 }
 
 future<> groups_manager::stop() {
+    _stopping = true;
     if (!_started) {
         co_return;
     }
@@ -1177,6 +1187,11 @@ future<> groups_manager::stop() {
 
 future<> groups_manager::do_stop() {
     logger.info("stop() enter");
+
+    // Lets a test hold the shutdown here, with the groups still alive, and make
+    // one of them persist something meanwhile.
+    co_await utils::get_local_injector().inject("sc_groups_manager_stop_wait",
+            utils::wait_for_message(std::chrono::minutes(5)));
 
     // The segments must survive so replay can recover the log.
     schedule_raft_groups_deletion(true, log_disposition::keep);
