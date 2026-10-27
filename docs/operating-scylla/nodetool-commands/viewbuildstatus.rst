@@ -3,6 +3,8 @@ Nodetool viewbuildstatus
 
 **viewbuildstatus** - ``<keyspace> <view>`` Shows the progress of a materialized view build.
 
+The view can also be given as ``<keyspace>.<view>``. The command exits with status 1 if the view has not finished building on all nodes.
+
 For example:
 
 ::   
@@ -10,7 +12,7 @@ For example:
    nodetool viewbuildstatus my_keyspace my_view 
 
 
-   my_view has not finished building; node status is below.
+   my_keyspace.my_view has not finished building; node status is below.
 
     Host                Info
    
