@@ -221,7 +221,6 @@ def test_interactive_no_free_disks(root, monkeypatch, capsys):
     assert not any(c.startswith('scylla_raid_setup') for c in setup_calls(root))
 
 
-@pytest.mark.xfail(strict=True, reason='a block device that was not offered crashes: devices.remove() ValueError')
 def test_interactive_rejects_unlisted_disk(root, monkeypatch, capsys):
     """A disk that wasn't offered (in use, e.g. the root disk) is refused, instead of crashing or failing RAID later."""
     root.cmd.set('lsblk --help', '')
@@ -234,7 +233,6 @@ def test_interactive_rejects_unlisted_disk(root, monkeypatch, capsys):
     assert any(c.startswith('scylla_raid_setup --disks /dev/sdb ') for c in setup_calls(root))
 
 
-@pytest.mark.xfail(strict=True, reason='a block device that was not offered crashes: devices.remove() ValueError')
 def test_interactive_accepts_disk_alias(root, monkeypatch):
     """An offered disk typed by a stable alias (/dev/disk/by-id/...) is accepted, as is_unused_disk() resolves it too."""
     root.cmd.set('lsblk --help', '')
