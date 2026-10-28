@@ -23,6 +23,7 @@
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
 #include "alternator/conditions.hh"
+#include "types/listlike_partial_deserializing_iterator.hh"
 #include "alternator/expressions.hh"
 #include "alternator/consumed_capacity.hh"
 #include "alternator/serialization.hh"
@@ -405,6 +406,9 @@ class describe_items_visitor {
     const filter& _filter;
     typename columns_t::const_iterator _column_it;
     rjson::value _item;
+    // Without a filter, items will only be printed, so they're written as
+    // JSON text right away, rather than built as rjson::values.
+    std::optional<rjson::text_writer> _text;
     rjson::value _items = rjson::empty_array();
     size_t _scanned_count;
 
@@ -433,10 +437,21 @@ public:
 
     void start_row() {
         _column_it = _columns.begin();
+        if (!_filter) {
+            _text.emplace();
+            _text->start_object();
+        }
     }
 
     void accept_value(managed_bytes_view_opt result_bytes_view) {
         if (!result_bytes_view) {
+            ++_column_it;
+            return;
+        }
+        if (_text) {
+            result_bytes_view->with_linearized([this] (bytes_view bv) {
+                write_item_cell(**_column_it, bv, *_text, _attrs_to_get);
+            });
             ++_column_it;
             return;
         }
@@ -451,12 +466,14 @@ public:
                     rjson::add_with_string_name(field, type_to_string((*_column_it)->type), json_key_column_value(bv, **_column_it));
                 }
             } else {
-                auto deserialized = attrs_type()->deserialize(bv);
-                const auto& keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
-                for (const auto& entry : keys_and_values) {
-                    const sstring& attr_name = value_cast<sstring>(entry.first);
+                // Walk the serialized map of attributes in place, rather than
+                // deserializing it into a map, which copies every value.
+                int count = read_collection_size(bv);
+                for (int i = 0; i < count; ++i) {
+                    bytes_view name_bytes = read_collection_key(bv);
+                    bytes_view value = read_collection_value_nonnull(bv);
+                    std::string attr_name(reinterpret_cast<const char*>(name_bytes.data()), name_bytes.size());
                     if (!_attrs_to_get || _attrs_to_get->contains(attr_name) || _extra_filter_attrs.contains(attr_name)) {
-                        const bytes& value = value_cast<bytes>(entry.second);
                         // Even if _attrs_to_get asked to keep only a part of a
                         // top-level attribute, we keep the entire attribute
                         // at this stage, because the item filter might still
@@ -472,6 +489,13 @@ public:
     }
 
     void end_row() {
+        if (_text) {
+            _text->end_object();
+            rjson::push_back(_items, std::move(*_text).result());
+            _text.reset();
+            ++_scanned_count;
+            return;
+        }
         if (_filter.check(_item)) {
             // As noted above, we kept entire top-level attributes listed in
             // _attrs_to_get. We may need to only keep parts of them.
@@ -2647,9 +2671,8 @@ static future<std::vector<rjson::value>> describe_multi_item(schema_ptr schema,
     auto result_set = builder.build();
     std::vector<rjson::value> ret;
     for (auto& result_row : result_set->rows()) {
-        rjson::value item = rjson::empty_object();
         uint64_t item_length_in_bytes = 0;
-        describe_single_item(*selection, result_row, *attrs_to_get, item, &item_length_in_bytes);
+        rjson::value item = describe_single_item_for_output(*selection, result_row, *attrs_to_get, &item_length_in_bytes);
         if (item_callback) {
             item_callback(item_length_in_bytes);
         }
@@ -2669,7 +2692,7 @@ static rjson::value describe_item(schema_ptr schema,
         const std::optional<attrs_to_get>& attrs_to_get,
         consumed_capacity_counter& consumed_capacity,
         uint64_t& metric) {
-    std::optional<rjson::value> opt_item = describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get, &consumed_capacity._total_bytes);
+    std::optional<rjson::value> opt_item = describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get, &consumed_capacity._total_bytes, true);
     rjson::value item_descr = rjson::empty_object();
     if (opt_item) {
         rjson::add(item_descr, "Item", std::move(*opt_item));

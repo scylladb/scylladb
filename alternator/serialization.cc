@@ -229,32 +229,33 @@ bytes serialize_item(const rjson::value& item) {
     return bytes(bo.linearize());
 }
 
+// Writes the value of a stored attribute, of a type stored as a Scylla type.
+template<typename Writer>
 struct to_json_visitor {
-    rjson::value& deserialized;
-    const std::string& type_ident;
+    Writer& w;
     bytes_view bv;
 
-    void operator()(const reversed_type_impl& t) const { visit(*t.underlying_type(), to_json_visitor{deserialized, type_ident, bv}); };
+    void operator()(const reversed_type_impl& t) const { visit(*t.underlying_type(), to_json_visitor{w, bv}); };
     void operator()(const decimal_type_impl& t) const {
-        auto s = to_json_string(*decimal_type, bytes(bv));
-        //FIXME(sarna): unnecessary copy
-        rjson::add_with_string_name(deserialized, type_ident, rjson::from_string(s));
+        w.string(to_json_string(*decimal_type, bytes(bv)));
     }
     void operator()(const string_type_impl& t) {
-        rjson::add_with_string_name(deserialized, type_ident, rjson::from_string(reinterpret_cast<const char *>(bv.data()), bv.size()));
+        w.string(std::string_view(reinterpret_cast<const char *>(bv.data()), bv.size()));
     }
     void operator()(const bytes_type_impl& t) const {
-        std::string b64 = base64_encode(bv);
-        rjson::add_with_string_name(deserialized, type_ident, rjson::from_string(b64));
+        w.string(base64_encode(bv));
+    }
+    void operator()(const boolean_type_impl& t) const {
+        w.boolean(value_cast<bool>(t.deserialize(bv)));
     }
     // default
     void operator()(const abstract_type& t) const {
-        rjson::add_with_string_name(deserialized, type_ident, rjson::parse(to_json_string(t, bytes(bv))));
+        w.raw(to_json_string(t, bytes(bv)));
     }
 };
 
-rjson::value deserialize_item(bytes_view bv) {
-    rjson::value deserialized = rjson::empty_object();
+template<typename Writer>
+void deserialize_item(bytes_view bv, Writer& w) {
     if (bv.empty()) {
         throw api_error::validation("Serialized value empty");
     }
@@ -263,28 +264,42 @@ rjson::value deserialize_item(bytes_view bv) {
     bv.remove_prefix(1);
 
     if (atype == alternator_type::NOT_SUPPORTED_YET) {
-        slogger.trace("Non-optimal deserialization of alternator type {}", int8_t(atype));
-        return rjson::parse(std::string_view(reinterpret_cast<const char *>(bv.data()), bv.size()));
+        // Values of these types are stored as JSON text.
+        w.raw(std::string_view(reinterpret_cast<const char *>(bv.data()), bv.size()));
+        return;
     }
 
     if (atype == alternator_type::FLOAT32VECTOR) {
         if (bv.size() % sizeof(uint32_t) != 0) {
             throw api_error::validation("FLOAT32VECTOR: byte length not a multiple of 4");
         }
-        rjson::value arr = rjson::empty_array();
+        w.start_object(1);
+        w.key(float32vector_type_name);
+        w.start_array(bv.size() / sizeof(uint32_t));
         while (!bv.empty()) {
             uint32_t bits_be = read_unaligned<uint32_t>(bv.data());
             bv.remove_prefix(sizeof(uint32_t));
-            rjson::push_back(arr, rjson::value(std::bit_cast<float>(net::ntoh(bits_be))));
+            w.number(double(std::bit_cast<float>(net::ntoh(bits_be))));
         }
-        rjson::add_with_string_name(deserialized, float32vector_type_name, std::move(arr));
-        return deserialized;
+        w.end_array();
+        w.end_object();
+        return;
     }
 
     type_representation type_representation = represent_type(atype);
-    visit(*type_representation.dtype, to_json_visitor{deserialized, type_representation.ident, bv});
+    w.start_object(1);
+    w.key(type_representation.ident);
+    visit(*type_representation.dtype, to_json_visitor<Writer>{w, bv});
+    w.end_object();
+}
 
-    return deserialized;
+template void deserialize_item(bytes_view, rjson::value_writer&);
+template void deserialize_item(bytes_view, rjson::text_writer&);
+
+rjson::value deserialize_item(bytes_view bv) {
+    rjson::value_writer w;
+    deserialize_item(bv, w);
+    return std::move(w).result();
 }
 
 // This function takes a bytes_view created earlier by serialize_item(), and
