@@ -4,6 +4,10 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+import fcntl
+import os
+import time
+
 import pytest
 import test.pylib.version_fetch_utils as vfu
 
@@ -263,3 +267,29 @@ def test_with_file_lock_creates_parent_and_runs_body(tmp_path):
     with vfu.with_file_lock(lock_path):
         assert lock_path.exists()
     assert lock_path.exists()
+
+
+def test_prune_unused_cache_deletes_only_stale_unlocked_entries(tmp_path):
+    old = time.time() - 8 * 24 * 3600
+
+    def entry(name, installed=True, mtime=None):
+        path = tmp_path / name
+        path.mkdir()
+        (path / "scylla.tar.gz").write_bytes(b"data")
+        if installed:
+            (path / "installed.success").touch()
+        if mtime:
+            os.utime(path / "installed.success" if installed else path, (mtime, mtime))
+        return path
+
+    stale = entry("stale", mtime=old)
+    stale_partial = entry("stale-partial", installed=False, mtime=old)
+    entry("fresh")
+    locked = entry("locked", mtime=old)
+
+    with (locked / "lock").open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        vfu.prune_unused_cache(tmp_path)
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["fresh", "locked"]
+    assert not stale.exists() and not stale_partial.exists()

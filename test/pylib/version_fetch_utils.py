@@ -246,6 +246,30 @@ def extract_tar_no_same_owner(archive_path: Path, unpack_dir: Path) -> None:
         archive.extractall(path=unpack_dir, filter="data")            
 
 
+CACHE_MAX_UNUSED_DAYS = 7
+
+
+def prune_unused_cache(cache_root: Path, max_unused_days: int = CACHE_MAX_UNUSED_DAYS) -> None:
+    """Delete cached archives that no caller used in the last `max_unused_days`.
+    Each use touches `installed.success`. An entry with no such marker (a partial
+    download) is aged by its directory mtime. Entries whose lock is held, i.e.
+    being downloaded or installed right now, are skipped.
+    """
+    cutoff = time.time() - max_unused_days * 24 * 3600
+    for entry in cache_root.iterdir():
+        marker = entry / "installed.success"
+        # Another caller may be pruning the same entry, so it can vanish under us.
+        try:
+            last_used = marker if marker.exists() else entry
+            if not entry.is_dir() or last_used.stat().st_mtime > cutoff:
+                continue
+            with (entry / "lock").open("a") as f:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                shutil.rmtree(entry, ignore_errors=True)
+        except OSError:  # gone already, or locked (BlockingIOError)
+            continue
+
+
 def fetch_and_install_scylla_version(major: Optional[int] = None, minor: Optional[int] = None,
                                      patch: Optional[int] = None, rc: Optional[int] = None,
                                      arch: str = "x86_64", pack: str = "", 
@@ -255,7 +279,8 @@ def fetch_and_install_scylla_version(major: Optional[int] = None, minor: Optiona
     URL, then cached under XDG_CACHE_HOME, or ~/.cache if XDG_CACHE_HOME is unset.
     Download, unpack, and install steps are guarded by marker files so repeated
     calls reuse the existing installation. A file lock prevents concurrent callers
-    from modifying the same cached archive directory at the same time.
+    from modifying the same cached archive directory at the same time. Cached
+    archives unused for CACHE_MAX_UNUSED_DAYS are deleted, see `prune_unused_cache()`.
     Args:
         major: ScyllaDB major version to fetch.
         minor: ScyllaDB minor version to fetch.
@@ -309,6 +334,7 @@ def fetch_and_install_scylla_version(major: Optional[int] = None, minor: Optiona
             shutil.rmtree(install_dir, ignore_errors=True)
             install_dir.mkdir(exist_ok=True, parents=True)
             subprocess.run(["bash", "./install.sh", "--without-systemd", "--nonroot", "--prefix", str(install_dir)], cwd=unpack_dir/"scylla", check=True)
-            installed_marker.touch()
+        installed_marker.touch()
 
+    prune_unused_cache(cache_dir.parent)
     return install_dir/"bin"/"scylla"
