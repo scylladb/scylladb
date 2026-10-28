@@ -75,7 +75,8 @@
 //   --report-value-sizes         the partition key sizes, the column counts and the column value
 //                                sizes of that matrix
 //
-// The dataset is written once and serves every test. Its index has the cache enabled, and
+// The dataset is written once and serves every test. `index-insert` and `cache-populate` run on a
+// private copy of its index, so they leave it unchanged. Its index has the cache enabled, and
 // `query-disk` takes the segment by bypassing the cache per read rather than by disabling it, so
 // that both read paths are measured against the same data. The run prints what one record of the
 // dataset takes in a segment against the bytes of the row it carries, and warns when the dataset
@@ -104,7 +105,8 @@
 //
 //   index-lookup     look one key up in the primary index, which hashes the key first
 //   index-insert     point the index of one key at a record, which is what a write does once its
-//                    record is in a segment. Includes the lookup
+//                    record is in a segment. Includes the lookup. Skips the per-segment accounting
+//                    of the segment manager that a real write pays
 //   deserialize      read one record frame from a buffer, which checks its frame header and
 //                    copies out the bytes of its value
 //   decode           decode the value of one record into the mutation a read returns
@@ -126,7 +128,9 @@
 //   cache-populate   evict the cached partition of one entry and admit one in its place. The
 //                    eviction is an `index-insert` of the entry, which is the only way the index
 //                    evicts one entry, and the admission includes a second lookup of it. Always
-//                    the same entry, the one of the key the prepared partition belongs to
+//                    the same entry, the one of the key the prepared partition belongs to. Runs on
+//                    a private copy of the index, which skips the per-segment accounting of the
+//                    segment manager that a real write pays
 //   raw-read         one DMA read of the size of a record, straight to the data file, with no
 //                    logstor in it
 //   query-cached     a whole read the cache serves, as a query pays for it: the reader for the key
@@ -307,6 +311,7 @@
 #include "test/lib/tmpdir.hh"
 #include "test/perf/perf.hh"
 #include "types/types.hh"
+#include "utils/logalloc.hh"
 
 // The record size report measures the column mapping a record value carries through the serializer
 // the value is written with.
@@ -569,6 +574,8 @@ class logstor_bench {
     std::optional<log_record_writer> _record_writer;
     // The frozen mutations the write-frozen test draws from, see freeze_write_pool().
     std::vector<frozen_mutation> _frozen_pool;
+    // A copy of the dataset's index for index-insert and cache-populate, freed after each.
+    std::unique_ptr<primary_index> _private_index;
     // Takes the result of a step whose result is otherwise unused, so that the step is not optimized
     // away and cannot be hoisted out of the loop of the test that repeats it. Volatile because that
     // is what makes the store to it something the compiler has to keep; it costs the same load and
@@ -622,6 +629,7 @@ public:
             co_await _data_file.close();
             _data_file = seastar::file();
         }
+        co_await drop_private_index();
         if (_group) {
             // The index evicts what it has in the cache before it goes, since a cached partition
             // lives in the shared cache region and the index entry only points at it. This is what
@@ -721,19 +729,44 @@ public:
         }
     }
 
-    // What a write pays once its record is in a segment: the index is pointed at the new record.
-    // The record is left where it is - the entry is replaced by one with the same location and a
-    // newer timestamp - so that the space accounting of the segment manager sees a record freed and
-    // the same record added, and the dataset the other tests read stays as it was. It includes the
-    // lookup of the location to reinsert, which is what index-lookup measures on its own.
-    void do_index_insert(unsigned count) {
-        for (unsigned i = 0; i < count; ++i) {
-            primary_index_key key{random_key()};
-            auto entry = index().get(key);
+    // Copies the index entries of the keys into _private_index, in the order populate() issues the
+    // dataset's writes; the segment manager refuses a record re-added to a segment a group owns,
+    // which every record of the dataset is in.
+    future<> prepare_private_index() {
+        // A tracker of its own, so cache-populate's churn doesn't tune the allocating sections the
+        // other tests use; region and LRU are shared.
+        auto copy = std::make_unique<primary_index>(tests::logstor::noop_space_accounting, &_cache.logstor_tracker);
+        for (const auto& key : _keys) {
+            primary_index_key pk{key};
+            auto entry = index().get(pk);
             if (!entry) [[unlikely]] {
                 on_internal_error(logstor_logger, "key of the dataset is missing from the index");
             }
-            index().insert(key, index_entry{
+            copy->insert(pk, *entry);
+            co_await coroutine::maybe_yield();
+        }
+        _private_index = std::move(copy);
+    }
+
+    // Evicts what the private index cached from the shared cache, then frees it.
+    future<> drop_private_index() {
+        if (_private_index) {
+            co_await _private_index->drain_cache();
+            _private_index.reset();
+        }
+    }
+
+    // What a write pays once its record is in a segment: the index is pointed at the new record.
+    // The entry is replaced by one with the same location and a newer timestamp, in the private
+    // index. Includes the lookup of the location, which index-lookup measures on its own.
+    void do_index_insert(unsigned count) {
+        for (unsigned i = 0; i < count; ++i) {
+            primary_index_key key{random_key()};
+            auto entry = _private_index->get(key);
+            if (!entry) [[unlikely]] {
+                on_internal_error(logstor_logger, "key of the dataset is missing from the index");
+            }
+            _private_index->insert(key, index_entry{
                 .location = entry->location,
                 .timestamp = api::new_timestamp(),
             });
@@ -816,15 +849,15 @@ public:
     void do_cache_populate(unsigned count) {
         const primary_index_key key{_mutation->decorated_key()};
         for (unsigned i = 0; i < count; ++i) {
-            auto entry = index().get(key);
+            auto entry = _private_index->get(key);
             if (!entry) [[unlikely]] {
                 on_internal_error(logstor_logger, "key of the dataset is missing from the index");
             }
-            index().insert(key, index_entry{
+            _private_index->insert(key, index_entry{
                 .location = entry->location,
                 .timestamp = api::new_timestamp(),
             });
-            if (!index().populate_cache(key, entry->location, _mutation->schema(), _mutation->key(), *_partition)) [[unlikely]] {
+            if (!_private_index->populate_cache(key, entry->location, _mutation->schema(), _mutation->key(), *_partition)) [[unlikely]] {
                 on_internal_error(logstor_logger, "the entry of the prepared partition was not populated");
             }
         }
@@ -1016,11 +1049,19 @@ std::vector<perf_result_with_io> run_test(sharded<logstor_bench>& bench, test_ki
         return results;
     };
 
+    // index-insert and cache-populate run on a private copy of the index of every key.
+    const auto private_index_test = [&bench] (auto run) {
+        bench.invoke_on_all(&logstor_bench::prepare_private_index).get();
+        auto results = run();
+        bench.invoke_on_all(&logstor_bench::drop_private_index).get();
+        return results;
+    };
+
     switch (kind) {
     case test_kind::index_lookup:
         return cpu_test(&logstor_bench::do_index_lookup);
     case test_kind::index_insert:
-        return cpu_test(&logstor_bench::do_index_insert);
+        return private_index_test([&] { return cpu_test(&logstor_bench::do_index_insert); });
     case test_kind::deserialize:
         return cpu_test(&logstor_bench::do_deserialize);
     case test_kind::decode:
@@ -1037,8 +1078,16 @@ std::vector<perf_result_with_io> run_test(sharded<logstor_bench>& bench, test_ki
         return cpu_test(&logstor_bench::do_serialize);
     case test_kind::cache_lookup:
         return cache_hit_test([&] { return cpu_test(&logstor_bench::do_cache_lookup); });
-    case test_kind::cache_populate:
-        return cpu_test(&logstor_bench::do_cache_populate);
+    case test_kind::cache_populate: {
+        auto results = private_index_test([&] { return cpu_test(&logstor_bench::do_cache_populate); });
+        // Its churn leaves LSA holding almost all memory in empty segments; the tests after it
+        // would pay for reclaim on every allocation.
+        bench.invoke_on_all([] (logstor_bench&) {
+            logalloc::shard_tracker().full_compaction();
+            logalloc::shard_tracker().reclaim_all_free_segments();
+        }).get();
+        return results;
+    }
     case test_kind::raw_read:
         return io_test(&logstor_bench::do_raw_read);
     case test_kind::query_cached:
