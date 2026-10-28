@@ -469,3 +469,14 @@ def test_system_keyspaces_cannot_be_created_or_dropped(cql):
     # "system_auth" may not exist at all, so either error is fine.
     with pytest.raises((Unauthorized, InvalidRequest, ConfigurationException)):
         cql.execute("DROP KEYSPACE system_auth")
+
+# Dropping a keyspace with several tables (which are dropped in parallel)
+# must not hang, nor make later schema changes hang.
+# Reproduces #1484.
+def test_drop_keyspace_with_many_tables(cql):
+    opts = "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }"
+    with new_test_keyspace(cql, opts) as keyspace:
+        for i in range(8):
+            cql.execute(f"CREATE TABLE {keyspace}.test_{i} (k int PRIMARY KEY, c int)")
+    with new_test_keyspace(cql, opts):
+        pass
