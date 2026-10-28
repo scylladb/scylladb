@@ -500,6 +500,9 @@ async def test_lwt_linearizability_with_faults(manager: ScyllaClusterManager, sc
 
         assert not errors, f"Task(s) failed (seed={workload.seed}): {errors}"
         workload.assert_progress(min_writes=MIN_WRITES, min_reads=MIN_READS)
-        required = ["crash", "migrate"] if tablets else ["crash"]
-        never_ran = [a for a in required if not nemesis.actions[a]]
-        assert not never_ran, f"the nemesis never got to {never_ran} (seed={workload.seed}): {dict(nemesis.actions)}"
+        # A round of the nemesis may not fit in the run when its first actions
+        # stall, so ask for the two things the test is about, however they came.
+        kills = sum(n for a, n in nemesis.actions.items() if a.startswith("kill@"))
+        migrations = nemesis.actions["migrate"] + nemesis.actions["migrate_and_crash"]
+        assert kills and (migrations or not tablets), (
+            f"the run proves nothing: {kills} kills, {migrations} migrations (seed={workload.seed}): {dict(nemesis.actions)}")
