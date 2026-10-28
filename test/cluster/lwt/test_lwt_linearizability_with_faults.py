@@ -10,10 +10,14 @@ Idea: each partition key of one table is a register holding an int that is
 only ever changed through lightweight transactions.  A writer sets a register
 with a compare-and-set against the value it last saw there: ``INSERT ... IF
 NOT EXISTS`` while it believes the register is empty, ``UPDATE ... IF c = ?``
-otherwise, always to a globally unique value.  Readers do SERIAL reads; one
-reader does QUORUM reads, which must also see every acknowledged LWT write,
-since the decision is learned by a quorum before the client is answered.
-Every attempt goes into a history that the Porcupine checker verifies per key
+otherwise, always to a globally unique value; now and then it deletes the row
+instead, ``DELETE ... IF c = ?``, which empties the register and leaves a
+tombstone for the next rounds to decide on.  Readers do SERIAL reads; one
+reader does QUORUM reads: a quorum read returns only once its read repair is
+done, so quorum reads are monotonic and, with every write learned by a quorum
+before the client is answered, must be linearizable too.  Should that reader
+alone ever flag a violation, question that claim before the LWT code.  Every
+attempt goes into a history that the Porcupine checker verifies per key
 against a register with a ``cas`` operation: an applied CAS replaced exactly
 the value it expected, a CAS reported as not applied saw the value the
 register held at that moment, and a CAS whose outcome the client never learned
@@ -21,7 +25,8 @@ may have applied at any later point while the register still held its
 expected value.  The final value of every register is read once more at the
 end and checked the same way.
 
-Meanwhile a nemesis task takes the cluster apart, picking at random from:
+Meanwhile a nemesis task takes the cluster apart.  Each of its rounds runs
+every action once, in random order:
 
 * ``crash``: SIGKILL a node, keep it down for a few seconds, start it again.
   Sometimes the node is first parked by error injection in the middle of a
@@ -29,32 +34,41 @@ Meanwhile a nemesis task takes the cluster apart, picking at random from:
   was applied but before it was recorded), so the kill lands right there; or
   it first fails every learn for a while, so that the kill takes away
   promises and proposals it acknowledged without ever syncing them.
+* ``restart``: stop a node gracefully, with paxos rounds in flight on it,
+  and start it again.
 * ``paxos_rpc_fault``: for a moment one replica fails one kind of paxos step
   after doing its part -- the promise or the proposal is saved but the
   coordinator gets an error back, or a decision is not learned -- so a later
   round has to repair it.
 * ``disconnect``: drop the RPC connections between two nodes, failing
   whatever paxos messages were in flight on them.
+* ``repair``: repair the table; with tablets the paxos state table is
+  co-located with it, so promises and proposals travel between replicas too.
 * ``migrate``: move one tablet to another node, or to the other shard.
 * ``migrate_and_crash``: start a migration, park it while it streams, crash a
   node meanwhile (the node receiving the tablet, one of the tablet's replicas
   or a bystander), bring it back and let the migration finish.
+* ``resize``: double the table's tablet count, or halve it back: every tablet
+  of the table and of its paxos state table is split or merged under load.
 
 The commitlog sync period is raised so that nothing but an explicit sync makes
 a write durable before a crash: a paxos promise or proposal acknowledged
 without a sync is lost with the kill, which is how the paxos state of tables
 with tablets used to be lost.
 
-What is accepted: inside a crash window the errors a lost node causes (see
-tolerate_reboot); at any time a CAS or a read may time out, because writers
-contending for one key cut each other's paxos rounds off.  Anything
-else -- an Unavailable or a server error while the cluster is whole, e.g.
-during a migration -- fails the test.  Linearizability is checked regardless
-of whether the tasks failed, so a violation is reported either way.
+What is accepted: inside a crash or restart window the errors a lost node
+causes (see tolerate_reboot); at any time a CAS or a read may time out,
+because writers contending for one key cut each other's paxos rounds off.
+Anything else -- an Unavailable or a server error while the cluster is whole,
+e.g. during a migration -- fails the test.  Linearizability is checked
+regardless of whether the tasks failed, so a violation is reported either
+way.  A run that did not crash a node, or with tablets did not migrate one,
+proves nothing and fails as well.
 
 Setup: 4 nodes with 2 shards each, one DC, RF=3; with tablets, 4 tablets so
-that migrations hit a key that is being written.  Tablet balancing is off, so
-only the nemesis moves tablets.  The vnodes flavour has no migrations.
+that migrations hit a key that is being written.  Tablet balancing is off
+except while a resize runs, so otherwise only the nemesis moves tablets.  The
+vnodes flavour has no tablet actions.
 """
 
 from __future__ import annotations
@@ -91,9 +105,10 @@ from test.cluster.strong_consistency.register_workload import (
     reader_task,
     run_workload,
 )
+from test.cluster.lwt.lwt_common import wait_for_tablet_count
 from test.cluster.util import new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.tablets import get_all_tablet_replicas
+from test.pylib.tablets import get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for_cql_and_get_hosts
 
 logger = logging.getLogger(__name__)
@@ -107,9 +122,11 @@ NUM_KEYS = 24
 NUM_WRITERS = 4
 # The last reader uses QUORUM, the others SERIAL.
 NUM_READERS = 4
-DURATION_S = 150
+DURATION_S = 180
 MIN_WRITES = 200
 MIN_READS = 200
+# How often a writer deletes a row it believes to exist instead of updating it.
+DELETE_P = 0.2
 
 # How long a crashed node stays down.
 DOWNTIME_S = (0.0, 5.0)
@@ -163,22 +180,25 @@ class CasWorkload(RegisterWorkload):
     """The register workload with LWT statements.
 
     ``write_stmt`` is the conditional update, ``insert_stmt`` the conditional
-    insert for a register the writer believes empty, ``read_stmt`` a SERIAL
-    read and ``quorum_read_stmt`` a QUORUM one.
+    insert for a register the writer believes empty, ``delete_stmt`` the
+    conditional delete that empties one, ``read_stmt`` a SERIAL read and
+    ``quorum_read_stmt`` a QUORUM one.
     """
 
     insert_stmt: Optional[PreparedStatement] = field(default=None, repr=False)
+    delete_stmt: Optional[PreparedStatement] = field(default=None, repr=False)
     quorum_read_stmt: Optional[PreparedStatement] = field(default=None, repr=False)
 
     def prepare(self, cql) -> None:
         self.write_stmt = cql.prepare(f"UPDATE {self.fqtn} SET c = ? WHERE pk = ? IF c = ?")
         self.insert_stmt = cql.prepare(f"INSERT INTO {self.fqtn} (pk, c) VALUES (?, ?) IF NOT EXISTS")
+        self.delete_stmt = cql.prepare(f"DELETE FROM {self.fqtn} WHERE pk = ? IF c = ?")
         self.read_stmt = cql.prepare(f"SELECT c FROM {self.fqtn} WHERE pk = ?")
         self.read_stmt.consistency_level = ConsistencyLevel.SERIAL
         self.quorum_read_stmt = cql.prepare(f"SELECT c FROM {self.fqtn} WHERE pk = ?")
         self.quorum_read_stmt.consistency_level = ConsistencyLevel.QUORUM
         # One attempt per recorded operation, see RegisterWorkload.prepare().
-        for stmt in (self.write_stmt, self.insert_stmt, self.read_stmt, self.quorum_read_stmt):
+        for stmt in (self.write_stmt, self.insert_stmt, self.delete_stmt, self.read_stmt, self.quorum_read_stmt):
             stmt.retry_policy = FallthroughRetryPolicy()
 
     def read_statement(self, reader_id: int) -> PreparedStatement:
@@ -202,12 +222,16 @@ async def cas_writer_task(workload: CasWorkload, cql, writer_id: int) -> None:
     while not workload.stop_event.is_set():
         pk = rng.randint(0, workload.num_keys - 1)
         expected = seen.get(pk, 0)
-        value = workload.next_write_value()
+        # A delete is a CAS to the empty register, 0.
+        delete = expected != 0 and rng.random() < DELETE_P
+        value = 0 if delete else workload.next_write_value()
 
         op_id, t_call_ns = workload.history.record_call(
             writer_id, "cas", pk, value, expected=expected)
         try:
-            if expected == 0:
+            if delete:
+                bound = workload.delete_stmt.bind([pk, expected])
+            elif expected == 0:
                 bound = workload.insert_stmt.bind([pk, value])
             else:
                 bound = workload.write_stmt.bind([value, pk, expected])
@@ -276,16 +300,60 @@ class Nemesis:
         return False
 
     async def run(self) -> None:
-        choices = [self.crash, self.paxos_rpc_fault, self.disconnect]
+        choices = [self.crash, self.restart, self.paxos_rpc_fault, self.disconnect, self.repair]
         if self.tablets:
-            choices += [self.migrate, self.migrate_and_crash]
+            choices += [self.migrate, self.migrate_and_crash, self.resize]
         while not self.workload.stop_event.is_set():
-            action = self.rng.choice(choices)
-            logger.info("Nemesis: %s", action.__name__)
-            await action()
-            self.actions[action.__name__] += 1
-            await asyncio.sleep(self.rng.uniform(*NEMESIS_PAUSE_S))
+            # Every action once per round, so that a run covers them all.
+            for action in self.rng.sample(choices, len(choices)):
+                if self.workload.stop_event.is_set():
+                    break
+                logger.info("Nemesis: %s", action.__name__)
+                await action()
+                self.actions[action.__name__] += 1
+                await asyncio.sleep(self.rng.uniform(*NEMESIS_PAUSE_S))
         logger.info("Nemesis finished: %s", dict(self.actions))
+
+    async def restart(self) -> None:
+        """Stop a node gracefully, keep it down for a while and start it again."""
+        victim = self.rng.choice(self.servers)
+        async with self.workload.disruption_window(CRASH):
+            logger.info("Nemesis: stopping %s gracefully", victim.ip_addr)
+            await self.manager.server_stop_gracefully(victim.server_id)
+            await asyncio.sleep(self.rng.uniform(*DOWNTIME_S))
+            await self.manager.server_start(victim.server_id)
+            await wait_for_cql_and_get_hosts(self.cql, [victim], time.time() + self.scale_timeout(120))
+            logger.info("Nemesis: %s is back", victim.ip_addr)
+
+    async def repair(self) -> None:
+        """Repair the table from a random node; with tablets its paxos state table goes with it."""
+        node = self.rng.choice(self.servers)
+        logger.info("Nemesis: repairing %s on %s", self.workload.fqtn, node.ip_addr)
+        await self.manager.api.repair(node.ip_addr, self.workload.ks, self.workload.table_name)
+
+    async def resize(self) -> None:
+        """Double the tablet count, or halve it back, through the balancer."""
+        api_node = self.rng.choice(self.servers)
+        current = await get_tablet_count(self.manager, api_node, self.workload.ks, self.workload.table_name)
+        target = NUM_TABLETS if current > NUM_TABLETS else 2 * NUM_TABLETS
+        split = target > current
+        logger.info("Nemesis: resizing %s from %d to %d tablets", self.workload.fqtn, current, target)
+        await self.manager.enable_tablet_balancing()
+        try:
+            await self.cql.run_async(f"ALTER TABLE {self.workload.fqtn} WITH tablets = {{'min_tablet_count': {target}}}")
+            await wait_for_tablet_count(
+                self.manager, api_node, self.workload.ks, self.workload.table_name,
+                (lambda c: c >= target) if split else (lambda c: c <= target), target,
+                scale_timeout=self.scale_timeout, timeout_s=180)
+        except TimeoutError as e:
+            # A merge waits for tablet size statistics the balancer may not
+            # have yet; that is not what this test is about.
+            logger.info("Nemesis: resize did not converge, moving on: %s", e)
+            self.actions["resize/timeout"] += 1
+            return
+        finally:
+            await self.manager.disable_tablet_balancing()
+        self.actions["resize/split" if split else "resize/merge"] += 1
 
     async def crash(self, victim=None) -> None:
         """Kill a node, keep it down for a while, start it and wait for the driver to have it back."""
@@ -432,3 +500,6 @@ async def test_lwt_linearizability_with_faults(manager: ScyllaClusterManager, sc
 
         assert not errors, f"Task(s) failed (seed={workload.seed}): {errors}"
         workload.assert_progress(min_writes=MIN_WRITES, min_reads=MIN_READS)
+        required = ["crash", "migrate"] if tablets else ["crash"]
+        never_ran = [a for a in required if not nemesis.actions[a]]
+        assert not never_ran, f"the nemesis never got to {never_ran} (seed={workload.seed}): {dict(nemesis.actions)}"
