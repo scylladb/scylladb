@@ -86,7 +86,7 @@ public:
                 auto schema = co_await schemas.resolve_and_upgrade(mut);
                 // Taken after the schema resolution, which may yield on the
                 // group0 barrier.
-                auto commitlog_pin = _persistence.pin_for_apply(command[i]->idx);
+                auto commitlog_pin = _persistence.pin_target_table_for_apply(command[i]->idx);
                 if (utils::get_local_injector().enter("strong_consistency_state_machine_abort_before_apply_in_memory")) {
                     throw std::runtime_error("strong_consistency_state_machine_abort_before_apply_in_memory");
                 }

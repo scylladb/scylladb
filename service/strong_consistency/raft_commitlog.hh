@@ -34,8 +34,8 @@ struct truncation_record {
 struct segment_record {
     // Reference at the position this record's first batch was written to,
     // accounted to the group's own table. Source of the per-command references.
-    db::rp_handle pin_user_table;
-    // A clone of pin_user_table, accounted to system.raft_groups and
+    db::rp_handle pin_table;
+    // A clone of pin_table, accounted to system.raft_groups and
     // taken when the record is created. A segment holding only raft entries is
     // raft_groups-dirty through this reference alone, and the closed signal a release
     // waits for arrives only in a flush round naming that table, so the reference
@@ -53,7 +53,7 @@ struct segment_record {
     utils::chunked_vector<raft::index_t> noncmd_indexes;
 
     db::segment_id_type segment() const {
-        return pin_user_table.rp().id;
+        return pin_table.rp().id;
     }
 
     // Term of the entry at `max_index`, the term persisted with that index.
@@ -78,7 +78,7 @@ struct segment_record {
     // Give up both references without decrementing, so the segments outlive this
     // record. Teardown paths only.
     void detach() {
-        pin_user_table.release();
+        pin_table.release();
         pin_raft_groups.release();
     }
 };
@@ -143,14 +143,14 @@ void account_batch(std::deque<segment_record>& segment_queue, const db::cf_id_ty
 //    |                 one batch = one commitlog entry = ONE position
 //    v            `- account_batch --> new record, or extend the newest
 //  +------------------------------------------------------------------+
-//  | segment held by: pin_user_table + pin_raft_groups                |
+//  | segment held by: pin_table + pin_raft_groups                     |
 //  +------------------------------------------------------------------+
 //    |
 //    +- COMMIT  store_commit_idx(i) --> _commit_index --> maybe_release()
 //    |            no IO at all
 //    |
 //    +- APPLY   state_machine::apply()
-//    |            pin_for_apply(idx) = pin_user_table.clone(tablet table)
+//    |            pin_target_table_for_apply(idx) = pin_table.clone(tablet table)
 //    |            --> the clone lands in the TABLET TABLE's memtable
 //    |            note_applied(idx) --> _apply_index --> maybe_release()
 //    |
@@ -171,7 +171,7 @@ void account_batch(std::deque<segment_record>& segment_queue, const db::cf_id_ty
 //    |                 snapshot_config, truncations
 //    |                 carrying pin_raft_groups  <== MOVED IN
 //    v
-//  pop_released()    record destroyed, pin_user_table dropped
+//  pop_released()    record destroyed, pin_table dropped
 //  +------------------------------------------------------------------+
 //  | segment now held ONLY by memtable contents:                      |
 //  |   tablet table  <- the per-command clones                        |
@@ -196,7 +196,7 @@ class raft_commitlog {
     // One record per segment this group has entries in, oldest first.
     std::deque<segment_record> _commitlog_segment_queue;
     // A pin past the front record means the front has not been released; see
-    // pin_for_apply().
+    // pin_table().
     logging::logger::rate_limit _pin_past_front_rate_limit{std::chrono::seconds(10)};
     // Truncation history as persisted in the row. Not ordered by segment; within
     // one segment it is chronological, which is all replay's cursors need.
@@ -206,6 +206,9 @@ class raft_commitlog {
     // db::commitlog::flush_position). Only half of closed_up_to().
     db::replay_position _reported_up_to;
     raft::log_entries _replayed_entries;
+
+    // The pin_table of the record holding `idx`. Aborts if there is none.
+    const db::rp_handle& pin_table(raft::index_t idx);
 
 public:
     raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id,
@@ -223,7 +226,7 @@ public:
     // table, for the memtable the applied mutation goes into. The reference sits at
     // the segment start; retention counts per segment, so the count is exact.
     // Aborts if no record holds `idx`.
-    db::rp_handle pin_for_apply(raft::index_t idx);
+    db::rp_handle pin_target_table_for_apply(raft::index_t idx);
 
     // Report a flush round's position: everything at or below it is in a closed
     // segment. One of the two inputs of closed_up_to().
@@ -271,7 +274,7 @@ public:
     // nothing more of this group can land there. Two commitlog details carry the claim:
     //
     // A round ends at or below the start of the still-allocating segment, when one
-    // exists. A record's pin_user_table is never at offset 0, because a segment opens
+    // exists. A record's pin_table is never at offset 0, because a segment opens
     // with its descriptor header, so no record of a live segment compares at or below
     // flush_position().
     //

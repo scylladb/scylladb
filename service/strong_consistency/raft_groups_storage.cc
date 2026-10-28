@@ -246,13 +246,13 @@ future<> raft_groups_storage::abort() {
     return std::move(_pending_op_fut);
 }
 
-db::rp_handle raft_groups_storage::pin_for_apply(raft::index_t idx) {
+db::rp_handle raft_groups_storage::pin_target_table_for_apply(raft::index_t idx) {
     // An earlier release may have failed on memtable pressure, leaving a record at the
     // front that should be gone. Retry here so a transient failure holds the segment
     // for as little time as possible. The pin below succeeds whether or not the retry
-    // frees the record, because raft_commitlog::pin_for_apply() searches the queue.
+    // frees the record, because raft_commitlog::pin_target_table_for_apply() searches the queue.
     maybe_release();
-    return _raft_commitlog.pin_for_apply(idx);
+    return _raft_commitlog.pin_target_table_for_apply(idx);
 }
 
 void raft_groups_storage::note_applied(raft::index_t idx) {
@@ -287,7 +287,7 @@ void raft_groups_storage::maybe_release() {
         // Read before the write and the pop, both of which invalidate `record`.
         // The commitlog asks a closed segment's dirty tables to flush once, in a round
         // run on disk pressure or data lifetime (see raft_commitlog::closed_up_to).
-        const bool flush_round_already_ran = record->pin_user_table.rp() <= _raft_commitlog.closed_up_to();
+        const bool flush_round_already_ran = record->pin_table.rp() <= _raft_commitlog.closed_up_to();
         const db::segment_id_type segment = record->segment();
         // No command means apply() got no reference into this segment, so after
         // the pop the tablet table holds nothing of this group's.
@@ -377,7 +377,7 @@ void raft_groups_storage::write_descriptor_and_purge_stale_truncations(segment_r
     // Cloned before the apply: apply() fails under memory pressure, and a clone in the
     // catch handler below allocates under the same pressure and loses the reference
     // for good. On the way out the spare is destroyed, undoing the clone.
-    auto spare_pin = record.pin_user_table.clone(_raft_groups_table_id);
+    auto spare_pin = record.pin_table.clone(_raft_groups_table_id);
     try {
         // Synchronous and IO-free, straight into the raft_groups memtable.
         cf.apply(m, std::move(record.pin_raft_groups));
@@ -386,7 +386,7 @@ void raft_groups_storage::write_descriptor_and_purge_stale_truncations(segment_r
         // retry. cf.apply() takes the reference in memtable::update(), past the work
         // that throws, so the move-assign usually destroys a pin_raft_groups still held.
         record.pin_raft_groups = std::move(spare_pin);
-        // Rate limited per group: pin_for_apply() and note_applied() both retry the
+        // Rate limited per group: pin_target_table_for_apply() and note_applied() both retry the
         // write, so sustained pressure reaches this line twice per applied command.
         rgslog.log(log_level::warn, _descriptor_write_rate_limit,
                 "group_id={}: writing the descriptor for segment {} failed, the record "

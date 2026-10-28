@@ -162,7 +162,7 @@ Key points:
   one per commitlog segment its entries landed in. A later batch in the same
   segment only advances that record's `max_index`, because retention is accounted
   per segment, not per position.
-- Each record holds two references to its segment: `pin_user_table` under the target
+- Each record holds two references to its segment: `pin_table` under the target
   table, which is what the memtable pins are cloned from, and `pin_raft_groups` under
   `system.raft_groups`, taken at record creation. That order matters: a segment
   holding only raft entries is `raft_groups`-dirty because of `pin_raft_groups`
@@ -179,9 +179,9 @@ cloned for each applied mutation:
 State machine applies entry at index N
     │
     ▼
-pin_for_apply(N)
+pin_target_table_for_apply(N)
     │
-    │  clone pin_user_table of the record covering N
+    │  clone pin_table of the record covering N
     │  (another reference to the same segment, no bytes written)
     │
     └──► handle → attached to memtable

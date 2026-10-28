@@ -575,16 +575,16 @@ SEASTAR_TEST_CASE(test_raft_batch_record_and_truncation) {
         BOOST_REQUIRE_EQUAL(*segment_queue.front().last_cmd(), raft::index_t(10));
         // Two references to the batch's segment: the group's own at the batch's
         // position and a clone under system.raft_groups.
-        BOOST_REQUIRE(bool(segment_queue.front().pin_user_table));
+        BOOST_REQUIRE(bool(segment_queue.front().pin_table));
         BOOST_REQUIRE(bool(segment_queue.front().pin_raft_groups));
         BOOST_REQUIRE(segment_queue.front().pin_raft_groups.rp()
-                == db::replay_position(segment_queue.front().pin_user_table.rp().id, 0));
+                == db::replay_position(segment_queue.front().pin_table.rp().id, 0));
 
         // A leader change discards 6..10: max is clamped, the reference stays for 1..5.
         segment_queue.back().trim_from(raft::index_t(6));
         BOOST_REQUIRE_EQUAL(segment_queue.front().max_index, raft::index_t(5));
         BOOST_REQUIRE_EQUAL(*segment_queue.front().last_cmd(), raft::index_t(5));
-        BOOST_REQUIRE(bool(segment_queue.front().pin_user_table));
+        BOOST_REQUIRE(bool(segment_queue.front().pin_table));
     });
 }
 
@@ -845,7 +845,7 @@ SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
         for (size_t i = 0; i + 1 < segment_queue.size(); ++i) {
             BOOST_REQUIRE_LT(segment_queue[i].segment(), segment_queue[i + 1].segment());
             BOOST_REQUIRE_LT(segment_queue[i].max_index, segment_queue[i + 1].first_index);
-            BOOST_REQUIRE(bool(segment_queue[i].pin_user_table));
+            BOOST_REQUIRE(bool(segment_queue[i].pin_table));
             BOOST_REQUIRE(bool(segment_queue[i].pin_raft_groups));
         }
 
@@ -866,7 +866,7 @@ SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
         }
         BOOST_REQUIRE(!truncations.empty());
         BOOST_REQUIRE_LT(segment_queue.back().max_index, cut);
-        BOOST_REQUIRE(bool(segment_queue.back().pin_user_table));
+        BOOST_REQUIRE(bool(segment_queue.back().pin_table));
     });
 }
 
@@ -1114,7 +1114,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_release_all_frees_the_segments) {
                 co_await rc.store_log_entries(batch, raft::index_t(0));
             }
             BOOST_REQUIRE_GT(log.get_num_dirty_segments(), 0);
-            BOOST_REQUIRE(bool(rc.pin_for_apply(raft::index_t(1))));
+            BOOST_REQUIRE(bool(rc.pin_target_table_for_apply(raft::index_t(1))));
 
             rc.release_all();
 
@@ -1122,7 +1122,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_release_all_frees_the_segments) {
             {
                 seastar::testing::scoped_no_abort_on_internal_error no_abort;
                 try {
-                    rc.pin_for_apply(raft::index_t(1));
+                    rc.pin_target_table_for_apply(raft::index_t(1));
                     BOOST_FAIL("Expected the records to have been released");
                 } catch (...) {
                     // Expected.

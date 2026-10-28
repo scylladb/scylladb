@@ -172,7 +172,7 @@ void account_batch(std::deque<segment_record>& segment_queue, const db::cf_id_ty
         // persist index 0 over the group's real descriptor.
         segment_record fresh;
         fresh.pin_raft_groups = handle.clone(raft_groups_table_id);
-        fresh.pin_user_table = std::move(handle);
+        fresh.pin_table = std::move(handle);
         fresh.first_index = entries.front()->idx;
         fresh.terms.push_back(raft_term_and_index{.idx = entries.front()->idx, .term = entries.front()->term});
         segment_queue.push_back(std::move(fresh));
@@ -268,7 +268,7 @@ void raft_commitlog::truncate_log(const raft::index_t idx) {
     }
 }
 
-db::rp_handle raft_commitlog::pin_for_apply(raft::index_t idx) {
+const db::rp_handle& raft_commitlog::pin_table(raft::index_t idx) {
     // The index is usually in the front record: records cover ascending disjoint
     // ranges and commands apply in index order. A release whose descriptor write
     // threw leaves its record at the front for a retry, and maybe_release() swallows
@@ -290,7 +290,11 @@ db::rp_handle raft_commitlog::pin_for_apply(raft::index_t idx) {
                 "group_id={}: idx={} is held behind an unreleased front record (segments={})",
                 _group_id, idx, _commitlog_segment_queue.size());
     }
-    return record_it->pin_user_table.clone(_table_id);
+    return record_it->pin_table;
+}
+
+db::rp_handle raft_commitlog::pin_target_table_for_apply(raft::index_t idx) {
+    return pin_table(idx).clone(_table_id);
 }
 
 void raft_commitlog::mark_segment_closed(db::replay_position pos) {
@@ -307,7 +311,7 @@ segment_record* raft_commitlog::front_releasable(raft::index_t commit_idx, raft:
     // The last record has no successor and relies on the flush rounds, which name
     // only closed segments (see closed_up_to()).
     const bool is_final = _commitlog_segment_queue.size() > 1
-            || record.pin_user_table.rp() <= closed_up_to();
+            || record.pin_table.rp() <= closed_up_to();
     if (!is_final || record.max_index > commit_idx) {
         return nullptr;
     }
@@ -337,7 +341,7 @@ std::optional<db::replay_position> raft_commitlog::flush_position_for_release_al
     for (const auto& record : _commitlog_segment_queue) {
         // With no command, apply() got no reference into this segment, so the
         // tablet table holds nothing there.
-        if (record.last_cmd() && record.pin_user_table.rp() <= reported) {
+        if (record.last_cmd() && record.pin_table.rp() <= reported) {
             newest = record.segment();
         }
     }
