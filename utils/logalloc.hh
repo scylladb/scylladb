@@ -31,7 +31,7 @@ constexpr size_t segment_size = 1 << segment_size_shift;
 constexpr size_t max_zone_segments = 256;
 constexpr size_t max_managed_object_size = segment_size * 0.1;
 
-constexpr size_t background_reclaim_free_memory_threshold = 60'000'000;
+constexpr size_t default_background_reclaim_goal = 60 * 1024 * 1024;
 
 //
 // Frees some amount of objects from the region to which it's attached.
@@ -111,6 +111,14 @@ public:
 
     void configure(const config& cfg);
     future<> stop();
+
+    // Sets the amount of free memory the background reclaimer tries to maintain.
+    // Zero disables background reclaiming.
+    void set_background_reclaim_goal(size_t goal) noexcept;
+
+    // Like set_background_reclaim_goal(), in MiB. A negative goal selects the default,
+    // and a goal above shard memory is capped at it.
+    void set_background_reclaim_goal_in_mb(int64_t goal_in_mb) noexcept;
 
 private:
     std::unique_ptr<impl> _impl;

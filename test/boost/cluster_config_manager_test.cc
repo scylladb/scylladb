@@ -29,6 +29,7 @@
 #include "replica/database.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
+#include "utils/logalloc.hh"
 
 BOOST_AUTO_TEST_SUITE(cluster_config_manager_test)
 
@@ -292,6 +293,39 @@ SEASTAR_TEST_CASE(test_cluster_config_manager_resolves_node_oriented_waterfall) 
     });
 }
 
+// lsa_background_reclaim_goal_in_mb resolves through the node-oriented chain and is not
+// a keyspace or table property.
+SEASTAR_TEST_CASE(test_lsa_background_reclaim_goal_is_node_oriented) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto* opt = db::cluster_config_registry::find(db::cluster_config_registry::option_name::lsa_background_reclaim_goal_in_mb);
+        BOOST_REQUIRE(opt != nullptr);
+        BOOST_REQUIRE(!db::cluster_config_registry::is_table_oriented(*opt));
+        BOOST_REQUIRE_EQUAL(std::get<int64_t>(opt->default_value), int64_t(logalloc::default_background_reclaim_goal >> 20));
+
+        e.execute_cql("CREATE KEYSPACE ks_cfg WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER KEYSPACE ks_cfg WITH lsa_background_reclaim_goal_in_mb = 10").get(),
+            exceptions::syntax_exception);
+
+        const auto& topo = e.shared_token_metadata().local().get()->get_topology();
+        db::cluster_config_manager::lookup_context ctx;
+        ctx.dc_name = topo.get_datacenter();
+        ctx.rack_name = topo.get_rack();
+        ctx.node_uuid = topo.my_host_id().uuid();
+
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(*opt, ctx), std::get<int64_t>(opt->default_value));
+        });
+
+        e.execute_cql("ALTER CLUSTER WITH lsa_background_reclaim_goal_in_mb = 10").get();
+        e.execute_cql(seastar::format("ALTER NODE {} WITH lsa_background_reclaim_goal_in_mb = 0", *ctx.node_uuid)).get();
+
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(*opt, ctx), 0);
+        });
+    });
+}
+
 // A node-oriented option has a single callback target: the local node's context, filled
 // in from the local topology. The callback is invoked exactly once per change with the
 // effective value, and an unchanged refresh does not re-invoke it.
@@ -415,6 +449,37 @@ SEASTAR_TEST_CASE(test_cluster_config_manager_resolves_auto_repair_threshold_in_
         with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
             BOOST_REQUIRE(!mgr.local().resolve_config("auto_repair_threshold_in_seconds", ctx));
         });
+    });
+}
+
+// connect_node_config() delivers the current value at once, without waiting for a refresh
+// pass, and every later change through the registered callback.
+SEASTAR_TEST_CASE(test_connect_node_config_delivers_current_value_then_changes) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto clear_test_options = inject_node_oriented_test_option(e);
+        const auto node_uuid = e.shared_token_metadata().local().get()->get_topology().my_host_id().uuid();
+
+        e.execute_cql("ALTER CLUSTER WITH test_node_only_option = 3").get();
+        auto& mgr = e.cluster_config_manager();
+        mgr.local().refresh().get();
+
+        std::vector<std::optional<sstring>> values;
+        auto registration = mgr.local().connect_node_config("test_node_only_option",
+                [&] (const db::cluster_config_registry::option& opt, std::optional<sstring> value) {
+            BOOST_REQUIRE_EQUAL(opt.name, "test_node_only_option");
+            values.push_back(std::move(value));
+        });
+        BOOST_REQUIRE_EQUAL(values.size(), 1u);
+        BOOST_REQUIRE_EQUAL(values.back().value_or(""), "3");
+
+        e.execute_cql(seastar::format("ALTER NODE {} WITH test_node_only_option = 5", node_uuid)).get();
+        mgr.local().refresh().get();
+        BOOST_REQUIRE_EQUAL(values.back().value_or(""), "5");
+
+        e.execute_cql(seastar::format("ALTER NODE {} WITH test_node_only_option = null", node_uuid)).get();
+        e.execute_cql("ALTER CLUSTER WITH test_node_only_option = null").get();
+        mgr.local().refresh().get();
+        BOOST_REQUIRE(!values.back());
     });
 }
 
