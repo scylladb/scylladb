@@ -466,3 +466,74 @@ def test_cdc_write_with_old_timestamp(scylla_only, cql, test_keyspace):
             match = 'from the past.*The oldest timestamp CDC accepts' if keyspace_has_tablets(cql, test_keyspace) else 'from the past'
             with pytest.raises(InvalidRequest, match=match):
                 cql.execute(stmt)
+
+
+# Test that the CDC log rows - delta rows as well as preimage and postimage
+# rows - expire after the table's CDC 'ttl' option, independently of the TTL
+# (or lack of one) of the base-table write, and that the base table only
+# follows its own TTL. Both INSERT and UPDATE, with a regular and a
+# non-frozen collection column, are checked.
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_cdc_log_ttl_expiry(scylla_only, cql, test_keyspace):
+    cdc_ttl = 6
+    schema = 'p int, c int, t text, l list<text>, primary key (p, c)'
+    extra = f" with cdc = {{'enabled': true, 'preimage': true, 'postimage': true, 'ttl': {cdc_ttl}}}"
+    with new_test_table(cql, test_keyspace, schema, extra) as table:
+        log = f'{table}_scylla_cdc_log'
+        # One partition per (operation, base TTL). Base TTL 1 expires before
+        # the log, 1000 after it. Each row is written twice, so that the second
+        # write has a preimage.
+        base_ttls = {}
+        for op in ['insert', 'update']:
+            for base_ttl in [None, 1, 1000]:
+                p = len(base_ttls)
+                base_ttls[p] = base_ttl
+                using = f' USING TTL {base_ttl}' if base_ttl else ''
+                for i in range(2):
+                    if op == 'insert':
+                        cql.execute(f"INSERT INTO {table} (p, c, t, l) VALUES ({p}, 0, 't{i}', ['a{i}', 'b{i}']){using}")
+                    else:
+                        cql.execute(f"UPDATE {table}{using} SET t = 't{i}', l = ['a{i}', 'b{i}'] WHERE p = {p} AND c = 0")
+
+        # Every log row carrying t - preimage (0), delta (1 = update,
+        # 2 = insert) and postimage (9) - has the CDC TTL, not the base one.
+        # The delta rows record the base TTL in cdc$ttl.
+        log_rows = list(cql.execute(f'SELECT p, "cdc$operation", "cdc$ttl", ttl(t) FROM {log}'))
+        for p, base_ttl in base_ttls.items():
+            rows = [r for r in log_rows if r[0] == p and r[3] is not None]
+            delta_op = 2 if p < 3 else 1
+            assert sorted(r[1] for r in rows) == [0, delta_op, delta_op, 9, 9]
+            for r in rows:
+                assert 0 < r[3] <= cdc_ttl
+                assert r[2] == (base_ttl if r[1] == delta_op else None)
+
+        def wait_until(cond):
+            deadline = time.time() + 60
+            while not cond():
+                assert time.time() < deadline, 'Timed out waiting for TTL expiration'
+                time.sleep(0.1)
+
+        def base_partitions():
+            return {r[0] for r in cql.execute(f'SELECT p FROM {table}')}
+
+        def log_partitions():
+            return {r[0] for r in cql.execute(f'SELECT p FROM {log}')}
+
+        # The base rows with TTL 1 expire, but their log rows stay.
+        short = {p for p, ttl in base_ttls.items() if ttl == 1}
+        wait_until(lambda: not (short & base_partitions()))
+        assert log_partitions() == set(base_ttls)
+
+        # Then the whole log expires, while the remaining base rows stay intact.
+        wait_until(lambda: not log_partitions())
+        rest = set(base_ttls) - short
+        assert sorted(cql.execute(f'SELECT p, t, l FROM {table}')) == [(p, 't1', ['a1', 'b1']) for p in sorted(rest)]
+        for p in rest:
+            ttl = cql.execute(f'SELECT ttl(t) FROM {table} WHERE p = {p} AND c = 0').one()[0]
+            if base_ttls[p] is None:
+                assert ttl is None
+            else:
+                assert base_ttls[p] - 100 < ttl <= base_ttls[p]
+
