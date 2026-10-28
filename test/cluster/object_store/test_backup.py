@@ -3040,3 +3040,39 @@ async def test_restore_tablets_fails_when_the_snapshot_does_not_hold_the_compone
             refs = sstable_refs(object_storage, sid)
             assert not any(r.startswith('nodes/') for r in refs), f'The failed restore left node references of sstable {sid}: {sorted(refs)}'
         assert_objects_intact(crafted, bucket_objects(object_storage), 'the failed restore')
+
+
+@pytest.mark.non_gating
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_backup_interrupted_by_shutdown(manager: ScyllaClusterManager, object_storage):
+    '''A node shut down while a backup task uploads must stop cleanly, and
+       after a restart a new backup of the same snapshot completes'''
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300}
+    server = await manager.server_add(config={**cfg, "tablets_mode_for_new_keyspaces": "disabled"})
+    cql = manager.get_cql()
+    cf = 'test_cf'
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} (name text PRIMARY KEY, value text)")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} (name, value) VALUES ('{i}', '{i}')") for i in range(10)))
+        snap_name, files = await take_snapshot_on_one_server(ks, server, manager, logger)
+
+        await manager.api.enable_injection(server.ip_addr, "backup_task_pre_upload", one_shot=True)
+        await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, unique_name('backup_'))
+        await manager.api.wait_for_injection_enter(server.ip_addr, "backup_task_pre_upload")
+        # Let the upload go on only once the shutdown waits for the backup.
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        stop = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
+        await log.wait_for("init - Shutting down snapshots$", from_mark=mark, timeout=60)
+        await manager.api.message_injection(server.ip_addr, "backup_task_pre_upload")
+        await stop
+        await manager.server_start(server.server_id)
+        await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+
+        prefix = unique_name('backup_')
+        tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
+        status = await manager.api.wait_task(server.ip_addr, tid)
+        assert status is not None and status['state'] == 'done', status
+        objects = set(o.key for o in object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+        assert all(f'{prefix}/{f}' in objects for f in files)
