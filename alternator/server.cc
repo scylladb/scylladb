@@ -146,7 +146,7 @@ public:
             [this, rep = std::move(rep), accept_encoding=std::move(accept_encoding)](future<executor::request_return_type> resf) mutable {
              auto res = !resf.failed() ? resf.get() : convert_exception_ptr_to_api_error(resf.get_exception());
              return std::visit(overloaded_functor {
-                [&] (std::string&& str) {
+                [&] (sstring&& str) {
                     return _response_compressor.generate_reply(std::move(rep), std::move(accept_encoding),
                                                                _content_type, std::move(str));
                 },
@@ -191,7 +191,7 @@ protected:
         }
         rjson::add(results, "__type", rjson::from_string("com.amazonaws.dynamodb.v20120810#" + err._type));
         rjson::add(results, "message", err._msg);
-        sstring content = rjson::print(std::move(results));
+        sstring content = rjson::print_sstring(results);
         slogger.trace("api_handler error case: {}", content);
         rep.set_status(err._http_code);
         rep.write_body(_content_type, std::move(content));
@@ -269,7 +269,7 @@ protected:
             }
         }
         rep->set_status(reply::status_type::ok);
-        rep->write_body("json", rjson::print(results));
+        rep->write_body("json", rjson::print_sstring(results));
         return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
     }
 };

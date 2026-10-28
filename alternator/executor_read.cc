@@ -702,7 +702,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     if (is_big(items_descr)) {
         co_return make_streamed(std::move(items_descr));
     }
-    co_return rjson::print(std::move(items_descr));
+    co_return rjson::print_sstring(std::move(items_descr));
 }
 
 static dht::token token_for_segment(int segment, int total_segments) {
@@ -2551,7 +2551,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
         rjson::value response = rjson::empty_object();
         rjson::add(response, "SearchResults", std::move(search_results));
         mark_latency();
-        co_return rjson::print(std::move(response));
+        co_return rjson::print_sstring(std::move(response));
     }
 
     // If we're here, we're in the slow path (!fast_path) case - basically the
@@ -2654,7 +2654,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     rjson::value response = rjson::empty_object();
     rjson::add(response, "SearchResults", std::move(search_results));
     mark_latency();
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 // Converts a multi-row selection result to JSON compatible with DynamoDB.
@@ -2764,7 +2764,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     if (qr.query_result->row_count().value_or(0) > 0) {
         per_table_stats->operation_sizes.get_item_op_size_kb.add(bytes_to_kb_ceil(add_capacity._total_bytes));
     }
-    co_return rjson::print(std::move(res));
+    co_return rjson::print_sstring(std::move(res));
 }
 
 future<executor::request_return_type> executor::batch_get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
@@ -3010,7 +3010,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     if (is_big(response)) {
         co_return make_streamed(std::move(response));
     } else {
-        co_return rjson::print(std::move(response));
+        co_return rjson::print_sstring(std::move(response));
     }
 }
 

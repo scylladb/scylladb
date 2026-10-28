@@ -208,7 +208,7 @@ void executor::maybe_audit(
         }
         // FIXME: rjson::print(request) serializes the entire JSON request body, which
         // can be up to 16 MB for BatchWriteItem.
-        audit_info->set_query_string(sstring(rjson::print(request)), sstring(operation_name));
+        audit_info->set_query_string(rjson::print_sstring(request), sstring(operation_name));
     }
 }
 
@@ -849,7 +849,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Table", std::move(std::get<rjson::value>(table_description_result)));
     elogger.trace("returning {}", response);
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 future<executor::request_return_type> executor::delete_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
@@ -927,7 +927,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     rjson::value response = rjson::empty_object();
     rjson::add(response, "TableDescription", std::move(std::get<rjson::value>(table_description_result)));
     elogger.trace("returning {}", response);
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 static data_type parse_key_type(std::string_view type) {
@@ -1401,7 +1401,7 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
         rjson::push_back(tags, std::move(new_entry));
     }
 
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print_sstring(std::move(ret)));
 }
 
 struct billing_mode_type {
@@ -2622,7 +2622,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     rjson::value status = rjson::empty_object();
     executor::supplement_table_info(request, *schema, _proxy);
     rjson::add(status, "TableDescription", std::move(request));
-    co_return rjson::print(std::move(status));
+    co_return rjson::print_sstring(std::move(status));
 }
 
 future<executor::request_return_type> executor::create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
@@ -3287,7 +3287,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         rjson::value status = rjson::empty_object();
         supplement_table_info(request, *schema, p.local());
         rjson::add(status, "TableDescription", std::move(request));
-        co_return rjson::print(std::move(status));
+        co_return rjson::print_sstring(std::move(status));
     });
 }
 
@@ -3940,7 +3940,7 @@ static executor::request_return_type rmw_operation_return(rjson::value&& attribu
     if (!attributes.IsNull()) {
         rjson::add(ret, "Attributes", std::move(attributes));
     }
-    return rjson::print(std::move(ret));
+    return rjson::print_sstring(std::move(ret));
 }
 
 static future<std::variant<std::unique_ptr<rjson::value>, api_error>> get_previous_item(
@@ -4714,7 +4714,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         maybe_audit(audit_info, audit::statement_category::DML, "",
                     audit_table_names, "BatchWriteItem", request, db::consistency_level::LOCAL_QUORUM, std::move(audited_table_names));
     }
-    co_return rjson::print(std::move(ret));
+    co_return rjson::print_sstring(std::move(ret));
 }
 
 static const std::string_view get_item_type_string(const rjson::value& v) {
@@ -5581,7 +5581,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
         rjson::add(response, "LastEvaluatedTableName", rjson::copy(last_table_name));
     }
 
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 future<executor::request_return_type> executor::describe_endpoints(client_state& client_state, service_permit permit, rjson::value request, std::string host_header, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
@@ -5614,7 +5614,7 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     rjson::push_back(response["Endpoints"], rjson::empty_object());
     rjson::add(response["Endpoints"][0], "Address", rjson::from_string(host_header));
     rjson::add(response["Endpoints"][0], "CachePeriodInMinutes", rjson::value(1440));
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 static locator::replication_strategy_config_options get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
@@ -5651,7 +5651,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
     rjson::add(desc, "PointInTimeRecoveryDescription", std::move(pitr));
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ContinuousBackupsDescription", std::move(desc));
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 static std::optional<unsigned> get_initial_tablet_count(const std::map<sstring, sstring>& tags_map,

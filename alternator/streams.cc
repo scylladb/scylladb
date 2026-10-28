@@ -296,7 +296,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     if (last && limit == 0) {
         rjson::add(ret, "LastEvaluatedStreamArn", *last);
     }
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print_sstring(std::move(ret)));
 }
 
 struct shard_id {
@@ -1050,7 +1050,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     rjson::add(stream_desc, "Shards", std::move(shards));
     rjson::add(ret, "StreamDescription", std::move(stream_desc));
         
-    co_return rjson::print(std::move(ret));
+    co_return rjson::print_sstring(std::move(ret));
 }
 
 enum class shard_iterator_type {
@@ -1205,7 +1205,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
 
     auto ret = rjson::empty_object();
     rjson::add(ret, "ShardIterator", iter);
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print_sstring(std::move(ret)));
 }
 
 struct event_id {
@@ -1520,8 +1520,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
         per_table_stats->returned_records += nrecords;
         _stats.operation_sizes.get_records_op_size_kb.add((total_item_bytes + 1023) / 1024);
         per_table_stats->operation_sizes.get_records_op_size_kb.add((total_item_bytes + 1023) / 1024);
-        auto str = rjson::print(std::move(ret));
-        co_return str;
+        co_return rjson::print_sstring(ret);
     }
 
     // ugh. figure out if we are and end-of-shard
@@ -1559,7 +1558,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     if (is_big(ret)) {
         co_return make_streamed(std::move(ret));
     }
-    co_return rjson::print(std::move(ret));
+    co_return rjson::print_sstring(std::move(ret));
 }
 
 bool executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder, service::storage_proxy& sp, const cdc::options& existing_cdc_opts) {
