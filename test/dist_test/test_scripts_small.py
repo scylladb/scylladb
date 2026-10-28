@@ -525,7 +525,6 @@ def test_sysconfig_parser(scripts):
     assert scripts.read('/etc/sysconfig/scylla-server') == 'A="say \\"hi\\" now"\nB="x y"\nC=3\n'
 
 
-@pytest.mark.xfail(strict=True, reason="get() strips the escaped closing quote: 'a \\\"b\\\"' reads back as 'a \"b\\'")
 def test_sysconfig_parser_trailing_quote(scripts):
     """A value ending with an escaped quote reads back unchanged, without a stray backslash."""
     scripts.file('/f')

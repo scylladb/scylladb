@@ -499,7 +499,11 @@ class sysconfig_parser:
         self.__load()
 
     def get(self, key):
-        val = self._cfg.get('global', key).strip('"')
+        val = self._cfg.get('global', key)
+        # remove the enclosing quotes, but not an escaped closing one
+        val = val.removeprefix('"')
+        if val.endswith('"') and not val.endswith('\\"'):
+            val = val[:-1]
         return self.__unescape(val)
 
     def has_option(self, key):
