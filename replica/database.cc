@@ -4266,14 +4266,26 @@ bool database::enforce_rf_rack_validity_for_keyspace(const db::config& cfg, cons
     return cfg.rf_rack_valid_keyspaces() || ksm.views().size() > 0;
 }
 
-void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) const {
+void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr, const std::unordered_set<sstring>& converted_later) const {
     const auto& keyspaces = get_keyspaces();
     std::vector<std::string_view> invalid_keyspaces{};
+    bool converted_later_invalid = false;
 
     for (const auto& [name, info] : keyspaces) {
         try {
             locator::assert_rf_rack_valid_keyspace(name, tmptr, info->get_replication_strategy());
         } catch (const std::invalid_argument&) {
+            if (converted_later.contains(name)) {
+                // Turning rf_rack_valid_keyspaces on converts these, so the warning below,
+                // which prepares the operator for that, does not concern them.
+                if (enforce_rf_rack_validity_for_keyspace(*info)) {
+                    dblog.warn("Keyspace '{}' is RF-rack-invalid although `rf_rack_valid_keyspaces` is enabled; it is converted to rack lists automatically", name);
+                } else {
+                    dblog.info("Keyspace '{}' is RF-rack-invalid; it is converted to rack lists automatically once `rf_rack_valid_keyspaces` is enabled", name);
+                }
+                converted_later_invalid = true;
+                continue;
+            }
             if (enforce_rf_rack_validity_for_keyspace(*info)) {
                 throw;
             }
@@ -4283,7 +4295,9 @@ void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) c
     }
 
     if (invalid_keyspaces.size() == 0) {
-        dblog.info("All keyspaces are RF-rack-valid");
+        if (!converted_later_invalid) {
+            dblog.info("All keyspaces are RF-rack-valid");
+        }
     } else {
         const auto ks_list = invalid_keyspaces
                 | std::views::join_with(std::string_view(", "))
@@ -4297,19 +4311,34 @@ void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) c
     }
 }
 
-bool database::check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr tmptr, locator::rf_rack_topology_operation change) const {
-    // if it's already invalid before the topology change, it's allowed to remain invalid
-    try {
-        check_rf_rack_validity(tmptr);
-    } catch (const std::invalid_argument&) {
-        return true;
+bool database::check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr tmptr, locator::rf_rack_topology_operation change,
+        const std::unordered_set<sstring>& converted_later, const std::unordered_set<sstring>& ignored_keyspaces) const {
+    const auto& keyspaces = get_keyspaces();
+
+    // if it's already invalid before the topology change, it's allowed to remain invalid,
+    // except that a keyspace in `converted_later` only drops out of the verdict (see the header).
+    std::unordered_set<std::string_view> invalid_before;
+    for (const auto& [name, info] : keyspaces) {
+        try {
+            locator::assert_rf_rack_valid_keyspace(name, tmptr, info->get_replication_strategy());
+        } catch (const std::invalid_argument&) {
+            if (!enforce_rf_rack_validity_for_keyspace(*info)) {
+                continue;
+            }
+            if (!converted_later.contains(name)) {
+                return true;
+            }
+            invalid_before.insert(name);
+        }
     }
 
-    const auto& keyspaces = get_keyspaces();
     std::vector<std::string_view> invalid_keyspaces{};
     bool valid = true;
 
     for (const auto& [name, info] : keyspaces) {
+        if (ignored_keyspaces.contains(name) || invalid_before.contains(name)) {
+            continue;
+        }
         try {
             locator::assert_rf_rack_valid_keyspace(name, tmptr, info->get_replication_strategy(), change);
         } catch (const std::invalid_argument&) {
@@ -4344,12 +4373,16 @@ bool database::check_rf_rack_validity_with_topology_change(locator::token_metada
     return valid;
 }
 
-void database::check_rack_list_everywhere(const bool enforce_rack_list) const {
+void database::check_rack_list_everywhere(const bool enforce_rack_list, const std::unordered_set<sstring>& converted_later) const {
     const auto& keyspaces = get_keyspaces();
     std::vector<std::string_view> invalid_keyspaces{};
 
     for (const auto& [name, info] : keyspaces) {
         if (info->uses_tablets() && !locator::uses_rack_list_exclusively(info->get_replication_strategy().get_config_options())) {
+            if (enforce_rack_list && converted_later.contains(name)) {
+                dblog.warn("Keyspace '{}' uses a numeric replication factor although `enforce_rack_list` is enabled; it is converted to rack lists automatically", name);
+                continue;
+            }
             if (enforce_rack_list) {
                 throw std::invalid_argument(std::format(
                     "The option `enforce_rack_list` is enabled. It requires that all tablet keyspaces use rack lists exclusively. "

@@ -15,11 +15,12 @@ The enhanced API ensures that after quiesce_topology returns:
 """
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.tablets import get_replica_count_by_host
-from test.cluster.util import new_test_keyspace, get_topology_coordinator
+from test.cluster.util import new_test_keyspace, get_topology_coordinator, quiesce_and_disable_tablet_balancing
 import pytest
 import asyncio
 import logging
+import math
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,20 @@ QUIESCE_DEBUG_CMDLINE = [
     '--logger-log-level', 'storage_service=debug',
 ]
 
+async def verify_tablets_are_balanced(cql, num_nodes):
+    """Check that all tablets, the system keyspaces' included, are spread evenly over num_nodes."""
+    tablet_cnt = 0
+    hosts = defaultdict(int)
+    for row in await cql.run_async(f"SELECT * FROM system.tablets"):
+        assert len(row.replicas) == 1, f'We expect only tables with RF==1, but got {len(row.replicas)} replicas for table {row.keyspace_name}.{row.table_name}'
+        tablet_cnt += 1
+        hosts[row.replicas[0][0]] += 1
+
+    assert len(hosts) == num_nodes, f"Expected tablets on all {num_nodes} nodes, got them on {len(hosts)}: {dict(hosts)}"
+    min_tablets = tablet_cnt // num_nodes
+    max_tablets = math.ceil(tablet_cnt / num_nodes)
+    for host_id, count in hosts.items():
+        assert min_tablets <= count <= max_tablets, f"Node {host_id} has {count} tablets, expected {min_tablets} or {max_tablets}"
 
 @pytest.mark.asyncio
 async def test_quiesce_waits_for_balancer(manager: ScyllaClusterManager):
@@ -62,12 +77,7 @@ async def test_quiesce_waits_for_balancer(manager: ScyllaClusterManager):
         await manager.enable_tablet_balancing()
         await manager.api.quiesce_topology(servers[0].ip_addr)
 
-        # Verify balance: 16 tablets / 3 nodes = 5 or 6 per node
-        replicas = await get_replica_count_by_host(manager, servers[0], ks, 't')
-        logger.info(f"Replica distribution after quiesce: {replicas}")
-        assert len(replicas) == 3, f"Expected tablets on all 3 nodes, got: {replicas}"
-        for host_id, count in replicas.items():
-            assert 5 <= count <= 6, f"Node {host_id} has {count} tablets, expected 5 or 6"
+        await verify_tablets_are_balanced(cql, 3)
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -99,7 +109,9 @@ async def test_quiesce_blocks_until_refresh_completes(manager: ScyllaClusterMana
         await log.wait_for("Refreshed table load stats for all DC", timeout=30)
 
         # Enable the refresh pause injection on the leader
-        await manager.api.enable_injection(leader.ip_addr, "refresh_tablet_load_stats_pause", one_shot=True)
+        # Not one-shot: the system keyspaces' pending splits start refreshes of their own,
+        # and all of them have to pause, not only the quiesce's.
+        await manager.api.enable_injection(leader.ip_addr, "refresh_tablet_load_stats_pause", one_shot=False)
 
         # Start quiesce — it should trigger a fresh refresh which will block on the injection
         await manager.enable_tablet_balancing()
@@ -107,8 +119,9 @@ async def test_quiesce_blocks_until_refresh_completes(manager: ScyllaClusterMana
         quiesce_task = asyncio.create_task(
             manager.api.quiesce_topology(leader.ip_addr))
 
-        # Wait for the quiesce-triggered refresh to start. Once we see this log,
-        # the refresh is in progress and blocked by the injection.
+        # The pause line may belong to a refresh the re-enabled balancer started first;
+        # the quiesce's own log line says it got as far as its refresh.
+        await log.wait_for("quiesce topology request: refreshing tablet load stats", from_mark=mark, timeout=30)
         await log.wait_for("refresh_tablet_load_stats_pause: waiting", from_mark=mark, timeout=30)
         # Verify that quiesce is blocked while refresh is paused
         with pytest.raises(asyncio.TimeoutError):
@@ -134,7 +147,9 @@ async def test_quiesce_retries_until_balance_plan_is_empty(manager: ScyllaCluste
     cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
     servers = await manager.servers_add(2, config=cfg, cmdline=QUIESCE_DEBUG_CMDLINE)
 
-    await manager.disable_tablet_balancing()
+    # Let the system keyspaces' tables finish their initial resize first, so that the
+    # non-empty plan the first quiesce observes is the imbalance created below.
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
                                  "'replication_factor': 1} AND tablets = {'initial': 32}") as ks:
@@ -178,12 +193,7 @@ async def test_quiesce_retries_until_balance_plan_is_empty(manager: ScyllaCluste
         matches = await log.grep("topology not idle", from_mark=mark)
         assert matches, "Expected quiesce to retry after observing a non-empty plan"
 
-        # Verify balance: all 4 nodes should have exactly 8 tablets each
-        replicas = await get_replica_count_by_host(manager, servers[0], ks, 't')
-        logger.info(f"Replica distribution after quiesce: {replicas}")
-        assert len(replicas) == 4, f"Expected tablets on all 4 nodes, got: {replicas}"
-        for host_id, count in replicas.items():
-            assert count == 8, f"Node {host_id} has {count} tablets, expected 8"
+        await verify_tablets_are_balanced(cql, 4)
 
         # Second quiesce should not trigger any work
         mark = await log.mark()

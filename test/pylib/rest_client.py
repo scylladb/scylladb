@@ -295,6 +295,11 @@ class ScyllaRESTAPIClient:
     async def quiesce_topology(self, node_ip: str) -> None:
         await self.client.post(f"/storage_service/quiesce_topology", host=node_ip)
 
+    async def quiesce_auto_rf(self, node_ip: str) -> None:
+        """Wait until the automatic replication of audit and system_traces has nothing
+        left to do, without waiting for the tablet load balancer."""
+        await self.client.post(f"/storage_service/quiesce_topology", host=node_ip, params={"auto_rf_only": "true"})
+
     async def add_tablet_replica(self, node_ip: str, ks: str, table: str, dst_host: HostID, dst_shard: int, token: int, force: bool = False) -> None:
         await self.client.post(f"/storage_service/tablets/add_replica", host=node_ip, params={
             "ks": ks,
@@ -666,11 +671,15 @@ class ScyllaRESTAPIClient:
     async def repair_and_wait(self, node_ip: str, keyspace: str = "", table: str = "", data_centers: str = "") -> None:
         """Issue repair_async and poll repair_status until completion.
 
-        If keyspace is empty, repairs all non-system keyspaces.
+        If keyspace is empty, repairs all non-system vnode keyspaces, which is
+        what `nodetool repair` without arguments does. Tablet keyspaces are
+        rejected by /storage_service/repair_async, they have to be repaired via
+        the tablet repair API (see `repair()`).
         """
         params = {k: v for k, v in (("columnFamilies", table), ("dataCenters", data_centers)) if v}
         if not keyspace:
-            keyspaces = await self.client.get_json("/storage_service/keyspaces", host=node_ip, params={"type": "non_local_strategy"})
+            keyspaces = await self.client.get_json("/storage_service/keyspaces", host=node_ip,
+                                                   params={"type": "non_local_strategy", "replication": "vnodes"})
             for ks in keyspaces:
                 await self._repair_keyspace(node_ip, ks, params)
         else:

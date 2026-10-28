@@ -2365,7 +2365,9 @@ public:
     // Preconditions:
     // * the `locator::topology` instance corresponding to the passed `locator::token_metadata_ptr`
     //   must contain a complete list of racks and data centers in the cluster.
-    void check_rf_rack_validity(const locator::token_metadata_ptr) const;
+    // Keyspaces in `converted_later` only get a log line of their own and are left out of the
+    // warning about RF-rack-invalid keyspaces: see check_rack_list_everywhere().
+    void check_rf_rack_validity(const locator::token_metadata_ptr, const std::unordered_set<sstring>& converted_later = {}) const;
 
     // Verifies whether all keyspaces that require RF-rack-validity (as determined by enforce_rf_rack_validity_for_keyspace)
     // would remain RF-rack-valid after applying a topology change.
@@ -2377,7 +2379,12 @@ public:
     // Preconditions:
     // * The provided locator::topology instance (from the passed locator::token_metadata_ptr)
     //   must contain a complete list of racks and data centers in the cluster.
-    bool check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr, locator::rf_rack_topology_operation) const;
+    // If a keyspace which requires RF-rack-validity is invalid already, the change is allowed.
+    // Keyspaces in `converted_later` (see check_rf_rack_validity()) are the exception: one which
+    // is invalid already is left out of the verdict, and the other keyspaces are still checked.
+    // Keyspaces named in `ignored_keyspaces` do not count towards the verdict.
+    bool check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr, locator::rf_rack_topology_operation,
+            const std::unordered_set<sstring>& converted_later, const std::unordered_set<sstring>& ignored_keyspaces = {}) const;
 
     // Verify that all tablet keyspaces have a rack list configured.
     //
@@ -2386,7 +2393,10 @@ public:
     //   if there is a tablet keyspace that uses numeric replication factors.
     // * If not `enforce_rack_list`, a warning will be printed for all keyspaces
     //   that use numeric replication factors, but no exception should be thrown.
-    void check_rack_list_everywhere(const bool enforce_rack_list) const;
+    // Keyspaces in `converted_later` are let through with a warning: the topology
+    // coordinator converts their numeric RFs to rack lists once enforce_rack_list or
+    // rf_rack_valid_keyspaces is set.
+    void check_rack_list_everywhere(const bool enforce_rack_list, const std::unordered_set<sstring>& converted_later = {}) const;
 
 private:
     // SSTable sampling might require considerable amounts of memory,

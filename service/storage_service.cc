@@ -123,6 +123,7 @@
 #include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
 #include "db/view/view_build_status.hh"
+#include "service/topology_utils.hh"
 #include "cql3/query_processor.hh"
 #include <csignal>
 #include "utils/labels.hh"
@@ -1368,34 +1369,7 @@ public:
 };
 
 future<bool> storage_service::ongoing_rf_change(const group0_guard& guard, sstring ks) const {
-    auto ongoing_ks_rf_change = [&] (utils::UUID request_id) -> future<bool> {
-        auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
-        co_return std::holds_alternative<global_topology_request>(req_entry.request_type) &&
-            std::get<global_topology_request>(req_entry.request_type) == global_topology_request::keyspace_rf_change &&
-            req_entry.new_keyspace_rf_change_ks_name.has_value() && req_entry.new_keyspace_rf_change_ks_name.value() == ks;
-    };
-    if (_topology_state_machine._topology.global_request_id.has_value()) {
-        auto req_id = _topology_state_machine._topology.global_request_id.value();
-        if (co_await ongoing_ks_rf_change(req_id)) {
-            co_return true;
-        }
-    }
-    for (auto request_id : _topology_state_machine._topology.paused_rf_change_requests) {
-        if (co_await ongoing_ks_rf_change(request_id)) {
-            co_return true;
-        }
-    }
-    for (auto request_id : _topology_state_machine._topology.global_requests_queue) {
-        if (co_await ongoing_ks_rf_change(request_id)) {
-            co_return true;
-        }
-    }
-    for (auto request_id : _topology_state_machine._topology.ongoing_rf_changes) {
-        if (co_await ongoing_ks_rf_change(request_id)) {
-            co_return true;
-        }
-    }
-    co_return false;
+    return service::ongoing_rf_change(_topology_state_machine._topology, _sys_ks.local(), guard, ks);
 }
 
 future<> storage_service::raft_initialize_discovery_leader(const join_node_request_params& params) {
@@ -2748,10 +2722,64 @@ static size_t count_normal_token_owners(const topology& topology) {
     });
 }
 
+// How long a removal waits for auto-RF to give the rack up.
+static constexpr std::chrono::seconds auto_rf_removal_max_wait{120};
+
+future<bool> storage_service::auto_rf_may_still_fix_removal(group0_guard guard, auto_rf_removal_wait& wait, locator::host_id host_id) {
+    // Release the guard: the coordinator has to be able to commit the changes waited for.
+    release_guard(std::move(guard));
+    if (!wait.deadline) {
+        wait.deadline = lowres_clock::now() + auto_rf_removal_max_wait;
+    }
+    if (lowres_clock::now() >= *wait.deadline) {
+        rtlogger.warn("removal of {}: gave up waiting for auto-RF after {}s", host_id, auto_rf_removal_max_wait.count());
+        co_return false;
+    }
+    // Wait only if the auto-RF keyspaces alone make the removal RF-rack-invalid.
+    auto tmptr = _db.local().get_token_metadata_ptr();
+    auto* node = tmptr->get_topology().find_node(host_id);
+    if (!node) {
+        co_return false;
+    }
+    locator::rf_rack_topology_operation op{locator::rf_rack_topology_operation::type::remove, host_id, node->dc(), node->rack()};
+    const auto& auto_rf_names = auto_rf_keyspace_names();
+    if (!_db.local().check_rf_rack_validity_with_topology_change(tmptr, std::move(op), auto_rf_names, auto_rf_names)) {
+        co_return false;
+    }
+    // Wait only while auto-RF will give the rack up and can act: the feature, tablet
+    // balancing and no dead non-excluded node are the reconciler's own gates, see
+    // find_auto_rf_change().
+    const auto& topology = _topology_state_machine._topology;
+    const bool dead_node = std::ranges::any_of(topology.normal_nodes, [&] (const auto& n) {
+        return !topology.excluded_tablet_nodes.contains(n.first) && !_gossiper.is_alive(locator::host_id(n.first.uuid()));
+    });
+    if (!_feature_service.auto_replication_factor || !tmptr->tablets().balancing_enabled() || dead_node
+            || !auto_rf_will_give_up_rack(_db.local(), topology, node->dc(), node->rack())) {
+        co_return false;
+    }
+    if (!wait.waited) {
+        rtlogger.info("removal of {} would make a keyspace RF-rack-invalid; waiting for auto-RF to give up rack {}/{} first",
+                host_id, node->dc(), node->rack());
+        wait.waited = true;
+    }
+    // Giving the rack up is a topology change, which signals the event. Any other
+    // change only causes another validation.
+    auto sub = _group0_as.subscribe([this] () noexcept {
+        _topology_state_machine.event.broadcast();
+    });
+    try {
+        co_await _topology_state_machine.event.wait(*wait.deadline);
+    } catch (const seastar::condition_variable_timed_out&) {
+    }
+    _group0_as.check();
+    co_return true;
+}
+
 future<> storage_service::raft_decommission() {
     auto& raft_server = _group0->group0_server();
     auto holder = _group0->hold_group0_gate();
     utils::UUID request_id;
+    auto_rf_removal_wait rf_wait;
 
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
@@ -2777,6 +2805,9 @@ future<> storage_service::raft_decommission() {
 
         auto validation_result = validate_removing_node(_db.local(), locator::host_id(raft_server.id().uuid()));
         if (std::holds_alternative<node_validation_failure>(validation_result)) {
+            if (co_await auto_rf_may_still_fix_removal(std::move(guard), rf_wait, locator::host_id(raft_server.id().uuid()))) {
+                continue;
+            }
             throw std::runtime_error(fmt::format("Decommission failed: node decommission rejected: {}",
                                                  std::get<node_validation_failure>(validation_result).reason));
         }
@@ -2862,6 +2893,7 @@ future<> storage_service::decommission(sharded<db::snapshot_ctl>& snapshot_ctl) 
 future<> storage_service::raft_removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params) {
     auto id = raft::server_id{host_id.uuid()};
     utils::UUID request_id;
+    auto_rf_removal_wait rf_wait;
 
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
@@ -2897,6 +2929,9 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
 
         auto validation_result = validate_removing_node(_db.local(), host_id);
         if (std::holds_alternative<node_validation_failure>(validation_result)) {
+            if (co_await auto_rf_may_still_fix_removal(std::move(guard), rf_wait, host_id)) {
+                continue;
+            }
             throw std::runtime_error(fmt::format("Removenode failed: node remove rejected: {}",
                                                  std::get<node_validation_failure>(validation_result).reason));
         }
@@ -5049,8 +5084,12 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
     while (!_async_gate.is_closed() && !_group0_as.abort_requested()) {
         bool sleep = false;
         try {
-            // Ensures that latest changes to tablet metadata, in group0, are visible
-            auto guard = co_await _group0->client().start_operation(_group0_as);
+            // Ensures that latest changes to tablet metadata, in group0, are visible.
+            // The timeout matters even though this is a background fiber: the guard holds
+            // _operation_mutex, which serialises every group0 operation on this node, so
+            // waiting here without a bound blocks all of them. Failing and retrying on the
+            // backoff below releases the mutex between attempts; not timing out never does.
+            auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
             auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
             if (!tmap.needs_split()) {
                 release_guard(std::move(guard));
@@ -7023,7 +7062,7 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled, std::option
     }
 }
 
-future<utils::UUID> storage_service::submit_quiesce_topology_request() {
+future<utils::UUID> storage_service::submit_quiesce_topology_request(global_topology_request type) {
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
         auto request_id = guard.new_group0_state_id();
@@ -7033,11 +7072,12 @@ future<utils::UUID> storage_service::submit_quiesce_topology_request() {
 
         topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
         rtbuilder.set("done", false)
-                 .set("request_type", global_topology_request::quiesce);
+                 .set("request_type", type);
 
         topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-            ::format("quiesce topology request from {}", _group0->group0_server().id()));
+            ::format("{} request from {}", type == global_topology_request::quiesce ? "quiesce topology" : "auto-RF quiesce",
+                    _group0->group0_server().id()));
 
         try {
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
@@ -7093,6 +7133,16 @@ future<> storage_service::do_await_topology_quiesced() {
                         "quiesce request {}: topology not idle: {} (attempt {}, waiting for {} s)",
                         request_id, error, attempts, elapsed_s());
         }
+        if (std::string_view(error) == auto_rf_backed_off_error) {
+            // The topology is idle during the backoff, so the waits below would not block.
+            // The retry is a topology change, which signals the event; the timeout covers a
+            // signal which came before this wait.
+            try {
+                co_await _topology_state_machine.event.wait(auto_rf_backoff_max);
+            } catch (const seastar::condition_variable_timed_out&) {
+            }
+            continue;
+        }
         // Wait locally for topology to settle before resubmitting.
         co_await _topology_state_machine.await_not_busy();
         co_await _topology_state_machine.event.when([this] {
@@ -7130,6 +7180,39 @@ future<> storage_service::await_topology_quiesced() {
     // by the next run rather than by that one, so nobody is given an answer which was
     // computed before it asked.
     co_await _quiesce_topology.trigger_later();
+}
+
+future<> storage_service::await_auto_rf_quiesced() {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_await container().invoke_on(0, [] (auto& ss) {
+            return ss.await_auto_rf_quiesced();
+        });
+        co_return;
+    }
+
+    if (!_feature_service.auto_replication_factor) {
+        co_return;
+    }
+
+    while (true) {
+        auto request_id = co_await submit_quiesce_topology_request(global_topology_request::auto_rf_quiesce);
+        auto error = co_await wait_for_topology_request_completion(request_id);
+        if (error.empty()) {
+            co_return;
+        }
+        slogger.info("auto-RF quiesce request {}: {}", request_id, error);
+        // A change in progress commits topology changes as it advances, and a backed-off
+        // one is retried with one, so either signals the event. The timeout covers a
+        // signal that came before this wait started.
+        try {
+            co_await _topology_state_machine.event.wait(auto_rf_backoff_max);
+        } catch (const seastar::condition_variable_timed_out&) {
+        }
+        co_await _topology_state_machine.await_not_busy();
+    }
 }
 
 future<bool> storage_service::verify_topology_quiesced(token_metadata::version_t expected_version) {

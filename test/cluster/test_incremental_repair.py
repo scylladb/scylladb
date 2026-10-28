@@ -9,7 +9,8 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.repair import load_tablet_sstables_repaired_at, load_tablet_repair_time, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
-from test.cluster.util import reconnect_driver, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown, create_new_test_keyspace
+from test.cluster.util import reconnect_driver, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown, create_new_test_keyspace, \
+    quiesce_and_disable_tablet_balancing
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.rest_client import read_barrier
 
@@ -234,11 +235,14 @@ async def verify_max_repaired_at(manager, scylla_path, servers, ks, max_repaired
             logger.info(f"Got {node_workdir=} {nr_sstables=} {sst=} {repaired_at=}")
             assert repaired_at <= max_repaired_at
 
-async def trigger_tablet_merge(manager, servers, logs):
+async def trigger_tablet_merge(manager, servers, logs, for_table_id=None, table_name=None):
     s1_log = logs[0]
     s1_mark = await s1_log.mark()
-    await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers)
-    await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
+    params = {} if for_table_id is None else {'for_table_id': for_table_id}
+    await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers, params=params)
+    # table_name ("ks.table") makes the wait see only that table's merge, not one of a
+    # system keyspace's tables.
+    await s1_log.wait_for(f'Detected tablet merge for table {table_name or ""}', from_mark=s1_mark)
     await inject_error_off(manager, "tablet_force_tablet_count_decrease", servers)
 
 async def prepare_cluster_for_incremental_repair(manager, nr_keys = 100 , cmdline = [], tablets = 8):
@@ -353,7 +357,7 @@ async def do_tablet_rebuild_incremental_repair(manager: ScyllaClusterManager, co
     cmdline = ['--logger-log-level', 'compaction=debug']
     servers = [await manager.server_add(config=cfg, cmdline=cmdline, property_file={"dc": "dc1", "rack": rack}) for rack in ["r1", "r1", "r2"]]
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
     cql = manager.get_cql()
 
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}")
@@ -624,11 +628,11 @@ async def do_test_tablet_incremental_repair_with_split_and_merge(manager, do_spl
     if do_split:
         s1_mark = await logs[0].mark()
         await inject_error_on(manager, "tablet_force_tablet_count_increase", servers)
-        await logs[0].wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await logs[0].wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
         await inject_error_off(manager, "tablet_force_tablet_count_increase", servers)
 
     if do_merge:
-        await trigger_tablet_merge(manager, servers, logs)
+        await trigger_tablet_merge(manager, servers, logs, table_id, f"{ks}.test")
 
     scylla_path = await manager.server_get_exe(servers[0].server_id)
 
@@ -705,7 +709,7 @@ async def test_tablet_incremental_repair_merge_higher_repaired_at_number(manager
     scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     s1_mark = await logs[0].mark()
-    await trigger_tablet_merge(manager, servers, logs)
+    await trigger_tablet_merge(manager, servers, logs, table_id, f"{ks}.test")
     # The merge process will set the unrepaired sstable with repaired_at=3 to repaired_at=0 during merge
     await logs[0].wait_for('Updating repaired_at for tablet merge .* old=3 new=0 sstables_repaired_at=2', from_mark=s1_mark)
     await logs[0].wait_for('Completed updating repaired_at=.* for tablet merge', from_mark=s1_mark)
@@ -743,7 +747,7 @@ async def test_tablet_incremental_repair_merge_correct_repaired_at_number_after_
     scylla_path = await manager.server_get_exe(servers[0].server_id)
 
     # Trigger merge
-    await trigger_tablet_merge(manager, servers, logs)
+    await trigger_tablet_merge(manager, servers, logs, table_id, f"{ks}.test")
 
     # Verify sstables_repaired_at should be 3 after merge
     for server, host in zip(servers, hosts):
@@ -778,7 +782,9 @@ async def do_test_tablet_incremental_repair_merge_error(manager, error):
     # Trigger merge and error in merge
     mark = await coord_log.mark()
     await inject_error_on(manager, error, [coord_serv])
-    await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers)
+    # Only the test table may merge: the _once injection disables the forced decrease at
+    # the first merge, and the error injected above fires for any merging table.
+    await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers, params={'for_table_id': table_id})
     await inject_error_on(manager, "tablet_force_tablet_count_decrease_once", servers)
     await coord_log.wait_for(f'Got {error}', from_mark=mark)
     await inject_error_off(manager, "tablet_force_tablet_count_decrease", servers)
@@ -884,7 +890,11 @@ async def test_incremental_repair_finishes_when_tablet_skips_end_repair_stage(ma
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_incremental_repair_rejoin_do_tablet_operation(manager):
     cmdline = ['--logger-log-level', 'raft_topology=debug']
-    servers = await manager.servers_add(3, auto_rack_dc="dc1", cmdline=cmdline)
+    # repair_finish_wait is not scoped to a table: auto-RF's rebuilds of the system
+    # keyspaces would take it, hold the repair slot and starve the test table's repair.
+    # Keep the system keyspaces on vnodes.
+    config = {'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
+    servers = await manager.servers_add(3, auto_rack_dc="dc1", config=config, cmdline=cmdline)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:

@@ -141,6 +141,22 @@ Procedure
 
       Failure to do so will result in decommission errors such as "zero replica after the removal".
 
+      Where the ``audit`` or ``system_traces`` keyspace uses tablets (``DESCRIBE KEYSPACE`` shows
+      ``tablets = {'enabled': true}``), its replication is managed automatically (see
+      :ref:`Replication of the Audit Table <audit-table-replication>`). A keyspace on vnodes is altered as above.
+      Remove the data center from each keyspace on tablets, and do it after all other keyspaces: while another tablets keyspace
+      still replicates to the data center, it is added back to them. Keep the replication of the other data centers
+      as ``DESCRIBE KEYSPACE`` shows it, and remove the data center with ``[]`` where it has a rack list, or with
+      ``0`` where it has a numeric replication factor. For example, with rack lists:
+
+      .. code-block:: shell
+
+         cqlsh> ALTER KEYSPACE audit WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : ['RAC1', 'RAC2', 'RAC3'], 'ASIA-DC' : [], 'EUROPE-DC' : ['RAC6', 'RAC7', 'RAC8']};
+         cqlsh> ALTER KEYSPACE system_traces WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'US-DC' : ['RAC1', 'RAC2'], 'ASIA-DC' : [], 'EUROPE-DC' : ['RAC6', 'RAC7']};
+
+      If a statement is rejected with ``Another RF change for this keyspace ... ongoing``, an automatic change is
+      in progress; retry once it has finished.
+
    .. warning::
 
          Removal of replicas from a datacenter cannot be aborted. To get back to the previous replication, wait until the ALTER KEYSPACE finishes and then add the replicas back by running another ALTER KEYSPACE statement.

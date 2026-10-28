@@ -225,6 +225,8 @@ struct rf_change_completion_info {
     sstring ks_name;
     sstring error;
     std::unordered_map<sstring, sstring> saved_ks_props;
+    // The request's initiating_host; set for the auto-RF reconciler's own requests.
+    utils::UUID initiating_host;
 };
 
 struct rf_change_abort_info {

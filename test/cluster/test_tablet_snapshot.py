@@ -19,6 +19,7 @@ import pytest
 from test import TOP_SRC_DIR
 from test.cluster.util import get_topology_coordinator
 from test.cluster.util import new_test_keyspace
+from test.cluster.util import quiesce_and_disable_tablet_balancing
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import unique_name
 from test.pylib.util import wait_for_view
@@ -97,9 +98,9 @@ async def test_tablet_snapshot_matches_live_topology(manager: ScyllaClusterManag
         )
         await wait_for_view(cql, mv, len(servers))
 
-        # The snapshots are taken after the live topology is read, so a migration in that
-        # window would move replicas and make the comparison below fail intermittently.
-        await manager.disable_tablet_balancing()
+        # The snapshots are taken after the live topology is read; an auto-RF change or a
+        # migration landing in between would make them differ. Wait for both to finish.
+        await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
         with get_live_topology(servers[0].ip_addr) as live_src:
             live_topo = live_src.get_topology()
@@ -142,7 +143,11 @@ async def test_tablet_snapshot_taken_after_replace_before_rebuild(manager: Scyll
     In that window the topology model must still list the replaced node as a replica, while
     system.topology already has it as left and the joining node as normal.
     """
-    servers = await manager.servers_add(3, auto_rack_dc="dc1")
+    # The replace is left blocked in await_tablets_rebuilt(). With only the test keyspace
+    # on tablets the orphaned server_start() still completes; with the system keyspaces
+    # on tablets it never does, and the post-test drain times out on it.
+    servers = await manager.servers_add(3, auto_rack_dc="dc1",
+                                        config={'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']})
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 3}"

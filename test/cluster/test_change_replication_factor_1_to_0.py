@@ -12,7 +12,7 @@ from cassandra import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
+from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency, alter_auto_rf_keyspaces
 from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
@@ -100,6 +100,8 @@ async def test_change_replication_factor_1_to_0_and_decommission(request: pytest
 
         # dc1 = 0 -> remove me from said dc
         await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc0': 1, 'dc1': 0}}")
+
+        await alter_auto_rf_keyspaces(cql, "{'class': 'NetworkTopologyStrategy', 'dc0': 1, 'dc1': 0}")
 
         logger.info(f"Decommissioning node {srvs[1]}")
 

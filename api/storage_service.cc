@@ -32,6 +32,7 @@
 #include <fmt/ranges.h>
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
+#include "service/topology_utils.hh"
 #include "service/topology_state_machine.hh"
 #include "service/load_meter.hh"
 #include "gms/feature_service.hh"
@@ -110,8 +111,10 @@ static void ensure_tablets_disabled(const http_context& ctx, const sstring& ks_n
 
 static bool any_of_keyspaces_use_tablets(const http_context& ctx) {
     auto& db = ctx.db.local();
+    // Leave out the auto-RF system keyspaces: they are on tablets wherever tablets are the
+    // default, but do not affect the token ring, which is all get_ownership() reports.
     auto uses_tablets = [&db](const auto& ks_name) {
-        return db.find_keyspace(ks_name).uses_tablets();
+        return !service::is_auto_rf_keyspace(ks_name) && db.find_keyspace(ks_name).uses_tablets();
     };
 
     auto keyspaces = db.get_all_keyspaces();
@@ -1684,7 +1687,12 @@ rest_finalize_vnode_tablet_migration(http_context& ctx, sharded<service::storage
 static
 future<json::json_return_type>
 rest_quiesce_topology(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        co_await ss.local().await_topology_quiesced();
+        auto auto_rf_only = req->get_query_param("auto_rf_only");
+        if (!auto_rf_only.empty() && parse_bool_param("auto_rf_only", auto_rf_only)) {
+            co_await ss.local().await_auto_rf_quiesced();
+        } else {
+            co_await ss.local().await_topology_quiesced();
+        }
         co_return json_void();
 }
 
