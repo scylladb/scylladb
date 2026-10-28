@@ -439,7 +439,9 @@ future<> groups_manager::cleanup_group(global_tablet_id tablet, raft::group_id g
                     "cleanup_group({}-{}): the raft server was not torn down before the deadline", tablet, group_id)));
         }
     }
-    co_await raft_groups_storage::erase_persisted_state(_qp, group_id, this_shard_id());
+    // The truncate record is stamped by the leader's clock; the tombstone has to beat it.
+    const auto truncate = co_await raft_groups_storage::load_truncate_record(_qp, group_id, this_shard_id());
+    co_await raft_groups_storage::erase_persisted_state(_qp, group_id, this_shard_id(), truncate.truncated_at);
 }
 
 void groups_manager::init_messaging_service() {
