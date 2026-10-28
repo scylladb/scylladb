@@ -174,6 +174,7 @@ private:
     sharded<service::migration_manager> _mm;
     sharded<db::batchlog_manager> _batchlog_manager;
     sharded<db::cluster_config_manager> _cluster_config_manager;
+    sharded<db::cluster_config_manager::config_callback_registration> _aggregated_metrics_callbacks;
     sharded<gms::gossiper> _gossiper;
     sharded<service::raft_group_registry> _group0_registry;
     sharded<db::system_keyspace> _sys_ks;
@@ -832,6 +833,10 @@ private:
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [this] {
                 _cluster_config_manager.stop().get();
             });
+            db::plug_aggregated_metrics(_db, _cluster_config_manager, _aggregated_metrics_callbacks).get();
+            auto unplug_aggregated_metrics = defer_verbose_shutdown("aggregated_metrics", [this] {
+                db::unplug_aggregated_metrics(_db, _aggregated_metrics_callbacks).get();
+            });
 
             _elc_notif.start().get();
             auto stop_elc_notif = defer_verbose_shutdown("lifecycle notifier", [this] { _elc_notif.stop().get(); });
@@ -1044,6 +1049,9 @@ private:
                 _groups_manager.invoke_on_all(&service::strong_consistency::groups_manager::uninit_messaging_service).get();
                 _groups_manager.stop().get();
             });
+            _groups_manager.invoke_on_all([this] (service::strong_consistency::groups_manager& m) {
+                m.watch_aggregated_metrics(_cluster_config_manager.local());
+            }).get();
 
             _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper)).get();
             auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [this] {
