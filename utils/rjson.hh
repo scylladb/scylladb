@@ -677,8 +677,16 @@ using chunked_content = std::vector<temporary_buffer<char>>;
 // in it.
 rjson::value parse(chunked_content&&, size_t max_nested_level = default_max_nested_level);
 
+// Observes the memory allocated for a document being parsed: it is called
+// with the number of bytes allocated so far each time it grew by about
+// memory_observer_step, and once more at the end. It may throw to stop the
+// parsing.
+using memory_observer = noncopyable_function<void(size_t allocated)>;
+inline constexpr size_t memory_observer_step = 64 * 1024;
+rjson::value parse(chunked_content&&, size_t max_nested_level, memory_observer observer);
+
 // Parses like parse(chunked_content&&), yielding when the task quota runs out.
-future<rjson::value> parse_gently(chunked_content&&, size_t max_nested_level = default_max_nested_level);
+future<rjson::value> parse_gently(chunked_content&&, size_t max_nested_level = default_max_nested_level, memory_observer observer = {});
 
 // Supplies parse_sax() with input, one buffer at a time. An empty buffer
 // marks the end of the input.

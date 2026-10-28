@@ -505,3 +505,35 @@ BOOST_AUTO_TEST_CASE(test_type_helper) {
     BOOST_REQUIRE_THROW(rjson::get<int>(v, "s"), rjson::malformed_value);
     BOOST_REQUIRE_THROW(rjson::get<int>(v, "nonexistent"), rjson::missing_value);
 }
+
+// The parser reports the memory a document takes as it grows, so that it
+// can be accounted for (#31314).
+SEASTAR_TEST_CASE(test_memory_observer) {
+    // A flat array of small numbers takes 8 times more memory than its text.
+    std::string doc = "[0";
+    for (int i = 0; i < 100000; ++i) {
+        doc += ",0";
+    }
+    doc += "]";
+    std::vector<size_t> reports;
+    auto v = rjson::parse(split(doc, {}), rjson::default_max_nested_level, [&] (size_t allocated) {
+        reports.push_back(allocated);
+    });
+    BOOST_REQUIRE_EQUAL(v.Size(), 100001);
+    BOOST_REQUIRE_GT(reports.size(), 2);
+    BOOST_REQUIRE(std::ranges::is_sorted(reports));
+    BOOST_REQUIRE_GE(reports.back(), 100001 * sizeof(rjson::value));
+
+    reports.clear();
+    v = co_await rjson::parse_gently(split(doc, {1000}), rjson::default_max_nested_level, [&] (size_t allocated) {
+        reports.push_back(allocated);
+    });
+    BOOST_REQUIRE_GE(reports.back(), 100001 * sizeof(rjson::value));
+
+    // The observer can stop the parsing.
+    BOOST_REQUIRE_THROW(co_await rjson::parse_gently(split(doc, {}), rjson::default_max_nested_level, [] (size_t allocated) {
+        if (allocated > 100000) {
+            throw std::runtime_error("too large");
+        }
+    }), std::runtime_error);
+}

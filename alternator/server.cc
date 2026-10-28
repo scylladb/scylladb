@@ -805,12 +805,13 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     }
     _pending_requests.enter();
     auto leave = defer([this] () noexcept { _pending_requests.leave(); });
-    // JSON parsing can allocate up to roughly 2x the size of the raw
-    // document, + a couple of bytes for maintenance.
+    // Reserve memory for the request and for its parsed form, estimated to
+    // take as much as the request, + a couple of bytes for maintenance. When
+    // the parsed form takes more, the excess is reserved during parsing.
     // If the Content-Length of the request is not available, we assume
     // the largest possible request (request_content_length_limit, i.e., 16 MB)
     // and after reading the request we return_units() the excess.
-    size_t mem_estimate = (req->content_length ? req->content_length : request_content_length_limit) * 2 + 8000;
+    size_t mem_estimate = (req->content_length ? req->content_length : request_content_length_limit) * 2 + parsed_request_overhead;
     auto units_fut = get_units(*_memory_limiter, mem_estimate);
     if (_memory_limiter->waiters()) {
         ++_executor._stats.requests_blocked_memory;
@@ -825,7 +826,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         for (const auto& chunk : content) {
             content_length += chunk.size();
         }
-        size_t new_mem_estimate = content_length * 2 + 8000;
+        size_t new_mem_estimate = content_length * 2 + parsed_request_overhead;
         units.return_units(mem_estimate - new_mem_estimate);
     }
     auto username = co_await verify_signature(*req, content);
@@ -880,7 +881,25 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     auto f = [this, content = std::move(content), &callback = callback_it->second,
             client_state = std::move(client_state), trace_state = std::move(trace_state),
             units = std::move(units), req = std::move(req)] () mutable -> future<executor::request_return_type> {
-        rjson::value json_request = co_await _json_parser.parse(std::move(content));
+        // The reservation made before reading the request let its parsed
+        // form take as much memory as the request itself. A parsed form can
+        // take several times more (#31314), so reserve the excess as it is
+        // allocated. It doesn't wait for the memory, which could deadlock
+        // requests holding memory while waiting for more, but makes later
+        // requests wait until it is freed.
+        // The units were counted from the request as received, which is
+        // smaller than its content if it was compressed, so compare them
+        // with what the content and its parsed form take.
+        size_t content_size = 0;
+        for (const auto& chunk : content) {
+            content_size += chunk.size();
+        }
+        rjson::value json_request = co_await _json_parser.parse(std::move(content), [this, &units, content_size] (size_t allocated) {
+            size_t needed = content_size + allocated;
+            if (needed > units.count()) {
+                units.adopt(consume_units(*_memory_limiter, needed - units.count()));
+            }
+        });
         if (!json_request.IsObject()) {
             co_return api_error::validation("Request content must be an object");
         }
@@ -1211,16 +1230,16 @@ future<> server::stop() {
     });
 }
 
-future<rjson::value> server::json_parser::parse(chunked_content&& content) {
+future<rjson::value> server::json_parser::parse(chunked_content&& content, rjson::memory_observer observer) {
     size_t size = 0;
     for (const auto& chunk : content) {
         size += chunk.size();
     }
     if (size < yieldable_parsing_threshold) {
-        return make_ready_future<rjson::value>(rjson::parse(std::move(content)));
+        return make_ready_future<rjson::value>(rjson::parse(std::move(content), rjson::default_max_nested_level, std::move(observer)));
     }
-    return with_semaphore(_parsing_sem, 1, [content = std::move(content)] () mutable {
-        return rjson::parse_gently(std::move(content));
+    return with_semaphore(_parsing_sem, 1, [content = std::move(content), observer = std::move(observer)] () mutable {
+        return rjson::parse_gently(std::move(content), rjson::default_max_nested_level, std::move(observer));
     });
 }
 

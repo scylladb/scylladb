@@ -1395,11 +1395,25 @@ class value_builder {
     value_stack _stack;
     // Where each open container's values start in _stack.
     utils::small_vector<uint32_t, 16> _starts;
+    memory_observer* _observer;
+    // Bytes allocated, and reported to _observer.
+    size_t _allocated = 0;
+    size_t _reported = 0;
 
+    void allocated(size_t n) {
+        _allocated += n;
+        if (_observer && _allocated - _reported >= memory_observer_step) {
+            _reported = _allocated;
+            (*_observer)(_allocated);
+        }
+    }
     // Builds a value in its slot: a temporary value, moved there, would
     // read back the bytes just written in pieces, which stalls the CPU.
     template<typename... Args>
     value& emplace(Args&&... args) {
+        if (_stack.full()) {
+            allocated(value_stack::segment_bytes);
+        }
         return _stack.emplace(std::forward<Args>(args)...);
     }
     template<typename... Args>
@@ -1419,6 +1433,9 @@ class value_builder {
             set_string(v, s, no_escape);
             return true;
         }
+        if (s.size() > value::inline_capacity) {
+            allocated(s.size());
+        }
         set_string(emplace(), s, no_escape);
         return true;
     }
@@ -1428,6 +1445,7 @@ class value_builder {
         internal::storage<T>* s = nullptr;
         if (n) {
             uint32_t start = _starts.back();
+            allocated(sizeof(storage<T>) + size_t(n) * sizeof(T));
             s = internal::allocate_storage<T>(n);
             // A member is laid out as two values, its name and its value,
             // like an object's names and values are on the stack.
@@ -1455,7 +1473,7 @@ class value_builder {
         return true;
     }
 public:
-    explicit value_builder(input& in) : _in(in) {}
+    explicit value_builder(input& in, memory_observer* observer = nullptr) : _in(in), _observer(observer) {}
 
     bool null() { return add(); }
     bool boolean(bool b) { return add(b); }
@@ -1470,6 +1488,9 @@ public:
     bool end_array(size_type n) { return close<value>(kArrayType, n); }
 
     value result() {
+        if (_observer) {
+            (*_observer)(_allocated);
+        }
         return std::move(_stack[_stack.size() - 1]);
     }
 };
@@ -1494,8 +1515,8 @@ public:
     bool end_array(size_type n) { return _h.end_array(n); }
 };
 
-value parse_input(input& in, size_t max_nested_level) {
-    value_builder builder(in);
+value parse_input(input& in, size_t max_nested_level, memory_observer* observer = nullptr) {
+    value_builder builder(in, observer);
     reader<value_builder> r(in, builder, max_nested_level);
     r.run<false>();
     return builder.result();
@@ -1951,6 +1972,11 @@ rjson::value parse(chunked_content&& content, size_t max_nested_level) {
     return parse_input(in, max_nested_level);
 }
 
+rjson::value parse(chunked_content&& content, size_t max_nested_level, memory_observer observer) {
+    chunked_input in(std::move(content));
+    return parse_input(in, max_nested_level, observer ? &observer : nullptr);
+}
+
 std::optional<rjson::value> try_parse(std::string_view str, size_t max_nested_level) {
     try {
         return parse(str, max_nested_level);
@@ -1959,9 +1985,9 @@ std::optional<rjson::value> try_parse(std::string_view str, size_t max_nested_le
     }
 }
 
-future<rjson::value> parse_gently(chunked_content&& content, size_t max_nested_level) {
+future<rjson::value> parse_gently(chunked_content&& content, size_t max_nested_level, memory_observer observer) {
     chunked_input in(std::move(content));
-    value_builder builder(in);
+    value_builder builder(in, observer ? &observer : nullptr);
     reader<value_builder> r(in, builder, max_nested_level);
     while (!r.run<true>()) {
         co_await coroutine::maybe_yield();
