@@ -142,6 +142,11 @@ def test_create_vector_search_global_index_with_static_filtering_column_fails(cq
             cql.execute(f"CREATE CUSTOM INDEX ON {table}(v, s) USING 'vector_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v, c, f) USING 'vector_index'")
 
+def test_create_vector_search_index_with_descending_clustering_filtering_column(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p int, c int, v vector<float, 3>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema, "WITH CLUSTERING ORDER BY (c DESC)") as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v, c) USING 'vector_index'")
+
 def test_create_vector_search_local_index_with_filtering_columns(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p1 int, p2 int, c1 int, c2 int, v vector<float, 3>, f1 int, f2 int, primary key ((p1, p2), c1, c2)'
     with new_test_table(cql, test_keyspace, schema) as table:
