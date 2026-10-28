@@ -138,6 +138,7 @@
 #include "message/shared_dict.hh"
 #include "message/dictionary_service.hh"
 #include "sstable_dict_autotrainer.hh"
+#include "sstables/dictionary_service.hh"
 #include "utils/disk_space_monitor.hh"
 #include "auth/cache.hh"
 #include "utils/labels.hh"
@@ -2106,6 +2107,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sc_coordinator.stop().get();
             });
 
+            checkpoint(stop_signal, "starting sstable dictionary service");
+            sharded<sstables::dictionary_service> sst_dicts;
+            sst_dicts.start(std::ref(db), std::ref(messaging), std::ref(sys_ks), std::ref(feature_service)).get();
+            auto stop_sst_dicts = defer_verbose_shutdown("sstable dictionary service", [&sst_dicts] {
+                sst_dicts.stop().get();
+            });
+            sst_dicts.local().set_train_dict_callback([&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {
+                return rpc_dict_training_worker.submit<std::vector<std::byte>>([sample = std::move(sample)] {
+                    return netw::zdict_train(sample, {});
+                });
+            });
+
             checkpoint(stop_signal, "initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -2120,12 +2133,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 only_on_shard0(&*disk_space_monitor_shard0),
                 std::ref(groups_manager)
             ).get();
-
-            ss.local().set_train_dict_callback([&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {
-                return rpc_dict_training_worker.submit<std::vector<std::byte>>([sample = std::move(sample)] {
-                    return netw::zdict_train(sample, {});
-                });
-            });
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
@@ -2204,6 +2211,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // Set up group0 service since it is needed by group0 setup just below
             ss.local().set_group0(group0_service);
+            sst_dicts.local().set_group0(group0_service);
 
             // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
             ss.local().init_address_map(gossip_address_map.local()).get();
@@ -2562,7 +2570,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return m.start();
             }).get();
 
-            api::set_server_storage_service(ctx, ss, snapshot_ctl, group0_client).get();
+            api::set_server_storage_service(ctx, ss, sst_dicts, snapshot_ctl, group0_client).get();
             auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
                 api::unset_server_storage_service(ctx).get();
             });
@@ -2679,7 +2687,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 dict_service.stop().get();
             });
 
-            auto sst_dict_autotrainer = sstable_dict_autotrainer(ss.local(), group0_client, sstable_dict_autotrainer::config{
+            auto sst_dict_autotrainer = sstable_dict_autotrainer(ss.local(), sst_dicts.local(), group0_client, sstable_dict_autotrainer::config{
                 .tick_period_in_seconds = cfg->sstable_compression_dictionaries_autotrainer_tick_period_in_seconds,
                 .retrain_period_in_seconds = cfg->sstable_compression_dictionaries_retrain_period_in_seconds,
                 .min_dataset_bytes = cfg->sstable_compression_dictionaries_min_training_dataset_bytes,
@@ -2888,7 +2896,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             api::set_server_service_levels(ctx, cql_server_ctl, qp).get();
 
-            alternator::controller alternator_ctl(gossiper, proxy, ss, mm, sys_dist_ks, sys_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, vector_store_client, timeout_cfg, *cfg, dbcfg.statement_scheduling_group);
+            alternator::controller alternator_ctl(gossiper, proxy, ss, sst_dicts, mm, sys_dist_ks, sys_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, vector_store_client, timeout_cfg, *cfg, dbcfg.statement_scheduling_group);
 
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {

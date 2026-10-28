@@ -1067,19 +1067,6 @@ public:
     future<> abort_rf_change(utils::UUID request_id);
 
 private:
-    semaphore _do_sample_sstables_concurrency_limiter{1};
-    // To avoid overly-large RPC messages, `do_sample_sstables` is broken up into several rounds.
-    // This implements a single round.
-    future<utils::chunked_vector<temporary_buffer<char>>> do_sample_sstables_oneshot(table_id, uint64_t chunk_size, uint64_t n_chunks);
-public:
-    // SSTable sampling results can occupy a considerable amount of memory.
-    // Callers of `do_sample_sstables` should hold this semaphore until they are done with the sample,
-    // to ensure that there's only one sample around.
-    semaphore& get_do_sample_sstables_concurrency_limiter();
-    // Gathers a randomly-selected sample of chunks of (decompressed) Data files for the given table,
-    // from across the entire cluster.
-    future<utils::chunked_vector<temporary_buffer<char>>> do_sample_sstables(table_id, uint64_t chunk_size, uint64_t n_chunks);
-private:
     future<utils::chunked_vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<utils::chunked_vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
 
@@ -1129,22 +1116,12 @@ private:
     abort_source _group0_as;
 
     std::function<future<void>(std::string_view)> _compression_dictionary_updated_callback;
-    using byte_vector = std::vector<std::byte>;
-    std::function<future<byte_vector>(std::vector<byte_vector>)> _train_dict;
 
     utils::disk_space_monitor* _disk_space_monitor; // != nullptr only on shard0.
 
     strong_consistency::groups_manager& _groups_manager;
 
 public:
-    struct ignore_errors_tag;
-    using ignore_errors = seastar::bool_class<ignore_errors_tag>;
-    // if ignore_errors set to yes, the function will not throw an exception - any error will be ignored
-    // and node for which an error happened will be considered having size 0.
-    future<uint64_t> estimate_total_sstable_volume(table_id, ignore_errors = ignore_errors::no);
-    future<std::vector<std::byte>> train_dict(utils::chunked_vector<temporary_buffer<char>> sample);
-    future<> publish_new_sstable_dict(table_id, std::span<const std::byte>, service::raft_group0_client&);
-    void set_train_dict_callback(decltype(_train_dict));
     seastar::future<> notify_client_routes_change(const client_routes_service::client_route_keys& client_route_keys);
 
     // Alters the given table's min/max tablet count hints. Only the engaged

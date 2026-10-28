@@ -48,6 +48,10 @@ namespace vector_search {
 class vector_store_client;
 }
 
+namespace sstables {
+class dictionary_service;
+}
+
 class updateable_timeout_config;
 
 namespace alternator {
@@ -66,6 +70,7 @@ class controller : public protocol_server {
     sharded<gms::gossiper>& _gossiper;
     sharded<service::storage_proxy>& _proxy;
     sharded<service::storage_service>& _ss;
+    sharded<sstables::dictionary_service>& _dicts;
     sharded<service::migration_manager>& _mm;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<db::system_keyspace>& _sys_ks;
@@ -87,6 +92,7 @@ public:
         sharded<gms::gossiper>& gossiper,
         sharded<service::storage_proxy>& proxy,
         sharded<service::storage_service>& ss,
+        sharded<sstables::dictionary_service>& dicts,
         sharded<service::migration_manager>& mm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<db::system_keyspace>& sys_ks,

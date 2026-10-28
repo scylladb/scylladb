@@ -16,8 +16,9 @@
 
 static seastar::logger alogger("sstable_dict_autotrainer");
 
-sstable_dict_autotrainer::sstable_dict_autotrainer(service::storage_service& ss, service::raft_group0_client& rgc, config cfg)
+sstable_dict_autotrainer::sstable_dict_autotrainer(service::storage_service& ss, sstables::dictionary_service& dicts, service::raft_group0_client& rgc, config cfg)
     : _ss(ss)
+    , _dicts(dicts)
     , _group0_client(rgc)
     , _cfg(std::move(cfg))
     , _fiber(run())
@@ -54,7 +55,7 @@ future<> sstable_dict_autotrainer::tick() {
             alogger.debug("sstable_dict_autotrainer::tick(): {}.{} has no dict", s->ks_name(), s->cf_name());
         }
         alogger.debug("sstable_dict_autotrainer::tick(): attempting to update the dict for {}.{}", s->ks_name(), s->cf_name());
-        auto estimated_size = co_await _ss.estimate_total_sstable_volume(s->id());
+        auto estimated_size = co_await _dicts.estimate_total_sstable_volume(s->id());
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: estimated_size={}", s->ks_name(), s->cf_name(), estimated_size);
         auto min_dataset_size = _cfg.min_dataset_bytes();
         if (estimated_size < min_dataset_size) {
@@ -62,7 +63,7 @@ future<> sstable_dict_autotrainer::tick() {
             continue;
         }
         auto params = s->get_compressor_params();
-        auto ticket = co_await get_units(_ss.get_do_sample_sstables_concurrency_limiter(), 1);
+        auto ticket = co_await get_units(_dicts.get_do_sample_sstables_concurrency_limiter(), 1);
         // When we sample a block from a set of files, we can think of this block's
         // compression ratio like about a random variable, with value in [0;1] and
         // some underlying distribution.
@@ -102,16 +103,16 @@ future<> sstable_dict_autotrainer::tick() {
         uint64_t max_number_of_samples = 0.02 * seastar::memory::stats().total_memory() / params.chunk_length();
         auto n_chunks = std::min<uint64_t>(target_number_of_samples, max_number_of_samples);
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: sampling for training with chunk_length={}, n_chunks={}", s->ks_name(), s->cf_name(), params.chunk_length(), n_chunks);
-        auto training_sample = co_await _ss.do_sample_sstables(s->id(), params.chunk_length(), n_chunks);
+        auto training_sample = co_await _dicts.do_sample_sstables(s->id(), params.chunk_length(), n_chunks);
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: got training sample with {} chunks", s->ks_name(), s->cf_name(), training_sample.size());
         if (training_sample.size() < n_chunks) {
             alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: not enough chunks, giving up on the update", s->ks_name(), s->cf_name());
             continue;
         }
-        auto dict = co_await _ss.train_dict(std::move(training_sample));
+        auto dict = co_await _dicts.train_dict(std::move(training_sample));
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: trained dict of size {}", s->ks_name(), s->cf_name(), dict.size());
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: sampling for validation with chunk_length={}, n_chunks={}", s->ks_name(), s->cf_name(), params.chunk_length(), n_chunks);
-        auto validation_sample = co_await _ss.do_sample_sstables(s->id(), params.chunk_length(), n_chunks);
+        auto validation_sample = co_await _dicts.do_sample_sstables(s->id(), params.chunk_length(), n_chunks);
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: got validation sample with {} chunks", s->ks_name(), s->cf_name(), validation_sample.size());
         if (validation_sample.size() < n_chunks) {
             alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: not enough chunks, giving up on the update", s->ks_name(), s->cf_name());
@@ -126,7 +127,7 @@ future<> sstable_dict_autotrainer::tick() {
             continue;
         }
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: Publishing the new dict.", s->ks_name(), s->cf_name());
-        co_await _ss.publish_new_sstable_dict(s->id(), dict, _group0_client);
+        co_await _dicts.publish_new_sstable_dict(s->id(), dict, _group0_client);
     }
 }
 

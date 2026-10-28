@@ -72,7 +72,7 @@ struct scrub_info {
 // d - days
 std::optional<std::chrono::seconds> validate_ttl(const std::string& value);
 
-void set_storage_service(http_context& ctx, httpd::routes& r, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>&, service::raft_group0_client&);
+void set_storage_service(http_context& ctx, httpd::routes& r, sharded<service::storage_service>& ss, sharded<sstables::dictionary_service>& dicts, sharded<db::snapshot_ctl>&, service::raft_group0_client&);
 void unset_storage_service(http_context& ctx, httpd::routes& r);
 void set_sstables_loader(http_context& ctx, httpd::routes& r, sharded<sstables_loader>& sst_loader);
 void unset_sstables_loader(http_context& ctx, httpd::routes& r);
