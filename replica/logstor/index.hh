@@ -105,10 +105,10 @@ struct primary_index_key_cmp {
         return lhs <=> rhs;
     }
     std::strong_ordering operator()(int64_t lhs, const primary_index_key& rhs) const noexcept {
-        return dht::tri_compare_raw(lhs, rhs.token().raw());
+        return dht::tri_compare_raw(lhs, rhs.raw_token().value);
     }
     std::strong_ordering operator()(const primary_index_key& lhs, int64_t rhs) const noexcept {
-        return dht::tri_compare_raw(lhs.token().raw(), rhs);
+        return dht::tri_compare_raw(lhs.raw_token().value, rhs);
     }
     std::strong_ordering operator()(const primary_index_entry& lhs, const primary_index_entry& rhs) const noexcept {
         return lhs.key() <=> rhs.key();
@@ -574,7 +574,7 @@ public:
         }
 
         auto it = with_allocator(_tree_allocator, [&] {
-            return _partitions.emplace_before(i, key.token().raw(), hint, key, std::move(new_entry));
+            return _partitions.emplace_before(i, key.raw_token().value, hint, key, std::move(new_entry));
         });
         space_accounting_on_record_added(it->_e.location);
         on_index_entry_inserted(*it);

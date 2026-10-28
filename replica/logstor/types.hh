@@ -18,20 +18,23 @@
 namespace replica::logstor {
 
 struct primary_index_key {
-    dht::token _token;
+    // A raw_token, since the index only holds key tokens: dht::token's kind would pad the key by 8 bytes.
+    dht::raw_token _token;
     key_hash _hash;
 
     primary_index_key() = default;
 
-    primary_index_key(dht::token token, key_hash hash)
-        : _token(std::move(token))
+    primary_index_key(dht::raw_token token, key_hash hash)
+        : _token(token)
         , _hash(std::move(hash)) {}
 
     explicit primary_index_key(const dht::decorated_key& dk);
 
-    const dht::token& token() const noexcept {
-        return _token;
+    dht::token token() const noexcept {
+        return dht::token(_token);
     }
+
+    dht::raw_token raw_token() const noexcept { return _token; }
 
     const key_hash& hash() const noexcept {
         return _hash;
