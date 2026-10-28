@@ -430,6 +430,111 @@ def test_gsi_backfill_empty_string(dynamodb):
         assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index1')
         assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index2')
 
+# The previous test checked that the backfill of a new GSI skips an item
+# with an empty key value. The following tests check the later writes to
+# such an item. After the backfill, DynamoDB refuses a write to an item
+# whose GSI key attribute has an invalid value - an empty value or a value
+# of the wrong type - also if the write does not change that attribute
+# (GSI.OnlineOps: "all writes to items that violate the new index's key
+# schema will be rejected"). A write which gives the attribute a valid
+# value or removes it, replaces the item or deletes it, is allowed. The
+# tests use one GSI with a string partition key "x" and a binary sort key
+# "y". Each variant of the tests has its own item, with one invalid value,
+# and the valid partition key "x" is the item's own key "p".
+# Reproduces SCYLLADB-5763.
+invalid_gsi_key_values = {
+    'x_empty': ('x', ''),
+    'x_wrong_type': ('x', 5),
+    'y_empty': ('y', b''),
+    'y_wrong_type': ('y', 'a'),
+}
+# The UpdateItem variants: the two APIs, and an UpdateExpression with a
+# ConditionExpression. For the condition, Alternator reads the item before
+# the write, so a partial fix can check the item only in this variant.
+update_apis = ['UpdateExpression', 'AttributeUpdates', 'ConditionExpression']
+valid_writes = ['UpdateItemSet', 'UpdateItemRemove', 'PutItem', 'DeleteItem']
+
+@pytest.fixture(scope="module")
+def table_with_invalid_gsi_keys(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }]) as table:
+        for variant in update_apis + valid_writes:
+            for kind, (attr, value) in invalid_gsi_key_values.items():
+                p = f'{variant}_{kind}'
+                table.put_item(Item={'p': p, 'x': p, 'y': b'a', attr: value})
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' },
+                                  { 'AttributeName': 'y', 'AttributeType': 'B' }],
+            GlobalSecondaryIndexUpdates=[
+                { 'Create': { 'IndexName': 'index1',
+                              'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' },
+                                            { 'AttributeName': 'y', 'KeyType': 'RANGE' }],
+                              'Projection': { 'ProjectionType': 'ALL' }}
+                }
+            ])
+        wait_for_gsi(table, 'index1')
+        yield table
+
+# Sets the attributes in "values" and removes the attribute "remove", with
+# one of the UpdateItem variants in update_apis.
+def update_attributes(table, api, p, values, remove=None):
+    if api == 'AttributeUpdates':
+        updates = {k: {'Value': v, 'Action': 'PUT'} for k, v in values.items()}
+        if remove:
+            updates[remove] = {'Action': 'DELETE'}
+        table.update_item(Key={'p': p}, AttributeUpdates=updates)
+    else:
+        expression = 'SET ' + ', '.join(f'{k} = :{k}' for k in values)
+        if remove:
+            expression += f' REMOVE {remove}'
+        condition = {'ConditionExpression': 'attribute_exists(p)'} if api == 'ConditionExpression' else {}
+        table.update_item(Key={'p': p}, UpdateExpression=expression,
+            ExpressionAttributeValues={f':{k}': v for k, v in values.items()}, **condition)
+
+@pytest.mark.xfail(reason="SCYLLADB-5763")
+@pytest.mark.parametrize('kind', invalid_gsi_key_values)
+@pytest.mark.parametrize('api', update_apis)
+def test_gsi_backfill_invalid_key_update(table_with_invalid_gsi_keys, api, kind):
+    table = table_with_invalid_gsi_keys
+    p = f'{api}_{kind}'
+    attr = invalid_gsi_key_values[kind][0]
+    other = 'y' if attr == 'x' else 'x'
+    # A write which leaves the invalid value in place is refused, also if it
+    # gives the GSI's other key attribute a new valid value. (DynamoDB
+    # accepts an AttributeUpdates PUT of the value which the attribute
+    # already has.)
+    for values in [{'z': 'dog'}, {other: {'x': p + '_new', 'y': b'b'}[other]}]:
+        with pytest.raises(ClientError, match='ValidationException'):
+            update_attributes(table, api, p, values)
+
+# The writes which DynamoDB allows on an item with an invalid GSI key value,
+# and which Alternator already allows: an UpdateItem which gives the
+# attribute a valid value or removes it, a PutItem which replaces the item,
+# and a DeleteItem. A fix of the previous test must not refuse them.
+@pytest.mark.parametrize('kind', invalid_gsi_key_values)
+@pytest.mark.parametrize('write', valid_writes)
+def test_gsi_backfill_invalid_key_valid_write(table_with_invalid_gsi_keys, write, kind):
+    table = table_with_invalid_gsi_keys
+    p = f'{write}_{kind}'
+    attr = invalid_gsi_key_values[kind][0]
+    item = {'p': p, 'x': p, 'y': b'a'}
+    if write == 'UpdateItemSet':
+        update_attributes(table, 'UpdateExpression', p, {attr: item[attr]})
+    elif write == 'UpdateItemRemove':
+        update_attributes(table, 'UpdateExpression', p, {'z': 'dog'}, remove=attr)
+        item = {k: v for k, v in item.items() if k != attr} | {'z': 'dog'}
+    elif write == 'PutItem':
+        table.put_item(Item=item)
+    else:
+        table.delete_item(Key={'p': p})
+        item = None
+    assert table.get_item(Key={'p': p}, ConsistentRead=True).get('Item') == item
+    # The item is in the GSI only if it has valid values in both key
+    # attributes:
+    assert_index_query(table, 'index1', [item] if item and attr in item else [],
+        KeyConditions={'x': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+
 # Trying to create two different GSIs with different types for the same key is
 # NOT allowed. The reason is that DynamoDB wants to insist that future writes
 # to this attribute must have the declared type - and it can't insist on two
