@@ -122,7 +122,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--exe-url', default=False,
                      dest="exe_url", action="store",
                      help="URL of a relocatable server or unified package to download and run, "
-                          "or `latest` for the latest master build. Not working with `mode`")
+                          "or a shortcut: `latest` / `master:latest` / `branch-2026.3:latest` for a branch's "
+                          "latest build, `release:2026.1` / `release:2026.1.9` for a release. Not working with `mode`")
 
 # Stores the per-phase test reports so that fixtures and hooks can inspect the
 # outcome of each phase (setup / call / teardown) independently.

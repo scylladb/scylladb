@@ -139,18 +139,23 @@ def _get_version_url(major: Optional[int] = None, minor: Optional[int] = None,
     return f"https://{bucket_url}/{prefix_url}{filtered[0]}" if filtered else None
 
 
-MASTER_LATEST_PREFIX = "unstable/scylla/master/relocatable/latest"
-
-
 def _find_package_url(url: str, arch: str = "x86_64") -> Optional[str]:
     """
-    Return `url` unchanged, unless it is `latest`: then return the URL of the latest
-    master build's unified package for `arch`, or `None` if there is none.
+    Return `url` unchanged, unless it is a shortcut (SCT/ccm naming) for a unified
+    package for `arch`. Returns `None` if there is no such package.
+    - `latest` (same as `master:latest`), `branch-2026.3:latest`: the latest build of that branch.
+    - `release:2026.1`, `release:2026.1.9`: the newest matching release.
     """
-    if url != "latest":
-        return url
-    entries = [e for e in _list_scylla_release_entries(DOWNLOADS_BUCKET, MASTER_LATEST_PREFIX, pack="unified") if f".{arch}." in e]
-    return f"https://{DOWNLOADS_BUCKET}/{MASTER_LATEST_PREFIX}/{entries[0]}" if entries else None
+    if url == "latest":
+        url = "master:latest"
+    if m := re.fullmatch(r"(master|branch-\d{4}\.\d+):latest", url):
+        prefix = f"unstable/scylla/{m[1]}/relocatable/latest"
+        entries = [e for e in _list_scylla_release_entries(DOWNLOADS_BUCKET, prefix, pack="unified") if f".{arch}." in e]
+        return f"https://{DOWNLOADS_BUCKET}/{prefix}/{entries[0]}" if entries else None
+    if m := re.fullmatch(r"release:(\d{4})(?:\.(\d+)(?:\.(\d+)(?:~?rc(\d+))?)?)?", url):
+        major, minor, patch, rc = (int(g) if g else None for g in m.groups())
+        return _get_version_url(major, minor, patch, rc, arch, pack="unified")
+    return url
 
 
 def get_file_name_and_url_from_url(major: Optional[int] = None, minor: Optional[int] = None,
@@ -177,7 +182,7 @@ def get_file_name_and_url_from_url(major: Optional[int] = None, minor: Optional[
              If `url` is provided, it is downloaded directly. Otherwise, the version URL is
              resolved from the requested `major`, `minor`, `patch`, `rc`, `arch`, and `pack`
              components, using the latest available value for any missing component.
-             `url` may also be `latest`, see `_find_package_url()`.
+             `url` may also be a shortcut such as `latest`, see `_find_package_url()`.
     """
 
     if rc is not None:
