@@ -220,6 +220,20 @@ BOOST_AUTO_TEST_CASE(test_base64_encode_decode) {
     }
 }
 
+// Inputs of every length up to 256 bytes, holding every byte value, round-trip.
+BOOST_AUTO_TEST_CASE(test_base64_all_bytes) {
+    bytes all(bytes::initialized_later(), 256);
+    for (int i = 0; i < 256; ++i) {
+        all[i] = int8_t(i);
+    }
+    for (size_t len = 0; len <= all.size(); ++len) {
+        bytes_view in(all.data(), len);
+        auto encoded = base64_encode(in);
+        BOOST_REQUIRE_EQUAL(encoded.size(), (len + 2) / 3 * 4);
+        BOOST_REQUIRE_EQUAL(bytes_view(base64_decode(encoded)), in);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(test_base64_decoded_len) {
     for (auto& [str, encoded] : strings) {
         BOOST_REQUIRE_EQUAL(str.size(), base64_decoded_len(encoded));
