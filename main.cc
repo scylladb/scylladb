@@ -2210,7 +2210,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // Set up group0 service since it is needed by group0 setup just below
             ss.local().set_group0(group0_service);
-            sst_dicts.local().set_group0(group0_service);
+            sst_dicts.local().set_group0(group0_service, ss.local().group0_abort_source());
 
             // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
             ss.local().init_address_map(gossip_address_map.local()).get();

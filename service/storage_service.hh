@@ -546,6 +546,11 @@ public:
 
     future<> wait_for_group0_stop();
 
+    // The abort source that wait_for_group0_stop() fires. Services which hold
+    // the group 0 gate for their own operations can chain their abort sources
+    // onto this one, so that they are woken up before group 0 is drained.
+    abort_source& group0_abort_source() noexcept { return _group0_as; }
+
 private:
     bool is_replacing();
     future<> start_sys_dist_ks() const;

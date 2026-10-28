@@ -72,6 +72,9 @@ class dictionary_service : public peering_sharded_service<dictionary_service> {
     // We need to be able to abort all group0 operations during shutdown,
     // so we need a special abort source for that.
     abort_source _group0_as;
+    // Chains _group0_as onto the abort source of whoever shuts group 0 down.
+    // Must be declared after _group0_as, so that it is unsubscribed first.
+    optimized_optional<abort_source::subscription> _group0_as_sub;
     // Callers of `do_sample_sstables` should hold this semaphore until they are
     // done with the sample, to avoid several samples being gathered at once.
     semaphore _do_sample_sstables_concurrency_limiter{1};
@@ -100,7 +103,10 @@ public:
     sstable_compressor_factory& get_compressor_factory() const noexcept;
     gate::holder hold_async_gate() { return _async_gate.hold(); }
 
-    void set_group0(service::raft_group0&);
+    // `group0_abort` is fired before group 0 is drained. Publishing holds the
+    // group 0 gate, so it must be aborted by then -- otherwise the drain would
+    // wait for a publish which has nothing to wake it up.
+    void set_group0(service::raft_group0&, abort_source& group0_abort);
 
     semaphore& get_do_sample_sstables_concurrency_limiter();
     // Gathers a combined sample of the table's SSTable data from the whole cluster.

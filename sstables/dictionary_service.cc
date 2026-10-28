@@ -27,6 +27,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "utils/alien_worker.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/log.hh"
 
 #include "idl/sstable_dicts.dist.hh"
@@ -66,8 +67,9 @@ future<> dictionary_service::stop() {
     co_await ser::sstable_dicts_rpc_verbs::unregister(&_messaging.local());
 }
 
-void dictionary_service::set_group0(service::raft_group0& group0) {
+void dictionary_service::set_group0(service::raft_group0& group0, abort_source& group0_abort) {
     _group0 = &group0;
+    _group0_as_sub = utils::chain_abort_source(_group0_as, group0_abort);
 }
 
 replica::database& dictionary_service::get_database() const noexcept {
