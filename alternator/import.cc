@@ -10,6 +10,7 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <utility>
 #include <seastar/core/coroutine.hh>
 #include "alternator/error.hh"
@@ -250,6 +251,132 @@ future<executor::request_return_type> executor::import_table(service::client_sta
     // ListImports and a ClientToken replay cannot find this import.
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ImportTableDescription", make_import_table_description(parsed));
+    co_return rjson::print(std::move(response));
+}
+
+// A copy of the export.cc function: as for the export operations, DynamoDB reports a malformed ARN as
+// ValidationException, while parse_arn reports some malformed ARNs as AccessDeniedException.
+static arn_parts parse_arn_reporting_validation(std::string_view arn, std::string_view arn_field_name, std::string_view type_name, std::string_view expected_postfix) {
+    try {
+        return parse_arn(arn, arn_field_name, type_name, expected_postfix);
+    } catch (const api_error& e) {
+        if (e._type == "AccessDeniedException") {
+            throw api_error::validation(e._msg);
+        }
+        throw;
+    }
+}
+
+// An import ARN is a table ARN followed by `/import/<id>`. DynamoDB requires the id to have the shape
+// of the ids ImportTable hands out: 14 digits, a dash and 8 hex digits of either case.
+static arn_parts parse_import_arn(std::string_view import_arn) {
+    static constexpr std::string_view import_infix = "/import/";
+    auto parts = parse_arn_reporting_validation(import_arn, "ImportArn", "Import", import_infix);
+    auto import_id = parts.postfix.substr(import_infix.size());
+    if (import_id.size() != 23 || import_id[14] != '-'
+            || import_id.substr(0, 14).find_first_not_of("0123456789") != std::string_view::npos
+            || import_id.substr(15).find_first_not_of("0123456789abcdefABCDEF") != std::string_view::npos) {
+        throw api_error::validation(fmt::format("ImportArn: Invalid Import ARN `{}` - the import id is not 14 digits, a dash and 8 hex digits",
+                import_arn));
+    }
+    return parts;
+}
+
+future<executor::request_return_type> executor::describe_import(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.describe_import++;
+
+    // DynamoDB reports an ImportArn of the wrong JSON type as SerializationException.
+    if (const rjson::value* import_arn_v = rjson::find(request, "ImportArn"); import_arn_v && !import_arn_v->IsNull() && !import_arn_v->IsString()) {
+        co_return api_error::serialization("ImportArn must be a string");
+    }
+    auto import_arn = get_non_empty_string_attribute(request, "ImportArn");
+    auto parts = parse_import_arn(import_arn);
+
+    // DynamoDB answers ValidationException when no table can have the name the ARN gives, but
+    // ImportNotFoundException when the ARN names a table it does not have.
+    if (parts.keyspace_name.empty()) {
+        co_return api_error::validation(fmt::format("ImportArn: Invalid Import ARN `{}` - empty keyspace name", import_arn));
+    }
+    validate_table_name(parts.table_name, "ImportArn: Invalid Import ARN - table name");
+
+    maybe_audit(audit_info, audit::statement_category::QUERY, parts.keyspace_name, parts.table_name, "DescribeImport", request);
+
+    // FIXME: check SELECT on the target table (SCYLLADB-4045).
+
+    // Only an existing Alternator table has per-table metrics. DynamoDB also describes the imports of
+    // a dropped table.
+    if (is_alternator_keyspace(parts.keyspace_name)) {
+        if (auto table = _proxy.data_dictionary().try_find_table(parts.keyspace_name, parts.table_name)) {
+            get_stats_from_schema(_proxy, *table->schema())->api_operations.describe_import++;
+        }
+    }
+
+    // FIXME: describe the import from its row in the imports table of SCYLLADB-4041 (SCYLLADB-4043). An
+    // import which a dead node left IN_PROGRESS stays so until the garbage collection of SCYLLADB-4044 fails it.
+    co_return api_error::import_not_found(fmt::format("ImportArn: Import `{}` not found", import_arn));
+}
+
+future<executor::request_return_type> executor::list_imports(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.list_imports++;
+
+    // DynamoDB returns at most 25 summaries per page.
+    static constexpr int max_page_size = 25;
+
+    // DynamoDB ignores a null parameter and reports a parameter of the wrong JSON type as
+    // SerializationException.
+    if (const rjson::value* page_size_v = rjson::find(request, "PageSize"); page_size_v && !page_size_v->IsNull()) {
+        if (!page_size_v->IsNumber()) {
+            co_return api_error::serialization("PageSize must be an integer");
+        }
+        // DynamoDB truncates a fractional PageSize.
+        auto page_size = std::trunc(page_size_v->GetDouble());
+        if (page_size < 1 || page_size > max_page_size) {
+            co_return api_error::validation(fmt::format("PageSize must be between 1 and {} inclusive", max_page_size));
+        }
+    }
+
+    std::optional<arn_parts> table_parts;
+    if (const rjson::value* table_arn_v = rjson::find(request, "TableArn"); table_arn_v && !table_arn_v->IsNull()) {
+        if (!table_arn_v->IsString()) {
+            co_return api_error::serialization("TableArn must be a string");
+        }
+        auto table_arn = rjson::to_string_view(*table_arn_v);
+        if (table_arn.empty() || table_arn.size() > 1024) {
+            co_return api_error::validation("TableArn must be between 1 and 1024 characters long");
+        }
+        table_parts = parse_arn_reporting_validation(table_arn, "TableArn", "table", "");
+        // DynamoDB reports a TableArn whose table name no table can have as ValidationException.
+        if (table_parts->keyspace_name.empty()) {
+            co_return api_error::validation(fmt::format("TableArn: Invalid Table ARN `{}` - empty keyspace name", table_arn));
+        }
+        validate_table_name(table_parts->table_name, "TableArn: Invalid Table ARN - table name");
+    }
+
+    if (const rjson::value* next_token_v = rjson::find(request, "NextToken"); next_token_v && !next_token_v->IsNull()) {
+        if (!next_token_v->IsString()) {
+            co_return api_error::serialization("NextToken must be a string");
+        }
+        // DynamoDB requires a NextToken of 112 to 1024 characters matching ([0-9a-f]{16})+.
+        auto next_token = rjson::to_string_view(*next_token_v);
+        if (next_token.size() < 112 || next_token.size() > 1024) {
+            co_return api_error::validation("NextToken must be between 112 and 1024 characters long");
+        }
+        if (next_token.size() % 16 != 0 || next_token.find_first_not_of("0123456789abcdef") != std::string_view::npos) {
+            co_return api_error::validation("NextToken must match the pattern ([0-9a-f]{16})+");
+        }
+        // FIXME: resume the listing where the page of the NextToken ended (SCYLLADB-4043). No page hands
+        // out a NextToken yet, and DynamoDB rejects a NextToken which it did not hand out.
+        co_return api_error::validation(fmt::format("NextToken: Provided nextToken is invalid: `{}`", next_token));
+    }
+
+    maybe_audit(audit_info, audit::statement_category::QUERY,
+                table_parts ? table_parts->keyspace_name : "", table_parts ? table_parts->table_name : "",
+                "ListImports", request);
+
+    // FIXME: list the imports from the imports table of SCYLLADB-4041, newest first, PageSize (by default 10)
+    // per page, only those of TableArn if given, also of a dropped table (SCYLLADB-4043). Until then there are none.
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ImportSummaryList", rjson::empty_array());
     co_return rjson::print(std::move(response));
 }
 
