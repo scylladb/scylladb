@@ -10,7 +10,7 @@ from random import randint
 import pytest
 from cassandra import ConsistencyLevel, ReadFailure, ReadTimeout, Unavailable, WriteFailure, WriteTimeout  # type: ignore
 from cassandra.cluster import EXEC_PROFILE_DEFAULT, NoHostAvailable  # type: ignore
-from cassandra.policies import DCAwareRoundRobinPolicy, RetryPolicy, TokenAwarePolicy
+from cassandra.policies import DCAwareRoundRobinPolicy, FallthroughRetryPolicy, RetryPolicy, TokenAwarePolicy  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 
 from test import DEBUG_MODES
@@ -18,7 +18,6 @@ from test.cluster.dtest_helpers import DTEST_CONFIG, create_ks, dtest_session, e
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 CL = ConsistencyLevel
-KEYS = range(10)
 
 
 # The TestSimpleCluster dtests: generate_cluster_topology(rack_num=3)
@@ -35,6 +34,35 @@ async def simple_prepare_cluster(manager: ScyllaClusterManager, ks_rf: int):
     return servers
 
 
+def simple_consistency_level_validate(session, read_keys, read_cls_pass, read_cls_fail, write_keys, write_cls_pass, write_cls_fail):
+    """TestSimpleCluster.simple_consistency_level_validate() with
+    read/write_cls_pass_all: every read of a key and write of a new key at
+    the passing levels succeeds; at the failing ones (no retries, 1 s
+    timeout) they fail with Unavailable."""
+    for cl in read_cls_pass:
+        failed = 0
+        for key in read_keys:
+            try:
+                assert len(list(session.execute(SimpleStatement(f"SELECT * FROM ks.test1 WHERE k={key}", consistency_level=cl)))) == 1
+            except Exception:  # noqa: BLE001
+                failed += 1
+        assert failed == 0, f"Expected all reads at {cl} to pass, {failed} failed"
+    for cl in read_cls_fail:
+        with pytest.raises(Unavailable):
+            list(session.execute(SimpleStatement("SELECT * FROM ks.test1 WHERE k=1", consistency_level=cl, retry_policy=FallthroughRetryPolicy()), timeout=1))
+    for cl in write_cls_pass:
+        failed = 0
+        for key in write_keys:
+            try:
+                list(session.execute(SimpleStatement(f"insert into ks.test1  (k,c) values ({key},{key})", consistency_level=cl)))
+            except Exception:  # noqa: BLE001
+                failed += 1
+        assert failed == 0, f"Expected all writes at {cl} to pass, {failed} failed"
+    for cl in write_cls_fail:
+        with pytest.raises(Unavailable):
+            list(session.execute(SimpleStatement("insert into ks.test1 (k,c) values (101,101)", consistency_level=cl, retry_policy=FallthroughRetryPolicy()), timeout=1))
+
+
 def simple_query_validate(session, read_keys: int, query: str, read_cls_pass, read_cls_fail):
     """TestSimpleCluster.simple_query_validate() with read_cls_pass_all."""
     for cl in read_cls_pass:
@@ -45,6 +73,68 @@ def simple_query_validate(session, read_keys: int, query: str, read_cls_pass, re
             list(session.execute(SimpleStatement(query, consistency_level=cl)))
 
 
+def insert_keys(session, keys):
+    for val in keys:
+        session.execute(SimpleStatement(f"insert into ks.test1  (k,c) values ({val},{val})", consistency_level=CL.ALL))
+
+
+# Ported from scylla-dtest simple_cluster_driver_test.py::TestSimpleCluster::test_simple_rf_3_consistency_level.
+# RF 3 on three nodes: through each node's exclusive session, reads of keys
+# 1..99 and writes of new keys at every level; then with node1 stopped, and
+# then node2, the levels needing more replicas fail with Unavailable.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_simple_rf_3_consistency_level(manager: ScyllaClusterManager):
+    node1, node2, node3 = await simple_prepare_cluster(manager, 3)
+    session1, session2, session3 = [await exclusive_one(manager, n) for n in (node1, node2, node3)]
+    keys = range(1, 100)
+    insert_keys(session1, keys)
+    read_pass = [CL.ONE, CL.TWO, CL.THREE, CL.QUORUM, CL.ALL]
+    write_pass = [CL.ANY, CL.ONE, CL.TWO, CL.THREE, CL.QUORUM, CL.ALL]
+    for session, write_keys in [(session1, range(101, 200)), (session2, range(201, 300)), (session3, range(301, 400))]:
+        simple_consistency_level_validate(session, keys, read_pass, [], write_keys, write_pass, [])
+
+    await manager.server_stop_gracefully(node1.server_id)
+    await manager.others_not_see_server(node1.ip_addr)
+    read_pass, read_fail = [CL.ONE, CL.TWO, CL.QUORUM], [CL.THREE, CL.ALL]
+    write_pass, write_fail = [CL.ANY, CL.ONE, CL.TWO, CL.QUORUM], [CL.THREE, CL.ALL]
+    simple_consistency_level_validate(session2, keys, read_pass, read_fail, range(401, 500), write_pass, write_fail)
+    simple_consistency_level_validate(session3, keys, read_pass, read_fail, range(501, 600), write_pass, write_fail)
+
+    await manager.server_stop_gracefully(node2.server_id)
+    await manager.others_not_see_server(node2.ip_addr)
+    read_pass, read_fail = [CL.ONE], [CL.TWO, CL.THREE, CL.QUORUM, CL.ALL]
+    write_pass, write_fail = [CL.ANY, CL.ONE], [CL.TWO, CL.THREE, CL.QUORUM, CL.ALL]
+    simple_consistency_level_validate(session3, keys, read_pass, read_fail, range(601, 700), write_pass, write_fail)
+async def simple_query(manager: ScyllaClusterManager, ks_rf: int, read_cls_pass, read_cls_fail) -> None:
+    """test_simple_rf_<n>_query(): 99 keys at ALL through node1, then a full
+    scan and an IN query of 10 keys at each level through sessions to each
+    node (non-exclusive, as patient_cql_connection)."""
+    servers = await simple_prepare_cluster(manager, ks_rf)
+    clusters = [manager.con_gen([s.ip_addr]) for s in servers]
+    try:
+        sessions = [c.connect() for c in clusters]
+        keys = range(1, 100)
+        insert_keys(sessions[0], keys)
+        for session in sessions:
+            simple_query_validate(session, len(keys), "SELECT * FROM ks.test1", read_cls_pass, read_cls_fail)
+            simple_query_validate(session, 10, "SELECT * FROM ks.test1 where k in (1,10,20,30,40,50,60,70,80,90) ", read_cls_pass, read_cls_fail)
+    finally:
+        for c in clusters:
+            c.shutdown()
+# Ported from scylla-dtest simple_cluster_driver_test.py::TestSimpleCluster::test_simple_rf_3_query.
+# RF 3 on three nodes: full scans and IN queries succeed at every level
+# through every node.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_simple_rf_3_query(manager: ScyllaClusterManager):
+    await simple_query(manager, 3, [CL.ONE, CL.TWO, CL.THREE, CL.QUORUM, CL.ALL], [])
+
+
+# Ported from scylla-dtest simple_cluster_driver_test.py::TestSimpleCluster::test_simple_rf_1_query.
+# RF 1 on three nodes: full scans and IN queries succeed at ONE, QUORUM and
+# ALL through every node, and fail with Unavailable at TWO and THREE.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_simple_rf_1_query(manager: ScyllaClusterManager):
+    await simple_query(manager, 1, [CL.ONE, CL.QUORUM, CL.ALL], [CL.TWO, CL.THREE])
 
 
 # Availability by consistency level as the nodes go down one by one, ported
