@@ -65,6 +65,7 @@
 #include "utils/rjson.hh"
 #include "utils/user_provided_param.hh"
 #include "sstable_dict_autotrainer.hh"
+#include "sstables/dictionary_service.hh"
 
 using namespace seastar::httpd;
 using namespace std::chrono_literals;
@@ -1196,7 +1197,7 @@ rest_get_effective_ownership(http_context& ctx, sharded<service::storage_service
 
 static
 future<json::json_return_type>
-rest_estimate_compression_ratios(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+rest_estimate_compression_ratios(http_context& ctx, sharded<sstables::dictionary_service>& ss, std::unique_ptr<http::request> req) {
     if (!ss.local().get_feature_service().sstable_compression_dicts) {
         apilog.warn("estimate_compression_ratios: called before the cluster feature was enabled");
         throw std::runtime_error("estimate_compression_ratios requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
@@ -1262,7 +1263,7 @@ rest_estimate_compression_ratios(http_context& ctx, sharded<service::storage_ser
 
 static
 future<json::json_return_type>
-rest_retrain_dict(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
+rest_retrain_dict(http_context& ctx, sharded<sstables::dictionary_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
     if (!ss.local().get_feature_service().sstable_compression_dicts) {
         apilog.warn("retrain_dict: called before the cluster feature was enabled");
         throw std::runtime_error("retrain_dict requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
@@ -1591,7 +1592,7 @@ gated(sharded<service::storage_service>&, seastar::httpd::json_request_function 
     return fn;
 }
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& ssc, service::raft_group0_client& group0_client) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, sharded<sstables::dictionary_service>& dicts, sharded<db::snapshot_ctl>& ssc, service::raft_group0_client& group0_client) {
     ss::get_token_endpoint.set(r, gated(ss, rest_bind(rest_get_token_endpoint, ctx, ss)));
     ss::get_release_version.set(r, gated(ss, rest_bind(rest_get_release_version, ss)));
     ss::get_scylla_release_version.set(r, gated(ss, rest_bind(rest_get_scylla_release_version, ss)));
@@ -1649,8 +1650,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_total_hints.set(r, gated(ss, rest_bind(rest_get_total_hints)));
     ss::get_ownership.set(r, gated(ss, rest_bind(rest_get_ownership, ctx, ss)));
     ss::get_effective_ownership.set(r, gated(ss, rest_bind(rest_get_effective_ownership, ctx, ss)));
-    ss::retrain_dict.set(r, gated(ss, rest_bind(rest_retrain_dict, ctx, ss, group0_client)));
-    ss::estimate_compression_ratios.set(r, gated(ss, rest_bind(rest_estimate_compression_ratios, ctx, ss)));
+    ss::retrain_dict.set(r, gated(ss, rest_bind(rest_retrain_dict, ctx, dicts, group0_client)));
+    ss::estimate_compression_ratios.set(r, gated(ss, rest_bind(rest_estimate_compression_ratios, ctx, dicts)));
     ss::reload_raft_topology_state.set(r, gated(ss, rest_bind(rest_reload_raft_topology_state, ss, group0_client)));
     ss::upgrade_to_raft_topology.set(r, gated(ss, rest_bind(rest_upgrade_to_raft_topology, ss)));
     ss::raft_topology_upgrade_status.set(r, gated(ss, rest_bind(rest_raft_topology_upgrade_status, ss)));

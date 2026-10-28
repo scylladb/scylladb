@@ -111,6 +111,7 @@
 #include "locator/util.hh"
 #include "idl/storage_service.dist.hh"
 #include "idl/sstable_dicts.dist.hh"
+#include "sstables/dictionary_service.hh"
 #include "idl/streaming.dist.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/join_node.hh"
@@ -3490,14 +3491,58 @@ bool storage_service::topology_global_queue_empty() const {
     return !_topology_state_machine._topology.global_request.has_value();
 }
 
-semaphore& storage_service::get_do_sample_sstables_concurrency_limiter() {
+} // namespace service
+
+namespace sstables {
+
+static logging::logger slogger("sstable_dictionary_service");
+
+dictionary_service::dictionary_service(abort_source& as, sharded<replica::database>& db, sharded<netw::messaging_service>& messaging, sharded<db::system_keyspace>& sys_ks, sharded<gms::feature_service>& feature_service)
+    : _abort_source(as)
+    , _db(db)
+    , _messaging(messaging)
+    , _sys_ks(sys_ks)
+    , _feature_service(feature_service)
+{
+    ser::sstable_dicts_rpc_verbs::register_estimate_sstable_volume(&_messaging.local(), [this] (rpc::opt_time_point, table_id t_id) -> future<uint64_t> {
+        co_return co_await _db.map_reduce0(seastar::coroutine::lambda([&] (replica::database& local_db) -> future<uint64_t> {
+            uint64_t result = 0;
+            auto& t = local_db.get_tables_metadata().get_table(t_id);
+            auto snap = co_await t.take_sstable_set_snapshot();
+            for (const auto& sst : snap) {
+                result += sst.get()->data_size();
+            }
+            co_return result;
+        }), uint64_t(0), std::plus());
+    });
+    ser::sstable_dicts_rpc_verbs::register_sample_sstables(&_messaging.local(), [this] (rpc::opt_time_point, table_id table, uint64_t chunk_size, uint64_t n_chunks) -> future<utils::chunked_vector<temporary_buffer<char>>> {
+        return _db.local().sample_data_files(table, chunk_size, n_chunks);
+    });
+}
+
+future<> dictionary_service::stop() {
+    if (!_group0_as.abort_requested()) {
+        _group0_as.request_abort();
+    }
+    return ser::sstable_dicts_rpc_verbs::unregister(&_messaging.local());
+}
+
+void dictionary_service::set_group0(service::raft_group0& group0) {
+    _group0 = &group0;
+}
+
+const gms::feature_service& dictionary_service::get_feature_service() const noexcept {
+    return _feature_service.local();
+}
+
+semaphore& dictionary_service::get_do_sample_sstables_concurrency_limiter() {
     return _do_sample_sstables_concurrency_limiter;
 }
 
 // Bounds a hung peer; shutdown is handled by _abort_source.
 static constexpr auto sstable_sampling_rpc_timeout = std::chrono::minutes(5);
 
-future<uint64_t> storage_service::estimate_total_sstable_volume(table_id t, ignore_errors errors, std::optional<lowres_clock::time_point> timeout) {
+future<uint64_t> dictionary_service::estimate_total_sstable_volume(table_id t, ignore_errors errors, std::optional<lowres_clock::time_point> timeout) {
     auto deadline = timeout.value_or(netw::messaging_service::clock_type::now() + sstable_sampling_rpc_timeout);
     co_return co_await seastar::map_reduce(
         _db.local().get_token_metadata().get_host_ids(),
@@ -3519,7 +3564,7 @@ future<uint64_t> storage_service::estimate_total_sstable_volume(table_id t, igno
     );
 }
 
-future<std::vector<std::byte>> storage_service::train_dict(utils::chunked_vector<temporary_buffer<char>> sample) {
+future<std::vector<std::byte>> dictionary_service::train_dict(utils::chunked_vector<temporary_buffer<char>> sample) {
     std::vector<std::vector<std::byte>> tmp;
     tmp.reserve(sample.size());
     for (const auto& s : sample) {
@@ -3539,8 +3584,8 @@ future<std::vector<std::byte>> storage_service::train_dict(utils::chunked_vector
     });
 }
 
-future<> storage_service::publish_new_sstable_dict(table_id t_id, std::span<const std::byte> dict, service::raft_group0_client& group0_client) {
-    co_await container().invoke_on(0, coroutine::lambda([t_id, dict, &group0_client] (storage_service& local_ss) -> future<> {
+future<> dictionary_service::publish_new_sstable_dict(table_id t_id, std::span<const std::byte> dict, service::raft_group0_client& group0_client) {
+    co_await container().invoke_on(0, coroutine::lambda([t_id, dict, &group0_client] (dictionary_service& local_ss) -> future<> {
         auto group0_holder = local_ss._group0->hold_group0_gate();
         while (true) {
             try {
@@ -3564,11 +3609,11 @@ future<> storage_service::publish_new_sstable_dict(table_id t_id, std::span<cons
     }));
 }
 
-void storage_service::set_train_dict_callback(decltype(_train_dict) cb) {
+void dictionary_service::set_train_dict_callback(decltype(_train_dict) cb) {
     _train_dict = std::move(cb);
 }
 
-future<utils::chunked_vector<temporary_buffer<char>>> storage_service::do_sample_sstables(table_id t, uint64_t chunk_size, uint64_t n_chunks) {
+future<utils::chunked_vector<temporary_buffer<char>>> dictionary_service::do_sample_sstables(table_id t, uint64_t chunk_size, uint64_t n_chunks) {
     uint64_t max_chunks_per_round = 16 * 1024 * 1024 / chunk_size;
     uint64_t chunks_done = 0;
     auto result = utils::chunked_vector<temporary_buffer<char>>();
@@ -3585,7 +3630,7 @@ future<utils::chunked_vector<temporary_buffer<char>>> storage_service::do_sample
     co_return result;
 }
 
-future<utils::chunked_vector<temporary_buffer<char>>> storage_service::do_sample_sstables_oneshot(table_id t, uint64_t chunk_size, uint64_t n_chunks) {
+future<utils::chunked_vector<temporary_buffer<char>>> dictionary_service::do_sample_sstables_oneshot(table_id t, uint64_t chunk_size, uint64_t n_chunks) {
     slogger.debug("do_sample_sstables(): called with table_id={} chunk_size={} n_chunks={}", t, chunk_size, n_chunks);
     auto& db = _db.local();
     auto& ms = _messaging.local();
@@ -3630,6 +3675,11 @@ future<utils::chunked_vector<temporary_buffer<char>>> storage_service::do_sample
     slogger.debug("do_sample_sstables(): returned {} chunks", samples.size());
     co_return samples;
 }
+
+} // namespace sstables
+
+namespace service {
+
 
 future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
     auto& raft_server = _group0->group0_server();
@@ -7383,20 +7433,6 @@ void storage_service::init_messaging_service() {
             });
         });
     });
-    ser::sstable_dicts_rpc_verbs::register_estimate_sstable_volume(&_messaging.local(), [this] (rpc::opt_time_point, table_id t_id) -> future<uint64_t> {
-        co_return co_await _db.map_reduce0(seastar::coroutine::lambda([&] (replica::database& local_db) -> future<uint64_t> {
-            uint64_t result = 0;
-            auto& t = local_db.get_tables_metadata().get_table(t_id);
-            auto snap = co_await t.take_sstable_set_snapshot();
-            for (const auto& sst : snap) {
-                result += sst.get()->data_size();
-            }
-            co_return result;
-        }), uint64_t(0), std::plus());
-    });
-    ser::sstable_dicts_rpc_verbs::register_sample_sstables(&_messaging.local(), [this] (rpc::opt_time_point, table_id table, uint64_t chunk_size, uint64_t n_chunks) -> future<utils::chunked_vector<temporary_buffer<char>>> {
-        return _db.local().sample_data_files(table, chunk_size, n_chunks);
-    });
     ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [this] (raft::server_id dst_id, service::join_node_request_params params) {
         return handle_raft_rpc(dst_id, [params = std::move(params)] (auto& ss) mutable {
             check_raft_rpc_scheduling_group(ss._db.local(), ss._feature_service, "join_node_request");
@@ -7443,7 +7479,6 @@ future<> storage_service::uninit_messaging_service() {
     return when_all_succeed(
         ser::node_ops_rpc_verbs::unregister(&_messaging.local()),
         ser::storage_service_rpc_verbs::unregister(&_messaging.local()),
-        ser::sstable_dicts_rpc_verbs::unregister(&_messaging.local()),
         ser::join_node_rpc_verbs::unregister(&_messaging.local()),
         ser::streaming_rpc_verbs::unregister_tablet_stream_files(&_messaging.local()),
         ser::streaming_rpc_verbs::unregister_clone_sstable(&_messaging.local())
