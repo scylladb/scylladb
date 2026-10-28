@@ -7,8 +7,8 @@
  */
 
 #include "sstable_dict_autotrainer.hh"
+#include "db/system_keyspace.hh"
 #include "gms/feature_service.hh"
-#include "service/storage_service.hh"
 #include <seastar/core/sleep.hh>
 #include "schema/schema_builder.hh"
 #include "sstables/sstables_manager.hh"
@@ -16,9 +16,8 @@
 
 static seastar::logger alogger("sstable_dict_autotrainer");
 
-sstable_dict_autotrainer::sstable_dict_autotrainer(service::storage_service& ss, sstables::dictionary_service& dicts, service::raft_group0_client& rgc, config cfg)
-    : _ss(ss)
-    , _dicts(dicts)
+sstable_dict_autotrainer::sstable_dict_autotrainer(sstables::dictionary_service& dicts, service::raft_group0_client& rgc, config cfg)
+    : _dicts(dicts)
     , _group0_client(rgc)
     , _cfg(std::move(cfg))
     , _fiber(run())
@@ -27,7 +26,7 @@ sstable_dict_autotrainer::sstable_dict_autotrainer(service::storage_service& ss,
 future<> sstable_dict_autotrainer::tick() {
     alogger.debug("sstable_dict_autotrainer::tick(): entering");
     auto dict_aware_tables = std::vector<schema_ptr>();
-    _ss.get_database().get_tables_metadata().for_each_table([&dict_aware_tables] (table_id id, lw_shared_ptr<replica::table> table) {
+    _dicts.get_database().get_tables_metadata().for_each_table([&dict_aware_tables] (table_id id, lw_shared_ptr<replica::table> table) {
         if (is_system_keyspace(table->schema()->ks_name())) {
             return;
         }
@@ -42,7 +41,7 @@ future<> sstable_dict_autotrainer::tick() {
     });
     for (const auto& s : dict_aware_tables) {
         auto dict_name = fmt::format("sstables/{}", s->id());
-        auto current_dict_timestamp = co_await _ss.get_system_keyspace().query_dict_timestamp(dict_name);
+        auto current_dict_timestamp = co_await _dicts.get_system_keyspace().query_dict_timestamp(dict_name);
         if (current_dict_timestamp) {
             alogger.debug("sstable_dict_autotrainer::tick(): {}.{} has timestamp {}", s->ks_name(), s->cf_name(), current_dict_timestamp);
             auto delta = (db_clock::now() - *current_dict_timestamp);
@@ -118,7 +117,7 @@ future<> sstable_dict_autotrainer::tick() {
             alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: not enough chunks, giving up on the update", s->ks_name(), s->cf_name());
             continue;
         }
-        auto ratio_before = co_await try_one_compression_config(_ss.get_database().get_user_sstables_manager().get_compressor_factory(), s, params, validation_sample);
+        auto ratio_before = co_await try_one_compression_config(_dicts.get_compressor_factory(), s, params, validation_sample);
         auto ratio_after = co_await try_one_compression_config(dict, s, params, validation_sample);
         float threshold = _cfg.min_improvement_factor() * ratio_before;
         alogger.debug("sstable_dict_autotrainer::tick(): {}.{}: ratio_before={}, ratio_after={}, update_threshold={}", s->ks_name(), s->cf_name(), ratio_before, ratio_after, threshold);
@@ -140,7 +139,7 @@ future<> sstable_dict_autotrainer::run() {
             auto tick_period = std::chrono::duration<float>(_cfg.tick_period_in_seconds());
             auto tick_period_ms = std::chrono::duration_cast<std::chrono::milliseconds>(tick_period);
             co_await seastar::sleep_abortable(tick_period_ms, _as);
-            if (_ss.is_raft_leader() && _ss.get_feature_service().sstable_compression_dicts) {
+            if (_dicts.is_raft_leader() && _dicts.get_feature_service().sstable_compression_dicts) {
                 co_await tick();
             }
         } catch (const abort_requested_exception&) {

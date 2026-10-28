@@ -730,7 +730,6 @@ public:
         _exec.start(
             std::ref(e.gossiper()),
             std::ref(e.get_storage_proxy()),
-            std::ref(e.get_storage_service()),
             std::ref(_dicts),
             std::ref(e.migration_manager()),
             std::ref(e.get_system_distributed_keyspace()),

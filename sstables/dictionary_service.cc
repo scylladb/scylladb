@@ -67,8 +67,20 @@ void dictionary_service::set_group0(service::raft_group0& group0) {
     _group0 = &group0;
 }
 
+replica::database& dictionary_service::get_database() const noexcept {
+    return _db.local();
+}
+
+db::system_keyspace& dictionary_service::get_system_keyspace() const noexcept {
+    return _sys_ks.local();
+}
+
 const gms::feature_service& dictionary_service::get_feature_service() const noexcept {
     return _feature_service.local();
+}
+
+bool dictionary_service::is_raft_leader() const noexcept {
+    return _group0->joined_group0() && _group0->group0_server().is_leader();
 }
 
 sstable_compressor_factory& dictionary_service::get_compressor_factory() const noexcept {

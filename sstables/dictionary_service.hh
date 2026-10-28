@@ -92,7 +92,10 @@ public:
 
     future<> stop();
 
+    replica::database& get_database() const noexcept;
+    db::system_keyspace& get_system_keyspace() const noexcept;
     const gms::feature_service& get_feature_service() const noexcept;
+    bool is_raft_leader() const noexcept;
     // The factory the published dictionaries eventually land in.
     sstable_compressor_factory& get_compressor_factory() const noexcept;
     gate::holder hold_async_gate() { return _async_gate.hold(); }

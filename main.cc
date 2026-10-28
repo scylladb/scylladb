@@ -2692,7 +2692,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 dict_service.stop().get();
             });
 
-            auto sst_dict_autotrainer = sstable_dict_autotrainer(ss.local(), sst_dicts.local(), group0_client, sstable_dict_autotrainer::config{
+            auto sst_dict_autotrainer = sstable_dict_autotrainer(sst_dicts.local(), group0_client, sstable_dict_autotrainer::config{
                 .tick_period_in_seconds = cfg->sstable_compression_dictionaries_autotrainer_tick_period_in_seconds,
                 .retrain_period_in_seconds = cfg->sstable_compression_dictionaries_retrain_period_in_seconds,
                 .min_dataset_bytes = cfg->sstable_compression_dictionaries_min_training_dataset_bytes,
@@ -2901,7 +2901,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             api::set_server_service_levels(ctx, cql_server_ctl, qp).get();
 
-            alternator::controller alternator_ctl(gossiper, proxy, ss, sst_dicts, mm, sys_dist_ks, sys_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, vector_store_client, timeout_cfg, *cfg, dbcfg.statement_scheduling_group);
+            alternator::controller alternator_ctl(gossiper, proxy, sst_dicts, mm, sys_dist_ks, sys_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, vector_store_client, timeout_cfg, *cfg, dbcfg.statement_scheduling_group);
 
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
