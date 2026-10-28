@@ -241,6 +241,20 @@ type value::GetType() const noexcept {
     case kind::int_:
     case kind::double_:
         return kNumberType;
+    case kind::raw: {
+        // The type of a raw value is told by its first character.
+        auto json = GetRawJson();
+        auto p = std::ranges::find_if(json, [] (char c) { return c != ' ' && c != '\n' && c != '\r' && c != '\t'; });
+        switch (p == json.end() ? 'n' : *p) {
+        case '{': return kObjectType;
+        case '[': return kArrayType;
+        case '"': return kStringType;
+        case 't': return kTrueType;
+        case 'f': return kFalseType;
+        case 'n': return kNullType;
+        default: return kNumberType;
+        }
+    }
     }
     return kNullType;
 }
@@ -248,6 +262,7 @@ type value::GetType() const noexcept {
 void value::destroy() noexcept {
     switch (_kind) {
     case kind::owned_string:
+    case kind::raw:
         allocator::Free(const_cast<char*>(load<const char*>(0)));
         break;
     case kind::chunk_string:
@@ -303,7 +318,11 @@ value::MemberIterator value::FindMember(std::string_view name) {
     auto s = container<member>();
     uint32_t n = MemberCount();
     for (uint32_t i = 0; i < n; ++i) {
-        if ((*s)[i].name.GetStringView() == name) {
+        auto candidate = (*s)[i].name.GetStringView();
+        // Compare the first characters inline, to call memcmp() only for
+        // likely matches.
+        if (candidate.size() == name.size() && (name.empty()
+                || (candidate[0] == name[0] && std::memcmp(candidate.data(), name.data(), name.size()) == 0))) {
             return {s, i};
         }
     }
@@ -386,6 +405,9 @@ value::ValueIterator value::Erase(ConstValueIterator pos) {
 }
 
 bool operator==(const value& a, const value& b) noexcept {
+    if (a.IsRaw() || b.IsRaw()) {
+        return a.IsRaw() && b.IsRaw() && a.GetRawJson() == b.GetRawJson();
+    }
     if (a.IsNumber() && b.IsNumber()) {
         if (a.IsDouble() || b.IsDouble()) {
             double x = a.GetDouble();
@@ -465,6 +487,20 @@ void set_chunk_string(value& v, internal::chunk_holder* h, uint32_t offset, uint
     v.store(12, uint16_t(len));
     v._data[14] = char(value::no_escape_flag);
     v._kind = value::kind::chunk_string;
+}
+
+value raw_json(std::string_view json) {
+    if (json.size() > std::numeric_limits<uint32_t>::max()) {
+        throw error(fmt::format("rjson: raw JSON of {} bytes is too long", json.size()));
+    }
+    value v;
+    char* p = static_cast<char*>(allocator::Malloc(json.size()));
+    copy_chars(p, json.data(), json.size());
+    v.store(0, static_cast<const char*>(p));
+    v.store(8, uint32_t(json.size()));
+    v._data[14] = 0;
+    v._kind = value::kind::raw;
+    return v;
 }
 
 // Returns true unless the string value is known to have no characters
@@ -1422,6 +1458,15 @@ class value_builder {
         return true;
     }
     bool add_string(std::string_view s, bool in_input, bool no_escape) {
+        if (s.size() <= value::inline_capacity && in_input && _in.end() - s.data() >= ptrdiff_t(sizeof(value::_data))) {
+            // Copy a fixed number of bytes, which compiles to a couple of
+            // moves rather than a call; bytes after the string are ignored.
+            value& v = emplace();
+            std::memcpy(v._data, s.data(), sizeof(v._data));
+            v._data[value::inline_capacity] = char(s.size() | (no_escape ? value::no_escape_flag : 0));
+            v._kind = value::kind::inline_string;
+            return true;
+        }
         if (in_input && s.size() >= min_chunk_string && s.size() <= std::numeric_limits<uint16_t>::max()) {
             // emplace() may throw, so take the reference after it.
             value& v = emplace();
@@ -1599,13 +1644,49 @@ constexpr char escape_char(unsigned char c) noexcept {
 }
 
 // Collects printed text in a std::string.
-class string_sink {
-    std::string& _out;
+// Collects printed text in a buffer, kept between calls by print(). Like
+// fast JSON writers, it checks the capacity once per token, then writes
+// with plain stores.
+class buffer_sink {
 public:
-    explicit string_sink(std::string& out) : _out(out) {}
-    void put(char c) { _out.push_back(c); }
-    void write(std::string_view s) { _out.append(s); }
+    struct buffer {
+        std::unique_ptr<char[]> data;
+        size_t capacity = 0;
+    };
+private:
+    buffer& _buf;
+    size_t _len = 0;
+
+    [[gnu::noinline]] void grow(size_t n) {
+        size_t capacity = std::max({_buf.capacity * 2, _len + n, size_t(4096)});
+        auto data = std::make_unique_for_overwrite<char[]>(capacity);
+        copy_chars(data.get(), _buf.data.get(), _len);
+        _buf.data = std::move(data);
+        _buf.capacity = capacity;
+    }
+public:
+    explicit buffer_sink(buffer& buf) : _buf(buf) {}
+    // Returns where to write up to n characters; commit() what was written.
+    char* reserve(size_t n) {
+        if (_buf.capacity - _len < n) [[unlikely]] {
+            grow(n);
+        }
+        return _buf.data.get() + _len;
+    }
+    void commit(char* end) noexcept { _len = end - _buf.data.get(); }
+    void put(char c) { *reserve(1) = c; ++_len; }
+    void write(std::string_view s) {
+        copy_chars(reserve(s.size()), s.data(), s.size());
+        _len += s.size();
+    }
     bool full() const noexcept { return false; }
+    std::string_view view() const noexcept { return std::string_view(_buf.data.get(), _len); }
+};
+
+template<typename Sink>
+concept reserving_sink = requires (Sink& s, char* p) {
+    { s.reserve(size_t(1)) } -> std::same_as<char*>;
+    s.commit(p);
 };
 
 // Collects printed text in buffers of a fixed size, for an output_stream.
@@ -1651,6 +1732,17 @@ public:
 
 template<typename Sink>
 void write_string(Sink& out, std::string_view s, bool escape) {
+    if constexpr (reserving_sink<Sink>) {
+        if (!escape) {
+            char* p = out.reserve(s.size() + 2);
+            *p++ = '"';
+            copy_chars(p, s.data(), s.size());
+            p += s.size();
+            *p++ = '"';
+            out.commit(p);
+            return;
+        }
+    }
     out.put('"');
     if (!escape) {
         out.write(s);
@@ -1686,20 +1778,35 @@ void write_string(Sink& out, const value& v) {
 
 template<typename Sink>
 void write_uint(Sink& out, uint64_t u) {
-    char buf[24];
-    out.write(std::string_view(buf, std::to_chars(buf, buf + sizeof(buf), u).ptr));
+    if constexpr (reserving_sink<Sink>) {
+        char* p = out.reserve(24);
+        out.commit(std::to_chars(p, p + 24, u).ptr);
+    } else {
+        char buf[24];
+        out.write(std::string_view(buf, std::to_chars(buf, buf + sizeof(buf), u).ptr));
+    }
 }
 
 template<typename Sink>
 void write_int(Sink& out, int64_t i) {
-    char buf[24];
-    out.write(std::string_view(buf, std::to_chars(buf, buf + sizeof(buf), i).ptr));
+    if constexpr (reserving_sink<Sink>) {
+        char* p = out.reserve(24);
+        out.commit(std::to_chars(p, p + 24, i).ptr);
+    } else {
+        char buf[24];
+        out.write(std::string_view(buf, std::to_chars(buf, buf + sizeof(buf), i).ptr));
+    }
 }
 
 template<typename Sink>
 void write_double(Sink& out, double d) {
-    char buf[32];
-    out.write(std::string_view(buf, format_double(d, buf)));
+    if constexpr (reserving_sink<Sink>) {
+        char* p = out.reserve(32);
+        out.commit(format_double(d, p));
+    } else {
+        char buf[32];
+        out.write(std::string_view(buf, format_double(d, buf)));
+    }
 }
 
 } // anonymous namespace
@@ -1738,6 +1845,9 @@ class printer {
         case value::kind::owned_string:
         case value::kind::chunk_string:
             write_string(out, v);
+            break;
+        case value::kind::raw:
+            out.write(v.GetRawJson());
             break;
         case value::kind::object:
             out.put('{');
@@ -1840,11 +1950,26 @@ public:
     }
 };
 
-std::string print(const rjson::value& value, size_t max_nested_level) {
-    std::string out;
-    string_sink sink(out);
+// Prints into a buffer kept between calls, so that printing doesn't grow
+// a string several times. Returns a view of the printed text, valid until
+// the next call.
+static std::string_view print_to_buffer(const rjson::value& value, size_t max_nested_level) {
+    static thread_local buffer_sink::buffer buffer;
+    // Don't keep a large buffer of a single large document.
+    if (buffer.capacity > 1024 * 1024) {
+        buffer = {};
+    }
+    buffer_sink sink(buffer);
     printer(value, max_nested_level).run<false>(sink);
-    return out;
+    return sink.view();
+}
+
+std::string print(const rjson::value& value, size_t max_nested_level) {
+    return std::string(print_to_buffer(value, max_nested_level));
+}
+
+sstring print_sstring(const rjson::value& value, size_t max_nested_level) {
+    return sstring(print_to_buffer(value, max_nested_level));
 }
 
 static future<> print_to_stream(printer p, seastar::output_stream<char>& os) {
@@ -1899,6 +2024,9 @@ void copy_into(value& dst, const value& src) {
     switch (src._kind) {
     case value::kind::owned_string:
         set_string(dst, src.GetStringView(), !needs_escaping(src));
+        break;
+    case value::kind::raw:
+        std::construct_at(&dst, raw_json(src.GetRawJson()));
         break;
     case value::kind::chunk_string:
         std::memcpy(static_cast<void*>(&dst), static_cast<const void*>(&src), sizeof(value));

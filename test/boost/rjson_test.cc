@@ -537,3 +537,30 @@ SEASTAR_TEST_CASE(test_memory_observer) {
         }
     }), std::runtime_error);
 }
+
+BOOST_AUTO_TEST_CASE(test_raw_json) {
+    auto obj = rjson::empty_object();
+    rjson::add(obj, "a", rjson::raw_json(R"({"L":[{"S":"x"},{"N":"1"}]})"));
+    rjson::add(obj, "b", rjson::raw_json("[1, 2]"));
+    rjson::add(obj, "c", rjson::raw_json("true"));
+    BOOST_REQUIRE_EQUAL(rjson::print(obj), R"({"a":{"L":[{"S":"x"},{"N":"1"}]},"b":[1, 2],"c":true})");
+    BOOST_REQUIRE_EQUAL(rjson::print_sstring(obj), rjson::print(obj));
+    const auto& a = rjson::get(obj, "a");
+    BOOST_REQUIRE(a.IsRaw());
+    BOOST_REQUIRE(!a.IsObject());
+    BOOST_REQUIRE_EQUAL(a.GetType(), rjson::kObjectType);
+    BOOST_REQUIRE_EQUAL(rjson::get(obj, "b").GetType(), rjson::kArrayType);
+    BOOST_REQUIRE_EQUAL(rjson::get(obj, "c").GetType(), rjson::kTrueType);
+    BOOST_REQUIRE_THROW(a.MemberCount(), rjson::error);
+    BOOST_REQUIRE(rjson::copy(obj) == obj);
+    BOOST_REQUIRE(!(rjson::raw_json("1") == rjson::value(1)));
+}
+
+// String literals known to need no escaping are printed as they are,
+// and those which need it are escaped.
+BOOST_AUTO_TEST_CASE(test_string_ref_escaping) {
+    auto obj = rjson::empty_object();
+    rjson::add(obj, "plain", "text");
+    rjson::add(obj, "quote\"", "line\n");
+    BOOST_REQUIRE_EQUAL(rjson::print(obj), R"({"plain":"text","quote\"":"line\n"})");
+}

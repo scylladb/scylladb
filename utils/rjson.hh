@@ -115,11 +115,22 @@ public:
 class string_ref_type {
     const char* _str;
     size_type _len;
+    bool _no_escape = true;
 public:
     template<size_t N>
-    consteval string_ref_type(const char (&str)[N]) : _str(str), _len(N - 1) {}
+    consteval string_ref_type(const char (&str)[N]) : _str(str), _len(N - 1) {
+        // Find out at compile time whether printing needs to escape it.
+        for (size_t i = 0; i < _len; ++i) {
+            unsigned char c = str[i];
+            if (c < 0x20 || c == '"' || c == '\\') {
+                _no_escape = false;
+            }
+        }
+    }
     const char* data() const noexcept { return _str; }
     size_type size() const noexcept { return _len; }
+    // True if the string has no characters which JSON needs escaped.
+    bool no_escape() const noexcept { return _no_escape; }
 };
 
 class value;
@@ -228,6 +239,8 @@ class value {
         owned_string,
         // A string referencing an input buffer kept by a chunk_holder.
         chunk_string,
+        // JSON text, which is printed verbatim. See raw_json().
+        raw,
         object,
         array,
     };
@@ -239,8 +252,8 @@ class value {
     // - numbers: the number in bytes 0-7.
     // - inline_string: the characters in bytes 0-13, the length and flags
     //   in byte 14.
-    // - static_string, owned_string: the pointer in bytes 0-7, the length in
-    //   bytes 8-11, flags in byte 14.
+    // - static_string, owned_string, raw: the pointer in bytes 0-7, the
+    //   length in bytes 8-11, flags in byte 14.
     // - chunk_string: the chunk_holder in bytes 0-7, the offset of the string
     //   in its buffer in bytes 8-11, the length in bytes 12-13, flags in
     //   byte 14.
@@ -291,6 +304,7 @@ class value {
     friend void internal::copy_into(value&, const value&);
     template<typename T>
     friend void internal::copy_container(value&, const value&);
+    friend value raw_json(std::string_view);
     friend void set_string(value&, std::string_view, bool);
     friend void set_chunk_string(value&, internal::chunk_holder*, uint32_t, uint32_t);
     friend bool needs_escaping(const value&) noexcept;
@@ -368,6 +382,13 @@ public:
         return (_kind == kind::uint && as_uint64() <= uint64_t(std::numeric_limits<int64_t>::max())) || _kind == kind::int_;
     }
     bool IsUint64() const noexcept { return _kind == kind::uint; }
+    // True for a value made by raw_json().
+    bool IsRaw() const noexcept { return _kind == kind::raw; }
+    // Returns the JSON text of a value made by raw_json().
+    std::string_view GetRawJson() const {
+        check(IsRaw(), "raw JSON");
+        return std::string_view(load<const char*>(0), load<uint32_t>(8));
+    }
 
     bool GetBool() const { check(IsBool(), "a boolean"); return _kind == kind::true_; }
     int GetInt() const { check(IsInt(), "a 32-bit integer"); return int(as_int64()); }
@@ -404,7 +425,7 @@ public:
         }
         store(0, s.data());
         store(8, s.size());
-        _data[14] = 0;
+        _data[14] = s.no_escape() ? char(no_escape_flag) : 0;
         _kind = kind::static_string;
     }
 
@@ -608,6 +629,8 @@ inline rjson::value empty_string() {
 // Convert the JSON value to a string with JSON syntax, the opposite of parse().
 // The representation is dense - without any redundant indentation.
 std::string print(const rjson::value& value, size_t max_nested_level = default_max_nested_level);
+// Like print(), but returns an sstring, as Seastar's HTTP server needs.
+sstring print_sstring(const rjson::value& value, size_t max_nested_level = default_max_nested_level);
 
 // Writes the JSON value to the output_stream, like print() does to a string,
 // but in buffers of limited size, so no large contiguous string is created,
@@ -617,6 +640,14 @@ seastar::future<> print(const rjson::value& value, seastar::output_stream<char>&
 
 // Copies given JSON value - involves allocation
 rjson::value copy(const rjson::value& value);
+
+// Makes a value holding the given JSON text, which print() writes verbatim,
+// avoiding the parsing and printing of a JSON document which is only passed
+// through. The text is copied, and must be a valid JSON value: it isn't
+// checked. GetType() tells the type of the value, but a raw value is not
+// IsObject() or IsString() etc., and its content can't be accessed, only
+// printed, copied or compared.
+rjson::value raw_json(std::string_view json);
 
 // copyable_value can be used when seamless copying of value is needed
 class copyable_value : public value {
