@@ -1223,6 +1223,13 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
             return make_ready_future<json::json_return_type>(json_void());
         });
     });
+
+    ss::logstor_compaction.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        bool major = get_query_param<bool>(*req, "major");
+        apilog.info("logstor_compaction: major={}", major);
+        co_await replica::database::trigger_logstor_compaction_on_all_shards(db, major);
+        co_return json_void();
+    });
 }
 
 void unset_column_family(http_context& ctx, routes& r) {
@@ -1344,5 +1351,6 @@ void unset_column_family(http_context& ctx, routes& r) {
     ss::force_keyspace_flush.unset(r);
     ss::is_incremental_backups_enabled.unset(r);
     ss::set_incremental_backups_enabled.unset(r);
+    ss::logstor_compaction.unset(r);
 }
 }
