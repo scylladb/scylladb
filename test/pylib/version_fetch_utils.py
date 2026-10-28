@@ -246,6 +246,37 @@ def extract_tar_no_same_owner(archive_path: Path, unpack_dir: Path) -> None:
         archive.extractall(path=unpack_dir, filter="data")            
 
 
+CACHE_MAX_UNUSED_DAYS = 7
+
+
+def prune_unused_cache(cache_root: Path, max_unused_days: int = CACHE_MAX_UNUSED_DAYS) -> None:
+    """Delete cached archives that no caller used in the last `max_unused_days`.
+    Each use touches `installed.success`. An entry with no such marker (a partial
+    download) is aged by its directory mtime. Entries whose lock is held, i.e.
+    being downloaded or installed right now, are skipped. The lock is
+    `<entry>.lock` next to the entry, so it survives the entry's deletion and a
+    caller waiting on it recreates the entry under the lock.
+    """
+    cutoff = time.time() - max_unused_days * 24 * 3600
+
+    def stale(entry: Path) -> bool:
+        marker = entry / "installed.success"
+        return (marker if marker.exists() else entry).stat().st_mtime <= cutoff
+
+    for entry in cache_root.iterdir():
+        # Another caller may be pruning the same entry, so it can vanish under us.
+        try:
+            if not entry.is_dir() or not stale(entry):
+                continue
+            with (cache_root / f"{entry.name}.lock").open("a") as f:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # A caller may have used it between the check above and the lock.
+                if stale(entry):
+                    shutil.rmtree(entry, ignore_errors=True)
+        except OSError:  # gone already, or locked (BlockingIOError)
+            continue
+
+
 def fetch_and_install_scylla_version(major: Optional[int] = None, minor: Optional[int] = None,
                                      patch: Optional[int] = None, rc: Optional[int] = None,
                                      arch: str = "x86_64", pack: str = "", 
@@ -255,7 +286,8 @@ def fetch_and_install_scylla_version(major: Optional[int] = None, minor: Optiona
     URL, then cached under XDG_CACHE_HOME, or ~/.cache if XDG_CACHE_HOME is unset.
     Download, unpack, and install steps are guarded by marker files so repeated
     calls reuse the existing installation. A file lock prevents concurrent callers
-    from modifying the same cached archive directory at the same time.
+    from modifying the same cached archive directory at the same time. Cached
+    archives unused for CACHE_MAX_UNUSED_DAYS are deleted, see `prune_unused_cache()`.
     Args:
         major: ScyllaDB major version to fetch.
         minor: ScyllaDB minor version to fetch.
@@ -282,18 +314,19 @@ def fetch_and_install_scylla_version(major: Optional[int] = None, minor: Optiona
         raise RuntimeError(f"couldnt get archive name for major: {major}, minor: {minor}," 
                            f" patch: {patch}, rc: {rc}, arch: {arch}, pack: {pack}, url: {url}")
     cache_dir = (xdg_cache_dir / "scylladb" / "test.py" / archive_name)
-    cache_dir.mkdir(exist_ok=True, parents=True)
 
     archive_path = cache_dir/archive_name
     unpack_dir = cache_dir/"unpacked"
     install_dir = cache_dir/"installed"
 
-    lock_file = cache_dir / "lock"
+    # Outside cache_dir, so prune_unused_cache() can delete cache_dir under it.
+    lock_file = cache_dir.parent / f"{archive_name}.lock"
     downloaded_marker = cache_dir / "downloaded.success"
     unpacked_marker = cache_dir / "unpacked.success"
     installed_marker = cache_dir / "installed.success"
 
     with with_file_lock(lock_file):
+        cache_dir.mkdir(exist_ok=True)
         if not installed_marker.exists():
             if not unpacked_marker.exists():
                 if not downloaded_marker.exists():
@@ -309,6 +342,7 @@ def fetch_and_install_scylla_version(major: Optional[int] = None, minor: Optiona
             shutil.rmtree(install_dir, ignore_errors=True)
             install_dir.mkdir(exist_ok=True, parents=True)
             subprocess.run(["bash", "./install.sh", "--without-systemd", "--nonroot", "--prefix", str(install_dir)], cwd=unpack_dir/"scylla", check=True)
-            installed_marker.touch()
+        installed_marker.touch()
 
+    prune_unused_cache(cache_dir.parent)
     return install_dir/"bin"/"scylla"
