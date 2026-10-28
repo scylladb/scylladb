@@ -11,6 +11,8 @@
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/functions/scoring_fcts.hh"
 #include "cql3/statements/external_search/external_function.hh"
+#include "cql3/statements/index_target.hh"
+#include "index/external_index.hh"
 #include "index/secondary_index_manager.hh"
 #include "schema/schema.hh"
 #include "utils/assert.hh"
@@ -34,7 +36,9 @@ const column_definition& indexed_column(const schema& schema, const secondary_in
 
 secondary_index::index index_for(data_dictionary::database db, const schema_ptr& schema, const column_definition& column) {
     for (const auto& index : db.find_column_family(schema).get_index_manager().list_indexes()) {
-        if (index.supports_bm25_expression(column)) {
+        // Vector Store cannot search a local index yet, as no partition is sent with the query.
+        if (index.supports_bm25_expression(column)
+                && !secondary_index::external_index::is_local(index.metadata().options().at(index_target::target_option_name))) {
             return index;
         }
     }
