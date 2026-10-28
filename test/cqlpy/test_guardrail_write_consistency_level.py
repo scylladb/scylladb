@@ -165,3 +165,21 @@ def test_write_cl_multiple_disallowed_levels(cql, test_table):
     check_disallowed(cql, query, cl=ConsistencyLevel.ANY, config_value=config)
     check_no_warning(cql, query, cl=ConsistencyLevel.QUORUM, disallowed=config)
 
+def test_write_cl_internal_writes_not_affected(cql, test_keyspace, test_table):
+    """Verify that disallowing ONE does not reject internal writes, such as
+    Raft persisting its log, which are written at ONE. Reproduces SCYLLADB-5525."""
+    with config_value_context(cql, "write_consistency_levels_disallowed", "ONE"):
+        with pytest.raises(InvalidRequest, match="ONE.*forbidden.*write_consistency_levels_disallowed"):
+            cql.execute(SimpleStatement(f"INSERT INTO {test_table} (pk, v) VALUES (1, 1)", consistency_level=ConsistencyLevel.ONE))
+        with new_test_table(cql, test_keyspace, "p int PRIMARY KEY"):
+            pass
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY"):
+        pass
+
+def test_write_cl_internal_tracing_not_affected(cql, test_table):
+    """Verify that disallowing ANY does not reject the internal writes that
+    record a trace, which are written at ANY. Reproduces SCYLLADB-5525."""
+    with config_value_context(cql, "write_consistency_levels_disallowed", "ANY"):
+        with pytest.raises(InvalidRequest, match="ANY.*forbidden.*write_consistency_levels_disallowed"):
+            cql.execute(SimpleStatement(f"INSERT INTO {test_table} (pk, v) VALUES (1, 1)", consistency_level=ConsistencyLevel.ANY))
+        cql.execute(f"INSERT INTO {test_table} (pk, v) VALUES (1, 1)", trace=True).get_query_trace(max_wait_sec=60)
