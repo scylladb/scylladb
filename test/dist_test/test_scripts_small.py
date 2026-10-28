@@ -525,13 +525,24 @@ def test_sysconfig_parser(scripts):
     assert scripts.read('/etc/sysconfig/scylla-server') == 'A="say \\"hi\\" now"\nB="x y"\nC=3\n'
 
 
-@pytest.mark.xfail(strict=True, reason="get() strips the escaped closing quote: 'a \\\"b\\\"' reads back as 'a \"b\\'")
 def test_sysconfig_parser_trailing_quote(scripts):
     """A value ending with an escaped quote reads back unchanged, without a stray backslash."""
     scripts.file('/f')
     cfg = scylla_util.sysconfig_parser('/f')
     cfg.set('A', 'say "hi"')
     assert cfg.get('A') == 'say "hi"'
+
+
+@pytest.mark.parametrize('val', ['x y\\', 'C:\\dir', 'a \\\\ "b\\"', 'x y\\\\'])
+def test_sysconfig_parser_backslash(scripts, val):
+    """Backslashes are escaped, so values with them read back unchanged, also after replacing an existing key."""
+    scripts.file('/f', 'B=1\n')
+    cfg = scylla_util.sysconfig_parser('/f')
+    cfg.set('A', val)
+    cfg.set('B', val)
+    cfg.commit()
+    cfg = scylla_util.sysconfig_parser('/f')
+    assert (cfg.get('A'), cfg.get('B')) == (val, val)
 
 
 @pytest.mark.parametrize('raw,expected', [('"--log-to-syslog 1', '--log-to-syslog 1'), ('"', ''), ('x"', 'x')],
