@@ -7,6 +7,7 @@
 #############################################################################
 import time
 
+from test import DEBUG_MODES
 from cassandra import ConsistencyLevel, InvalidRequest
 from cassandra.cluster import NoHostAvailable
 from cassandra.query import BatchStatement, SimpleStatement
@@ -460,3 +461,40 @@ def test_batch_static_ttl_conditional_interaction(cql, test_keyspace, clock):
         assert rows() == [(1, 2, 3, 4, 22, 5), (1, 4, 5, 6, 22, None)]
         batch(f'UPDATE {table} SET sval=23 WHERE id=1 IF sval=22', delete(4, 5, 6))
         assert rows() == [(1, 2, 3, 4, 23, 5)]
+
+
+# BEGIN BATCH USING TIMESTAMP applies the timestamp to every statement in
+# the batch, and statements in a batch without a timestamp can each have
+# their own USING TIMESTAMP. Setting a timestamp on both the batch and a
+# statement in it is an error.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_batch_using_timestamp(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, a text, b text") as table:
+        cql.execute(f"""BEGIN BATCH USING TIMESTAMP 1111111111111111
+            INSERT INTO {table} (id, a, b) VALUES (0, 'Jack', 'Sparrow')
+            INSERT INTO {table} (id, a, b) VALUES (1, 'Will', 'Turner')
+            APPLY BATCH""")
+        assert sorted(cql.execute(f"SELECT id, writetime(a), writetime(b) FROM {table}")) == [
+            (0, 1111111111111111, 1111111111111111), (1, 1111111111111111, 1111111111111111)]
+
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_batch_statements_using_timestamp(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, a text, b text") as table:
+        cql.execute(f"""BEGIN BATCH
+            INSERT INTO {table} (id, a, b) VALUES (0, 'Jack', 'Sparrow') USING TIMESTAMP 1111111111111111
+            INSERT INTO {table} (id, a, b) VALUES (1, 'Will', 'Turner') USING TIMESTAMP 1111111111111112
+            APPLY BATCH""")
+        assert sorted(cql.execute(f"SELECT id, writetime(a), writetime(b) FROM {table}")) == [
+            (0, 1111111111111111, 1111111111111111), (1, 1111111111111112, 1111111111111112)]
+
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_batch_and_statement_timestamp_conflict(cql, table1):
+    with pytest.raises(InvalidRequest, match='Timestamp must be set either on BATCH or individual statements'):
+        cql.execute(f"""BEGIN BATCH USING TIMESTAMP 1111111111111111
+            INSERT INTO {table1} (k, t) VALUES (0, 'Jack') USING TIMESTAMP 2
+            INSERT INTO {table1} (k, t) VALUES (1, 'Will')
+            APPLY BATCH""")
+

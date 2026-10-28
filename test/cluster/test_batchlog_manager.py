@@ -5,12 +5,17 @@
 #
 
 import asyncio
+import os
 import pytest
 import logging
 import time
+from cassandra import ConsistencyLevel, Timeout, Unavailable  # type: ignore
+from cassandra.policies import FallthroughRetryPolicy  # type: ignore
+from cassandra.query import SimpleStatement  # type: ignore
+from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
-from test.cluster.util import new_test_keyspace, reconnect_driver, wait_for_cql_and_get_hosts
+from test.cluster.util import cassandra_stress, create_new_test_keyspace, new_test_keyspace, reconnect_driver, wait_for_cql_and_get_hosts
 
 
 logger = logging.getLogger(__name__)
@@ -410,3 +415,114 @@ async def test_batchlog_replay_failure_during_repair(manager: ScyllaClusterManag
 
         res = await cql.run_async(f"SELECT * FROM {ks}.my_table WHERE pk=0 BYPASS CACHE")
         assert len(res) == 0
+
+
+# A LOGGED batch at CL=ANY is accepted with one of three replicas (RF=3)
+# down: the batchlog only needs two live nodes. Once the node is back, it
+# has the batch's rows.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_logged_batch_at_cl_any_with_node_down(manager: ScyllaClusterManager) -> None:
+    servers = await manager.servers_add(3, auto_rack_dc="dc1", config={"tablets_mode_for_new_keyspaces": "disabled"})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (id int PRIMARY KEY, name text)")
+        await manager.server_stop_gracefully(servers[2].server_id)
+        await manager.server_not_sees_other_server(servers[0].ip_addr, servers[2].ip_addr)
+        await cql.run_async(SimpleStatement(f"""
+            BEGIN BATCH
+            INSERT INTO {ks}.t (id, name) VALUES (0, 'Jack')
+            INSERT INTO {ks}.t (id, name) VALUES (1, 'Will')
+            APPLY BATCH""", consistency_level=ConsistencyLevel.ANY))
+        await manager.server_start(servers[2].server_id)
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        # The rows reach the restarted node by hint replay.
+        async def rows_arrived():
+            rows = await cql.run_async(f"SELECT id FROM MUTATION_FRAGMENTS({ks}.t) WHERE mutation_fragment_kind = 'clustering row' ALLOW FILTERING", host=hosts[2])
+            return sorted(r.id for r in rows) == [0, 1] or None
+        await wait_for(rows_arrived, time.time() + 60)
+
+
+async def batch_prepare(manager: ScyllaClusterManager, nodes: int, **kwargs):
+    """The dtest's prepare(): a node per rack, and keyspace ks of RF=nodes
+    with its clicks and users tables. Returns the servers and the keyspace."""
+    servers = await manager.servers_add(nodes, auto_rack_dc="dc1", **kwargs)
+    cql = manager.get_cql()
+    ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {nodes}}} AND tablets = {{'enabled': false}}")
+    await cql.run_async(f"CREATE TABLE {ks}.clicks (userid int, url text, total counter, PRIMARY KEY (userid, url))")
+    await cql.run_async(f"CREATE TABLE {ks}.users (id int, firstname text, lastname text, PRIMARY KEY (id))")
+    return servers, ks
+
+
+def users_batch(ks: str) -> str:
+    return (f"BEGIN BATCH INSERT INTO {ks}.users (id, firstname, lastname) VALUES (0, 'Jack', 'Sparrow') "
+            f"INSERT INTO {ks}.users (id, firstname, lastname) VALUES (1, 'Will', 'Turner') APPLY BATCH")
+
+
+# A logged batch fails with Unavailable when its coordinator has no live
+# node to write the batchlog to: the other two of three nodes are down.
+async def test_logged_batch_throws_uae(manager: ScyllaClusterManager) -> None:
+    servers, ks = await batch_prepare(manager, 3)
+    for s in servers[1:]:
+        await manager.server_stop_gracefully(s.server_id)
+    await manager.server_not_sees_other_server(servers[0].ip_addr, servers[1].ip_addr)
+    await manager.server_not_sees_other_server(servers[0].ip_addr, servers[2].ip_addr)
+    cql = await manager.get_cql_exclusive(servers[0])
+    with pytest.raises(Unavailable):
+        await cql.run_async(SimpleStatement(users_batch(ks), consistency_level=ConsistencyLevel.ONE,
+                                            retry_policy=FallthroughRetryPolicy()))
+
+
+# With the other two of three nodes killed and not yet seen down, the
+# batchlog write of a logged batch gets no response: the batch times out
+# with no acknowledgment (or, if the coordinator already saw them down,
+# fails with Unavailable with no live replica).
+async def test_acknowledged_by_batchlog_not_set_when_batchlog_write_fails(manager: ScyllaClusterManager) -> None:
+    servers, ks = await batch_prepare(manager, 3)
+    cql = await manager.get_cql_exclusive(servers[0])
+    for s in servers[1:]:
+        await manager.server_stop(s.server_id, convict=False)
+    with pytest.raises((Timeout, Unavailable)) as ex:
+        await cql.run_async(SimpleStatement(users_batch(ks), consistency_level=ConsistencyLevel.ONE,
+                                            retry_policy=FallthroughRetryPolicy()), timeout=None)
+    if isinstance(ex.value, Timeout):
+        assert ex.value.received_responses == 0
+    else:
+        assert ex.value.alive_replicas == 0
+
+
+
+# Ported from scylla-dtest batch_test.py::TestBatch::test_acknowledged_by_batchlog_set_when_batchlog_write_succeeds.
+# With one of three nodes killed, the batchlog write of a logged batch at
+# CL=THREE succeeds on the two live nodes, but the batch itself times out with
+# their two responses (or, if the coordinator already saw the node down, fails
+# with Unavailable with two live replicas).
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+async def test_acknowledged_by_batchlog_set_when_batchlog_write_succeeds(manager: ScyllaClusterManager) -> None:
+    servers, ks = await batch_prepare(manager, 3)
+    cql = await manager.get_cql_exclusive(servers[0])
+    await manager.server_stop(servers[-1].server_id, convict=False)
+    with pytest.raises((Timeout, Unavailable)) as ex:
+        await cql.run_async(SimpleStatement(users_batch(ks), consistency_level=ConsistencyLevel.THREE,
+                                            retry_policy=FallthroughRetryPolicy()), timeout=None)
+    if isinstance(ex.value, Timeout):
+        assert ex.value.received_responses == 2
+    else:
+        assert ex.value.alive_replicas == 2
+
+# Reproduces #3229: logged batches at CL=ALL on four nodes, whose racks are
+# named so that the batchlog manager's choice of batchlog replicas from
+# other racks hashes them in various orders, must not make any node log
+# "unknown endpoint". The batches are the dtest's cassandra-stress user
+# profile of LOGGED batches.
+@pytest.mark.parametrize("rack_names", [["rc", "rc2", "rc3", "rc4"], ["1a", "1b", "1c", "1d"], ["rc1", "rc2", "rc3", "rc4"]])
+async def test_batchlog_manager_issue(manager: ScyllaClusterManager, rack_names) -> None:
+    servers = await manager.servers_add(4, property_file=[{"dc": "dc1", "rack": rack} for rack in rack_names], config={"tablets_mode_for_new_keyspaces": "disabled"})
+    profile = os.path.join(os.path.dirname(__file__), "..", "resource", "cassandra-stress", "batch_complex_schema.yaml")
+    await cassandra_stress(manager, servers[-1], "user", "no-warmup", f"profile={os.path.realpath(profile)}", "ops(insert=1)",
+                           "cl=ALL", "duration=5s", "-rate", "threads=100", "-pop", "seq=1..500", create_keyspace=False)
+    await asyncio.gather(*(manager.server_stop_gracefully(s.server_id) for s in servers))
+    for s in servers:
+        log = await manager.server_open_log(s.server_id)
+        assert not await log.grep("unknown endpoint")
