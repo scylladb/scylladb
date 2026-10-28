@@ -171,3 +171,78 @@ async def test_truncated_value_returns_through_a_new_replica(manager: ScyllaClus
             f"the truncated row of key {pk} came back through n4, which joined after the TRUNCATE: "
             f"SERIAL reads {[r.c for r in rows]} then {[r.c for r in again]}, "
             f"read at ALL {[r.c for r in everywhere]}")
+
+
+@pytest.mark.parametrize("tablets", [
+    pytest.param(True, id="tablets"),
+    pytest.param(False, id="vnodes",
+                 marks=pytest.mark.xfail(reason="https://scylladb.atlassian.net/browse/SCYLLADB-5758", strict=True)),
+])
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_truncated_value_returns_through_an_ignorant_quorum(manager: ScyllaClusterManager, scale_timeout, tablets: bool):
+    """A learned, pruned, truncated value must not be re-proposed by replicas that never saw it learned.
+
+    A replica that accepted a proposal but failed to learn it keeps the
+    proposal, data included, after the others learned, pruned and were
+    truncated.  A later round that reaches a quorum without a single replica
+    that knows the commit takes that proposal for an unfinished round and
+    finishes it under its own ballot, past the truncation guard.  With vnodes
+    a node added after the truncation knows nothing, since system.paxos is
+    not streamed to it, so such a quorum is the stale replica and the new
+    node, with the third replica down.  Setup: learned by n1 and n2 only (n3
+    fails to learn), TRUNCATE, n4 added, a key replicated on n3 and n4 picked,
+    its third replica stopped, a SERIAL read of the key run through n4.
+    """
+    servers = await manager.servers_add(3, config=CONFIG, cmdline=CMDLINE)
+    n1, n2, n3 = servers
+    cql, (h1, h2, h3) = await manager.get_ready_cql(servers)
+    if tablets:
+        await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, keyspace_opts(tablets)) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
+        keys = [1] if tablets else list(range(1, 33))
+
+        logger.info("Learned by n1 and n2 only; n3 keeps the accepted proposal")
+        await manager.api.enable_injection(n3.ip_addr, "paxos_error_before_learn", one_shot=False)
+        for pk in keys:
+            [row] = await cql.run_async(insert(ks, pk), host=h1)
+            assert row.applied, "scenario not reached: the insert was not applied"
+        await manager.api.disable_injection(n3.ip_addr, "paxos_error_before_learn")
+        token = await get_token_for_pk(cql, ks, "t", keys[0])
+
+        logger.info("TRUNCATE, then add n4")
+        await cql.run_async(f"TRUNCATE {ks}.t")
+        n4 = await manager.server_add(config=CONFIG, cmdline=CMDLINE)
+        [h4] = await wait_for_cql_and_get_hosts(cql, [n4], time.time() + scale_timeout(60))
+        host_id = {s.server_id: await manager.get_host_id(s.server_id) for s in (n1, n2, n3, n4)}
+
+        if tablets:
+            # n4 takes n1's place, so the key's replicas are n2, n3 and n4.
+            pk = 1
+            [shard] = [s for h, s in await get_tablet_replicas(manager, n1, ks, "t", token) if h == host_id[n1.server_id]]
+            await manager.api.move_tablet(n2.ip_addr, ks, "t", host_id[n1.server_id], shard, host_id[n4.server_id], 0,
+                                          token, timeout=scale_timeout(120))
+            third = n2
+        else:
+            for pk in keys:
+                replicas = set(await manager.api.natural_endpoints(n1.ip_addr, ks, "t", str(pk)))
+                if {n3.ip_addr, n4.ip_addr} <= replicas:
+                    break
+            else:
+                pytest.fail("scenario not reached: no key is replicated on both n3 and n4")
+            [third] = [s for s in (n1, n2) if s.ip_addr in replicas]
+            logger.info("Key %d is replicated on n3, n4 and %s", pk, third.ip_addr)
+
+        assert not await cql.run_async(read(ks, pk, ConsistencyLevel.QUORUM), host=h4), (
+            "scenario not reached: the row is there before any paxos round")
+        await manager.server_stop_gracefully(third.server_id)
+        rows = await cql.run_async(read(ks, pk, ConsistencyLevel.SERIAL), host=h4)
+        await manager.server_start(third.server_id)
+        await wait_for_cql_and_get_hosts(cql, [third], time.time() + scale_timeout(60))
+        again = await cql.run_async(read(ks, pk, ConsistencyLevel.SERIAL), host=h4)
+        everywhere = await cql.run_async(read(ks, pk, ConsistencyLevel.ALL), host=h4)
+        assert not rows and not again and not everywhere, (
+            f"the truncated row of key {pk} came back: a quorum without a replica that saw it learned "
+            f"re-proposed it: SERIAL reads {[r.c for r in rows]} then {[r.c for r in again]}, "
+            f"read at ALL {[r.c for r in everywhere]}")
