@@ -28,6 +28,7 @@ from test.alternator.util import (ManualRequestError, client_no_transform,
                                   full_scan, get_table_arn, is_aws,
                                   manual_request, multiset, random_string,
                                   unique_table_name)
+from test.alternator.test_export import arn_with_part
 
 
 COMPRESSORS = {
@@ -554,17 +555,70 @@ def test_client_token_invalid(dynamodb):
 def unknown_import_arn(table):
     return f'{get_table_arn(table)}/import/{int(time.time() * 1000):014}-0badf00d'
 
-# An unknown import is ImportNotFoundException, not ValidationException.
+# An unknown import is ImportNotFoundException, not ValidationException, also
+# when its table does not exist.
 def test_describe_import_not_found(dynamodb, test_table_s):
     arn = unknown_import_arn(test_table_s)
-    with pytest.raises(ClientError, match='ImportNotFoundException'):
+    for import_arn in [arn, arn.replace(test_table_s.name, unique_table_name())]:
+        with pytest.raises(ClientError, match='ImportNotFoundException'):
+            dynamodb.meta.client.describe_import(ImportArn=import_arn)
+
+# The ARN `table_arn` with an empty keyspace before the `@`. An Alternator ARN
+# names its keyspace before `table/`, so it is rewritten into the AWS form, as
+# in unknown_export_arn().
+def arn_with_empty_keyspace(table_arn):
+    prefix, _, name = table_arn.rpartition('/')
+    if prefix.startswith('arn:scylla:'):
+        prefix = 'arn:aws:dynamodb:us-east-1:000000000000:table'
+    return f'{prefix}/@{name}'
+
+# A missing, null or empty ImportArn is a ValidationException, and one of the
+# wrong JSON type a SerializationException. botocore resolves the endpoint
+# from the ImportArn, so these go by manual_request().
+@pytest.mark.parametrize('body, error', [
+    pytest.param({}, 'ValidationException', id='missing'),
+    pytest.param({'ImportArn': None}, 'ValidationException', id='null'),
+    pytest.param({'ImportArn': ''}, 'ValidationException', id='empty'),
+    pytest.param({'ImportArn': 5}, 'SerializationException', id='number'),
+])
+def test_describe_import_missing_or_wrong_type(dynamodb, body, error):
+    with pytest.raises(ManualRequestError, match=error):
+        manual_request(dynamodb, 'DescribeImport', json.dumps(body))
+
+# An import ARN must be a table ARN followed by `/import/<id>`, of a table
+# name that a table can have.
+@pytest.mark.parametrize('make_arn', [
+    pytest.param(lambda table_arn: table_arn.rpartition('/')[0] + '/x/import/01658528578619-c4d4e311',
+                 id='name_too_short'),
+    pytest.param(lambda table_arn: table_arn, id='table_arn'),
+    pytest.param(lambda table_arn: f'{table_arn}/export/01658528578619-c4d4e311', id='export_arn'),
+    pytest.param(lambda table_arn: arn_with_part(table_arn, 0, 'qwerty') + '/import/01658528578619-c4d4e311',
+                 id='no_arn_prefix'),
+    pytest.param(lambda table_arn: arn_with_part(table_arn, 4, None) + '/import/01658528578619-c4d4e311',
+                 id='no_account'),
+    pytest.param(lambda table_arn: arn_with_empty_keyspace(table_arn) + '/import/01658528578619-c4d4e311',
+                 id='empty_keyspace'),
+])
+def test_describe_import_malformed_arn(dynamodb, test_table_s, make_arn):
+    arn = make_arn(get_table_arn(test_table_s))
+    with pytest.raises(ClientError, match='ValidationException.*Invalid Import ARN'):
         dynamodb.meta.client.describe_import(ImportArn=arn)
 
-# An import ARN whose table name is below the 3-character minimum.
-def test_describe_import_malformed_arn(dynamodb, test_table_s):
-    arn_up_to_table, _, _ = get_table_arn(test_table_s).rpartition('/')
-    arn = f'{arn_up_to_table}/x/import/01658528578619-c4d4e311'
-    with pytest.raises(ClientError, match='ValidationException.*Invalid Import ARN'):
+# The import id must have the shape of the ids DynamoDB hands out: 14 digits,
+# a dash and 8 hex digits, which may be upper case.
+@pytest.mark.parametrize('import_id, error', [
+    pytest.param('01658528578619-C4D4E311', 'ImportNotFoundException', id='upper_case'),
+    pytest.param('', 'ValidationException', id='empty'),
+    pytest.param('1658528578619-c4d4e311', 'ValidationException', id='13_digits'),
+    pytest.param('01658528578619-c4d4e3110', 'ValidationException', id='9_hex_digits'),
+    pytest.param('01658528578619_c4d4e311', 'ValidationException', id='no_dash'),
+    pytest.param('01658528578619-c4d4e311/x', 'ValidationException', id='suffix'),
+    pytest.param('0165852857861x-c4d4e311', 'ValidationException', id='non_digit'),
+    pytest.param('01658528578619-c4d4e31g', 'ValidationException', id='non_hex_digit'),
+])
+def test_describe_import_import_id(dynamodb, test_table_s, import_id, error):
+    arn = f'{get_table_arn(test_table_s)}/import/{import_id}'
+    with pytest.raises(ClientError, match=error):
         dynamodb.meta.client.describe_import(ImportArn=arn)
 
 # ImportSummary members, except CloudWatchLogGroupArn.
@@ -903,6 +957,58 @@ def test_list_imports_page_size_out_of_range(dynamodb, page_size):
 def test_list_imports_bad_next_token(dynamodb, token):
     with pytest.raises(ClientError, match='ValidationException.*[Nn]ext[Tt]oken'):
         dynamodb.meta.client.list_imports(NextToken=token)
+
+# A NextToken of 112 to 1024 characters which does not match ([0-9a-f]{16})+.
+@pytest.mark.parametrize('token', [
+    pytest.param('0' * 113, id='113_characters'),
+    pytest.param('A' * 112, id='upper_case'),
+    pytest.param('g' * 112, id='not_hex'),
+])
+def test_list_imports_next_token_pattern(dynamodb, token):
+    with pytest.raises(ClientError, match='ValidationException.*[Nn]ext[Tt]oken.*pattern'):
+        dynamodb.meta.client.list_imports(NextToken=token)
+
+# A table without imports has an empty ImportSummaryList, also when the table
+# does not exist.
+def test_list_imports_table_without_imports(dynamodb, test_table_s):
+    table_arn = get_table_arn(test_table_s)
+    for arn in [table_arn, table_arn.replace(test_table_s.name, unique_table_name())]:
+        response = dynamodb.meta.client.list_imports(TableArn=arn)
+        assert response['ImportSummaryList'] == []
+        assert 'NextToken' not in response
+
+# TableArn must be a table ARN, of a table name that a table can have.
+@pytest.mark.parametrize('make_arn', [
+    pytest.param(lambda table_arn, name: '', id='empty'),
+    pytest.param(lambda table_arn, name: arn_with_part(table_arn, 0, 'qwerty'), id='no_arn_prefix'),
+    pytest.param(lambda table_arn, name: f'{table_arn}/import/01658528578619-c4d4e311', id='import_arn'),
+    pytest.param(lambda table_arn, name: table_arn.replace(name, 'ab'), id='name_too_short'),
+    pytest.param(lambda table_arn, name: table_arn.replace(name, 'a b'), id='name_with_space'),
+    pytest.param(lambda table_arn, name: arn_with_empty_keyspace(table_arn), id='empty_keyspace'),
+])
+def test_list_imports_invalid_table_arn(dynamodb, test_table_s, make_arn):
+    arn = make_arn(get_table_arn(test_table_s), test_table_s.name)
+    with pytest.raises(ClientError, match='ValidationException.*[Tt]able ?[Aa][Rr][Nn]'):
+        dynamodb.meta.client.list_imports(TableArn=arn)
+
+# A parameter of the wrong JSON type is a SerializationException. botocore
+# resolves the endpoint from an ARN, so a wrong ARN goes by manual_request().
+def test_list_imports_wrong_type(dynamodb):
+    for kwargs in [{'PageSize': '3'}, {'PageSize': True}, {'NextToken': 5}]:
+        with pytest.raises(ClientError, match='SerializationException'):
+            dynamodb.meta.client.list_imports(**kwargs)
+    with pytest.raises(ManualRequestError, match='SerializationException'):
+        manual_request(dynamodb, 'ListImports', json.dumps({'TableArn': 5}))
+
+# A null parameter is ignored. A fractional PageSize is truncated, so 25.9 is
+# accepted as 25, 1.5 lists at most one import and 0.5 is out of range.
+def test_list_imports_fraction_and_null(dynamodb):
+    client = dynamodb.meta.client
+    client.list_imports(PageSize=None, TableArn=None, NextToken=None)
+    assert len(client.list_imports(PageSize=25.9)['ImportSummaryList']) <= 25
+    assert len(client.list_imports(PageSize=1.5)['ImportSummaryList']) <= 1
+    with pytest.raises(ClientError, match='ValidationException.*[Pp]age[Ss]ize'):
+        client.list_imports(PageSize=0.5)
 
 DUPLICATE_ITEMS = [
     {'p': 'dup', 'c': Decimal(1), 'which': 'first'},
