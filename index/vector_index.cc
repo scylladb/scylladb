@@ -93,38 +93,12 @@ void vector_index::check_target(const schema& schema, const std::vector<::shared
         const class schema& schema;
         bool& is_vector;
 
-        /// Vector indexes support filtering on native types that can be used as primary key columns.
-        /// There is no counter (it cannot be used with vector columns)
-        /// and no duration (it cannot be used as a primary key or in secondary indexes).
-        static bool is_supported_filtering_column(abstract_type const & kind_type) {
-            switch (kind_type.get_kind()) {
-                case abstract_type::kind::ascii:
-                case abstract_type::kind::boolean:
-                case abstract_type::kind::byte:
-                case abstract_type::kind::bytes:
-                case abstract_type::kind::date:
-                case abstract_type::kind::decimal:
-                case abstract_type::kind::double_kind:
-                case abstract_type::kind::float_kind:
-                case abstract_type::kind::inet:
-                case abstract_type::kind::int32:
-                case abstract_type::kind::long_kind:
-                case abstract_type::kind::short_kind:
-                case abstract_type::kind::simple_date:
-                case abstract_type::kind::time:
-                case abstract_type::kind::timestamp:
-                case abstract_type::kind::timeuuid:
-                case abstract_type::kind::utf8:
-                case abstract_type::kind::uuid:
-                case abstract_type::kind::varint:
-                    return true;
-                default:
-                    break;
-            }
-            return false;
-        }
-
         void validate(cql3::column_identifier const& column, bool is_vector) const {
+            if (!is_vector) {
+                index.check_filtering_column(schema, column);
+                return;
+            }
+
             auto const& c_name = column.to_string();
             auto const* c_def = schema.get_column_definition(column.name());
             if (c_def == nullptr) {
@@ -133,31 +107,16 @@ void vector_index::check_target(const schema& schema, const std::vector<::shared
 
             auto type = c_def->type;
 
-            if (is_vector) {
-                index.check_regular_column(*c_def);
+            index.check_regular_column(*c_def);
 
-                auto const* vector_type = dynamic_cast<const vector_type_impl*>(type.get());
-                if (vector_type == nullptr) {
-                    throw exceptions::invalid_request_exception("Vector indexes are only supported on columns of vectors of floats");
-                }
-
-                auto elements_type = vector_type->get_elements_type();
-                if (elements_type->get_kind() != abstract_type::kind::float_kind) {
-                    throw exceptions::invalid_request_exception("Vector indexes are only supported on columns of vectors of floats");
-                }
-                return;
+            auto const* vector_type = dynamic_cast<const vector_type_impl*>(type.get());
+            if (vector_type == nullptr) {
+                throw exceptions::invalid_request_exception("Vector indexes are only supported on columns of vectors of floats");
             }
 
-            // An update to a static column alone gives a CDC row with a null clustering key,
-            // which the Vector Store skips, so the filtering value of each row would go stale.
-            if (c_def->is_static()) {
-                throw exceptions::invalid_request_exception(
-                    fmt::format("Creating a {} index requires a non-static filtering column, but column {} is a static column",
-                    index.index_type_name(), c_name));
-            }
-
-            if (!is_supported_filtering_column(*type)) {
-                throw exceptions::invalid_request_exception(format("Unsupported vector index filtering column {} type", c_name));
+            auto elements_type = vector_type->get_elements_type();
+            if (elements_type->get_kind() != abstract_type::kind::float_kind) {
+                throw exceptions::invalid_request_exception("Vector indexes are only supported on columns of vectors of floats");
             }
         }
 
