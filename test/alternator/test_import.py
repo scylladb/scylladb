@@ -555,14 +555,12 @@ def unknown_import_arn(table):
     return f'{get_table_arn(table)}/import/{int(time.time() * 1000):014}-0badf00d'
 
 # An unknown import is ImportNotFoundException, not ValidationException.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 def test_describe_import_not_found(dynamodb, test_table_s):
     arn = unknown_import_arn(test_table_s)
     with pytest.raises(ClientError, match='ImportNotFoundException'):
         dynamodb.meta.client.describe_import(ImportArn=arn)
 
 # An import ARN whose table name is below the 3-character minimum.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 def test_describe_import_malformed_arn(dynamodb, test_table_s):
     arn_up_to_table, _, _ = get_table_arn(test_table_s).rpartition('/')
     arn = f'{arn_up_to_table}/x/import/01658528578619-c4d4e311'
@@ -889,7 +887,6 @@ def test_list_imports_paging(dynamodb):
 # PageSize must be 1 to 25. botocore checks only the minimum, so -1 and 0
 # reach the server only because the "dynamodb" fixture sets
 # parameter_validation=False; 26 and 1000 reach it regardless.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 @pytest.mark.parametrize('page_size', [-1, 0, 26, 1000])
 def test_list_imports_page_size_out_of_range(dynamodb, page_size):
     with pytest.raises(ClientError, match='ValidationException.*[Pp]age[Ss]ize'):
@@ -898,7 +895,6 @@ def test_list_imports_page_size_out_of_range(dynamodb, page_size):
 # NextToken must be 112 to 1024 characters matching ([0-9a-f]{16})+. The
 # 111-character token reaches the server only because the "dynamodb" fixture
 # sets parameter_validation=False: botocore checks the minimum length.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 @pytest.mark.parametrize('token', [
     pytest.param('0' * 111, id='one_short_of_the_minimum'),
     pytest.param('0' * 112, id='minimum_length_but_not_a_token'),
