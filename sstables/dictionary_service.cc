@@ -24,6 +24,7 @@
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "utils/log.hh"
 
 #include "idl/sstable_dicts.dist.hh"
@@ -58,7 +59,8 @@ future<> dictionary_service::stop() {
     if (!_group0_as.abort_requested()) {
         _group0_as.request_abort();
     }
-    return ser::sstable_dicts_rpc_verbs::unregister(&_messaging.local());
+    co_await _async_gate.close();
+    co_await ser::sstable_dicts_rpc_verbs::unregister(&_messaging.local());
 }
 
 void dictionary_service::set_group0(service::raft_group0& group0) {
@@ -67,6 +69,10 @@ void dictionary_service::set_group0(service::raft_group0& group0) {
 
 const gms::feature_service& dictionary_service::get_feature_service() const noexcept {
     return _feature_service.local();
+}
+
+sstable_compressor_factory& dictionary_service::get_compressor_factory() const noexcept {
+    return _db.local().get_user_sstables_manager().get_compressor_factory();
 }
 
 semaphore& dictionary_service::get_do_sample_sstables_concurrency_limiter() {

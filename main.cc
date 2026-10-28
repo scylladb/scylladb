@@ -2119,6 +2119,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             });
 
+            api::set_server_sstable_dicts(ctx, sst_dicts, group0_client).get();
+            auto stop_sst_dicts_api = defer_verbose_shutdown("sstable dicts API", [&ctx] {
+                api::unset_server_sstable_dicts(ctx).get();
+            });
+
             checkpoint(stop_signal, "initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -2570,7 +2575,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return m.start();
             }).get();
 
-            api::set_server_storage_service(ctx, ss, sst_dicts, snapshot_ctl, group0_client).get();
+            api::set_server_storage_service(ctx, ss, snapshot_ctl, group0_client).get();
             auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
                 api::unset_server_storage_service(ctx).get();
             });

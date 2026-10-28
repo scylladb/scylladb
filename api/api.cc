@@ -12,6 +12,7 @@
 #include <seastar/http/api_docs.hh>
 #include "cql_server_test.hh"
 #include "storage_service.hh"
+#include "sstable_dicts.hh"
 #include "token_metadata.hh"
 #include "commitlog.hh"
 #include "gossiper.hh"
@@ -123,10 +124,20 @@ future<> unset_thrift_controller(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_thrift_controller(ctx, r); });
 }
 
-future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<sstables::dictionary_service>& dicts, sharded<db::snapshot_ctl>& ssc, service::raft_group0_client& group0_client) {
-    return ctx.http_server.set_routes([&ctx, &ss, &dicts, &ssc, &group0_client] (routes& r) {
-            set_storage_service(ctx, r, ss, dicts, ssc, group0_client);
+future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& ssc, service::raft_group0_client& group0_client) {
+    return ctx.http_server.set_routes([&ctx, &ss, &ssc, &group0_client] (routes& r) {
+            set_storage_service(ctx, r, ss, ssc, group0_client);
         });
+}
+
+future<> set_server_sstable_dicts(http_context& ctx, sharded<sstables::dictionary_service>& dicts, service::raft_group0_client& group0_client) {
+    return ctx.http_server.set_routes([&ctx, &dicts, &group0_client] (routes& r) {
+            set_sstable_dicts(ctx, r, dicts, group0_client);
+        });
+}
+
+future<> unset_server_sstable_dicts(http_context& ctx) {
+    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_sstable_dicts(ctx, r); });
 }
 
 future<> unset_server_storage_service(http_context& ctx) {

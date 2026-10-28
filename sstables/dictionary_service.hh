@@ -10,6 +10,7 @@
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/temporary_buffer.hh>
@@ -41,6 +42,8 @@ namespace replica {
 class database;
 }
 
+class sstable_compressor_factory;
+
 namespace service {
 class raft_group0;
 class raft_group0_client;
@@ -69,6 +72,9 @@ class dictionary_service : public peering_sharded_service<dictionary_service> {
     // Callers of `do_sample_sstables` should hold this semaphore until they are
     // done with the sample, to avoid several samples being gathered at once.
     semaphore _do_sample_sstables_concurrency_limiter{1};
+    // Held for the duration of async REST handlers, so that stop() drains
+    // in-flight requests before teardown.
+    named_gate _async_gate{"sstables::dictionary_service"};
     // The trainer itself is plugged in from `main`, since it has to run on a
     // non-reactor thread.
     std::function<future<byte_vector>(std::vector<byte_vector>)> _train_dict;
@@ -87,6 +93,9 @@ public:
     future<> stop();
 
     const gms::feature_service& get_feature_service() const noexcept;
+    // The factory the published dictionaries eventually land in.
+    sstable_compressor_factory& get_compressor_factory() const noexcept;
+    gate::holder hold_async_gate() { return _async_gate.hold(); }
 
     void set_group0(service::raft_group0&);
     void set_train_dict_callback(decltype(_train_dict));
