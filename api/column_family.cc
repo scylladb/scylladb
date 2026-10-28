@@ -1450,6 +1450,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
             return make_ready_future<json::json_return_type>(res);
         });
     });
+
+    cm::get_pending_tasks.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return map_reduce_cf(db, int64_t(0), [](replica::column_family& cf) {
+            return cf.estimate_pending_compactions();
+        }, std::plus<int64_t>());
+    });
 }
 
 void unset_column_family(http_context& ctx, routes& r) {
@@ -1576,5 +1582,6 @@ void unset_column_family(http_context& ctx, routes& r) {
     ss::sstable_info.unset(r);
     ss::drop_quarantined_sstables.unset(r);
     cm::get_pending_tasks_by_table.unset(r);
+    cm::get_pending_tasks.unset(r);
 }
 }

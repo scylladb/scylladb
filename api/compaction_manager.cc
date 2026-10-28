@@ -151,12 +151,6 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction::co
         co_return json_void();
     });
 
-    cm::get_pending_tasks.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx.db, int64_t(0), [](replica::column_family& cf) {
-            return cf.estimate_pending_compactions();
-        }, std::plus<int64_t>());
-    });
-
     cm::get_completed_tasks.set(r, [&cm] (std::unique_ptr<http::request> req) {
         return get_cm_stats(cm, &compaction::compaction_manager::stats::completed_tasks);
     });
@@ -257,7 +251,6 @@ void unset_compaction_manager(http_context& ctx, routes& r) {
     cm::force_user_defined_compaction.unset(r);
     cm::stop_compaction.unset(r);
     cm::stop_keyspace_compaction.unset(r);
-    cm::get_pending_tasks.unset(r);
     cm::get_completed_tasks.unset(r);
     cm::get_total_compactions_completed.unset(r);
     cm::get_bytes_compacted.unset(r);
