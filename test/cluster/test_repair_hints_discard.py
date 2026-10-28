@@ -22,13 +22,12 @@ from test.pylib.repair import load_tablet_repair_time
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.cluster.test_cluster_config import CLUSTER_CONFIGS_QUERY, wait_for_config_map_value_on_hosts
+from test.cluster.util import set_cluster_config
 
 logger = logging.getLogger(__name__)
 
 # Makes a node fail every write to ks.hinted, so that every hint for it fails to be sent.
 REJECT_HINTS = "database_apply"
-SHORT_TIMEOUT = "repair_flush_hints_batchlog_timeout"
 # Makes the hint senders flush and wake up every second instead of every 10 seconds. Read at startup.
 FAST_HINT_FLUSH = "decrease_hints_flush_period"
 OPTION = "repair_hints_batchlog_flush_discard_unreplayed_hints"
@@ -96,9 +95,9 @@ async def reject_hints(manager: ScyllaClusterManager, node: ServerInfo, reject: 
         await manager.api.disable_injection(node.ip_addr, REJECT_HINTS)
 
 
-async def short_flush_timeout(manager: ScyllaClusterManager, node: ServerInfo) -> None:
-    """Makes the repairs `node` coordinates give up waiting for hints after a few seconds instead of minutes."""
-    await manager.api.enable_injection(node.ip_addr, SHORT_TIMEOUT, one_shot=False, parameters={"hints_timeout_in_s": "3"})
+async def short_flush_timeout(manager: ScyllaClusterManager, cql, servers: list[ServerInfo], hosts) -> None:
+    """Makes repairs give up waiting for hints after a few seconds instead of minutes."""
+    await set_cluster_config(manager, cql, servers, hosts, "repair_hints_batchlog_flush_timeout_in_seconds", "3")
 
 
 async def metric_sum(manager: ScyllaClusterManager, servers: list[ServerInfo], name: str) -> float:
@@ -188,16 +187,7 @@ async def tablet_repaired(cql, host, table_id) -> bool:
 
 
 async def set_option(manager: ScyllaClusterManager, cql, servers: list[ServerInfo], hosts, value: bool) -> None:
-    """
-    Sets the option cluster-wide and waits until every node resolves the new value. The schema map
-    holds the value before the cluster config cache, which is refreshed in the background, does.
-    """
-    logs = [await manager.server_open_log(s.server_id) for s in servers]
-    marks = [await log.mark() for log in logs]
-    await cql.run_async(f"ALTER CLUSTER WITH {OPTION} = {str(value).lower()}")
-    await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], OPTION, str(value).lower())
-    for log, mark in zip(logs, marks):
-        await log.wait_for(f"Refreshed cluster config cache.*{OPTION}={str(value).lower()}", from_mark=mark, timeout=60)
+    await set_cluster_config(manager, cql, servers, hosts, OPTION, str(value).lower())
 
 
 async def keys_on(manager: ScyllaClusterManager, server: ServerInfo, table: str) -> set[int]:
@@ -251,7 +241,7 @@ async def test_repair_discards_hints_it_cannot_wait_for(manager: ScyllaClusterMa
     else:
         live, ignore_nodes = [n1], n2.ip_addr
     live_hosts = [host_of(hosts, n) for n in live]
-    await short_flush_timeout(manager, n1)
+    await short_flush_timeout(manager, cql, live, live_hosts)
 
     # Option off: the repair goes on without a repair time and the hints stay.
     await set_option(manager, cql, live, live_hosts, False)
@@ -313,9 +303,7 @@ async def test_tablet_repair_discards_hints_it_cannot_wait_for(manager: ScyllaCl
     await reject_hints(manager, n2, True)
     await manager.server_start(n2.server_id)
     await manager.servers_see_each_other([n1, n2])
-    # The tablet's primary replica, on either node, runs the repair and sends the flush to both.
-    for node in (n1, n2):
-        await short_flush_timeout(manager, node)
+    await short_flush_timeout(manager, cql, [n1, n2], hosts)
     log1 = await manager.server_open_log(n1.server_id)
     mark = await log1.mark()
 
@@ -374,8 +362,9 @@ async def test_repair_discards_hints_only_once_view_hints_are_sent(manager: Scyl
     await write_hinted(manager, cql, n3, keys, both_replicas_live=frozenset(keys) - base_on_n3)
     await wait_for_hints_stored(manager, live, "hints_manager", len(base_on_n3))
     await wait_for_hints_stored(manager, live, "hints_for_views_manager", len(view_rows_for_n3))
-    await set_option(manager, cql, live, [host_of(hosts, n) for n in live], True)
-    await short_flush_timeout(manager, n1)
+    live_hosts = [host_of(hosts, n) for n in live]
+    await set_option(manager, cql, live, live_hosts, True)
+    await short_flush_timeout(manager, cql, live, live_hosts)
 
     # n3 is down, so neither kind of hint can be sent, and the timeout discards nothing. Every live node
     # gets the flush request; the write coordinators hold the regular hints, the paired base replicas the view hints.

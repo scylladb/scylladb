@@ -184,3 +184,12 @@ Available options
        acknowledged at consistency level ``ANY`` that only hints hold is lost. Hints for
        materialized views are never discarded. Default: ``true``, in effect once every node knows
        the option.
+   * - ``repair_hints_batchlog_flush_timeout_in_seconds``
+     - integer
+     - ``CLUSTER``
+     - A repair of a table with ``tombstone_gc`` in ``repair`` mode first asks every node to flush
+       its hints and replay its batchlog, and gives up on a node that has not finished within this
+       many seconds. Raise it when nodes accumulate hints faster than they can replay them within
+       the default, for example after a node stayed down for a long time. Must be between ``1``
+       and ``315360000`` (ten years). Default: ``300``, in effect once every node runs a version
+       that knows the option.

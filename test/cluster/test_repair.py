@@ -13,6 +13,7 @@ import random
 import uuid
 
 from cassandra.cluster import ConsistencyLevel
+from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement
 
 from test.pylib.internal_types import ServerInfo
@@ -20,7 +21,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.util import new_test_keyspace, reconnect_driver, FeatureConfig
+from test.cluster.util import new_test_keyspace, reconnect_driver, FeatureConfig, set_cluster_config
 
 
 logger = logging.getLogger(__name__)
@@ -176,8 +177,9 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
     total_repair_duration = 0
 
     cfg = { 'tablets_mode_for_new_keyspaces': 'disabled' }
-    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", str(cache_time_in_ms), "--smp", "1", "--logger-log-level", "api=trace"]
+    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", str(cache_time_in_ms), "--smp", "1", "--logger-log-level", "api=trace", "--logger-log-level", "repair=debug"]
     node1, node2 = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
+    log1 = await manager.server_open_log(node1.server_id)
 
     cql = manager.get_cql()
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
@@ -201,6 +203,7 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
 
     await asyncio.sleep(1 + (cache_time_in_ms / 1000))
 
+    mark = await log1.mark()
     count_before = await manager.api.get_injection_enter_count(node1.ip_addr, "repair_flush_hints_batchlog_handler")
     duration = await repair("Second")
     total_repair_duration += duration
@@ -208,8 +211,12 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
 
     # Each repair sends flush requests to all nodes, so node1 receives nr_repairs
     # requests per round. With cache, only the first triggers an actual replay.
-    replays_per_round = 1 if cache_time_in_ms > 0 else nr_repairs
-    assert count_after - count_before == replays_per_round
+    replays = count_after - count_before
+    if cache_time_in_ms > 0:
+        assert replays == 1
+    else:
+        reused = len(await log1.grep("with a flush that started after it arrived", from_mark=mark))
+        assert replays + reused == nr_repairs
 
     logger.debug(f"Repair nr_repairs={nr_repairs} cache_time_in_ms={cache_time_in_ms} total_repair_duration={total_repair_duration}")
 
@@ -222,6 +229,91 @@ async def test_batchlog_flush_in_repair_without_cache(manager):
     await do_batchlog_flush_in_repair(manager, 0);
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_repair_flush_gives_up_on_silent_replica(manager):
+    """A flush request that the replica never answers does not hold its
+    caller forever. The request is held on the replica where none of its
+    deadlines can end it, so only the caller's own bound can end the wait."""
+    injection = "repair_flush_hints_batchlog_handler_hold"
+    margin_injection = "repair_flush_hints_batchlog_rpc_margin_in_ms"
+    # A one second flush timeout and no flush cache, so every repair flushes
+    # and a stuck flush fails fast.
+    config = {'tablets_mode_for_new_keyspaces': 'disabled',
+              'repair_hints_batchlog_flush_cache_time_in_ms': 0}
+    cmdline = ["--logger-log-level", "cluster_config_manager=debug"]
+    node1, node2 = await manager.servers_add(2, config=config, cmdline=cmdline, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, [node1, node2], time.time() + 60)
+    await set_cluster_config(manager, cql, [node1, node2], hosts, "repair_hints_batchlog_flush_timeout_in_seconds", "1")
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    cql.execute("CREATE TABLE ks.tbl (pk int PRIMARY KEY) WITH tombstone_gc = {'mode': 'repair'}")
+
+    node2_host_id = await manager.api.get_host_id(node2.ip_addr)
+    log1 = await manager.server_open_log(node1.server_id)
+    log2 = await manager.server_open_log(node2.server_id)
+    mark1 = await log1.mark()
+    mark2 = await log2.mark()
+    await manager.api.enable_injection(node2.ip_addr, injection, one_shot=True)
+    # The caller normally gives the replica a 30 second head start; the test
+    # does not need to sit through it.
+    await manager.api.enable_injection(node1.ip_addr, margin_injection, one_shot=False, parameters={"value": "500"})
+    try:
+        repair = asyncio.create_task(manager.api.repair(node1.ip_addr, "ks", "tbl"))
+        await log2.wait_for(f"{injection}: waiting for message", from_mark=mark2)
+
+        await asyncio.wait_for(repair, timeout=20)
+        await log1.wait_for(rf"Sending repair_flush_hints_batchlog to node={node2_host_id}, failed: .*timed.?out", from_mark=mark1)
+    finally:
+        await manager.api.message_injection(node2.ip_addr, injection)
+        await manager.api.disable_injection(node1.ip_addr, margin_injection)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_repair_flush_queued_request(manager):
+    """A flush request queued behind an earlier one reuses the earlier flush
+    when it started after the request arrived, and gives up on the replica
+    once its timeout passes while it is still queued."""
+    injection = "repair_flush_hints_batchlog_handler_hold"
+    flush_injection = "repair_flush_hints_batchlog_handler"
+    config = {'tablets_mode_for_new_keyspaces': 'disabled',
+              'repair_hints_batchlog_flush_cache_time_in_ms': 0}
+    cmdline = ["--logger-log-level", "repair=debug", "--logger-log-level", "cluster_config_manager=debug"]
+    node1, node2 = await manager.servers_add(2, config=config, cmdline=cmdline, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, [node1, node2], time.time() + 60)
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    cql.execute("CREATE TABLE ks.tbl (pk int PRIMARY KEY) WITH tombstone_gc = {'mode': 'repair'}")
+    log2 = await manager.server_open_log(node2.server_id)
+    await manager.api.enable_injection(node2.ip_addr, flush_injection, one_shot=False)
+
+    async def queue_two_repairs():
+        mark = await log2.mark()
+        await manager.api.enable_injection(node2.ip_addr, injection, one_shot=True)
+        first = asyncio.create_task(manager.api.repair(node1.ip_addr, "ks", "tbl"))
+        await log2.wait_for(f"{injection}: waiting for message", from_mark=mark)
+        second = asyncio.create_task(manager.api.repair(node1.ip_addr, "ks", "tbl"))
+        arrived, _ = await log2.wait_for("Started to process repair_flush_hints_batchlog_request", from_mark=mark)
+        await log2.wait_for("Started to process repair_flush_hints_batchlog_request", from_mark=arrived)
+        return mark, first, second
+
+    # gc_clock counts whole seconds.
+    mark, first, second = await queue_two_repairs()
+    count_before = await manager.api.get_injection_enter_count(node2.ip_addr, flush_injection)
+    await asyncio.sleep(1.5)
+    await manager.api.message_injection(node2.ip_addr, injection)
+    await asyncio.gather(first, second)
+    count_after = await manager.api.get_injection_enter_count(node2.ip_addr, flush_injection)
+    assert count_after - count_before == 1
+    await log2.wait_for("with a flush that started after it arrived", from_mark=mark)
+
+    await set_cluster_config(manager, cql, [node1, node2], hosts, "repair_hints_batchlog_flush_timeout_in_seconds", "1")
+    mark, first, second = await queue_two_repairs()
+    try:
+        await log2.wait_for("still queued behind earlier flush requests", from_mark=mark)
+        await asyncio.wait_for(second, timeout=20)
+    finally:
+        await manager.api.message_injection(node2.ip_addr, injection)
+    await first
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
     """
     Check that the batchlog flush a repair asks for gives up at the request's
@@ -231,8 +323,8 @@ async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
 
     Leaves a batch in the batchlog, pauses the write handlers so replaying it
     cannot complete, and repairs. The repair coordinator carries on after a
-    failed flush, so the repair has to finish shortly after the batchlog
-    timeout, which an injection shortens to 2s.
+    failed flush, so the repair has to finish shortly after the flush
+    timeout, which the cluster config option shortens to 2s.
 
     Regression test for SCYLLADB-3928.
     """
@@ -240,11 +332,16 @@ async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
     # Disable the batchlog flush cache: otherwise the periodic replay loop's
     # own near-boot run can satisfy the default 60s cache window, so issue_flush
     # ends up false and the replay is never reached.
-    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", "0"]
+    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", "0", "--logger-log-level", "cluster_config_manager=debug"]
     node1, node2 = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, [node1, node2], time.time() + 60)
     host1 = next(h for h in hosts if h.address == str(node1.rpc_address))
+
+    # A timeout that cannot bound a wait is rejected at the statement.
+    with pytest.raises(InvalidRequest, match="expected an integer between 1 and"):
+        await cql.run_async("ALTER CLUSTER WITH repair_hints_batchlog_flush_timeout_in_seconds = 0")
+    await set_cluster_config(manager, cql, [node1, node2], hosts, "repair_hints_batchlog_flush_timeout_in_seconds", "2")
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tbl (pk int, ck int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {{'mode': 'repair'}}")
@@ -274,8 +371,6 @@ async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
         # write_request_timeout_in_ms, 4s with the default of 2s.
         await asyncio.sleep(5)
 
-        await manager.api.enable_injection(node1.ip_addr, "repair_flush_hints_batchlog_timeout", one_shot=False,
-                                           parameters={"batchlog_timeout_in_s": "2"})
         # Pause the write handlers, so whichever node holds the batch cannot
         # finish replaying it: the replay writes to both replicas.
         for node in (node1, node2):
@@ -303,7 +398,6 @@ async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
             # replay can finish before the servers are torn down.
             for node in (node1, node2):
                 await manager.api.disable_injection(node.ip_addr, "storage_proxy_write_response_pause")
-            await manager.api.disable_injection(node1.ip_addr, "repair_flush_hints_batchlog_timeout")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_keyspace_drop_during_data_sync_repair(manager):

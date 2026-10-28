@@ -81,6 +81,15 @@ constexpr std::array registry_options = {
         .scopes = scope_set::of<scope::cluster>(),
         .default_value = true,
     },
+    option{
+        .name = option_name::repair_hints_batchlog_flush_timeout_in_seconds,
+        .description = "How long the hints and batchlog flush that precedes a repair of a table whose tombstone_gc is set to repair mode waits for each node to flush its hints and replay its batchlog before giving up. Raise it when nodes accumulate hints faster than they can replay them within the default, for example after a node stayed down for a long time",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t(300),
+        // The replica adds it to a clock. Ten years is as good as never and far from the
+        // overflow.
+        .range = integer_range{.min = 1, .max = 10 * 365 * 24 * 3600},
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
@@ -98,6 +107,27 @@ static_assert(all_registry_options_are_single_domain(),
 
 // The feature names of options removed from the registry; see retired_feature_names().
 constexpr std::array<std::string_view, 0> retired_option_features = {};
+
+// Only an integer option may declare a range, and its default must lie within it.
+constexpr bool has_consistent_range(const option& opt) {
+    if (!opt.range) {
+        return true;
+    }
+    return opt.type() == value_type::integer && opt.range->min <= opt.range->max
+            && opt.range->contains(std::get<int64_t>(opt.default_value));
+}
+
+constexpr bool all_registry_option_ranges_are_consistent() {
+    for (const auto& opt : registry_options) {
+        if (!has_consistent_range(opt)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(all_registry_option_ranges_are_consistent(),
+        "Only an integer cluster config option may declare a range, and its default must lie within it");
 
 // Empty in production. When a test injects options via add_test_only_option(), this holds
 // registry_options followed by the injected ones, and options()/find() consult it instead of
@@ -158,8 +188,14 @@ std::optional<seastar::sstring> validate_with(T (*parse)(std::string_view), std:
     }
 }
 
-std::optional<seastar::sstring> validate_integer(std::string_view value) {
-    return validate_with(parse_integer, "64-bit integer", value);
+std::optional<seastar::sstring> validate_integer(const option& opt, std::string_view value) {
+    if (auto error = validate_with(parse_integer, "64-bit integer", value)) {
+        return error;
+    }
+    if (opt.range && !opt.range->contains(parse_integer(value))) {
+        return fmt::format("expected an integer between {} and {}, got '{}'", opt.range->min, opt.range->max, value);
+    }
+    return std::nullopt;
 }
 
 std::optional<seastar::sstring> validate_floating_point(std::string_view value) {
@@ -276,7 +312,7 @@ std::optional<seastar::sstring> validate_value(const option& opt, std::string_vi
     case value_type::text:
         return validate_text(value);
     case value_type::integer:
-        return validate_integer(value);
+        return validate_integer(opt, value);
     case value_type::floating_point:
         return validate_floating_point(value);
     case value_type::boolean:
@@ -291,7 +327,17 @@ bool to_boolean(const option& opt, const std::optional<seastar::sstring>& value)
 }
 
 int64_t to_integer(const option& opt, const std::optional<seastar::sstring>& value) {
-    return to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    auto result = to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    // Like unparsable text, a stored value outside the range can only come from a corrupt
+    // or out-of-band write, and degrades to the default the same way.
+    if (opt.range && !opt.range->contains(result)) {
+        auto fallback = std::get<int64_t>(opt.default_value);
+        cluster_config_registry_logger.warn(
+                "Ignoring stored value {} for integer config '{}', which is outside [{}, {}]; using default {}",
+                result, opt.name, opt.range->min, opt.range->max, fallback);
+        return fallback;
+    }
+    return result;
 }
 
 double to_floating_point(const option& opt, const std::optional<seastar::sstring>& value) {
@@ -339,6 +385,10 @@ void add_test_only_option(option opt) {
     if (!is_single_domain(opt.scopes)) {
         utils::on_internal_error(fmt::format(
                 "test-only cluster config option '{}' mixes table-oriented and node-oriented scopes", opt.name));
+    }
+    if (!has_consistent_range(opt)) {
+        utils::on_internal_error(fmt::format(
+                "test-only cluster config option '{}' declares a range that is not an integer range holding its default", opt.name));
     }
     if (g_options_with_test_overrides.empty()) {
         g_options_with_test_overrides.reserve(registry_options.size() + max_test_only_options);
