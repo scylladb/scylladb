@@ -52,11 +52,15 @@ parsed::update_expression parse_update_expression(std::string_view query);
 std::vector<parsed::path> parse_projection_expression(std::string_view query);
 parsed::condition_expression parse_condition_expression(std::string_view query, const char* caller);
 
+// Resolving replaces references to ExpressionAttributeValues by their values.
+// They are copied, unless borrow_values is true: then the expression references
+// them, and the request holding them must outlive the expression, unmodified.
 void resolve_update_expression(parsed::update_expression& ue,
         const rjson::value* expression_attribute_names,
         const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
-        std::unordered_set<std::string>& used_attribute_values);
+        std::unordered_set<std::string>& used_attribute_values,
+        bool borrow_values = false);
 void resolve_projection_expression(std::vector<parsed::path>& pe,
         const rjson::value* expression_attribute_names,
         std::unordered_set<std::string>& used_attribute_names);
@@ -64,7 +68,8 @@ void resolve_condition_expression(parsed::condition_expression& ce,
         const rjson::value* expression_attribute_names,
         const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
-        std::unordered_set<std::string>& used_attribute_values);
+        std::unordered_set<std::string>& used_attribute_values,
+        bool borrow_values = false);
 void validate_filter_expression(const parsed::condition_expression& ce);
 
 void validate_value(const rjson::value& v, const char* caller);
@@ -113,6 +118,17 @@ rjson::value calculate_value(const parsed::value& v,
 
 rjson::value calculate_value(const parsed::set_rhs& rhs,
         const rjson::value* previous_item);
+
+// Like calculate_value(), but avoids copying a value which already exists,
+// a constant or an attribute of previous_item, by returning a reference to
+// it. A calculated value is stored in storage, and a reference to it returned.
+const rjson::value& calculate_value_ref(const parsed::value& v,
+        calculate_value_caller caller,
+        const rjson::value* previous_item,
+        rjson::value& storage);
+const rjson::value& calculate_value_ref(const parsed::set_rhs& rhs,
+        const rjson::value* previous_item,
+        rjson::value& storage);
 
 void validate_attr_name_length(std::string_view supplementary_context, size_t attr_name_length, bool is_key, std::string_view error_msg_prefix = {});
 

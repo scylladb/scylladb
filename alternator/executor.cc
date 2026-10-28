@@ -4103,7 +4103,8 @@ public:
             std::unordered_set<std::string> used_attribute_values;
             resolve_condition_expression(_condition_expression,
                     expression_attribute_names, expression_attribute_values,
-                    used_attribute_names, used_attribute_values);
+                    used_attribute_names, used_attribute_values,
+                    /* borrow_values: _request outlives the expression */ true);
             verify_all_are_used(expression_attribute_names, used_attribute_names,"ExpressionAttributeNames", "PutItem");
             verify_all_are_used(expression_attribute_values, used_attribute_values,"ExpressionAttributeValues", "PutItem");
         } else {
@@ -4216,7 +4217,8 @@ public:
             std::unordered_set<std::string> used_attribute_values;
             resolve_condition_expression(_condition_expression,
                     expression_attribute_names, expression_attribute_values,
-                    used_attribute_names, used_attribute_values);
+                    used_attribute_names, used_attribute_values,
+                    /* borrow_values: _request outlives the expression */ true);
             verify_all_are_used(expression_attribute_names, used_attribute_names,"ExpressionAttributeNames", "DeleteItem");
             verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "DeleteItem");
         } else {
@@ -4864,7 +4866,8 @@ update_item_operation::update_item_operation(parsed::expression_cache& parsed_ex
             parsed::update_expression expr = parsed_expression_cache.parse_update_expression(rjson::to_string_view(*update_expression));
             resolve_update_expression(expr,
                     expression_attribute_names, expression_attribute_values,
-                    used_attribute_names, used_attribute_values);
+                    used_attribute_names, used_attribute_values,
+                    /* borrow_values: _request outlives the expression */ true);
             for (auto& action : expr.actions()) {
                 // Unfortunately we need to copy the action's path, because
                 // we std::move the action object.
@@ -4888,7 +4891,8 @@ update_item_operation::update_item_operation(parsed::expression_cache& parsed_ex
     _condition_expression = get_parsed_condition_expression(parsed_expression_cache, _request);
     resolve_condition_expression(_condition_expression,
             expression_attribute_names, expression_attribute_values,
-            used_attribute_names, used_attribute_values);
+            used_attribute_names, used_attribute_values,
+                    /* borrow_values: _request outlives the expression */ true);
 
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "UpdateItem");
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "UpdateItem");
@@ -5353,7 +5357,17 @@ inline void update_item_operation::apply_update_expression(const std::unique_ptr
             // An action on a top-level attribute column_name. The single
             // action is actions.second.get_value(). We can simply invoke
             // the action and replace the attribute with its result:
-            std::optional<rjson::value> result = action_result(actions.second.get_value(), previous_item.get());
+            const auto& action = actions.second.get_value();
+            if (auto* set = std::get_if<parsed::update_expression::action::set>(&action._action)) {
+                // A SET writes a value which often exists already, as a
+                // constant or another attribute, so don't copy it.
+                rjson::value storage;
+                const rjson::value& result = calculate_value_ref(set->_rhs, previous_item.get(), storage);
+                any_updates = true;
+                update_attribute(to_bytes(column_name), result, previous_item, ts, row, modified_attrs, &actions.second);
+                continue;
+            }
+            std::optional<rjson::value> result = action_result(action, previous_item.get());
             if (result) {
                 any_updates = true;
                 update_attribute(to_bytes(column_name), *result, previous_item, ts, row, modified_attrs, &actions.second);
