@@ -219,6 +219,37 @@ def test_fts_with_clustering_key_returns_rows_in_bm25_order(cql, test_keyspace, 
         assert [(r.p, r.c) for r in rows] == [(2, 30), (1, 10)]
 
 
+def test_fts_local_index_is_not_used(cql, test_keyspace, vector_store_mock):
+    """A BM25 query does not use a local full-text index, because Vector Store cannot search one yet."""
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p, c), content) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match="No fulltext index found for full-text search query"):
+            cql.execute(f"SELECT p, c FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
+        assert len(vector_store_mock.bm25_requests) == 0
+
+
+def test_fts_global_index_used_next_to_local_index(cql, test_keyspace, vector_store_mock):
+    """A BM25 query uses the global full-text index when a local one is on the same column."""
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        local_idx = unique_name()
+        global_idx = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {local_idx} ON {table}((p, c), content) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX {global_idx} ON {table}(content) USING 'fulltext_index'")
+        cql.execute(f"INSERT INTO {table} (p, c, content) VALUES (1, 10, 'hello')")
+        vector_store_mock.set_next_bm25_response(200, json.dumps({
+            "primary_keys": {"p": [1], "c": [10]},
+            "scores": [0.5],
+        }))
+
+        rows = list(cql.execute(f"SELECT p, c FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1"))
+        assert [(r.p, r.c) for r in rows] == [(1, 10)]
+        reqs = vector_store_mock.bm25_requests
+        assert len(reqs) == 1
+        assert reqs[0].path == f"/api/v1/indexes/{test_keyspace}/{global_idx}/bm25"
+
+
 def test_fts_ascii_column_executes(cql, test_keyspace, vector_store_mock):
     """BM25 on an ascii column must execute and return rows in BM25 rank order."""
     with new_test_table(cql, test_keyspace, "id int primary key, content ascii") as table:
