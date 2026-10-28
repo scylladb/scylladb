@@ -236,7 +236,7 @@ void vector_index::check_target(const schema& schema, const std::vector<::shared
         /// There is no counter (it cannot be used with vector columns)
         /// and no duration (it cannot be used as a primary key or in secondary indexes).
         static bool is_supported_filtering_column(abstract_type const & kind_type) {
-            switch (kind_type.get_kind()) {
+            switch (kind_type.without_reversed().get_kind()) {
                 case abstract_type::kind::ascii:
                 case abstract_type::kind::boolean:
                 case abstract_type::kind::byte:
