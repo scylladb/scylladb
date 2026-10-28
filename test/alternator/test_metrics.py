@@ -365,6 +365,25 @@ def test_import_table_operations(dynamodb, metrics):
                     'AttributeDefinitions': [{'AttributeName': 'p', 'AttributeType': 'S'}],
                     'BillingMode': 'PAY_PER_REQUEST'})
 
+# DescribeImport counts against the table named by the import ARN, whether the import exists or
+# not - the counter tracks the request, not its outcome. A table outside Alternator gets no
+# per-table counter.
+def test_describe_import_operations(test_table_s, metrics):
+    client = test_table_s.meta.client
+    table_arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    with check_increases_operation(metrics, ['DescribeImport']):
+        with check_table_increases_operation(metrics, ['DescribeImport'], test_table_s.name):
+            with pytest.raises(ClientError, match='ImportNotFoundException'):
+                client.describe_import(ImportArn=f'{table_arn}/import/01790264607542-abcdef12')
+    with pytest.raises(ClientError, match='ImportNotFoundException'):
+        client.describe_import(ImportArn='arn:aws:dynamodb:us-east-1:000000000000:table/system@peers/import/01790264607542-abcdef12')
+    assert get_metric(metrics, 'scylla_alternator_table_operation', {'ks': 'system', 'cf': 'peers'}) == 0
+
+# ListImports has no table of its own, so like ListTables it only counts against the cluster.
+def test_list_imports_operations(dynamodb, metrics):
+    with check_increases_operation(metrics, ['ListImports']):
+        dynamodb.meta.client.list_imports(PageSize=1)
+
 def test_export_table_operations(test_table_s, metrics):
     table_arn = test_table_s.meta.client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
     with check_increases_operation(metrics, ['ExportTableToPointInTime']):
