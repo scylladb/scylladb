@@ -473,10 +473,10 @@ class sysconfig_parser:
         self._cfg.read_file(f)
 
     def __escape(self, val):
-        return re.sub(r'"', r'\"', val)
+        return val.replace('\\', '\\\\').replace('"', '\\"')
 
     def __unescape(self, val):
-        return re.sub(r'\\"', r'"', val)
+        return re.sub(r'\\(["\\])', r'\1', val)
 
     def __format_line(self, key, val):
         need_quotes = any([ch.isspace() for ch in val])
@@ -499,7 +499,11 @@ class sysconfig_parser:
         self.__load()
 
     def get(self, key):
-        val = self._cfg.get('global', key).strip('"')
+        val = self._cfg.get('global', key)
+        # remove the enclosing quotes, but not an escaped closing one (after an odd number of backslashes)
+        val = val.removeprefix('"')
+        if re.search(r'(?<!\\)(\\\\)*"$', val):
+            val = val[:-1]
         return self.__unescape(val)
 
     def has_option(self, key):
@@ -509,7 +513,7 @@ class sysconfig_parser:
         if not self.has_option(key):
             return self.__add(key, val)
         new_line = self.__format_line(key, val)
-        self._data = re.sub(f'^{key}=[^\n]*$', new_line, self._data, flags=re.MULTILINE)
+        self._data = re.sub(f'^{key}=[^\n]*$', lambda m: new_line, self._data, flags=re.MULTILINE)
         self.__load()
 
     def commit(self):
