@@ -375,6 +375,13 @@ bool value::RemoveMember(std::string_view name) {
     return true;
 }
 
+void value::MemberReserve(size_type n) {
+    uint32_t size = MemberCount();
+    if (n > size) {
+        reserve_more<member>(n - size);
+    }
+}
+
 void value::Reserve(size_type n) {
     uint32_t size = Size();
     if (n > size) {
@@ -2462,6 +2469,204 @@ bool streaming_writer::EndArray(size_type) {
     _levels.pop_back();
     _os.put(']');
     return true;
+}
+
+value_writer::value_writer(rjson::value& object) {
+    object.MemberCount();
+    _open.push_back(&object);
+}
+
+rjson::value& value_writer::add(rjson::value&& v) {
+    if (_open.empty()) {
+        _result = std::move(v);
+        return _result;
+    }
+    // Only the innermost container changes, so the pointers in _open to the
+    // containers holding it stay valid.
+    rjson::value& container = *_open.back();
+    if (container.IsObject()) {
+        container.AddMember(std::move(_key), std::move(v));
+        return (container.MemberEnd() - 1)->value;
+    }
+    container.PushBack(std::move(v));
+    return container[container.Size() - 1];
+}
+
+void value_writer::start_object(size_type size_hint) {
+    auto& v = add(rjson::empty_object());
+    if (size_hint) {
+        v.MemberReserve(size_hint);
+    }
+    _open.push_back(&v);
+}
+
+void value_writer::end_object() {
+    _open.pop_back();
+}
+
+void value_writer::start_array(size_type size_hint) {
+    auto& v = add(rjson::empty_array());
+    if (size_hint) {
+        v.Reserve(size_hint);
+    }
+    _open.push_back(&v);
+}
+
+void value_writer::end_array() {
+    _open.pop_back();
+}
+
+void value_writer::size_hint(size_type n) {
+    if (_open.empty()) {
+        return;
+    }
+    rjson::value& container = *_open.back();
+    if (container.IsObject()) {
+        container.MemberReserve(container.MemberCount() + n);
+    } else {
+        container.Reserve(container.Size() + n);
+    }
+}
+
+void value_writer::key(std::string_view name) {
+    _key = from_string(name);
+}
+
+void value_writer::string(std::string_view s) {
+    add(from_string(s));
+}
+
+void value_writer::raw(std::string_view json) {
+    add(parse(json));
+}
+
+// Lets the printing functions write into a text_writer's buffer.
+class text_writer_sink {
+    text_writer& _w;
+public:
+    explicit text_writer_sink(text_writer& w) : _w(w) {}
+    char* reserve(size_t n) { return _w.reserve(n); }
+    void commit(char* end) noexcept { _w._len = end - _w._buf; }
+    void put(char c) { *reserve(1) = c; ++_w._len; }
+    void write(std::string_view s) {
+        copy_chars(reserve(s.size()), s.data(), s.size());
+        _w._len += s.size();
+    }
+    bool full() const noexcept { return false; }
+};
+
+text_writer::~text_writer() {
+    allocator::Free(_buf);
+}
+
+char* text_writer::reserve(size_t n) {
+    if (_capacity - _len < n) [[unlikely]] {
+        size_t capacity = std::max({_capacity * 2, _len + n, size_t(256)});
+        _buf = static_cast<char*>(allocator::Realloc(_buf, _capacity, capacity));
+        _capacity = capacity;
+    }
+    return _buf + _len;
+}
+
+void text_writer::separate() {
+    if (_after_key) {
+        _after_key = false;
+    } else if (!_empty.empty()) {
+        if (_empty.back()) {
+            _empty.back() = false;
+        } else {
+            text_writer_sink(*this).put(',');
+        }
+    }
+}
+
+void text_writer::start_object(size_type) {
+    separate();
+    text_writer_sink(*this).put('{');
+    _empty.push_back(true);
+}
+
+void text_writer::end_object() {
+    _empty.pop_back();
+    text_writer_sink(*this).put('}');
+}
+
+void text_writer::start_array(size_type) {
+    separate();
+    text_writer_sink(*this).put('[');
+    _empty.push_back(true);
+}
+
+void text_writer::end_array() {
+    _empty.pop_back();
+    text_writer_sink(*this).put(']');
+}
+
+void text_writer::key(std::string_view name) {
+    separate();
+    text_writer_sink sink(*this);
+    write_string(sink, name, true);
+    sink.put(':');
+    _after_key = true;
+}
+
+void text_writer::null() {
+    separate();
+    text_writer_sink(*this).write("null");
+}
+
+void text_writer::boolean(bool b) {
+    separate();
+    text_writer_sink(*this).write(b ? "true" : "false");
+}
+
+void text_writer::number(int64_t i) {
+    separate();
+    text_writer_sink sink(*this);
+    write_int(sink, i);
+}
+
+void text_writer::number(uint64_t u) {
+    separate();
+    text_writer_sink sink(*this);
+    write_uint(sink, u);
+}
+
+void text_writer::number(double d) {
+    separate();
+    text_writer_sink sink(*this);
+    write_double(sink, d);
+}
+
+void text_writer::string(std::string_view s) {
+    separate();
+    text_writer_sink sink(*this);
+    write_string(sink, s, true);
+}
+
+void text_writer::raw(std::string_view json) {
+    separate();
+    text_writer_sink(*this).write(json);
+}
+
+void text_writer::put(const rjson::value& v) {
+    separate();
+    text_writer_sink sink(*this);
+    printer(v, default_max_nested_level).run<false>(sink);
+}
+
+rjson::value text_writer::result() && {
+    if (_len > std::numeric_limits<uint32_t>::max()) {
+        throw error(fmt::format("rjson: written JSON of {} bytes is too long", _len));
+    }
+    // The value takes over the buffer, allocated like raw_json() allocates.
+    rjson::value v;
+    v.store(0, static_cast<const char*>(std::exchange(_buf, nullptr)));
+    v.store(8, uint32_t(_len));
+    v._data[14] = 0;
+    v._kind = value::kind::raw;
+    _len = _capacity = 0;
+    return v;
 }
 
 } // end namespace rjson

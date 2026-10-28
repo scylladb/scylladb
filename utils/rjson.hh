@@ -62,6 +62,7 @@
 #include <seastar/util/noncopyable_function.hh>
 
 #include "utils/base64.hh"
+#include "utils/small_vector.hh"
 
 #include "seastarx.hh"
 
@@ -305,6 +306,7 @@ class value {
     template<typename T>
     friend void internal::copy_container(value&, const value&);
     friend value raw_json(std::string_view);
+    friend class text_writer;
     friend void set_string(value&, std::string_view, bool);
     friend void set_chunk_string(value&, internal::chunk_holder*, uint32_t, uint32_t);
     friend bool needs_escaping(const value&) noexcept;
@@ -458,6 +460,8 @@ public:
     // last member, like RapidJSON's RemoveMember(). Returns false if there
     // was no such member.
     bool RemoveMember(std::string_view name);
+    // Allocates room for n members in total, as a hint: adding more works.
+    void MemberReserve(size_type n);
     Object GetObject();
     ConstObject GetObject() const;
 
@@ -648,6 +652,81 @@ rjson::value copy(const rjson::value& value);
 // IsObject() or IsString() etc., and its content can't be accessed, only
 // printed, copied or compared.
 rjson::value raw_json(std::string_view json);
+
+// value_writer and text_writer produce a JSON value from calls naming its
+// parts in order, like a SAX handler: start_object(), key(), the member's
+// value, ..., end_object(). Code producing JSON can be written once, as a
+// template over the writer, and its caller chooses what it needs:
+// value_writer builds an rjson::value, to be inspected or modified, and
+// text_writer prints JSON text directly, which is much cheaper if the
+// result will only be printed, and returns it as a raw_json() value.
+//
+// The size hints of start_object() and start_array() say how many members
+// or elements are coming, to allocate room for them at once.
+class value_writer {
+    rjson::value _result;
+    // The open objects and arrays, the innermost last.
+    utils::small_vector<rjson::value*, 8> _open;
+    rjson::value _key;
+    // Adds v to the innermost open container, returning where it is.
+    rjson::value& add(rjson::value&& v);
+public:
+    value_writer() = default;
+    // Writes members into an existing object, rather than a new value.
+    explicit value_writer(rjson::value& object);
+    void start_object(size_type size_hint = 0);
+    void end_object();
+    void start_array(size_type size_hint = 0);
+    void end_array();
+    // Hints that n more members or elements are coming.
+    void size_hint(size_type n);
+    void key(std::string_view name);
+    void null() { add(rjson::value()); }
+    void boolean(bool b) { add(rjson::value(b)); }
+    void number(int64_t i) { add(rjson::value(i)); }
+    void number(uint64_t u) { add(rjson::value(u)); }
+    void number(double d) { add(rjson::value(d)); }
+    void string(std::string_view s);
+    // A value given as JSON text, which is parsed.
+    void raw(std::string_view json);
+    void put(rjson::value&& v) { add(std::move(v)); }
+    rjson::value result() && { return std::move(_result); }
+};
+
+class text_writer {
+    char* _buf = nullptr;
+    size_t _len = 0;
+    size_t _capacity = 0;
+    // For each open object or array, whether nothing was written in it yet.
+    utils::small_vector<bool, 8> _empty;
+    bool _after_key = false;
+
+    friend class text_writer_sink;
+    // Writes the separator needed before a value or a key.
+    void separate();
+    char* reserve(size_t n);
+public:
+    text_writer() = default;
+    text_writer(const text_writer&) = delete;
+    ~text_writer();
+    void start_object(size_type size_hint = 0);
+    void end_object();
+    void start_array(size_type size_hint = 0);
+    void end_array();
+    void size_hint(size_type) {}
+    void key(std::string_view name);
+    void null();
+    void boolean(bool b);
+    void number(int64_t i);
+    void number(uint64_t u);
+    void number(double d);
+    void string(std::string_view s);
+    // A value given as JSON text, which is copied verbatim.
+    void raw(std::string_view json);
+    void put(const rjson::value& v);
+    // Returns the written text as a raw_json() value.
+    rjson::value result() &&;
+};
 
 // copyable_value can be used when seamless copying of value is needed
 class copyable_value : public value {

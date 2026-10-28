@@ -564,3 +564,62 @@ BOOST_AUTO_TEST_CASE(test_string_ref_escaping) {
     rjson::add(obj, "quote\"", "line\n");
     BOOST_REQUIRE_EQUAL(rjson::print(obj), R"({"plain":"text","quote\"":"line\n"})");
 }
+
+namespace {
+
+template<typename Writer>
+void write_sample(Writer& w) {
+    w.start_object(3);
+    w.key("s");
+    w.string("a\"b");
+    w.key("n");
+    w.number(int64_t(-1));
+    w.key("u");
+    w.number(uint64_t(2));
+    w.key("d");
+    w.number(1.5);
+    w.key("b");
+    w.boolean(true);
+    w.key("z");
+    w.null();
+    w.key("l");
+    w.start_array(2);
+    w.raw(R"({"x":[1,2]})");
+    w.put(rjson::parse("[3]"));
+    w.end_array();
+    w.key("e");
+    w.start_object();
+    w.end_object();
+    w.end_object();
+}
+
+} // anonymous namespace
+
+// value_writer and text_writer produce the same JSON from the same calls.
+BOOST_AUTO_TEST_CASE(test_writers) {
+    const std::string_view expected = R"({"s":"a\"b","n":-1,"u":2,"d":1.5,"b":true,"z":null,"l":[{"x":[1,2]},[3]],"e":{}})";
+    rjson::value_writer vw;
+    write_sample(vw);
+    auto v = std::move(vw).result();
+    BOOST_REQUIRE(v.IsObject());
+    BOOST_REQUIRE_EQUAL(rjson::print(v), expected);
+    rjson::text_writer tw;
+    write_sample(tw);
+    auto t = std::move(tw).result();
+    BOOST_REQUIRE(t.IsRaw());
+    BOOST_REQUIRE_EQUAL(rjson::print(t), expected);
+
+    // value_writer can add members to an existing object.
+    auto obj = rjson::parse(R"({"a":1})");
+    rjson::value_writer ow(obj);
+    ow.key("b");
+    ow.number(int64_t(2));
+    BOOST_REQUIRE_EQUAL(rjson::print(obj), R"({"a":1,"b":2})");
+
+    // MemberReserve() is only a hint.
+    auto reserved = rjson::empty_object();
+    reserved.MemberReserve(1);
+    rjson::add(reserved, "x", rjson::value(1));
+    rjson::add(reserved, "y", rjson::value(2));
+    BOOST_REQUIRE_EQUAL(rjson::print(reserved), R"({"x":1,"y":2})");
+}
