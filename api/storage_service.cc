@@ -1285,136 +1285,6 @@ rest_retrain_dict(http_context& ctx, sharded<service::storage_service>& ss, serv
 
 static
 future<json::json_return_type>
-rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto ks = get_query_param<sstring>(*req, "keyspace");
-        auto cf = get_query_param<sstring>(*req, "cf");
-
-        // The size of this vector is bound by ks::cf. I.e. it is as most Nks + Ncf long
-        // which is not small, but not huge either. 
-        using table_sstables_list = std::vector<ss::table_sstables>;
-
-        return do_with(table_sstables_list{}, [ks, cf, &ctx](table_sstables_list& dst) {
-            return ctx.db.map_reduce([&dst](table_sstables_list&& res) {
-                for (auto&& t : res) {
-                    auto i = std::find_if(dst.begin(), dst.end(), [&t](const ss::table_sstables& t2) {
-                        return t.keyspace() == t2.keyspace() && t.table() == t2.table();
-                    });
-                    if (i == dst.end()) {
-                        dst.emplace_back(std::move(t));
-                        continue;
-                    }
-                    auto& ssd = i->sstables; 
-                    for (auto&& sd : t.sstables._elements) {
-                        auto j = std::find_if(ssd._elements.begin(), ssd._elements.end(), [&sd](const ss::sstable& s) {
-                            return s.generation() == sd.generation();
-                        });
-                        if (j == ssd._elements.end()) {
-                            i->sstables.push(std::move(sd));
-                        }
-                    }
-                }
-            }, [ks, cf](const replica::database& db) {
-                // see above
-                table_sstables_list res;
-
-                auto& ext = db.get_config().extensions();
-
-                db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> t) {
-                    auto& schema = t->schema();
-                    if ((ks.empty() || ks == schema->ks_name()) && (cf.empty() || cf == schema->cf_name())) {
-                        // at most Nsstables long
-                        ss::table_sstables tst;
-                        tst.keyspace = schema->ks_name();
-                        tst.table = schema->cf_name();
-
-                        for (auto sstables = t->get_sstables_including_compacted_undeleted(); auto sstable : *sstables) {
-                            auto ts = db_clock::to_time_t(sstable->data_file_write_time());
-                            ::tm t;
-                            ::gmtime_r(&ts, &t);
-
-                            ss::sstable info;
-
-                            info.timestamp = t;
-                            info.generation = fmt::to_string(sstable->generation());
-                            info.level = sstable->get_sstable_level();
-                            info.size = sstable->bytes_on_disk();
-                            info.data_size = sstable->ondisk_data_size();
-                            info.index_size = sstable->index_size();
-                            info.filter_size = sstable->filter_size();
-                            info.version = sstable->get_version();
-
-                            if (sstable->has_component(sstables::component_type::CompressionInfo)) {
-                                const auto& cp = sstable->get_compression().get_compressor();
-
-                                ss::named_maps nm;
-                                nm.group = "compression_parameters";
-                                for (auto& p : cp.options()) {
-                                    if (compressor::is_hidden_option_name(p.first)) {
-                                        continue;
-                                    }
-                                    ss::mapper e;
-                                    e.key = p.first;
-                                    e.value = p.second;
-                                    nm.attributes.push(std::move(e));
-                                }
-                                if (!cp.options().contains(compression_parameters::SSTABLE_COMPRESSION)) {
-                                    ss::mapper e;
-                                    e.key = compression_parameters::SSTABLE_COMPRESSION;
-                                    e.value = sstring(cp.name());
-                                    nm.attributes.push(std::move(e));
-                                }
-                                info.extended_properties.push(std::move(nm));
-                            }
-
-                            sstables::file_io_extension::attr_value_map map;
-
-                            for (auto* ep : ext.sstable_file_io_extensions()) {
-                                map.merge(ep->get_attributes(*sstable));
-                            }
-
-                            for (auto& p : map) {
-                                struct {
-                                    const sstring& key; 
-                                    ss::sstable& info;
-                                    void operator()(const std::map<sstring, sstring>& map) const {
-                                        ss::named_maps nm;
-                                        nm.group = key;
-                                        for (auto& p : map) {
-                                            ss::mapper e;
-                                            e.key = p.first;
-                                            e.value = p.second;
-                                            nm.attributes.push(std::move(e));
-                                        }
-                                        info.extended_properties.push(std::move(nm));
-                                    }
-                                    void operator()(const sstring& value) const {
-                                        ss::mapper e;
-                                        e.key = key;
-                                        e.value = value;
-                                        info.properties.push(std::move(e));                                        
-                                    }
-                                } v{p.first, info};
-
-                                std::visit(v, p.second);
-                            }
-
-                            tst.sstables.push(std::move(info));
-                        }
-                        res.emplace_back(std::move(tst));
-                    }
-                });
-                std::sort(res.begin(), res.end(), [](const ss::table_sstables& t1, const ss::table_sstables& t2) {
-                    return t1.keyspace() < t2.keyspace() || (t1.keyspace() == t2.keyspace() && t1.table() < t2.table());
-                });
-                return res;
-            }).then([&dst] {
-                return make_ready_future<json::json_return_type>(stream_object(dst));
-            });
-        });
-}
-
-static
-future<json::json_return_type>
 rest_reload_raft_topology_state(sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
         co_await ss.invoke_on(0, [&group0_client] (service::storage_service& ss) -> future<> {
             return ss.reload_raft_topology_state(group0_client);
@@ -1821,7 +1691,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_effective_ownership.set(r, gated(ss, rest_bind(rest_get_effective_ownership, ctx, ss)));
     ss::retrain_dict.set(r, gated(ss, rest_bind(rest_retrain_dict, ctx, ss, group0_client)));
     ss::estimate_compression_ratios.set(r, gated(ss, rest_bind(rest_estimate_compression_ratios, ctx, ss)));
-    ss::sstable_info.set(r, gated(ss, rest_bind(rest_sstable_info, ctx)));
     ss::reload_raft_topology_state.set(r, gated(ss, rest_bind(rest_reload_raft_topology_state, ss, group0_client)));
     ss::upgrade_to_raft_topology.set(r, gated(ss, rest_bind(rest_upgrade_to_raft_topology, ss)));
     ss::raft_topology_upgrade_status.set(r, gated(ss, rest_bind(rest_raft_topology_upgrade_status, ss)));
@@ -1897,7 +1766,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_total_hints.unset(r);
     ss::get_ownership.unset(r);
     ss::get_effective_ownership.unset(r);
-    ss::sstable_info.unset(r);
     ss::reload_raft_topology_state.unset(r);
     ss::upgrade_to_raft_topology.unset(r);
     ss::raft_topology_upgrade_status.unset(r);
