@@ -2142,15 +2142,16 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
     }
 
     auto permit = std::move(flush_permit);
-    auto r = exponential_backoff_retry(100ms, 10s);
-    // Try flushing for around half an hour (30 minutes every 10 seconds)
-    int default_retries = 30 * 60 / 10;
-    int allowed_retries = default_retries;
     std::optional<utils::phased_barrier::operation> op;
     size_t memtable_size;
     future<> previous_flush = make_ready_future<>();
 
     auto with_retry = [&] (std::function<future<>()> func) -> future<> {
+        auto r = exponential_backoff_retry(100ms, 10s);
+        // Try flushing for around half an hour (30 minutes every 10 seconds)
+        int default_retries = 30 * 60 / 10;
+        int allowed_retries = default_retries;
+
         for (;;) {
             std::exception_ptr ex;
             try {
