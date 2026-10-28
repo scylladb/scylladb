@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include "cql3/statements/index_prop_defs.hh"
 #include "cql3/statements/index_target.hh"
 #include "exceptions/exceptions.hh"
 #include "schema/schema.hh"
@@ -38,11 +39,13 @@ std::optional<cql3::description> fulltext_index::describe(const index_metadata& 
 void fulltext_index::check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) const {
     using cql3::statements::index_target;
 
-    if (targets.size() != 1) {
+    const bool is_local = !targets.empty() && std::holds_alternative<index_target::multiple_columns>(targets.front()->value);
+    const size_t target_idx = is_local ? 1 : 0;
+    if (targets.size() != target_idx + 1) {
         throw exceptions::invalid_request_exception("Fulltext index must have exactly one target column");
     }
 
-    auto& target = targets[0];
+    auto& target = targets[target_idx];
     if (!std::holds_alternative<index_target::single_column>(target->value)) {
         throw exceptions::invalid_request_exception("Fulltext index target must be a single column");
     }
@@ -60,6 +63,19 @@ void fulltext_index::check_target(const schema& schema, const std::vector<::shar
     if (kind != abstract_type::kind::utf8 && kind != abstract_type::kind::ascii) {
         throw exceptions::invalid_request_exception(
                 format("Fulltext index is only supported on text, varchar, or ascii columns, but column {} has an incompatible type", c_name));
+    }
+
+    if (is_local) {
+        for (const auto& key : std::get<index_target::multiple_columns>(targets.front()->value)) {
+            if (key->name() == column->name()) {
+                throw exceptions::invalid_request_exception(
+                        format("Local fulltext index cannot be partitioned by its indexed column {}", c_name));
+            }
+            if (!is_supported_filtering_column(*schema.get_column_definition(key->name())->type)) {
+                throw exceptions::invalid_request_exception(
+                        format("Unsupported local fulltext index partition column {} type", key->to_string()));
+            }
+        }
     }
 }
 
