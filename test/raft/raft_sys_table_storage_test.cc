@@ -1285,6 +1285,85 @@ SEASTAR_TEST_CASE(test_groups_truncations_survive_until_the_next_release) {
     });
 }
 
+// The seals written into the group's row are loaded with the snapshot descriptor,
+// oldest first, and the same seal written twice is kept once. In memory, only a
+// seal newer than the last one is added.
+SEASTAR_TEST_CASE(test_groups_seals_are_loaded_with_the_descriptor) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        {
+            raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                    cl, dummy_table, {});
+            raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+            co_await storage.bootstrap(raft::configuration({srv}), false);
+        }
+
+        for (const raft_seal seal : {raft_seal{.idx = raft::index_t(3), .ts = 30},
+                                     raft_seal{.idx = raft::index_t(2), .ts = 20},
+                                     raft_seal{.idx = raft::index_t(2), .ts = 20}}) {
+            auto m = make_seal_mutation(gid, test_shard, seal, api::new_timestamp());
+            co_await env.local_db().apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
+        }
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(storage.seals() == (std::vector<raft_seal>{
+            {.idx = raft::index_t(2), .ts = 20},
+            {.idx = raft::index_t(3), .ts = 30},
+        }));
+
+        storage.add_seal({.idx = raft::index_t(3), .ts = 30});
+        storage.add_seal({.idx = raft::index_t(1), .ts = 10});
+        storage.add_seal({.idx = raft::index_t(4), .ts = 40});
+        BOOST_CHECK(storage.seals() == (std::vector<raft_seal>{
+            {.idx = raft::index_t(2), .ts = 20},
+            {.idx = raft::index_t(3), .ts = 30},
+            {.idx = raft::index_t(4), .ts = 40},
+        }));
+    });
+}
+
+// Removing a seal removes it and every older seal, from the row and from memory.
+SEASTAR_TEST_CASE(test_groups_remove_seals_up_to_a_seal) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+        const std::vector<raft_seal> seals{
+            {.idx = raft::index_t(2), .ts = 20},
+            {.idx = raft::index_t(3), .ts = 30},
+            {.idx = raft::index_t(4), .ts = 40},
+        };
+        const std::vector<raft_seal> expected{seals.back()};
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+        for (const auto& seal : seals) {
+            auto m = make_seal_mutation(gid, test_shard, seal, storage.next_row_timestamp());
+            co_await env.local_db().apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
+            storage.add_seal(seal);
+        }
+
+        auto m = make_remove_seals_mutation(gid, test_shard, std::span(seals).first(2), storage.next_row_timestamp());
+        co_await env.local_db().apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
+        storage.remove_seals(seals[1]);
+        BOOST_CHECK(storage.seals() == expected);
+
+        raft_groups_storage restarted(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        co_await restarted.load_snapshot_descriptor();
+        BOOST_CHECK(restarted.seals() == expected);
+    });
+}
+
 // A release leaves the truncations cell alone when the history has not moved. A
 // release rewrites the whole list, and the list grows with every leader change.
 // The cell is independent of the other cells, so skipping it keeps the last value.
