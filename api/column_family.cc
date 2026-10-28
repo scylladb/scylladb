@@ -11,6 +11,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "api/api.hh"
 #include "api/api-doc/column_family.json.hh"
+#include "api/api-doc/compaction_manager.json.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/system.json.hh"
 #include <vector>
@@ -36,6 +37,7 @@ using namespace httpd;
 
 using namespace json;
 namespace cf = httpd::column_family_json;
+namespace cm = httpd::compaction_manager_json;
 namespace ss = httpd::storage_service_json;
 namespace hs = httpd::system_json;
 
@@ -1416,6 +1418,38 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     ss::drop_quarantined_sstables.set(r, [&ctx, &db] (std::unique_ptr<http::request> req) {
         return drop_quarantined_sstables(ctx, db, std::move(req));
     });
+
+    cm::get_pending_tasks_by_table.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return db.map_reduce0([](replica::database& db) {
+            return do_with(std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>(), [&db](std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>& tasks) {
+                return db.get_tables_metadata().for_each_table_gently([&tasks] (table_id, lw_shared_ptr<replica::table> table) -> future<> {
+                    replica::table& cf = *table.get();
+                    tasks[std::make_pair(cf.schema()->ks_name(), cf.schema()->cf_name())] = co_await cf.estimate_pending_compactions();
+                }).then([&tasks] {
+                    return std::move(tasks);
+                });
+            });
+        }, std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>(), [] (auto&& a, const auto& b) {
+            for (auto&& i : b) {
+                if (i.second) {
+                    a[i.first] += i.second;
+                }
+            }
+            return std::move(a);
+        }).then(
+                [](const std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_hash>& task_map) {
+            std::vector<cm::pending_compaction> res;
+            res.reserve(task_map.size());
+            for (auto i : task_map) {
+                cm::pending_compaction task;
+                task.ks = i.first.first;
+                task.cf = i.first.second;
+                task.task = i.second;
+                res.emplace_back(std::move(task));
+            }
+            return make_ready_future<json::json_return_type>(res);
+        });
+    });
 }
 
 void unset_column_family(http_context& ctx, routes& r) {
@@ -1541,5 +1575,6 @@ void unset_column_family(http_context& ctx, routes& r) {
     ss::logstor_flush.unset(r);
     ss::sstable_info.unset(r);
     ss::drop_quarantined_sstables.unset(r);
+    cm::get_pending_tasks_by_table.unset(r);
 }
 }
