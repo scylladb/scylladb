@@ -3992,12 +3992,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_reader_produces_nothing_for_empty_ranges) 
 // larger of the two and it has to follow the index up and back down.
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_memory_usage) {
     auto schema = make_kv_schema();
-    struct accounting_subscriber : space_accounting_subscriber {
-        void on_add_record(record_location) noexcept override {}
-        void on_free_record(record_location) noexcept override {}
-    } accounting;
-
-    primary_index index(accounting, nullptr);
+    primary_index index(noop_space_accounting, nullptr);
 
     // The tree builds its root on the first insert, so an untouched index holds nothing.
     BOOST_REQUIRE_EQUAL(index.get_entries_memory_usage(), 0u);
