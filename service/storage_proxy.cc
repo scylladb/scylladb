@@ -6582,7 +6582,40 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 
             auto proposal = make_lw_shared<paxos::proposal>(ballot, freeze(*mutation));
 
+<<<<<<< HEAD
             bool is_accepted = co_await handler->accept_proposal(proposal);
+||||||| parent of 871278cfb5 (storage_proxy: let a test hold a CAS between its prepare and its accept)
+            // We pass timeout_if_partially_accepted := write to accept_proposal()
+            // for the following reasons:
+            //   * Write requests cannot be safely retried if some replicas respond with
+            //     accepts and others with rejects. In this case, the coordinator is
+            //     uncertain about the outcome of the LWT: a subsequent LWT may either
+            //     complete the Paxos round (if a quorum observed the accept) or overwrite it
+            //     (if a quorum did not). If the original LWT was actually completed by
+            //     later rounds and the coordinator retried it, the write could be applied
+            //     twice, potentially overwriting effects of other LWTs that slipped in
+            //     between.
+            //   * Read requests do not have this problem, so they can be safely retried.
+            bool is_accepted = co_await handler->accept_proposal(proposal, write);
+
+=======
+            // Lets a test hold a round between its prepare and its accept.
+            co_await utils::get_local_injector().inject("paxos_coordinator_before_accept", utils::wait_for_message(std::chrono::minutes(2)));
+
+            // We pass timeout_if_partially_accepted := write to accept_proposal()
+            // for the following reasons:
+            //   * Write requests cannot be safely retried if some replicas respond with
+            //     accepts and others with rejects. In this case, the coordinator is
+            //     uncertain about the outcome of the LWT: a subsequent LWT may either
+            //     complete the Paxos round (if a quorum observed the accept) or overwrite it
+            //     (if a quorum did not). If the original LWT was actually completed by
+            //     later rounds and the coordinator retried it, the write could be applied
+            //     twice, potentially overwriting effects of other LWTs that slipped in
+            //     between.
+            //   * Read requests do not have this problem, so they can be safely retried.
+            bool is_accepted = co_await handler->accept_proposal(proposal, write);
+
+>>>>>>> 871278cfb5 (storage_proxy: let a test hold a CAS between its prepare and its accept)
             if (is_accepted) {
                 // The majority (aka a QUORUM) has promised the coordinator to
                 // accept the action associated with the computed ballot.
