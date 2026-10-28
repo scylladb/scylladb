@@ -970,13 +970,8 @@ public:
         auto local_replica = locator::tablet_replica{_my_host_id, this_shard_id()};
 
         for (auto tid : tmap.tablet_ids()) {
-            if (!tmap.has_replica(tid, local_replica)) {
-                continue;
-            }
-
-            // if the tablet was cleaned up already on this replica, don't allocate a storage group for it.
-            auto trinfo = tmap.get_tablet_transition_info(tid);
-            if (trinfo && locator::is_post_cleanup(local_replica, tmap.get_tablet_info(tid), *trinfo)) {
+            if (locator::get_tablet_storage_state(local_replica, tmap.get_tablet_info(tid), tmap.get_tablet_transition_info(tid))
+                    == locator::tablet_storage_state::absent) {
                 continue;
             }
 
@@ -4058,18 +4053,16 @@ void tablet_storage_group_manager::update_effective_replication_map(
         .host = erm.get_token_metadata().get_my_id(),
         .shard = this_shard_id()
     };
-    auto tablet_migrates_in = [this_replica] (locator::tablet_transition_info& transition_info) {
-        return transition_info.stage == locator::tablet_transition_stage::allow_write_both_read_old && transition_info.pending_replica == this_replica;
-    };
     bool tablet_migrating_in = false;
     for (auto& transition : new_tablet_map->transitions()) {
         auto tid = transition.first;
         auto transition_info = transition.second;
-        if (!_storage_groups.contains(tid.value()) && tablet_migrates_in(transition_info)) {
+        const auto state = locator::get_tablet_storage_state(this_replica, new_tablet_map->get_tablet_info(tid), &transition_info);
+        if (!_storage_groups.contains(tid.value()) && state == locator::tablet_storage_state::present) {
             auto range = new_tablet_map->get_token_range(tid);
             _storage_groups[tid.value()] = allocate_storage_group(*new_tablet_map, tid, std::move(range));
             tablet_migrating_in = true;
-        } else if (_storage_groups.contains(tid.value()) && locator::is_post_cleanup(this_replica, new_tablet_map->get_tablet_info(tid), transition_info)) {
+        } else if (_storage_groups.contains(tid.value()) && state == locator::tablet_storage_state::absent) {
             // The storage group should be cleaned up and stopped at this point usually by the tablet cleanup stage,
             // unless the storage group was allocated after tablet cleanup was completed for this node. This could
             // happen if the node was restarted after tablet cleanup was run but before moving to the next stage. To

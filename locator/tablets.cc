@@ -348,16 +348,41 @@ std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, cons
     return *leaving.begin();
 }
 
-bool is_post_cleanup(tablet_replica replica, const tablet_info& tinfo, const tablet_transition_info& trinfo) {
-    if (replica == locator::get_leaving_replica(tinfo, trinfo)) {
-        // we do tablet cleanup on the leaving replica in the `cleanup` stage, after which there is only the `end_migration` stage.
-        return trinfo.stage == locator::tablet_transition_stage::end_migration;
+tablet_storage_state get_tablet_storage_state(const tablet_replica& replica, const tablet_info& tinfo,
+        const tablet_transition_info* trinfo) {
+    using enum tablet_storage_state;
+    const bool is_current = contains(tinfo.replicas, replica);
+    if (!trinfo) {
+        return is_current ? present : absent;
     }
-    if (replica == trinfo.pending_replica) {
-        // we do tablet cleanup on the pending replica in the `cleanup_target` stage, after which there is only the `revert_migration` stage.
-        return trinfo.stage == locator::tablet_transition_stage::revert_migration;
+    const bool is_pending = replica == trinfo->pending_replica;
+    const bool is_leaving = is_current && !contains(trinfo->next, replica);
+    const auto as_replica = is_current || is_pending ? present : absent;
+    switch (trinfo->stage) {
+        case tablet_transition_stage::allow_write_both_read_old:               [[fallthrough]];
+        case tablet_transition_stage::write_both_read_old:                     [[fallthrough]];
+        case tablet_transition_stage::write_both_read_old_fallback_cleanup:    [[fallthrough]];
+        case tablet_transition_stage::streaming:                               [[fallthrough]];
+        case tablet_transition_stage::rebuild_repair:                          [[fallthrough]];
+        case tablet_transition_stage::write_both_read_new:                     [[fallthrough]];
+        case tablet_transition_stage::use_new:                                 [[fallthrough]];
+        case tablet_transition_stage::sc_rollback:                             [[fallthrough]];
+        case tablet_transition_stage::sc_remove_pending:                       [[fallthrough]];
+        case tablet_transition_stage::repair:                                  [[fallthrough]];
+        case tablet_transition_stage::end_repair:                              [[fallthrough]];
+        case tablet_transition_stage::restore:
+            return as_replica;
+        case tablet_transition_stage::cleanup:
+            return is_leaving ? being_cleaned : as_replica;
+        case tablet_transition_stage::cleanup_target:
+            return is_pending ? being_cleaned : as_replica;
+        case tablet_transition_stage::end_migration:
+            return is_leaving ? absent : as_replica;
+        case tablet_transition_stage::revert_migration:
+            return is_pending ? absent : as_replica;
     }
-    return false;
+    on_internal_error(tablet_logger, format("get_tablet_storage_state(): unknown tablet transition stage {}",
+            static_cast<int>(trinfo->stage)));
 }
 
 tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migration_info& mig) {
