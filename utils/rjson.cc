@@ -1688,24 +1688,13 @@ void write_double(Sink& out, double d) {
 // rather than recursing, so run() can stop between tokens and continue in
 // the next call.
 class printer {
-    enum class frame_kind : uint8_t {
-        object,
-        array,
-        // The root object of print_with_extra_array(), before its extra array.
-        object_with_extra_array,
-        // The extra array of print_with_extra_array().
-        extra_array,
-    };
     struct frame {
-        const void* container;
+        const value* container;
         uint32_t index;
-        frame_kind kind;
     };
     std::vector<frame> _stack;
     const value* _root;
     size_t _max_nested_level;
-    std::string_view _extra_name;
-    const utils::chunked_vector<value>* _extra;
 
     void push(frame f) {
         if (_stack.size() + 1 > _max_nested_level) {
@@ -1715,7 +1704,7 @@ class printer {
     }
 
     template<typename Sink>
-    void write_value(Sink& out, const value& v) {
+    [[gnu::always_inline]] void write_value(Sink& out, const value& v) {
         switch (v._kind) {
         case value::kind::null: out.write("null"); break;
         case value::kind::false_: out.write("false"); break;
@@ -1731,17 +1720,17 @@ class printer {
             break;
         case value::kind::object:
             out.put('{');
-            push({&v, 0, frame_kind::object});
+            push({&v, 0});
             break;
         case value::kind::array:
             out.put('[');
-            push({&v, 0, frame_kind::array});
+            push({&v, 0});
             break;
         }
     }
 public:
-    printer(const value& root, size_t max_nested_level, std::string_view extra_name = {}, const utils::chunked_vector<value>* extra = nullptr)
-        : _root(&root), _max_nested_level(max_nested_level), _extra_name(extra_name), _extra(extra)
+    printer(const value& root, size_t max_nested_level)
+        : _root(&root), _max_nested_level(max_nested_level)
     {}
 
     // Prints until done, or until the sink has a full buffer or, if
@@ -1749,84 +1738,81 @@ public:
     template<bool Preemptible, typename Sink>
     bool run(Sink& out) {
         if (_root) {
-            const value& root = *std::exchange(_root, nullptr);
-            if (_extra) {
-                root.MemberCount();
-                out.put('{');
-                push({&root, 0, frame_kind::object_with_extra_array});
-            } else {
-                write_value(out, root);
-            }
+            write_value(out, *std::exchange(_root, nullptr));
         }
         unsigned tokens = 0;
+        // Returns true if printing should stop for now.
+        auto pause = [&] {
+            if (out.full()) {
+                return true;
+            }
+            if constexpr (Preemptible) {
+                if ((++tokens & 63) == 0 && need_preempt()) {
+                    return true;
+                }
+            }
+            return false;
+        };
         while (!_stack.empty()) {
-            // Note that write_value() may push, invalidating f.
+            // Prints the elements of the innermost container until one is a
+            // container, which write_value() pushes, invalidating f.
             frame& f = _stack.back();
-            switch (f.kind) {
-            case frame_kind::object:
-            case frame_kind::object_with_extra_array: {
-                const value& o = *static_cast<const value*>(f.container);
-                uint32_t n = o.MemberCount();
-                if (f.index < n) {
-                    const member& m = (*o.container<member>())[f.index];
+            const value& c = *f.container;
+            if (c._kind == value::kind::object) {
+                auto* s = c.container<member>();
+                uint32_t n = s ? s->size : 0;
+                if (f.index == n) {
+                    out.put('}');
+                    _stack.pop_back();
+                    if (pause()) {
+                        return _stack.empty();
+                    }
+                    continue;
+                }
+                for (;;) {
+                    const member& m = (*s)[f.index];
                     if (f.index++) {
                         out.put(',');
                     }
                     write_string(out, m.name);
                     out.put(':');
+                    bool nested = m.value.IsObject() || m.value.IsArray();
                     write_value(out, m.value);
-                } else if (f.kind == frame_kind::object_with_extra_array) {
-                    // Print the extra array as the last member; once it is
-                    // done, this frame ends the object.
-                    f.kind = frame_kind::object;
-                    if (n) {
-                        out.put(',');
+                    if (nested || f.index == n) {
+                        break;
                     }
-                    write_string(out, _extra_name, true);
-                    out.write(":[");
-                    push({_extra, 0, frame_kind::extra_array});
-                } else {
-                    out.put('}');
-                    _stack.pop_back();
+                    if (pause()) {
+                        return false;
+                    }
                 }
-                break;
-            }
-            case frame_kind::array: {
-                const value& a = *static_cast<const value*>(f.container);
-                if (f.index < a.Size()) {
-                    const value& e = (*a.container<value>())[f.index];
+            } else {
+                auto* s = c.container<value>();
+                uint32_t n = s ? s->size : 0;
+                if (f.index == n) {
+                    out.put(']');
+                    _stack.pop_back();
+                    if (pause()) {
+                        return _stack.empty();
+                    }
+                    continue;
+                }
+                for (;;) {
+                    const value& e = (*s)[f.index];
                     if (f.index++) {
                         out.put(',');
                     }
+                    bool nested = e.IsObject() || e.IsArray();
                     write_value(out, e);
-                } else {
-                    out.put(']');
-                    _stack.pop_back();
-                }
-                break;
-            }
-            case frame_kind::extra_array: {
-                auto& a = *static_cast<const utils::chunked_vector<value>*>(f.container);
-                if (f.index < a.size()) {
-                    const value& e = a[f.index];
-                    if (f.index++) {
-                        out.put(',');
+                    if (nested || f.index == n) {
+                        break;
                     }
-                    write_value(out, e);
-                } else {
-                    out.put(']');
-                    _stack.pop_back();
+                    if (pause()) {
+                        return false;
+                    }
                 }
-                break;
             }
-            }
-            if (out.full()) {
+            if (pause()) {
                 return _stack.empty();
-            }
-            if constexpr (Preemptible) {
-                if ((++tokens & 63) == 0 && need_preempt()) {
-                    return false;
-                }
             }
         }
         return true;
@@ -1860,14 +1846,6 @@ static future<> print_to_stream(printer p, seastar::output_stream<char>& os) {
 
 future<> print(const rjson::value& value, seastar::output_stream<char>& os, size_t max_nested_level) {
     return print_to_stream(printer(value, max_nested_level), os);
-}
-
-future<> print_with_extra_array(const rjson::value& value,
-        std::string_view array_name,
-        const utils::chunked_vector<rjson::value>& array,
-        seastar::output_stream<char>& os,
-        size_t max_nested_level) {
-    return print_to_stream(printer(value, max_nested_level, array_name, &array), os);
 }
 
 rjson::malformed_value::malformed_value(std::string_view name, const rjson::value& value)

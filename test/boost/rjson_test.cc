@@ -410,23 +410,6 @@ SEASTAR_TEST_CASE(test_print_to_stream) {
     BOOST_REQUIRE(arr.IsNull());
 }
 
-SEASTAR_TEST_CASE(test_print_with_extra_array) {
-    utils::chunked_vector<rjson::value> items;
-    for (int i = 0; i < 3; ++i) {
-        items.push_back(rjson::parse(fmt::format(R"({{"i":{}}})", i)));
-    }
-    for (auto [obj, expected] : std::initializer_list<std::pair<std::string_view, std::string_view>>{
-            {"{}", R"({"Items":[{"i":0},{"i":1},{"i":2}]})"},
-            {R"({"Count":3})", R"({"Count":3,"Items":[{"i":0},{"i":1},{"i":2}]})"},
-    }) {
-        std::string out;
-        output_stream<char> os(data_sink(std::make_unique<string_data_sink>(out)));
-        co_await rjson::print_with_extra_array(rjson::parse(obj), "Items", items, os);
-        co_await os.close();
-        BOOST_REQUIRE_EQUAL(out, expected);
-    }
-}
-
 namespace {
 
 // Records the events of parse_sax().

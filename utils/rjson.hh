@@ -62,7 +62,6 @@
 #include <seastar/util/noncopyable_function.hh>
 
 #include "utils/base64.hh"
-#include "utils/chunked_vector.hh"
 
 #include "seastarx.hh"
 
@@ -615,17 +614,6 @@ std::string print(const rjson::value& value, size_t max_nested_level = default_m
 // and yields when the task quota runs out.
 // Note: input value must remain valid until the future resolves.
 seastar::future<> print(const rjson::value& value, seastar::output_stream<char>&, size_t max_nested_level = default_max_nested_level);
-
-// A variant of print() which prints a JSON object (it assumes the given
-// rjson::value is an object) but adds to it at the end an additional array.
-// That extra array is given a separate chunked_vector, to avoid putting it
-// inside the rjson::value. The value and the array must remain valid until
-// the future resolves.
-future<> print_with_extra_array(const rjson::value& value,
-    std::string_view array_name,
-    const utils::chunked_vector<rjson::value>& array,
-    seastar::output_stream<char>& os,
-    size_t max_nested_level = default_max_nested_level);
 
 // Copies given JSON value - involves allocation
 rjson::value copy(const rjson::value& value);
