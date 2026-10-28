@@ -64,8 +64,6 @@ def test_raid_single_disk(raid, distro):
     assert mount_unit(raid) == f'''[Unit]
 Description=Scylla data directory
 Before=local-fs.target scylla-server.service
-After=
-Wants=
 DefaultDependencies=no
 
 [Mount]
@@ -124,7 +122,6 @@ def test_raid_level1_starts_md_service(raid, unit):
     assert raid.read('/etc/mdadm/mdadm.conf').endswith('MAILADDR root')
 
 
-@pytest.mark.xfail(strict=True, reason="mount unit depends on the literal 'md_service', a unit that doesn't exist")
 def test_raid_level1_mount_unit_has_no_md_dependency(raid):
     """The mount unit is ordered before local-fs.target, so depending on the md monitor unit (after sysinit.target) is a cycle."""
     raid.run('scylla_raid_setup', '--disks', '/dev/sdb,/dev/sdc', '--raid-level', '1')
@@ -146,7 +143,6 @@ def test_raid_invalid_role(raid, capsys):
 
 
 @pytest.mark.parametrize('option', ['--online-discard', '--blk-discard'])
-@pytest.mark.xfail(strict=True, reason="non-boolean values end in a ValueError traceback, or are taken as true")
 def test_raid_invalid_bool_option(raid, capsys, option):
     """A non-boolean --online-discard/--blk-discard gets a usage error, not a traceback or a silent true."""
     assert raid.run('scylla_raid_setup', '--disks', '/dev/sdb', option, 'maybe') == 2
@@ -196,7 +192,6 @@ def test_raid_blk_discard(raid):
     assert 'blkdiscard /dev/sdc' not in raid.cmd
 
 
-@pytest.mark.xfail(strict=True, reason='--blk-discard is a string, so the default "False" is truthy')
 def test_raid_no_blk_discard_by_default(raid):
     """blkdiscard wipes disks and is slow, so it must not run unless --blk-discard is given."""
     raid.file('/sys/block/sdb/queue/discard_granularity', '512')
@@ -228,7 +223,6 @@ def test_raid_mount_failure_dumps_udev(raid, caplog):
     assert 'ID_FS_TYPE: ext4' in caplog.text
 
 
-@pytest.mark.xfail(strict=True, reason='error messages lack the f-string prefix')
 def test_raid_mount_failure_names_missing_link(raid, caplog):
     """When mounting fails, the error must name the missing device link."""
     raid.cmd.set('systemctl  start var-lib-scylla.mount', returncode=1)
@@ -238,7 +232,6 @@ def test_raid_mount_failure_names_missing_link(raid, caplog):
     assert 'is broken link' not in caplog.text
 
 
-@pytest.mark.xfail(strict=True, reason='error messages lack the f-string prefix')
 def test_raid_mount_failure_names_broken_link(raid, caplog):
     """A device link pointing nowhere is reported as broken, not as missing."""
     raid.fs.create_symlink(UUID_LINK, '/dev/nowhere')
