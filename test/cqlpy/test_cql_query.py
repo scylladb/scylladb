@@ -3855,6 +3855,90 @@ def test_multi_column_slice_mixed_order(cql, test_keyspace, order):
             expected = [(0, *r) for r in in_clustering_order if pred(r)]
             assert expected == list(cql.execute(f"SELECT * FROM {table} WHERE a = 0 AND (b, c, d, e) {op} {bound}"))
 
+# Reversed (ORDER BY ... DESC) single- and multi-partition queries with
+# single-column, multi-column, IN and range restrictions, over data that has
+# row and range tombstones. Each query is run while the data is in the
+# memtable, then after a flush (served from the cache), and on Scylla also
+# with BYPASS CACHE (read from the sstable).
+def reversed_selectors(cql, test_keyspace, single_partition_queries: bool):
+    with new_test_table(cql, test_keyspace, "bucket int, id int, id2 int, value text, PRIMARY KEY (bucket, id, id2)") as table:
+        # As the dtest, every statement is at CL=ALL.
+        insert = cql.prepare(f"INSERT INTO {table} (bucket, id, id2, value) VALUES (?, ?, ?, 'x')")
+        insert.consistency_level = ConsistencyLevel.ALL
+        for bucket in [1, 2]:
+            for id, id2 in [(1, 4), (2, 1), (2, 5), (2, 9), (2, 10), (3, 3), (4, 2), (4, 5), (4, 6), (5, 4), (6, 1), (6, 3), (7, 1), (8, 1)]:
+                cql.execute(insert, [bucket, id, id2])
+        for bucket in [3, 4, 5]:
+            cql.execute(insert, [bucket, 1, 1])
+        # Row and range tombstones, in bucket 1 only.
+        cql.execute(SimpleStatement(f"DELETE FROM {table} WHERE bucket = 1 AND id < 0", consistency_level=ConsistencyLevel.ALL))
+        cql.execute(SimpleStatement(f"DELETE FROM {table} WHERE bucket = 1 AND id = 2 AND id2 < 4", consistency_level=ConsistencyLevel.ALL))
+        cql.execute(SimpleStatement(f"DELETE FROM {table} WHERE bucket = 1 AND id = 2 AND id2 > 9", consistency_level=ConsistencyLevel.ALL))
+        cql.execute(SimpleStatement(f"DELETE FROM {table} WHERE bucket = 1 AND (id, id2) >= (4, 6) AND (id, id2) <= (6, 2)", consistency_level=ConsistencyLevel.ALL))
+        cql.execute(SimpleStatement(f"DELETE FROM {table} WHERE bucket = 1 AND id >= 8", consistency_level=ConsistencyLevel.ALL))
+
+        single_partition = [
+            ("", [(7, 1), (6, 3), (4, 5), (4, 2), (3, 3), (2, 9), (2, 5), (1, 4)]),
+            ("AND id = 2", [(2, 9), (2, 5)]),
+            ("AND id IN (4, 2, 20)", [(4, 5), (4, 2), (2, 9), (2, 5)]),
+            ("AND id < 3", [(2, 9), (2, 5), (1, 4)]),
+            ("AND id > 4", [(7, 1), (6, 3)]),
+            ("AND id > 3 AND id < 7", [(6, 3), (4, 5), (4, 2)]),
+            ("AND (id, id2) IN ((2, 9), (7, 1))", [(7, 1), (2, 9)]),
+            ("AND (id, id2) < (2, 8)", [(2, 5), (1, 4)]),
+            ("AND (id, id2) > (3, 3)", [(7, 1), (6, 3), (4, 5), (4, 2)]),
+            ("AND (id, id2) < (3, 5) AND (id, id2) > (1, 10)", [(3, 3), (2, 9), (2, 5)]),
+            ("AND id IN (3, 6) AND id2 IN (3, 4)", [(6, 3), (3, 3)]),
+        ]
+        multi_partition = [
+            ("ORDER BY id DESC",
+             [(2, 6, 1), (2, 6, 3), (1, 6, 3), (2, 5, 4), (2, 4, 2), (2, 4, 5), (2, 4, 6), (1, 4, 2), (1, 4, 5)]),
+            ("ORDER BY id DESC, id2 DESC",
+             [(2, 6, 3), (1, 6, 3), (2, 6, 1), (2, 5, 4), (2, 4, 6), (2, 4, 5), (1, 4, 5), (2, 4, 2), (1, 4, 2)]),
+            ("ORDER BY id DESC, id2 DESC PER PARTITION LIMIT 3",
+             [(2, 6, 3), (1, 6, 3), (2, 6, 1), (2, 5, 4), (1, 4, 5), (1, 4, 2)]),
+        ]
+
+        def check(bypass_cache):
+            suffix = " BYPASS CACHE" if bypass_cache else ""
+            for where, expected in (single_partition if single_partition_queries else []):
+                rows = cql.execute(SimpleStatement(f"SELECT id, id2 FROM {table} WHERE bucket = 1 {where} ORDER BY id DESC{suffix}",
+                                                   consistency_level=ConsistencyLevel.ALL))
+                assert list(rows) == expected, where
+            # Ordering a multi-partition (IN) query requires paging to be off.
+            # Rows of different partitions which tie on the ORDER BY columns
+            # may come in any order, so only the order of those columns is
+            # checked, and the rows themselves as a set.
+            for order, expected in ([] if single_partition_queries else multi_partition):
+                stmt = SimpleStatement(f"SELECT bucket, id, id2 FROM {table} WHERE bucket IN (1, 2) AND id > 3 AND id < 7 {order}{suffix}", fetch_size=0,
+                                       consistency_level=ConsistencyLevel.ALL)
+                rows = list(cql.execute(stmt))
+                order_columns = 1 if order == "ORDER BY id DESC" else 2
+                assert [tuple(row)[1:1 + order_columns] for row in rows] == [row[1:1 + order_columns] for row in expected], order
+                assert sorted(rows) == sorted(expected), order
+
+        check(bypass_cache=False)
+        nodetool.flush_all(cql)
+        check(bypass_cache=False)
+        if is_scylla(cql):
+            check(bypass_cache=True)
+
+
+# Ported from scylla-dtest reversed_queries_test.py::TestSinglePartitionReversedQueriesSelectors::test_reverse_selectors.
+# The single-partition reversed queries over the data with tombstones.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_single_partition_reverse_selectors(cql, test_keyspace):
+    reversed_selectors(cql, test_keyspace, single_partition_queries=True)
+
+
+# Ported from scylla-dtest reversed_queries_test.py::TestMultiPartitionReversedQueriesSelectors::test_reverse_selectors.
+# The multi-partition (IN, unpaged) reversed queries over the same data.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_multi_partition_reverse_selectors(cql, test_keyspace):
+    reversed_selectors(cql, test_keyspace, single_partition_queries=False)
+
 
 # Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
 # they run in a keyspace with vnodes, and keep the dtests' table names.

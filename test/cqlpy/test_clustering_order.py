@@ -10,11 +10,13 @@
 # unit tests from Cassandra (cassandra_tests), and its interaction with
 # other features (filtering, secondary indexes, etc.) in other test files.
 
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from .util import new_test_table, unique_key_int, sleep_till_whole_second, new_named_table
 from . import nodetool
+from .nodetool import flush, flush_all
 from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement
 
@@ -314,3 +316,59 @@ def test_function_on_desc_clustering_column(cql, test_keyspace_vnodes):
         for i in range(5):
             cql.execute(f"INSERT INTO {table} (k, t) VALUES ({i}, now())")
         assert len(list(cql.execute(f"SELECT dateOf(t) FROM {table}"))) == 5
+
+# Ported from dtest reversed_queries_test.py (vnodes keyspaces, like the
+# dtests):
+
+# A query in ascending order of a table with descending clustering order
+# returns the rows in ascending order.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_reversed_query_on_table_with_reversed_order(cql, test_keyspace_vnodes):
+    with new_test_table(cql, test_keyspace_vnodes, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)', 'WITH CLUSTERING ORDER BY (ck DESC)') as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)')
+        for i in range(100):
+            cql.execute(stmt, (0, i, -i))
+        assert [tuple(r) for r in cql.execute(f'SELECT ck, v FROM {table} WHERE pk = 0 ORDER BY ck ASC')] == [(i, -i) for i in range(100)]
+
+def is_debug_build(cql):
+    """Whether the server is a debug build of Scylla, from system.versions,
+    which Cassandra does not have."""
+    try:
+        return cql.execute("SELECT build_mode FROM system.versions WHERE key = 'local'").one().build_mode == 'debug'
+    except Exception:
+        return False
+
+# A reversed query finds the row near the end of a range covered by many
+# overlapping range tombstones (100000 of them, written concurrently),
+# bypassing the cache: from the memtable, and after a flush from the sstable.
+# A dtest node's memtable may also get flushed while the tombstones pile up,
+# so the scenario is repeated with the tombstones flushed to an sstable of
+# their own before the row is written.
+# Each tombstone overlaps all the earlier ones, so writing them is too slow
+# for a debug build, which gets 10000 of them.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_reversed_query_with_overlapping_range_tombstones(cql, test_keyspace_vnodes):
+    count = 10000 if is_debug_build(cql) else 100000
+    for flush_tombstones in [False, True]:
+        with new_test_table(cql, test_keyspace_vnodes, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)') as table:
+            stmt = cql.prepare(f'DELETE FROM {table} WHERE pk = 0 AND ck >= ? AND ck < ?')
+            # As the dtest's run_concurrently(10, run_deletes): ten workers,
+            # each deleting its own i = worker_id, worker_id + 10, ... in
+            # order, one statement at a time.
+            def run_deletes(worker_id):
+                for i in range(worker_id, count, 10):
+                    cql.execute(stmt, (i, i + count))
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                for f in [executor.submit(run_deletes, w) for w in range(10)]:
+                    f.result()
+            if flush_tombstones:
+                flush(cql, table)
+            ck = 2 * count - 10
+            cql.execute(f'INSERT INTO {table} (pk, ck, v) VALUES (0, {ck}, 42)')
+            query = f'SELECT ck, v FROM {table} WHERE pk = 0 ORDER BY ck DESC LIMIT 1 BYPASS CACHE'
+            assert [tuple(r) for r in cql.execute(query, trace=True)] == [(ck, 42)]
+            flush(cql, table)
+            assert [tuple(r) for r in cql.execute(query)] == [(ck, 42)]
+    # The node's other tables, like the queries' traces, are flushed too, as
+    # when a dtest node stops.
+    flush_all(cql)
