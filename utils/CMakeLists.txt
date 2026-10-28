@@ -73,8 +73,7 @@ target_sources(utils
     )
 target_include_directories(utils
   PUBLIC
-    ${CMAKE_SOURCE_DIR}
-    ${RAPIDJSON_INCLUDE_DIRS})
+    ${CMAKE_SOURCE_DIR})
 target_link_libraries(utils
   PUBLIC
     Seastar::seastar
