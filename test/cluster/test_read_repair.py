@@ -7,6 +7,7 @@
 import asyncio
 import json
 import logging
+import os
 import pytest
 import random
 import time
@@ -461,3 +462,144 @@ async def test_range_scan_over_consistent_tombstones_does_not_read_repair(manage
         assert "Appending to commitlog" not in activity
         assert "Adding to cf memtable" not in activity
         assert "Acquiring switchLock read lock" not in activity
+
+
+# The TestReversedQueries* dtests' cluster: generate_cluster_topology(dc_num=1,
+# rack_num=2) (datacenter1, rack1 and rack2), vnodes, no hinted handoff,
+# and keyspace ks with RF=2.
+REVERSED_CONFIG = {"tablets_mode_for_new_keyspaces": "disabled", "num_tokens": 256, "hinted_handoff_enabled": False}
+
+
+async def reversed_prepare(manager: ScyllaClusterManager, table_options: str):
+    servers = await manager.servers_add(2, config=REVERSED_CONFIG, property_file=[
+        {"dc": "datacenter1", "rack": "rack1"}, {"dc": "datacenter1", "rack": "rack2"}])
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    cql.cluster.control_connection.wait_for_schema_agreement(wait_time=120)
+    await cql.run_async(f"CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH {table_options}")
+    return servers, cql
+
+
+async def stop_node(manager: ScyllaClusterManager, server: ServerInfo) -> None:
+    """ccm's node.stop(wait_other_notice=True)."""
+    await manager.server_stop_gracefully(server.server_id)
+    await manager.others_not_see_server(server.ip_addr)
+
+
+async def start_node(manager: ScyllaClusterManager, server: ServerInfo, servers: list[ServerInfo]) -> None:
+    """ccm's node.start(wait_for_binary_proto=True, wait_other_notice=True)."""
+    await manager.server_start(server.server_id)
+    await manager.servers_see_each_other(await manager.running_servers())
+    await wait_for_cql_and_get_hosts(manager.get_cql(), await manager.running_servers(), time.time() + 60)
+
+
+# Ported from scylla-dtest reversed_queries_test.py::TestReversedQueriesReadRepair::test_queries_with_read_repair.
+# A reversed (ORDER BY ... DESC) read with CL=ALL reconciles the replicas
+# into the right reversed result, and repairs the replica that missed the
+# writes: after it, that replica alone returns all the rows.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_reversed_read_repair(manager: ScyllaClusterManager):
+    row_count = 100
+    servers, cql = await reversed_prepare(manager, "read_repair_chance = 100.0")
+    node1, node2 = servers
+    await stop_node(manager, node2)
+    stmt = cql.prepare("INSERT INTO ks.t (pk, ck, v) VALUES (?, ?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ONE
+    for i in range(row_count):
+        await cql.run_async(stmt, (0, i, 2 * i))
+    await start_node(manager, node2, servers)
+
+    query = SimpleStatement("SELECT ck, v FROM ks.t WHERE pk = 0 ORDER BY ck DESC", consistency_level=ConsistencyLevel.ALL)
+    expected_rows = [(i, 2 * i) for i in range(row_count)]
+    assert list(await manager.get_cql().run_async(query)) == expected_rows[::-1]
+
+    await stop_node(manager, node1)
+    session = await manager.get_cql_exclusive(node2)
+    query = SimpleStatement("SELECT ck, v FROM ks.t WHERE pk = 0 BYPASS CACHE", consistency_level=ConsistencyLevel.ONE)
+    assert list(await session.run_async(query, trace=True)) == expected_rows
+
+
+# Ported from scylla-dtest reversed_queries_test.py::TestReversedQueriesMerging::test_read_from_memtables_and_multiple_sstables.
+# A reversed read with CL=ALL merges correctly the data of two replicas
+# that each have it spread over three sstables and the memtable, with
+# overlapping, differently-valued writes of the same rows: each row has the
+# value of its latest write, with the cache and with BYPASS CACHE (on
+# different partitions).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_reversed_read_merging_memtable_and_sstables(manager: ScyllaClusterManager):
+    rng = 1000
+    servers, cql = await reversed_prepare(manager, "COMPACTION = {'class': 'NullCompactionStrategy'} AND read_repair_chance = 0.0")
+    node1, node2 = servers
+    expected_dict = {}
+    await stop_node(manager, node2)
+
+    async def load_cks(session, cks, v_offset):
+        stmt = session.prepare("INSERT INTO ks.t (pk, ck, v) VALUES (?, ?, ?)")
+        stmt.consistency_level = ConsistencyLevel.ONE
+        for pk in [0, 1]:
+            for ck in cks:
+                v = 100 * ck + v_offset
+                await session.run_async(stmt, (pk, ck, v))
+                expected_dict[ck] = v
+
+    for cks, offset in [(range(0, rng, 2), 1), (range(0, rng, 3), 2), (range(0, rng, 5), 3)]:
+        await load_cks(cql, list(cks), offset)
+        await manager.api.flush_all_keyspaces(node1.ip_addr)
+
+    await start_node(manager, node2, servers)
+    await stop_node(manager, node1)
+    session = await manager.get_cql_exclusive(node2)
+    for cks, offset in [(range(1, rng, 2), 4), (range(1, rng, 3), 5), (range(1, rng, 5), 6)]:
+        await load_cks(session, list(cks), offset)
+        await manager.api.flush_all_keyspaces(node2.ip_addr)
+    await start_node(manager, node1, servers)
+    # No flush: kept in the memtables.
+    await load_cks(session, list(range(0, rng, 7)), 7)
+
+    expected_rows = [(ck, expected_dict[ck]) for ck in list(range(rng))[::-1] if ck in expected_dict]
+    for pk, bypass_cache in [(0, ""), (1, " BYPASS CACHE")]:
+        query = SimpleStatement(f"SELECT ck, v FROM ks.t WHERE pk = {pk} ORDER BY ck DESC{bypass_cache}", consistency_level=ConsistencyLevel.ALL)
+        assert list(await session.run_async(query, trace=True)) == expected_rows
+
+
+# Ported from scylla-dtest reversed_queries_test.py::TestReversedQueriesReadRepairBigMutationsSmallChanges::test_queries_with_read_repair.
+# A partition of 10000 rows (one deleted in each thousand, flushed on node2
+# every thousand rows): with the files of node2's first sstable removed, a
+# reversed CL=ALL read returns the right rows in reverse order and repairs
+# node2, which then alone returns all the rows.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_reversed_read_repair_big_partition_small_difference(manager: ScyllaClusterManager):
+    row_count = 10_000
+    servers, cql = await reversed_prepare(manager, "compaction = {'class': 'NullCompactionStrategy'} AND read_repair_chance = 100.0")
+    node1, node2 = servers
+    delete_stmt = cql.prepare("DELETE FROM ks.t WHERE pk = ? AND ck = ?")
+    delete_stmt.consistency_level = ConsistencyLevel.ALL
+    insert_stmt = cql.prepare("INSERT INTO ks.t (pk, ck, v) VALUES (?, ?, ?)")
+    insert_stmt.consistency_level = ConsistencyLevel.ALL
+    expected_rows = []
+    for i in range(1, row_count + 1):
+        await cql.run_async(insert_stmt, (0, i, 2 * i))
+        expected_rows.append((i, 2 * i))
+        if i % 1000 == 0:
+            ck = random.randint(i - 999, i)
+            await cql.run_async(delete_stmt, (0, ck))
+            await manager.api.flush_all_keyspaces(node2.ip_addr)
+            expected_rows.remove((ck, 2 * ck))
+
+    await stop_node(manager, node2)
+    # Remove the files of one sstable: the first nine files under data/ks, by
+    # path (CompressionInfo, Data, Digest, Filter, Index, Scylla, Statistics,
+    # Summary and TOC of the oldest sstable).
+    root = os.path.join(await manager.server_get_workdir(node2.server_id), "data", "ks")
+    data_files = sorted(os.path.join(r, name) for r, _, files in os.walk(root) for name in files)
+    for file in data_files[0:9]:
+        os.remove(file)
+    await start_node(manager, node2, servers)
+
+    query = SimpleStatement("SELECT ck, v FROM ks.t WHERE pk = 0 ORDER BY ck DESC", consistency_level=ConsistencyLevel.ALL)
+    assert list(await manager.get_cql().run_async(query, trace=True)) == expected_rows[::-1]
+
+    await stop_node(manager, node1)
+    session = await manager.get_cql_exclusive(node2)
+    query = SimpleStatement("SELECT ck, v FROM ks.t WHERE pk = 0 BYPASS CACHE", consistency_level=ConsistencyLevel.ONE)
+    assert list(await session.run_async(query, trace=True)) == expected_rows
