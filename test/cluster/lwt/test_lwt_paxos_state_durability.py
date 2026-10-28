@@ -21,7 +21,10 @@ Setup, for both tests: three nodes, RF=3, one tablet or vnodes, and the
 commitlog synced only on demand (period of an hour), so a paxos state table
 write that is not synced explicitly is lost with the kill.  n1 is the replica
 that crashes.  The vnodes flavour, whose paxos state lives in the
-always-synced system.paxos, is the control.
+always-synced system.paxos, is the control.  Both tests also run with
+durable_writes = false, where the tablets flavour is expected to fail: its
+paxos state table is in the keyspace, inherits the setting, and never
+reaches the commitlog.
 """
 
 import asyncio
@@ -61,10 +64,19 @@ def serial_read(ks: str) -> SimpleStatement:
     return SimpleStatement(f"SELECT c FROM {ks}.t WHERE pk = 1", consistency_level=ConsistencyLevel.SERIAL)
 
 
-def keyspace_opts(tablets: bool) -> str:
+def keyspace_opts(tablets: bool, durable_writes: bool) -> str:
     tablets_opts = "{'initial': 1}" if tablets else "{'enabled': false}"
     return ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
-            f"AND tablets = {tablets_opts}")
+            f"AND tablets = {tablets_opts} AND durable_writes = {str(durable_writes).lower()}")
+
+
+FLAVOURS = [
+    pytest.param(True, True, id="tablets"),
+    pytest.param(False, True, id="vnodes"),
+    pytest.param(True, False, id="tablets-not-durable",
+                 marks=pytest.mark.xfail(reason="https://scylladb.atlassian.net/browse/SCYLLADB-5756", strict=True)),
+    pytest.param(False, False, id="vnodes-not-durable"),
+]
 
 
 async def create_table(manager: ScyllaClusterManager, cql, servers, ks: str) -> None:
@@ -81,9 +93,9 @@ async def crash(manager: ScyllaClusterManager, cql, server) -> None:
     await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
 
 
-@pytest.mark.parametrize("tablets", [True, False], ids=["tablets", "vnodes"])
+@pytest.mark.parametrize("tablets, durable_writes", FLAVOURS)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_chosen_value_survives_replica_crash(manager: ScyllaClusterManager, tablets: bool):
+async def test_chosen_value_survives_replica_crash(manager: ScyllaClusterManager, tablets: bool, durable_writes: bool):
     """A proposal accepted by a quorum stays chosen when an accepting replica crashes.
 
     The first CAS is coordinated by n2 with CL=ONE, so that one learn is
@@ -103,7 +115,7 @@ async def test_chosen_value_survives_replica_crash(manager: ScyllaClusterManager
     n1, n2, n3 = servers
     cql, (h1, h2, h3) = await manager.get_ready_cql(servers)
 
-    async with new_test_keyspace(manager, keyspace_opts(tablets)) as ks:
+    async with new_test_keyspace(manager, keyspace_opts(tablets, durable_writes)) as ks:
         await create_table(manager, cql, servers, ks)
 
         logger.info("First CAS: accepted by n1 and n2, learned by n2 only")
@@ -149,9 +161,9 @@ async def test_chosen_value_survives_replica_crash(manager: ScyllaClusterManager
 COORDINATOR_BEFORE_ACCEPT = "paxos_coordinator_before_accept"
 
 
-@pytest.mark.parametrize("tablets", [True, False], ids=["tablets", "vnodes"])
+@pytest.mark.parametrize("tablets, durable_writes", FLAVOURS)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-async def test_promised_ballot_survives_replica_crash(manager: ScyllaClusterManager, tablets: bool):
+async def test_promised_ballot_survives_replica_crash(manager: ScyllaClusterManager, tablets: bool, durable_writes: bool):
     """A replica keeps rejecting the ballots it promised away when it crashes.
 
     Two rounds are held between their prepare and their accept.  The first,
@@ -169,7 +181,7 @@ async def test_promised_ballot_survives_replica_crash(manager: ScyllaClusterMana
     n1, n2, n3 = servers
     cql, (h1, h2, h3) = await manager.get_ready_cql(servers)
 
-    async with new_test_keyspace(manager, keyspace_opts(tablets)) as ks:
+    async with new_test_keyspace(manager, keyspace_opts(tablets, durable_writes)) as ks:
         await create_table(manager, cql, servers, ks)
         n1_log = await manager.server_open_log(n1.server_id)
 
