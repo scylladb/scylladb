@@ -22,7 +22,6 @@ run_first:
 skip_in_release:
   - test_raft_cluster_features
   - test_cluster_features
-  - dtest/schema_management_test
 skip_in_debug:
   - test_shutdown_hang
   - test_replace
@@ -40,6 +39,5 @@ run_in_dev:
   - dtest/audit_test
   - audit/test_audit
   - dtest/rebuild_test
-  - dtest/schema_management_test
 run_in_debug:
   - random_failures/test_random_failures

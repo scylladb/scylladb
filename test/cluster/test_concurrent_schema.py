@@ -65,3 +65,7 @@ async def test_cassandra_issue_10250(random_tables):
     logger.debug("verifying schema status")
     # When bug happens, deleted columns are still there (often) and/or new columns are missing (rarely)
     await tables.verify_schema()
+
+
+
+

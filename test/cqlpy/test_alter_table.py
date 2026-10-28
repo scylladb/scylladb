@@ -302,6 +302,37 @@ def test_drop_column_queries(cql, test_keyspace):
         assert list(cql.execute(f"SELECT c1 FROM {table} WHERE key = 0")) == [(None,)]
         assert list(cql.execute(f"SELECT c1 FROM {table} WHERE key = 3")) == [(4,)]
 
+# Every schema change of a table adds one new version to
+# system.scylla_table_schema_history, holding the table's columns at that
+# version.
+def test_schema_history_alter_table(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int, int_col int") as table:
+        ks, cf = table.split('.')
+        cf_id = cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one().id
+        seen_versions = set()
+        def new_version_columns():
+            rows = list(cql.execute(f"SELECT * FROM system.scylla_table_schema_history WHERE cf_id = {cf_id}"))
+            new_versions = {r.schema_version for r in rows} - seen_versions
+            assert len(new_versions) == 1
+            version = new_versions.pop()
+            seen_versions.add(version)
+            return {(r.column_name, r.type) for r in rows if r.schema_version == version and r.kind == 'regular'}
+
+        columns = new_version_columns()
+        assert columns == {('v', 'int'), ('int_col', 'int')}
+        for alter, added, removed in [
+                ("ALTER v TYPE varint", {('v', 'varint')}, {('v', 'int')}),
+                ("ADD (v2 int, v3 int)", {('v2', 'int'), ('v3', 'int')}, set()),
+                ("ALTER int_col TYPE varint", {('int_col', 'varint')}, {('int_col', 'int')}),
+                ("DROP int_col", set(), {('int_col', 'varint')}),
+                ("ADD int_col bigint", {('int_col', 'bigint')}, set()),
+                ("DROP (int_col, v)", set(), {('int_col', 'bigint'), ('v', 'varint')})]:
+            cql.execute(f"ALTER TABLE {table} {alter}")
+            new_columns = new_version_columns()
+            assert new_columns - columns == added, alter
+            assert columns - new_columns == removed, alter
+            columns = new_columns
+
 # Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
 # they run in a keyspace with vnodes, and keep the dtests' table names.
 
