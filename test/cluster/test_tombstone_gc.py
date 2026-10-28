@@ -388,3 +388,5 @@ async def test_tombstone_gc_rf_one(manager: ScyllaClusterManager, tablets: bool)
             await rf_change_fut
 
             await check_tombstone_gc(table, 3, 2, False)
+
+
