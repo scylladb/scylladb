@@ -18,7 +18,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <span>
 #include <vector>
 
@@ -49,6 +48,10 @@ class raft_group0;
 class raft_group0_client;
 }
 
+namespace utils {
+class alien_worker;
+}
+
 namespace sstables {
 
 // The interface between the users of SSTable compression dictionaries (the REST
@@ -59,12 +62,12 @@ namespace sstables {
 //
 // This is the SSTable counterpart of the RPC compression dictionary_service.
 class dictionary_service : public peering_sharded_service<dictionary_service> {
-    using byte_vector = std::vector<std::byte>;
-
     sharded<replica::database>& _db;
     sharded<netw::messaging_service>& _messaging;
     sharded<db::system_keyspace>& _sys_ks;
     sharded<gms::feature_service>& _feature_service;
+    // Training is nonpreemptible 3rd party code, so it runs on a thread of its own.
+    utils::alien_worker& _trainer;
     service::raft_group0* _group0 = nullptr;
     // We need to be able to abort all group0 operations during shutdown,
     // so we need a special abort source for that.
@@ -75,9 +78,6 @@ class dictionary_service : public peering_sharded_service<dictionary_service> {
     // Held for the duration of async REST handlers, so that stop() drains
     // in-flight requests before teardown.
     named_gate _async_gate{"sstables::dictionary_service"};
-    // The trainer itself is plugged in from `main`, since it has to run on a
-    // non-reactor thread.
-    std::function<future<byte_vector>(std::vector<byte_vector>)> _train_dict;
 
     // To avoid overly-large RPC messages, `do_sample_sstables` is broken up into several rounds.
     future<utils::chunked_vector<temporary_buffer<char>>> do_sample_sstables_oneshot(table_id, uint64_t chunk_size, uint64_t n_chunks);
@@ -88,7 +88,7 @@ public:
     // and node for which an error happened will be considered having size 0.
     using ignore_errors = bool_class<ignore_errors_tag>;
 
-    dictionary_service(sharded<replica::database>&, sharded<netw::messaging_service>&, sharded<db::system_keyspace>&, sharded<gms::feature_service>&);
+    dictionary_service(sharded<replica::database>&, sharded<netw::messaging_service>&, sharded<db::system_keyspace>&, sharded<gms::feature_service>&, utils::alien_worker&);
 
     future<> stop();
 
@@ -101,7 +101,6 @@ public:
     gate::holder hold_async_gate() { return _async_gate.hold(); }
 
     void set_group0(service::raft_group0&);
-    void set_train_dict_callback(decltype(_train_dict));
 
     semaphore& get_do_sample_sstables_concurrency_limiter();
     // Gathers a combined sample of the table's SSTable data from the whole cluster.

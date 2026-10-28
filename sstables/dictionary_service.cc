@@ -18,6 +18,7 @@
 #include "db/system_keyspace.hh"
 #include "gms/feature_service.hh"
 #include "locator/token_metadata.hh"
+#include "message/dict_trainer.hh"
 #include "message/messaging_service.hh"
 #include "mutation/mutation.hh"
 #include "replica/database.hh"
@@ -25,6 +26,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
+#include "utils/alien_worker.hh"
 #include "utils/log.hh"
 
 #include "idl/sstable_dicts.dist.hh"
@@ -33,11 +35,12 @@ namespace sstables {
 
 static logging::logger slogger("sstable_dictionary_service");
 
-dictionary_service::dictionary_service(sharded<replica::database>& db, sharded<netw::messaging_service>& messaging, sharded<db::system_keyspace>& sys_ks, sharded<gms::feature_service>& feature_service)
+dictionary_service::dictionary_service(sharded<replica::database>& db, sharded<netw::messaging_service>& messaging, sharded<db::system_keyspace>& sys_ks, sharded<gms::feature_service>& feature_service, utils::alien_worker& trainer)
     : _db(db)
     , _messaging(messaging)
     , _sys_ks(sys_ks)
     , _feature_service(feature_service)
+    , _trainer(trainer)
 {
     ser::sstable_dicts_rpc_verbs::register_estimate_sstable_volume(&_messaging.local(), [this] (table_id t_id) -> future<uint64_t> {
         co_return co_await _db.map_reduce0(seastar::coroutine::lambda([&] (replica::database& local_db) -> future<uint64_t> {
@@ -124,11 +127,10 @@ future<std::vector<std::byte>> dictionary_service::train_dict(utils::chunked_vec
         // Let's add a preemption point here.
         co_await coroutine::maybe_yield();
     }
-    co_return co_await container().invoke_on(0, [tmp = std::move(tmp)] (auto& local) mutable {
-        if (!local._train_dict) {
-            on_internal_error(slogger, "retrain_dict: _train_dict not plugged");
-        }
-        return local._train_dict(std::move(tmp));
+    co_return co_await container().invoke_on(0, [tmp = std::move(tmp)] (dictionary_service& local) mutable {
+        return local._trainer.submit<std::vector<std::byte>>([tmp = std::move(tmp)] {
+            return netw::zdict_train(tmp, {});
+        });
     });
 }
 
@@ -155,10 +157,6 @@ future<> dictionary_service::publish_new_sstable_dict(table_id t_id, std::span<c
             }
         }
     }));
-}
-
-void dictionary_service::set_train_dict_callback(decltype(_train_dict) cb) {
-    _train_dict = std::move(cb);
 }
 
 future<utils::chunked_vector<temporary_buffer<char>>> dictionary_service::do_sample_sstables(table_id t, uint64_t chunk_size, uint64_t n_chunks) {

@@ -2109,16 +2109,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting sstable dictionary service");
             sharded<sstables::dictionary_service> sst_dicts;
-            sst_dicts.start(std::ref(db), std::ref(messaging), std::ref(sys_ks), std::ref(feature_service)).get();
+            sst_dicts.start(std::ref(db), std::ref(messaging), std::ref(sys_ks), std::ref(feature_service), std::ref(rpc_dict_training_worker)).get();
             auto stop_sst_dicts = defer_verbose_shutdown("sstable dictionary service", [&sst_dicts] {
                 sst_dicts.stop().get();
             });
-            sst_dicts.local().set_train_dict_callback([&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {
-                return rpc_dict_training_worker.submit<std::vector<std::byte>>([sample = std::move(sample)] {
-                    return netw::zdict_train(sample, {});
-                });
-            });
-
             api::set_server_sstable_dicts(ctx, sst_dicts, group0_client).get();
             auto stop_sst_dicts_api = defer_verbose_shutdown("sstable dicts API", [&ctx] {
                 api::unset_server_sstable_dicts(ctx).get();
