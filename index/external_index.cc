@@ -169,13 +169,13 @@ sstring external_index::targets_to_cql(const sstring& targets) {
 //   ((p1, p2), v, f1, f2)        -> {"tc":"v","pk":["p1","p2"],"fc":["f1","f2"]}
 sstring external_index::serialize_targets(const std::vector<::shared_ptr<index_target>>& targets) {
     if (targets.size() == 0) {
-        throw exceptions::invalid_request_exception("Vector index must have at least one target column");
+        throw exceptions::invalid_request_exception("External index must have at least one target column");
     }
 
     if (targets.size() == 1) {
         auto tc = targets[0]->value;
         if (!std::holds_alternative<index_target::single_column>(tc)) {
-            throw exceptions::invalid_request_exception("Missing vector column target for local vector index");
+            throw exceptions::invalid_request_exception("Missing target column for local external index");
         }
         return index_target::escape_target_column(*std::get<index_target::single_column>(tc));
     }
@@ -185,7 +185,7 @@ sstring external_index::serialize_targets(const std::vector<::shared_ptr<index_t
     const size_t fc_count = targets.size() - tc_idx - 1;
 
     if (!std::holds_alternative<index_target::single_column>(targets[tc_idx]->value)) {
-        throw exceptions::invalid_request_exception("Vector index target column must be a single column");
+        throw exceptions::invalid_request_exception("External index target column must be a single column");
     }
 
     rjson::value json_map = rjson::empty_object();
@@ -203,7 +203,7 @@ sstring external_index::serialize_targets(const std::vector<::shared_ptr<index_t
         rjson::value fc_json = rjson::empty_array();
         for (size_t i = tc_idx + 1; i < targets.size(); ++i) {
             if (!std::holds_alternative<index_target::single_column>(targets[i]->value)) {
-                throw exceptions::invalid_request_exception("Vector index filtering column must be a single column");
+                throw exceptions::invalid_request_exception("External index filtering column must be a single column");
             }
             rjson::push_back(fc_json, rjson::from_string(std::get<index_target::single_column>(targets[i]->value)->text()));
         }
