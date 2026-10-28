@@ -512,6 +512,18 @@ jobs:
           done
           PYTEST_EXTRA_OPTIONS=$(echo "$PYTEST_EXTRA_OPTIONS" | sed 's/^ //')
 
+          # Map the PR's priority label to the scylla-ci BUILD_PRIORITY (1 is the
+          # highest). P0/P1 -> 1, P2 -> 2, P3/P4 -> 3; no priority label keeps the
+          # job's default. The highest priority (lowest P-number) wins if several
+          # are set.
+          PRIORITY_LABEL=$(echo "$PR_JSON" | jq -r '[.labels[].name | select(test("^P[0-4]$")) | ltrimstr("P") | tonumber] | min // empty')
+          case "$PRIORITY_LABEL" in
+            0|1) BUILD_PRIORITY=1 ;;
+            2) BUILD_PRIORITY=2 ;;
+            3|4) BUILD_PRIORITY=3 ;;
+            *) BUILD_PRIORITY="" ;;
+          esac
+
           # Check conflict state. "mergeable" is GitHub's answer to "does this PR have
           # merge conflicts?": false means conflicts (normally mergeable_state "dirty",
           # also for draft PRs), true means none, null means not computed yet.
@@ -658,6 +670,7 @@ jobs:
           echo "skip_unittest_custom=$SKIP_UNITTEST_CUSTOM" >> "$GITHUB_OUTPUT"
           echo "force_on_cloud=$FORCE_ON_CLOUD" >> "$GITHUB_OUTPUT"
           echo "pytest_extra_options=$PYTEST_EXTRA_OPTIONS" >> "$GITHUB_OUTPUT"
+          echo "build_priority=$BUILD_PRIORITY" >> "$GITHUB_OUTPUT"
 
       - name: Determine target folder
         if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.is_docs_only != 'true'
@@ -863,6 +876,7 @@ jobs:
           RUN_GDB_ONLY="${{ steps.required-checks.outputs.gdb_required }}"
           PYTEST_EXTRA_OPTIONS="${{ steps.pr-details.outputs.pytest_extra_options }}"
           THIN_CI="${{ steps.resolve-pr.outputs.thin_ci }}"
+          BUILD_PRIORITY="${{ steps.pr-details.outputs.build_priority }}"
 
           echo "Routing to $TARGET_FOLDER/scylla-ci with:"
           echo "  PR_NUMBER=$PR_NUMBER"
@@ -874,8 +888,15 @@ jobs:
           echo "  RUN_ONLY_SCYLLA_GDB=$RUN_GDB_ONLY"
           echo "  PYTEST_EXTRA_COMMANDLINE_OPTIONS=$PYTEST_EXTRA_OPTIONS"
           echo "  THIN_CI=$THIN_CI"
+          echo "  BUILD_PRIORITY=${BUILD_PRIORITY:-<job default>}"
 
           JOB_PATH="$TARGET_FOLDER/job/scylla-ci"
+
+          # Only pass BUILD_PRIORITY when the PR has a priority label
+          PRIORITY_ARGS=()
+          if [ -n "$BUILD_PRIORITY" ]; then
+            PRIORITY_ARGS=(--data-urlencode "BUILD_PRIORITY=$BUILD_PRIORITY")
+          fi
 
           # Trigger the Jenkins job and capture the queue location
           RESPONSE=$(curl -s -i -X POST \
@@ -890,6 +911,7 @@ jobs:
             --data-urlencode "RUN_ONLY_SCYLLA_GDB=$RUN_GDB_ONLY" \
             --data-urlencode "PYTEST_EXTRA_COMMANDLINE_OPTIONS=$PYTEST_EXTRA_OPTIONS" \
             --data-urlencode "THIN_CI=$THIN_CI" \
+            "${PRIORITY_ARGS[@]}" \
             -w "\n%{http_code}")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
