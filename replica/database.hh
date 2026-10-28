@@ -1520,6 +1520,11 @@ private:
     // Runs a step of a memtable flush. Errors which may go away are retried, the others abort,
     // unless the table is being stopped.
     future<> with_flush_retry(future<>& previous_flush, std::function<future<>()> func);
+    // Accounts for `old` being switched out of its memtable list to be flushed.
+    // Returns the size of the flush.
+    size_t account_memtable_switch(memtable& old) noexcept;
+    void add_pending_flush(size_t memtable_size) noexcept;
+    void remove_pending_flush(size_t memtable_size) noexcept;
 
     void check_valid_rp(const db::replay_position&) const;
 

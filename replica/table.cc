@@ -2174,6 +2174,29 @@ future<> table::with_flush_retry(future<>& previous_flush, std::function<future<
     }
 }
 
+size_t table::account_memtable_switch(memtable& old) noexcept {
+    _highest_flushed_rp = std::max(_highest_flushed_rp, old.replay_position());
+    _stats.memtable_switch_count++;
+    // This will set evictable occupancy of the old memtable region to zero, so that
+    // this region is considered last for flushing by dirty_memory_manager::flush_when_needed().
+    // If we don't do that, the flusher may keep picking up this memtable list for flushing after
+    // the permit is released even though there is not much to flush in the active memtable of this list.
+    old.region().ground_evictable_occupancy();
+    return old.occupancy().total_space();
+}
+
+void table::add_pending_flush(size_t memtable_size) noexcept {
+    _stats.pending_flushes++;
+    _config.cf_stats->pending_memtables_flushes_count++;
+    _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
+}
+
+void table::remove_pending_flush(size_t memtable_size) noexcept {
+    _stats.pending_flushes--;
+    _config.cf_stats->pending_memtables_flushes_count--;
+    _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
+}
+
 // The function never fails.
 // It either succeeds eventually after retrying or aborts.
 future<>
@@ -2209,18 +2232,9 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
         });
 
         cg.memtables()->add_memtable();
-        _highest_flushed_rp = std::max(_highest_flushed_rp, old->replay_position());
 
         // no exceptions allowed (nor expected) from this point on
-        _stats.memtable_switch_count++;
-        [&] () noexcept {
-            // This will set evictable occupancy of the old memtable region to zero, so that
-            // this region is considered last for flushing by dirty_memory_manager::flush_when_needed().
-            // If we don't do that, the flusher may keep picking up this memtable list for flushing after
-            // the permit is released even though there is not much to flush in the active memtable of this list.
-            old->region().ground_evictable_occupancy();
-            memtable_size = old->occupancy().total_space();
-        }();
+        memtable_size = account_memtable_switch(*old);
         return make_ready_future<>();
     });
 
@@ -2232,16 +2246,12 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
         op = _flush_barrier.start();
 
         // no exceptions allowed (nor expected) from this point on
-        _stats.pending_flushes++;
-        _config.cf_stats->pending_memtables_flushes_count++;
-        _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
+        add_pending_flush(memtable_size);
         return make_ready_future<>();
     });
 
     auto undo_stats = std::make_optional(deferred_action([this, memtable_size] () noexcept {
-        _stats.pending_flushes--;
-        _config.cf_stats->pending_memtables_flushes_count--;
-        _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
+        remove_pending_flush(memtable_size);
     }));
 
     co_await with_retry([&] () -> future<> {
