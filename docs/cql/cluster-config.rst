@@ -184,3 +184,9 @@ Available options
        acknowledged at consistency level ``ANY`` that only hints hold is lost. Hints for
        materialized views are never discarded. Default: ``true``, in effect once every node knows
        the option.
+   * - ``cql_response_compression_threshold_in_bytes``
+     - integer
+     - ``CLUSTER``
+     - CQL responses with a body smaller than this are sent uncompressed, even on connections that
+       negotiated compression; compressing small bodies costs CPU and saves few or no bytes. ``0``
+       (or a negative value) compresses all responses. Default: ``1024``.

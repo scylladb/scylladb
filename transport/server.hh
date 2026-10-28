@@ -24,6 +24,7 @@
 #include <boost/intrusive/list.hpp>
 #include <seastar/net/tls.hh>
 #include <seastar/core/metrics_registration.hh>
+#include "bytes_ostream.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/result.hh"
 #include "service_permit.hh"
@@ -45,6 +46,7 @@
 #include "utils/estimated_histogram.hh"
 #include "transport/forward.hh"
 #include "service/qos/service_level_controller.hh"
+#include "db/cluster_config_manager.hh"
 
 namespace cql3 {
 
@@ -238,12 +240,17 @@ private:
     std::unique_ptr<event_notifier> _notifier;
 private:
     client_options_cache_type _connection_options_keys_and_values;
+    bytes_ostream _supported_body; // cached serialized body for SUPPORTED responses
+    cql_protocol_extension_enum_set _supported_protocol_extensions;
     transport_stats _stats;
     auth::service& _auth_service;
     qos::service_level_controller& _sl_controller;
     gms::gossiper& _gossiper;
     scheduling_group_key _stats_key;
     maintenance_socket_enabled _used_by_maintenance_socket;
+    // Response bodies smaller than this are sent uncompressed.
+    size_t _response_compression_threshold;
+    db::cluster_config_manager::config_callback_registration _response_compression_threshold_registration;
 public:
     cql_server(sharded<cql3::query_processor>& qp, auth::service&,
             service::memory_limiter& ml,
@@ -252,7 +259,8 @@ public:
             gms::gossiper& g,
             scheduling_group_key stats_key,
             maintenance_socket_enabled used_by_maintenance_socket,
-            netw::messaging_service& ms);
+            netw::messaging_service& ms,
+            db::cluster_config_manager& cluster_config);
     ~cql_server();
     future<> stop();
 
@@ -278,6 +286,8 @@ public:
     future<std::vector<connection_service_level_params>> get_connections_service_level_params();
 private:
     class fmt_visitor;
+    void build_supported_body();
+    cql_protocol_extension_enum_set supported_cql_protocol_extensions() const;
     friend class connection;
     friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
             const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata);
@@ -348,7 +358,6 @@ private:
         service::client_state& get_client_state() { return _client_state; }
         scheduling_group get_scheduling_group() const { return _current_scheduling_group; }
     private:
-        cql_protocol_extension_enum_set supported_cql_protocol_extensions() const;
         friend class process_request_executor;
 
         future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, uint8_t flags, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit, api::timestamp_type request_start_timestamp);
