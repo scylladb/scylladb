@@ -1555,46 +1555,6 @@ rest_get_schema_versions(sharded<service::storage_service>& ss, std::unique_ptr<
         });
 }
 
-static
-future<json::json_return_type>
-rest_drop_quarantined_sstables(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-    auto accept_risk = get_query_param<bool>(*req, "accept_data_resurrection_risk");
-    if (!accept_risk) {
-        co_await coroutine::return_exception(bad_request_exception(
-            "Dropping quarantined SSTables can resurrect deleted data. "
-            "This can happen regardless of the consistency level and of the \"repair\" tombstone GC mode. "
-            "Its usage is highly discouraged. "
-            "The only supported way to rid a node of corrupt data is to replace it. Anything else risks data resurrection or data loss. "
-            "This operation should only be used with full understanding of the risks when no viable alternatives remain. "
-            "To accept the risk and carry out the operation, provide the \"accept_data_resurrection_risk\" parameter."));
-    }
-    auto keyspace = req->get_query_param("keyspace");
-    try {
-        if (!keyspace.empty()) {
-            keyspace = validate_keyspace(ctx, keyspace);
-            auto table_infos = parse_table_infos(keyspace, ctx, req->get_query_param("tables"));
-
-            co_await ctx.db.invoke_on_all([&table_infos](replica::database& db) -> future<> {
-                return parallel_for_each(table_infos, [&db](const auto& table) -> future<> {
-                    const auto& [table_name, table_id] = table;
-                    return db.find_column_family(table_id).drop_quarantined_sstables();
-                });
-            });
-        } else {
-            co_await ctx.db.invoke_on_all([](replica::database& db) -> future<> {
-                return db.get_tables_metadata().parallel_for_each_table([](table_id, lw_shared_ptr<replica::table> t) -> future<> {
-                    return t->drop_quarantined_sstables();
-                });
-            });
-        }
-    } catch (...) {
-        apilog.error("drop_quarantined_sstables: failed with exception: {:t}", std::current_exception());
-        throw;
-    }
-
-    co_return json_void();
-}
-
 // Disambiguate between a function that returns a future and a function that returns a plain value, also
 // add std::ref() as a courtesy. Also handles ks_cf_func signatures.
 template <typename FuncType, typename... BindArgs>
@@ -1706,7 +1666,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::finalize_vnode_tablet_migration.set(r, gated(ss, rest_bind(rest_finalize_vnode_tablet_migration, ctx, ss)));
     ss::quiesce_topology.set(r, gated(ss, rest_bind(rest_quiesce_topology, ss)));
     sp::get_schema_versions.set(r, gated(ss, rest_bind(rest_get_schema_versions, ss)));
-    ss::drop_quarantined_sstables.set(r, gated(ss, rest_bind(rest_drop_quarantined_sstables, ctx, ss)));
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {
@@ -1781,7 +1740,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::finalize_vnode_tablet_migration.unset(r);
     ss::quiesce_topology.unset(r);
     sp::get_schema_versions.unset(r);
-    ss::drop_quarantined_sstables.unset(r);
 }
 
 void set_load_meter(http_context& ctx, routes& r, service::load_meter& lm) {

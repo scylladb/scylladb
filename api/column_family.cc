@@ -535,6 +535,46 @@ sstable_info(sharded<replica::database>& db, std::unique_ptr<http::request> req)
         });
 }
 
+static
+future<json::json_return_type>
+drop_quarantined_sstables(http_context& ctx, sharded<replica::database>& db, std::unique_ptr<http::request> req) {
+    auto accept_risk = get_query_param<bool>(*req, "accept_data_resurrection_risk");
+    if (!accept_risk) {
+        co_await coroutine::return_exception(bad_request_exception(
+            "Dropping quarantined SSTables can resurrect deleted data. "
+            "This can happen regardless of the consistency level and of the \"repair\" tombstone GC mode. "
+            "Its usage is highly discouraged. "
+            "The only supported way to rid a node of corrupt data is to replace it. Anything else risks data resurrection or data loss. "
+            "This operation should only be used with full understanding of the risks when no viable alternatives remain. "
+            "To accept the risk and carry out the operation, provide the \"accept_data_resurrection_risk\" parameter."));
+    }
+    auto keyspace = req->get_query_param("keyspace");
+    try {
+        if (!keyspace.empty()) {
+            keyspace = validate_keyspace(ctx, keyspace);
+            auto table_infos = parse_table_infos(keyspace, ctx, req->get_query_param("tables"));
+
+            co_await db.invoke_on_all([&table_infos](replica::database& db) -> future<> {
+                return parallel_for_each(table_infos, [&db](const auto& table) -> future<> {
+                    const auto& [table_name, table_id] = table;
+                    return db.find_column_family(table_id).drop_quarantined_sstables();
+                });
+            });
+        } else {
+            co_await db.invoke_on_all([](replica::database& db) -> future<> {
+                return db.get_tables_metadata().parallel_for_each_table([](table_id, lw_shared_ptr<replica::table> t) -> future<> {
+                    return t->drop_quarantined_sstables();
+                });
+            });
+        }
+    } catch (...) {
+        apilog.error("drop_quarantined_sstables: failed with exception: {:t}", std::current_exception());
+        throw;
+    }
+
+    co_return json_void();
+}
+
 void set_column_family(http_context& ctx, routes& r, sharded<replica::database>& db) {
     cf::get_column_family_name.set(r, [&db] (const_req req){
         std::vector<sstring> res;
@@ -1372,6 +1412,10 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     ss::sstable_info.set(r, [&db] (std::unique_ptr<http::request> req) {
         return sstable_info(db, std::move(req));
     });
+
+    ss::drop_quarantined_sstables.set(r, [&ctx, &db] (std::unique_ptr<http::request> req) {
+        return drop_quarantined_sstables(ctx, db, std::move(req));
+    });
 }
 
 void unset_column_family(http_context& ctx, routes& r) {
@@ -1496,5 +1540,6 @@ void unset_column_family(http_context& ctx, routes& r) {
     ss::logstor_compaction.unset(r);
     ss::logstor_flush.unset(r);
     ss::sstable_info.unset(r);
+    ss::drop_quarantined_sstables.unset(r);
 }
 }
