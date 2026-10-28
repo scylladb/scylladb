@@ -207,6 +207,27 @@ def test_get_file_name_and_url_from_url_uses_direct_url():
     assert vfu.get_file_name_and_url_from_url(url=url) == (url, "scylla.tar.gz")
 
 
+def test_get_file_name_and_url_from_url_resolves_latest_to_unified_package(monkeypatch):
+    calls = []
+
+    def fake_list(bucket, prefix, pack=""):
+        calls.append((bucket, prefix, pack))
+        return ["scylla-unified-2026.4.0~dev-0.20261012.31f345d460b8.aarch64.tar.gz",
+                "scylla-unified-2026.4.0~dev-0.20261012.31f345d460b8.x86_64.tar.gz"]
+
+    monkeypatch.setattr(vfu, "_list_scylla_release_entries", fake_list)
+
+    name = "scylla-unified-2026.4.0~dev-0.20261012.31f345d460b8.x86_64.tar.gz"
+    assert vfu.get_file_name_and_url_from_url(url="latest") == (
+        f"https://downloads.scylladb.com/unstable/scylla/master/relocatable/latest/{name}", name)
+    assert calls == [("downloads.scylladb.com", "unstable/scylla/master/relocatable/latest", "unified")]
+
+
+def test_get_file_name_and_url_from_url_returns_none_when_latest_has_no_package(monkeypatch):
+    monkeypatch.setattr(vfu, "_list_scylla_release_entries", lambda *args, **kwargs: [])
+    assert vfu.get_file_name_and_url_from_url(url="latest") == (None, None)
+
+
 def test_get_file_name_and_url_from_url_supports_rc_zero(monkeypatch):
     calls = []
 
