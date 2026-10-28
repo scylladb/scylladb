@@ -13,9 +13,55 @@
 
 namespace compaction {
 
-// The only difference to size tiered backlog tracker is that it will calculate
-// backlog contribution using total bytes of each sstable run instead of total
-// bytes of an individual sstable object.
+// Backlog for one SSTable run under ICS:
+//
+//   (1) Bi = Ei * log4 (T / Si),
+//
+// where Ei is the effective size of the run, Si is the Size of this run, and T is
+// the total size of the Table.
+//
+// To calculate the backlog, we can use the logarithm in any base, but we choose
+// 4 as that is the historical minimum for the number of runs being compacted
+// together. Although now that minimum could be lifted, this is still a good number
+// of runs to aim for in a compaction execution.
+//
+// T, the total table size, is defined as
+//
+//   (2) T = Sum(i = 0...N) { Si }.
+//
+// Ei, the effective size, is defined as
+//
+//   (3) Ei = Si - Ci,
+//
+// where Ci is the total amount of bytes already compacted for this run.
+// For runs that are not under compaction, Ci = 0 and Si = Ei.
+//
+// Using the fact that log(a / b) = log(a) - log(b), we rewrite (1) as:
+//
+//   Bi = Ei log4(T) - Ei log4(Si)
+//
+// For the entire Table, the Aggregate Backlog (A) is
+//
+//   A = Sum(i = 0...N) { Ei * log4(T) - Ei * log4(Si) },
+//
+// which can be expressed as a sum of a table component and a run component:
+//
+//   A = Sum(i = 0...N) { Ei } * log4(T) - Sum(i = 0...N) { Ei * log4(Si) },
+//
+// and if we define C = Sum(i = 0...N) { Ci }, then we can write
+//
+//   A = (T - C) * log4(T) - Sum(i = 0...N) { (Si - Ci)* log4(Si) }.
+//
+// Because the number of runs can be quite big, we'd like to keep iterations to a minimum.
+// We can do that if we rewrite the expression above one more time, yielding:
+//
+//   (4) A = T * log4(T) - C * log4(T) - (Sum(i = 0...N) { Si * log4(Si) } - Sum(i = 0...N) { Ci * log4(Si) }
+//
+// When runs are added or removed, we update the static parts of the equation, and
+// every time we need to compute the backlog we use the most up-to-date estimate of Ci to
+// calculate the compacted parts, having to iterate only over the runs that are compacting,
+// instead of all of them. Only runs in a size tier holding at least min_threshold runs
+// contribute to the backlog, and the writes in progress are not accounted for.
 //
 // The runs are taken directly from the sstable set of the compaction group the
 // backlog is computed for, rather than being maintained by the tracker on every
