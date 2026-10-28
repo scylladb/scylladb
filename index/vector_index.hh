@@ -23,6 +23,7 @@ public:
     static constexpr std::string_view INDEX_TYPE_NAME = "vector";
     static constexpr std::string_view SEARCH_TYPE_NAME = "Vector Search";
     std::string_view index_type_name() const override { return INDEX_TYPE_NAME; }
+    bool supports_local_index() const override { return true; }
 
     vector_index() = default;
     ~vector_index() override = default;

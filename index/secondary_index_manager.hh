@@ -107,6 +107,8 @@ class custom_index {
 public:
     virtual ~custom_index() = default;
     virtual std::string_view index_type_name() const = 0;
+    /// Whether the index can be local, partitioned by columns listed in parentheses before the indexed column.
+    virtual bool supports_local_index() const { return false; }
     /// Returns a custom description of the index, or std::nullopt if the default index description logic should be used instead.
     virtual std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const = 0;
     virtual bool view_should_exist() const = 0;
