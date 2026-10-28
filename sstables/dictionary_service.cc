@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <ranges>
+#include <stdexcept>
 
 #include "sstables/dictionary_service.hh"
 
@@ -24,6 +25,7 @@
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "utils/log.hh"
 
 #include "idl/sstable_dicts.dist.hh"
@@ -59,7 +61,8 @@ future<> dictionary_service::stop() {
     if (!_group0_as.abort_requested()) {
         _group0_as.request_abort();
     }
-    return ser::sstable_dicts_rpc_verbs::unregister(&_messaging.local());
+    co_await _async_gate.close();
+    co_await ser::sstable_dicts_rpc_verbs::unregister(&_messaging.local());
 }
 
 void dictionary_service::set_group0(service::raft_group0& group0) {
@@ -68,6 +71,10 @@ void dictionary_service::set_group0(service::raft_group0& group0) {
 
 const gms::feature_service& dictionary_service::get_feature_service() const noexcept {
     return _feature_service.local();
+}
+
+sstable_compressor_factory& dictionary_service::get_compressor_factory() const noexcept {
+    return _db.local().get_user_sstables_manager().get_compressor_factory();
 }
 
 semaphore& dictionary_service::get_do_sample_sstables_concurrency_limiter() {
@@ -121,6 +128,11 @@ future<std::vector<std::byte>> dictionary_service::train_dict(utils::chunked_vec
 
 future<> dictionary_service::publish_new_sstable_dict(table_id t_id, std::span<const std::byte> dict, service::raft_group0_client& group0_client) {
     co_await container().invoke_on(0, coroutine::lambda([t_id, dict, &group0_client] (dictionary_service& local_ss) -> future<> {
+        // The REST endpoints are served from the moment the service starts, which is
+        // before group 0 is wired in.
+        if (!local_ss._group0) {
+            throw std::runtime_error("publish_new_sstable_dict: group 0 isn't set up yet");
+        }
         auto group0_holder = local_ss._group0->hold_group0_gate();
         while (true) {
             try {
