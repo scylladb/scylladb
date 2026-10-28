@@ -47,6 +47,7 @@ protected:
     static sstring targets_to_cql(const sstring& targets);
     void check_uses_tablets(const schema& schema, const data_dictionary::database& db) const;
     void check_regular_column(const column_definition& column) const;
+    void check_filtering_column(const schema& schema, const cql3::column_identifier& column) const;
 
     template <typename T>
     static void check_cdc_options_impl(const schema& s) {
