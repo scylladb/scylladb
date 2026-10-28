@@ -297,11 +297,15 @@ void lz4_cstream::set_dict(const LZ4_stream_t* dict) {
 }
 
 lz4_dstream::lz4_dstream(size_t window_size)
-    // The ring buffer has to be bigger than the compressor's by at least the maximum
-    // block size plus 64. See the comment on `_buf`.
-    : _buf(window_size + window_size + 64)
-    , _max_block_size(window_size)
+    : _max_block_size(window_size)
 {
+    {
+        // One contiguous history buffer per shard is unavoidable.
+        const memory::scoped_large_allocation_warning_threshold slawt{1024*1024+1};
+        // The ring buffer has to be bigger than the compressor's by at least the maximum
+        // block size plus 64. See the comment on `_buf`.
+        _buf.resize(window_size + window_size + 64);
+    }
     reset();
 }
 
