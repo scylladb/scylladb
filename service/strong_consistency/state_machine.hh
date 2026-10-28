@@ -84,6 +84,12 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     raft_groups_storage& storage,
     raft_resize_tracker& resize_tracker);
 
+// Applies the truncate_command `tc`, committed at `idx` in the log of the group `gid`, which
+// serves `tablet`, on this shard. Returns once the record is durable. A no-op when `record`
+// already carries tc.request_id.
+future<> apply_truncate_command(replica::database& db, locator::global_tablet_id tablet, raft::group_id gid,
+        raft::index_t idx, const truncate_command& tc, truncate_record& record);
+
 // Resolves schemas for frozen mutations and upgrades them to the current schema if needed.
 //
 // One instance is meant to serve a batch of mutations: schemas resolved for a given
