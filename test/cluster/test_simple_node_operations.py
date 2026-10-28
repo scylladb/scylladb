@@ -18,7 +18,8 @@ import asyncio
 import logging
 
 import pytest
-from cassandra import ConsistencyLevel
+from cassandra import ConsistencyLevel, Unavailable
+from cassandra.policies import FallthroughRetryPolicy
 from cassandra.query import SimpleStatement
 
 from test.cluster.util import run_nodetool, stop_servers_gracefully
@@ -99,6 +100,86 @@ async def test_boot_create_keyspace_table_insert_shutdown_commitlog_replay_selec
     await run_nodetool(manager, server, "flush")
     await restart(manager, server, gracefully=False)
     await check_k1_and_not_k2(manager.get_cql())
+
+
+############################################################################
+# Ported from simple_cluster_driver_test.py.
+
+# Three nodes (one per rack), RF=3: a table created through the second node
+# takes a row written at QUORUM through the third, which each node reads at
+# QUORUM; a key never written is found by none.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_simple_cluster_create_insert_select(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config=CONFIG, property_file=[{"dc": "datacenter1", "rack": f"rack{i}"} for i in range(1, 4)])
+    sessions = [await manager.get_cql_exclusive(s) for s in servers]
+    await sessions[0].run_async(f"CREATE KEYSPACE ks {ks_opts(3)}")
+    await sessions[1].run_async("CREATE TABLE ks.test1 (k int PRIMARY KEY, c int)")
+    await sessions[2].run_async(SimpleStatement("insert into ks.test1  (k,c) values (1,2);", consistency_level=ConsistencyLevel.QUORUM))
+    for key, n in ((1, 1), (2, 0)):
+        query = SimpleStatement(f"SELECT * FROM ks.test1 WHERE k={key}", consistency_level=ConsistencyLevel.QUORUM)
+        for session in sessions:
+            res = list(await session.run_async(query))
+            assert len(res) == n, res
+
+async def consistency_level_validate(cql, read_keys, read_cls_pass, read_cls_fail, read_cls_pass_all,
+                                     write_keys, write_cls_pass, write_cls_fail, write_cls_pass_all) -> None:
+    """The dtest's simple_consistency_level_validate(): reads and writes at
+    each CL either all pass, or (with some replicas down) some fail; CLs
+    needing more replicas than there are fail with Unavailable."""
+    for cl in read_cls_pass:
+        failed = 0
+        for key in read_keys:
+            try:
+                res = list(await cql.run_async(SimpleStatement(f"SELECT * FROM ks.test1 WHERE k={key}", consistency_level=cl)))
+                assert len(res) == 1, res
+            except Exception:  # noqa: BLE001
+                failed += 1
+        assert failed == 0 or not read_cls_pass_all, f"expected all reads at {cl} to pass, {failed} failed"
+        assert failed > 0 or read_cls_pass_all, f"expected some reads at {cl} to fail"
+    for cl in read_cls_fail:
+        with pytest.raises(Unavailable):
+            await cql.run_async(SimpleStatement("SELECT * FROM ks.test1 WHERE k=1", consistency_level=cl, retry_policy=FallthroughRetryPolicy()), timeout=1)
+    for cl in write_cls_pass:
+        failed = 0
+        for key in write_keys:
+            try:
+                await cql.run_async(SimpleStatement(f"insert into ks.test1  (k,c) values ({key},{key})", consistency_level=cl))
+            except Exception:  # noqa: BLE001
+                failed += 1
+        assert failed == 0 or not write_cls_pass_all, f"expected all writes at {cl} to pass, {failed} failed"
+        assert failed > 0 or write_cls_pass_all, f"expected some writes at {cl} to fail"
+    for cl in write_cls_fail:
+        with pytest.raises(Unavailable):
+            await cql.run_async(SimpleStatement("insert into ks.test1 (k,c) values (101,101)", consistency_level=cl, retry_policy=FallthroughRetryPolicy()), timeout=1)
+
+
+# Three nodes (one per rack), RF=1: every read and write at ONE, QUORUM and
+# ALL passes from each node, TWO and THREE are unavailable; with one and then
+# two nodes down, some requests fail and TWO and THREE stay unavailable.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_simple_rf_1_consistency_level_no_racklist(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config=CONFIG, property_file=[{"dc": "datacenter1", "rack": f"rack{i}"} for i in range(1, 4)])
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE ks {ks_opts(1)}")
+    await cql.run_async("CREATE TABLE ks.test1 (k int PRIMARY KEY, c int)")
+    sessions = [await manager.get_cql_exclusive(s) for s in servers]
+    keys = range(1, 100)
+    for val in keys:
+        await sessions[0].run_async(SimpleStatement(f"insert into ks.test1  (k,c) values ({val},{val})", consistency_level=ConsistencyLevel.ALL))
+    CL = ConsistencyLevel
+    reads, unavailable = [CL.ONE, CL.QUORUM, CL.ALL], [CL.TWO, CL.THREE]
+    for i, s in enumerate(sessions):
+        await consistency_level_validate(s, keys, reads, unavailable, True, range(101 + 100 * i, 200 + 100 * i),
+                                         [CL.ANY, CL.ONE, CL.QUORUM, CL.ALL], unavailable, True)
+    await manager.server_stop_gracefully(servers[0].server_id)
+    await manager.others_not_see_server(servers[0].ip_addr)
+    for i, s in enumerate(sessions[1:]):
+        await consistency_level_validate(s, keys, reads, unavailable, False, range(401 + 100 * i, 500 + 100 * i),
+                                         [CL.ONE, CL.QUORUM, CL.ALL], unavailable, False)
+    await manager.server_stop_gracefully(servers[1].server_id)
+    await manager.others_not_see_server(servers[1].ip_addr)
+    await consistency_level_validate(sessions[2], keys, reads, unavailable, False, range(601, 700),
+                                     [CL.ONE, CL.QUORUM, CL.ALL], unavailable, False)
 
 
 ############################################################################
