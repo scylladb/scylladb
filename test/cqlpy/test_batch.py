@@ -7,10 +7,11 @@
 #############################################################################
 from cassandra import InvalidRequest, ConsistencyLevel
 from cassandra.cluster import NoHostAvailable
-from .util import new_named_table, new_test_table
+from .util import new_named_table, new_test_table, unique_name
 from .rest_api import scylla_inject_error
 
 
+import contextlib
 import pytest
 from cassandra.query import SimpleStatement
 
@@ -77,6 +78,42 @@ def test_batch_with_error(cql, table1):
             cql.execute(generate_big_batch(table1, 100) + injection_key)
 
 
+# BEGIN BATCH USING TIMESTAMP applies the timestamp to every statement in
+# the batch, and statements in a batch without a timestamp can each have
+# their own USING TIMESTAMP. Setting a timestamp on both the batch and a
+# statement in it is an error.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_batch_using_timestamp(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, a text, b text") as table:
+        cql.execute(f"""BEGIN BATCH USING TIMESTAMP 1111111111111111
+            INSERT INTO {table} (id, a, b) VALUES (0, 'Jack', 'Sparrow')
+            INSERT INTO {table} (id, a, b) VALUES (1, 'Will', 'Turner')
+            APPLY BATCH""")
+        assert sorted(cql.execute(f"SELECT id, writetime(a), writetime(b) FROM {table}")) == [
+            (0, 1111111111111111, 1111111111111111), (1, 1111111111111111, 1111111111111111)]
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_batch_statements_using_timestamp(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, a text, b text") as table:
+        cql.execute(f"""BEGIN BATCH
+            INSERT INTO {table} (id, a, b) VALUES (0, 'Jack', 'Sparrow') USING TIMESTAMP 1111111111111111
+            INSERT INTO {table} (id, a, b) VALUES (1, 'Will', 'Turner') USING TIMESTAMP 1111111111111112
+            APPLY BATCH""")
+        assert sorted(cql.execute(f"SELECT id, writetime(a), writetime(b) FROM {table}")) == [
+            (0, 1111111111111111, 1111111111111111), (1, 1111111111111112, 1111111111111112)]
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_batch_and_statement_timestamp_conflict(cql, table1):
+    with pytest.raises(InvalidRequest, match='Timestamp must be set either on BATCH or individual statements'):
+        cql.execute(f"""BEGIN BATCH USING TIMESTAMP 1111111111111111
+            INSERT INTO {table1} (k, t) VALUES (0, 'Jack') USING TIMESTAMP 2
+            INSERT INTO {table1} (k, t) VALUES (1, 'Will')
+            APPLY BATCH""")
+
+
 # Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
 # they run in a keyspace with vnodes, and keep the dtests' table names.
 
@@ -120,3 +157,84 @@ def test_batch_delete_one_row_insert_another(cql, test_keyspace_vnodes):
         cql.execute(f"INSERT INTO {table} (k, v) VALUES (0, 1)")
         cql.execute(f"BEGIN BATCH DELETE FROM {table} WHERE k=0 AND v=1; INSERT INTO {table} (k, v) VALUES (0, 2); APPLY BATCH")
         assert list(cql.execute(f"SELECT * FROM {table}")) == [(0, 2)]
+
+
+
+
+# The tests below come from scylla-dtest batch_test.py's single-node TestBatch
+# tests. Like the dtests, a session uses a vnodes keyspace with
+# 'replication_factor': 1 holding the dtests' `clicks` (a counter) and `users`
+# tables, and sends its statements without a keyspace.
+@contextlib.contextmanager
+def batch_dtest_session(cql):
+    ks = unique_name()
+    cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': false}}")
+    session = cql.cluster.connect()
+    try:
+        session.execute(f"USE {ks}")
+        session.execute("CREATE TABLE clicks (userid int, url text, total counter, PRIMARY KEY (userid, url))")
+        session.execute("CREATE TABLE users (id int, firstname text, lastname text, PRIMARY KEY (id))")
+        yield session
+    finally:
+        session.shutdown()
+        cql.execute(f"DROP KEYSPACE {ks}")
+
+COUNTER_UPDATES = """
+    UPDATE clicks SET total = total + 1 WHERE userid = 1 and url = 'http://foo.com'
+    UPDATE clicks SET total = total + 1 WHERE userid = 1 and url = 'http://bar.com'
+    UPDATE clicks SET total = total + 1 WHERE userid = 2 and url = 'http://baz.com'
+"""
+
+# Ported from scylla-dtest batch_test.py::TestBatch::test_empty_batch_throws_no_error (CASSANDRA-10711).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_empty_batch_throws_no_error(cql):
+    with batch_dtest_session(cql) as session:
+        session.execute("BEGIN BATCH APPLY BATCH")
+
+# Ported from scylla-dtest batch_test.py::TestBatch::test_counter_batch_accepts_counter_mutations.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_counter_batch_accepts_counter_mutations(cql):
+    with batch_dtest_session(cql) as session:
+        session.execute(f"BEGIN COUNTER BATCH {COUNTER_UPDATES} APPLY BATCH")
+        assert [list(r) for r in session.execute("SELECT total FROM clicks")] == [[1], [1], [1]]
+
+# Ported from scylla-dtest batch_test.py::TestBatch::test_counter_batch_rejects_regular_mutations.
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+def test_counter_batch_rejects_regular_mutations(cql):
+    with batch_dtest_session(cql) as session:
+        with pytest.raises(InvalidRequest, match="Cannot include non-counter statement in a counter batch"):
+            session.execute(f"BEGIN COUNTER BATCH {COUNTER_UPDATES} "
+                            "INSERT INTO users (id, firstname, lastname) VALUES (0, 'Jack', 'Sparrow') APPLY BATCH")
+
+# Ported from scylla-dtest batch_test.py::TestBatch::test_logged_batch_accepts_regular_mutations.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_logged_batch_accepts_regular_mutations(cql):
+    with batch_dtest_session(cql) as session:
+        session.execute("""BEGIN BATCH
+            INSERT INTO users (id, firstname, lastname) VALUES (0, 'Jack', 'Sparrow')
+            INSERT INTO users (id, firstname, lastname) VALUES (1, 'Will', 'Turner')
+            APPLY BATCH""")
+        assert sorted(list(r) for r in session.execute("SELECT * FROM users")) == [[0, "Jack", "Sparrow"], [1, "Will", "Turner"]]
+
+
+# Ported from scylla-dtest batch_test.py::TestBatch::test_logged_batch_rejects_counter_mutations.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_logged_batch_rejects_counter_mutations(cql):
+    with batch_dtest_session(cql) as session:
+        with pytest.raises(InvalidRequest, match="Cannot include a counter statement in a logged batch"):
+            session.execute("""BEGIN BATCH
+                INSERT INTO users (id, firstname, lastname) VALUES (0, 'Jack', 'Sparrow')
+                INSERT INTO users (id, firstname, lastname) VALUES (1, 'Will', 'Turner')
+                UPDATE clicks SET total = total + 1 WHERE userid = 1 and url = 'http://foo.com'
+                APPLY BATCH""")
+
+# Ported from scylla-dtest batch_test.py::TestBatch::test_unlogged_batch_accepts_regular_mutations.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_unlogged_batch_accepts_regular_mutations(cql):
+    with batch_dtest_session(cql) as session:
+        session.execute("""BEGIN UNLOGGED BATCH
+            INSERT INTO users (id, firstname, lastname) VALUES (0, 'Jack', 'Sparrow')
+            INSERT INTO users (id, firstname, lastname) VALUES (2, 'Elizabeth', 'Swann')
+            APPLY BATCH""")
+        assert sorted(list(r) for r in session.execute("SELECT * FROM users")) == [[0, "Jack", "Sparrow"], [2, "Elizabeth", "Swann"]]
