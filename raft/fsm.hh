@@ -142,8 +142,9 @@ struct fsm_config {
     // ascending server_id order. Callers that manage many groups (e.g. one per
     // tablet) can derive the seed from the group id so that leadership is spread
     // across nodes instead of always landing on the smallest-id one; a seed of 0
-    // selects the smallest-id voter. When unset (the default), fast bootstrap is
-    // disabled and a bare fsm starts as a follower; raft::server sets it.
+    // selects the smallest-id voter, and the preferred leader, if there is one,
+    // takes precedence over the seed. When unset (the default), fast bootstrap is disabled and
+    // a bare fsm starts as a follower; raft::server sets it.
     std::optional<uint64_t> fast_bootstrap_seed;
     // LeaseGuard leader-lease parameters. Absent unless leases are enabled for
     // this server. When present, the leader records `clock.interval_now()` in
@@ -159,6 +160,12 @@ struct fsm_config {
         lease_clock::duration delta;
     };
     std::optional<leaseguard_config> leaseguard;
+    // Servers to prefer as leader, best first. The first one which can vote gets the
+    // earliest election timeout slot - unless its own clock is unusable while leases
+    // are on - and everybody else randomizes after it. A bias, not a guarantee. The
+    // rest of the list is for preferred_handover_target(). Invoked whenever either is
+    // needed; must neither block nor throw. Empty / unset => ordinary Raft.
+    std::function<std::vector<server_id>()> get_priority_members;
 };
 
 class fsm;
@@ -432,6 +439,8 @@ private:
     // has been unusable long enough and such a replica exists. A no-op unless
     // leases are enabled. Precondition: is_leader(), not already stepping down.
     void maybe_transfer_leadership_on_clock_loss();
+    // The first of get_priority_members() which can vote, or nullopt.
+    std::optional<server_id> preferred_leader() const;
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return election_elapsed() >= _randomized_election_timeout;
@@ -723,6 +732,10 @@ public:
     // transfer with no one to hand leadership to. It then waits out `timeout` with the log limiter
     // consumed - the group takes no writes for that whole time - before tick_leader() cancels it.
     void transfer_leadership(logical_clock::duration timeout = logical_clock::duration(0), server_id target = {});
+    // The first of get_priority_members() ahead of us which can vote, is alive and,
+    // with leases on, has a working clock; nullopt if there is none, we are the
+    // preferred leader ourselves, or we are not the leader at all.
+    std::optional<server_id> preferred_handover_target() const;
 
     void stop();
 

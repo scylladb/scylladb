@@ -268,6 +268,7 @@ public:
     void elapse_election() override;
     bool is_leader() override;
     raft::server_id current_leader() const override;
+    std::optional<raft::server_id> preferred_handover_target() const override;
     void tick() override;
     raft::server_id id() const override;
     future<> stepdown(logical_clock::duration timeout, server_id target) override;
@@ -588,6 +589,7 @@ future<> server_impl::start() {
                                      .enable_prevoting = _config.enable_prevoting,
                                      .fast_bootstrap_seed = _config.fast_bootstrap_seed,
                                      .leaseguard = fsm_leaseguard,
+                                     .get_priority_members = _config.get_priority_members
                                  },
                                  _events);
 
@@ -2380,6 +2382,10 @@ bool server_impl::is_leader() {
 
 raft::server_id server_impl::current_leader() const {
     return _fsm->current_leader();
+}
+
+std::optional<raft::server_id> server_impl::preferred_handover_target() const {
+    return _fsm->preferred_handover_target();
 }
 
 void server_impl::elapse_election() {

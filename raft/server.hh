@@ -77,7 +77,8 @@ public:
         // is spread across nodes instead of always landing on the smallest-id
         // one. The default of 0 selects the smallest-id voter. raft::server
         // always enables fast bootstrap (unlike a bare fsm, which disables it
-        // when no seed is provided).
+        // when no seed is provided). The preferred leader, if there is one, takes
+        // precedence over the seed.
         uint64_t fast_bootstrap_seed = 0;
 
         // LeaseGuard leader leases. When set, the leader serves linearizable
@@ -95,6 +96,11 @@ public:
             std::reference_wrapper<bounded_clock> clock;
         };
         std::optional<leaseguard_configuration> leaseguard;
+        // Servers to prefer as leader, best first. The first one which can vote
+        // campaigns before everybody else and normally wins; a bias, not a guarantee.
+        // The rest of the list is for preferred_handover_target(). Invoked whenever
+        // either is needed; must neither block nor throw. Empty / unset => ordinary Raft.
+        std::function<std::vector<server_id>()> get_priority_members;
     };
 
     virtual ~server() {}
@@ -286,6 +292,13 @@ public:
     // Returns an empty ID if there is an ongoing election.
     // The information is only relevant for the current_term() only.
     virtual raft::server_id current_leader() const = 0;
+
+    // The server which should lead instead of this one and could take over now: the
+    // first priority member ahead of this one which can vote, is alive and, with
+    // leases on, has a working clock. Meant for stepdown(). Nullopt if this server is
+    // not the leader or nobody fits. The transfer may still fail, e.g. if the target
+    // does not catch up in time.
+    virtual std::optional<raft::server_id> preferred_handover_target() const = 0;
 
     // The function should be called periodically to advance logical clock.
     virtual void tick() = 0;

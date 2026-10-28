@@ -16,6 +16,7 @@
 #include "service/strong_consistency/table_metrics.hh"
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
+#include "gms/feature.hh"
 #include "utils/hash.hh"
 
 #include <seastar/util/noncopyable_function.hh>
@@ -168,6 +169,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     boost::intrusive::list<raft_group_state, boost::intrusive::constant_time_size<false>> _starting_groups;
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
+    gms::feature::listener_registration _leader_placement_listener;
+    abort_source _leader_placement_as;
+    future<> _leader_placement = make_ready_future<>();
 
     tablet_group_leader_cache _leader_cache;
 
@@ -217,6 +221,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     static std::optional<raft_server> try_acquire_server(raft_group_state& state);
 
     future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
+
+    // Periodically hands the leadership of the groups this shard leads to a preferred
+    // replica, if one can take over; see raft::server::preferred_handover_target().
+    future<> leader_placement_fiber();
+    future<> hand_over_leadership();
+    future<> stop_leader_placement();
 
     void init_messaging_service();
 
