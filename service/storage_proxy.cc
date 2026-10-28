@@ -7547,6 +7547,26 @@ future<> storage_proxy::drain_hints_for_left_nodes() {
     return _hints_resource_manager.drain_hints_for_left_nodes();
 }
 
+future<> storage_proxy::drain_all_hints() {
+    utils::get_local_injector().inject("hinted_handoff_drain_fail", [] {
+        throw std::runtime_error("hinted_handoff_drain_fail injection");
+    });
+    const auto my_id = get_token_metadata_ptr()->get_my_id();
+    auto drain = [my_id] (db::hints::manager& m, std::string_view kind) {
+        // The regular manager is never started when hinted handoff is disabled.
+        if (!m.started()) {
+            return make_ready_future<>();
+        }
+        if (!m.replay_allowed()) {
+            slogger.warn("Not draining {} hints: hint replay is not allowed, undelivered hints will be lost", kind);
+            return make_ready_future<>();
+        }
+        slogger.debug("Draining {} hints", kind);
+        return m.drain_for(my_id);
+    };
+    co_await when_all_succeed(drain(_hints_manager, "regular"), drain(_hints_for_views_manager, "view")).discard_result();
+}
+
 future<> storage_proxy::change_hints_host_filter(db::hints::host_filter new_filter) {
     if (new_filter == _hints_manager.get_host_filter()) {
         co_return;

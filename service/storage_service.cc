@@ -2816,6 +2816,20 @@ future<> storage_service::raft_decommission() {
     }
 }
 
+future<> storage_service::drain_hints_before_leaving() {
+    auto holder = _async_gate.hold();
+    slogger.info("DECOMMISSIONING: draining hints");
+    try {
+        co_await _qp.proxy().container().invoke_on_all(&storage_proxy::drain_all_hints);
+    } catch (...) {
+        // Failing the barrier would only make the coordinator fence and barrier again;
+        // drain_for is one-shot, so it would not retry the drain.
+        slogger.warn("DECOMMISSIONING: draining hints failed, undelivered hints will be lost: {}", std::current_exception());
+        co_return;
+    }
+    slogger.info("DECOMMISSIONING: draining hints finished");
+}
+
 future<> storage_service::decommission(sharded<db::snapshot_ctl>& snapshot_ctl) {
     return run_with_api_lock(sstring("decommission"), [&] (storage_service& ss) {
         return seastar::async([&] {
@@ -5422,6 +5436,17 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             break;
             case raft_topology_cmd::command::barrier_and_drain: {
                 co_await local_topology_barrier();
+
+                // Send out the hints while the leaving node can still reach the cluster.
+                // A repeated barrier joins the running drain.
+                if (const auto& t = _topology_state_machine._topology; t.tstate == topology::transition_state::left_token_ring) {
+                    if (const auto* rs = t.find(id); rs && rs->second.state == node_state::decommissioning) {
+                        if (!_decommission_hints_drain) {
+                            _decommission_hints_drain.emplace(drain_hints_before_leaving());
+                        }
+                        co_await _decommission_hints_drain->get_future(_abort_source);
+                    }
+                }
 
                 co_await utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail", [this] (auto& handler) -> future<> {
                     auto ks = handler.get("keyspace");
