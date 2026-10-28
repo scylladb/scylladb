@@ -35,7 +35,7 @@ from cassandra import InvalidRequest
 from test.pylib.skip_types import skip_env
 from .util import new_test_keyspace, new_test_table, local_process_id
 from . import nodetool
-from .test_batch import generate_big_batch
+from .test_batch import generate_big_batch, batch_dtest_session
 
 # A fixture to find the Scylla log file, returning the log file's path.
 # If the log file cannot be found, or it's not Scylla, the fixture calls
@@ -162,3 +162,17 @@ def test_error_message_for_batch_exceeding_fail_threshold(cql, table_batch, logf
         wait_for_log(logfile, err_pattern, timeout=1)
     else:
         pytest.fail("Oversized batch didn't fail.")
+
+
+
+# Ported from scylla-dtest batch_test.py::TestBatch::test_unlogged_batch_gcgs_below_threshold_should_not_print_warning.
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+def test_unlogged_batch_gcgs_below_threshold_should_not_print_warning(cql, logfile):
+    with batch_dtest_session(cql) as session:
+        session.execute("ALTER TABLE users WITH gc_grace_seconds = 0")
+        session.execute("""BEGIN UNLOGGED BATCH
+            INSERT INTO users (id, firstname, lastname) VALUES (0, 'Jack', 'Sparrow')
+            INSERT INTO users (id, firstname, lastname) VALUES (1, 'Will', 'Turner')
+            APPLY BATCH""")
+        assert "setting a too low gc_grace_seconds on tables involved in an atomic batch" not in logfile.read()
