@@ -18,7 +18,6 @@
 #include <seastar/core/format.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
-#include <seastar/core/thread.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/preempt.hh>
@@ -1990,20 +1989,6 @@ future<rjson::value> parse_gently(chunked_content&& content, size_t max_nested_l
         co_await coroutine::maybe_yield();
     }
     co_return builder.result();
-}
-
-rjson::value parse_yieldable(std::string_view str, size_t max_nested_level) {
-    contiguous_input in(str);
-    value_builder builder(in);
-    reader<value_builder> r(in, builder, max_nested_level);
-    while (!r.run<true>()) {
-        thread::yield();
-    }
-    return builder.result();
-}
-
-rjson::value parse_yieldable(chunked_content&& content, size_t max_nested_level) {
-    return parse_gently(std::move(content), max_nested_level).get();
 }
 
 void internal::parse_sax(chunk_source& source, sax_handler& handler, size_t max_nested_level) {

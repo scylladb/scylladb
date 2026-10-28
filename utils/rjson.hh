@@ -676,8 +676,6 @@ rjson::value parse(std::string_view str, size_t max_nested_level = default_max_n
 // NOTICE: any error context will be lost, so this function should
 // be used only if one does not care why parsing failed.
 std::optional<rjson::value> try_parse(std::string_view str, size_t max_nested_level = default_max_nested_level);
-// Needs to be run in thread context
-rjson::value parse_yieldable(std::string_view str, size_t max_nested_level = default_max_nested_level);
 
 // chunked_content holds a non-contiguous buffer of bytes - such as bytes
 // read by util::read_entire_stream(). We assume that chunked_content does
@@ -685,12 +683,11 @@ rjson::value parse_yieldable(std::string_view str, size_t max_nested_level = def
 // content - but individual buffers cannot).
 using chunked_content = std::vector<temporary_buffer<char>>;
 
-// Additional variants of parse() and parse_yieldable() that work on non-
-// contiguous chunked_content. The chunked_content is moved into the parsing
-// function, which frees each buffer once it is parsed, unless the parsed
-// value keeps referencing long strings in it.
+// A variant of parse() that works on non-contiguous chunked_content. The
+// chunked_content is moved into the parsing function, which frees each buffer
+// once it is parsed, unless the parsed value keeps referencing long strings
+// in it.
 rjson::value parse(chunked_content&&, size_t max_nested_level = default_max_nested_level);
-rjson::value parse_yieldable(chunked_content&&, size_t max_nested_level = default_max_nested_level);
 
 // Parses like parse(chunked_content&&), yielding when the task quota runs out.
 future<rjson::value> parse_gently(chunked_content&&, size_t max_nested_level = default_max_nested_level);

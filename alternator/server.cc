@@ -1208,49 +1208,20 @@ future<> server::stop() {
         return server.stop();
     }).then([this] {
         return _pending_requests.close();
-    }).then([this] {
-        return _json_parser.stop();
     });
-}
-
-server::json_parser::json_parser() : _run_parse_json_thread(async([this] {
-        while (true) {
-            _document_waiting.wait().get();
-            if (_as.abort_requested()) {
-                return;
-            }
-            try {
-                _parsed_document = rjson::parse_yieldable(std::move(_raw_document));
-                _current_exception = nullptr;
-            } catch (...) {
-                _current_exception = std::current_exception();
-            }
-            _document_parsed.signal();
-        }
-    })) {
 }
 
 future<rjson::value> server::json_parser::parse(chunked_content&& content) {
-    if (content.size() < yieldable_parsing_threshold) {
+    size_t size = 0;
+    for (const auto& chunk : content) {
+        size += chunk.size();
+    }
+    if (size < yieldable_parsing_threshold) {
         return make_ready_future<rjson::value>(rjson::parse(std::move(content)));
     }
-    return with_semaphore(_parsing_sem, 1, [this, content = std::move(content)] () mutable {
-        _raw_document = std::move(content);
-        _document_waiting.signal();
-        return _document_parsed.wait().then([this] {
-            if (_current_exception) {
-                return make_exception_future<rjson::value>(_current_exception);
-            }
-            return make_ready_future<rjson::value>(std::move(_parsed_document));
-        });
+    return with_semaphore(_parsing_sem, 1, [content = std::move(content)] () mutable {
+        return rjson::parse_gently(std::move(content));
     });
-}
-
-future<> server::json_parser::stop() {
-    _as.request_abort();
-    _document_waiting.signal();
-    _document_parsed.broken();
-    return std::move(_run_parse_json_thread);
 }
 
 // Convert an entry in the server's list of ongoing Alternator requests
