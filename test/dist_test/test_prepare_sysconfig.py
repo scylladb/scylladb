@@ -201,7 +201,6 @@ def test_sysconfig_setup_legacy_options(sysconfig_setup):
     assert sysconfig_setup.read('/etc/sysconfig/scylla-server') == legacy + 'SET_NIC=yes\n'
 
 
-@pytest.mark.xfail(strict=True, reason="cfg.set() is given an int, sysconfig_parser crashes iterating it")
 def test_sysconfig_setup_nr_hugepages(sysconfig_setup):
     """--nr-hugepages must be written to the sysconfig file (it used to crash with TypeError)."""
     sysconfig_setup.file('/etc/sysconfig/scylla-server', SYSCONFIG)
@@ -209,7 +208,6 @@ def test_sysconfig_setup_nr_hugepages(sysconfig_setup):
     assert sysconfig_setup.read('/etc/sysconfig/scylla-server') == sysconfig(NR_HUGEPAGES='128')
 
 
-@pytest.mark.xfail(strict=True, reason="`if args.nr_hugepages:` treats 0 as unset")
 def test_sysconfig_setup_nr_hugepages_zero(sysconfig_setup):
     """--nr-hugepages 0 is a value (no hugepages), not "unset": it must replace the shipped 64."""
     sysconfig_setup.file('/etc/sysconfig/scylla-server', SYSCONFIG)
