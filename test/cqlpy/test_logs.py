@@ -30,12 +30,15 @@ import io
 import time
 import re
 
-from cassandra import InvalidRequest
+from cassandra import ConsistencyLevel, InvalidRequest
+from cassandra.query import SimpleStatement
 
+from test import DEBUG_MODES
 from test.pylib.skip_types import skip_env
 from .util import new_test_keyspace, new_test_table, local_process_id
 from . import nodetool
-from .test_batch import generate_big_batch, batch_dtest_session
+from .rest_api import get_request, post_request
+from .test_batch import generate_big_batch, batch_dtest_session, batch_dtest_table, batch_ttl_conditional_interaction, CLUSTERING_SCHEMA, CLUSTERING_COND_UPDATE
 
 # A fixture to find the Scylla log file, returning the log file's path.
 # If the log file cannot be found, or it's not Scylla, the fixture calls
@@ -163,6 +166,34 @@ def test_error_message_for_batch_exceeding_fail_threshold(cql, table_batch, logf
     else:
         pytest.fail("Oversized batch didn't fail.")
 
+# Ported from scylla-dtest cassandra_batch_test.py::TestBatch::test_batch_prepared_with_slow_query_log.
+# The batches of test_batch_ttl_conditional_interaction, prepared
+# statements with a conditional (LWT) update among them, work while the slow
+# query log records every query (threshold 0, ttl 604800), and the
+# conditional update shows up as a command in system_traces.node_slow_log.
+# Reproduces #5843 (the slow query log could not record the parameters of
+# such a batch), and the node logs no "No .query. parameter set for a
+# session requesting a slow_query_log record" error.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_prepared_lwt_batch_with_slow_query_log(cql, scylla_only, logfile):
+    old = get_request(cql, "storage_service/slow_query")
+    post_request(cql, "storage_service/slow_query?enable=true&ttl=604800&threshold=0")
+    try:
+        with batch_dtest_table(cql, 'clustering', CLUSTERING_SCHEMA) as table:
+            update_command = CLUSTERING_COND_UPDATE.format(t=table)
+            batch_ttl_conditional_interaction(cql, table, update_command=update_command)
+            post_request(cql, "storage_service/slow_query?enable=false")
+            errors = re.findall("No .query. parameter set for a session requesting a slow_query_log record", logfile.read())
+            assert len(errors) == 0, f"No errors expected when enabling slow logging, {errors}"
+            # Slow query log records are written in the background.
+            # SELECT *, as the dtest: the rows' parameters map is read too.
+            slow_log = SimpleStatement("SELECT * FROM system_traces.node_slow_log", consistency_level=ConsistencyLevel.ONE)
+            deadline = time.time() + 60
+            while not any(row.command == update_command for row in cql.execute(slow_log)):
+                assert time.time() < deadline, f"not found slow query logging of command={update_command}"
+                time.sleep(0.1)
+    finally:
+        post_request(cql, f"storage_service/slow_query?enable={str(old['enable']).lower()}&threshold={old['threshold']}&ttl={old['ttl']}")
 
 
 # Ported from scylla-dtest batch_test.py::TestBatch::test_unlogged_batch_gcgs_below_threshold_should_not_print_warning.
