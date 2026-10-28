@@ -20,7 +20,6 @@ run_first:
 skip_in_release:
   - test_raft_cluster_features
   - test_cluster_features
-  - dtest/schema_management_test
 skip_in_debug_modes:
   - test_shutdown_hang
   - test_replace
@@ -47,7 +46,6 @@ run_in_dev: &dev_only
   - dtest/audit_test
   - audit/test_audit
   - dtest/rebuild_test
-  - dtest/schema_management_test
 # Sanitize runs everything dev does: it is the mode that covers these tests
 # in CI runs that do not include dev.
 run_in_sanitize: *dev_only
