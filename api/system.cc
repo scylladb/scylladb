@@ -67,24 +67,24 @@ void set_system(http_context& ctx, routes& r) {
                 source_labels.resize(element["source_labels"].Size());
 
                 for (size_t j = 0; j < element["source_labels"].Size(); j++) {
-                    source_labels[j] = element["source_labels"][j].GetString();
+                    source_labels[j] = rjson::to_string(element["source_labels"][j]);
                 }
                 relabels[i].source_labels = source_labels;
             }
             if (element.HasMember("action")) {
-                relabels[i].action = seastar::metrics::relabel_config_action(element["action"].GetString());
+                relabels[i].action = seastar::metrics::relabel_config_action(rjson::to_string(element["action"]));
             }
             if (element.HasMember("replacement")) {
-                relabels[i].replacement = element["replacement"].GetString();
+                relabels[i].replacement = rjson::to_string(element["replacement"]);
             }
             if (element.HasMember("separator")) {
-                relabels[i].separator = element["separator"].GetString();
+                relabels[i].separator = rjson::to_string(element["separator"]);
             }
             if (element.HasMember("target_label")) {
-                relabels[i].target_label = element["target_label"].GetString();
+                relabels[i].target_label = rjson::to_string(element["target_label"]);
             }
             if (element.HasMember("regex")) {
-                relabels[i].expr = element["regex"].GetString();
+                relabels[i].expr = rjson::to_string(element["regex"]);
             }
         }
         bool failed = false;

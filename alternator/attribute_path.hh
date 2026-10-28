@@ -101,11 +101,11 @@ bool hierarchy_filter(rjson::value& val, const attribute_path_map_node<T>& h) {
         // documents before storing them, so this can happen on read.
         throw api_error::internal(format("Malformed value object read: {}", val));
     }
-    const char* type = val.MemberBegin()->name.GetString();
+    std::string_view type = rjson::to_string_view(val.MemberBegin()->name);
     rjson::value& v = val.MemberBegin()->value;
     if (h.has_members()) {
         const auto& members = h.get_members();
-        if (type[0] != 'M' || !v.IsObject()) {
+        if (!type.starts_with('M') || !v.IsObject()) {
             // If v is not an object (dictionary, map), none of the members
             // can match.
             return false;
@@ -131,10 +131,10 @@ bool hierarchy_filter(rjson::value& val, const attribute_path_map_node<T>& h) {
         if (newv.MemberCount() == 0) {
             return false;
         }
-        v = newv;
+        v = std::move(newv);
     } else if (h.has_indexes()) {
         const auto& indexes = h.get_indexes();
-        if (type[0] != 'L' || !v.IsArray()) {
+        if (!type.starts_with('L') || !v.IsArray()) {
             return false;
         }
         rjson::value newv = rjson::empty_array();
@@ -155,7 +155,7 @@ bool hierarchy_filter(rjson::value& val, const attribute_path_map_node<T>& h) {
         if (newv.Size() == 0) {
             return false;
         }
-        v = newv;
+        v = std::move(newv);
     }
     return true;
 }

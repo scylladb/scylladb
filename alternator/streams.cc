@@ -1455,7 +1455,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             auto item = rjson::empty_object();
             describe_single_item(*selection, row, attr_names, item, &total_item_bytes, true);
             describe_single_item(*selection, row, key_names, item, &total_item_bytes);
-            rjson::add(record.dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
+            rjson::add_with_string_name(record.dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
             break;
         }
         case cdc::operation::update:

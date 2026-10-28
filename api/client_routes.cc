@@ -41,7 +41,7 @@ static sstring parse_string(const char* name, const rjson::value& v) {
     if (!it->value.IsString()) {
         throw bad_param_exception(fmt::format("'{}' must be a string", name));
     }
-    return {it->value.GetString(), it->value.GetStringLength()};
+    return rjson::to_sstring(it->value);
 }
 
 static std::optional<uint32_t> parse_port(const char* name, const rjson::value& v) {

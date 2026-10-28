@@ -752,18 +752,18 @@ static rjson::value extract_path(const rjson::value* item,
             // read.
             throw api_error::validation(format("{}: malformed item read: {}", caller, *item));
         }
-        const char* type = v->MemberBegin()->name.GetString();
+        std::string_view type = rjson::to_string_view(v->MemberBegin()->name);
         v = &(v->MemberBegin()->value);
         std::visit(overloaded_functor {
             [&] (const std::string& member) {
-                if (type[0] == 'M' && v->IsObject()) {
+                if (type.starts_with('M') && v->IsObject()) {
                     v = rjson::find(*v, member);
                 } else {
                     v = nullptr;
                 }
             },
             [&] (unsigned index) {
-                if (type[0] == 'L' && v->IsArray() && index < v->Size()) {
+                if (type.starts_with('L') && v->IsArray() && index < v->Size()) {
                     v = &(v->GetArray()[index]);
                 } else {
                     v = nullptr;

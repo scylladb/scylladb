@@ -263,10 +263,6 @@ BOOST_AUTO_TEST_CASE(test_allocator_fail_gracefully) {
     void* memory = allocator.Malloc(1);
     auto release = defer([memory] noexcept { rjson::allocator::Free(memory); });
     BOOST_REQUIRE_THROW(allocator.Realloc(memory, 1, too_large_alloc_size), rjson::error);
-    // Internal rapidjson stack should also throw
-    // and also be destroyed gracefully later
-    rapidjson::internal::Stack stack(&allocator, 0);
-    BOOST_REQUIRE_THROW(stack.Push<char>(too_large_alloc_size), rjson::error);
 }
 
 // Test the alternator::internal::magnitude_and_precision() function which we

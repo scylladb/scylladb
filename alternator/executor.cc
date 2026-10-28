@@ -1014,7 +1014,7 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
             throw api_error::validation("Second key in KeySchema must have string AttributeName");
         }
         validate_attr_name_length(supplementary_context, v->GetStringLength(), true, "RANGE key in KeySchema - ");
-        range_key = v->GetString();
+        range_key = rjson::to_string(*v);
     }
     return {hash_key, range_key};
 }
@@ -4986,7 +4986,7 @@ static std::optional<rjson::value> action_result(
             if (v1.IsNull()) {
                 const auto v2_type = get_item_type_string(v2);
                 if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS") {
-                    result = v2;
+                    result = std::move(v2);
                 } else {
                     throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v2));
                 }
@@ -5072,7 +5072,7 @@ static bool hierarchy_actions(
         // documents before storing them, so this can happen on read.
         throw api_error::validation(format("Malformed value object read: {}", obj));
     }
-    const char* type = obj.MemberBegin()->name.GetString();
+    std::string_view type = rjson::to_string_view(obj.MemberBegin()->name);
     rjson::value& v = obj.MemberBegin()->value;
     if (h.has_value()) {
         // Action replacing everything in this position in the hierarchy
@@ -5083,7 +5083,7 @@ static bool hierarchy_actions(
             return false;
         }
     } else if (h.has_members()) {
-        if (type[0] != 'M' || !v.IsObject()) {
+        if (!type.starts_with('M') || !v.IsObject()) {
             // A .something on a non-map doesn't work.
             throw api_error::validation(fmt::format("UpdateExpression: document paths not valid for this item:{}", h));
         }
@@ -5114,7 +5114,7 @@ static bool hierarchy_actions(
             }
         }
     } else if (h.has_indexes()) {
-        if (type[0] != 'L' || !v.IsArray()) {
+        if (!type.starts_with('L') || !v.IsArray()) {
             // A [i] on a non-list doesn't work.
             throw api_error::validation(format("UpdateExpression: document paths not valid for this item:{}", h));
         }

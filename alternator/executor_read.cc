@@ -2505,7 +2505,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
         }
         std::vector<std::string> to_remove;
         for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
-            std::string key(it->name.GetString(), it->name.GetStringLength());
+            std::string key = rjson::to_string(it->name);
             if (!attrs.contains(key)) {
                 to_remove.push_back(std::move(key));
             }
