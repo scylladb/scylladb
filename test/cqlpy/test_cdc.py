@@ -2,10 +2,13 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
+import collections.abc
+import contextlib
 import re
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
+from cassandra.util import SortedSet
 
 from .util import new_test_table, unique_name, keyspace_has_tablets
 from .nodetool import flush
@@ -537,3 +540,352 @@ def test_cdc_log_ttl_expiry(scylla_only, cql, test_keyspace):
             else:
                 assert base_ttls[p] - 100 < ttl <= base_ttls[p]
 
+# CDC log operation codes, see cdc::operation.
+PREIMAGE, UPDATE, INSERT, POSTIMAGE = 0, 1, 2, 9
+# Expected CDC log of writes to a table whose regular columns are named
+# cval<i> and static columns stval<i>, all of one type, and of the clustering
+# key ck. The writes of one change of a partition - a statement, or the
+# statements of a batch for that partition - are given together: their
+# log rows are the preimages of all changed rows (the static row first,
+# then the clustering rows in order), then the deltas, then the postimages.
+# Rows are (cdc$operation, ck, values), values as in log_rows_after().
+class CdcLogModel:
+    def __init__(self, preimage, postimage, static_columns, regular_columns, non_frozen):
+        self.preimage = preimage
+        self.postimage = postimage
+        self.columns = {True: static_columns, False: regular_columns}
+        self.non_frozen = non_frozen
+        self.rows = {}  # (pk, ck), ck None for the static row -> {column: value}
+        self.markers = set()  # (pk, ck) of rows with a live row marker
+
+    # writes: list of (pk, ck, {column: value or None}, is_insert), all with
+    # one timestamp. Returns {pk: expected log rows}.
+    def change(self, writes):
+        parts = {}  # (pk, ck) -> (values, is_insert)
+        for pk, ck, values, insert in writes:
+            static = {c: v for c, v in values.items() if c.startswith('st')}
+            regular = {c: v for c, v in values.items() if not c.startswith('st')}
+            for key, vals, ins in [((pk, None), static, False), ((pk, ck), regular, insert)]:
+                if vals or (ins and key[1] is not None):
+                    old_vals, old_ins = parts.get(key, ({}, False))
+                    parts[key] = (old_vals | vals, old_ins or ins)
+        ret = {}
+        for pk in sorted({pk for pk, _ in parts}):
+            keys = sorted((k for k in parts if k[0] == pk), key=lambda k: (k[1] is not None, k[1]))
+            pres, deltas, posts = [], [], []
+            for key in keys:
+                values, insert = parts[key]
+                static = key[1] is None
+                old = self.rows.get(key, {})
+                if self.preimage != 'false' and (old or key in self.markers):
+                    image_columns = self.columns[static] if self.preimage == 'full' else values
+                    pres.append((PREIMAGE, key[1], {c: old[c] for c in image_columns if c in old} |
+                                 {f'deleted_{c}': True for c in image_columns if c not in old}))
+                deltas.append((INSERT if insert else UPDATE, key[1], {c: v for c, v in values.items() if v is not None} |
+                               {f'deleted_{c}': True for c, v in values.items() if v is None or c in self.non_frozen}))
+                new = {c: v for c, v in (old | values).items() if v is not None}
+                self.rows[key] = new
+                if insert:
+                    self.markers.add(key)
+                posts.append((POSTIMAGE, key[1], new))
+            ret[pk] = pres + deltas + (posts if self.postimage == 'true' else [])
+        return ret
+
+
+# Reads the CDC log of `table` at consistency level ALL, like the CDC
+# dtests: the whole log, or - given the "cdc$time" of the changes read
+# last - only the rows newer than all of them. Returns the rows in log
+# order as {pk: [(cdc$operation, ck, values)]}, where `values` maps the
+# names of the cval/stval columns to their non-null values in the log row
+# ("cdc$deleted_x" flags as "deleted_x"; lists in `list_columns` - logged
+# as maps from timeuuid - as lists of their values), and the "cdc$time" of
+# each change read.
+def log_rows_after(cql, table, last_times, list_columns=()):
+    where = ' AND '.join(f'"cdc$time" > {t}' for t in last_times)
+    query = f'SELECT * FROM {table}_scylla_cdc_log' + (f' WHERE {where} ALLOW FILTERING' if where else '')
+    ret, times = {}, set()
+    for r in cql.execute(SimpleStatement(query, consistency_level=ConsistencyLevel.ALL)):
+        times.add(r.cdc_time)
+        values = {}
+        for name, value in r._asdict().items():
+            if value is None or not ('val' in name):
+                continue
+            column = name.removeprefix('cdc_deleted_')
+            if column in list_columns and not name.startswith('cdc_deleted_'):
+                value = list(value.values())
+            elif isinstance(value, collections.abc.Mapping):
+                value = dict(value)
+            elif isinstance(value, (collections.abc.Set, SortedSet)):
+                value = set(value)
+            values[name.removeprefix('cdc_')] = value
+        ret.setdefault(r.pk, []).append((r.cdc_operation, r.ck, values))
+    return ret, sorted(times, key=lambda t: t.time)
+
+
+# Values of the CDC static row and batch dtests' data generators: value i of
+# type typ, where seed() is the dtests' DataGenerator.seed - a property that
+# takes the next number of a counter each time it is read, so that the two
+# halves of a collection value get consecutive seeds.
+def typed_value(typ, i, seed):
+    typ = typ.replace(' ', '')
+    if typ == 'int':
+        return i + seed()
+    if typ == 'bigint':
+        return 32000 + i + seed()
+    if typ in ('text', 'varchar'):
+        return f'{typ}{i + seed()}'
+    if typ == 'frozen<set<text>>':
+        return {f'frozenset{i + seed()}', f'frozenset{i + seed() + 10}'}
+    if typ in ('frozen<set<int>>', 'set<int>'):
+        return {i + seed(), i + seed() + 10}
+    if typ in ('frozen<list<int>>', 'list<int>'):
+        return [i + seed(), i + seed() + 10]
+    if typ == 'map<int,int>':
+        return {i + seed(): i + seed() + 10}
+    if typ == 'map<text,blob>':
+        return {f'file{i + seed()}': b'\x00' * (i + seed())}
+    raise ValueError(typ)
+
+
+# The dtests' DataGenerator: a new data set of n values, value i being
+# typed_value(typ, i) with the shared seed counter. A data set is the same
+# for all the rows written.
+class DataGenerator:
+    def __init__(self, typ):
+        self.typ = typ
+        self.counter = 0
+
+    def seed(self):
+        self.counter += 1
+        return self.counter
+
+    def generate(self, n):
+        return [typed_value(self.typ, i, self.seed) for i in range(n)]
+
+
+# The dtests' test id of a type name.
+def mkident(s):
+    s = s.replace(' ', '')
+    for c in '<>,':
+        s = s.replace(c, '_')
+    return s.rstrip('_')
+
+
+# Creates the table of the CDC static row and batch dtests, with n_static
+# static and n_regular regular columns of type typ and the cdc option
+# `cdc_options` (as the dtest formats it), and returns it with the model of
+# its log, for the given normalized preimage ('false', 'true' or 'full') and
+# postimage ('false' or 'true').
+def new_cdc_table_of_type(stack, cql, keyspace, typ, n_static, n_regular, cdc_options, preimage, postimage):
+    static = [f'stval{i}' for i in range(n_static)]
+    regular = [f'cval{i}' for i in range(n_regular)]
+    schema = ', '.join(['pk bigint', 'ck bigint'] + [f'{c} {typ} STATIC' for c in static] + [f'{c} {typ}' for c in regular]) + ', PRIMARY KEY (pk, ck)'
+    table = stack.enter_context(new_test_table(cql, keyspace, schema, f" WITH cdc={{'enabled': true{cdc_options}}}"))
+    non_frozen = set(static + regular) if typ.split('<')[0] in ('map', 'set', 'list') else set()
+    lists = set(static + regular) if typ.startswith('list') else set()
+    return table, CdcLogModel(preimage, postimage, static, regular, non_frozen), lists
+
+
+# Runs `writes` (as for CdcLogModel.change(), one statement each, values
+# formatted into the statements by the driver) and checks the log rows
+# written since the changes whose times are `last_times`. Returns the times
+# of the new changes.
+def check_cdc_statements(cql, table, model, writes, last_times, list_columns):
+    expected = {}
+    for pk, ck, values, insert in writes:
+        cols = list(values)
+        if insert:
+            keys = ['pk'] + (['ck'] if ck is not None else [])
+            cql.execute(f"INSERT INTO {table} ({', '.join(keys + cols)}) VALUES ({', '.join(['%s'] * (len(keys) + len(cols)))})",
+                        [pk] + ([ck] if ck is not None else []) + [values[c] for c in cols])
+        else:
+            where = 'pk = %s' + (' AND ck = %s' if ck is not None else '')
+            cql.execute(f"UPDATE {table} SET {', '.join(f'{c} = %s' for c in cols)} WHERE {where}",
+                        [values[c] for c in cols] + [pk] + ([ck] if ck is not None else []))
+        for pk, rows in model.change([(pk, ck, values, insert)]).items():
+            expected.setdefault(pk, []).extend(rows)
+    actual, times = log_rows_after(cql, table, last_times, list_columns)
+    assert actual == expected
+    return times
+
+
+# The column types of cdc_static_row_test.py, in the dtest's spelling.
+static_row_types = [pytest.param(t, id=mkident(t)) for t in
+                    ['int', 'bigint', 'text', 'map<int,int>', 'varchar', 'frozen<set<int>>', 'frozen<set<text>>',
+                     'frozen<list<int>>', 'set<int>', 'list<int>']]
+
+
+# The cdc option of the static row dtests' tables: the preimage and
+# postimage values are formatted in quotes, so True becomes 'True'.
+def static_row_cdc_options(preimage_enable, postimage_enable):
+    ret = ''
+    if preimage_enable:
+        ret += f", 'preimage': '{preimage_enable}'"
+    if postimage_enable:
+        ret += f", 'postimage': '{postimage_enable}'"
+    return ret
+
+def normalized_images(preimage_enable, postimage_enable):
+    preimage = 'full' if preimage_enable == 'full' else ('true' if preimage_enable else 'false')
+    return preimage, 'true' if postimage_enable else 'false'
+# cdc_static_row_test.py's check_single_row_static(): the dtest's INSERT,
+# UPDATE, DELETE and UPDATE again of the static columns (only) of each row
+# of the data set (num_of_partitions partitions of one row), one statement
+# per row. Each change is logged as an UPDATE of the static row (null
+# clustering key), with preimage and postimage rows as enabled; the static
+# row is empty after the DELETE, so the last UPDATE has no preimage. The log
+# is read as the dtest did: whole, then the rows newer than the changes read
+# last, at consistency level ALL.
+def check_single_row_static(cql, keyspace, typ, num_of_partitions=1, num_of_rows=1, num_of_static=2,
+                            preimage_enable=False, postimage_enable=False):
+    with contextlib.ExitStack() as stack:
+        table, model, lists = new_cdc_table_of_type(stack, cql, keyspace, typ, num_of_static, 0,
+                                                    static_row_cdc_options(preimage_enable, postimage_enable),
+                                                    *normalized_images(preimage_enable, postimage_enable))
+        data = DataGenerator(typ)
+        rows = [(pk, ck) for pk in range(num_of_partitions) for ck in range(num_of_rows)]
+
+        def statics(values):
+            return {f'stval{k}': None if values is None else values[k] for k in range(num_of_static)}
+        ins = data.generate(num_of_static)
+        times = check_cdc_statements(cql, table, model, [(pk, None, statics(ins), True) for pk, _ in rows], [], lists)
+        upd = data.generate(num_of_static)
+        times = check_cdc_statements(cql, table, model, [(pk, None, statics(upd), False) for pk, _ in rows], times, lists)
+        expected = {}
+        for pk, _ in rows:
+            cql.execute(f"DELETE {', '.join(statics(None))} FROM {table} WHERE pk = %s", [pk])
+            for p, log in model.change([(pk, None, statics(None), False)]).items():
+                expected.setdefault(p, []).extend(log)
+        actual, times = log_rows_after(cql, table, times, lists)
+        assert actual == expected
+        upd = data.generate(num_of_static)
+        check_cdc_statements(cql, table, model, [(pk, None, statics(upd), False) for pk, _ in rows], times, lists)
+
+# cdc_static_row_test.py's check_static_common_field(): INSERT, UPDATE,
+# UPDATE to null and UPDATE again of all static and regular columns of each
+# row of the data set (num_of_partitions partitions of num_of_rows rows),
+# one statement per row. Each statement's change is logged as an UPDATE of
+# the static row (null clustering key) and an INSERT or UPDATE of the
+# clustering row, with their preimage and postimage rows as enabled.
+def check_static_common_field(cql, keyspace, typ, num_of_partitions, num_of_rows, num_of_columns, num_of_static=2,
+                              preimage_enable=False, postimage_enable=False):
+    with contextlib.ExitStack() as stack:
+        table, model, lists = new_cdc_table_of_type(stack, cql, keyspace, typ, num_of_static, num_of_columns,
+                                                    static_row_cdc_options(preimage_enable, postimage_enable),
+                                                    *normalized_images(preimage_enable, postimage_enable))
+        data = DataGenerator(typ)
+        rows = [(pk, ck) for pk in range(num_of_partitions) for ck in range(num_of_rows)]
+
+        def values(data_set):
+            return {f'{c}{k}': None if data_set is None else data_set[k] for c, n in (('cval', num_of_columns), ('stval', num_of_static)) for k in range(n)}
+        n = num_of_columns + num_of_static
+        ins = data.generate(n)
+        times = check_cdc_statements(cql, table, model, [(pk, ck, values(ins), True) for pk, ck in rows], [], lists)
+        upd = data.generate(n)
+        times = check_cdc_statements(cql, table, model, [(pk, ck, values(upd), False) for pk, ck in rows], times, lists)
+        times = check_cdc_statements(cql, table, model, [(pk, ck, values(None), False) for pk, ck in rows], times, lists)
+        upd = data.generate(n)
+        check_cdc_statements(cql, table, model, [(pk, ck, values(upd), False) for pk, ck in rows], times, lists)
+
+
+STATIC_ROW_GATE = pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+
+
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_single_static_row.
+# Writes of the two static columns of one partition, without images.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_single_static_row(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_single_row_static(cql, test_keyspace_vnodes, typ)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_single_static_row_preimage.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_single_static_row_preimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_single_row_static(cql, test_keyspace_vnodes, typ, preimage_enable=True)
+
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_single_static_row_postimage.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_single_static_row_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_single_row_static(cql, test_keyspace_vnodes, typ, postimage_enable=True)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_single_static_row_preimage_postimage.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_single_static_row_preimage_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_single_row_static(cql, test_keyspace_vnodes, typ, preimage_enable=True, postimage_enable=True)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_several_partitions_with_single_static_row_preimage_postimage.
+# The same with five partitions.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_several_partitions_with_single_static_row_preimage_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_single_row_static(cql, test_keyspace_vnodes, typ, num_of_partitions=5, preimage_enable=True, postimage_enable=True)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_several_partitions_with_single_static_row.
+# Ten partitions, without images.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_several_partitions_with_single_static_row(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_single_row_static(cql, test_keyspace_vnodes, typ, num_of_partitions=10)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_several_partitions_with_single_static_row_preimage.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_several_partitions_with_single_static_row_preimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_single_row_static(cql, test_keyspace_vnodes, typ, num_of_partitions=5, preimage_enable=True)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_several_partitions_with_single_static_row_postimage.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_several_partitions_with_single_static_row_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_single_row_static(cql, test_keyspace_vnodes, typ, num_of_partitions=3, postimage_enable=True)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_several_partitions_with_single_static_row_full_postimage.
+# Three partitions, with full preimage and postimage.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_several_partitions_with_single_static_row_full_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_single_row_static(cql, test_keyspace_vnodes, typ, num_of_partitions=3, preimage_enable='full', postimage_enable=True)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_static_row_and_regular_columns_preimage_postimage.
+# Writes of two static and two regular columns of three rows in each of
+# three partitions, with preimage and postimage.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_operations_with_static_row_and_regular_columns_preimage_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 2, preimage_enable=True, postimage_enable=True)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_static_row_and_regular_columns_preimage.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_operations_with_static_row_and_regular_columns_preimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 2, preimage_enable=True)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_static_row_and_regular_columns_postimage.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_operations_with_static_row_and_regular_columns_postimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 2, postimage_enable=True)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_static_row_and_regular_columns.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_operations_with_static_row_and_regular_columns(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 2)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_large_number_of_static_and_regular_columns_postimage_preimage.
+# Ten static and ten regular columns, with preimage and postimage.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_operations_with_large_number_of_static_and_regular_columns_postimage_preimage(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 10, num_of_static=10, preimage_enable=True, postimage_enable=True)
+# Ported from scylla-dtest cdc_static_row_test.py::TestCDCStaticRow::test_operations_with_large_number_of_static_and_regular_columns.
+@pytest.mark.tier3
+@STATIC_ROW_GATE
+@pytest.mark.parametrize('typ', static_row_types)
+def test_operations_with_large_number_of_static_and_regular_columns(scylla_only, cql, test_keyspace_vnodes, typ):
+    check_static_common_field(cql, test_keyspace_vnodes, typ, 3, 3, 10, num_of_static=10)
