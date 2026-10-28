@@ -157,6 +157,12 @@ public:
         _drop_apply_waiters = true;
         _changed.signal();
     }
+    // The fsm refuses entries until a snapshot shrinks its log (see
+    // fsm::log_is_full()). Nothing new to apply, but the applier fiber has to
+    // take that snapshot.
+    void notify_log_full() {
+        _changed.signal();
+    }
     // Called by trigger_snapshot(), not by io_fiber.
     void request_snapshot() {
         _snapshot_requested = true;
@@ -1668,6 +1674,9 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
     if (_state_change_promise && batch.state_changed) {
         std::exchange(_state_change_promise, std::nullopt)->set_value();
     }
+    if (_fsm->log_is_full()) {
+        _applier_mailbox.notify_log_full();
+    }
 }
 
 future<> server_impl::io_fiber(index_t last_stable) {
@@ -1825,11 +1834,23 @@ future<> server_impl::applier_fiber() {
         _stats->snapshots_taken++;
     };
 
+    // True if the fsm refuses entries until its log shrinks, and a snapshot of
+    // what has been applied shrinks it. The fsm refuses on the promise that we
+    // take it (see fsm::can_shrink_log()), and the configured thresholds may
+    // not call for it: the log may have filled up with uncommitted entries
+    // after everything committed was applied, or an entry may not fit while
+    // the log is below snapshot_threshold_log_size. If the leader needs this
+    // server for a quorum, nothing else frees the room.
+    auto room_due = [this] {
+        return _fsm->log_is_full() && _applied_idx > _fsm->log_last_snapshot_idx();
+    };
+
     // Applies the committed entries up to apply_upto, in bounded batches,
-    // taking a state machine snapshot when the configured thresholds say so.
+    // taking a state machine snapshot when the configured thresholds say so,
+    // or when the fsm log is full.
     // Returns early, leaving _applied_idx below apply_upto, when a snapshot
     // received from the leader removed the remaining entries from the fsm log.
-    auto apply_entries = [this, &take_snapshot] (index_t apply_upto) -> future<> {
+    auto apply_entries = [this, &take_snapshot, &room_due] (index_t apply_upto) -> future<> {
         while (_applied_idx < apply_upto) {
             if (_applier_mailbox.stopped()) {
                 // abort() waits for this fiber before it aborts the state
@@ -1922,7 +1943,8 @@ future<> server_impl::applier_fiber() {
 
             if (force_snapshot || (_applied_idx > last_snap_idx &&
                 ((_applied_idx - last_snap_idx).value() >= _config.snapshot_threshold ||
-                _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size)))
+                _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size)) ||
+                room_due())
             {
                 const auto max_trailing = force_snapshot ? 0 : _config.snapshot_trailing;
                 const auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
@@ -1937,7 +1959,7 @@ future<> server_impl::applier_fiber() {
     // waits for the snapshot rather than for more entries. The truncation
     // only ever moves up, so a stale read here cannot turn into a missed
     // wakeup; at worst it costs one extra turn through the loop.
-    auto has_work = [this] {
+    auto has_work = [this, &room_due] {
         const auto& mailbox = _applier_mailbox;
         if (mailbox.snapshot_to_load()) {
             return true;
@@ -1945,7 +1967,7 @@ future<> server_impl::applier_fiber() {
         if (_applied_idx < mailbox.stable_commit_idx()) {
             return _fsm->log_last_snapshot_idx() <= _applied_idx;
         }
-        return mailbox.drop_apply_waiters_requested() || mailbox.snapshot_requested();
+        return mailbox.drop_apply_waiters_requested() || mailbox.snapshot_requested() || room_due();
     };
 
     try {
@@ -1991,6 +2013,16 @@ future<> server_impl::applier_fiber() {
 
             if (_applier_mailbox.take_snapshot_request()) {
                 co_await take_snapshot(0, 0);
+            } else if (room_due()) {
+                // apply_entries() takes this snapshot right after a batch, so
+                // we get here when everything committed is applied and the log
+                // became full after that: it filled up with entries which are
+                // not committed yet, or an entry did not fit. The fsm refuses
+                // entries on the promise that we take this snapshot (see
+                // room_due()). If the leader needs this server for a quorum,
+                // nothing gets committed or applied until the fsm has room, so
+                // without this snapshot its log would stay full forever.
+                co_await take_snapshot(_config.snapshot_trailing, _config.snapshot_trailing_size);
             }
         }
     } catch(stop_apply_fiber& ex) {
