@@ -53,6 +53,7 @@ set(idl_headers
   group0.idl.hh
   hinted_handoff.idl.hh
   snapshot_backup.idl.hh
+  sstable_dicts.idl.hh
   sstables.idl.hh
   sstables_loader.idl.hh
   storage_proxy.idl.hh
