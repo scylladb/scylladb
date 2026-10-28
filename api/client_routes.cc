@@ -33,7 +33,7 @@ static void validate_client_routes_endpoint(sharded<service::client_routes_servi
     }
 }
 
-static sstring parse_string(const char* name, rapidjson::Value const& v) {
+static sstring parse_string(const char* name, const rjson::value& v) {
     const auto it = v.FindMember(name);
     if (it == v.MemberEnd()) {
         throw bad_param_exception(fmt::format("Missing '{}'", name));
@@ -44,7 +44,7 @@ static sstring parse_string(const char* name, rapidjson::Value const& v) {
     return {it->value.GetString(), it->value.GetStringLength()};
 }
 
-static std::optional<uint32_t> parse_port(const char* name, rapidjson::Value const& v) {
+static std::optional<uint32_t> parse_port(const char* name, const rjson::value& v) {
     const auto it = v.FindMember(name);
     if (it == v.MemberEnd()) {
         return std::nullopt;
@@ -59,7 +59,7 @@ static std::optional<uint32_t> parse_port(const char* name, rapidjson::Value con
     return port;
 }
 
-static std::vector<service::client_routes_service::client_route_entry> parse_set_client_array(const rapidjson::Document& root) {
+static std::vector<service::client_routes_service::client_route_entry> parse_set_client_array(const rjson::value& root) {
     if (!root.IsArray()) {
         throw bad_param_exception("Body must be a JSON array");
     }
@@ -97,15 +97,14 @@ future<json::json_return_type>
 rest_set_client_routes(http_context& ctx, sharded<service::client_routes_service>& cr, std::unique_ptr<http::request> req) {
     validate_client_routes_endpoint(cr, "rest_set_client_routes");
 
-    rapidjson::Document root;
     auto content = co_await util::read_entire_stream_contiguous(*req->content_stream);
-    root.Parse(content.c_str());
+    auto root = rjson::try_parse(content).value_or(rjson::null_value());
 
     co_await cr.local().set_client_routes(parse_set_client_array(root));
     co_return seastar::json::json_void();
 }
 
-static std::vector<service::client_routes_service::client_route_key> parse_delete_client_array(const rapidjson::Document& root) {
+static std::vector<service::client_routes_service::client_route_key> parse_delete_client_array(const rjson::value& root) {
     if (!root.IsArray()) {
         throw bad_param_exception("Body must be a JSON array");
     }
@@ -127,9 +126,8 @@ future<json::json_return_type>
 rest_delete_client_routes(http_context& ctx, sharded<service::client_routes_service>& cr, std::unique_ptr<http::request> req) {
     validate_client_routes_endpoint(cr, "delete_client_routes");
 
-    rapidjson::Document root;
     auto content = co_await util::read_entire_stream_contiguous(*req->content_stream);
-    root.Parse(content.c_str());
+    auto root = rjson::try_parse(content).value_or(rjson::null_value());
 
     co_await cr.local().delete_client_routes(parse_delete_client_array(root));
     co_return seastar::json::json_void();

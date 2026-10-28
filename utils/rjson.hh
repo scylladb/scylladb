@@ -35,6 +35,8 @@
 #include "utils/chunked_vector.hh"
 
 #include <seastar/core/future.hh>
+#include <seastar/core/temporary_buffer.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 namespace seastar {
     template<typename> class output_stream;
@@ -122,6 +124,14 @@ public:
 class missing_value : public error {
 public:
     missing_value(std::string_view name);
+};
+
+// Malformed JSON text, found at the given offset of the input.
+class parse_error : public error {
+    size_t _offset;
+public:
+    parse_error(std::string_view msg, size_t offset);
+    size_t offset() const noexcept { return _offset; }
 };
 
 
@@ -240,6 +250,64 @@ using chunked_content = std::vector<temporary_buffer<char>>;
 // function so that we can start freeing chunks as soon as we parse them.
 rjson::value parse(chunked_content&&, size_t max_nested_level = default_max_nested_level);
 rjson::value parse_yieldable(chunked_content&&, size_t max_nested_level = default_max_nested_level);
+
+// Supplies parse_sax() with input, one buffer at a time. An empty buffer
+// marks the end of the input.
+using chunk_source = noncopyable_function<temporary_buffer<char>()>;
+
+namespace internal {
+// Presents a chunk_source as the Stream concept of rapidjson's parser.
+class chunk_source_stream {
+    chunk_source& _source;
+    temporary_buffer<char> _current;
+    size_t _count = 0;
+public:
+    using Ch = char;
+    explicit chunk_source_stream(chunk_source& source) : _source(source), _current(_source()) {}
+    // Reading past the end of the input returns a null byte, which
+    // rapidjson's parser takes as the end.
+    char Peek() const { return _current.empty() ? '\0' : *_current.get(); }
+    char Take() {
+        if (_current.empty()) {
+            return '\0';
+        }
+        char c = *_current.get();
+        _current.trim_front(1);
+        ++_count;
+        if (_current.empty()) {
+            _current = _source();
+        }
+        return c;
+    }
+    size_t Tell() const { return _count; }
+    Ch* PutBegin() { RAPIDJSON_ASSERT(false && "PutBegin"); return nullptr; }
+    void Put(Ch) { RAPIDJSON_ASSERT(false && "Put"); }
+    void Flush() { RAPIDJSON_ASSERT(false && "Flush"); }
+    size_t PutEnd(Ch*) { RAPIDJSON_ASSERT(false && "PutEnd"); return 0; }
+};
+[[noreturn]] void throw_parse_error(unsigned code, size_t offset);
+}
+
+// Parses JSON read from source, reporting each token to handler. The handler
+// follows the SAX Handler concept of RapidJSON, with these methods:
+//   Null(), Bool(bool), Int(int), Uint(unsigned), Int64(int64_t),
+//   Uint64(uint64_t), Double(double), String(const char*, size_type, bool),
+//   Key(const char*, size_type, bool), StartObject(), EndObject(size_type),
+//   StartArray(), EndArray(size_type)
+// Each returns false to stop parsing. The strings passed to String() and Key()
+// are valid only during the call.
+// Throws rjson::parse_error on malformed JSON, or when the handler stops
+// the parsing. Runs synchronously; the source may wait for its input only
+// in a seastar thread.
+template<typename Handler>
+void parse_sax(chunk_source source, Handler& handler) {
+    internal::chunk_source_stream is(source);
+    rapidjson::GenericReader<encoding, encoding, allocator> reader;
+    reader.Parse(is, handler);
+    if (reader.HasParseError()) {
+        internal::throw_parse_error(reader.GetParseErrorCode(), reader.GetErrorOffset());
+    }
+}
 
 // Creates a JSON value (of JSON string type) out of internal string representations.
 // The string value is copied, so str's liveness does not need to be persisted.
@@ -444,8 +512,6 @@ class streaming_writer {
 public:
     streaming_writer(std::ostream& os = std::cout) : _stream(os), _writer(_stream)
     { }
-
-    writer& rjson_writer() { return _writer; }
 
     // following the rapidjson method names here
     bool Null() { return _writer.Null(); }

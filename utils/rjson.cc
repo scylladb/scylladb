@@ -325,6 +325,15 @@ rjson::missing_value::missing_value(std::string_view name)
     : error(seastar::format("JSON parameter {} not found", name))
 {}
 
+rjson::parse_error::parse_error(std::string_view msg, size_t offset)
+    : error(seastar::format("Parsing JSON failed: {} at {}", msg, offset))
+    , _offset(offset)
+{}
+
+void internal::throw_parse_error(unsigned code, size_t offset) {
+    throw parse_error(rapidjson::GetParseError_En(rapidjson::ParseErrorCode(code)), offset);
+}
+
 rjson::value copy(const rjson::value& value) {
     return rjson::value(value, the_allocator);
 }
