@@ -14,6 +14,7 @@
 #include "index/fulltext_index.hh"
 #include "index/pattern_index.hh"
 #include "index/vector_index.hh"
+#include "types/types.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/rjson.hh"
 
@@ -94,6 +95,37 @@ void external_index::check_regular_column(const column_definition& column) const
             fmt::format("Creating a {} index requires a regular column, but column {} is a {} column",
             index_type_name(), column.name_as_text(), column_kind_name(column.kind)));
     }
+}
+
+// The Vector Store supports filtering, and partitioning a local index, on native types
+// that can be used as primary key columns. There is no counter (it cannot be used with
+// vector columns) and no duration (it cannot be used as a primary key or in secondary indexes).
+bool external_index::is_supported_filtering_column(const abstract_type& type) {
+    switch (type.get_kind()) {
+        case abstract_type::kind::ascii:
+        case abstract_type::kind::boolean:
+        case abstract_type::kind::byte:
+        case abstract_type::kind::bytes:
+        case abstract_type::kind::date:
+        case abstract_type::kind::decimal:
+        case abstract_type::kind::double_kind:
+        case abstract_type::kind::float_kind:
+        case abstract_type::kind::inet:
+        case abstract_type::kind::int32:
+        case abstract_type::kind::long_kind:
+        case abstract_type::kind::short_kind:
+        case abstract_type::kind::simple_date:
+        case abstract_type::kind::time:
+        case abstract_type::kind::timestamp:
+        case abstract_type::kind::timeuuid:
+        case abstract_type::kind::utf8:
+        case abstract_type::kind::uuid:
+        case abstract_type::kind::varint:
+            return true;
+        default:
+            break;
+    }
+    return false;
 }
 
 void external_index::check_cdc_options_if_present(const schema& s) {
