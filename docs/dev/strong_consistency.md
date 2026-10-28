@@ -239,6 +239,110 @@ survive on disk, so uncommitted entries are still available for replay on the ne
 This is important: if we decremented the dirty count on shutdown, the commitlog might
 delete segments containing uncommitted Raft entries that we still need.
 
+# Leader leases (LeaseGuard)
+
+A linearizable read on a strongly consistent table normally runs a Raft read barrier: the
+leader confirms with a quorum that it is still the leader before it reads. Leader leases
+remove that round-trip. The Raft groups of strongly consistent tablets implement the
+LeaseGuard algorithm (arXiv:2512.15659, "Raft Leases Done Right"), in which the log itself
+carries the lease, so leases need no extra messages and no extra persistent state.
+
+Leases are off by default. They rely on every node knowing the current time within a known
+error bound, which is what the bounded clock described below provides.
+
+## Algorithm
+
+The leader records a time interval `[earliest, latest]` from its bounded clock in every log
+entry it creates (`log_entry::lease_time`). A committed entry is a lease of duration Δ
+starting at the time recorded in it.
+
+- **Lease reads.** The leader serves a read locally, without contacting followers, while its
+  newest committed entry is from its own term and is definitely younger than Δ:
+  `recorded.earliest + Δ > now.latest`. The read is linearizable because no other leader can
+  commit while the lease is valid (next item). Otherwise the read falls back to the quorum
+  read barrier.
+- **Deferred commit.** A new leader holds every committed entry, including the deposed
+  leader's lease. It replicates new entries right away but does not advance the commit index
+  until the newest entry of earlier terms in its log is definitely older than Δ:
+  `recorded.latest + Δ < now.earliest`. That entry is not older than the deposed lease, so
+  the deposed lease has expired by then. Until then the deposed leader may still be serving
+  lease reads, and committing would make them stale. When the deposed entry is no longer in
+  memory (folded into a snapshot) or carries no interval, the new leader waits until Δ has
+  passed since its own election instead.
+- **Renewal.** Writes renew the lease as a side effect. Under a read-only workload the leader
+  appends a no-op entry once its newest committed entry is older than Δ/2, but only if reads
+  were served since the last renewal and nothing is in flight, so an idle group appends
+  nothing.
+
+## Unsynchronized clocks
+
+When the bounded clock cannot bound the error (it reports nothing), the node stays correct
+and only loses performance:
+
+- reads fall back to the quorum read barrier;
+- entries are appended without an interval;
+- a new leader discharges the deferred commit on elapsed time alone: it waits Δ + Δ/8 of
+  `CLOCK_MONOTONIC_RAW` time since its election, which needs no synchronized clock;
+- a leader whose clock stays unusable for 2Δ (plus a per-group jitter of up to Δ) hands
+  leadership to an up-to-date voter whose clock works. Followers report their clock health
+  in `append_reply::clock_ok`. The jitter spreads out the transfers of the many groups a node
+  leads, so they do not all move at the same moment.
+
+## Clock backends
+
+The Raft library defines the `raft::bounded_clock` interface (`raft/bounded_clock.hh`).
+Strongly consistent tables provide two implementations; each shard owns one instance,
+created by `groups_manager` when leases are enabled, and shares it among its groups.
+
+- **`clockbound`** (`service/raft/bounded_clock_clockbound.{hh,cc}`): reads the interval
+  published by the AWS ClockBound daemon in shared memory. The daemon disciplines the clock
+  itself and computes a bound meant for exactly this purpose. It also detects clock
+  disruptions, including VM live-migration jumps through the VMClock device. The bound is
+  used while the daemon reports SYNCHRONIZED or FREE_RUNNING (no fresh time source for 60 s,
+  with the bound widening at the daemon's maximum drift rate) and rejected while it reports
+  UNKNOWN or DISRUPTED. The daemon can sync from public AWS time servers, so it also works
+  outside AWS, but it replaces chrony or ntpd on the host. The node fails to start if the
+  daemon's shared-memory segment is missing or unreadable, i.e. the daemon has never run on
+  the host. The daemon leaves the segment behind when it stops, so a stopped daemon is
+  detected at runtime through its status, like one that stops while the node runs. This is
+  the backend intended for production.
+- **`adjtimex`** (`service/raft/bounded_clock_adjtimex.{hh,cc}`): derives the interval from
+  the kernel's NTP state, as read by `ntp_adjtime(2)`: `CLOCK_REALTIME` ± `maxerror`. It is
+  unusable while the kernel reports `TIME_ERROR`. It needs nothing beyond an NTP daemon
+  disciplining the kernel clock, which makes it convenient for development and testing.
+  A leap second steps `CLOCK_REALTIME` by a second, back for an insertion and forward for a
+  deletion, so the backend runs a small discipline that keeps the reported time monotonic,
+  slews it towards `CLOCK_REALTIME` and widens the interval to cover the difference. The kernel's `maxerror` grows by 0.5 ms per second between daemon updates,
+  so the NTP daemon must update the kernel often (see the lease duration below).
+  The kernel's `maxerror` does not include an offset the daemon is still slewing, so the
+  daemon must apply leap seconds through the kernel or by a step (chrony's `leapsecmode
+  system`, the default, or `step`; not `slew` or `ignore`), and all nodes must use the same
+  kind of time sources: all leap-smearing or none. The backend cannot detect a violation.
+
+Both backends measure elapsed time with `CLOCK_MONOTONIC_RAW`, whose rate the NTP daemon
+does not change.
+
+## Configuration
+
+All options require a restart.
+
+- `strongly_consistent_raft_leader_leases_enabled` (default `false`): enables leases.
+- `strongly_consistent_raft_leader_lease_duration_in_ms` (default `1000`): the lease
+  duration Δ. A lease is usable only while its age plus twice the clock's error bound is
+  under Δ, so the error bound must be well below Δ. A longer Δ tolerates larger clock
+  errors and renews less often, but after a leader failure the group cannot commit writes
+  for up to Δ.
+- `strongly_consistent_raft_leader_lease_clock_source` (default `adjtimex`): `adjtimex` or
+  `clockbound`. The default is `adjtimex` because it works with the NTP daemon every
+  distribution ships, while `clockbound` requires the ClockBound daemon to be installed and
+  running. Production deployments should run the ClockBound daemon and select `clockbound`.
+
+## Persistence
+
+`lease_time` is part of the Raft log entry stored in the commitlog, so it survives a
+restart: a node that restarts and becomes leader defers commits for the lease recorded in
+the entries it replayed.
+
 # Metrics
 
 The raft servers and RPC modules of a table's tablets on a shard share one set of
