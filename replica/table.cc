@@ -2122,6 +2122,58 @@ public:
     }
 };
 
+future<> table::with_flush_retry(future<>& previous_flush, std::function<future<>()> func) {
+    auto r = exponential_backoff_retry(100ms, 10s);
+    // Try flushing for around half an hour (30 minutes every 10 seconds)
+    int default_retries = 30 * 60 / 10;
+    int allowed_retries = default_retries;
+
+    for (;;) {
+        std::exception_ptr ex;
+        try {
+            co_return co_await func();
+        } catch (...) {
+            ex = std::current_exception();
+            _config.cf_stats->failed_memtables_flushes_count++;
+
+            auto should_retry = [](auto* ep) {
+                int ec = ep->code().value();
+                return ec == ENOSPC || ec == EDQUOT || ec == EPERM || ec == EACCES;
+            };
+            if (try_catch<std::bad_alloc>(ex)) {
+                // There is a chance something else will free the memory, so we can try again
+                allowed_retries--;
+            } else if (auto ep = try_catch<std::system_error>(ex)) {
+                allowed_retries = should_retry(ep) ? default_retries : 0;
+            } else if (auto ep = try_catch<storage_io_error>(ex)) {
+                allowed_retries = should_retry(ep) ? default_retries : 0;
+            } else if (try_catch<db::extension_storage_exception>(ex)) {
+                allowed_retries = default_retries;
+            } else {
+                allowed_retries = 0;
+            }
+
+            if (allowed_retries <= 0) {
+                // At this point we don't know what has happened and it's better to potentially
+                // take the node down and rely on commitlog to replay.
+                //
+                // FIXME: enter maintenance mode when available.
+                // since replaying the commitlog with a corrupt mutation
+                // may end up in an infinite crash loop.
+                tlogger.error("Memtable flush failed due to: {}. Aborting, at {}", ex, current_backtrace());
+                std::abort();
+            }
+        }
+        if (_async_gate.is_closed()) {
+            tlogger.warn("Memtable flush failed due to: {}. Dropped due to shutdown", ex);
+            co_await std::move(previous_flush);
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+        tlogger.warn("Memtable flush failed due to: {}. Will retry in {}ms", ex, r.sleep_time().count());
+        co_await r.retry();
+    }
+}
+
 // The function never fails.
 // It either succeeds eventually after retrying or aborts.
 future<>
@@ -2146,56 +2198,8 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
     size_t memtable_size;
     future<> previous_flush = make_ready_future<>();
 
-    auto with_retry = [&] (std::function<future<>()> func) -> future<> {
-        auto r = exponential_backoff_retry(100ms, 10s);
-        // Try flushing for around half an hour (30 minutes every 10 seconds)
-        int default_retries = 30 * 60 / 10;
-        int allowed_retries = default_retries;
-
-        for (;;) {
-            std::exception_ptr ex;
-            try {
-                co_return co_await func();
-            } catch (...) {
-                ex = std::current_exception();
-                _config.cf_stats->failed_memtables_flushes_count++;
-
-                auto should_retry = [](auto* ep) {
-                    int ec = ep->code().value();
-                    return ec == ENOSPC || ec == EDQUOT || ec == EPERM || ec == EACCES;
-                };
-                if (try_catch<std::bad_alloc>(ex)) {
-                    // There is a chance something else will free the memory, so we can try again
-                    allowed_retries--;
-                } else if (auto ep = try_catch<std::system_error>(ex)) {
-                    allowed_retries = should_retry(ep) ? default_retries : 0;
-                } else if (auto ep = try_catch<storage_io_error>(ex)) {
-                    allowed_retries = should_retry(ep) ? default_retries : 0;
-                } else if (try_catch<db::extension_storage_exception>(ex)) {
-                    allowed_retries = default_retries;
-                } else {
-                    allowed_retries = 0;
-                }
-
-                if (allowed_retries <= 0) {
-                    // At this point we don't know what has happened and it's better to potentially
-                    // take the node down and rely on commitlog to replay.
-                    //
-                    // FIXME: enter maintenance mode when available.
-                    // since replaying the commitlog with a corrupt mutation
-                    // may end up in an infinite crash loop.
-                    tlogger.error("Memtable flush failed due to: {}. Aborting, at {}", ex, current_backtrace());
-                    std::abort();
-                }
-            }
-            if (_async_gate.is_closed()) {
-                tlogger.warn("Memtable flush failed due to: {}. Dropped due to shutdown", ex);
-                co_await std::move(previous_flush);
-                co_await coroutine::return_exception_ptr(std::move(ex));
-            }
-            tlogger.warn("Memtable flush failed due to: {}. Will retry in {}ms", ex, r.sleep_time().count());
-            co_await r.retry();
-        }
+    auto with_retry = [&] (std::function<future<>()> func) {
+        return with_flush_retry(previous_flush, std::move(func));
     };
 
     co_await with_retry([&] {

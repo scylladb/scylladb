@@ -1517,6 +1517,9 @@ private:
     // The function never fails.
     // It either succeeds eventually after retrying or aborts.
     future<> seal_active_memtable(compaction_group& cg, flush_permit&&) noexcept;
+    // Runs a step of a memtable flush. Errors which may go away are retried, the others abort,
+    // unless the table is being stopped.
+    future<> with_flush_retry(future<>& previous_flush, std::function<future<>()> func);
 
     void check_valid_rp(const db::replay_position&) const;
 
