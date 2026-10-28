@@ -25,6 +25,8 @@
 #include "utils/chunked_vector.hh"
 #include "db/commitlog/replay_position.hh"
 #include <absl/container/flat_hash_map.h>
+#include <utility>
+#include <vector>
 
 #pragma once
 
@@ -106,6 +108,11 @@ class compaction_group : public compaction::compaction_backlog_source {
     // only once the flushed sstables are on disk and in the sstable set, so a
     // mutation of this group at or below it is in an sstable at any moment.
     db::replay_position _highest_flushed_rp;
+    // For each rotated memtable whose flush is pending, oldest first, the flushed
+    // position as it was at the rotation. The memtable may be flushed after newer
+    // ones, so _highest_flushed_rp may pass its data while it is still in memory;
+    // the position reported meanwhile is the one from before it. See table::rotate_memtables().
+    std::vector<std::pair<const memtable*, db::replay_position>> _pending_rotations;
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();
@@ -197,7 +204,7 @@ public:
     // The highest replay position of this group's data which is in sstables.
     // Invalid (default-constructed) if nothing of this group was flushed yet.
     const db::replay_position& highest_flushed_replay_position() const noexcept {
-        return _highest_flushed_rp;
+        return _pending_rotations.empty() ? _highest_flushed_rp : _pending_rotations.front().second;
     }
 
     void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept {

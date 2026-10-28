@@ -22,6 +22,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/on_internal_error.hh>
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/key_utils.hh"
@@ -7843,6 +7844,139 @@ SEASTAR_TEST_CASE(test_truncate_tablet_locally_under_parked_paged_read) {
             check(got, expected_rows);
             BOOST_REQUIRE(paged_partition_read(e, 0, page_size).rest().empty());
         }
+    }, tablet_cql_test_config());
+}
+
+// Rotates the memtables of one tablet of ks.cf on the shard holding it.
+static void rotate_memtables(cql_test_env& e, locator::tablet_id tid) {
+    e.db().invoke_on(shard_of(e, tid), [tid] (replica::database& db) {
+        auto& t = db.find_column_family("ks", "cf");
+        t.rotate_memtables(db.get_token_metadata().tablets().get_tablet_map(t.schema()->id()).get_token_range(tid));
+    }).get();
+}
+
+// Writes from before and after rotate_memtables() never end up in one sstable.
+SEASTAR_TEST_CASE(test_rotate_memtables_cuts_tablet) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (pk int, ck int, v int, primary key (pk, ck)) with compaction = {'class': 'NullCompactionStrategy'}").get();
+        const auto tid = tablet_of(e, 0);
+        const auto owner = shard_of(e, tid);
+
+        for (int ck = 0; ck < 10; ck++) {
+            e.execute_cql(format("insert into ks.cf (pk, ck, v) values (0, {}, 1) using timestamp 1", ck)).get();
+        }
+        rotate_memtables(e, tid);
+        for (int ck = 10; ck < 20; ck++) {
+            e.execute_cql(format("insert into ks.cf (pk, ck, v) values (0, {}, 2) using timestamp 3", ck)).get();
+        }
+        // Waits for the flush of the rotated memtable too.
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+
+        auto sstable_count = e.db().invoke_on(owner, [] (replica::database& db) {
+            auto ssts = db.find_column_family("ks", "cf").get_sstables();
+            for (auto& sst : *ssts) {
+                const auto& stats = sst->get_stats_metadata();
+                BOOST_REQUIRE(stats.max_timestamp < 2 || stats.min_timestamp > 2);
+            }
+            return ssts->size();
+        }).get();
+        BOOST_REQUIRE_EQUAL(sstable_count, 2);
+        assert_that(e.execute_cql("select * from ks.cf where pk = 0").get()).is_rows().with_size(20);
+    }, tablet_cql_test_config());
+}
+
+// A rotated memtable dropped by a truncate while its flush waits must not be written out,
+// even when the flush gets a permit before the truncate clears the memtable.
+SEASTAR_TEST_CASE(test_rotate_memtables_then_truncate) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("create table ks.cf (pk int, ck int, v int, primary key (pk, ck))").get();
+        const auto tid = tablet_of(e, 0);
+        const auto owner = shard_of(e, tid);
+        constexpr auto pause = "rotated_memtable_flush_wait";
+
+        write_partition(e, 0, 10, 1);
+        smp::submit_to(owner, [] { utils::get_local_injector().enable(pause); }).get();
+        rotate_memtables(e, tid);
+        BOOST_REQUIRE(eventually_true([&] {
+            return smp::submit_to(owner, [] { return utils::get_local_injector().waiters(pause) > 0; }).get();
+        }));
+
+        constexpr auto truncate_pause = "truncate_tablet_locally_before_clear";
+        smp::submit_to(owner, [] { utils::get_local_injector().enable(truncate_pause); }).get();
+        auto truncate = truncate_tablet_locally(e, tid);
+        BOOST_REQUIRE(eventually_true([&] {
+            return smp::submit_to(owner, [] { return utils::get_local_injector().waiters(truncate_pause) > 0; }).get();
+        }));
+        smp::submit_to(owner, [] {
+            utils::get_local_injector().receive_message(pause);
+            utils::get_local_injector().disable(pause);
+        }).get();
+        // Waits for the flush of the rotated memtable, which runs while the dropped memtable
+        // still holds its data.
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+        smp::submit_to(owner, [] {
+            utils::get_local_injector().receive_message(truncate_pause);
+            utils::get_local_injector().disable(truncate_pause);
+        }).get();
+        truncate.get();
+
+        e.execute_cql("insert into ks.cf (pk, ck, v) values (0, 100, 2)").get();
+        // Waits for the flush of the rotated memtable too.
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+        assert_that(e.execute_cql("select ck, v from ks.cf where pk = 0").get()).is_rows().with_rows({
+            {int32_type->decompose(100), int32_type->decompose(2)},
+        });
+    }, tablet_cql_test_config());
+}
+
+// The flushed position of a tablet does not pass a rotated memtable while its flush
+// waits, even if newer memtables are flushed meanwhile, and covers it once it is flushed.
+SEASTAR_TEST_CASE(test_rotate_memtables_keeps_flushed_position_behind) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("create table ks.cf (pk int, ck int, v int, primary key (pk, ck)) with compaction = {'class': 'NullCompactionStrategy'}").get();
+        const auto tid = tablet_of(e, 0);
+        const auto owner = shard_of(e, tid);
+        constexpr auto pause = "rotated_memtable_flush_wait";
+        const auto flushed_position = [&] {
+            return e.db().invoke_on(owner, [tid] (replica::database& db) {
+                auto& t = db.find_column_family("ks", "cf");
+                return t.highest_flushed_replay_position(db.get_token_metadata().tablets().get_tablet_map(t.schema()->id()).get_token_range(tid));
+            }).get();
+        };
+        const auto sstable_count = [&] {
+            return e.db().invoke_on(owner, [] (replica::database& db) {
+                return db.find_column_family("ks", "cf").get_sstables()->size();
+            }).get();
+        };
+
+        write_partition(e, 0, 10, 1);
+        smp::submit_to(owner, [] { utils::get_local_injector().enable(pause); }).get();
+        rotate_memtables(e, tid);
+        BOOST_REQUIRE(eventually_true([&] {
+            return smp::submit_to(owner, [] { return utils::get_local_injector().waiters(pause) > 0; }).get();
+        }));
+
+        write_partition(e, 1, 10, 1);
+        // Flushes the newer memtable, then waits for the rotated one.
+        auto flush = replica::database::flush_table_on_all_shards(e.db(), "ks", "cf");
+        BOOST_REQUIRE(eventually_true([&] { return sstable_count() == 1; }));
+        BOOST_REQUIRE(flushed_position() == db::replay_position());
+
+        smp::submit_to(owner, [] {
+            utils::get_local_injector().receive_message(pause);
+            utils::get_local_injector().disable(pause);
+        }).get();
+        flush.get();
+        BOOST_REQUIRE_EQUAL(sstable_count(), 2);
+        BOOST_REQUIRE(flushed_position() != db::replay_position());
     }, tablet_cql_test_config());
 }
 
