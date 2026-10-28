@@ -43,21 +43,13 @@
 static logging::logger slogger("alternator-streams");
 
 /**
- * Base template type to implement  rapidjson::internal::TypeHelper<...>:s
+ * Base template type to implement rjson::type_helper<...>:s
  * for types that are ostreamable/string constructible/castable.
  * Eventually maybe graduate to header, for other modules. 
  */
-template<typename ValueType, typename T>
+template<typename T>
 struct from_string_helper {
-    static bool Is(const ValueType& v) {
-        try {
-            Get(v);
-            return true;
-        } catch (...) {
-            return false;
-        }
-    }
-    static T Get(const ValueType& v) {
+    static T get(const rjson::value& v) {
         auto s = rjson::to_string_view(v);
         if constexpr (std::is_constructible_v<T, std::string_view>) {
             return T(s);
@@ -67,18 +59,16 @@ struct from_string_helper {
             return boost::lexical_cast<T>(s.data(), s.size());
         }
     }
-    static ValueType& Set(ValueType&, T) = delete;
-    static ValueType& Set(ValueType& v, T data, typename ValueType::AllocatorType& a) {
+    static rjson::value make(const T& data) {
         std::ostringstream ss;
         ss << data;
-        auto s = ss.str();
-        return v.SetString(s.data(), s.size(), a);
+        return rjson::from_string(ss.str());
     }
 };
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, utils::UUID>
-    : public from_string_helper<ValueType, utils::UUID>
+template<>
+struct rjson::type_helper<utils::UUID>
+    : public from_string_helper<utils::UUID>
 {};
 
 static db_clock::time_point as_timepoint(const table_id& tid) {
@@ -171,9 +161,9 @@ static schema_ptr get_schema_from_arn(service::storage_proxy& proxy, const strea
 
 } // namespace alternator
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_arn>
-    : public from_string_helper<ValueType, alternator::stream_arn>
+template<>
+struct rjson::type_helper<alternator::stream_arn>
+    : public from_string_helper<alternator::stream_arn>
 {};
 
 namespace alternator {
@@ -387,14 +377,14 @@ sequence_number::sequence_number(std::string_view v)
 
 } // namespace alternator
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_id>
-    : public from_string_helper<ValueType, alternator::shard_id>
+template<>
+struct rjson::type_helper<alternator::shard_id>
+    : public from_string_helper<alternator::shard_id>
 {};
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::sequence_number>
-    : public from_string_helper<ValueType, alternator::sequence_number>
+template<>
+struct rjson::type_helper<alternator::sequence_number>
+    : public from_string_helper<alternator::sequence_number>
 {};
 
 namespace alternator {
@@ -447,9 +437,9 @@ static stream_view_type cdc_options_to_stream_view_type(const cdc::options& opts
 
 } // namespace alternator
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_view_type>
-    : public from_string_helper<ValueType, alternator::stream_view_type>
+template<>
+struct rjson::type_helper<alternator::stream_view_type>
+    : public from_string_helper<alternator::stream_view_type>
 {};
 
 namespace alternator {
@@ -1139,14 +1129,14 @@ shard_iterator::shard_iterator(const sstring& s)
 }
 }
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_iterator>
-    : public from_string_helper<ValueType, alternator::shard_iterator>
+template<>
+struct rjson::type_helper<alternator::shard_iterator>
+    : public from_string_helper<alternator::shard_iterator>
 {};
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_iterator_type>
-    : public from_string_helper<ValueType, alternator::shard_iterator_type>
+template<>
+struct rjson::type_helper<alternator::shard_iterator_type>
+    : public from_string_helper<alternator::shard_iterator_type>
 {};
 
 namespace alternator {
@@ -1238,9 +1228,9 @@ struct event_id {
 };
 } // namespace alternator
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::event_id>
-    : public from_string_helper<ValueType, alternator::event_id>
+template<>
+struct rjson::type_helper<alternator::event_id>
+    : public from_string_helper<alternator::event_id>
 {};
 
 namespace alternator {

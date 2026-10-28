@@ -254,7 +254,7 @@ struct to_json_visitor {
 };
 
 rjson::value deserialize_item(bytes_view bv) {
-    rjson::value deserialized(rapidjson::kObjectType);
+    rjson::value deserialized = rjson::empty_object();
     if (bv.empty()) {
         throw api_error::validation("Serialized value empty");
     }
@@ -271,7 +271,7 @@ rjson::value deserialize_item(bytes_view bv) {
         if (bv.size() % sizeof(uint32_t) != 0) {
             throw api_error::validation("FLOAT32VECTOR: byte length not a multiple of 4");
         }
-        rjson::value arr(rapidjson::kArrayType);
+        rjson::value arr = rjson::empty_array();
         while (!bv.empty()) {
             uint32_t bits_be = read_unaligned<uint32_t>(bv.data());
             bv.remove_prefix(sizeof(uint32_t));

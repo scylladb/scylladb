@@ -100,6 +100,7 @@ using string_ref_type = value::StringRefType;
 using string_buffer = rapidjson::GenericStringBuffer<encoding, allocator>;
 using writer = rapidjson::Writer<string_buffer, encoding, encoding, allocator>;
 using type = rapidjson::Type;
+using size_type = rapidjson::SizeType;
 
 // The default value is derived from the days when rjson resided in alternator:
 // - the original DynamoDB nested level limit is 32
@@ -282,16 +283,34 @@ const rjson::value* find(const rjson::value& value, std::string_view name);
 rjson::value& get(rjson::value& value, std::string_view name);
 const rjson::value& get(const rjson::value& value, std::string_view name);
 
+extern allocator the_allocator;
+
+// Converts between rjson::value and T, for rjson::get<T>(), rjson::get_opt<T>()
+// and rjson::add(..., T). This primary template handles booleans, numbers and
+// std::string; specialize it for other types, providing:
+//   static T get(const rjson::value&);  // throws if the value doesn't hold a T
+//   static rjson::value make(const T&);
+template<typename T>
+struct type_helper {
+    static T get(const rjson::value& v) {
+        return v.Get<T>();
+    }
+    static rjson::value make(const T& x) {
+        rjson::value v;
+        v.Set(x, the_allocator);
+        return v;
+    }
+};
+
 /**
  * Type conversion getter. 
- * Will typically require an existing rapidjson::internal::TypeHelper<...>
- * to exist for the type queried. 
+ * Requires rjson::type_helper<T> to support the type queried.
  */
 template<typename T>
 T get(const rjson::value& value, std::string_view name) {
     auto& v = get(value, name);
     try {
-        return v.Get<T>();
+        return type_helper<T>::get(v);
     } catch (...) {
         std::throw_with_nested(malformed_value(name, v));
     }
@@ -299,8 +318,7 @@ T get(const rjson::value& value, std::string_view name) {
 
 /**
  * Type conversion opt getter. 
- * Will typically require an existing rapidjson::internal::TypeHelper<...>
- * to exist for the type queried. 
+ * Requires rjson::type_helper<T> to support the type queried.
  * 
  * Return std::nullopt if value does not exist. 
  */
@@ -308,7 +326,7 @@ template<typename T>
 std::optional<T> get_opt(const rjson::value& value, std::string_view name) {
     auto* v = find(value, name);
     try {
-        return v ? std::optional<T>(v->Get<T>()) : std::nullopt;
+        return v ? std::optional<T>(type_helper<T>::get(*v)) : std::nullopt;
     } catch (...) {
         std::throw_with_nested(malformed_value(name, *v));
     }
@@ -349,8 +367,7 @@ void add(rjson::value& base, rjson::string_ref_type name, rjson::string_ref_type
 
 /**
  * Type conversion setter. 
- * Will typically require an existing rapidjson::internal::TypeHelper<...>
- * to exist for the type written. 
+ * Requires rjson::type_helper<T> to support the type written.
  * 
  * (Note: order is important. Need to be after set(..., rjson::value)).
  * Assumes a member with the same name does not yet exist in base.
@@ -358,11 +375,7 @@ void add(rjson::value& base, rjson::string_ref_type name, rjson::string_ref_type
 template<typename T>
 requires (!std::is_constructible_v<string_ref_type, T>)
 void add(rjson::value& base, rjson::string_ref_type name, T&& member) {
-    extern allocator the_allocator;
-
-    rjson::value v;
-    v.Set(std::forward<T>(member), the_allocator);
-    add(base, std::move(name), std::move(v));
+    add(base, std::move(name), type_helper<std::remove_cvref_t<T>>::make(member));
 }
 
 // Set a member in a given JSON object by moving the member - allocates the name.
@@ -447,9 +460,9 @@ public:
     bool String(std::string_view str) { return _writer.String(str.data(), str.size(), false); }
     bool StartObject() { return _writer.StartObject(); }
     bool Key(std::string_view str) { return _writer.Key(str.data(), str.size(), false); }
-    bool EndObject(rapidjson::SizeType memberCount = 0) { return _writer.EndObject(memberCount); }
+    bool EndObject(size_type memberCount = 0) { return _writer.EndObject(memberCount); }
     bool StartArray() { return _writer.StartArray(); }
-    bool EndArray(rapidjson::SizeType elementCount = 0) { return _writer.EndArray(elementCount); }
+    bool EndArray(size_type elementCount = 0) { return _writer.EndArray(elementCount); }
 
     template<typename U>
     bool Write(U v) {
