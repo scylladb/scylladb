@@ -602,7 +602,6 @@ def test_keep_alive(dynamodb, test_table, use_keep_alive):
 # We don't want to store the malformed value on disk and only discover the
 # problem when reading the value back. We want the write to fail immediately,
 # and this is what this test checks. Reproduces issue #8070.
-@pytest.mark.xfail(reason="issue #8070")
 @pytest.mark.parametrize("op", ['PutItem', 'UpdateItem', 'BatchWriteItem'])
 def test_write_malformed_value(dynamodb, test_table_s, op):
     p = random_string()
@@ -649,6 +648,33 @@ def test_write_malformed_value(dynamodb, test_table_s, op):
         # will return this broken map and boto3's attempt to parse the
         # returned map will fail, causing the following call to fail.
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+
+# Like test_write_malformed_value above, test that a PutItem with a
+# malformed value fails, also when the problem isn't at the top level of the
+# value, but deep inside a list, map or set. Reproduces issue #8070.
+MALFORMED_VALUES = [
+    # Malformed lists and maps:
+    {'L': 'dog'}, {'M': []}, {'L': [{'dog': 'cat'}]},
+    # Malformed values nested in a list or map:
+    {'L': [{'BOOL': 'dog'}]}, {'M': {'a': {'BOOL': 'dog'}}}, {'L': [{'S': 123}]},
+    {'L': [{'N': 'dog'}]}, {'M': {'a': {'N': 'dog'}}}, {'L': [{'B': '!!!'}]},
+    {'L': [{'NULL': False}]}, {'L': [{'NS': []}]}, {'M': {'a': {'L': [{'N': 'dog'}]}}},
+    # Malformed sets, at the top level or nested:
+    {'SS': [1]}, {'NS': ['dog']}, {'BS': ['!!!']}, {'L': [{'NS': ['dog']}]},
+    # NULL must be true:
+    {'NULL': False}, {'NULL': 'dog'},
+]
+@pytest.mark.parametrize('value', MALFORMED_VALUES, ids=[json.dumps(v) for v in MALFORMED_VALUES])
+def test_put_malformed_nested_value(dynamodb, test_table_s, value):
+    request = {'TableName': test_table_s.name, 'Item': {'p': {'S': random_string()}, 'x': value}}
+    with pytest.raises(ManualRequestError) as err:
+        # boto3 validates values client-side, so we need a manual request
+        # to send a malformed one.
+        manual_request(dynamodb, 'PutItem', json.dumps(request))
+    # DynamoDB reports some of these errors as a SerializationException,
+    # while Alternator always reports a ValidationException.
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'
 
 # A config_value_context() which retries the restore: at
 # max_concurrent_requests_per_shard=0 the CQL server sheds any request made
