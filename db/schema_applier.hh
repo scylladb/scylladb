@@ -29,8 +29,6 @@ namespace db {
 
 namespace schema_tables {
 
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, utils::chunked_vector<mutation> mutations);
-
 enum class table_kind { table, view };
 
 struct table_selector {
@@ -241,6 +239,10 @@ public:
     // topology change run after releasing it. Must be called on shard 0.
     future<> apply_persisted();
 
+    // Some destruction may need to be done on particular shard hence we need to run it in coroutine.
+    future<> destroy();
+
+private:
     // Update is called after mutations are applied, it should create
     // all updates but not yet commit them to a subsystem (i.e. copy on write style).
     // All changes should be visible only to schema_applier object but not to other subsystems.
@@ -253,10 +255,7 @@ public:
     // atomicity either for legacy reasons or causes side effects to an external system
     // (e.g. informing client's driver).
     future<> post_commit();
-    // Some destruction may need to be done on particular shard hence we need to run it in coroutine.
-    future<> destroy();
 
-private:
     future<> merge_keyspaces();
     future<> merge_types();
     future<> merge_tables_and_views();
