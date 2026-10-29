@@ -972,6 +972,8 @@ future<> schema_applier::load_mutable_token_metadata() {
 }
 
 future<> schema_applier::update() {
+    co_await utils::get_local_injector().inject("schema_applier_update_fail",
+            [] { return std::make_exception_ptr(std::runtime_error("injected failure in schema_applier::update")); });
     _after = co_await get_schema_persisted_state();
     co_await load_mutable_token_metadata();
     co_await merge_keyspaces();
@@ -1233,7 +1235,16 @@ future<> schema_applier::destroy() {
 static future<> execute_do_merge_schema(sharded<service::storage_proxy>& proxy, schema_applier& ap, utils::chunked_vector<mutation> mutations) {
     co_await ap.prepare(mutations);
     co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
-    co_await ap.update();
+    try {
+        co_await ap.update();
+    } catch (...) {
+        // The schema mutations are already persisted, but the in-memory schema
+        // was not updated. Subsequent merges diff persisted state against
+        // persisted state, so they would not notice the difference. Report it
+        // with a distinct exception so the caller can stop applying further
+        // changes until the node is restarted.
+        std::throw_with_nested(schema_persisted_but_not_applied());
+    }
     try {
         co_await ap.commit();
     } catch (...) {
