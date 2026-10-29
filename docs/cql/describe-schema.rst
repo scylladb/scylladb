@@ -29,6 +29,11 @@ Syntax and semantics
   also describes authentication and authorization, as well as service levels. The statements corresponding to
   restoring roles do *not* contain any information about their passwords. Aside from that, additional information
   about tables, materialized views, and secondary indices may be provided, e.g. the ID of a table.
+  Cluster configuration overrides stored at any scope (cluster, keyspace, or table) are not part of the
+  ``CREATE`` statements; they are described by separate rows of type ``cluster_config``, ``keyspace_config``,
+  or ``table_config``, holding ``ALTER CLUSTER``, ``ALTER KEYSPACE``, or ``ALTER TABLE`` statements, which
+  follow all keyspaces.
+  See :doc:`Cluster configuration </cql/cluster-config>`.
 
 * ``DESCRIBE [FULL] SCHEMA WITH INTERNALS AND PASSWORDS``: aside from the information retrieved as part of the
   previous tier, the statements corresponding to restoring roles *do* contain information about their
