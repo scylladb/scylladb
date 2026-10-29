@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
+# A stand-in for the Scylla executable that runs it under the bpcov tracer,
+# for test runners that take the path of the executable to run, e.g.:
+#
+#     SCYLLA=scripts/bpcov/scylla test/cqlpy/run test_json.py
+#
+# The real executable is $BPCOV_SCYLLA, by default build/dev/scylla.
+# See bpcov.py for how to prepare and report.
+
+# Test runners may run us through a symlink, so find our real location.
+dir=$(dirname "$(readlink -f "$0")")
+exec python3 "$dir/bpcov.py" run "${BPCOV_SCYLLA:-$dir/../../build/dev/scylla}" "$@"
