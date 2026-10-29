@@ -27,11 +27,34 @@ struct chunk_headers {
     std::optional<ondisk::segment_header> segment;
 };
 
-// Returns nullopt if the stream ends first or the headers are invalid.
-future<std::optional<chunk_headers>> read_chunk_headers(segment_reader& reader) {
+// Returns nullopt if the stream ends before the headers, if no chunk starts at the position, if
+// the chunk is from an earlier use of the segment (its segment_seq is not `expected_seq`), or if
+// the headers are invalid.
+//
+// Throws std::runtime_error at a chunk with a format version that this code does not read. Such a
+// chunk is from another release and does not mark the end of the segment, so recovery must not
+// handle the segment as empty.
+//
+// The function checks segment_seq before the version, so that the chunks of an earlier use of the
+// segment end the scan and do not fail it.
+//
+// The function checks the version before the CRC, because a chunk of another format version can
+// have another header layout and another CRC, so this code cannot check the CRC of such a chunk. As
+// a result, a bit flip in the version byte makes this function throw, and does not end the scan as
+// other corruption does.
+future<std::optional<chunk_headers>> read_chunk_headers(segment_reader& reader, log_segment_id segment_id,
+        std::optional<segment_sequence> expected_seq) {
+    const auto position = reader.position();
     auto ch = co_await reader.read<ondisk::chunk_header>();
-    if (!ch || !ondisk::validate_chunk_header_fields(*ch)) {
+    if (!ch || ch->magic != ondisk::chunk_header_magic) {
         co_return std::nullopt;
+    }
+    if (expected_seq && ch->segment_seq != *expected_seq) {
+        co_return std::nullopt;
+    }
+    if (!ondisk::can_read_version(ch->version)) {
+        throw std::runtime_error(fmt::format("Chunk at offset {} of {} has format version {}, and this release reads versions {} to {}",
+                position, segment_id, ch->version, ondisk::min_read_version, ondisk::current_version));
     }
 
     std::optional<ondisk::segment_header> sh;
@@ -164,17 +187,12 @@ future<std::optional<scanned_chunk>> segment_scanner::read_chunk() {
 
     // A chunk with invalid headers, or a chunk of an earlier use of the segment, ends the scan.
     // Chunks are written in sequence, so no chunk of this use of the segment follows it.
-    auto headers = co_await read_chunk_headers(_reader);
+    auto headers = co_await read_chunk_headers(_reader, _segment_id, _segment_seq);
     if (!headers) {
         co_return std::nullopt;
     }
     const auto& ch = headers->chunk;
-
-    if (!_segment_seq) {
-        _segment_seq = ch.segment_seq;
-    } else if (ch.segment_seq != *_segment_seq) {
-        co_return std::nullopt;
-    }
+    _segment_seq = ch.segment_seq;
 
     // A chunk whose body is cut short still gives its segment info. Recovery takes the highest
     // segment_seq from it, and a segment_seq that is on disk must not go to a new segment again,
@@ -227,9 +245,9 @@ void segment_scanner::report_failed_chunks() const {
     }
 }
 
-future<std::optional<segment_info>> read_chunk_info(seastar::input_stream<char>& in) {
+future<std::optional<segment_info>> read_chunk_info(seastar::input_stream<char>& in, log_segment_id segment_id) {
     segment_reader reader(in);
-    auto headers = co_await read_chunk_headers(reader);
+    auto headers = co_await read_chunk_headers(reader, segment_id, std::nullopt);
     co_return headers.transform(make_segment_info);
 }
 
@@ -250,6 +268,10 @@ void streamed_segment_rewriter::maybe_parse_initial_header() {
     }
 
     auto ch = read_chunk_header();
+    if (ch.magic == ondisk::chunk_header_magic && !ondisk::can_read_version(ch.version)) {
+        throw std::runtime_error(fmt::format("Streamed logstor chunk has format version {}, and this release reads versions {} to {}",
+                ch.version, ondisk::min_read_version, ondisk::current_version));
+    }
     if (!ondisk::validate_chunk_header_fields(ch)) {
         throw std::runtime_error("Invalid streamed logstor chunk header");
     }
