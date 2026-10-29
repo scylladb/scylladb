@@ -132,6 +132,8 @@ add_scylla_test(hash_test
   KIND SEASTAR)
 add_scylla_test(hashers_test
   KIND SEASTAR)
+add_scylla_test(hint_storage_test
+  KIND SEASTAR)
 add_scylla_test(hint_test
   KIND SEASTAR)
 add_scylla_test(hwlb_test
