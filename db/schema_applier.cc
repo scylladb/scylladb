@@ -1331,63 +1331,6 @@ future<> schema_applier::apply_persisted() {
     }
 }
 
-static future<> execute_do_merge_schema(sharded<service::storage_proxy>& proxy, schema_applier& ap, utils::chunked_vector<mutation> mutations) {
-    co_await ap.prepare(mutations);
-    co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
-    try {
-        co_await ap.update();
-    } catch (...) {
-        // The schema mutations are already persisted, but the in-memory schema
-        // was not updated. Subsequent merges diff persisted state against
-        // persisted state, so they would not notice the difference. Report it
-        // with a distinct exception so the caller can stop applying further
-        // changes until the node is restarted.
-        std::throw_with_nested(schema_persisted_but_not_applied());
-    }
-    try {
-        co_await ap.commit();
-    } catch (...) {
-        // We have no good way to recover from partial commit and continuing
-        // would mean that schema is in inconsistent state.
-        on_fatal_internal_error(slogger, format("schema commit failed: {:t}", std::current_exception()));
-    }
-    co_await ap.post_commit();
-}
-
-static future<> do_merge_schema(sharded<service::storage_proxy>& proxy,  sharded<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, utils::chunked_vector<mutation> mutations)
-{
-    slogger.trace("do_merge_schema: {}", mutations);
-    schema_applier ap(proxy, ss, sys_ks);
-    co_await execute_do_merge_schema(proxy, ap, std::move(mutations)).finally([&ap]() {
-        return ap.destroy();
-    });
-}
-
-/**
- * Merge remote schema in form of mutations with local and mutate ks/cf metadata objects
- * (which also involves fs operations on add/drop ks/cf)
- *
- * @param mutations the schema changes to apply
- *
- * @throws ConfigurationException If one of metadata attributes has invalid value
- * @throws IOException If data was corrupted during transportation or failed to apply fs operations
- */
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, utils::chunked_vector<mutation> mutations)
-{
-    if (this_shard_id() != 0) {
-        // mutations must be applied on the owning shard (0).
-        co_await smp::submit_to(0, coroutine::lambda([&, fmuts = freeze(mutations)] () mutable -> future<> {
-            co_await merge_schema(sys_ks, proxy, ss, co_await unfreeze_gently(fmuts));
-        }));
-        co_return;
-    }
-    co_await with_merge_lock([&] () mutable -> future<> {
-        co_await do_merge_schema(proxy, ss, sys_ks, std::move(mutations));
-        auto version = co_await get_group0_schema_version(sys_ks.local());
-        co_await update_schema_version_and_announce(sys_ks, proxy, version);
-    });
-}
-
 }
 
 }
