@@ -14,6 +14,7 @@ from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, ne
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
+from cassandra.metadata import Murmur3Token
 from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement, BoundStatement
@@ -3297,3 +3298,96 @@ async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterMa
         logger.info("Dropping the table removes the series of that node too")
         await cql.run_async(f"DROP TABLE {ks}.test")
         await wait_for_sc_raft_series_gone(manager, src)
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_shutdown_does_not_abort_shard_bounced_write(manager: ScyllaClusterManager):
+    """
+    Reproducer for SCYLLADB-5405.
+
+    A write arrives on a connection of one shard while the tablet lives on the
+    other shard, so the CQL server bounces it there. The bounced request runs
+    with the abort source of the target shard's CQL server. On a graceful stop
+    each shard's CQL server waits only for its own connections and then aborts
+    its abort source. The target shard has nothing to wait for, so it aborts
+    the write while the shard that owns the connection is still waiting for
+    that very write to finish.
+
+    The write is paused on the target shard until the target shard's CQL
+    server has shut its connections down. Once released, it should complete
+    and be applied: the connection that owns it is still draining.
+
+    The test relies on the driver to send the write to the wrong shard. The
+    driver has no routing information for the table (see below), so it picks
+    the shard by the token. If a driver learns the routing before the first
+    write to a tablet, the test has to send the write on a connection of the
+    other shard by other means. The shard bounce metric check catches that.
+    """
+    cmdline = DEFAULT_CMDLINE + ["--smp=2", "--logger-log-level", "cql_server=debug"]
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline)
+    cql, [host] = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+        [(_, tablet_shard)] = await get_tablet_replicas(manager, server, ks, "test", 0)
+
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        insert.retry_policy = FallthroughRetryPolicy()
+
+        # Strongly consistent statements return routing information only over
+        # TABLETS_ROUTING_V2, which the driver doesn't support, so it picks the
+        # shard from the token alone, as for vnodes. Even a driver supporting it
+        # learns a tablet's routing only from the response to the first request
+        # to that tablet, and the write below is the first one to the table.
+        # Pick a key that the driver sends to the shard without the tablet.
+        def driver_shard(pk: int) -> int:
+            routing_key = insert.bind((pk, 0)).routing_key
+            return host.sharding_info.shard_id_from_token(Murmur3Token.from_key(routing_key).value)
+        pk = next(pk for pk in range(100) if driver_shard(pk) != tablet_shard)
+        conn_shard = driver_shard(pk)
+        logger.info(f"Tablet is on shard {tablet_shard}, the driver sends pk={pk} to shard {conn_shard}")
+
+        # Without a connection to that shard the driver would use any connection.
+        pool = next(p for p in cql.get_pools() if p.host == host)
+        async def driver_connected_to_all_shards():
+            return True if pool.num_missing_or_needing_replacement == 0 else None
+        await wait_for(driver_connected_to_all_shards, time.time() + 60)
+
+        bounces_metric = "scylla_strong_consistency_coordinator_write_shard_bounces"
+        bounces_before = (await manager.metrics.query(server.ip_addr)).get(bounces_metric) or 0
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        await manager.api.enable_injection(server.ip_addr, "sc_coordinator_wait_before_begin_mutate", one_shot=True)
+        write_fut = asyncio.ensure_future(cql.run_async(insert.bind((pk, 1))))
+        await log.wait_for(rf"\[shard {tablet_shard}:.*sc_coordinator_wait_before_begin_mutate: waiting",
+                           from_mark=mark, timeout=30)
+
+        bounces_after = (await manager.metrics.query(server.ip_addr)).get(bounces_metric) or 0
+        assert bounces_after > bounces_before, "The write was not bounced to another shard"
+
+        logger.info("Stopping the node while the bounced write is in flight")
+        mark = await log.mark()
+        stop_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
+        # The CQL server of the maintenance socket stops later, so the first match is
+        # the CQL server of the clients. Before the fix the abort came right before
+        # "generic_server::shutdown completed", now it comes after all shards log
+        # "generic_server::shutdown_connections completed".
+        await log.wait_for(rf"\[shard {tablet_shard}:[^\]]*\] cql_server - generic_server::shutdown(_connections)? completed",
+                           from_mark=mark, timeout=30)
+        await manager.api.message_injection(server.ip_addr, "sc_coordinator_wait_before_begin_mutate")
+
+        # Report the write's error even if the stop fails too.
+        write_result, stop_result = await asyncio.gather(write_fut, stop_task, return_exceptions=True)
+        if isinstance(write_result, WriteTimeout):
+            pytest.fail(f"SCYLLADB-5405: the bounced write was aborted by the CQL server of shard {tablet_shard} "
+                        f"while the connection on shard {conn_shard} was still draining: {write_result}")
+        for result in (write_result, stop_result):
+            if isinstance(result, BaseException):
+                raise result
+
+        logger.info("Restarting the node to check that the write was applied")
+        await manager.server_start(server.server_id)
+        cql, _ = await manager.get_ready_cql([server])
+        rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
+        assert [row.v for row in rows] == [1]
