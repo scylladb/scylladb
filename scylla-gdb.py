@@ -2701,7 +2701,7 @@ class scylla_memory(gdb.Command):
                   ' System:\n'
                   '  real dirty: {sys_real_dirty:>13}\n'
                   '  unspooled:  {sys_unspooled:>13}\n\n'
-                  .format(total=(lsa_allocated-cache_region.total()),
+                  .format(total=(lsa_used-cache_region.total()),
                           reg_real_dirty=dirty_mem_mgr(db['_dirty_memory_manager']).real_dirty(),
                           reg_unspooled=dirty_mem_mgr(db['_dirty_memory_manager']).unspooled(),
                           sys_real_dirty=dirty_mem_mgr(db['_system_dirty_memory_manager']).real_dirty(),
