@@ -6005,7 +6005,7 @@ future<> table::flush_compaction_groups(storage_group& sg) {
     }
 }
 
-future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg) {
+future<> table::cleanup_compaction_groups(db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg) {
     for (auto& cg_ptr : sg.compaction_groups_immediate()) {
         co_await cg_ptr->cleanup();
         // FIXME: at this point _highest_rp might be greater than the replay_position of the last cleaned mutation,
@@ -6015,12 +6015,8 @@ future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys
         // in the first place, but it would be better to extract the exact replay_position from
         // the actually flushed/deleted sstables, like discard_sstable() does, so that the mutations
         // cleaned from sstables are exactly the same as the ones cleaned from commitlog.
+        // This also drops the unneeded records, which apply only to deleted commitlog segments.
         co_await sys_ks.save_commitlog_cleanup_record(schema()->id(), sg.token_range(), _highest_rp);
-        // This is the only place (outside of reboot) where we delete unneeded commitlog cleanup
-        // records. This isn't ideal -- it would be more natural if the unneeded records
-        // were deleted as soon as they become unneeded -- but this gets the job done with a
-        // minimal amount of code.
-        co_await sys_ks.drop_old_commitlog_cleanup_records(db.commitlog()->min_position());
     }
 
     tlogger.info("Cleaned up tablet {} of table {}.{} successfully.", tid, _schema->ks_name(), _schema->cf_name());
@@ -6040,7 +6036,7 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
     // compaction_group::stop takes care of flushing.
     co_await stop_compaction_groups(sg);
     co_await utils::get_local_injector().inject("delay_tablet_compaction_groups_cleanup", std::chrono::seconds(5));
-    co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
+    co_await cleanup_compaction_groups(sys_ks, tid, sg);
 }
 
 future<> table::cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
@@ -6049,7 +6045,7 @@ future<> table::cleanup_tablet_without_deallocation(database& db, db::system_key
 
     co_await clear_inactive_reads_for_tablet(db, sg);
     co_await flush_compaction_groups(sg);
-    co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
+    co_await cleanup_compaction_groups(sys_ks, tid, sg);
 }
 
 // Retires the memtables of every compaction group of the tablet. The replacements are
