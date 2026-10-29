@@ -987,14 +987,16 @@ def lua_plus_one():
 def lua_state_function():
     return "(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return (a or 0) + b'"
 
-# Test that the creator of a UDF/UDA is automatically granted all permissions on it.
-# NOTE: In Cassandra, the creator automatically gets all permissions (ALTER, DROP,
-# AUTHORIZE, EXECUTE) on functions they create. Scylla currently does NOT auto-grant
-# permissions on created functions (only on keyspaces and tables).
-@pytest.mark.skip_bug(
-    link="https://github.com/scylladb/scylladb/issues/13747",
-    reason="Scylla does not auto-grant permissions on created functions (unlike Cassandra)",
-)
+# A function body for the tests below, in Java if the server supports it
+# (Cassandra), otherwise in Lua (Scylla).
+def plus_function(has_java_udf):
+    if has_java_udf:
+        return "(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return a + b;'"
+    return "(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return a + b'"
+
+# Test that the creator of a UDF/UDA is automatically granted all permissions on it
+# (ALTER, DROP, AUTHORIZE, EXECUTE), as in Cassandra.
+# Reproduces #13747.
 def test_udf_creator_granted_all_permissions(cql, test_keyspace, scylla_only):
     with new_user(cql) as mike:
         grant(cql, 'CREATE', 'ALL KEYSPACES', mike)
@@ -1020,13 +1022,6 @@ def test_udf_creator_granted_all_permissions(cql, test_keyspace, scylla_only):
             finally:
                 mike_session.execute(f"DROP KEYSPACE IF EXISTS {ks}")
 
-# A function body for the tests below, in Java if the server supports it
-# (Cassandra), otherwise in Lua (Scylla).
-def plus_function(has_java_udf):
-    if has_java_udf:
-        return "(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return a + b;'"
-    return "(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return a + b'"
-
 # Test that the creator of a keyspace is automatically granted all
 # permissions on the functions in that keyspace, as in Cassandra - so that,
 # for example, a user allowed only to create keyspaces can create functions
@@ -1049,6 +1044,53 @@ def test_keyspace_creator_granted_function_permissions(cql, has_java_udf):
                 mike_session.execute(f'CREATE FUNCTION {ks}.plus {plus_function(has_java_udf)}')
             finally:
                 cql.execute(f'DROP KEYSPACE IF EXISTS {ks}')
+
+# Test that CREATE OR REPLACE FUNCTION or CREATE FUNCTION IF NOT EXISTS of a
+# function which already exists doesn't grant the user any permissions on
+# it, because the user didn't create it - as in Cassandra.
+def test_udf_existing_function_not_granted(cql, test_keyspace, has_java_udf):
+    with new_function(cql, test_keyspace, plus_function(has_java_udf), args='int, int') as f:
+        with new_user(cql) as mike:
+            grant(cql, 'CREATE', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', mike)
+            grant(cql, 'ALTER', f'FUNCTION {test_keyspace}.{f}(int, int)', mike)
+            ensure_updated_permissions(cql)
+            perms_before = set(cql.execute(f'LIST ALL PERMISSIONS OF {mike}'))
+            with new_session(cql, mike) as mike_session:
+                # Check that CREATE OR REPLACE of the existing function
+                # grants mike nothing
+                mike_session.execute(f'CREATE OR REPLACE FUNCTION {test_keyspace}.{f} {plus_function(has_java_udf)}')
+                ensure_updated_permissions(cql)
+                assert set(cql.execute(f'LIST ALL PERMISSIONS OF {mike}')) == perms_before
+                # Check that CREATE FUNCTION IF NOT EXISTS of the existing
+                # function grants mike nothing
+                mike_session.execute(f'CREATE FUNCTION IF NOT EXISTS {test_keyspace}.{f} {plus_function(has_java_udf)}')
+                ensure_updated_permissions(cql)
+                assert set(cql.execute(f'LIST ALL PERMISSIONS OF {mike}')) == perms_before
+
+# Test that CREATE OR REPLACE AGGREGATE or CREATE AGGREGATE IF NOT EXISTS of
+# an aggregate which already exists doesn't grant the user any permissions
+# on it, because the user didn't create it - as in Cassandra.
+def test_uda_existing_aggregate_not_granted(cql, test_keyspace, has_java_udf):
+    with new_function(cql, test_keyspace, plus_function(has_java_udf), args='int, int') as f:
+        aggregate_body = f'(int) SFUNC {f} STYPE int INITCOND 0'
+        with new_aggregate(cql, test_keyspace, aggregate_body) as a:
+            with new_user(cql) as mike:
+                grant(cql, 'CREATE', f'ALL FUNCTIONS IN KEYSPACE {test_keyspace}', mike)
+                grant(cql, 'ALTER', f'FUNCTION {test_keyspace}.{a}(int)', mike)
+                grant(cql, 'EXECUTE', f'FUNCTION {test_keyspace}.{f}(int, int)', mike)
+                ensure_updated_permissions(cql)
+                perms_before = set(cql.execute(f'LIST ALL PERMISSIONS OF {mike}'))
+                with new_session(cql, mike) as mike_session:
+                    # Check that CREATE OR REPLACE of the existing aggregate
+                    # grants mike nothing
+                    mike_session.execute(f'CREATE OR REPLACE AGGREGATE {test_keyspace}.{a} {aggregate_body}')
+                    ensure_updated_permissions(cql)
+                    assert set(cql.execute(f'LIST ALL PERMISSIONS OF {mike}')) == perms_before
+                    # Check that CREATE AGGREGATE IF NOT EXISTS of the
+                    # existing aggregate grants mike nothing
+                    mike_session.execute(f'CREATE AGGREGATE IF NOT EXISTS {test_keyspace}.{a} {aggregate_body}')
+                    ensure_updated_permissions(cql)
+                    assert set(cql.execute(f'LIST ALL PERMISSIONS OF {mike}')) == perms_before
 
 # Test GRANT/REVOKE of EXECUTE on specific functions, all functions in keyspace, and all functions
 # Test that GRANT and REVOKE are idempotent for UDF permissions
