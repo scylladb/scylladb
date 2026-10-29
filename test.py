@@ -98,7 +98,7 @@ import treelib
 
 from scripts import coverage
 from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, DEBUG_MODES
-from test.pylib import coverage_utils
+from test.pylib import coverage_utils, lcov_utils
 from test.pylib.util import LogPrefixAdapter, get_configured_modes, palette
 
 launch_time = time.monotonic()
@@ -737,6 +737,10 @@ async def process_coverage(options):
     proc = await asyncio.create_subprocess_shell(f"lcov --list --rc lcov_branch_coverage=1 {options.tmpdir}/test_coverage.info  2>/dev/null >> {options.tmpdir}/test_coverage_report.txt")
     await proc.wait()
     logger.info(f"Done creating textual report. ({options.tmpdir}/test_coverage_report.txt)")
+
+    cobertura_report = pathlib.Path(options.tmpdir) / "test_coverage.cobertura.xml"
+    lcov_utils.LcovFile(target_trace_file).write_cobertura(cobertura_report)
+    logger.info(f"Done creating the Cobertura report for SonarQube. ({cobertura_report})")
     total_processing_time = time.time() - total_processing_time
     ROOT_NODE.data.time = total_processing_time
 
