@@ -226,14 +226,11 @@ class group0_state_machine : public raft_state_machine {
     // on-disk state - we can only do that if we know that the group0 table state
     // is consistent.
     //
-    // The only exception to the above rule is the schema - the schema state is
-    // loaded into memory before group0 is initialized, and the in-memory state
-    // is reloaded even if _in_memory_state_machine_enabled is set to false.
-    // Resolving this exception should be possible, but would require considerable
-    // effort in refactoring the migration manager code. In the meantime, we are
-    // fine with this exception because the migration manager applies all schema
-    // mutations of a single command atomically, in a single commitlog entry -
-    // therefore, we should not observe broken invariants in the schema module.
+    // The schema follows the same rule: while the flag is false, the schema
+    // mutations are only written. The group0 log is replayed before the
+    // non-system keyspaces are loaded from the persisted schema, so a command
+    // left partially applied by a crash is applied fully before its schema is
+    // read.
     bool _in_memory_state_machine_enabled;
     // Whether non-system keyspaces are loaded, so the in-memory state built
     // from their schemas (see do_reload_schema_dependent_state()) can be loaded.
@@ -250,6 +247,8 @@ class group0_state_machine : public raft_state_machine {
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
     future<> reload_state();
+    // Persists the topology and raft parts of a transferred snapshot.
+    future<> persist_snapshot_state(std::optional<service::raft_snapshot> topology_snp, std::optional<service::raft_snapshot> raft_snp);
     future<> sync_audit_known_entities();
     future<> do_reload_schema_dependent_state();
 public:

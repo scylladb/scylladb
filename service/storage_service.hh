@@ -888,8 +888,8 @@ public:
 
 private:
     friend class group0_state_machine;
-    // Grants test/boost/tablets_test.cc unit-level access to topology_state_load()
-    // and state_change_hint, to test the reload-scope decision directly.
+    // Grants test/boost/tablets_test.cc access to state_change_hint, to test the
+    // reload-scope decision directly.
     friend struct topology_state_load_test_access;
 
 private:
@@ -977,10 +977,9 @@ private:
         std::optional<topology_change_hint> topology_hint;
     };
 
-    // This is called on all nodes for each new command received through raft
+    // Reloads the topology state from disk and notifies its listeners.
     // raft_group0_client::_read_apply_mutex must be held
-    // Precondition: the topology mutations were already written to disk; the function only transitions the in-memory state machine.
-    future<> topology_transition(state_change_hint hint = {});
+    future<> topology_transition();
     
     // This is called on all nodes for each new command related to tablet-view-building, received through raft
     // raft_group0_client::_read_apply_mutex must be held
@@ -1135,7 +1134,7 @@ private:
     future<> finish_topology_state_change(topology_state_change& change);
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
-    future<> topology_state_load(state_change_hint hint = {});
+    future<> topology_state_load();
     // Applies received raft snapshot to local state machine persistent storage
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_snapshot snp);
