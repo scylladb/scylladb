@@ -2040,6 +2040,13 @@ future<> storage_service::stop_transport() {
             _messaging.invoke_on_all(&netw::messaging_service::shutdown).get();
             slogger.info("Stop transport: shutdown messaging_service done");
 
+            // Forwarded CQL requests must finish before the drain shuts down the commitlog.
+            // We wait for them after messaging_service has shut down, so no new ones arrive.
+            if (_drain_forwarded_cql_requests) {
+                _drain_forwarded_cql_requests().get();
+                slogger.info("Stop transport: drain forwarded CQL requests done");
+            }
+
             _stream_manager.invoke_on_all(&streaming::stream_manager::shutdown).get();
             slogger.info("Stop transport: shutdown stream_manager done");
 
@@ -7991,6 +7998,10 @@ future<> storage_service::start_maintenance_mode() {
         token_metadata->update_topology(my_host_id(), _snitch.local()->get_location(), locator::node::state::normal, this_smp_shard_count());
         return token_metadata->update_normal_tokens({ dht::token{} }, my_host_id());
     }, acquire_merge_lock::yes);
+}
+
+void storage_service::set_forwarded_cql_requests_drain(std::function<future<>()> drain) {
+    _drain_forwarded_cql_requests = std::move(drain);
 }
 
 future<> storage_service::register_protocol_server(protocol_server& server, bool start_instantly) {
