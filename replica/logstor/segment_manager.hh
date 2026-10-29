@@ -53,7 +53,6 @@ struct segment_manager_config {
     // fragmentation and of not reserving space up front.
     bool sparse_files = false;
     bool compaction_enabled = true;
-    size_t max_segments_per_compaction = 32;
     // The free segments that compaction keeps for itself, as a fraction of the disk, see
     // compaction_space_floor().
     utils::updateable_value<double> compaction_space_floor{0.03};

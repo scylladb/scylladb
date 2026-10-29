@@ -69,9 +69,6 @@ public:
     };
 
     struct config {
-        // Upper bound on the batch cap; the cap actually used is derived from the compaction
-        // space floor by make_compaction_limits().
-        size_t max_segments_per_compaction;
         // The space floor as a fraction of the disk, see compaction_space_floor().
         utils::updateable_value<double> space_floor;
         // See utilization_threshold_curve.
