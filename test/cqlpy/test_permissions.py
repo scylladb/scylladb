@@ -1008,6 +1008,36 @@ def test_udf_creator_granted_all_permissions(cql, test_keyspace, scylla_only):
             finally:
                 mike_session.execute(f"DROP KEYSPACE IF EXISTS {ks}")
 
+# A function body for the tests below, in Java if the server supports it
+# (Cassandra), otherwise in Lua (Scylla).
+def plus_function(has_java_udf):
+    if has_java_udf:
+        return "(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return a + b;'"
+    return "(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return a + b'"
+
+# Test that the creator of a keyspace is automatically granted all
+# permissions on the functions in that keyspace, as in Cassandra - so that,
+# for example, a user allowed only to create keyspaces can create functions
+# in the keyspaces they created.
+# Reproduces #13747.
+def test_keyspace_creator_granted_function_permissions(cql, has_java_udf):
+    with new_user(cql) as mike:
+        grant(cql, 'CREATE', 'ALL KEYSPACES', mike)
+        ensure_updated_permissions(cql)
+        with new_session(cql, mike) as mike_session:
+            ks = unique_name()
+            mike_session.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class':'NetworkTopologyStrategy', 'replication_factor':1}}")
+            try:
+                ensure_updated_permissions(cql)
+                # Check that mike got all permissions on the functions in ks
+                perms = {(str(r.resource), str(r.permission)) for r in cql.execute(f'LIST ALL PERMISSIONS OF {mike}')}
+                for perm in ['CREATE', 'ALTER', 'DROP', 'AUTHORIZE', 'EXECUTE']:
+                    assert (f'<all functions in {ks}>', perm) in perms
+                # Check that mike can create a function in ks
+                mike_session.execute(f'CREATE FUNCTION {ks}.plus {plus_function(has_java_udf)}')
+            finally:
+                cql.execute(f'DROP KEYSPACE IF EXISTS {ks}')
+
 # Test GRANT/REVOKE of EXECUTE on specific functions, all functions in keyspace, and all functions
 # Test that GRANT and REVOKE are idempotent for UDF permissions
 def test_udf_grant_revoke_are_idempotent(cql, test_keyspace, scylla_only):
