@@ -34,6 +34,45 @@ static constexpr size_t record_alignment = 8;
 static constexpr uint8_t current_version = 1;
 static constexpr uint32_t chunk_header_magic = 0x4c475342;
 
+// max_key_size is the size of the largest partition key that a record can hold. CQL limits the
+// serialized key to this size (see validation::max_key_size), so a larger key_size can only come
+// from corruption.
+static constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
+
+template <>
+struct field<segment_kind> : enum_field<segment_kind, uint8_t> {};
+
+template <>
+struct field<segment_sequence> : projected_field<uint64_t, &segment_sequence::value> {};
+
+// A dht::token is written as its raw value only, and not in its IDL form, which also holds the
+// token kind.
+template <>
+struct field<dht::token> : projected_field<int64_t, &dht::token::raw, &dht::token::from_int64> {};
+
+template <>
+struct field<utils::UUID> {
+    static constexpr size_t size = 2 * field<int64_t>::size;
+
+    template <typename Output>
+    [[gnu::always_inline]]
+    static void write(Output& out, const utils::UUID& v) {
+        field<int64_t>::write(out, v.get_most_significant_bits());
+        field<int64_t>::write(out, v.get_least_significant_bits());
+    }
+
+    template <typename Input>
+    [[gnu::always_inline]]
+    static utils::UUID read(Input& in) {
+        auto msb = field<int64_t>::read(in);
+        auto lsb = field<int64_t>::read(in);
+        return utils::UUID(msb, lsb);
+    }
+};
+
+template <>
+struct field<table_id> : projected_field<utils::UUID, &table_id::uuid> {};
+
 struct segment_header;
 
 // A segment holds one or more chunks, each starting at a block_alignment boundary and padded to
@@ -78,9 +117,13 @@ struct record_frame_header : fixed_layout {
     bool operator==(const record_frame_header& other) const noexcept = default;
 };
 
-// The largest partition key a record can carry. CQL caps the serialized key at this size (see
-// validation::max_key_size), so a larger key_size can only come from corruption.
-static constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
+// These constants are the on-disk sizes, which fixed_size calculates from the fields of each type.
+static constexpr size_t chunk_header_size = fixed_size<chunk_header>;
+static constexpr size_t segment_header_size = fixed_size<segment_header>;
+static constexpr size_t record_frame_header_size = fixed_size<record_frame_header>;
+
+static_assert(chunk_header_size % record_alignment == 0, "Chunk header size must be aligned by record_alignment");
+static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
 
 // Whether the header has the magic, a kind and the version this code writes. The kind tells the
 // reader whether a segment header follows. The CRC is not checked here: validate_chunk_headers()
@@ -110,47 +153,6 @@ inline bool validate_record_frame_header(const record_frame_header& frame_header
 
 // Out of line so that the formatting and the throw stay out of the inlined read path.
 [[noreturn]] void throw_invalid_record_frame(const record_frame_header& frame_header, size_t frame_size);
-
-template <>
-struct field<segment_kind> : enum_field<segment_kind, uint8_t> {};
-
-template <>
-struct field<segment_sequence> : projected_field<uint64_t, &segment_sequence::value> {};
-
-// The raw value only, not the IDL form of dht::token, which also carries the token kind.
-template <>
-struct field<dht::token> : projected_field<int64_t, &dht::token::raw, &dht::token::from_int64> {};
-
-template <>
-struct field<utils::UUID> {
-    static constexpr size_t size = 2 * field<int64_t>::size;
-
-    template <typename Output>
-    [[gnu::always_inline]]
-    static void write(Output& out, const utils::UUID& v) {
-        field<int64_t>::write(out, v.get_most_significant_bits());
-        field<int64_t>::write(out, v.get_least_significant_bits());
-    }
-
-    template <typename Input>
-    [[gnu::always_inline]]
-    static utils::UUID read(Input& in) {
-        auto msb = field<int64_t>::read(in);
-        auto lsb = field<int64_t>::read(in);
-        return utils::UUID(msb, lsb);
-    }
-};
-
-template <>
-struct field<table_id> : projected_field<utils::UUID, &table_id::uuid> {};
-
-// The on-disk sizes, derived from the fields of each type.
-static constexpr size_t chunk_header_size = fixed_size<chunk_header>;
-static constexpr size_t segment_header_size = fixed_size<segment_header>;
-static constexpr size_t record_frame_header_size = fixed_size<record_frame_header>;
-
-static_assert(chunk_header_size % record_alignment == 0, "Chunk header size must be aligned by record_alignment");
-static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
 
 // The record header is the token, the timestamp and the table id as four little-endian 64-bit
 // words, followed by the partition key in its internal representation:
