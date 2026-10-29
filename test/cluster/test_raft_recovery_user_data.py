@@ -230,3 +230,148 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
     await finish_writes_dc2()
     safe_driver_shutdown(ccluster_dc1)
     safe_driver_shutdown(ccluster_dc2)
+
+
+
+async def test_raft_recovery_user_data_sc(manager: ScyllaClusterManager):
+    """
+    Test that the Raft-based recovery procedure works correctly with a strongly consistent keyspace.
+
+    1. Start a cluster with two dcs, dc1 and dc2, containing three nodes each. dc2 contains 3 out of 5 group 0 voters.
+    2. Create a strongly consistent keyspace with RF=3 in dc1 and RF=0 in dc2, and write some data to it.
+    3. Kill all nodes from dc2, causing a permanent group 0 majority loss. The tablets' raft groups lose no member.
+    4. Run the recovery procedure to recreate group 0 with nodes from dc1, checking after each step that the keyspace
+    holds all the data written so far and accepts writes.
+    5. Replace the dead nodes from dc2 and check the keyspace again.
+
+    FIXME: give the keyspace replicas in dc2 and write to it during the rolling restarts, as
+    test_raft_recovery_user_data does, once raft snapshot transfer is implemented for strongly consistent tables. Both
+    need a snapshot transfer: after the rolling restarts, the replicas in dc1 have no log entries a new replica in dc2
+    could catch up from, and a replica restarted before the leader misses the entries the leader drops from its log on
+    its own restart.
+    test_minority_dc_loss in test_strong_consistency_multidc.py covers a raft group of a strongly consistent tablet
+    losing its replicas in a dc.
+    """
+    cfg = {'experimental_features': ['strongly-consistent-tables']}
+
+    # Add servers to dc2 first, so 3 out of 5 group 0 voters will be there.
+    logging.info('Adding servers that will be killed to dc2')
+    dead_servers = await manager.servers_add(3, config=cfg, auto_rack_dc='dc2')
+    logging.info('Adding servers that will survive majority loss to dc1')
+    live_servers = await manager.servers_add(3, config=cfg, auto_rack_dc='dc1')
+    logging.info(f'Servers to survive majority loss: {live_servers}, servers to be killed: {dead_servers}')
+
+    cql, _ = await manager.get_ready_cql(live_servers + dead_servers)
+    hosts = await wait_for_cql_and_get_hosts(cql, live_servers, time.time() + 60)
+    dead_host_ids = await gather_safely(*(manager.get_host_id(srv.server_id) for srv in dead_servers))
+
+    # See test_raft_recovery_user_data for the explanation on why this is needed.
+    result = await cql.run_async("SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")
+    if result:
+        await cql.run_async("ALTER KEYSPACE audit WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3}")
+
+    first_group0_id = (await cql.run_async(
+            "SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
+
+    ks = unique_name()
+    cf = 'test'
+    # FIXME: remove the initial tablet count once tablets of strongly consistent tables can be split and merged.
+    # Until then, the tablet count stays fixed.
+    await cql.run_async(f"""CREATE KEYSPACE {ks} WITH replication =
+                        {{'class': 'NetworkTopologyStrategy', 'dc1': 3, 'dc2': 0}}
+                        AND tablets = {{'initial': 4}} AND consistency = 'global'""")
+    await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk int PRIMARY KEY, v int)")
+    table_id = await manager.get_table_id(ks, cf)
+
+    async def catch_up():
+        """
+        Wait until the raft group of every tablet has a leader and the servers from dc1, which host all the tablets,
+        have applied everything committed so far.
+        """
+        group_ids = [str(r.raft_group_id) for r in await manager.get_cql().run_async(
+                f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")]
+        # Passing a timeout matters: a tablet group defines no default one.
+        await gather_safely(*(read_barrier(manager.api, srv.ip_addr, group_id=gid, timeout=60)
+                              for srv in live_servers for gid in group_ids))
+
+    # Each step of the test writes its own keys, and reads all keys written so far.
+    keys_per_step = 50
+    written: dict[int, int] = {}
+
+    async def write_and_check(step: int):
+        # Wait until every tablet's raft group has a leader: a restart moves leadership.
+        await catch_up()
+        # Prepare the statements on every call: the driver session changes after each reconnect_driver.
+        cql = manager.get_cql()
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, v) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.QUORUM
+        select_stmt = cql.prepare(f"SELECT pk, v FROM {ks}.{cf} WHERE pk = ?")
+        select_stmt.consistency_level = ConsistencyLevel.QUORUM
+
+        keys = range(step * keys_per_step, (step + 1) * keys_per_step)
+        logging.info(f'Writing keys {keys} to {ks}.{cf}')
+        await gather_safely(*(cql.run_async(insert_stmt, (k, step)) for k in keys))
+        written.update({k: step for k in keys})
+        logging.info(f'Reading {ks}.{cf}')
+        results = await gather_safely(*(cql.run_async(select_stmt, (k,)) for k in written))
+        assert {row.pk: row.v for rows in results for row in rows} == written
+
+    await write_and_check(0)
+
+    logging.info(f'Killing {dead_servers}')
+    await gather_safely(*(manager.server_stop(server_id=srv.server_id, convict=False) for srv in dead_servers))
+
+    logging.info('Checking that group 0 has no majority')
+    with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out"):
+        await read_barrier(manager.api, live_servers[0].ip_addr, timeout=2)
+
+    await write_and_check(1)
+
+    logging.info('Starting the recovery procedure')
+
+    logging.info(f'Restarting {live_servers}')
+    await manager.rolling_restart(live_servers)
+
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(live_servers)
+    await write_and_check(2)
+
+    logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
+    await gather_safely(*(delete_discovery_state_and_group0_id(cql, h) for h in hosts))
+
+    # FIXME: use the API to find the recovery leader here when it is implemented. See test_raft_recovery_user_data.
+    recovery_leader = live_servers[0]
+    recovery_leader_id = await manager.get_host_id(recovery_leader.server_id)
+
+    async def set_recovery_leader(srv: ServerInfo):
+        await manager.server_update_config(srv.server_id, 'recovery_leader', recovery_leader_id)
+
+    logging.info(f'Restarting {live_servers} with recovery leader {recovery_leader.server_id}')
+    await manager.rolling_restart(live_servers, with_down=set_recovery_leader)
+
+    await reconnect_driver(manager)
+    cql, hosts = await manager.get_ready_cql(live_servers)
+    await write_and_check(3)
+
+    # Mark the dead nodes as permanently dead, so that every replace request ignores the dead nodes replaced by the
+    # other requests, and the requests can run concurrently.
+    logging.info(f'Marking {dead_servers} as permanently dead')
+    await manager.api.exclude_node(recovery_leader.ip_addr, dead_host_ids)
+
+    async def replace_server(i, being_replaced):
+        replace_cfg = ReplaceConfig(replaced_id=being_replaced.server_id, reuse_ip_addr=False, use_host_id=True)
+        return await manager.server_add(replace_cfg=replace_cfg, config=cfg,
+                                        property_file={'dc': 'dc2', 'rack': f'rack{i + 1}'})
+
+    logging.info(f'Replacing {dead_servers} concurrently')
+    new_servers = list(await gather_safely(*(replace_server(i, srv) for i, srv in enumerate(dead_servers))))
+
+    logging.info(f'Unsetting the recovery_leader config option on {live_servers}')
+    await gather_safely(*(manager.server_remove_config_option(srv.server_id, 'recovery_leader') for srv in live_servers))
+
+    logging.info(f'Deleting persistent data of group 0 {first_group0_id} on {live_servers}')
+    await gather_safely(*(delete_raft_group_data(first_group0_id, cql, h) for h in hosts))
+
+    await reconnect_driver(manager)
+    await manager.get_ready_cql(live_servers + new_servers)
+    await write_and_check(4)
