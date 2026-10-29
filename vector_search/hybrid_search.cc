@@ -80,7 +80,7 @@ seastar::future<std::expected<std::vector<search_candidate>, vector_store_client
                     return client.ann(request.keyspace, request.index, schema, std::move(request.vector), request.fetch, request.filter, searches_as);
                 },
                 [&] (bm25_request& request) {
-                    return client.bm25(request.keyspace, request.index, schema, std::move(request.term), request.limit, searches_as);
+                    return client.bm25(request.keyspace, request.index, schema, std::move(request.term), request.limit, request.filter, searches_as);
                 },
                 [&] (like_request& request) {
                     return client.like(request.keyspace, request.index, schema, std::move(request.pattern), request.limit, searches_as);

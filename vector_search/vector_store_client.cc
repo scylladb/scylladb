@@ -338,8 +338,14 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema, const std
     return read_scored_primary_keys_json(json, schema, "similarity_scores", return_columns);
 }
 
-auto write_bm25_json(query_string query, limit limit) -> json_content {
-    return seastar::format(R"({{"query":{},"limit":{}}})", rjson::from_string(query), limit);
+auto write_bm25_json(query_string query, limit limit, const rjson::value& filter) -> json_content {
+    // As for ANN, omit "filter" when it is empty, keeping queries on global
+    // indexes wire-compatible with vector stores unaware of filtering
+    // full-text searches.
+    if (filter.ObjectEmpty()) {
+        return seastar::format(R"({{"query":{},"limit":{}}})", rjson::from_string(query), limit);
+    }
+    return seastar::format(R"({{"query":{},"limit":{},"filter":{}}})", rjson::from_string(query), limit, rjson::print(filter));
 }
 
 auto read_bm25_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, fts_error> {
@@ -644,9 +650,10 @@ struct vector_store_client::impl {
         }
     }
 
-    auto bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
-            -> future<std::expected<primary_keys, fts_error>> {
-        auto content = co_await post_to_index("bm25", format("/api/v1/indexes/{}/{}/bm25", keyspace, name), write_bm25_json(std::move(fts_query), limit), as);
+    auto bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, const rjson::value& filter,
+            abort_source& as) -> future<std::expected<primary_keys, fts_error>> {
+        auto content = co_await post_to_index(
+                "bm25", format("/api/v1/indexes/{}/{}/bm25", keyspace, name), write_bm25_json(std::move(fts_query), limit, filter), as);
         if (!content) {
             co_return std::unexpected{content.error()};
         }
@@ -821,9 +828,9 @@ auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_pt
     return _impl->ann(std::move(keyspace), std::move(name), schema, std::move(vs_vector), limit, filter, as, routing, std::move(return_columns));
 }
 
-auto vector_store_client::bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
-        -> future<std::expected<primary_keys, fts_error>> {
-    return _impl->bm25(std::move(keyspace), std::move(name), schema, std::move(fts_query), limit, as);
+auto vector_store_client::bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit,
+        const rjson::value& filter, abort_source& as) -> future<std::expected<primary_keys, fts_error>> {
+    return _impl->bm25(std::move(keyspace), std::move(name), schema, std::move(fts_query), limit, filter, as);
 }
 
 auto vector_store_client::like(keyspace_name keyspace, index_name name, schema_ptr schema, query_string pattern, limit limit, abort_source& as)
