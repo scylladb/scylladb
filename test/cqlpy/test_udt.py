@@ -13,6 +13,7 @@
 
 import time
 import pytest
+from contextlib import ExitStack
 from cassandra.protocol import InvalidRequest
 from .util import new_test_table, unique_key_int, new_type
 
@@ -180,3 +181,28 @@ def test_alter_type_rename_used_in_partition_key(cql, test_keyspace, scylla_only
         with new_test_table(cql, test_keyspace, f'pk frozen<{typ}>, val int, PRIMARY KEY(pk)') as table:
             with pytest.raises(InvalidRequest, match=table.split('.')[1]):
                 cql.execute(f'ALTER TYPE {typ} RENAME v1 TO v1_renamed')
+
+# A user type can have a quoted name that is also a CQL type name or keyword.
+# The schema saves the type of a column as text, and the node reads that text
+# back when it applies the schema change. A column of such a type must keep
+# its type, frozen or not.
+# Reproduces SCYLLADB-5202: the text lost the quotes, so "int" was read as the
+# native int, and "byte" or "ttl" failed to parse, which stopped group 0.
+@pytest.mark.skip_bug(
+    link="https://scylladb.atlassian.net/browse/SCYLLADB-5202",
+    reason="stops group 0 on the node, so every later schema change fails",
+)
+def test_quoted_user_type_names(cql, test_keyspace):
+    with ExitStack() as stack:
+        columns = {}
+        for name in ['byte', 'int', 'empty', 'ttl']:
+            typ = stack.enter_context(new_type(cql, test_keyspace, '(a int)', name=f'"{name}"'))
+            columns[f'f_{name}'] = f'frozen<{typ}>'
+            columns[f'n_{name}'] = typ
+        column_defs = ', '.join(f'{column} {typ}' for column, typ in columns.items())
+        table = stack.enter_context(new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, {column_defs}'))
+        values = ', '.join('{a: 1}' for _ in columns)
+        cql.execute(f'INSERT INTO {table} (p, {", ".join(columns)}) VALUES (0, {values})')
+        row = cql.execute(f'SELECT * FROM {table} WHERE p = 0').one()
+        for column in columns:
+            assert getattr(row, column).a == 1
