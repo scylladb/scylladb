@@ -226,7 +226,10 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
                                                             service::migration_manager& mm, bool enable_sm_immediately,
                                                             lw_shared_ptr<raft::server_stats> server_stats) {
     auto state_machine = std::make_unique<group0_state_machine>(
-            _client, mm, qp.proxy(), ss, _gossiper, _feat, enable_sm_immediately);
+            _client, mm, qp.proxy(), ss, _gossiper, _feat, enable_sm_immediately,
+            [gid, this] (std::exception_ptr e) {
+                abort_server_on_error(gid, fmt::format("state machine error, {:t}", e));
+            });
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id, _rpc_stats);
     // Keep a reference to a specific RPC class.
@@ -236,9 +239,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
     auto* cl = qp.proxy().get_db().local().schema_commitlog();
     auto config = raft::server::configuration {
         .on_background_error = [gid, this](std::exception_ptr e) {
-            // The future will be waited indirectly in raft_group0::abort_and_drain.
-            (void)_raft_gr.abort_server(gid, fmt::format("background error, {:t}", e));
-            _status_for_monitoring = status_for_monitoring::aborted;
+            abort_server_on_error(gid, fmt::format("background error, {:t}", e));
         }
     };
     if (cl) {
@@ -954,6 +955,12 @@ struct sleep_with_exponential_backoff {
         _retry_period = std::min(_retry_period * 2, _max_retry_period);
     }
 };
+
+void raft_group0::abort_server_on_error(raft::group_id gid, sstring reason) {
+    // The future will be waited indirectly in raft_group0::abort_and_drain.
+    (void)_raft_gr.abort_server(gid, std::move(reason));
+    _status_for_monitoring = status_for_monitoring::aborted;
+}
 
 void raft_group0::register_metrics() {
     namespace sm = seastar::metrics;

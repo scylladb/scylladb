@@ -56,12 +56,14 @@ namespace service {
 static logging::logger slogger("group0_raft_sm");
 
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-        gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately)
+        gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately,
+        noncopyable_function<void(std::exception_ptr)> on_fatal_error)
     : _client(client), _mm(mm), _sp(sp), _ss(ss)
     , _gate("group0_state_machine")
     , _state_id_handler(ss._topology_state_machine, sp.local_db(), gossiper)
     , _feature_service(feat)
-    , _in_memory_state_machine_enabled(enable_immediately || utils::get_local_injector().is_enabled("group0_enable_sm_immediately")) {
+    , _in_memory_state_machine_enabled(enable_immediately || utils::get_local_injector().is_enabled("group0_enable_sm_immediately"))
+    , _on_fatal_error(std::move(on_fatal_error)) {
     _state_id_handler.run();
 }
 
@@ -582,7 +584,15 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(as);
 
     if (_in_memory_state_machine_enabled) {
-        co_await _mm.merge_schema_from(hid, std::move(*cm));
+        try {
+            co_await _mm.merge_schema_from(hid, std::move(*cm));
+        } catch (const db::schema_tables::schema_persisted_but_not_applied&) {
+            // Raft retries a failed snapshot transfer, but the retry finds the schema
+            // already persisted and does not update the in-memory schema. Stop the
+            // group 0 server, as raft does when apply() fails.
+            _on_fatal_error(std::current_exception());
+            throw;
+        }
     } else {
         co_await write_mutations_to_database(_ss, _sp, gms::inet_address{}, std::move(*cm));
     }
