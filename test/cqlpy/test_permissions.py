@@ -997,7 +997,7 @@ def plus_function(has_java_udf):
 # Test that the creator of a UDF/UDA is automatically granted all permissions on it
 # (ALTER, DROP, AUTHORIZE, EXECUTE), as in Cassandra.
 # Reproduces #13747.
-def test_udf_creator_granted_all_permissions(cql, test_keyspace, scylla_only):
+def test_udf_creator_granted_all_permissions(cql, has_java_udf):
     with new_user(cql) as mike:
         grant(cql, 'CREATE', 'ALL KEYSPACES', mike)
         grant(cql, 'CREATE', 'ALL ROLES', mike)
@@ -1007,7 +1007,7 @@ def test_udf_creator_granted_all_permissions(cql, test_keyspace, scylla_only):
             mike_session.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class':'NetworkTopologyStrategy', 'replication_factor':1}}")
             try:
                 mike_session.execute(f"CREATE TABLE {ks}.t1 (k int PRIMARY KEY, v int)")
-                mike_session.execute(f"CREATE FUNCTION {ks}.state_func_1(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return (a or 0) + b'")
+                mike_session.execute(f"CREATE FUNCTION {ks}.state_func_1 {plus_function(has_java_udf)}")
                 ensure_updated_permissions(cql)
                 mike_session.execute(f"CREATE AGGREGATE {ks}.simple_agg_1(int) SFUNC state_func_1 STYPE int INITCOND 0")
 
