@@ -445,41 +445,38 @@ mutation make_kv_mutation_of_record_size(schema_ptr schema, const sstring& pk, s
     return make_kv_mutation(schema, pk, sstring(value_size, 'x'));
 }
 
-// Verifies that the fixed serialized size declared by a serializer is the number of bytes
-// that write(), read() and skip() actually cover.
+// Checks that a fixed-size on-disk type serializes to the expected bytes, and that read() and skip()
+// consume the same number of bytes. A change to the member order or to a field encoding, which
+// together give the on-disk layout, changes the bytes and fails the test.
 template <typename T>
-void check_serialized_size(const char* name, const T& value) {
-    constexpr size_t expected = ser::serializer<T>::serialized_size;
+void check_ondisk_layout(const char* name, const T& value, std::string_view expected_hex) {
+    constexpr size_t size = ser::serializer<T>::serialized_size;
 
     BOOST_TEST_CONTEXT(name) {
-        seastar::measuring_output_stream ms;
-        ser::serialize(ms, value);
-        BOOST_REQUIRE_EQUAL(ms.size(), expected);
-
-        std::vector<char> buf(expected);
+        std::vector<char> buf(size);
         seastar::simple_memory_output_stream out(buf.data(), buf.size());
         ser::serialize(out, value);
+        BOOST_REQUIRE_EQUAL(out.size(), 0);
+        BOOST_REQUIRE_EQUAL(to_hex(bytes_view(reinterpret_cast<const int8_t*>(buf.data()), buf.size())), expected_hex);
 
         seastar::simple_memory_input_stream in(buf.data(), buf.size());
         auto read_back = ser::deserialize(in, std::type_identity<T>{});
-        BOOST_REQUIRE_EQUAL(buf.size() - in.size(), expected);
+        BOOST_REQUIRE_EQUAL(in.size(), 0);
         BOOST_REQUIRE(read_back == value);
 
         seastar::simple_memory_input_stream skip_in(buf.data(), buf.size());
         ser::serializer<T>::skip(skip_in);
-        BOOST_REQUIRE_EQUAL(buf.size() - skip_in.size(), expected);
+        BOOST_REQUIRE_EQUAL(skip_in.size(), 0);
     }
 }
 
 }
 
-// Checks that the on-disk size constants match what the serializers actually write, read and skip.
-// These sizes drive the substream sizing in write_buffer and segment_io, where a mismatch would
-// silently truncate or pad records rather than fail, so they are verified against the real encoding.
-SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
+// Every field has a distinct value, so a swapped pair of fields changes the bytes.
+SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_layout) {
     auto table = table_id(utils::UUID(int64_t(0x1122334455667788), int64_t(0x99aabbccddeeff00)));
 
-    check_serialized_size("chunk_header", ondisk::chunk_header {
+    check_ondisk_layout("chunk_header", ondisk::chunk_header {
         .magic = ondisk::chunk_header_magic,
         .kind = segment_kind::full,
         .version = ondisk::current_version,
@@ -489,18 +486,52 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
         .body_crc = 0x0badf00d,
         .reserved2 = 0x5eed1e55,
         .crc = 0xfeedface,
-    });
+    }, "4253474c" "01" "01" "3412" "0807060504030201" "efbeadde" "0df0ad0b" "551eed5e" "cefaedfe");
 
-    check_serialized_size("segment_header", ondisk::segment_header {
+    check_ondisk_layout("segment_header", ondisk::segment_header {
         .table = table,
         .first_token = dht::token::from_int64(-0x0123456789abcdef),
         .last_token = dht::token::from_int64(0x7fffffffffffffff),
-    });
+    }, "8877665544332211" "00ffeeddccbbaa99" "1132547698badcfe" "ffffffffffffff7f");
 
-    check_serialized_size("record_frame_header", ondisk::record_frame_header {
+    check_ondisk_layout("record_frame_header", ondisk::record_frame_header {
         .key_size = 0x0a0b0c0d,
         .value_size = 0xcafebabe,
-    });
+    }, "0d0c0b0a" "bebafeca");
+
+    BOOST_TEST_CONTEXT("record_header") {
+        const record_header header {
+            .key = dht::decorated_key(dht::token::from_int64(-0x0123456789abcdef), partition_key::from_bytes(bytes("pk"))),
+            .timestamp = api::timestamp_type(0x0f0e0d0c0b0a0908),
+            .table = table,
+        };
+        std::vector<char> buf(ondisk::record_header_size(header));
+        seastar::simple_memory_output_stream out(buf.data(), buf.size());
+        ondisk::write_record_header(out, header);
+        BOOST_REQUIRE_EQUAL(out.size(), 0);
+        BOOST_REQUIRE_EQUAL(to_hex(bytes_view(reinterpret_cast<const int8_t*>(buf.data()), buf.size())),
+                "1132547698badcfe" "08090a0b0c0d0e0f" "8877665544332211" "00ffeeddccbbaa99" "706b");
+    }
+
+    // The CRC covers the chunk header fields before `crc`, and the segment header in a full segment.
+    auto ch = ondisk::chunk_header {
+        .magic = ondisk::chunk_header_magic,
+        .kind = segment_kind::mixed,
+        .version = ondisk::current_version,
+        .reserved = 0x1234,
+        .segment_seq = segment_sequence{0x0102030405060708},
+        .records_size = 0xdeadbeef,
+        .body_crc = 0x0badf00d,
+        .reserved2 = 0x5eed1e55,
+        .crc = 0xfeedface,
+    };
+    BOOST_REQUIRE_EQUAL(ch.calculate_crc(std::nullopt), 0xb1229275u);
+    ch.kind = segment_kind::full;
+    BOOST_REQUIRE_EQUAL(ch.calculate_crc(ondisk::segment_header {
+        .table = table,
+        .first_token = dht::token::from_int64(-0x0123456789abcdef),
+        .last_token = dht::token::from_int64(0x7fffffffffffffff),
+    }), 0x2c81ed9fu);
 }
 
 // Serializes a record frame and returns its bytes, checking that the frame took exactly the size
