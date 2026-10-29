@@ -113,7 +113,9 @@ struct chunk_header : fixed_layout {
     // over a reused segment - from a whole one.
     uint32_t body_crc;
     uint32_t reserved2;
-    uint32_t crc; // of the fields above, and of the segment header in a full segment
+    // crc is the CRC32 of the fields above it and, in a full segment, of the segment header. crc
+    // must stay the last field, because calculate_crc() covers the serialized bytes before crc.
+    uint32_t crc;
 
     uint32_t calculate_crc(const std::optional<segment_header>& sh) const;
 
