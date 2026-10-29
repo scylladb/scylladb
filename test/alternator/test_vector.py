@@ -1480,6 +1480,32 @@ def test_updatetable_vectorindex_just_one_update(dynamodb):
                 {'Create': {'IndexName': 'ind1', 'VectorAttribute': {'AttributeName': 'x'}, 'Dimensions': 17, 'DistanceFunction': 'COSINE', 'Projection': {'ProjectionType': 'KEYS_ONLY'}}},
                 {'Delete': {'IndexName': 'ind2'}}])
 
+# The test above checked how many *elements* VectorIndexUpdates may have -
+# exactly one. This test checks how many operations that one element may
+# hold: also exactly one. Both "Create" and "Delete" are optional members of
+# the same structure, so a single element holding both of them, or neither,
+# is a perfectly well-formed request that the server - not the SDK - has to
+# reject.
+def test_updatetable_vectorindex_one_operation_per_update(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }]) as table:
+        # An element with neither a "Create" nor a "Delete" says nothing about
+        # what to do, and is rejected:
+        with pytest.raises(ClientError, match='ValidationException'):
+            table.update(VectorIndexUpdates=[{}])
+        # An element asking to both create and delete an index in the same
+        # breath is rejected too. Note that unlike the "two elements" cases in
+        # the previous test - which DynamoDB reports as LimitExceededException -
+        # this is one malformed element rather than too many of them, so the
+        # error is a ValidationException.
+        with pytest.raises(ClientError, match='ValidationException'):
+            table.update(VectorIndexUpdates=[{
+                'Create': {'IndexName': 'ind1', 'VectorAttribute': {'AttributeName': 'x'}, 'Dimensions': 17, 'DistanceFunction': 'COSINE', 'Projection': {'ProjectionType': 'KEYS_ONLY'}},
+                'Delete': {'IndexName': 'ind2'}}])
+        # Neither request did anything - the table still has no vector index:
+        assert 'VectorIndexes' not in table.meta.client.describe_table(TableName=table.name)['Table']
+
 # Also, it's not allowed to have in one UpdateTable request both a
 # VectorIndexUpdates and a GlobalSecondaryIndexUpdates. There is no real
 # reason why we can't support this, but since we already don't allow adding
@@ -1602,6 +1628,44 @@ def test_searchvectors_wrong_indexname(table_vs):
     client = table_vs.meta.client
     with pytest.raises(ClientError, match='ValidationException.*nonexistent'):
         client.search_vectors(TableName=table_vs.name, IndexName='nonexistent', SearchVector=[1, 2, 3], TopK=1)
+
+# The test above (test_searchvectors_wrong_indexname) used an IndexName that
+# doesn't exist at all. Here we check the claim made in its comment but not
+# actually tested by the test itself - that an IndexName naming a real index
+# of the wrong type, a GSI or an LSI, is rejected just the same. In Alternator
+# these two error cases are really one code path (a GSI or LSI is a
+# materialized view, not a secondary index, so it is never even considered a
+# candidate), but that is an implementation detail which DynamoDB need not
+# share - so it deserves its own test.
+# This is the mirror image of test_query_vectorindex_rejected below, which
+# points a Query at a vector index.
+def test_searchvectors_indexname_of_gsi_or_lsi(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'},
+                       {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                                  {'AttributeName': 'c', 'AttributeType': 'S'},
+                                  {'AttributeName': 'x', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexes=[
+                {'IndexName': 'gsi',
+                 'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                 'Projection': {'ProjectionType': 'ALL'}}],
+            LocalSecondaryIndexes=[
+                {'IndexName': 'lsi',
+                 'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'},
+                               {'AttributeName': 'x', 'KeyType': 'RANGE'}],
+                 'Projection': {'ProjectionType': 'ALL'}}],
+            VectorIndexes=[
+                {'IndexName': 'vind',
+                 'VectorAttribute': {'AttributeName': 'v'},
+                 'Dimensions': 3,
+                 'DistanceFunction': 'COSINE',
+                 'Projection': {'ProjectionType': 'KEYS_ONLY'}}]) as table:
+        client = table.meta.client
+        for index_name in ['gsi', 'lsi']:
+            with pytest.raises(ClientError, match=f'ValidationException.*vector index'):
+                client.search_vectors(TableName=table.name, IndexName=index_name,
+                    SearchVector=[1, 2, 3], TopK=1)
 
 # Test that a Query on a vector index is rejected (the separate SearchVectors
 # operation should be used instead). A Query expects IndexName to point to a
@@ -6443,6 +6507,38 @@ def test_searchvectors_projectionexpression_nested_path(dynamodb, needs_vector_s
             ProjectionExpression='z.w[0]')
         assert result['SearchResults'][0]['Item'] == {}
 
+# A ProjectionExpression may not list two "overlapping" paths - two identical
+# paths, or one that is a sub-path of the other. test_projection_expression.py
+# tests this at length for GetItem; here we check that SearchVectors enforces
+# it too. This isn't a given: SearchVectors' projection is unlike any other
+# operation's, splitting the attributes it returns between the vector index
+# and the base table, so it could easily have grown its own path handling that
+# forgets this check.
+# Paths with a common *prefix* only, like "a.b, a.c", do not overlap and are
+# fine - plenty of tests above use multi-path ProjectionExpressions
+# successfully, so we don't need to recheck that here.
+# The overlap is decided symbolically, from the paths alone, with no regard
+# for what the items contain or whether any exist - so this test needs no
+# data, and no vector store either, as the request is rejected long before
+# any search happens.
+def test_searchvectors_projectionexpression_path_overlap(table_vs):
+    client = table_vs.meta.client
+    for expr in ['a, a',
+                 'a.b, a.b',
+                 'a[1], a[1]',
+                 'a, a.b',
+                 'a.b, a',
+                 'a.b, a.b[2]',
+                 'a.b, a.b.c',
+                 'a, a.b[2].c',
+                 'a.b.d, a.b',
+                ]:
+        with pytest.raises(ClientError, match='ValidationException.* overlap'):
+            client.search_vectors(
+                TableName=table_vs.name, IndexName='vind',
+                SearchVector=[1, 2, 3], TopK=1,
+                ProjectionExpression=expr)
+
 # Test that SearchVectors reports a ConsumedCapacity.VectorSearchRequestBytes
 # field, metered at (at least) the 1 KB minimum per request. We check both
 # ReturnConsumedCapacity='TOTAL' and 'INDEXES': unlike write operations
@@ -6488,6 +6584,36 @@ def test_searchvectors_returnconsumedcapacity(dynamodb, needs_vector_store):
             # A tiny 3-dimensional query vector is still metered at (at
             # least) the 1 KB minimum per request.
             assert consumed['VectorSearchRequestBytes'] >= 1024
+
+# The test above checked the two ReturnConsumedCapacity values that ask for
+# the consumed capacity, 'TOTAL' and 'INDEXES'. The third allowed value,
+# 'NONE', asks *not* to report it - and is also the default when the
+# parameter is missing altogether. In both of these cases the response must
+# not have a ConsumedCapacity at all. This test passes even if Alternator
+# does not support ReturnConsumedCapacity for SearchVectors, because if it
+# doesn't report a ConsumedCapacity - this is exactly what 'NONE' wants :-)
+def test_searchvectors_returnconsumedcapacity_none(table_vs, needs_vector_store):
+    client = table_vs.meta.client
+    # The table may be empty - this test is only about the presence of the
+    # ConsumedCapacity field, not about the search results.
+    for kwargs in [{}, {'ReturnConsumedCapacity': 'NONE'}]:
+        result = client.search_vectors(
+            TableName=table_vs.name, IndexName='vind',
+            SearchVector=[1, 0, 0], TopK=1, **kwargs)
+        assert 'ConsumedCapacity' not in result
+
+# ReturnConsumedCapacity only allows the three values checked in the two
+# tests above (plus the missing value). Any other value is rejected with a
+# ValidationException - as DynamoDB also does for other operations (see
+# test_returnconsumedcapacity.py's test_invalid_consumed_capacity_type).
+@pytest.mark.xfail(reason="Alternator does not validate SearchVectors' ReturnConsumedCapacity")
+def test_searchvectors_returnconsumedcapacity_invalid(table_vs, needs_vector_store):
+    client = table_vs.meta.client
+    with pytest.raises(ClientError, match='ValidationException'):
+        client.search_vectors(
+            TableName=table_vs.name, IndexName='vind',
+            SearchVector=[1, 0, 0], TopK=1,
+            ReturnConsumedCapacity='DUMMY')
 
 # Test that PutItem, when writing an item's vector attribute that's indexed
 # by a vector index, reports a
@@ -7311,6 +7437,72 @@ def test_vector_with_old_image_stream(dynamodb, dynamodbstreams, needs_vector_st
                 if time.monotonic() > deadline:
                     pytest.fail('Timed out waiting for MODIFY record in Alternator Streams')
                 time.sleep(VECTOR_STORE_POLL_INTERVAL)
+
+
+# Above we had several tests for errors in ExpressionAttributeNames, but no
+# test that uses it successfully in SearchConditionExpression or in
+# ProjectionExpression. Let's test this now. Using ExpressionAttributeNames
+# aliases is especially important when the attribute name contains characters
+# that are not allowed in the normal expression syntax, e.g., a space in the
+# attribute name - so we'll use that as our example.
+def test_searchvectors_expression_attribute_names(dynamodb, needs_vector_store):
+    attribute_name = 'x with spaces'
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': attribute_name, 'AttributeType': 'S'},
+            ],
+            VectorIndexes=[{
+                'IndexName': 'vind',
+                'VectorAttribute': {'AttributeName': 'v'},
+                'Dimensions': 3,
+                'DistanceFunction': 'COSINE',
+                'Projection': {'ProjectionType': 'ALL'},
+                'SearchSchema': [
+                    {'AttributeName': attribute_name, 'SearchSchemaElementType': 'INLINE_FILTER'},
+                ],
+            }]) as table:
+        wait_for_vector_index_active(table, 'vind')
+        client = table.meta.client
+        # Two items with the same vector, differing only in the value of the
+        # inline-filter attribute, so only the filter can tell them apart.
+        p1 = random_string()
+        p2 = random_string()
+        table.put_item(Item={'p': p1, 'v': [1, 0, 0], attribute_name: 'dog'})
+        table.put_item(Item={'p': p2, 'v': [1, 0, 0], attribute_name: 'cat'})
+        get_ps = lambda result: {item['Item']['p'] for item in result.get('SearchResults', [])}
+        wait_for_search_vectors(client,
+            condition=lambda result: get_ps(result) == {p1, p2},
+            message=lambda result: f'Timed out waiting for both items to appear, got {get_ps(result) if result else None}',
+            TableName=table.name, IndexName='vind', SearchVector=[1, 0, 0], TopK=2)
+        # The attribute's name cannot be written literally in the expression -
+        # a space isn't allowed there, so this doesn't parse:
+        with pytest.raises(ClientError, match='ValidationException'):
+            client.search_vectors(
+                TableName=table.name, IndexName='vind',
+                SearchVector=[1, 0, 0], TopK=2,
+                SearchConditionExpression=f'{attribute_name} = :val',
+                ExpressionAttributeValues={':val': 'dog'})
+        # Referring to the same attribute through an ExpressionAttributeNames
+        # alias does work, and filters on that attribute:
+        for value, expected in [('dog', p1), ('cat', p2)]:
+            result = client.search_vectors(
+                TableName=table.name, IndexName='vind',
+                SearchVector=[1, 0, 0], TopK=2,
+                SearchConditionExpression='#x = :val',
+                ExpressionAttributeNames={'#x': attribute_name},
+                ExpressionAttributeValues={':val': value})
+            assert [item['Item']['p'] for item in result['SearchResults']] == [expected]
+        # An alias is likewise the only way to name this attribute in a
+        # ProjectionExpression:
+        result = client.search_vectors(
+            TableName=table.name, IndexName='vind',
+            SearchVector=[1, 0, 0], TopK=2,
+            ProjectionExpression='#x',
+            ExpressionAttributeNames={'#x': attribute_name})
+        assert [set(item['Item']) for item in result['SearchResults']] == [{attribute_name}] * 2
+        assert {item['Item'][attribute_name] for item in result['SearchResults']} == {'dog', 'cat'}
 
 ################################################################################
 ###### Checks for Alternator API extensions over DynamoDB's vector search ######
@@ -8661,6 +8853,54 @@ def test_searchvectors_filterexpression_untyped_attribute(dynamodb_with_alternat
         )
         assert {e['Item']['p'] for e in result['SearchResults']} == {p_str}
 
+# In test_searchvectors_expression_attribute_names we tested that
+# ExpressionAttributeNames works correctly in SearchConditionExpression
+# and ProjectionExpression. Here we test that it also works correctly in
+# the Alternator extension, FilterExpression.
+def test_searchvectors_filterexpression_expression_attribute_names(dynamodb_with_alternator_extensions, needs_vector_store):
+    attribute_name = 'x with spaces'
+    with new_test_table(dynamodb_with_alternator_extensions,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{
+                'IndexName': 'vind',
+                'VectorAttribute': {'AttributeName': 'v'},
+                'Dimensions': 3,
+                'DistanceFunction': 'COSINE',
+                'Projection': {'ProjectionType': 'ALL'},
+            }]) as table:
+        wait_for_vector_index_active(table, 'vind')
+        client = table.meta.client
+        # Two items with the same vector, differing only in the value of the
+        # filtered attribute, so only the filter can tell them apart.
+        p1 = random_string()
+        p2 = random_string()
+        table.put_item(Item={'p': p1, 'v': [1, 0, 0], attribute_name: 'dog'})
+        table.put_item(Item={'p': p2, 'v': [1, 0, 0], attribute_name: 'cat'})
+        get_ps = lambda result: {item['Item']['p'] for item in result.get('SearchResults', [])}
+        wait_for_search_vectors(client,
+            condition=lambda result: get_ps(result) == {p1, p2},
+            message=lambda result: f'Timed out waiting for both items to appear, got {get_ps(result) if result else None}',
+            TableName=table.name, IndexName='vind', SearchVector=[1, 0, 0], TopK=2)
+        # The attribute's name cannot be written literally in the expression -
+        # a space isn't allowed there, so this doesn't parse:
+        with pytest.raises(ClientError, match='ValidationException'):
+            client.search_vectors(
+                TableName=table.name, IndexName='vind',
+                SearchVector=[1, 0, 0], TopK=2,
+                FilterExpression=f'{attribute_name} = :val',
+                ExpressionAttributeValues={':val': 'dog'})
+        # Referring to the same attribute through an ExpressionAttributeNames
+        # alias does work, and filters on that attribute:
+        for value, expected in [('dog', p1), ('cat', p2)]:
+            result = client.search_vectors(
+                TableName=table.name, IndexName='vind',
+                SearchVector=[1, 0, 0], TopK=2,
+                FilterExpression='#x = :val',
+                ExpressionAttributeNames={'#x': attribute_name},
+                ExpressionAttributeValues={':val': value})
+            assert [item['Item']['p'] for item in result['SearchResults']] == [expected]
+
 ################################################################################
 # TODO: Test interaction of vector searches with features which Alternator
 # doesn't yet support - when these features are implemented:
@@ -8672,7 +8912,16 @@ def test_searchvectors_filterexpression_untyped_attribute(dynamodb_with_alternat
 #    MRSC).
 # 2. Point-in-time recovery / on-demand backup and restore: the vector index is
 #   rebuilt (not copied byte-for-byte) from the restored base table data, and
-#   goes through backfilling again.
+#   goes through backfilling again. Three fields of the DynamoDB API exist only
+#   for this, and can only be tested once Alternator supports the operations
+#   that carry them: the "VectorIndexOverride" of RestoreTableFromBackup and of
+#   RestoreTableToPointInTime, and DescribeBackup's
+#   SourceTableFeatureDetails.VectorIndexes.
 # 3. Table export to S3 (includes the raw vector attribute) and import from S3
 #   (vector index is populated as items are written during the import).
+#   ImportTable's TableCreationParameters.VectorIndexes belongs here too.
+#
+# Finally, of the four IndexStatus values a vector index can report,
+# the tests above see "CREATING" and "ACTIVE" but never "DELETING" or
+# "UPDATING". Neither looks reachable by a test that isn't a race.
 ################################################################################
