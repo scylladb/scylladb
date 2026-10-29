@@ -1654,7 +1654,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
             try {
                 rtlogger.debug("quiesce topology request: refreshing tablet load stats");
-                auto [load_stats, complete] = co_await collect_tablet_load_stats(require_live_nodes::yes);
+                auto [load_stats, complete, _] = co_await collect_tablet_load_stats(require_live_nodes::yes);
                 if (!complete) {
                     error = "incomplete load stats";
                 } else {
@@ -1765,7 +1765,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     rtlogger.info("Finalizing migration for keyspace '{}': direction={}",
                         ks_name, rollback ? "rollback to vnodes" : "forward to tablets");
 
-                    co_await _tablet_load_stats_refresh.trigger();
+                    auto collected = co_await collect_tablet_load_stats(require_live_nodes::yes);
+                    for (const auto& [node_id, _] : _topo_sm._topology.normal_nodes) {
+                        auto host_id = to_host_id(node_id);
+                        if (!collected.reported.contains(host_id)) {
+                            throw std::runtime_error(fmt::format(
+                                "Cannot verify every node's storage mode: node {} is down", host_id));
+                        }
+                    }
+                    _tablet_allocator.set_load_stats(std::move(collected.stats));
 
                     // Verify that the actual storage mode matches the intended mode for all normal nodes.
                     // A node that has migrated a table's storage to tablets will report it in its load_stats.
@@ -5367,6 +5375,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     struct tablet_load_stats_collect_result {
         locator::load_stats_ptr stats;
         bool complete;
+        std::unordered_set<locator::host_id> reported;
     };
 
     future<tablet_load_stats_collect_result> collect_tablet_load_stats(require_live_nodes require);
@@ -5604,6 +5613,7 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
     static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
     bool table_load_stats_invalid = false;
+    std::unordered_set<locator::host_id> reported;
 
     // Poll every normal node of each DC, not only its token owners: a node that owns no
     // tokens (e.g. in an arbiter DC) still switches its local storage mode during a
@@ -5640,7 +5650,8 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
             auto sub = _as.subscribe(request_abort);
 
             locator::load_stats node_stats;
-            if (!_gossiper.is_alive(dst)) {
+            const bool alive = _gossiper.is_alive(dst);
+            if (!alive) {
                 if (is_excluded(dst_server)) {
                     // An excluded node is banned from rejoining, so its stats are never coming back
                     // and waiting for them only keeps the collection invalid. The split-ready
@@ -5672,6 +5683,9 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
                                                                                       dst_server));
             }
 
+            if (alive) {
+                reported.insert(dst);
+            }
             _load_stats_per_node[dst] = node_stats;
             if (is_token_owner) {
                 dc_stats += node_stats;
@@ -5727,12 +5741,13 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
     co_return tablet_load_stats_collect_result{
         .stats = make_lw_shared<const locator::load_stats>(std::move(stats)),
         .complete = !table_load_stats_invalid,
+        .reported = std::move(reported),
     };
 }
 
 future<> topology_coordinator::refresh_tablet_load_stats() {
-    auto [load_stats, _] = co_await collect_tablet_load_stats(require_live_nodes::no);
-    _tablet_allocator.set_load_stats(std::move(load_stats));
+    auto collected = co_await collect_tablet_load_stats(require_live_nodes::no);
+    _tablet_allocator.set_load_stats(std::move(collected.stats));
     _topo_sm.event.broadcast(); // wake up load balancer.
     rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");
 }

@@ -1819,6 +1819,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "\tenforced: New keyspaces must use tablets. Tablets cannot be disabled using the CREATE KEYSPACE option")
     , auto_repair_enabled_default(this, "auto_repair_enabled_default", liveness::LiveUpdate, value_status::Used, cluster_config_registry::auto_repair_enabled_default, "Deprecated, use ALTER CLUSTER WITH auto_repair_enabled = true instead. Set true to enable auto repair for tablet tables when the auto_repair_enabled cluster config option is not set at cluster, keyspace or table scope. The option will be removed in a future release.")
     , auto_repair_threshold_default_in_seconds(this, "auto_repair_threshold_default_in_seconds", liveness::LiveUpdate, value_status::Used, int32_t(cluster_config_registry::auto_repair_threshold_default_seconds), "Deprecated, use ALTER CLUSTER WITH auto_repair_threshold_in_seconds = <seconds> instead. Set the auto repair threshold in seconds for tablet tables when the auto_repair_threshold_in_seconds cluster config option is not set at cluster, keyspace or table scope. A tablet is eligible for auto repair when this much time has passed since the start of its last successful repair; a repair restricted to some hosts or datacenters does not count, and a tablet that was never repaired is eligible immediately. 0 disables time-based auto repair. The option will be removed in a future release.")
+    , force_vnodes_for_migrating_tables(this, "force_vnodes_for_migrating_tables", liveness::MustRestart, value_status::Used, false,
+        "Load the tables of keyspaces under vnodes-to-tablets migration with vnodes on this node, "
+        "ignoring the node's upgrade recorded in system.topology. For recovering a node that cannot "
+        "start because upgrading its tables to tablets fails. Does not change system.topology: once "
+        "the node is up, record the rollback with 'nodetool migrate-to-tablets downgrade' and unset "
+        "this option.")
     , view_flow_control_delay_limit_in_ms(this, "view_flow_control_delay_limit_in_ms", liveness::LiveUpdate, value_status::Used, 1000,
         "The maximal amount of time that materialized-view update flow control may delay responses "
         "to try to slow down the client and prevent buildup of unfinished view updates. "
