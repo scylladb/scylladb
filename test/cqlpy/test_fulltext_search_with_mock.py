@@ -250,6 +250,211 @@ def test_fts_global_index_used_next_to_local_index(cql, test_keyspace, vector_st
         assert reqs[0].path == f"/api/v1/indexes/{test_keyspace}/{global_idx}/bm25"
 
 
+@pytest.fixture(scope="module")
+def filter_table(cql, test_keyspace):
+    schema = ("p int, c1 int, c2 int, r int, t text, l list<int>, m map<text, text>, global text, local text, "
+              "PRIMARY KEY (p, c1, c2)")
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(global) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p, c1), local) USING 'fulltext_index'")
+        yield table
+
+
+def key_response():
+    return json.dumps({"primary_keys": {"p": [1], "c1": [10], "c2": [20]}, "scores": [0.5]})
+
+
+def restriction(type, lhs, rhs):
+    return {"type": type, "lhs": lhs, "rhs": rhs}
+
+
+def eq(column, value):
+    return restriction("==", column, value)
+
+
+def bm25_filter(cql, table, vector_store_mock, where, suffix="", *, column):
+    """Runs a BM25 query on the column with the given WHERE restrictions and returns the filter sent with it (None if none)."""
+    vector_store_mock.set_next_bm25_response(200, key_response())
+    restrictions = f"{where} AND " if where else ""
+    cql.execute(f"SELECT p FROM {table} WHERE {restrictions}BM25({column}, 'hello') > 0 "
+                f"ORDER BY BM25({column}, 'hello') LIMIT 1{suffix}")
+    return json.loads(vector_store_mock.bm25_requests[-1].body).get("filter")
+
+
+def test_fts_local_index_restrictions_are_sent(cql, test_keyspace, vector_store_mock):
+    """The restrictions of a query on a local full-text index are sent to the index."""
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        idx = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {idx} ON {table}((p, c), content) USING 'fulltext_index'")
+        cql.execute(f"INSERT INTO {table} (p, c, content) VALUES (1, 10, 'hello')")
+        vector_store_mock.set_next_bm25_response(200, json.dumps({
+            "primary_keys": {"p": [1], "c": [10]},
+            "scores": [0.5],
+        }))
+
+        rows = list(cql.execute(f"SELECT p, c FROM {table} WHERE p = 1 AND c = 10 AND BM25(content, 'hello') > 0 "
+                                f"ORDER BY BM25(content, 'hello') LIMIT 2"))
+        assert [(r.p, r.c) for r in rows] == [(1, 10)]
+
+        reqs = vector_store_mock.bm25_requests
+        assert len(reqs) == 1
+        assert reqs[0].path == f"/api/v1/indexes/{test_keyspace}/{idx}/bm25"
+        assert json.loads(reqs[0].body) == {
+            "query": "hello",
+            "limit": 2,
+            "filter": {
+                "restrictions": [
+                    {"type": "==", "lhs": "p", "rhs": 1},
+                    {"type": "==", "lhs": "c", "rhs": 10},
+                ],
+                "allow_filtering": False,
+            },
+        }
+
+
+@pytest.mark.parametrize("column", ["global", "local"])
+def test_fts_restrictions_are_sent(cql, filter_table, vector_store_mock, column):
+    """Each kind of restriction a BM25 query can carry is sent to the index, global or local; the index decides whether it can apply it."""
+    cases = [
+        # The partition key.
+        ("p = 1", [eq("p", 1)]),
+        ("p IN (1, 2)", [restriction("IN", "p", [1, 2])]),
+        ("p < 1", [restriction("<", "p", 1)]),
+        ("p <= 1", [restriction("<=", "p", 1)]),
+        ("p > 1", [restriction(">", "p", 1)]),
+        ("p >= 1", [restriction(">=", "p", 1)]),
+        # A clustering column, with or without the partition.
+        ("c1 = 10", [eq("c1", 10)]),
+        ("p = 1 AND c1 = 10", [eq("p", 1), eq("c1", 10)]),
+        ("p = 1 AND c1 IN (10, 20)", [eq("p", 1), restriction("IN", "c1", [10, 20])]),
+        ("p = 1 AND c1 < 10", [eq("p", 1), restriction("<", "c1", 10)]),
+        ("p = 1 AND c1 <= 10", [eq("p", 1), restriction("<=", "c1", 10)]),
+        ("p = 1 AND c1 > 10", [eq("p", 1), restriction(">", "c1", 10)]),
+        ("p = 1 AND c1 >= 10", [eq("p", 1), restriction(">=", "c1", 10)]),
+        # Several clustering columns as one tuple.
+        ("p = 1 AND (c1, c2) = (10, 20)", [eq("p", 1), restriction("()==()", ["c1", "c2"], [10, 20])]),
+        ("p = 1 AND (c1, c2) IN ((10, 20), (30, 40))", [eq("p", 1), restriction("()IN()", ["c1", "c2"], [[10, 20], [30, 40]])]),
+        ("p = 1 AND (c1, c2) < (10, 20)", [eq("p", 1), restriction("()<()", ["c1", "c2"], [10, 20])]),
+        ("p = 1 AND (c1, c2) <= (10, 20)", [eq("p", 1), restriction("()<=()", ["c1", "c2"], [10, 20])]),
+        ("p = 1 AND (c1, c2) > (10, 20)", [eq("p", 1), restriction("()>()", ["c1", "c2"], [10, 20])]),
+        ("p = 1 AND (c1, c2) >= (10, 20)", [eq("p", 1), restriction("()>=()", ["c1", "c2"], [10, 20])]),
+        # Regular columns.
+        ("r = 2", [eq("r", 2)]),
+        ("r IN (2, 3)", [restriction("IN", "r", [2, 3])]),
+        ("r < 2", [restriction("<", "r", 2)]),
+        ("r <= 2", [restriction("<=", "r", 2)]),
+        ("r > 2", [restriction(">", "r", 2)]),
+        ("r >= 2", [restriction(">=", "r", 2)]),
+        ("r > 2 AND r < 5", [restriction(">", "r", 2), restriction("<", "r", 5)]),
+        ("t = 'x'", [eq("t", "x")]),
+        # Every kind together.
+        ("p = 1 AND c1 > 10 AND r = 2", [eq("p", 1), restriction(">", "c1", 10), eq("r", 2)]),
+    ]
+    for where, restrictions in cases:
+        assert bm25_filter(cql, filter_table, vector_store_mock, where, column=column) == \
+            {"restrictions": restrictions, "allow_filtering": False}, where
+
+
+@pytest.mark.parametrize("column", ["global", "local"])
+def test_fts_no_restrictions_send_no_filter(cql, filter_table, vector_store_mock, column):
+    """A BM25 query with no other restrictions sends no filter, unless it allows filtering."""
+    table = filter_table
+    assert bm25_filter(cql, table, vector_store_mock, "", column=column) is None
+    assert bm25_filter(cql, table, vector_store_mock, "", " ALLOW FILTERING", column=column) == {"restrictions": [], "allow_filtering": True}
+
+
+@pytest.mark.parametrize("column", ["global", "local"])
+def test_fts_allow_filtering_is_sent(cql, filter_table, vector_store_mock, column):
+    """ALLOW FILTERING is sent with the restrictions."""
+    table = filter_table
+    assert bm25_filter(cql, table, vector_store_mock, "p = 1 AND r > 2", " ALLOW FILTERING", column=column) == {
+        "restrictions": [eq("p", 1), restriction(">", "r", 2)],
+        "allow_filtering": True,
+    }
+
+
+@pytest.mark.parametrize("column", ["global", "local"])
+def test_fts_restrictions_from_bind_markers(cql, filter_table, vector_store_mock, column):
+    """Bind markers in the restrictions are sent with the values of each execution."""
+    table = filter_table
+    stmt = cql.prepare(f"SELECT p FROM {table} WHERE p = ? AND (c1, c2) > (?, ?) AND r IN ? AND t = ? "
+                       f"AND BM25({column}, ?) > 0 ORDER BY BM25({column}, ?) LIMIT 1")
+    vector_store_mock.set_next_bm25_response(200, key_response())
+    for p, c1, c2, rs, t in [(1, 10, 20, [2, 3], "x"), (2, 30, 40, [4], "y")]:
+        cql.execute(stmt, [p, c1, c2, rs, t, "hello", "hello"])
+
+    assert [json.loads(r.body)["filter"]["restrictions"] for r in vector_store_mock.bm25_requests] == [
+        [eq("p", 1), restriction("()>()", ["c1", "c2"], [10, 20]), restriction("IN", "r", [2, 3]), eq("t", "x")],
+        [eq("p", 2), restriction("()>()", ["c1", "c2"], [30, 40]), restriction("IN", "r", [4]), eq("t", "y")],
+    ]
+
+
+@pytest.mark.parametrize("column", ["global", "local"])
+def test_fts_unsupported_restriction_raises_error(cql, filter_table, vector_store_mock, column):
+    """A restriction the filter cannot express is rejected before anything is sent to the index."""
+    table = filter_table
+    cases = [
+        ("l CONTAINS 1", "Unsupported operator in restriction on column l"),
+        ("m CONTAINS KEY 'a'", "Unsupported operator in restriction on column m"),
+        ("t LIKE 'x%'", "Unsupported operator in restriction on column t"),
+        ("m['a'] = 'b'", "Unsupported restriction"),
+        ("token(p) > 0", "Unsupported restriction"),
+    ]
+    for where, error in cases:
+        with pytest.raises(InvalidRequest, match=re.escape(error)):
+            cql.execute(f"SELECT p FROM {table} WHERE {where} AND BM25({column}, 'hello') > 0 "
+                        f"ORDER BY BM25({column}, 'hello') LIMIT 1 ALLOW FILTERING")
+    assert len(vector_store_mock.bm25_requests) == 0
+
+
+def test_fts_local_index_partitioned_by_regular_column(cql, test_keyspace, vector_store_mock):
+    """A local full-text index partitioned by a regular column is searched in the partition its value names."""
+    schema = "p int, c int, r text, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((r), content) USING 'fulltext_index'")
+        cql.execute(f"INSERT INTO {table} (p, c, r, content) VALUES (1, 10, 'x', 'hello')")
+        vector_store_mock.set_next_bm25_response(200, json.dumps({"primary_keys": {"p": [1], "c": [10]}, "scores": [0.5]}))
+
+        rows = list(cql.execute(f"SELECT p, c FROM {table} WHERE r = 'x' AND BM25(content, 'hello') > 0 "
+                                f"ORDER BY BM25(content, 'hello') LIMIT 1"))
+        assert [(r.p, r.c) for r in rows] == [(1, 10)]
+
+        body = json.loads(vector_store_mock.bm25_requests[0].body)
+        assert body["filter"] == {"restrictions": [eq("r", "x")], "allow_filtering": False}
+
+
+def test_fts_restricted_column_not_selected(cql, filter_table, vector_store_mock):
+    """The restrictions are sent although the restricted columns are not selected."""
+    table = filter_table
+    cql.execute(f"INSERT INTO {table} (p, c1, c2, r, local) VALUES (1, 10, 20, 2, 'hello')")
+    vector_store_mock.set_next_bm25_response(200, key_response())
+
+    rows = list(cql.execute(f"SELECT local FROM {table} WHERE p = 1 AND c1 = 10 AND r = 2 AND BM25(local, 'hello') > 0 "
+                            f"ORDER BY BM25(local, 'hello') LIMIT 1"))
+    assert [r.local for r in rows] == ["hello"]
+
+    body = json.loads(vector_store_mock.bm25_requests[0].body)
+    assert body["filter"]["restrictions"] == [eq("p", 1), eq("c1", 10), eq("r", 2)]
+
+
+def test_fts_local_index_incomplete_partition_is_left_to_the_index(cql, filter_table, vector_store_mock):
+    """Scylla does not check that every partition column is restricted; Vector Store does."""
+    table = filter_table
+    assert bm25_filter(cql, table, vector_store_mock, "", column="local") is None
+    assert bm25_filter(cql, table, vector_store_mock, "p = 1", column="local") == {"restrictions": [eq("p", 1)], "allow_filtering": False}
+
+
+def test_fts_restriction_rejected_by_index_is_reported(cql, filter_table, vector_store_mock):
+    """A restriction the index cannot apply is rejected by it, and its error reaches the client."""
+    table = filter_table
+    vector_store_mock.set_next_bm25_response(HTTPStatus.BAD_REQUEST, "unsupported restriction on column c2")
+
+    with pytest.raises(InvalidRequest, match="400.*unsupported restriction on column c2"):
+        cql.execute(f"SELECT p FROM {table} WHERE p = 1 AND c1 = 10 AND c2 > 20 AND BM25(local, 'hello') > 0 "
+                    f"ORDER BY BM25(local, 'hello') LIMIT 1")
+
+
 def test_fts_ascii_column_executes(cql, test_keyspace, vector_store_mock):
     """BM25 on an ascii column must execute and return rows in BM25 rank order."""
     with new_test_table(cql, test_keyspace, "id int primary key, content ascii") as table:
