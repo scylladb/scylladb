@@ -171,23 +171,51 @@ private:
     };
     // The counts as of the last controller tick.
     candidate_counts _candidate_counts{};
-    // The counts before the last ranking that came back empty; a driver waiting for candidates is
-    // woken when they change. An empty value means that any event wakes the driver.
-    std::optional<candidate_counts> _candidates_at_empty_ranking;
+    // The state before the last ranking that came back empty. A driver that waits for candidates is
+    // woken when the counts change, and it does not wait when a group became idle during the
+    // ranking. An empty value means that any event wakes the driver.
+    struct empty_ranking {
+        candidate_counts candidates;
+        uint64_t idle_notifications;
+    };
+    std::optional<empty_ranking> _empty_ranking;
 
     compaction_rate_controller _rate_controller;
     timer<lowres_clock> _rate_timer;
 
+    // The candidates of the last ranking, best last, the limits that ranked them, and the best batch
+    // of the ranking that copies data, which the marginal admission gate measures against.
+    struct ranking_state {
+        std::vector<candidate> candidates;
+        compaction_batch_limits limits{};
+        std::optional<compaction_candidate_score> best_copying;
+    };
+
     void set_space_floor(double fraction) noexcept;
     void tick_rate_controller() noexcept;
+    // Returns true when compaction is enabled and the threshold enables automatic compaction.
+    bool may_compact() const noexcept;
     future<> wait_for_work(wait_reason);
     future<> run();
+    // Ranks the groups into `ranking`. Returns false when no group has a batch, or when the driver
+    // stops.
+    future<bool> rank(ranking_state& ranking);
+    // Waits after an empty ranking until the candidates can have changed.
+    future<> wait_for_candidates();
+    // Returns the bar that the marginal admission gate measures a candidate of `ranking` against:
+    // the best batch of the ranking that copies data, or a job in flight that reclaims better. It
+    // returns nothing while no job runs, so that the first job always starts.
+    std::optional<compaction_candidate_score> admission_bar(const ranking_state& ranking) const;
+    future<> wait_for_job_end();
     // Returns true when the marginal admission gate refuses `c`, a batch that would run next to the
     // jobs in flight, against the best batch of its ranking. It counts and logs a refusal.
     bool refuse_marginal(const candidate& c, const compaction_candidate_score& admission_bar);
     // Submits the job of `c` under `limits`. The job holds `units` of the driver's semaphore until
     // the job finishes.
     void start_job(candidate c, compaction_batch_limits limits, semaphore_units<> units);
+    void on_job_end(std::list<compaction_candidate_score>::iterator job) noexcept;
+    // Waits for the jobs still in flight, so that the end of run() is the end of the driver.
+    future<> wait_for_jobs_in_flight();
 };
 
 } // namespace replica::logstor
