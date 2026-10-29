@@ -153,6 +153,10 @@ schema_ptr make_group0_raft_schema(sstring name) {
 //                   leader change discarded from which segment, so replay can drop
 //                   superseded entry copies without consulting terms. Frozen, so
 //                   one release sets the whole history as one cell
+//   truncated_at, last_truncate_request_id, truncate_index
+//                   the last truncate_command the group applied: its write
+//                   timestamp, the topology request that issued it and its log
+//                   index; see raft_groups_storage::truncate_record
 schema_ptr make_tablet_raft_groups_schema(sstring name) {
     if (!strongly_consistent_tables_enabled) {
         on_internal_error(tablet_logger, "Can't create raft table for strongly consistent tablets when the feature is disabled");
@@ -177,6 +181,10 @@ schema_ptr make_tablet_raft_groups_schema(sstring name) {
                         // raft_groups_storage.cc, which serializes the cell; drift
                         // between them surfaces on the first row read.
                         tuple_type_impl::get_instance({long_type, long_type, long_type}), false))
+        // the last truncate the group applied
+        .with_column("truncated_at", long_type)
+        .with_column("last_truncate_request_id", uuid_type)
+        .with_column("truncate_index", long_type)
         .with_hash_version()
         .set_caching_options(caching_options::get_disabled_caching_options())
         .set_comment("Persisted RAFT votes and snapshot info for strongly consistent tablets")

@@ -42,7 +42,9 @@ It has its own schema, separate from group 0's `system.raft`: there are no log
 columns, because the log lives in the commitlog, and therefore no clustering key,
 so each group is one ordinary row. It holds `vote`/`vote_term` and the whole
 snapshot descriptor: `snapshot_idx`, `snapshot_term`, `snapshot_config` and the
-`truncations` history that replay needs. `snapshot_idx` is committed by definition,
+`truncations` history that replay needs, plus the last truncate the group applied:
+`truncated_at`, `last_truncate_request_id`, `truncate_index` (see Truncate below).
+`snapshot_idx` is committed by definition,
 since a segment's record is released only once every index it holds is committed, so it is
 what a restart resumes from, even though the group had usually committed further than
 its last release.
@@ -275,6 +277,84 @@ This is only about reclaiming the segment, not about durability. The entries sta
 the segment, and the record holds it until the release, so a crash before any of this
 is recovered by replay.
 
+### Truncate
+
+`TRUNCATE TABLE` on a strongly consistent table is serialized in each tablet's Raft log as
+a `truncate_command`, the alternative of `raft_command` next to `write_mutation`. The
+group's leader stamps it with a write timestamp from the same generator as the writes
+(`truncated_at`). The entry's position in the log is the linearization point: applying it
+drops every write ordered before it and keeps every write ordered after it, which `apply()`
+applies to the emptied tablet in log order like any other entry of the batch.
+
+`apply()` handles the command with `apply_truncate_command()`:
+
+1. If the group's record in `system.raft_groups` already carries the command's
+   `request_id`, the entry is a retry of a truncate this replica has applied and is a no-op.
+   The topology coordinator retries a `TRUNCATE` until every tablet has committed its entry,
+   and a retry can land a second entry in the same log. Dropping the tablet twice is not the
+   same as dropping it once when a read can observe the state in between, so the writes
+   committed between the two entries survive. The id is the topology request's id, so a new
+   `TRUNCATE` statement is a new truncate.
+2. Otherwise `table::truncate_tablet_locally()` drops the tablet's data on this shard:
+   memtables without flushing them, sstables by deleting them. The storage group stays
+   writable for the entries that follow.
+3. Then the record is written: `truncated_at`, `last_truncate_request_id` and the entry's
+   log index, `truncate_index`. It is written after the drop because it is a receipt, not the
+   intent; the intent is the entry in the log. A crash between the two leaves no record, so
+   the entry is applied again onto an already empty tablet.
+
+   The record is written through the commitlog with a forced sync, like the entries
+   themselves, and the entry's apply returns only once it is on disk; the entry is reported
+   applied (`note_applied()`) after that, so its segment's record is not released before. So
+   no entry after the truncate is applied until the record is durable: a crash finds either
+   no record and no data written after the truncate (the entry is replayed), or the record,
+   which tells the replay which entries the truncate discarded.
+
+No `system.truncated` record is written. It would raise the minimum replay position of the
+shard and make the commitlog replay skip whole segments, together with the Raft entries of
+every other group stored in them.
+
+The topology coordinator drives the operation, over the same
+`global_topology_request::truncate_table` the eventually consistent truncate uses. For a
+table whose tablet map carries Raft groups (`tablet_map::has_raft_info()`),
+`handle_truncate_table()` sends `truncate_strongly_consistent_tablet` to the replicas of every tablet instead of
+`truncate_with_tablets` to every host. A replica answers whether it has committed the entry
+as the group's leader. The coordinator asks the tablet's live, non-excluded replicas at once,
+and repeats the round after a pause until one of them commits the entry. A client-side
+timeout does not end this: the request stays queued and the coordinator keeps retrying, so
+a `TRUNCATE` that timed out on the client can still take effect later.
+The RPC phase needs only a Raft quorum per tablet: dead and excluded replicas are skipped,
+and a tablet without a quorum keeps the request waiting. The topology barrier which fences
+the operation still has to reach every node which is not ignored (see the FIXME in
+`global_tablet_token_metadata_barrier()`), so a node which is merely down holds the truncate
+at the barrier until it is back or ignored, as it holds every topology operation.
+
+Success means that every tablet's group has committed its `truncate_command`. A replica
+which missed the entry still holds the data until it catches up on the log, and a read
+which is not linearizable may return pre-truncate data from it meanwhile; a linearizable
+read runs a read barrier first and never does.
+
+There is no single cut across the tablets: each tablet's group commits its entry at its own
+moment, so a write running concurrently with the `TRUNCATE` may land before the entry on one
+tablet and after it on another, and so be dropped on the first and survive on the second.
+The same holds for a batch across tablets.
+
+The commitlog replay (`apply_committed()`) honours the record: a committed entry at or
+below `truncate_index` is dropped, since the record is durable only if the drop it stands
+for happened, and a committed `truncate_command` above it is applied with
+`apply_truncate_command()`, which drops the entries replayed before it.
+
+Not implemented yet, planned as a follow-up:
+
+- A snapshot at the truncate index, which is what would let the commitlog reclaim the
+  segments holding the tablet's pre-truncate entries. Snapshots are not implemented for
+  these groups.
+- Snapshot transfer has to carry the truncate record, and a replica installing a snapshot
+  whose `truncate_index` is above its applied index has to drop all its local data for the
+  tablet first: the truncate entry is below the snapshot, so the replica never applies it,
+  and without the drop the data it holds from before the truncate would survive. The
+  snapshot-transfer tickets do not mention this; it is written down only here.
+
 ### Crash recovery (commitlog replay)
 
 The replayer reads segments in id order and meets both normal mutation entries and
@@ -302,7 +382,8 @@ raft batch for group G, carrying commit_idx in its header
     │
     ▼
 first batch of this group: read its row from system.raft_groups
-(snapshot_idx is the floor; snapshot_term, snapshot_config, truncations)
+(snapshot_idx is the floor; snapshot_term, snapshot_config, truncations,
+and the truncate record)
     │
     ▼
 raise the floor to the header's commit_idx (it only ever advances)
@@ -324,8 +405,10 @@ replay of the same segments would see the dropped copies below the
 new floor and apply an entry no leader committed. A copy in the same
 term is the same entry, so the buffer keeps its tail
     │
+    ├── entries at or below truncate_index: dropped by the recorded truncate
+    │
     ├── entries at or below the floor (committed):
-    │     apply to the memtable in-memory
+    │     apply to the memtable in-memory, or run the truncate
     │     (they may not have been flushed before the crash)
     │
     └── entries above the floor (uncommitted):

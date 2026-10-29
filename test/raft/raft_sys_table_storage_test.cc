@@ -239,7 +239,7 @@ static raft::log_entry_ptr make_mutation_entry(const schema_ptr& s, raft::term_t
     m.set_clustered_cell(ck, to_bytes("v"), data_value(v), ts);
     m.partition().clustered_row(*s, ck).apply(row_marker(ts));
     raft::command cmd;
-    ser::serialize(cmd, service::strong_consistency::raft_command{.mutation = freeze(m)});
+    ser::serialize(cmd, service::strong_consistency::raft_command{.change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
     return make_lw_shared<raft::log_entry>(
             raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
 }
@@ -823,6 +823,25 @@ SEASTAR_TEST_CASE(test_groups_erase_persisted_state_isolation) {
 
         BOOST_CHECK(co_await raft_groups_storage::load_commit_idx_if_persisted(qp, gid1, 0));
         BOOST_CHECK((co_await storage_g1_s0.load_snapshot_descriptor()).id);
+    });
+}
+
+// The truncate record carries the leader's clock, which may be ahead of this node's. A record
+// an hour ahead survives an erase without the floor and goes with it.
+SEASTAR_TEST_CASE(test_groups_erase_persisted_state_above_truncate_record) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+        const auto ahead = api::new_timestamp()
+                + std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::hours(1)).count();
+        co_await raft_groups_storage::store_truncate_record(env.local_db(), gid, test_shard, truncate_record{
+                .truncated_at = ahead, .last_truncate_request_id = utils::make_random_uuid(), .truncate_index = raft::index_t(3)});
+
+        co_await raft_groups_storage::erase_persisted_state(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL((co_await raft_groups_storage::load_truncate_record(qp, gid, test_shard)).truncated_at, ahead);
+
+        co_await raft_groups_storage::erase_persisted_state(qp, gid, test_shard, ahead);
+        BOOST_CHECK_EQUAL((co_await raft_groups_storage::load_truncate_record(qp, gid, test_shard)).truncated_at, api::min_timestamp);
     });
 }
 

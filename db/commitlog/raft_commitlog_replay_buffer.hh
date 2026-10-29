@@ -80,7 +80,7 @@ class raft_commitlog_replay_buffer {
         // moved away or been dropped; everything read for it is discarded.
         bool resolved = false;
         bool known = false;
-        table_id table;
+        locator::global_tablet_id tablet{table_id{}, locator::tablet_id(0)};
 
         // The running commit index and the term of the entry at it.
         raft::index_t commit_idx{0};
@@ -101,9 +101,13 @@ class raft_commitlog_replay_buffer {
         // order, plus the whole list so finish_replay() can persist it unchanged.
         std::unordered_map<db::segment_id_type, raft_buffer_detail::segment_cursors> cursors;
         std::vector<service::strong_consistency::truncation_record> truncations;
+        // The last truncate the group applied, as the row recorded it; replay drops the
+        // entries at or below its index and applies the truncate_commands above it.
+        service::strong_consistency::truncate_record truncate;
 
         uint64_t applied = 0;
         uint64_t dropped_truncated = 0;
+        uint64_t dropped_by_truncate = 0;
         uint64_t superseded = 0;
     };
 
@@ -114,10 +118,10 @@ class raft_commitlog_replay_buffer {
     // across all groups. Created on first use.
     std::optional<service::strong_consistency::schema_store> _schemas;
 
-    // The table of each raft group this shard hosts, by hosts_raft_group(). Built
+    // The tablet of each raft group this shard hosts, by hosts_raft_group(). Built
     // once, on first use, by walking every tablet in the cluster's metadata; replay
     // changes no tablet.
-    std::optional<std::unordered_map<raft::group_id, table_id>> _group_to_table;
+    std::optional<std::unordered_map<raft::group_id, locator::global_tablet_id>> _group_to_tablet;
 
     // Segments a replay could not read in full; see note_unreadable_segment().
     std::vector<db::segment_id_type> _unreadable_segments;
@@ -126,12 +130,14 @@ class raft_commitlog_replay_buffer {
     future<> resolve_group(replica::database& db, cql3::query_processor& qp,
         raft::group_id group_id, group_state& group);
 
-    // Apply one committed command entry to its table's memtable.
+    // Apply one committed command entry: a write to its table's memtable, a truncate
+    // to the tablet. An entry the recorded truncate dropped is skipped.
     future<> apply_committed(replica::database& db, db::system_keyspace& sys_ks,
-        const raft::log_entry_ptr& entry);
+        raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry);
 
     // Consume the buffered entries the floor has reached.
-    future<> drain_committed(replica::database& db, db::system_keyspace& sys_ks, group_state& group);
+    future<> drain_committed(replica::database& db, db::system_keyspace& sys_ks,
+        raft::group_id group_id, group_state& group);
 
     // Note a committed entry's term and configuration.
     static void note_committed(group_state& group, const raft::log_entry_ptr& entry);

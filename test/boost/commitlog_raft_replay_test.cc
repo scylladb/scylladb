@@ -1649,7 +1649,7 @@ raft::log_entry_ptr make_mutation_entry(const schema_ptr& schema, raft::term_t t
     // A row marker, as an INSERT writes one, so the row exists in its own right.
     m.partition().clustered_row(*schema, ck).apply(row_marker(ts));
     raft::command cmd;
-    ser::serialize(cmd, service::strong_consistency::raft_command{.mutation = freeze(m)});
+    ser::serialize(cmd, service::strong_consistency::raft_command{.change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
     return make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = term, .idx = idx, .data = std::move(cmd)});
 }
@@ -2579,7 +2579,7 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
         m.set_cell(clustering_key::make_empty(), "c", data_value(10), api::new_timestamp());
 
         raft::command cmd;
-        ser::serialize(cmd, service::strong_consistency::raft_command{.mutation = freeze(m)});
+        ser::serialize(cmd, service::strong_consistency::raft_command{.change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
 
         auto entry = make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = raft::term_t(1),
