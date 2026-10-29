@@ -234,13 +234,36 @@ def test_fts_local_index_is_found_by_its_text_column(cql, test_keyspace, vector_
         assert [(r.p, r.c) for r in rows] == [(1, 10)]
 
 
-def test_fts_local_index_partition_restriction_rejected(cql, test_keyspace):
-    """Restricting the partition of a local full-text index is not supported yet."""
+def test_fts_local_index_partition_restriction_is_sent(cql, test_keyspace, vector_store_mock):
+    """The = restrictions on the partition of a local full-text index are sent to the index, as for ANN."""
     schema = "p int, c int, content text, PRIMARY KEY (p, c)"
     with new_test_table(cql, test_keyspace, schema) as table:
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p, c), content) USING 'fulltext_index'")
-        with pytest.raises(InvalidRequest, match="do not support additional WHERE restrictions"):
-            cql.execute(f"SELECT p, c FROM {table} WHERE p = 1 AND BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 2")
+        idx = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {idx} ON {table}((p, c), content) USING 'fulltext_index'")
+        cql.execute(f"INSERT INTO {table} (p, c, content) VALUES (1, 10, 'hello')")
+        vector_store_mock.set_next_bm25_response(200, json.dumps({
+            "primary_keys": {"p": [1], "c": [10]},
+            "scores": [0.5],
+        }))
+
+        rows = list(cql.execute(f"SELECT p, c FROM {table} WHERE p = 1 AND c = 10 AND BM25(content, 'hello') > 0 "
+                                f"ORDER BY BM25(content, 'hello') LIMIT 2"))
+        assert [(r.p, r.c) for r in rows] == [(1, 10)]
+
+        reqs = vector_store_mock.bm25_requests
+        assert len(reqs) == 1
+        assert reqs[0].path == f"/api/v1/indexes/{test_keyspace}/{idx}/bm25"
+        assert json.loads(reqs[0].body) == {
+            "query": "hello",
+            "limit": 2,
+            "filter": {
+                "restrictions": [
+                    {"type": "==", "lhs": "p", "rhs": 1},
+                    {"type": "==", "lhs": "c", "rhs": 10},
+                ],
+                "allow_filtering": False,
+            },
+        }
 
 
 def test_fts_ascii_column_executes(cql, test_keyspace, vector_store_mock):

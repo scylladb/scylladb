@@ -44,7 +44,8 @@ struct external_statement_args {
 /// What differs by family lives in ann_search, bm25_search and pattern_search.
 class external_index_select_statement : public select_statement {
     std::vector<search_source> _sources;
-    /// The restrictions a vector search prefilters by. Empty for any other query.
+    /// The restrictions a vector search prefilters by, or the partition of a local index a full-text
+    /// search is restricted to. Empty for any other query.
     external_search::prepared_filter _prepared_filter;
     mutable gc_clock::time_point _query_start_time_point;
 

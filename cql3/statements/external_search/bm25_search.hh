@@ -20,6 +20,10 @@
 #include <optional>
 #include <span>
 
+namespace cql3::restrictions {
+class select_restrictions;
+}
+
 /// The parts of running a full-text search that are specific to it: which index serves it, how the
 /// query value is read, which relation on it is accepted, and how excerpts are fetched. The
 /// statement running the search decides when to ask and what to do with the rows.
@@ -34,6 +38,12 @@ sstring query_term(const cql3::raw_value& value);
 /// Checks the form of the one relation a full-text search takes, WHERE BM25(column, term) > 0. The
 /// plan compares the term with the search's.
 void validate_restriction(const expr::binary_operator& binop);
+
+/// Checks the WHERE restrictions besides the BM25() relation. A local index accepts `=`
+/// restrictions on its partition columns, and is searched in the partition they name. Any other
+/// restriction is rejected. As for vector searches, the index checks that every partition column
+/// is restricted.
+void validate_partition_restrictions(const restrictions::select_restrictions& restrictions, const secondary_index::index& index);
 
 /// Asks the index for a highlighted excerpt of every row's text, and returns the excerpts as the
 /// values of the highlight temporary: one per joined row, in the order the rows are emitted.

@@ -168,7 +168,8 @@ uint64_t request_limit(const search_source& source, uint64_t limit) {
         }
     }
 
-    auto prepared_filter = is_ann_only(sources)
+    // A full-text search sends the partition of a local index it is restricted to.
+    auto prepared_filter = !is_hybrid(sources) && sources.front().family != search_family::pattern
             ? external_search::prepare_filter(*args.restrictions, args.parameters->allow_filtering())
             : external_search::prepared_filter{{}, args.parameters->allow_filtering()};
 
@@ -227,7 +228,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_index_sel
                     .index = index_name,
                     .term = std::get<sstring>(query_values[i]),
                     .limit = wanted,
-                    .filter = rjson::empty_object()});
+                    .filter = _prepared_filter.to_json(options)});
             break;
         case search_family::pattern:
             requests.push_back(vector_search::like_request{
