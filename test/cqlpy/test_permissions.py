@@ -321,6 +321,12 @@ def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql, has_java_udf):
             with new_user(cql) as username:
                 with new_session(cql, username) as user_session:
                     fun = "fun42"
+                    # The function is created by the superuser, so that the
+                    # user's CREATE OR REPLACE below replaces it rather than
+                    # creating it: the creator of a function is granted all
+                    # permissions on it, so the user would have ALTER on it
+                    # even without the grants which the checks below make.
+                    cql.execute(f"CREATE FUNCTION {keyspace}.{fun} {fun_body}")
 
                     grant(cql, 'ALTER', 'ALL FUNCTIONS', username)
                     check_enforced(cql, username, permission='CREATE', resource=f'all functions in keyspace {keyspace}',
@@ -396,6 +402,12 @@ def test_grant_revoke_uda_permissions(scylla_only, cql):
                                 function=create_aggr_idempotent)
 
                         grant(cql, 'CREATE', 'ALL FUNCTIONS', username)
+                        # The aggregate is created by the superuser, so that the
+                        # user's CREATE OR REPLACE below replaces it rather than
+                        # creating it: the creator of an aggregate is granted all
+                        # permissions on it, so the user would have ALTER on it
+                        # even without the grants which the checks below make.
+                        cql.execute(f"CREATE AGGREGATE {keyspace}.{custom_avg} {custom_avg_body}")
                         check_enforced(cql, username, permission='ALTER', resource=f'all functions in keyspace {keyspace}',
                                 function=lambda: user_session.execute(f"CREATE OR REPLACE AGGREGATE {keyspace}.{custom_avg} {custom_avg_body}"))
                         check_enforced(cql, username, permission='ALTER', resource='all functions',
