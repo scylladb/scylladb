@@ -839,6 +839,10 @@ arg_parser.add_argument('--tests-debuginfo', action='store', dest='tests_debugin
                         help='Enable(1)/disable(0)compiler debug information generation for tests')
 arg_parser.add_argument('--perf-tests-debuginfo', action='store', dest='perf_tests_debuginfo', type=int, default=0,
                         help='Enable(1)/disable(0)compiler debug information generation for perf tests')
+arg_parser.add_argument('--line-tables', dest='line_tables', action='store_true', default=False,
+                        help='Add line-number debug information (-gline-tables-only, compressed with zstd) '
+                             'to modes that would otherwise have no debug information: dev mode, and all modes with --debuginfo 0. '
+                             'It does not change the generated code, and is needed by scripts/bpcov/bpcov.py.')
 arg_parser.add_argument('--split-dwarf', dest='split_dwarf', action='store_true', default=False,
                         help='use of split dwarf (https://gcc.gnu.org/wiki/DebugFission) to speed up linking')
 arg_parser.add_argument('--enable-alloc-failure-injector', dest='alloc_failure_injector', action='store_true', default=False,
@@ -1966,8 +1970,9 @@ tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
 perf_tests_link_rule = 'link' if args.perf_tests_debuginfo else 'link_stripped'
 
 # Strip if debuginfo is disabled, otherwise we end up with partial
-# debug info from the libraries we static link with
-regular_link_rule = 'link' if args.debuginfo else 'link_stripped'
+# debug info from the libraries we static link with. But don't strip
+# the line tables requested with --line-tables.
+regular_link_rule = 'link' if args.debuginfo or args.line_tables else 'link_stripped'
 
 has_sanitize_address_use_after_scope = try_compile(compiler=args.cxx, flags=['-fsanitize-address-use-after-scope'], source='int f() {}')
 
@@ -2795,6 +2800,13 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
 
     if debuginfo and mode_config['can_have_debug_info']:
         cxxflags += ['-g', '-gz']
+    elif args.line_tables:
+        # Compression halves the size of the debug information (see
+        # scripts/bpcov/README.md). Don't add -gno-column-info: without
+        # column numbers, clang marks fewer places in the code as the
+        # beginning of a line, and some lines - e.g., "if (a && b)" - lose
+        # every place that bpcov can use.
+        cxxflags += ['-gline-tables-only', '-gz=zstd']
 
     return cxxflags
 
@@ -3553,7 +3565,11 @@ def create_build_system(args):
     # the result in case one of the linked static libraries happens to
     ## have some debug symbols. See issue #23834.
     for mode, mode_config in build_modes.items():
-        if '-g' not in user_cflags.split() + mode_config['cxxflags'].split():
+        if '-gline-tables-only' in mode_config['cxxflags'].split():
+            # Keep the line tables, compressed like the objects' (the linker
+            # writes uncompressed debug sections unless told otherwise).
+            mode_config['cxx_ld_flags'] += ' -Wl,--compress-debug-sections=zstd'
+        elif '-g' not in user_cflags.split() + mode_config['cxxflags'].split():
             mode_config['cxx_ld_flags'] += ' -Wl,--strip-debug'
 
     ninja = find_ninja()
