@@ -1755,7 +1755,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     seastar::abort_source* _as;
     range _range;
     static constexpr size_t _socket_buff_size = 128_KiB;
-    static constexpr size_t _max_buffers_size = 5_MiB;
+    static constexpr size_t _max_buffers_size = max_download_buffers_size;
     static constexpr double _buffers_low_watermark = 0.5;
     static constexpr double _buffers_high_watermark = 0.9;
     std::deque<temporary_buffer<char>> _buffers;

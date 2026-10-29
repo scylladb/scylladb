@@ -43,6 +43,10 @@ static constexpr unsigned maximum_parts_in_piece = 10'000;
 // https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingObjects.html
 static constexpr size_t maximum_object_size = maximum_parts_in_piece * maximum_part_size;
 
+// The most that chunked_download_source buffers ahead of its reader. When the buffers are
+// full it ends the request in flight, and asks for more once the reader has drained half of them.
+static constexpr size_t max_download_buffers_size = 5_MiB;
+
 static constexpr size_t max_client_mpu_in_flight = 32;
 static constexpr size_t max_client_buffered_downloads_in_flight = 32;
 
