@@ -44,7 +44,23 @@ table_metrics::sample table_metrics::sweep() const {
     return result;
 }
 
-table_metrics::table_metrics(const sstring& ks_name, const sstring& cf_name, reporting mode) {
+table_metrics::table_metrics(const sstring& ks_name, const sstring& cf_name, reporting mode)
+    : _mode(mode)
+{
+    register_metrics(ks_name, cf_name);
+}
+
+void table_metrics::set_reporting(const sstring& ks_name, const sstring& cf_name, reporting mode) {
+    if (mode == _mode) {
+        return;
+    }
+    _mode = mode;
+    _metrics.clear();
+    register_metrics(ks_name, cf_name);
+}
+
+void table_metrics::register_metrics(const sstring& ks_name, const sstring& cf_name) {
+    const auto mode = _mode;
     if (mode == reporting::none) {
         return;
     }

@@ -2130,6 +2130,33 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 groups_manager.stop().get();
             });
 
+            // Registered after the groups manager starts, as the callback updates the raft
+            // metrics of the strongly consistent tables too.
+            static sharded<std::optional<db::cluster_config_manager::config_callback_registration>> table_metrics_registrations;
+            table_metrics_registrations.start(std::nullopt).get();
+            auto stop_table_metrics_registrations = defer_verbose_shutdown("table metrics config callbacks", [] {
+                table_metrics_registrations.stop().get();
+            });
+
+            cluster_config_manager.invoke_on_all([&db, &groups_manager] (db::cluster_config_manager& ccm) {
+                table_metrics_registrations.local() = ccm.register_config_callback(
+                        sstring(db::cluster_config_registry::option_name::table_metrics),
+                        [&db, &groups_manager] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                    const auto& tables = db.local().get_tables_metadata();
+                    auto id = tables.get_table_id_if_exists({*ctx.keyspace_name, *ctx.table_name});
+                    if (!id) {
+                        return make_ready_future<>();
+                    }
+                    auto t = tables.get_table_if_exists(id);
+                    if (!t) {
+                        return make_ready_future<>();
+                    }
+                    t->set_metrics_mode_override(value ? replica::parse_table_metrics_mode(*value) : std::nullopt);
+                    groups_manager.local().update_table_metrics_reporting(*t->schema(), t->metrics_mode());
+                    return make_ready_future<>();
+                });
+            }).get();
+
             checkpoint(stop_signal, "initializing strongly consistent coordinator");
             sharded<service::strong_consistency::coordinator> sc_coordinator;
             sc_coordinator.start(std::ref(groups_manager), std::ref(db), std::ref(gossiper)).get();

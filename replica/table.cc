@@ -34,6 +34,7 @@
 #include "sstables/sstable_set.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/schema_tables.hh"
 #include "db/snapshot/manifest.hh"
 #include "cell_locking.hh"
@@ -2388,7 +2389,7 @@ void table::set_metrics() {
     auto cf = column_family_label(_schema->cf_name());
     auto ks = keyspace_label(_schema->ks_name());
     namespace ms = seastar::metrics;
-    if (_config.enable_metrics_reporting) {
+    if (_metrics_mode == table_metrics_mode::per_shard) {
         _metrics.add_group("column_family", {
                 ms::make_counter("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks).set_skip_when_empty(),
                 ms::make_counter("memtable_partition_writes", [this] () { return _stats.memtable_partition_insertions + _stats.memtable_partition_hits; }, ms::description("Number of write operations performed on partitions in memtables"))(cf)(ks).set_skip_when_empty(),
@@ -2462,7 +2463,7 @@ void table::set_metrics() {
             });
         }
     } else {
-        if (_config.enable_node_aggregated_table_metrics && !is_internal_keyspace(_schema->ks_name())) {
+        if (_metrics_mode == table_metrics_mode::per_node) {
             _metrics.add_group("column_family", {
                 ms::make_counter("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_counter("memtable_partition_writes", [this] () { return _stats.memtable_partition_insertions + _stats.memtable_partition_hits; }, ms::description("Number of write operations performed on partitions in memtables"))(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
@@ -3680,6 +3681,7 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     }
 
     recalculate_tablet_count_stats();
+    _metrics_mode = default_metrics_mode();
     set_metrics();
 
     update_tombstone_gc_rf_one();
@@ -5506,6 +5508,56 @@ table::disable_auto_compaction() {
             return get_logstor_compaction_manager().stop_ongoing_compactions(cg.as_logstor_group());
         });
     }
+}
+
+std::optional<table_metrics_mode> parse_table_metrics_mode(std::string_view value) {
+    namespace values = db::cluster_config_registry::table_metrics_value;
+    if (value == values::none) {
+        return table_metrics_mode::none;
+    }
+    if (value == values::per_node) {
+        return table_metrics_mode::per_node;
+    }
+    if (value == values::per_shard) {
+        return table_metrics_mode::per_shard;
+    }
+    return std::nullopt;
+}
+
+std::string_view to_string(table_metrics_mode mode) {
+    namespace values = db::cluster_config_registry::table_metrics_value;
+    switch (mode) {
+    case table_metrics_mode::none:
+        return values::none;
+    case table_metrics_mode::per_node:
+        return values::per_node;
+    case table_metrics_mode::per_shard:
+        return values::per_shard;
+    }
+    __builtin_unreachable();
+}
+
+table_metrics_mode table::default_metrics_mode() const {
+    if (_config.enable_metrics_reporting) {
+        return table_metrics_mode::per_shard;
+    }
+    // The node-aggregated metrics leave out the internal keyspaces.
+    if (_config.enable_node_aggregated_table_metrics && !is_internal_keyspace(_schema->ks_name())) {
+        return table_metrics_mode::per_node;
+    }
+    return table_metrics_mode::none;
+}
+
+void table::set_metrics_mode_override(std::optional<table_metrics_mode> mode) {
+    const auto new_mode = mode.value_or(default_metrics_mode());
+    if (new_mode == _metrics_mode) {
+        return;
+    }
+    tlogger.info0("Table metrics of {}.{} changed from {} to {}", _schema->ks_name(), _schema->cf_name(),
+            to_string(_metrics_mode), to_string(new_mode));
+    _metrics_mode = new_mode;
+    deregister_metrics();
+    set_metrics();
 }
 
 void table::set_scrub_period(std::optional<std::chrono::seconds> period) {

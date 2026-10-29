@@ -35,6 +35,10 @@ namespace service {
 class migration_manager;
 }
 
+namespace replica {
+enum class table_metrics_mode;
+}
+
 namespace service::strong_consistency {
 
 class raft_groups_storage;
@@ -298,6 +302,9 @@ public:
     // Note that the method is synchronous: it only initiates these operations
     // and does not wait for their completion.
     void update(locator::token_metadata_ptr new_tm);
+
+    // Applies a changed metrics mode of a table to the raft metrics of its tablets.
+    void update_table_metrics_reporting(const schema& s, replica::table_metrics_mode mode);
 
     // The raft_server instance is used to submit write commands and perform read_barrier() before reads.
     future<raft_server> acquire_server(table_id table_id, raft::group_id group_id, abort_source& as);

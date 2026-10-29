@@ -62,6 +62,7 @@ constexpr bool is_single_domain(scope_set scopes) {
 // Defined below, with the other parsers and validators.
 // Declared here so that the automatic scrub period option may take their address.
 config_value parse_auto_scrub_period_seconds(std::string_view value);
+config_value parse_table_metrics(std::string_view value);
 
 // The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
 // When no scope stores an override it falls back to the deprecated yaml options
@@ -95,6 +96,19 @@ constexpr std::array registry_options = {
         .default_value = int64_t(0),
         .custom_parser = parse_auto_scrub_period_seconds,
         .custom_expected_description = "0 or an integer from 3600 to 4294967295",
+    },
+    // A table follows the enable_keyspace_column_family_metrics and
+    // enable_node_aggregated_table_metrics yaml options when no scope stores an override,
+    // so the registered default is never applied.
+    option{
+        .name = option_name::table_metrics,
+        .description = "The per-table metrics reported: 'none', 'per_node' (summed over the shards of the node) "
+                "or 'per_shard'. When not set, the enable_keyspace_column_family_metrics and "
+                "enable_node_aggregated_table_metrics scylla.yaml options decide",
+        .scopes = table_oriented_scopes,
+        .default_value = table_metrics_value::per_node,
+        .custom_parser = parse_table_metrics,
+        .custom_expected_description = "'none', 'per_node' or 'per_shard'",
     },
 };
 
@@ -194,6 +208,15 @@ config_value parse_auto_scrub_period_seconds(std::string_view value) {
         throw marshal_exception("expected 0 or an integer between 3600 and 4294967295");
     }
     return parsed;
+}
+
+config_value parse_table_metrics(std::string_view value) {
+    for (auto valid : {table_metrics_value::none, table_metrics_value::per_node, table_metrics_value::per_shard}) {
+        if (value == valid) {
+            return valid;
+        }
+    }
+    throw marshal_exception("expected 'none', 'per_node' or 'per_shard'");
 }
 
 static std::optional<seastar::sstring> validate_with_custom_parser(const option& opt, std::string_view value) {
