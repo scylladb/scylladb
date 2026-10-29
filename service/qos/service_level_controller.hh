@@ -434,6 +434,7 @@ private:
      * change due to execution reordering.
      */
     future<> notify_service_level_added(sstring name, service_level sl_data);
+    void make_service_level_available(sstring name, service_level sl_data);
     future<> notify_service_level_updated(sstring name, service_level_options slo);
     future<> notify_service_level_removed(sstring name);
     future<> notify_effective_service_levels_cache_reloaded();
