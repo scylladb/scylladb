@@ -14,6 +14,7 @@ from collections import defaultdict
 from textwrap import indent
 from typing import NamedTuple
 from test.nodetool.rest_api_mock import expected_request
+from test.nodetool.utils import format_size
 
 
 class Table(NamedTuple):
@@ -222,20 +223,23 @@ class table_stats:
             self.req('tombstone_scanned_histogram', self.tombstone_scanned_histogram),
         ]
 
-    def format(self):
+    def format(self, human_readable=False):
+        def size(v):
+            return format_size(v) if human_readable else v
+
         return f'''\
 Table: {self.cf}
 SSTable count: {self.live_ss_table_count}
 SSTables in each level: [{self.sstables_in_each_level}]
-Space used (live): {self.live_disk_space_used}
-Space used (total): {self.total_disk_space_used}
-Space used by snapshots (total): {self.snapshots_size}
-Off heap memory used (total): {self.total_off_heap_memory_used}
+Space used (live): {size(self.live_disk_space_used)}
+Space used (total): {size(self.total_disk_space_used)}
+Space used by snapshots (total): {size(self.snapshots_size)}
+Off heap memory used (total): {size(self.total_off_heap_memory_used)}
 SSTable Compression Ratio: {self.compression_ratio:.2f}
 Number of partitions (estimate): {self.estimated_row_count}
 Memtable cell count: {self.memtable_columns_count}
-Memtable data size: {self.memtable_live_data_size}
-Memtable off heap memory used: {self.memtable_off_heap_size}
+Memtable data size: {size(self.memtable_live_data_size)}
+Memtable off heap memory used: {size(self.memtable_off_heap_size)}
 Memtable switch count: {self.memtable_switch_count}
 Local read count: {self.read}
 Local read latency: {self.local_read_latency / 1000:.3f} ms
@@ -245,13 +249,13 @@ Pending flushes: {self.pending_flushes}
 Percent repaired: {self.percent_repaired}
 Bloom filter false positives: {self.bloom_filter_false_positives}
 Bloom filter false ratio: {self.recent_bloom_filter_false_ratio:.5f}
-Bloom filter space used: {self.bloom_filter_disk_space_used}
-Bloom filter off heap memory used: {self.bloom_filter_off_heap_memory_used}
-Index summary off heap memory used: {self.index_summary_off_heap_memory_used}
-Compression metadata off heap memory used: {self.compression_metadata_off_heap_memory_used}
-Compacted partition minimum bytes: {self.min_row_size}
-Compacted partition maximum bytes: {self.max_row_size}
-Compacted partition mean bytes: {self.mean_row_size}
+Bloom filter space used: {size(self.bloom_filter_disk_space_used)}
+Bloom filter off heap memory used: {size(self.bloom_filter_off_heap_memory_used)}
+Index summary off heap memory used: {size(self.index_summary_off_heap_memory_used)}
+Compression metadata off heap memory used: {size(self.compression_metadata_off_heap_memory_used)}
+Compacted partition minimum bytes: {size(self.min_row_size)}
+Compacted partition maximum bytes: {size(self.max_row_size)}
+Compacted partition mean bytes: {size(self.mean_row_size)}
 Average live cells per slice (last five minutes): {self.avg_live_cells_per_slice:.1f}
 Maximum live cells per slice (last five minutes): {self.max_live_cells_per_slice}
 Average tombstones per slice (last five minutes): {self.avg_tombstones_per_slice:.1f}
@@ -260,18 +264,24 @@ Dropped Mutations: {self.dropped_mutations}
 
 '''
 
-    def to_map(self):
+    def to_map(self, human_readable=False):
+        def size(v):
+            return format_size(v) if human_readable else f'{v}'
+
+        def partition_size(v):
+            return format_size(v) if human_readable else v
+
         return {
             'sstables_in_each_level': list(self.sstable_count_in_each_level()),
-            'space_used_live': f'{self.live_disk_space_used}',
-            'space_used_total': f'{self.total_disk_space_used}',
-            'space_used_by_snapshots_total': f'{self.snapshots_size}',
-            'off_heap_memory_used_total': f'{self.total_off_heap_memory_used}',
+            'space_used_live': size(self.live_disk_space_used),
+            'space_used_total': size(self.total_disk_space_used),
+            'space_used_by_snapshots_total': size(self.snapshots_size),
+            'off_heap_memory_used_total': size(self.total_off_heap_memory_used),
             'sstable_compression_ratio': self.compression_ratio,
             'number_of_partitions_estimate': self.estimated_row_count,
             'memtable_cell_count': self.memtable_columns_count,
-            'memtable_data_size': f'{self.memtable_live_data_size}',
-            'memtable_off_heap_memory_used': f'{self.memtable_off_heap_size}',
+            'memtable_data_size': size(self.memtable_live_data_size),
+            'memtable_off_heap_memory_used': size(self.memtable_off_heap_size),
             'memtable_switch_count': self.memtable_switch_count,
             'local_read_count': self.read,
             'local_read_latency_ms': f'{self.local_read_latency / 1000:.3f}',
@@ -281,13 +291,13 @@ Dropped Mutations: {self.dropped_mutations}
             'percent_repaired': self.percent_repaired,
             'bloom_filter_false_positives': self.bloom_filter_false_positives,
             'bloom_filter_false_ratio': f'{self.recent_bloom_filter_false_ratio:01.5f}',
-            'bloom_filter_space_used': f'{self.bloom_filter_disk_space_used}',
-            'bloom_filter_off_heap_memory_used': f'{self.bloom_filter_off_heap_memory_used}',
-            'index_summary_off_heap_memory_used': f'{self.index_summary_off_heap_memory_used}',
-            'compression_metadata_off_heap_memory_used': f'{self.compression_metadata_off_heap_memory_used}',
-            'compacted_partition_minimum_bytes': self.min_row_size,
-            'compacted_partition_maximum_bytes': self.max_row_size,
-            'compacted_partition_mean_bytes': self.mean_row_size,
+            'bloom_filter_space_used': size(self.bloom_filter_disk_space_used),
+            'bloom_filter_off_heap_memory_used': size(self.bloom_filter_off_heap_memory_used),
+            'index_summary_off_heap_memory_used': size(self.index_summary_off_heap_memory_used),
+            'compression_metadata_off_heap_memory_used': size(self.compression_metadata_off_heap_memory_used),
+            'compacted_partition_minimum_bytes': partition_size(self.min_row_size),
+            'compacted_partition_maximum_bytes': partition_size(self.max_row_size),
+            'compacted_partition_mean_bytes': partition_size(self.mean_row_size),
             'average_live_cells_per_slice_last_five_minutes': self.avg_live_cells_per_slice,
             'maximum_live_cells_per_slice_last_five_minutes': self.max_live_cells_per_slice,
             'average_tombstones_per_slice_last_five_minutes': self.avg_tombstones_per_slice,
@@ -354,14 +364,18 @@ class keyspace_stats:
         }
 
 
-@pytest.mark.parametrize('command,args,tables_to_print',
+@pytest.mark.parametrize('command,args,tables_to_print,human_readable',
                          [
-                             ('tablestats', [], ['keyspace1.standard1', 'system.local']),
-                             ('tablestats', ['keyspace1'], ['keyspace1.standard1']),
-                             ('tablestats', ['keyspace1.standard1'], ['keyspace1.standard1']),
-                             ('cfstats', [], ['keyspace1.standard1', 'system.local']),
+                             ('tablestats', [], ['keyspace1.standard1', 'system.local'], False),
+                             ('tablestats', ['keyspace1'], ['keyspace1.standard1'], False),
+                             ('tablestats', ['keyspace1.standard1'], ['keyspace1.standard1'], False),
+                             ('tablestats', ['-i', 'system'], ['keyspace1.standard1'], False),
+                             ('tablestats', ['--ignore', 'keyspace1.standard1'], ['system.local'], False),
+                             ('tablestats', ['-H'], ['keyspace1.standard1', 'system.local'], True),
+                             ('tablestats', ['--human-readable'], ['keyspace1.standard1', 'system.local'], True),
+                             ('cfstats', [], ['keyspace1.standard1', 'system.local'], False),
                          ])
-def test_plain_text_output(nodetool, command, args, tables_to_print):
+def test_plain_text_output(nodetool, command, args, tables_to_print, human_readable):
     tables = [Table('keyspace1', 'standard1', 'ColumnFamilies'),
               Table('system', 'local', 'ColumnFamilies')]
     expected_requests = [expected_request(
@@ -397,7 +411,7 @@ Keyspace : {ks_name}
 '''
         for table in keyspace.tables:
             expected_requests.extend(table.expected_details_requests())
-            expected_output += indent(table.format(), '\t\t')
+            expected_output += indent(table.format(human_readable), '\t\t')
         expected_output += '----------------\n'
 
     res = nodetool(command, *args, expected_requests=expected_requests)
@@ -406,7 +420,8 @@ Keyspace : {ks_name}
 
 
 @pytest.mark.parametrize('output_format', ['json', 'yaml'])
-def test_output_format(nodetool, output_format):
+@pytest.mark.parametrize('human_readable', [False, True])
+def test_output_format(nodetool, output_format, human_readable):
     tables = [Table('keyspace1', 'standard1', 'ColumnFamilies'),
               Table('system', 'local', 'ColumnFamilies')]
     expected_requests = [expected_request(
@@ -430,7 +445,7 @@ def test_output_format(nodetool, output_format):
         expected_tables = {}
         for table in keyspace.tables:
             expected_requests.extend(table.expected_details_requests())
-            expected_tables[table.cf] = table.to_map()
+            expected_tables[table.cf] = table.to_map(human_readable)
         expected_dict[ks_name]['tables'] = expected_tables
 
     parsers = {
@@ -438,8 +453,10 @@ def test_output_format(nodetool, output_format):
         'json': json.loads
     }
 
-    res = nodetool('tablestats', '--format', output_format,
-                   expected_requests=expected_requests)
+    args = ['--format', output_format]
+    if human_readable:
+        args.append('-H')
+    res = nodetool('tablestats', *args, expected_requests=expected_requests)
     actual_output = res.stdout
     actual_dict = parsers[output_format](actual_output)
 

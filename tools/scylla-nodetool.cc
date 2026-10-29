@@ -1085,7 +1085,7 @@ void compactionstats_operation(scylla_rest_client& client, const bpo::variables_
         }
     }
     fmt::print("\n");
-    report_compaction_table(client, vm["human-readable"].as<bool>());
+    report_compaction_table(client, vm.contains("human-readable"));
 }
 
 void decommission_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -3233,9 +3233,16 @@ public:
                     fmt::to_string(file_size_printer(index_summary_off_heap_mem_size, human_readable)));
         map.emplace("compression_metadata_off_heap_memory_used",
                     fmt::to_string(file_size_printer(compression_metadata_off_heap_mem_size, human_readable)));
-        map.emplace("compacted_partition_minimum_bytes", min_row_size());
-        map.emplace("compacted_partition_maximum_bytes", max_row_size());
-        map.emplace("compacted_partition_mean_bytes", mean_row_size());
+        // Unlike the other sizes, these are numbers, unless human readable.
+        auto partition_size = [human_readable] (uint64_t size) -> metrics_value {
+            if (human_readable) {
+                return fmt::to_string(file_size_printer(size));
+            }
+            return size;
+        };
+        map.emplace("compacted_partition_minimum_bytes", partition_size(min_row_size()));
+        map.emplace("compacted_partition_maximum_bytes", partition_size(max_row_size()));
+        map.emplace("compacted_partition_mean_bytes", partition_size(mean_row_size()));
         auto live_cells_per_slice = live_scanned_histogram();
         map.emplace("average_live_cells_per_slice_last_five_minutes", live_cells_per_slice.mean);
         map.emplace("maximum_live_cells_per_slice_last_five_minutes", live_cells_per_slice.max);
@@ -3272,7 +3279,7 @@ public:
         fmt::print("\t\tSSTable Compression Ratio: {:.2f}\n", compression_ratio());
         fmt::print("\t\tNumber of partitions (estimate): {}\n", estimated_partition_count());
         fmt::print("\t\tMemtable cell count: {}\n", memtable_columns_count());
-        fmt::print("\t\tMemtable data size: {}\n", memtable_live_data_size());
+        fmt::print("\t\tMemtable data size: {}\n", file_size_printer(memtable_live_data_size(), human_readable));
         fmt::print("\t\tMemtable off heap memory used: {}\n", file_size_printer(memtable_off_heap_mem_size, human_readable));
         fmt::print("\t\tMemtable switch count: {}\n", memtable_switch_count());
         auto local_reads = latency_histogram("read_latency");
@@ -3294,9 +3301,9 @@ public:
                    file_size_printer(index_summary_off_heap_mem_size, human_readable));
         fmt::print("\t\tCompression metadata off heap memory used: {}\n",
                    file_size_printer(compression_metadata_off_heap_mem_size, human_readable));
-        fmt::print("\t\tCompacted partition minimum bytes: {}\n", min_row_size());
-        fmt::print("\t\tCompacted partition maximum bytes: {}\n", max_row_size());
-        fmt::print("\t\tCompacted partition mean bytes: {}\n", mean_row_size());
+        fmt::print("\t\tCompacted partition minimum bytes: {}\n", file_size_printer(min_row_size(), human_readable));
+        fmt::print("\t\tCompacted partition maximum bytes: {}\n", file_size_printer(max_row_size(), human_readable));
+        fmt::print("\t\tCompacted partition mean bytes: {}\n", file_size_printer(mean_row_size(), human_readable));
         auto live_cells_per_slice = live_scanned_histogram();
         fmt::print("\t\tAverage live cells per slice (last five minutes): {:.1f}\n",
                    live_cells_per_slice.mean);
@@ -3503,10 +3510,10 @@ void table_stats_operation(scylla_rest_client& client, const bpo::variables_map&
     if (vm.contains("tables")) {
         match_set = vm["tables"].as<std::vector<sstring>>();
     }
-    table_filter is_included(vm["ignore"].as<bool>(), match_set);
+    table_filter is_included(vm.contains("ignore"), match_set);
 
     const auto format = vm["format"].as<sstring>();
-    const auto human_readable = vm["human-readable"].as<bool>();
+    const auto human_readable = vm.contains("human-readable");
     if (format == "json") {
         table_stats_print<json_writer>(client, is_included, human_readable);
     } else if (format == "yaml") {
@@ -4334,7 +4341,7 @@ fmt::format(R"(
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/compactionstats.html")),
                 {
-                    typed_option<bool>("human-readable,H", false, "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
+                    typed_option<>("human-readable,H", "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
                 },
             },
             {
@@ -5260,8 +5267,8 @@ fmt::format(R"(
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tablestats.html")),
                 {
-                    typed_option<bool>("ignore,i", false, "Ignore the list of tables and display the remaining tables"),
-                    typed_option<bool>("human-readable,H", false, "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
+                    typed_option<>("ignore,i", "Ignore the list of tables and display the remaining tables"),
+                    typed_option<>("human-readable,H", "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
                     typed_option<sstring>("format,F", "plain", "Output format (json, yaml)"),
                 },
                 {
