@@ -1301,11 +1301,18 @@ void write_compression_info_component(const sstables::shared_sstable& sst, json_
     writer.Uint(compression.uncompressed_chunk_length());
     writer.Key("data_len");
     writer.Uint64(compression.data_len);
-    writer.Key("offsets");
-    writer.StartArray();
-    for (const auto& offset : compression.offsets) {
-        writer.Uint64(offset);
+    if (sst->uses_physical_positions()) {
+        // CompressionInfo.db of `mu` stores only a random sample of the chunk offsets.
+        writer.Key("sampling_denominator");
+        writer.Uint(compression.sampling_denominator());
+        writer.Key("sampled_offsets");
+    } else {
+        writer.Key("offsets");
     }
+    writer.StartArray();
+    sst->for_each_compression_offset([&writer] (uint64_t offset) {
+        writer.Uint64(offset);
+    }).get();
     writer.EndArray();
     writer.EndObject();
 }

@@ -10,6 +10,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
 #include <array>
 #include <ranges>
 #include <string>
@@ -299,4 +300,38 @@ BOOST_AUTO_TEST_CASE(framed_chunk_parse_variants) {
     codec.write_frames(chunk.data(), len);
     chunk.back() = char(0x80);
     BOOST_CHECK_THROW(codec.parse(std::string_view(chunk.data(), chunk.size())), sstables::malformed_sstable_exception);
+}
+
+// Checks that take_sampled_offsets() leaves out the sampled chunks that start
+// less than max(sampled_chunk_min_data, chunk length) bytes before the end of
+// the data, and that it frees the sample.
+BOOST_AUTO_TEST_CASE(take_sampled_offsets_leaves_out_chunks_near_end) {
+    auto check = [] (uint32_t chunk_len, uint64_t data_len) {
+        BOOST_TEST_CONTEXT("chunk_len=" << chunk_len << " data_len=" << data_len) {
+            const uint64_t min_data = std::max<uint64_t>(sstables::sampled_chunk_min_data, chunk_len);
+            sstables::compression c;
+            c.set_uncompressed_chunk_length(chunk_len);
+            c.set_uncompressed_file_length(data_len);
+            // Sample every chunk. The offsets only need to increase.
+            std::vector<uint64_t> expected;
+            for (uint64_t i = 0; i * chunk_len < data_len; ++i) {
+                c.add_sampled_chunk(i * 1000, i * chunk_len);
+                if (i * chunk_len + min_data <= data_len) {
+                    expected.push_back(i * 1000);
+                }
+            }
+            BOOST_REQUIRE(c.take_sampled_offsets() == expected);
+            BOOST_REQUIRE(c.take_sampled_offsets().empty());
+        }
+    };
+    // The last chunk is partial. With 4 KiB chunks, the last 4 chunks are left
+    // out. With 64 KiB chunks, only the last one.
+    check(4096, 99 * 4096 + 1);
+    check(65536, 99 * 65536 + 1);
+    // The last chunk is full. A sample of min_data bytes from the chunk
+    // that starts min_data bytes before the end fits.
+    check(4096, 100 * 4096);
+    check(65536, 100 * 65536);
+    // The data is shorter than min_data, so no chunk is kept.
+    check(4096, sstables::sampled_chunk_min_data - 1);
 }

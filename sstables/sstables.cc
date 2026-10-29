@@ -956,6 +956,44 @@ static future<> do_parse_compression(const schema& s, sstable_version_types v, r
     c.set_uncompressed_chunk_length(chunk_len);
     c.set_uncompressed_file_length(data_len);
 
+    if (index_holds_physical_positions(v)) {
+        // `mu` stores a sample of the chunk offsets, preceded by the sampling
+        // denominator and the size of the sample.
+        uint32_t denominator = 0;
+        uint32_t len = 0;
+        co_await parse(s, v, in, denominator, len);
+        if (denominator == 0) {
+            throw_malformed_sstable_exception("CompressionInfo is malformed: zero sampling denominator");
+        }
+        c.set_sampling_denominator(denominator);
+        const uint64_t start_pos = in.offset();
+        // The readers of the sample read it from the file when they need it, so
+        // don't keep it in memory. Still read through it: the caller might be
+        // computing the digest of the component. Check that the offsets increase
+        // strictly.
+        uint64_t prev = 0;
+        size_t parsed = 0;
+        while (parsed != len) {
+            auto now = std::min<size_t>(len - parsed, 100000 / sizeof(uint64_t));
+            auto buf = co_await in.read_exactly(now * sizeof(uint64_t));
+            if (buf.size() != now * sizeof(uint64_t)) {
+                throw_malformed_sstable_exception(format("CompressionInfo is truncated: expected {} sampled offsets, got {}",
+                        len, parsed + buf.size() / sizeof(uint64_t)));
+            }
+            for (size_t i = 0; i < now; ++i) {
+                const uint64_t value = seastar::read_be<uint64_t>(buf.get() + i * sizeof(uint64_t));
+                if (parsed + i > 0 && value <= prev) {
+                    throw_malformed_sstable_exception(format("CompressionInfo is malformed: sampled offset {} at index {} doesn't follow {}",
+                            value, parsed + i, prev));
+                }
+                prev = value;
+            }
+            parsed += now;
+        }
+        c.set_sample_location(start_pos, len);
+        co_return;
+    }
+
     uint32_t len = 0;
     compression::segmented_offsets::writer offsets = c.offsets.get_writer();
     co_await parse(s, v, in, len);
@@ -989,8 +1027,21 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     }
 }
 
-void write(sstable_version_types v, file_writer& out, const compression& c) {
+void write(sstable_version_types v, file_writer& out, compression& c) {
     write(v, out, c.name, c.options, c.uncompressed_chunk_length(), c.uncompressed_file_length());
+
+    if (index_holds_physical_positions(v)) {
+        // This frees the sample. The writer doesn't need it after this, and the
+        // readers read it from the file.
+        auto sample = c.take_sampled_offsets();
+        write(v, out, c.sampling_denominator(), static_cast<uint32_t>(sample.size()));
+        c.set_sample_location(out.offset(), sample.size());
+        for (auto& offset : sample) {
+            offset = net::hton(offset);
+        }
+        out.write(reinterpret_cast<const char*>(sample.data()), sample.size() * sizeof(uint64_t));
+        return;
+    }
 
     write(v, out, static_cast<uint32_t>(c.offsets.size()));
 
@@ -1336,7 +1387,7 @@ uint32_t sstable::do_write_simple_with_digest(component_type type,
 }
 
 template <component_type Type, typename T>
-uint32_t sstable::write_simple_with_digest(const T& component) {
+uint32_t sstable::write_simple_with_digest(T& component) {
     return do_write_simple_with_digest(Type, [&component] (version_types v, file_writer& w) {
         write(v, w, component);
     }, sstable_buffer_size);
@@ -1346,7 +1397,7 @@ template future<> sstable::read_simple<component_type::Filter>(sstables::filter&
 template void sstable::write_simple<component_type::Filter>(const sstables::filter& f);
 
 template void sstable::write_simple<component_type::Summary>(const sstables::summary_ka&);
-template uint32_t sstable::write_simple_with_digest<component_type::Summary>(const sstables::summary&);
+template uint32_t sstable::write_simple_with_digest<component_type::Summary>(sstables::summary&);
 
 future<> sstable::read_compression() {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
@@ -3127,20 +3178,14 @@ sstable_position sstable::end_position() const {
     return sstable_position::from_logical(data_size());
 }
 
-sstable_position sstable::sstable_position_from_logical_position(uint64_t logical_position) const {
-    if (!_components->compression || !index_holds_physical_positions(_version)) {
-        return sstable_position::from_logical(logical_position);
-    }
-    if (logical_position >= data_size()) {
-        return end_position();
-    }
-    const auto& comp = _components->compression;
-    auto chunk = comp.locate(logical_position, comp.offsets.get_accessor());
-    return sstable_position::from_physical(chunk.chunk_start, chunk.chunk_len, chunk.offset);
-}
-
 disk_read_range sstable::disk_read_range_from_logical_range(uint64_t begin, uint64_t end) const {
-    return {sstable_position_from_logical_position(begin), sstable_position_from_logical_position(end)};
+    SCYLLA_ASSERT(begin < end && end <= data_size());
+    if (uses_physical_positions()) {
+        // CompressionInfo.db of `mu` stores only a sample of the chunk offsets,
+        // so a logical position can't be translated to a physical one.
+        on_internal_error(sstlog, format("disk_read_range_from_logical_range() called for {}, which uses physical positions", get_filename()));
+    }
+    return {sstable_position::from_logical(begin), sstable_position::from_logical(end)};
 }
 
 // Which fraction of the data file is covered by `range`.
@@ -3593,7 +3638,11 @@ future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> ss
         digest = get_digest();
     }
 
-    if (_components->compression && index_holds_physical_positions(_version)) {
+    if (uses_physical_positions()) {
+        if (!range.start.is_physical() || !range.end.is_physical()) {
+            on_internal_error(sstlog, format("data_stream() of {} got the logical range [{}, {}), but the sstable uses physical positions",
+                    get_filename(), range.start, range.end));
+        }
         // The physical-position compressed format (`mu`) is read through the
         // decompressing cursor, which navigates the data file by chunk
         // coordinates. It opens its own (traced) file, verifies per-chunk
@@ -3701,13 +3750,107 @@ future<input_stream<char>> sstable::data_stream_compressed_chunks(
     co_return co_await stream_creator(pos, len, std::move(options));
 }
 
+future<temporary_buffer<char>> sstable::read_compression_offsets(file& f, uint64_t first, uint64_t n) const {
+    const auto& c = _components->compression;
+    try {
+        // dma_read_exactly() takes care of the alignment requirements of the underlying file.
+        co_return co_await f.dma_read_exactly<char>(c.offsets_start_pos() + first * sizeof(uint64_t), n * sizeof(uint64_t));
+    } catch (const file::eof_error&) {
+        throw_malformed_sstable_exception(format("CompressionInfo of {} is truncated: no sampled offsets {} to {}",
+                get_filename(), first, first + n - 1));
+    }
+}
+
+future<file> sstable::open_compression_info() const {
+    // See read_digest(). The lock keeps change_state() from moving the file and
+    // unlink() from removing it while we open it by name.
+    auto lock = co_await get_units(_mutate_sem, 1);
+    if (_unlinked_at) {
+        // Compaction can unlink the sstable while a reader still holds it. Fail
+        // as the open would, but without the error that a failed open logs.
+        // is_sstable_gone() recognizes this exception.
+        throw std::system_error(ENOENT, std::system_category(),
+                fmt::format("{} was unlinked", filename(component_type::CompressionInfo)));
+    }
+    co_return co_await open_file(component_type::CompressionInfo, open_flags::ro);
+}
+
+future<> sstable::for_each_compression_offset(noncopyable_function<void (uint64_t)> func) const {
+    const auto& c = _components->compression;
+    if (!uses_physical_positions()) {
+        for (uint64_t offset : c.offsets) {
+            func(offset);
+        }
+        co_return;
+    }
+    auto f = co_await open_compression_info();
+    std::exception_ptr ex;
+    try {
+        // Read the offsets in batches, so that memory use doesn't grow with the
+        // number of chunks.
+        const uint64_t per_read = 100000 / sizeof(uint64_t);
+        for (uint64_t first = 0; first < c.sample_size(); first += per_read) {
+            const uint64_t n = std::min<uint64_t>(c.sample_size() - first, per_read);
+            auto buf = co_await read_compression_offsets(f, first, n);
+            for (uint64_t i = 0; i < n; ++i) {
+                func(seastar::read_be<uint64_t>(buf.get() + i * sizeof(uint64_t)));
+            }
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await f.close();
+    maybe_rethrow_exception(std::move(ex));
+}
+
+future<std::vector<uint64_t>> sstable::read_sampled_offsets(std::vector<uint64_t> indices) const {
+    const auto& c = _components->compression;
+    if (!uses_physical_positions()) {
+        on_internal_error(sstlog, format("read_sampled_offsets() called for {}, which doesn't use physical positions", get_filename()));
+    }
+    for (uint64_t index : indices) {
+        if (index >= c.sample_size()) {
+            on_internal_error(sstlog, format("read_sampled_offsets(): index {} is out of range, {} has {} sampled offsets",
+                    index, get_filename(), c.sample_size()));
+        }
+    }
+    std::vector<uint64_t> result;
+    result.reserve(indices.size());
+    if (indices.empty()) {
+        co_return result;
+    }
+    auto f = co_await open_compression_info();
+    std::exception_ptr ex;
+    try {
+        // Read a block of offsets that starts at an index which the last read
+        // didn't cover. The following indices are likely in the same block.
+        const uint64_t per_read = 4096 / sizeof(uint64_t);
+        // The offsets [first, first + buf.size() / sizeof(uint64_t)).
+        uint64_t first = 0;
+        temporary_buffer<char> buf;
+        for (uint64_t index : indices) {
+            if (index < first || index >= first + buf.size() / sizeof(uint64_t)) {
+                first = index;
+                buf = co_await read_compression_offsets(f, first, std::min<uint64_t>(c.sample_size() - first, per_read));
+            }
+            result.push_back(seastar::read_be<uint64_t>(buf.get() + (index - first) * sizeof(uint64_t)));
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await f.close();
+    maybe_rethrow_exception(std::move(ex));
+    co_return result;
+}
+
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, reader_permit permit) {
     // Clamp the range to the (uncompressed) data size so a read that runs off the
     // end of the file returns a short buffer rather than over-reading. Callers
     // (e.g. the data-file sampler, which may read a partial last chunk) rely on
-    // this. Clamp `len` before adding it to `pos`, so that the sum can't
-    // overflow.
-    if (pos >= data_size()) {
+    // this. An empty range returns an empty buffer, because
+    // disk_read_range_from_logical_range() requires a nonempty range. Clamp
+    // `len` before adding it to `pos`, so that the sum can't overflow.
+    if (pos >= data_size() || len == 0) {
         co_return temporary_buffer<char>();
     }
     auto end = pos + std::min<uint64_t>(len, data_size() - pos);
@@ -3716,6 +3859,13 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, read
 }
 
 future<temporary_buffer<char>> sstable::data_read(disk_read_range range, size_t len, reader_permit permit) {
+    file_input_stream_options options;
+    options.buffer_size = sstable_buffer_size;
+    options.read_ahead = 4;
+    return data_read(range, len, std::move(permit), std::move(options));
+}
+
+future<temporary_buffer<char>> sstable::data_read(disk_read_range range, size_t len, reader_permit permit, file_input_stream_options options) {
     if (len == 0) {
         co_return temporary_buffer<char>();
     }
@@ -3724,7 +3874,7 @@ future<temporary_buffer<char>> sstable::data_read(disk_read_range range, size_t 
     // requested number of decompressed bytes from it. No whole-file digest is
     // verified here.
     const size_t want = len;
-    auto stream = co_await data_stream(range, std::move(permit), tracing::trace_state_ptr(), nullptr);
+    auto stream = co_await data_stream(range, std::move(permit), tracing::trace_state_ptr(), nullptr, std::move(options));
     // A physical stream can return data past range.end, up to the end of its
     // chunk, so clip the buffers at range.end.
     stream->init_stream_position(range.start);
@@ -3756,7 +3906,10 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
 
     auto accessor = c.offsets.get_accessor();
     framed_chunk_stream_reader chunk_reader(codec);
-    for (size_t i = 0; i < c.offsets.size(); ++i) {
+    // Without framing, the chunk boundaries come from the offsets, so there is
+    // one chunk per offset.
+    const uint64_t n_chunks = codec.framed() ? c.chunk_count() : c.offsets.size();
+    for (uint64_t i = 0; i < n_chunks; ++i) {
         uint64_t chunk_len;
         temporary_buffer<char> buf;
 
@@ -3775,7 +3928,7 @@ static future<bool> do_validate_compressed(input_stream<char>& stream, const sst
             }
         } else {
             auto current_pos = accessor.at(i);
-            auto next_pos = i + 1 == c.offsets.size() ? c.compressed_file_length() : accessor.at(i + 1);
+            auto next_pos = i + 1 == n_chunks ? c.compressed_file_length() : accessor.at(i + 1);
             chunk_len = next_pos - current_pos;
             buf = co_await stream.read_exactly(chunk_len);
 

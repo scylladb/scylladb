@@ -405,13 +405,23 @@ public:
     // Throws malformed_sstable_exception if the chunk length doesn't allow
     // physical positions.
     trie::bti_position_encoding get_bti_position_encoding() const;
+    // Calls `func`, in order, with each chunk offset that CompressionInfo.db
+    // stores. For an sstable that uses physical positions, these are only a
+    // random sample of the chunk offsets (see compression::sampled_chunk),
+    // read from the file. For other sstables, these are the offsets of all
+    // chunks.
+    future<> for_each_compression_offset(noncopyable_function<void (uint64_t)> func) const;
+    // For an sstable that uses physical positions: returns the sampled chunk
+    // offsets with the given indices, which must be less than
+    // get_compression().sample_size(). Reads from CompressionInfo.db only the
+    // parts that hold them. Indices that are close to each other share a read,
+    // so pass them sorted.
+    future<std::vector<uint64_t>> read_sampled_offsets(std::vector<uint64_t> indices) const;
     // Start/end positions of the data component, expressed as sstable_positions.
     sstable_position start_position() const;
     sstable_position end_position() const;
 
     double approximate_file_fraction(sstable_positions_range range) const;
-    sstable_position sstable_position_from_logical_position(uint64_t logical_position) const;
-    disk_read_range disk_read_range_from_logical_range(uint64_t begin, uint64_t end) const;
 
     uint64_t index_size() const {
         return _index_file_size;
@@ -734,7 +744,7 @@ private:
             unsigned buffer_size);
 
     template <component_type Type, typename T>
-    uint32_t write_simple_with_digest(const T& comp);
+    uint32_t write_simple_with_digest(T& comp);
     uint32_t do_write_simple_with_digest(component_type type,
             noncopyable_function<void (version_types version, file_writer& writer)> write_component,
             unsigned buffer_size);
@@ -915,14 +925,31 @@ public:
     // for iteration through all the rows.
     //
     // The range [pos, pos + len) is logical (uncompressed). It is clamped to
-    // data_size(), so a read past the end returns a short buffer.
+    // data_size(), so a read past the end returns a short buffer. Must not be
+    // called for an sstable that uses physical positions; use the overload
+    // below.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, reader_permit permit);
     // Like the above, but the range is given in the position type of this
     // sstable (see uses_physical_positions()). Reads at most `len` bytes from
     // `range.start`. Returns fewer if the range ends first.
     future<temporary_buffer<char>> data_read(disk_read_range range, size_t len, reader_permit permit);
+    // Like the above, but reads the data file with the given stream options.
+    future<temporary_buffer<char>> data_read(disk_read_range range, size_t len, reader_permit permit, file_input_stream_options options);
 
 private:
+    // Translates the logical range [begin, end) of the data component to a
+    // disk_read_range. Requires begin < end <= data_size(). Must not be called
+    // for an sstable that uses physical positions: it doesn't store the chunk
+    // offsets needed for the translation.
+    disk_read_range disk_read_range_from_logical_range(uint64_t begin, uint64_t end) const;
+    // Reads the sampled offsets [first, first + n) from the CompressionInfo.db
+    // file `f` of an sstable that uses physical positions, as big-endian
+    // uint64_t values.
+    future<temporary_buffer<char>> read_compression_offsets(file& f, uint64_t first, uint64_t n) const;
+    // Opens CompressionInfo.db, which an sstable that uses physical positions
+    // doesn't keep open. Fails with ENOENT if the sstable is unlinked.
+    future<file> open_compression_info() const;
+
     future<summary_entry&> read_summary_entry(size_t i);
 
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }

@@ -1092,6 +1092,8 @@ void writer::init_file_writers() {
                 _sst.get_version(),
                 _sst._schema->get_compressor_params(),
                 std::move(compressor),
+                // A deterministic seed lets a test failure be reproduced.
+                std::hash<generation_type>{}(_sst.generation()),
                 // Only a physically indexed sstable needs the chunks, to compute the
                 // positions of the buffered index writes.
                 !_physical_index_positions ? compressed_chunk_observer() :

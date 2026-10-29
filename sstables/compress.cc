@@ -8,6 +8,8 @@
 
 #include <stdexcept>
 #include <cstdlib>
+#include <optional>
+#include <random>
 
 #include <seastar/core/align.hh>
 #include <seastar/core/bitops.hh>
@@ -538,6 +540,22 @@ void compression::update(uint64_t compressed_file_length) {
     _compressed_file_length = compressed_file_length;
 }
 
+std::vector<uint64_t> compression::take_sampled_offsets() {
+    auto sample = std::exchange(_sampled_chunks, {});
+    // A chunk is kept only if a sample of min_data bytes from its start fits in
+    // the data. The chunks are in increasing order, so the others are at the end.
+    const uint64_t min_data = std::max<uint64_t>(sampled_chunk_min_data, uncompressed_chunk_length());
+    while (!sample.empty() && sample.back().uncompressed_start + min_data > uncompressed_file_length()) {
+        sample.pop_back();
+    }
+    std::vector<uint64_t> offsets;
+    offsets.reserve(sample.size());
+    for (const auto& chunk : sample) {
+        offsets.push_back(chunk.offset);
+    }
+    return offsets;
+}
+
 // locate() takes a byte position in the uncompressed stream, and finds the
 // the location of the compressed chunk on disk which contains it, and the
 // offset in this chunk.
@@ -892,18 +910,43 @@ class compressed_file_data_sink_impl : public data_sink_impl {
     uint32_t _full_checksum;
     // Called after each compressed chunk is written. See compressed_chunk_observer.
     sstables::compressed_chunk_observer _observer;
+    std::minstd_rand _sampling_rng;
 public:
     compressed_file_data_sink_impl(output_stream<char> out, sstables::compression* cm,
-            sstables::sstable_version_types version, sstables::compressed_chunk_observer observer)
+            sstables::sstable_version_types version, uint64_t sampling_seed, sstables::compressed_chunk_observer observer)
             : _out(std::move(out))
             , _compression_metadata(cm)
             , _codec(version, cm->uncompressed_chunk_length())
             , _offsets(_compression_metadata->offsets.get_writer())
             , _full_checksum(ChecksumType::init_checksum())
             , _observer(std::move(observer))
-    {}
+            , _sampling_rng(sampling_seed)
+    {
+        if (_codec.framed()) {
+            _compression_metadata->set_sampling_denominator(sstables::default_offset_sampling_denominator);
+        }
+    }
 
 private:
+    // Records the offset of a new chunk, which starts at `uncompressed_start`
+    // in the uncompressed data.
+    void add_chunk_offset(uint64_t offset, uint64_t uncompressed_start) {
+        if (!_codec.framed()) {
+            _offsets.push_back(offset);
+            return;
+        }
+        // Keep each chunk with the same probability, independently of the other
+        // chunks. Then a uniform draw from the sampled offsets is a uniform draw
+        // from the chunks, so database::sample_data_files(), which draws from
+        // the sampled offsets, gives every chunk the same chance to be sampled.
+        // The chunks near the end of the data are left out later, when the end
+        // is known (see compression::take_sampled_offsets()).
+        const auto d = _compression_metadata->sampling_denominator();
+        if (std::uniform_int_distribution<uint32_t>(0, d - 1)(_sampling_rng) == 0) {
+            _compression_metadata->add_sampled_chunk(offset, uncompressed_start);
+        }
+    }
+
     future<> do_put(temporary_buffer<char> buf) {
         // Leave room for the largest header, if any, before the compressed
         // data, and for the checksum and the largest footer, if any, after it.
@@ -932,7 +975,7 @@ private:
 
         // position of this chunk in the post-compression stream.
         auto post_compression_pos = _pos;
-        _offsets.push_back(_pos);
+        add_chunk_offset(_pos, pre_compression_pos);
         auto chunk_size = _codec.extent(len);
         _pos += chunk_size;
         _compression_metadata->set_compressed_file_length(_pos);
@@ -985,9 +1028,9 @@ requires ChecksumUtils<ChecksumType>
 class compressed_file_data_sink : public data_sink {
 public:
     compressed_file_data_sink(output_stream<char> out, sstables::compression* cm,
-            sstables::sstable_version_types version, sstables::compressed_chunk_observer observer)
+            sstables::sstable_version_types version, uint64_t sampling_seed, sstables::compressed_chunk_observer observer)
         : data_sink(std::make_unique<compressed_file_data_sink_impl<ChecksumType, mode>>(
-                std::move(out), cm, version, std::move(observer))) {}
+                std::move(out), cm, version, sampling_seed, std::move(observer))) {}
 };
 
 template <typename ChecksumType, compressed_checksum_mode mode>
@@ -997,6 +1040,7 @@ inline output_stream<char> make_compressed_file_output_stream(output_stream<char
          sstables::sstable_version_types version,
          const compression_parameters& cp,
          compressor_ptr p,
+         uint64_t sampling_seed,
          sstables::compressed_chunk_observer observer) {
     cm->set_compressor(std::move(p));
     // buffer of output stream is set to chunk length, because flush must
@@ -1007,7 +1051,7 @@ inline output_stream<char> make_compressed_file_output_stream(output_stream<char
     // defaults to 1.0.
     cm->options.elements.push_back({{"crc_check_chance"}, {"1.0"}});
 
-    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(out), cm, version, std::move(observer)));
+    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(out), cm, version, sampling_seed, std::move(observer)));
 }
 
 input_stream<char> sstables::make_compressed_file_k_l_format_input_stream(stream_creator_fn stream_creator,
@@ -1032,9 +1076,10 @@ output_stream<char> sstables::make_compressed_file_m_format_output_stream(output
         sstable_version_types version,
         const compression_parameters& cp,
         compressor_ptr p,
+        uint64_t sampling_seed,
         sstables::compressed_chunk_observer observer) {
     return make_compressed_file_output_stream<crc32_utils, compressed_checksum_mode::checksum_all>(
-            std::move(out), cm, version, cp, std::move(p), std::move(observer));
+            std::move(out), cm, version, cp, std::move(p), sampling_seed, std::move(observer));
 }
 
 input_stream<char> sstables::make_compressed_raw_file_input_stream(sstables::stream_creator_fn stream_creator, sstables::compression *cm,

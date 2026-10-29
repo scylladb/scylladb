@@ -14,13 +14,16 @@
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/file.hh>
 
 #include "test/boost/sstable_test.hh"
 #include "sstables/key.hh"
+#include "sstables/compressor.hh"
 #include <seastar/core/do_with.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/thread.hh>
 #include "sstables/sstables.hh"
+#include "sstables/storage.hh"
 #include "replica/database.hh"
 #include "mutation/timestamp.hh"
 #include "schema/schema_builder.hh"
@@ -1602,7 +1605,8 @@ static temporary_buffer<char> read_data_component(test_env& env, const shared_ss
 }
 
 // Returns the offset of every chunk of an sstable that uses physical
-// positions. Follows the chunk headers in Data.db.
+// positions. Its CompressionInfo.db stores only a sample of them, so this
+// follows the chunk headers in Data.db.
 static std::vector<uint64_t> read_all_chunk_offsets(const shared_sstable& sst) {
     const auto codec = sst->get_chunk_codec();
     auto f = open_file_dma(test(sst).filename(component_type::Data).native(), open_flags::ro).get();
@@ -1618,6 +1622,79 @@ static std::vector<uint64_t> read_all_chunk_offsets(const shared_sstable& sst) {
     }
     BOOST_REQUIRE_EQUAL(pos, sst->ondisk_data_size());
     return offsets;
+}
+
+// Returns the offsets that CompressionInfo.db of `sst` stores.
+static std::vector<uint64_t> get_stored_compression_offsets(const shared_sstable& sst) {
+    std::vector<uint64_t> offsets;
+    sst->for_each_compression_offset([&] (uint64_t offset) {
+        offsets.push_back(offset);
+    }).get();
+    return offsets;
+}
+
+// A schema whose sstables are compressed in chunks of `chunk_len_kb` KiB.
+static schema_ptr make_schema_with_chunk_length(unsigned chunk_len_kb) {
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v", utf8_type)
+            .set_compressor_params(std::map<sstring, sstring>{
+                {compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor"},
+                {compression_parameters::CHUNK_LENGTH_KB, fmt::to_string(chunk_len_kb)},
+            })
+            .build();
+}
+
+// A partition with `rows` rows of about 1 KiB of random data.
+static mutation make_partition_with_random_rows(schema_ptr s, int32_t rows) {
+    mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(int32_t(0))));
+    for (int32_t i = 0; i < rows; ++i) {
+        auto ck = clustering_key::from_single_value(*s, int32_type->decompose(i));
+        m.set_clustered_cell(ck, "v", data_value(tests::random::get_sstring(1000)), api::new_timestamp());
+    }
+    return m;
+}
+
+// Checks that data_read() honours its stream options. With buffers that hold
+// any one chunk and no read-ahead, as the data-file sampler uses, reading a
+// chunk takes one I/O, although the range ends at end_position().
+SEASTAR_TEST_CASE(test_physical_data_read_reads_chunk_in_one_io) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            simple_schema ss;
+            auto s = ss.schema();
+            auto pk = ss.make_pkey();
+            mutation m(s, pk);
+            for (uint32_t i = 0; i < 20000; ++i) {
+                ss.add_row(m, ss.make_ckey(i), tests::random::get_sstring(50));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+            if (!sst->uses_physical_positions()) {
+                continue;
+            }
+            const auto codec = sst->get_chunk_codec();
+            const uint64_t chunk_len = codec.uncompressed_chunk_length();
+            const uint64_t max_extent = codec.extent(compressed_chunk_length_limit(chunk_len));
+            const uint64_t alignment = sst->get_data_file().disk_read_dma_alignment();
+            file_input_stream_options options;
+            options.buffer_size = alignment - 1 + max_extent;
+            options.read_ahead = 0;
+
+            const auto offsets = read_all_chunk_offsets(sst);
+            reactor& r = *local_engine;
+            for (size_t i = 0; i < offsets.size(); ++i) {
+                disk_read_range range{sstable_position::from_physical(offsets[i], 0, 0), sst->end_position()};
+                const auto stats_before = r.get_io_stats();
+                auto buf = sst->data_read(range, chunk_len, env.make_reader_permit(), options).get();
+                const auto stats_after = r.get_io_stats();
+                BOOST_TEST_INFO(fmt::format("version {}, chunk {}", version, i));
+                BOOST_REQUIRE_EQUAL(buf.size(), std::min(chunk_len, sst->data_size() - i * chunk_len));
+                BOOST_REQUIRE_EQUAL(stats_after.aio_reads - stats_before.aio_reads, 1);
+                BOOST_REQUIRE_LE(stats_after.aio_read_bytes - stats_before.aio_read_bytes, align_up(options.buffer_size, alignment));
+            }
+        }
+    });
 }
 
 // Checks that data_read() returns the same bytes as a full scan of the data
@@ -1642,39 +1719,41 @@ SEASTAR_TEST_CASE(test_data_read) {
 
             const auto expected = read_data_component(env, sst);
 
-            auto check = [&] (uint64_t pos, uint64_t len) {
-                testlog.trace("version {}: data_read({}, {})", version, pos, len);
-                auto buf = sst->data_read(pos, len, env.make_reader_permit()).get();
-                const uint64_t want = pos < size ? std::min(len, size - pos) : 0;
-                BOOST_REQUIRE_EQUAL(buf.size(), want);
-                BOOST_REQUIRE(std::equal(buf.begin(), buf.end(), expected.begin() + std::min(pos, size)));
-            };
-            check(0, 1);
-            check(0, size);
-            check(0, size + 1);
-            check(chunk_len - 1, 2);
-            check(chunk_len, chunk_len);
-            check(chunk_len, chunk_len + 1);
-            check(chunk_len - 1, 2 * chunk_len + 2);
-            check(size - 1, 1);
-            check(size - 1, 10);
-            check(size - size % chunk_len, chunk_len);
-            check(size, 5);
-            check(0, 0);
-            check(chunk_len, 0);
-            check(size, 0);
-            check(chunk_len, std::numeric_limits<uint64_t>::max());
-            for (int i = 0; i < 20; ++i) {
-                check(tests::random::get_int<uint64_t>(0, size - 1), tests::random::get_int<uint64_t>(1, 3 * chunk_len));
-            }
-
             if (!sst->uses_physical_positions()) {
+                auto check = [&] (uint64_t pos, uint64_t len) {
+                    testlog.trace("version {}: data_read({}, {})", version, pos, len);
+                    auto buf = sst->data_read(pos, len, env.make_reader_permit()).get();
+                    const uint64_t want = pos < size ? std::min(len, size - pos) : 0;
+                    BOOST_REQUIRE_EQUAL(buf.size(), want);
+                    BOOST_REQUIRE(std::equal(buf.begin(), buf.end(), expected.begin() + std::min(pos, size)));
+                };
+                check(0, 1);
+                check(0, size);
+                check(0, size + 1);
+                check(chunk_len - 1, 2);
+                check(chunk_len, chunk_len);
+                check(chunk_len, chunk_len + 1);
+                check(chunk_len - 1, 2 * chunk_len + 2);
+                check(size - 1, 1);
+                check(size - 1, 10);
+                check(size - size % chunk_len, chunk_len);
+                check(size, 5);
+                check(0, 0);
+                check(chunk_len, 0);
+                check(size, 0);
+                check(chunk_len, std::numeric_limits<uint64_t>::max());
+                for (int i = 0; i < 20; ++i) {
+                    check(tests::random::get_int<uint64_t>(0, size - 1), tests::random::get_int<uint64_t>(1, 3 * chunk_len));
+                }
                 continue;
             }
-            // The physical overload reads from a position inside a chunk to
-            // end_position(), so it can continue into the following chunks.
+
+            // An sstable that uses physical positions can only be read from a
+            // physical position. Read from positions inside each chunk to
+            // end_position(), so that reads can continue into the following
+            // chunks.
             const auto offsets = read_all_chunk_offsets(sst);
-            BOOST_REQUIRE_EQUAL(offsets.size(), (size + chunk_len - 1) / chunk_len);
+            BOOST_REQUIRE_EQUAL(offsets.size(), sst->get_compression().chunk_count());
             auto check_physical = [&] (size_t chunk, uint64_t offset_in_chunk, uint64_t len) {
                 testlog.trace("version {}: physical data_read(chunk {}, offset {}, len {})", version, chunk, offset_in_chunk, len);
                 const uint64_t pos = chunk * chunk_len + offset_in_chunk;
@@ -1713,6 +1792,178 @@ SEASTAR_TEST_CASE(test_data_read) {
                 check_physical_bounded(i, 1, i + 1, 1, 2 * chunk_len);
                 check_physical_bounded(i, chunk_len / 2, i + 1, chunk_len / 2, 10);
             }
+        }
+    });
+}
+
+// Checks that for_each_compression_offset() and read_sampled_offsets() return
+// the offsets that CompressionInfo.db stores, for every format. For an sstable
+// that uses physical positions, these are a sample of the chunk offsets: checks
+// that each is the start of a chunk that isn't near the end of the data (see
+// sampled_chunk_min_data), and that each sampled chunk holds the expected data.
+SEASTAR_TEST_CASE(test_for_each_compression_offset) {
+    return test_env::do_with_async([] (test_env& env) {
+        // With 1 KiB chunks, a `mu` sstable has about 30 sampled offsets.
+        auto s = make_schema_with_chunk_length(1);
+        for (const auto version : writable_sstable_versions) {
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {make_partition_with_random_rows(s, 2000)}).get();
+            BOOST_REQUIRE(sst->has_component(component_type::CompressionInfo));
+
+            const auto& c = sst->get_compression();
+            const uint64_t size = sst->data_size();
+            const uint64_t chunk_len = c.uncompressed_chunk_length();
+            BOOST_REQUIRE_EQUAL(chunk_len, 1024);
+            BOOST_REQUIRE_EQUAL(c.chunk_count(), (size + chunk_len - 1) / chunk_len);
+
+            const auto offsets = get_stored_compression_offsets(sst);
+            BOOST_REQUIRE(std::ranges::adjacent_find(offsets, std::ranges::greater_equal()) == offsets.end());
+
+            if (!sst->uses_physical_positions()) {
+                BOOST_REQUIRE_EQUAL(offsets.size(), c.chunk_count());
+                BOOST_REQUIRE_EQUAL(offsets.front(), 0);
+                BOOST_REQUIRE_LT(offsets.back(), c.compressed_file_length());
+                std::vector<uint64_t> in_memory;
+                for (uint64_t offset : c.offsets) {
+                    in_memory.push_back(offset);
+                }
+                BOOST_REQUIRE(offsets == in_memory);
+                continue;
+            }
+            BOOST_REQUIRE_EQUAL(c.offsets.size(), 0);
+            BOOST_REQUIRE_EQUAL(offsets.size(), c.sample_size());
+            BOOST_REQUIRE_GT(offsets.size(), 0);
+
+            // read_sampled_offsets() returns the same offsets, also for
+            // repeated and unsorted indices.
+            {
+                const std::vector<uint64_t> indices = {0, offsets.size() / 2, offsets.size() / 2, offsets.size() - 1, 0};
+                std::vector<uint64_t> wanted;
+                for (const uint64_t i : indices) {
+                    wanted.push_back(offsets[i]);
+                }
+                BOOST_REQUIRE(sst->read_sampled_offsets(indices).get() == wanted);
+                BOOST_REQUIRE(sst->read_sampled_offsets({}).get().empty());
+            }
+
+            const auto all_offsets = read_all_chunk_offsets(sst);
+            BOOST_REQUIRE_EQUAL(all_offsets.size(), c.chunk_count());
+            const auto expected = read_data_component(env, sst);
+            for (const uint64_t offset : offsets) {
+                auto it = std::ranges::lower_bound(all_offsets, offset);
+                BOOST_REQUIRE(it != all_offsets.end() && *it == offset);
+                const size_t i = it - all_offsets.begin();
+                BOOST_REQUIRE_LE(i * chunk_len + std::max<uint64_t>(sampled_chunk_min_data, chunk_len), size);
+                BOOST_REQUIRE_LT(i + 1, all_offsets.size());
+                disk_read_range range{
+                    sstable_position::from_physical(offset, all_offsets[i + 1] - offset, 0),
+                    sstable_position::from_physical(all_offsets[i + 1], 0, 0),
+                };
+                auto stream = sst->data_stream(range, env.make_reader_permit(), nullptr, nullptr).get();
+                auto close_stream = defer([&] noexcept { stream->close().get(); });
+                uint64_t filled = 0;
+                bool eof = false;
+                while (!eof) {
+                    stream->consume_one(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+                        eof = data.empty();
+                        BOOST_REQUIRE_LE(filled + data.size(), chunk_len);
+                        BOOST_REQUIRE(std::equal(data.begin(), data.end(), expected.begin() + i * chunk_len + filled));
+                        filled += data.size();
+                        return seastar::continue_consuming{};
+                    }).get();
+                }
+                // The sampled chunk isn't the last one, so it is full.
+                BOOST_REQUIRE_EQUAL(filled, chunk_len);
+            }
+        }
+    });
+}
+
+// Checks the statistics of the sample of chunk offsets that the writer of a
+// `mu` sstable keeps: it keeps about one chunk in sampling_denominator(), but
+// none near the end of the data.
+SEASTAR_TEST_CASE(test_compression_offset_sample_size) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_schema_with_chunk_length(1);
+        auto sst = make_sstable_containing(env.make_sstable(s, sstable_version_types::mu), {make_partition_with_random_rows(s, 6400)}).get();
+        BOOST_REQUIRE(sst->uses_physical_positions());
+        const auto& c = sst->get_compression();
+        BOOST_REQUIRE_EQUAL(c.sampling_denominator(), 64);
+
+        const auto offsets = get_stored_compression_offsets(sst);
+        BOOST_REQUIRE(std::ranges::adjacent_find(offsets, std::ranges::greater_equal()) == offsets.end());
+        const auto all_offsets = read_all_chunk_offsets(sst);
+        // The chunks [0, n_eligible) start at least min_data bytes before the
+        // end of the data.
+        const uint64_t size = sst->data_size();
+        const uint64_t chunk_len = c.uncompressed_chunk_length();
+        const uint64_t min_data = std::max<uint64_t>(sampled_chunk_min_data, chunk_len);
+        BOOST_REQUIRE_GE(size, min_data);
+        const uint64_t n_eligible = (size - min_data) / chunk_len + 1;
+        BOOST_REQUIRE_LT(n_eligible, all_offsets.size());
+        for (const uint64_t offset : offsets) {
+            auto it = std::ranges::lower_bound(all_offsets, offset);
+            BOOST_REQUIRE(it != all_offsets.end() && *it == offset);
+            BOOST_REQUIRE_LT(uint64_t(it - all_offsets.begin()), n_eligible);
+        }
+
+        // Each eligible chunk is in the sample with probability p, so the
+        // sample size has a binomial distribution. Allow 5 standard deviations.
+        const double p = 1.0 / c.sampling_denominator();
+        const double n = n_eligible;
+        const double mean = n * p;
+        const double margin = 5 * std::sqrt(n * p * (1 - p));
+        testlog.info("{} chunks, {} sampled offsets, expected {} +- {}", all_offsets.size(), offsets.size(), mean, margin);
+        BOOST_REQUIRE_GT(mean, 50);
+        BOOST_REQUIRE_GE(double(offsets.size()), mean - margin);
+        BOOST_REQUIRE_LE(double(offsets.size()), mean + margin);
+    });
+}
+
+// Checks that the sampled chunk offsets of a `mu` sstable can't be read after
+// the sstable is unlinked, and that the error says that the sstable is gone.
+// The data-file sampler relies on this to skip such an sstable.
+SEASTAR_TEST_CASE(test_sampled_offsets_of_unlinked_sstable) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_schema_with_chunk_length(1);
+        auto sst = make_sstable_containing(env.make_sstable(s, sstable_version_types::mu), {make_partition_with_random_rows(s, 2000)}).get();
+        BOOST_REQUIRE_GT(sst->get_compression().sample_size(), 0);
+        sst->unlink().get();
+        auto is_gone = [] (const std::system_error& e) {
+            return sstables::is_sstable_gone(std::make_exception_ptr(e));
+        };
+        BOOST_REQUIRE_EXCEPTION(sst->read_sampled_offsets({0}).get(), std::system_error, is_gone);
+        BOOST_REQUIRE_EXCEPTION(sst->for_each_compression_offset([] (uint64_t) {}).get(), std::system_error, is_gone);
+    });
+}
+
+// Checks that a `mu` sstable whose sampled chunk offsets are invalid fails to load.
+SEASTAR_TEST_CASE(test_invalid_compression_offset_sample) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_schema_with_chunk_length(1);
+        auto make_sstable = [&] {
+            auto sst = make_sstable_containing(env.make_sstable(s, sstable_version_types::mu), {make_partition_with_random_rows(s, 2000)}).get();
+            BOOST_REQUIRE_GE(sst->get_compression().sample_size(), 2);
+            return sst;
+        };
+        auto message_contains = [] (std::string_view text) {
+            return [text] (const malformed_sstable_exception& e) {
+                return std::string_view(e.what()).find(text) != std::string_view::npos;
+            };
+        };
+
+        // The first two sampled offsets are swapped.
+        {
+            auto sst = make_sstable();
+            const auto& c = sst->get_compression();
+            const auto path = test(sst).filename(component_type::CompressionInfo).native();
+            auto contents = util::read_entire_file_contiguous(path).get();
+            char* first = contents.data() + c.offsets_start_pos();
+            std::swap_ranges(first, first + sizeof(uint64_t), first + sizeof(uint64_t));
+            auto f = open_file_dma(path, open_flags::wo | open_flags::truncate).get();
+            auto out = make_file_output_stream(std::move(f)).get();
+            out.write(contents.data(), contents.size()).get();
+            out.close().get();
+            BOOST_REQUIRE_EXCEPTION(env.reusable_sst(sst).get(), malformed_sstable_exception, message_contains("doesn't follow"));
         }
     });
 }
