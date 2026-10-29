@@ -913,7 +913,14 @@ public:
     // determined using the index file).
     // This function is intended (and optimized for) random access, not
     // for iteration through all the rows.
+    //
+    // The range [pos, pos + len) is logical (uncompressed). It is clamped to
+    // data_size(), so a read past the end returns a short buffer.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, reader_permit permit);
+    // Like the above, but the range is given in the position type of this
+    // sstable (see uses_physical_positions()). Reads at most `len` bytes from
+    // `range.start`. Returns fewer if the range ends first.
+    future<temporary_buffer<char>> data_read(disk_read_range range, size_t len, reader_permit permit);
 
 private:
     future<summary_entry&> read_summary_entry(size_t i);

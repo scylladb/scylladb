@@ -1579,3 +1579,140 @@ SEASTAR_TEST_CASE(test_reversed_read_io_does_not_scale_with_row_count) {
         }
     });
 }
+
+// Returns the decompressed data component of `sst`, read with a full scan.
+static temporary_buffer<char> read_data_component(test_env& env, const shared_sstable& sst) {
+    const uint64_t size = sst->data_size();
+    temporary_buffer<char> data(size);
+    auto stream = sst->data_stream(sst->full_range(), env.make_reader_permit(), nullptr, nullptr).get();
+    auto close_stream = defer([&] noexcept { stream->close().get(); });
+    uint64_t filled = 0;
+    bool eof = false;
+    while (!eof) {
+        stream->consume_one(std::nullopt, [&] (temporary_buffer<char> buf) -> consumption_result<char> {
+            eof = buf.empty();
+            BOOST_REQUIRE_LE(filled + buf.size(), size);
+            std::copy_n(buf.get(), buf.size(), data.get_write() + filled);
+            filled += buf.size();
+            return seastar::continue_consuming{};
+        }).get();
+    }
+    BOOST_REQUIRE_EQUAL(filled, size);
+    return data;
+}
+
+// Returns the offset of every chunk of an sstable that uses physical
+// positions. Follows the chunk headers in Data.db.
+static std::vector<uint64_t> read_all_chunk_offsets(const shared_sstable& sst) {
+    const auto codec = sst->get_chunk_codec();
+    auto f = open_file_dma(test(sst).filename(component_type::Data).native(), open_flags::ro).get();
+    auto close_f = deferred_close(f);
+    std::vector<uint64_t> offsets;
+    uint64_t pos = 0;
+    while (pos < sst->ondisk_data_size()) {
+        offsets.push_back(pos);
+        // Every chunk is longer than the largest header, so this read stays
+        // in the file.
+        auto header = f.dma_read_exactly<char>(pos, codec.max_frame_len()).get();
+        pos += codec.extent(codec.decode_header(std::string_view(header.get(), header.size())).compressed_len);
+    }
+    BOOST_REQUIRE_EQUAL(pos, sst->ondisk_data_size());
+    return offsets;
+}
+
+// Checks that data_read() returns the same bytes as a full scan of the data
+// component, for ranges that start, end or cross chunk boundaries.
+SEASTAR_TEST_CASE(test_data_read) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            simple_schema ss;
+            auto s = ss.schema();
+            auto pk = ss.make_pkey();
+            mutation m(s, pk);
+            for (uint32_t i = 0; i < 1000; ++i) {
+                ss.add_row(m, ss.make_ckey(i), tests::random::get_sstring(50));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+            BOOST_REQUIRE(sst->has_component(component_type::CompressionInfo));
+
+            const uint64_t size = sst->data_size();
+            const uint64_t chunk_len = sst->get_compression().uncompressed_chunk_length();
+            // Several chunks, so that ranges can cross chunk boundaries.
+            BOOST_REQUIRE_GT(size, 4 * chunk_len);
+
+            const auto expected = read_data_component(env, sst);
+
+            auto check = [&] (uint64_t pos, uint64_t len) {
+                testlog.trace("version {}: data_read({}, {})", version, pos, len);
+                auto buf = sst->data_read(pos, len, env.make_reader_permit()).get();
+                const uint64_t want = pos < size ? std::min(len, size - pos) : 0;
+                BOOST_REQUIRE_EQUAL(buf.size(), want);
+                BOOST_REQUIRE(std::equal(buf.begin(), buf.end(), expected.begin() + std::min(pos, size)));
+            };
+            check(0, 1);
+            check(0, size);
+            check(0, size + 1);
+            check(chunk_len - 1, 2);
+            check(chunk_len, chunk_len);
+            check(chunk_len, chunk_len + 1);
+            check(chunk_len - 1, 2 * chunk_len + 2);
+            check(size - 1, 1);
+            check(size - 1, 10);
+            check(size - size % chunk_len, chunk_len);
+            check(size, 5);
+            check(0, 0);
+            check(chunk_len, 0);
+            check(size, 0);
+            check(chunk_len, std::numeric_limits<uint64_t>::max());
+            for (int i = 0; i < 20; ++i) {
+                check(tests::random::get_int<uint64_t>(0, size - 1), tests::random::get_int<uint64_t>(1, 3 * chunk_len));
+            }
+
+            if (!sst->uses_physical_positions()) {
+                continue;
+            }
+            // The physical overload reads from a position inside a chunk to
+            // end_position(), so it can continue into the following chunks.
+            const auto offsets = read_all_chunk_offsets(sst);
+            BOOST_REQUIRE_EQUAL(offsets.size(), (size + chunk_len - 1) / chunk_len);
+            auto check_physical = [&] (size_t chunk, uint64_t offset_in_chunk, uint64_t len) {
+                testlog.trace("version {}: physical data_read(chunk {}, offset {}, len {})", version, chunk, offset_in_chunk, len);
+                const uint64_t pos = chunk * chunk_len + offset_in_chunk;
+                disk_read_range range{sstable_position::from_physical(offsets[chunk], 0, offset_in_chunk), sst->end_position()};
+                auto buf = sst->data_read(range, len, env.make_reader_permit()).get();
+                BOOST_REQUIRE_EQUAL(buf.size(), std::min(len, size - pos));
+                BOOST_REQUIRE(std::equal(buf.begin(), buf.end(), expected.begin() + pos));
+            };
+            for (size_t i = 0; i < offsets.size(); ++i) {
+                const uint64_t this_chunk_len = std::min(chunk_len, size - i * chunk_len);
+                check_physical(i, 0, 1);
+                check_physical(i, 0, chunk_len);
+                check_physical(i, 0, size);
+                check_physical(i, this_chunk_len / 2, 3 * chunk_len);
+                check_physical(i, this_chunk_len - 1, 2);
+            }
+
+            // Reads of a range that ends before the end of the data. They must
+            // stop at the end of the range, also inside a chunk.
+            auto check_physical_bounded = [&] (size_t chunk, uint64_t offset_in_chunk, size_t end_chunk, uint64_t end_offset_in_chunk, uint64_t len) {
+                testlog.trace("version {}: physical data_read(chunk {}, offset {}, end chunk {}, end offset {}, len {})",
+                        version, chunk, offset_in_chunk, end_chunk, end_offset_in_chunk, len);
+                const uint64_t pos = chunk * chunk_len + offset_in_chunk;
+                const uint64_t end = end_chunk * chunk_len + end_offset_in_chunk;
+                disk_read_range range{sstable_position::from_physical(offsets[chunk], 0, offset_in_chunk),
+                        sstable_position::from_physical(offsets[end_chunk], 0, end_offset_in_chunk)};
+                auto buf = sst->data_read(range, len, env.make_reader_permit()).get();
+                BOOST_REQUIRE_EQUAL(buf.size(), std::min(len, end - pos));
+                BOOST_REQUIRE(std::equal(buf.begin(), buf.end(), expected.begin() + pos));
+            };
+            // Chunks i and i + 1 are full.
+            for (size_t i = 0; i + 2 < offsets.size(); ++i) {
+                check_physical_bounded(i, 0, i, chunk_len / 2, 2 * chunk_len);
+                check_physical_bounded(i, 1, i, 2, chunk_len);
+                check_physical_bounded(i, 1, i + 1, 0, 2 * chunk_len);
+                check_physical_bounded(i, 1, i + 1, 1, 2 * chunk_len);
+                check_physical_bounded(i, chunk_len / 2, i + 1, chunk_len / 2, 10);
+            }
+        }
+    });
+}

@@ -3702,23 +3702,34 @@ future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, read
     // Clamp the range to the (uncompressed) data size so a read that runs off the
     // end of the file returns a short buffer rather than over-reading. Callers
     // (e.g. the data-file sampler, which may read a partial last chunk) rely on
-    // this.
+    // this. Clamp `len` before adding it to `pos`, so that the sum can't
+    // overflow.
     if (pos >= data_size()) {
         co_return temporary_buffer<char>();
     }
-    auto end = std::min<uint64_t>(pos + len, data_size());
+    auto end = pos + std::min<uint64_t>(len, data_size() - pos);
     auto disk_range = disk_read_range_from_logical_range(pos, end);
+    co_return co_await data_read(disk_range, end - pos, std::move(permit));
+}
+
+future<temporary_buffer<char>> sstable::data_read(disk_read_range range, size_t len, reader_permit permit) {
+    if (len == 0) {
+        co_return temporary_buffer<char>();
+    }
     // Random-access read of a byte range. data_stream() decompresses if needed and
-    // handles both compressed and uncompressed data files; we drain exactly the
+    // handles both compressed and uncompressed data files; we drain at most the
     // requested number of decompressed bytes from it. No whole-file digest is
     // verified here.
-    const size_t want = end - pos;
-    auto stream = co_await data_stream(disk_range, std::move(permit), tracing::trace_state_ptr(), nullptr);
+    const size_t want = len;
+    auto stream = co_await data_stream(range, std::move(permit), tracing::trace_state_ptr(), nullptr);
+    // A physical stream can return data past range.end, up to the end of its
+    // chunk, so clip the buffers at range.end.
+    stream->init_stream_position(range.start);
     temporary_buffer<char> result(want);
     size_t filled = 0;
     bool eof = false;
     while (filled < want && !eof) {
-        co_await stream->consume_one(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+        co_await stream->consume_one(range.end, [&] (temporary_buffer<char> data) -> consumption_result<char> {
             if (data.empty()) {
                 eof = true;
             } else {
