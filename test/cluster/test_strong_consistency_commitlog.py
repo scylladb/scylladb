@@ -701,7 +701,8 @@ async def test_replay_after_a_crash_before_the_cleanup_erased_the_row(manager: S
         # coordinator's retried cleanup lets the migration end.
         await migration
         await reconnect_driver(manager)
-        cql = manager.get_cql()
+        # The new session may not be connected to dst yet, and get_tablet_replica() queries dst.
+        cql, _ = await manager.get_ready_cql(servers)
         # With RF=1 the rows stay readable after a rollback too, so check where the tablet is.
         replica_host_id, _ = await get_tablet_replica(manager, dst_server, ks, 'test', tablet_token)
         assert replica_host_id == dst_host_id, "the migration did not finish after the crash"
