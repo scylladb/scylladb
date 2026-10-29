@@ -73,7 +73,7 @@ bool validate_chunk_header_fields(const chunk_header& ch) {
         return false;
     }
 
-    return ch.version == current_version;
+    return can_read_version(ch.version);
 }
 
 bool validate_chunk_headers(const chunk_header& ch, const std::optional<segment_header>& sh) {

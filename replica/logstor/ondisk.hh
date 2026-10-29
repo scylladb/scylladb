@@ -50,7 +50,12 @@ namespace replica::logstor::ondisk {
 
 static constexpr size_t block_alignment = 4096;
 static constexpr size_t record_alignment = 8;
+// current_version is the format version that this code writes.
 static constexpr uint8_t current_version = 1;
+// min_read_version is the oldest format version that this code reads, and this code reads every
+// version from min_read_version to current_version. To remove the read path of an old version,
+// increase min_read_version.
+static constexpr uint8_t min_read_version = 1;
 static constexpr uint32_t chunk_header_magic = 0x4c475342;
 
 // max_key_size is the size of the largest partition key that a record can hold. CQL limits the
@@ -170,9 +175,14 @@ static constexpr size_t min_record_frame_size = record_frame_header_size + recor
 static_assert(chunk_header_size % record_alignment == 0, "Chunk header size must be aligned by record_alignment");
 static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
 
-// Whether the header has the magic, a kind and the version this code writes. The kind tells the
-// reader whether a segment header follows. The CRC is not checked here: validate_chunk_headers()
-// checks it, as it needs the segment header too.
+// Returns true if this code reads chunks of format version `v`.
+constexpr bool can_read_version(uint8_t v) noexcept {
+    return v >= min_read_version && v <= current_version;
+}
+
+// Returns true if the header has the magic, a valid kind and a version that this code reads. The
+// kind shows if a segment header follows. This function does not check the CRC, because the CRC
+// also covers the segment header, and validate_chunk_headers() checks the CRC.
 bool validate_chunk_header_fields(const chunk_header& ch);
 
 // Whether the headers at the start of a chunk are the ones this code wrote: the chunk header fields
