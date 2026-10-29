@@ -25,12 +25,17 @@
 #include "utils/error_injection.hh"
 #include "utils/hashers.hh"
 #include "utils/rjson.hh"
+#include "utils/s3/aws_error.hh"
 #include "utils/s3/client.hh"
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/format.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/core/smp.hh>
+#include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/testing/test_fixture.hh>
@@ -41,8 +46,11 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
+#include <initializer_list>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -54,11 +62,12 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 #include "replica/database.hh"
 
 // Tests of the export (sink) and import (source) pipelines from alternator/export.hh.
-// Except for test_s3_flush_and_close_result, which needs an S3 server, they use the in-memory storage backend,
+// Except for the test_s3_* ones, which need an S3 server, they use the in-memory storage backend,
 // so they exercise the serialization, framing and flushing logic of the pipelines themselves,
 // without involving S3.
 // The pipelines write JSON lines: one serialized item per line, each terminated by '\n'.
@@ -258,39 +267,45 @@ SEASTAR_TEST_CASE(test_in_memory_flush_and_close_result) {
     BOOST_CHECK_EQUAL(etag, to_hex(hasher.finalize()));
 }
 
-// The same, against a real S3 object: the etag the S3 sink reports is the one S3 assigned to the
-// object, so it has to match what S3 says about that object afterwards - the point being that the
-// sink passes the storage's etag through rather than computing one of its own, which for a
-// multipart upload would not be the object's etag at all. Needs the S3 server test.py sets up, so
-// the precondition skips the test when it runs outside test.py.
-SEASTAR_TEST_CASE(test_s3_flush_and_close_result, *boost::unit_test::precondition(tests::has_scylla_test_env)
-        *seastar::testing::async_fixture<s3_fixture>()) {
+static shared_ptr<s3::client> make_test_s3_client() {
     s3::endpoint_config cfg = {
         .port = static_cast<unsigned>(std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST"))),
         .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
         .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
     };
-    auto client = s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)));
-    // The bucket belongs to the fixture and is dropped with its objects, so the object needs no
-    // cleanup of its own.
-    const sstring object_name = seastar::format("/{}/alternator-export-test", tests::getenv_safe("S3_BUCKET_FOR_TEST"));
+    return s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)));
+}
 
-    std::exception_ptr ex;
-    try {
+// The bucket belongs to the fixture and is dropped with its objects, so no test cleans up the
+// objects it puts there.
+static sstring test_s3_object_name(std::string_view key) {
+    return seastar::format("/{}/{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), key);
+}
+
+// Runs `test` with a client of its own, and closes that client before it returns. The fixture's
+// client must be the only one on this endpoint when it deletes the bucket: a second client on the
+// same endpoint and shard fails to register its metrics.
+static future<> with_test_s3_client(std::function<future<>(shared_ptr<s3::client>)> test) {
+    auto client = make_test_s3_client();
+    co_await futurize_invoke(test, client).finally([&client] { return client->close(); });
+}
+
+// test_in_memory_flush_and_close_result against a real S3 object: the etag the S3 sink reports
+// is the one S3 assigned to the object, so it has to match what S3 says about that object
+// afterwards - the point being that the sink passes the storage's etag through rather than
+// computing one of its own, which for a multipart upload would not be the object's etag at all.
+// Needs the S3 server test.py sets up, so the precondition skips the test when it runs outside
+// test.py.
+SEASTAR_TEST_CASE(test_s3_flush_and_close_result, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        const sstring object_name = test_s3_object_name("alternator-export-test");
+
         auto sink = co_await alternator::create_sink_pipeline(alternator::s3_target_config{ client, object_name }, alternator::no_compression{});
         auto etag = (co_await write_items_and_check_result(*sink)).second;
         // S3 reports an etag as an RFC 9110 entity-tag, i.e. in double quotes, which the pipeline strips.
         BOOST_CHECK_EQUAL(seastar::format("\"{}\"", etag), (co_await client->get_object_info(object_name)).etag);
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    // Closed before returning, so that the fixture's client is the only one left on this endpoint
-    // when it deletes the bucket - a second client on the same endpoint and shard fails to register
-    // its metrics.
-    co_await client->close();
-    if (ex) {
-        std::rethrow_exception(ex);
-    }
+    });
 }
 
 // The gzip variant of the basic happy path: the item survives the roundtrip, and the bytes left in
@@ -705,6 +720,269 @@ SEASTAR_TEST_CASE(test_in_memory_roundtrip_gzip_decompressed_larger_than_buffer)
     BOOST_REQUIRE_EQUAL(received.size(), 1u);
     // Compared without BOOST_CHECK_EQUAL on purpose: a mismatch would print a megabyte of JSON.
     BOOST_CHECK(rjson::print(received[0]) == rjson::print(item));
+}
+
+using target_config = std::variant<alternator::in_memory_target_config, alternator::s3_target_config>;
+
+// Closes the sink also when process() throws: a sink that is destroyed without flush_and_close()
+// is an internal error, and an S3 sink leaves its upload behind.
+static future<> write_object(target_config target, const std::vector<rjson::value>& items, alternator::compression_type compression) {
+    auto sink = co_await alternator::create_sink_pipeline(std::move(target), compression);
+    co_await seastar::do_for_each(items, [&sink] (const rjson::value& item) { return sink->process(item); })
+            .finally([&sink] { return sink->flush_and_close().discard_result(); });
+}
+
+// Runs `test` on a source pipeline over the object, and closes the pipeline also when `test`
+// throws: a pipeline that is destroyed without close() asserts in its destructor.
+static future<> with_source(target_config target, alternator::compression_type compression,
+        std::function<future<>(rjson::value)> on_item,
+        std::function<future<>(alternator::import_pipeline_interface&)> test) {
+    auto source = co_await alternator::create_source_pipeline(std::move(target), std::move(on_item), compression);
+    co_await futurize_invoke(test, *source).finally([&source] { return source->close(); });
+}
+
+static future<std::vector<rjson::value>> read_object(target_config target, alternator::compression_type compression,
+        std::chrono::milliseconds delay_per_item = {}) {
+    std::vector<rjson::value> items;
+    co_await with_source(std::move(target), compression, [&items, delay_per_item](rjson::value item) -> future<> {
+        items.push_back(std::move(item));
+        if (delay_per_item.count()) {
+            co_await seastar::sleep(delay_per_item);
+        }
+    }, [](alternator::import_pipeline_interface& source) -> future<> {
+        co_await source.read_all();
+    });
+    co_return items;
+}
+
+static std::vector<rjson::value> parse_items(std::initializer_list<std::string_view> lines) {
+    return lines | std::views::transform([] (std::string_view line) { return rjson::parse(line); }) | std::ranges::to<std::vector>();
+}
+
+// Compared without BOOST_CHECK_EQUAL on purpose: some tests use items of a megabyte each, and a
+// mismatch would print megabytes of JSON.
+static void require_same_items(const std::vector<rjson::value>& actual, const std::vector<rjson::value>& expected) {
+    BOOST_REQUIRE_EQUAL(actual.size(), expected.size());
+    for (size_t i = 0; i < actual.size(); ++i) {
+        BOOST_CHECK(rjson::print(actual[i]) == rjson::print(expected[i]));
+    }
+}
+
+static future<> check_s3_roundtrip(alternator::compression_type compression) {
+    auto items = parse_items({
+        R"({"id": 1, "name": "alice"})",
+        R"({"id": 2, "name": "bob"})",
+        R"({"id": 3, "name": "charlie"})",
+    });
+    co_await with_test_s3_client([&](shared_ptr<s3::client> client) -> future<> {
+        alternator::s3_target_config target{ client, test_s3_object_name("roundtrip") };
+        co_await write_object(target, items, compression);
+        require_same_items(co_await read_object(target, compression), items);
+    });
+}
+
+// The in-memory roundtrips again, now through the S3 sink and source, without and with gzip.
+SEASTAR_TEST_CASE(test_s3_roundtrip_multiple_items, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_roundtrip(alternator::no_compression{});
+}
+
+SEASTAR_TEST_CASE(test_s3_roundtrip_gzip_multiple_items, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_roundtrip(alternator::gzip_compression{});
+}
+
+constexpr size_t item_payload_size = 1024 * 1024;
+
+// Items of a megabyte each, so that each line is longer than any buffer the source hands out.
+static std::vector<rjson::value> make_megabyte_items(size_t count) {
+    const auto payload = make_incompressible_text(item_payload_size);
+    std::vector<rjson::value> items;
+    for (size_t i = 0; i < count; ++i) {
+        auto item = rjson::empty_object();
+        rjson::add(item, "id", i);
+        rjson::add(item, "payload", rjson::from_string(payload));
+        items.push_back(std::move(item));
+    }
+    return items;
+}
+
+// Enough megabyte items to make an object larger than twice the download buffers.
+static std::vector<rjson::value> make_items_spanning_several_download_chunks() {
+    return make_megabyte_items(2 * s3::max_download_buffers_size / item_payload_size + 1);
+}
+
+// An object larger than the download buffers cannot be held whole. The reader is slow, so the
+// source very probably ends its first request when the buffers are full, and continues with
+// ranged requests. The source must join the pieces with no byte lost or repeated. The size check
+// fails if a change to the buffer size or to the items makes the object too small for this.
+SEASTAR_TEST_CASE(test_s3_roundtrip_object_spanning_several_download_chunks, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    auto items = make_items_spanning_several_download_chunks();
+
+    co_await with_test_s3_client([&](shared_ptr<s3::client> client) -> future<> {
+        alternator::s3_target_config target{ client, test_s3_object_name("several-download-chunks") };
+        co_await write_object(target, items, alternator::no_compression{});
+        auto object_size = co_await client->get_object_size(target.object_name);
+        BOOST_REQUIRE_GT(object_size, 2 * s3::max_download_buffers_size);
+        // A slow reader on purpose, so that the download stops and continues.
+        require_same_items(co_await read_object(target, alternator::no_compression{}, std::chrono::milliseconds(100)), items);
+    });
+}
+
+// test_in_memory_line_without_newline against S3. The object is put by hand, since the sink
+// cannot produce one without a trailing newline.
+SEASTAR_TEST_CASE(test_s3_line_without_newline, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        auto object_name = test_s3_object_name("line-without-newline");
+        std::string_view content = "{\"id\": 1}\n{\"id\": 2}";
+        co_await client->put_object(object_name, temporary_buffer<char>(content.data(), content.size()));
+
+        auto items = co_await read_object(alternator::s3_target_config{ client, object_name }, alternator::no_compression{});
+
+        require_same_items(items, parse_items({ R"({"id": 1})", R"({"id": 2})" }));
+    });
+}
+
+// A zero-byte object reads as no items. Covers the download source, whose first request has no
+// range for this very case: S3 answers a byte range of a zero-length object with 416.
+static future<> check_s3_zero_byte_object_is_empty(alternator::compression_type compression) {
+    co_await with_test_s3_client([compression](shared_ptr<s3::client> client) -> future<> {
+        auto object_name = test_s3_object_name("zero-byte");
+        co_await client->put_object(object_name, temporary_buffer<char>());
+        BOOST_CHECK((co_await read_object(alternator::s3_target_config{ client, object_name }, compression)).empty());
+    });
+}
+
+SEASTAR_TEST_CASE(test_s3_zero_byte_object_is_empty, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_zero_byte_object_is_empty(alternator::no_compression{});
+}
+
+// test_in_memory_gzip_zero_byte_object_is_an_empty_stream against S3, where such an object is
+// what AWS leaves behind for an empty partition.
+SEASTAR_TEST_CASE(test_s3_gzip_zero_byte_object_is_an_empty_stream, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_zero_byte_object_is_empty(alternator::gzip_compression{});
+}
+
+// test_in_memory_gzip_truncated_stream_is_rejected against S3. The sink cannot produce a truncated
+// object, so a complete one is cut and put again under another name. The cut takes off exactly
+// the 8 byte CRC32/ISIZE trailer, so all the deflate data is still there: every line decodes,
+// read_all() succeeds, and only close() can report the truncation.
+SEASTAR_TEST_CASE(test_s3_gzip_truncated_object_is_rejected, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        constexpr size_t gzip_trailer_size = 8;
+        auto complete_object_name = test_s3_object_name("complete.gz");
+        auto truncated_object_name = test_s3_object_name("truncated.gz");
+        auto items = parse_items({ R"({"id": 1})", R"({"id": 2})" });
+        co_await write_object(alternator::s3_target_config{ client, complete_object_name }, items, alternator::gzip_compression{});
+
+        auto complete = co_await client->get_object_contiguous(complete_object_name);
+        BOOST_REQUIRE_GT(complete.size(), gzip_trailer_size);
+        complete.trim(complete.size() - gzip_trailer_size);
+        co_await client->put_object(truncated_object_name, std::move(complete));
+
+        std::vector<rjson::value> received;
+        co_await with_source(alternator::s3_target_config{ client, truncated_object_name }, alternator::gzip_compression{}, [&received](rjson::value item) -> future<> {
+            received.push_back(std::move(item));
+            co_return;
+        }, [](alternator::import_pipeline_interface& source) -> future<> {
+            co_await source.read_all();
+            BOOST_CHECK_THROW(co_await source.close(), alternator::api_error);
+        });
+        require_same_items(received, items);
+    });
+}
+
+// A GET of a missing key fails with a 404. AWS puts a NoSuchKey error body in it, which the client
+// maps to NO_SUCH_KEY; a 404 without such a body maps to HTTP_NOT_FOUND. Both mean that the object
+// is not there, and which one comes depends on the server.
+SEASTAR_TEST_CASE(test_s3_missing_object_is_rejected, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        BOOST_REQUIRE_EXCEPTION(
+            co_await read_object(alternator::s3_target_config{ client, test_s3_object_name("missing") }, alternator::no_compression{}),
+            aws::aws_exception, [](const aws::aws_exception& e) {
+                auto type = e.error().get_error_type();
+                return type == aws::aws_error_type::NO_SUCH_KEY || type == aws::aws_error_type::HTTP_NOT_FOUND;
+            });
+    });
+}
+
+// Passed to request_abort_ex() by the tests below, so that read_all() is seen to fail with the
+// abort itself and not with some other error.
+struct s3_read_aborted : public std::runtime_error {
+    s3_read_aborted() : std::runtime_error("s3 read aborted") {}
+};
+
+enum class abort_point { before_read_all, in_first_item };
+
+// An abort must stop read_all() with the abort's exception, before the end of the object. The
+// abort cuts the request in flight, but the download source still holds data, and the connection
+// still delivers what it received before the cut: in a fast run, the rest of the object. The source
+// must fail the read after the abort anyway. An abort in the callback of item 1 lets no other item
+// through: each line is longer than a download buffer, and than what one decompresses to, so the
+// next read is the one that fails. An abort before read_all() lets no item through.
+static future<> check_s3_aborted_read_is_rejected(alternator::compression_type compression, abort_point point) {
+    co_await with_test_s3_client([compression, point](shared_ptr<s3::client> client) -> future<> {
+        auto object_name = test_s3_object_name("aborted");
+        co_await write_object(alternator::s3_target_config{ client, object_name }, make_megabyte_items(3), compression);
+
+        abort_source as;
+        if (point == abort_point::before_read_all) {
+            as.request_abort_ex(s3_read_aborted{});
+        }
+        size_t received = 0;
+        co_await with_source(alternator::s3_target_config{ client, object_name, &as }, compression, [&](rjson::value) -> future<> {
+            if (++received == 1 && point == abort_point::in_first_item) {
+                as.request_abort_ex(s3_read_aborted{});
+            }
+            co_return;
+        }, [](alternator::import_pipeline_interface& source) -> future<> {
+            BOOST_CHECK_THROW(co_await source.read_all(), s3_read_aborted);
+        });
+        const size_t expected = point == abort_point::in_first_item ? 1 : 0;
+        BOOST_CHECK_EQUAL(received, expected);
+    });
+}
+
+SEASTAR_TEST_CASE(test_s3_aborted_read_is_rejected, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_aborted_read_is_rejected(alternator::no_compression{}, abort_point::in_first_item);
+}
+
+// With gzip, read_all() cancels the decompressor, so close() must not report a truncated stream.
+SEASTAR_TEST_CASE(test_s3_gzip_aborted_read_is_rejected, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_aborted_read_is_rejected(alternator::gzip_compression{}, abort_point::in_first_item);
+}
+
+SEASTAR_TEST_CASE(test_s3_abort_before_read_all_is_rejected, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_aborted_read_is_rejected(alternator::no_compression{}, abort_point::before_read_all);
+}
+
+// close() without read_all(). The download source starts its fetching fiber when it is
+// constructed. The object is larger than the download buffers, so without a reader the fiber
+// cannot finish: it waits for the reader. close() must stop it, and no item may reach the callback.
+SEASTAR_TEST_CASE(test_s3_close_without_read_all, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        alternator::s3_target_config target{ client, test_s3_object_name("closed-without-reading") };
+        co_await write_object(target, make_items_spanning_several_download_chunks(), alternator::no_compression{});
+
+        size_t received = 0;
+        co_await with_source(target, alternator::no_compression{}, [&](rjson::value) -> future<> {
+            ++received;
+            co_return;
+        }, [](alternator::import_pipeline_interface&) -> future<> {
+            co_return;
+        });
+        BOOST_CHECK_EQUAL(received, 0u);
+    });
 }
 
 // Tests of alternator::export_scan_table() - the S3 export's table scan helper (not the
