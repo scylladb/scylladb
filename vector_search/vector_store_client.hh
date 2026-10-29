@@ -202,8 +202,8 @@ public:
     /// field set to the BM25 relevance score returned by the vector store,
     /// which sorts the results in decreasing relevance order (higher score =
     /// more relevant).
-    auto bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
-            -> future<std::expected<primary_keys, fts_error>>;
+    auto bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, const rjson::value& filter,
+            abort_source& as) -> future<std::expected<primary_keys, fts_error>>;
 
     /// Request the vector store service for the primary keys of the rows
     /// whose indexed value matches the `LIKE` `pattern`. The results are not scored.

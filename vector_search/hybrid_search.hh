@@ -43,6 +43,7 @@ struct bm25_request {
     vector_store_client::query_string term;
     /// How many keys the index is asked for, all of them joined.
     vector_store_client::limit limit;
+    rjson::value filter;
 };
 
 /// A request for one pattern search: the rows matching the LIKE `pattern`, in no particular order.
