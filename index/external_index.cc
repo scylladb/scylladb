@@ -280,6 +280,22 @@ std::vector<sstring> external_index::get_all_target_columns(const sstring& targe
     return columns;
 }
 
+std::vector<sstring> external_index::get_partition_columns(const sstring& targets) {
+    std::optional<rjson::value> json_value = rjson::try_parse(targets);
+    if (!json_value || !json_value->IsObject()) {
+        return {};
+    }
+
+    std::vector<sstring> columns;
+    const rjson::value* pk = rjson::find(*json_value, PK_TARGET_KEY);
+    if (pk && pk->IsArray()) {
+        for (const rjson::value& column : pk->GetArray()) {
+            columns.emplace_back(rjson::to_string_view(column));
+        }
+    }
+    return columns;
+}
+
 bool external_index::is_local(const sstring& target_string) {
     std::optional<rjson::value> json_value = rjson::try_parse(target_string);
     if (!json_value || !json_value->IsObject()) {

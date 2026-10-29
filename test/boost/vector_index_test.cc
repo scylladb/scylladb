@@ -185,5 +185,21 @@ BOOST_AUTO_TEST_CASE(get_target_column_returns_column_with_quotes_from_json) {
     BOOST_CHECK_EQUAL(external_index::get_target_column(serialized), "a\"b");
 }
 
+BOOST_AUTO_TEST_CASE(get_partition_columns_of_local_index) {
+    std::vector<::shared_ptr<index_target>> targets = {
+            make_multi({"P1", "a\"b"}),
+            make_single("v"),
+            make_single("f1"),
+    };
+    const auto serialized = external_index::serialize_targets(targets);
+
+    BOOST_CHECK(external_index::get_partition_columns(serialized) == (std::vector<sstring>{"P1", "a\"b"}));
+}
+
+BOOST_AUTO_TEST_CASE(get_partition_columns_of_global_index_is_empty) {
+    BOOST_CHECK(external_index::get_partition_columns(external_index::serialize_targets({make_single("v")})).empty());
+    BOOST_CHECK(external_index::get_partition_columns(external_index::serialize_targets({make_single("v"), make_single("f1")})).empty());
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()

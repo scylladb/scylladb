@@ -41,6 +41,8 @@ public:
     static sstring get_target_column(const sstring& targets);
     // The target column, the columns of the partition of a local index and the filtering columns.
     static std::vector<sstring> get_all_target_columns(const sstring& targets);
+    // The columns of the partition of a local index, none for a global index.
+    static std::vector<sstring> get_partition_columns(const sstring& targets);
     static bool is_local(const sstring& target_string);
 
 protected:
