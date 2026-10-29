@@ -122,6 +122,12 @@ public:
         _topology.add_or_update_endpoint(id, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
     }
 
+    void set_node_flag(host_id id, node::flag f, bool value) {
+        if (auto* n = _topology.find_node(id)) {
+            n->set_flag(f, value);
+        }
+    }
+
     /**
      * Creates an iterable range of the sorted tokens starting at the token next
      * after the given one.
@@ -915,6 +921,11 @@ token_metadata::get_bootstrap_tokens() const {
 void
 token_metadata::update_topology(host_id ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count) {
     _impl->update_topology(ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+}
+
+void
+token_metadata::set_node_flag(host_id id, node::flag f, bool value) {
+    _impl->set_node_flag(id, f, value);
 }
 
 std::ranges::subrange<token_metadata::tokens_iterator>

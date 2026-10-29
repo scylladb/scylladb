@@ -221,6 +221,11 @@ public:
     void update_topology(host_id ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st = std::nullopt,
                          std::optional<shard_id> shard_count = std::nullopt);
     /**
+     * Set a flag of the node with the given host_id, see node::set_flag().
+     * No-op if there is no such node.
+     */
+    void set_node_flag(host_id id, node::flag f, bool value);
+    /**
      * Creates an iterable range of the sorted tokens starting at the token t
      * such that t >= start.
      *

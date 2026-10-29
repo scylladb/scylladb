@@ -19,6 +19,7 @@
 #include <random>
 
 #include <seastar/core/future.hh>
+#include "enum_set.hh"
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
 
@@ -60,10 +61,17 @@ private:
     const locator::topology* _topology;
     locator::host_id _host_id;
     endpoint_dc_rack _dc_rack;
+public:
+    // Boolean per-node flags, see set_flag().
+    enum class flag {
+        excluded,
+        draining,
+    };
+    using flag_set = enum_set<super_enum<flag, flag::excluded, flag::draining>>;
+private:
     state _state;
     shard_id _shard_count = 0;
-    bool _excluded = false;
-    bool _draining = false;
+    flag_set _flags;
 
     // Is this node the `localhost` instance
     this_node _is_this_node;
@@ -75,10 +83,9 @@ public:
          endpoint_dc_rack dc_rack,
          state state,
          shard_id shard_count = 0,
-         bool excluded = false,
+         flag_set flags = {},
          this_node is_this_node = this_node::no,
-         idx_type idx = -1,
-         bool draining = false);
+         idx_type idx = -1);
 
     node(const node&) = delete;
     node(node&&) = delete;
@@ -136,21 +143,33 @@ public:
     // Excluded nodes are still part of topology, possibly present in replica sets, but
     // are not going to be up again and can be ignored in barriers.
     bool is_excluded() const {
-        return _excluded;
+        return _flags.contains<flag::excluded>();
     }
 
     void set_excluded(bool excluded) {
-        _excluded = excluded;
+        set_flag(flag::excluded, excluded);
     }
 
     // Indicates that the tablet scheduler should move tablet replicas away
     // from this node because it's undergoing decommission or removenode operation.
     bool is_draining() const {
-        return _draining;
+        return _flags.contains<flag::draining>();
     }
 
     void set_draining(bool draining) {
-        _draining = draining;
+        set_flag(flag::draining, draining);
+    }
+
+    const flag_set& flags() const noexcept {
+        return _flags;
+    }
+
+    void set_flag(flag f, bool value) {
+        if (value) {
+            _flags.set(f);
+        } else {
+            _flags.remove(f);
+        }
     }
 
     bool is_leaving() const noexcept {
@@ -186,10 +205,9 @@ private:
                             endpoint_dc_rack dc_rack,
                             state state,
                             shard_id shard_count = 0,
-                            bool excluded = false,
+                            flag_set flags = {},
                             node::this_node is_this_node = this_node::no,
-                            idx_type idx = -1,
-                            bool draining = false);
+                            idx_type idx = -1);
     node_holder clone() const;
 
     void set_topology(const locator::topology* topology) noexcept { _topology = topology; }
