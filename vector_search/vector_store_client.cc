@@ -19,18 +19,24 @@
 #include "utils/rjson.hh"
 #include "types/json_utils.hh"
 #include "schema/schema.hh"
+#include "marshal_exception.hh"
+#include "utils/exceptions.hh"
+#include <array>
 #include <charconv>
 #include <exception>
 #include <fmt/ranges.h>
 #include <ranges>
 #include <regex>
 #include <span>
+#include <seastar/core/shard_id.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/http/client.hh>
+#include <seastar/http/exception.hh>
 #include <seastar/http/request.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/net/inet_address.hh>
@@ -62,7 +68,13 @@ using primary_keys = vector_search::vector_store_client::primary_keys;
 using reply_content = std::vector<seastar::temporary_buffer<char>>;
 using documents = vector_search::vector_store_client::documents;
 using highlights = vector_search::vector_store_client::highlights;
+using disabled = vector_search::vector_store_client::disabled;
+using aborted = vector_search::vector_store_client::aborted;
+using addr_unavailable = vector_search::vector_store_client::addr_unavailable;
+using service_unavailable = vector_search::vector_store_client::service_unavailable;
+using service_error = vector_search::vector_store_client::service_error;
 using service_reply_format_error = vector_search::vector_store_client::service_reply_format_error;
+using status_type = vector_search::vector_store_client::status_type;
 using uri = vector_search::uri;
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
@@ -484,6 +496,110 @@ std::vector<sstring> get_hosts(const std::vector<uri>& primary_uris, const std::
     return ret;
 }
 
+enum class request_op { ann, bm25, like, highlight, num_ops };
+
+// No `default`, so -Wswitch fails the build when a new value has no name.
+auto to_name(request_op op) -> std::string_view {
+    switch (op) {
+    using enum request_op;
+    case ann:
+        return "ann";
+    case bm25:
+        return "bm25";
+    case like:
+        return "like";
+    case highlight:
+        return "highlight";
+    case num_ops:
+        break;
+    }
+    on_internal_error(vslogger, fmt::format("invalid request_op {}", int(op)));
+}
+
+/// Outcome of a request to the Vector Store, exported as the `status` label of the requests metric.
+enum class request_status {
+    ok,
+    disabled,         ///< No Vector Store URI is configured.
+    unavailable,      ///< No Vector Store endpoint could be resolved or reached.
+    aborted,          ///< The request was aborted.
+    bad_query,        ///< 400: the query cannot be served, e.g. it needs ALLOW FILTERING.
+    forbidden,        ///< 403: today only sent when TLS is required and the request used plain HTTP.
+    index_not_found,  ///< 404: the Vector Store does not know the index yet, or it was dropped.
+    index_unservable, ///< 422: the index exists but cannot be served, e.g. unsupported columns.
+    index_not_ready,  ///< 503: the index is still building.
+    service_error,    ///< Any other non-2xx status.
+    format_error,     ///< The Vector Store reply could not be parsed, as HTTP or as JSON.
+    unexpected_error, ///< The call failed with any other exception.
+    num_statuses
+};
+
+// No `default`, so -Wswitch fails the build when a new value has no name.
+auto to_name(request_status status) -> std::string_view {
+    switch (status) {
+    using enum request_status;
+    case ok:
+        return "ok";
+    case disabled:
+        return "disabled";
+    case unavailable:
+        return "unavailable";
+    case aborted:
+        return "aborted";
+    case bad_query:
+        return "bad_query";
+    case forbidden:
+        return "forbidden";
+    case index_not_found:
+        return "index_not_found";
+    case index_unservable:
+        return "index_unservable";
+    case index_not_ready:
+        return "index_not_ready";
+    case service_error:
+        return "service_error";
+    case format_error:
+        return "format_error";
+    case unexpected_error:
+        return "unexpected_error";
+    case num_statuses:
+        break;
+    }
+    on_internal_error(vslogger, fmt::format("invalid request_status {}", int(status)));
+}
+
+auto to_request_status(const ann_error& err) -> request_status {
+    return std::visit(
+            [](const auto& e) -> request_status {
+                using T = std::decay_t<decltype(e)>;
+                if constexpr (std::is_same_v<T, disabled>) {
+                    return request_status::disabled;
+                } else if constexpr (std::is_same_v<T, aborted>) {
+                    return request_status::aborted;
+                } else if constexpr (std::is_same_v<T, addr_unavailable> || std::is_same_v<T, service_unavailable>) {
+                    return request_status::unavailable;
+                } else if constexpr (std::is_same_v<T, service_reply_format_error>) {
+                    return request_status::format_error;
+                } else {
+                    static_assert(std::is_same_v<T, service_error>);
+                    switch (e.status) {
+                    case status_type::bad_request:
+                        return request_status::bad_query;
+                    case status_type::forbidden:
+                        return request_status::forbidden;
+                    case status_type::not_found:
+                        return request_status::index_not_found;
+                    case status_type::unprocessable_entity:
+                        return request_status::index_unservable;
+                    case status_type::service_unavailable:
+                        return request_status::index_not_ready;
+                    default:
+                        return request_status::service_error;
+                    }
+                }
+            },
+            err);
+}
+
 } // namespace
 
 namespace vector_search {
@@ -497,6 +613,7 @@ struct vector_store_client::impl {
     std::vector<uri> _secondary_uris;
     dns _dns;
     uint64_t _dns_refreshes = 0;
+    std::array<std::array<uint64_t, size_t(request_status::num_statuses)>, size_t(request_op::num_ops)> _requests = {};
     seastar::metrics::metric_groups _metrics;
     truststore _truststore;
     clients _primary_clients;
@@ -538,9 +655,53 @@ struct vector_store_client::impl {
                       _dns.trigger_refresh();
                   },
                   unreachable_node_detection_time_in_ms, _truststore) {
+        register_metrics();
+    }
+
+    void register_metrics() {
+        seastar::metrics::label op_label("op");
+        seastar::metrics::label status_label("status");
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
             return _dns_refreshes;
         }).aggregate({seastar::metrics::shard_label})});
+        // Every op/status pair is registered up front, so that a node which has
+        // never reached the Vector Store still exports its failures from the first one.
+        for (size_t op = 0; op < size_t(request_op::num_ops); ++op) {
+            for (size_t status = 0; status < size_t(request_status::num_statuses); ++status) {
+                _metrics.add_group("vector_store", {seastar::metrics::make_counter("requests",
+                        seastar::metrics::description("Number of requests sent to the Vector Store, by operation and outcome"),
+                        {op_label(to_name(request_op(op))), status_label(to_name(request_status(status)))}, _requests[op][status])
+                                .aggregate({seastar::metrics::shard_label})});
+            }
+        }
+        // The URIs come from the config, which is the same on every shard,
+        // so the node state is exported once, from shard 0.
+        if (this_shard_id() == 0) {
+            _metrics.add_group("vector_store", {seastar::metrics::make_gauge("enabled",
+                    seastar::metrics::description("1 when at least one Vector Store URI (primary or secondary) is configured, 0 otherwise"), [this] {
+                        return !is_disabled();
+                    })});
+        }
+    }
+
+    void record_request(request_op op, request_status status) {
+        ++_requests[size_t(op)][size_t(status)];
+    }
+
+    /// Counts the outcome of one call to the Vector Store. Every call ends here, returned or thrown,
+    /// so the series of an operation add up to the number of its calls.
+    template <typename T>
+    auto counted(request_op op, future<std::expected<T, ann_error>> call) -> future<std::expected<T, ann_error>> {
+        auto f = co_await coroutine::as_future(std::move(call));
+        if (f.failed()) {
+            auto err = f.get_exception();
+            auto is_format_error = try_catch<seastar::httpd::response_parsing_exception>(err) != nullptr || try_catch<marshal_exception>(err) != nullptr;
+            record_request(op, is_format_error ? request_status::format_error : request_status::unexpected_error);
+            co_await coroutine::return_exception_ptr(std::move(err));
+        }
+        auto result = f.get();
+        record_request(op, result ? request_status::ok : to_request_status(result.error()));
+        co_return result;
     }
 
     void handle_uris_changed(seastar::sstring uris_csv, std::vector<uri>& uris, clients& clients) {
@@ -604,9 +765,9 @@ struct vector_store_client::impl {
         co_return ret;
     }
 
-    auto post_to_index(std::string_view op, http_path path, json_content content, abort_source& as) -> future<std::expected<reply_content, ann_error>> {
+    auto post_to_index(request_op op, http_path path, json_content content, abort_source& as) -> future<std::expected<reply_content, ann_error>> {
         if (is_disabled()) {
-            vslogger.error("Disabled Vector Store while calling {}", op);
+            vslogger.error("Disabled Vector Store while calling {}", to_name(op));
             co_return std::unexpected{disabled{}};
         }
 
@@ -630,7 +791,7 @@ struct vector_store_client::impl {
 
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter, abort_source& as,
             bool routing, std::vector<std::string> return_columns) -> future<std::expected<primary_keys, ann_error>> {
-        auto content = co_await post_to_index("ann", format("/api/v1/indexes/{}/{}/ann", keyspace, name),
+        auto content = co_await post_to_index(request_op::ann, format("/api/v1/indexes/{}/{}/ann", keyspace, name),
                 write_ann_json(std::move(vs_vector), limit, filter, routing, return_columns), as);
         if (!content) {
             co_return std::unexpected{content.error()};
@@ -646,7 +807,7 @@ struct vector_store_client::impl {
 
     auto bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
             -> future<std::expected<primary_keys, fts_error>> {
-        auto content = co_await post_to_index("bm25", format("/api/v1/indexes/{}/{}/bm25", keyspace, name), write_bm25_json(std::move(fts_query), limit), as);
+        auto content = co_await post_to_index(request_op::bm25, format("/api/v1/indexes/{}/{}/bm25", keyspace, name), write_bm25_json(std::move(fts_query), limit), as);
         if (!content) {
             co_return std::unexpected{content.error()};
         }
@@ -661,7 +822,7 @@ struct vector_store_client::impl {
 
     auto like(keyspace_name keyspace, index_name name, schema_ptr schema, query_string pattern, limit limit, abort_source& as)
             -> future<std::expected<primary_keys, like_error>> {
-        auto content = co_await post_to_index("like", format("/api/v1/indexes/{}/{}/like", keyspace, name),
+        auto content = co_await post_to_index(request_op::like, format("/api/v1/indexes/{}/{}/like", keyspace, name),
                 write_like_json(std::move(pattern), limit), as);
         if (!content) {
             co_return std::unexpected{content.error()};
@@ -678,7 +839,7 @@ struct vector_store_client::impl {
     auto highlight(keyspace_name keyspace, index_name name, query_string fts_query, documents docs, abort_source& as)
             -> future<std::expected<highlights, fts_error>> {
         auto documents_sent = docs.size();
-        auto content = co_await post_to_index("highlight", format("/api/v1/indexes/{}/{}/highlight", keyspace, name),
+        auto content = co_await post_to_index(request_op::highlight, format("/api/v1/indexes/{}/{}/highlight", keyspace, name),
                 write_highlight_json(std::move(fts_query), std::move(docs)), as);
         if (!content) {
             co_return std::unexpected{content.error()};
@@ -818,22 +979,22 @@ auto vector_store_client::get_index_status_per_node(keyspace_name keyspace, inde
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, const rjson::value& filter,
         abort_source& as, bool routing, std::vector<std::string> return_columns) -> future<std::expected<primary_keys, ann_error>> {
-    return _impl->ann(std::move(keyspace), std::move(name), schema, std::move(vs_vector), limit, filter, as, routing, std::move(return_columns));
+    return _impl->counted(request_op::ann, _impl->ann(std::move(keyspace), std::move(name), schema, std::move(vs_vector), limit, filter, as, routing, std::move(return_columns)));
 }
 
 auto vector_store_client::bm25(keyspace_name keyspace, index_name name, schema_ptr schema, query_string fts_query, limit limit, abort_source& as)
         -> future<std::expected<primary_keys, fts_error>> {
-    return _impl->bm25(std::move(keyspace), std::move(name), schema, std::move(fts_query), limit, as);
+    return _impl->counted(request_op::bm25, _impl->bm25(std::move(keyspace), std::move(name), schema, std::move(fts_query), limit, as));
 }
 
 auto vector_store_client::like(keyspace_name keyspace, index_name name, schema_ptr schema, query_string pattern, limit limit, abort_source& as)
         -> future<std::expected<primary_keys, like_error>> {
-    return _impl->like(std::move(keyspace), std::move(name), schema, std::move(pattern), limit, as);
+    return _impl->counted(request_op::like, _impl->like(std::move(keyspace), std::move(name), schema, std::move(pattern), limit, as));
 }
 
 auto vector_store_client::highlight(keyspace_name keyspace, index_name name, query_string fts_query, documents documents, abort_source& as)
         -> future<std::expected<highlights, fts_error>> {
-    return _impl->highlight(std::move(keyspace), std::move(name), std::move(fts_query), std::move(documents), as);
+    return _impl->counted(request_op::highlight, _impl->highlight(std::move(keyspace), std::move(name), std::move(fts_query), std::move(documents), as));
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {
