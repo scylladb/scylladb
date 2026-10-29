@@ -48,6 +48,7 @@ Examples:
    2. `<mode>_coverage.info` - will be produced for ever coverage enabled mode under `<tmpdir>/<mode>/coverage/` and contains the aggregated coverage information from all suites.
    3. `test_coverage.info` - will be created under `<tmpdir>` and contains the aggregated coverage information for all coverage enabled modes.
    4. `test_coverage_report.txt` - will be produced under `<tmpdir>` a textual report of the coverage information in `test_coverage.info`.
+   5. `test_coverage.cobertura.xml` - will be produced under `<tmpdir>`, the line and branch coverage of `test_coverage.info` as a Cobertura report, ready to be imported into SonarQube with `sonar.cxx.cobertura.reportPaths=testlog/test_coverage.cobertura.xml`.
 
 ## Advanced And Manual Workflows
 Once built with code coverage instrumentation, all test executables and scylla executable are going
