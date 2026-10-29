@@ -646,12 +646,14 @@ public:
 class s3_storage_source : public source_interface {
     shared_ptr<s3::client> _client;
     sstring _object_name;
+    abort_source *_as;
     temporary_buffer<char> _buffer;
     std::optional<input_stream<char>> _src;
 public:
     s3_storage_source(shared_ptr<s3::client> client, sstring object_name, abort_source *as)
         : _client(std::move(client))
         , _object_name(std::move(object_name))
+        , _as(as)
         , _src(_client->make_chunked_download_source(_object_name, s3::full_range, as))
     {
     }
@@ -663,7 +665,22 @@ public:
         if (!_src) {
             on_internal_error(xlogger, fmt::format("s3_storage_source {} already closed", _object_name));
         }
-        _buffer = co_await _src->read();
+        // An abort cuts the request in flight, but the download source still hands out the data
+        // that it holds and the data that the connection received before the cut - possibly the
+        // rest of the object. Check here, so that an abort fails the next read.
+        if (_as) {
+            _as->check();
+        }
+        try {
+            _buffer = co_await _src->read();
+        } catch (...) {
+            // The HTTP client already reports a request that an abort cut short with the abort's
+            // exception. This check is a guard: any read that fails after an abort reports the abort.
+            if (_as) {
+                _as->check();
+            }
+            throw;
+        }
         co_return std::span<const std::byte>(reinterpret_cast<const std::byte*>(_buffer.get()), _buffer.size());
     }
     future<> close() override {

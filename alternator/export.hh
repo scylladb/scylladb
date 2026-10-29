@@ -132,7 +132,9 @@ struct in_memory_target_config {
 // `s3::client::make_upload_jumbo_sink`, the source reads it with
 // `s3::client::make_chunked_download_source`; see utils/s3/client.hh for the object size limits.
 // `as`, if set, is handed to the S3 client by both pipelines:
-//  - source: an abort makes `read_all()` fail with an exception; `close()` is still required,
+//  - source: an abort makes `read_all()` fail with an exception; the items of the data already
+//    read (one download buffer, or what it decompresses to) can still reach the callback before
+//    that; `close()` is still required,
 //  - sink: an abort makes `process()` fail with an exception; `flush_and_close()` is still required.
 // If set, it must stay valid until the future returned by `flush_and_close()` (sink) or `close()`
 // (source) resolves.
