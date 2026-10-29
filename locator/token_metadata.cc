@@ -128,6 +128,10 @@ public:
         }
     }
 
+    void set_host_id_cfg(host_id this_host_id) {
+        _topology.set_host_id_cfg(this_host_id);
+    }
+
     /**
      * Creates an iterable range of the sorted tokens starting at the token next
      * after the given one.
@@ -139,10 +143,6 @@ public:
     std::ranges::subrange<token_metadata::tokens_iterator> ring_range(const token& start) const;
 
     std::ranges::subrange<token_metadata::tokens_iterator> ring_range(dht::ring_position_view pos) const;
-
-    topology& get_topology() {
-        return _topology;
-    }
 
     const topology& get_topology() const {
         return _topology;
@@ -928,6 +928,11 @@ token_metadata::set_node_flag(host_id id, node::flag f, bool value) {
     _impl->set_node_flag(id, f, value);
 }
 
+void
+token_metadata::set_host_id_cfg(host_id this_host_id) {
+    _impl->set_host_id_cfg(this_host_id);
+}
+
 std::ranges::subrange<token_metadata::tokens_iterator>
 token_metadata::ring_range(const token& start) const {
     return _impl->ring_range(start);
@@ -983,11 +988,6 @@ public:
         return std::nullopt;
     }
 };
-
-topology&
-token_metadata::get_topology() {
-    return _impl->get_topology();
-}
 
 const topology&
 token_metadata::get_topology() const {

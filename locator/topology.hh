@@ -441,7 +441,7 @@ private:
         return const_cast<node*>(nptr);
     }
 
-    void seed_random_engine(random_engine_type::result_type);
+    void seed_random_engine(random_engine_type::result_type) const;
     const endpoint_dc_rack& get_location_slow(host_id id) const;
 
     unsigned _shard;

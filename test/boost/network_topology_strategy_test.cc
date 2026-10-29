@@ -297,11 +297,10 @@ void simple_test() {
 
     // Initialize the token_metadata
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert(token{tests::d2t(ring_point / ring_points.size())});
-            topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
+            tm.update_topology(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();
@@ -408,9 +407,8 @@ void heavy_origin_test() {
     }
 
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
-            topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
+            tm.update_topology(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal);
             co_await tm.update_normal_tokens(tokens[endpoint], id);
         }
     }).get();
@@ -479,11 +477,10 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
         auto stop_stm = deferred_stop(stm);
         stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-            auto& topo = tm.get_topology();
             for (const auto& [ring_point, endpoint, id] : ring_points) {
                 std::unordered_set<token> tokens;
                 tokens.insert(token{tests::d2t(ring_point / ring_points.size())});
-                topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
+                tm.update_topology(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
                 co_await tm.update_normal_tokens(std::move(tokens), id);
             }
         }).get();
@@ -574,11 +571,10 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
     auto stop_stm = deferred_stop(stm);
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert(token{tests::d2t(ring_point / ring_points.size())});
-            topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
+            tm.update_topology(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();
@@ -847,7 +843,7 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
     }
 }
 
-void generate_topology(topology& topo, const std::unordered_map<sstring, size_t> datacenters, const host_id_vector_replica_set& nodes) {
+void generate_topology(token_metadata& tm, const std::unordered_map<sstring, size_t> datacenters, const host_id_vector_replica_set& nodes) {
     auto& e1 = seastar::testing::local_random_engine;
 
     std::unordered_map<sstring, size_t> racks_per_dc;
@@ -871,7 +867,7 @@ void generate_topology(topology& topo, const std::unordered_map<sstring, size_t>
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo.add_or_update_endpoint(node, endpoint_dc_rack{dc, to_sstring(r)}, locator::node::state::normal);
+        tm.update_topology(node, endpoint_dc_rack{dc, to_sstring(r)}, locator::node::state::normal);
     }
 }
 
@@ -920,7 +916,7 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
         }
 
         stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-            generate_topology(tm.get_topology(), datacenters, nodes);
+            generate_topology(tm, datacenters, nodes);
             for (auto&& i : endpoint_tokens) {
                 co_await tm.update_normal_tokens(std::move(i.second), i.first);
             }
@@ -1216,8 +1212,8 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
     auto stop_stm = deferred_stop(stm);
     stm.mutate_token_metadata([&] (token_metadata& tm) {
-        auto& topo = tm.get_topology();
-        generate_topology(topo, datacenters, nodes);
+        generate_topology(tm, datacenters, nodes);
+        const auto& topo = tm.get_topology();
 
         const auto& address = nodes[tests::random::get_int<size_t>(0, NODES-1)];
         const auto& a1 = nodes[tests::random::get_int<size_t>(0, NODES-1)];
@@ -1261,7 +1257,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_sort_by_proximity) {
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
     auto stop_stm = deferred_stop(stm);
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        generate_topology(tm.get_topology(), datacenters, nodes);
+        generate_topology(tm, datacenters, nodes);
         return make_ready_future();
     }).get();
 
@@ -1366,7 +1362,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
 
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
         co_await tm.clear_gently();
-        tm.get_topology().add_or_update_endpoint(host1, ip1_dc_rack_v2, node::state::being_decommissioned);
+        tm.update_topology(host1, ip1_dc_rack_v2, node::state::being_decommissioned);
     }).get();
 
     n1 = stm.get()->get_topology().find_node(host1);
@@ -1425,11 +1421,10 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
     auto stop_stm = deferred_stop(stm);
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert(token{tests::d2t(ring_point / ring_points.size())});
-            topo.add_node(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
+            tm.update_topology(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, shard_count);
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();

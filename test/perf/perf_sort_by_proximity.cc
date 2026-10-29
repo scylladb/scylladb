@@ -46,13 +46,13 @@ struct sort_by_proximity_topology {
 
         unsigned i = 1;
         stm->mutate_token_metadata_for_test([&] (locator::token_metadata& tm) {
-            auto& topology = tm.get_topology();
+            const auto& topology = tm.get_topology();
             for (size_t dc = 0; dc < DCS; ++dc) {
                 for (size_t rack = 0; rack < RACKS_PER_DC; ++rack) {
                     for (size_t node = 0; node < NODES_PER_RACK; ++node, ++i) {
                         auto id = locator::host_id{utils::UUID(0, i)};
                         nodes[dc][rack].emplace_back(id);
-                        topology.add_or_update_endpoint(id,
+                        tm.update_topology(id,
                                 locator::endpoint_dc_rack{format("dc{}", dc), format("rack{}", rack)},
                                 locator::node::state::normal);
                     }

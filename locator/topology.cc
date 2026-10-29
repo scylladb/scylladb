@@ -576,7 +576,7 @@ topology::get_datacenter_host_ids() const {
     return ret;
 }
 
-void topology::seed_random_engine(random_engine_type::result_type value) {
+void topology::seed_random_engine(random_engine_type::result_type value) const {
     _random_engine.seed(value);
 }
 

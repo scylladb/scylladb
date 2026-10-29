@@ -226,6 +226,10 @@ public:
      */
     void set_node_flag(host_id id, node::flag f, bool value);
     /**
+     * Records the local host_id in the topology config, see topology::set_host_id_cfg().
+     */
+    void set_host_id_cfg(host_id this_host_id);
+    /**
      * Creates an iterable range of the sorted tokens starting at the token t
      * such that t >= start.
      *
@@ -240,7 +244,6 @@ public:
      */
     std::ranges::subrange<tokens_iterator> ring_range(dht::ring_position_view start) const;
 
-    topology& get_topology();
     const topology& get_topology() const;
     void debug_show() const;
 

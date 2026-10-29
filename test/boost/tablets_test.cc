@@ -1661,7 +1661,7 @@ SEASTAR_TEST_CASE(test_sharder) {
         auto table1 = table_id(utils::UUID_gen::get_time_UUID());
 
         token_metadata tokm(e.shared_token_metadata().local(), token_metadata::config{ .topo_cfg{ .this_host_id = h1, .local_dc_rack = locator::endpoint_dc_rack::default_location } });
-        tokm.get_topology().add_or_update_endpoint(h1);
+        tokm.update_topology(h1, std::nullopt);
 
         std::vector<tablet_id> tablet_ids;
         {
@@ -1883,7 +1883,7 @@ SEASTAR_TEST_CASE(test_intranode_sharding) {
         auto stop_stm = deferred_stop(stm);
         auto tmptr = stm.make_token_metadata_ptr();
         auto& tokm = *tmptr;
-        tokm.get_topology().add_or_update_endpoint(h1);
+        tokm.update_topology(h1, std::nullopt);
 
         auto leaving_replica = tablet_replica{h1, 5};
         auto pending_replica = tablet_replica{h1, 7};
@@ -6907,11 +6907,10 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
 
     // Initialize the token_metadata
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : test_config.ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert(dht::token{tests::d2t(ring_point / test_config.ring_points.size())});
-            topo.add_or_update_endpoint(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
+            tm.update_topology(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();
