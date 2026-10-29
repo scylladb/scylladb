@@ -326,9 +326,7 @@ void external_search_plan::check_restrictions(const restrictions::select_restric
         const auto& fc = expr::as<expr::function_call>(relation.lhs);
         const auto& fun = *functions::as_external_search_function(fc);
         check_query_value(source, external_search::extract_call_arguments(fc, fun.display_name()).second, fun, search_clause::restrictions);
-        if (has_other_restrictions(restrictions)) {
-            throw exceptions::invalid_request_exception("Full-text search queries do not support additional WHERE restrictions");
-        }
+        bm25_search::validate_partition_restrictions(restrictions, source.index);
         return;
     }
     std::unreachable();

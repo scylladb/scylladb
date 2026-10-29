@@ -70,7 +70,7 @@ class index {
     // All columns the index depends on.
     std::vector<sstring> _columns;
 public:
-    index(const sstring& target_column, const index_metadata& im);
+    explicit index(const index_metadata& im);
     bool depends_on(const column_definition& cdef) const;
     struct supports_expression_v {
         enum class value_type {
@@ -107,6 +107,8 @@ class custom_index {
 public:
     virtual ~custom_index() = default;
     virtual std::string_view index_type_name() const = 0;
+    /// Whether the index can be local, partitioned by columns listed in parentheses before the indexed column.
+    virtual bool supports_local_index() const { return false; }
     /// Returns a custom description of the index, or std::nullopt if the default index description logic should be used instead.
     virtual std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const = 0;
     virtual bool view_should_exist() const = 0;
@@ -162,6 +164,11 @@ public:
     static bool is_custom_index(const index_metadata& im) {
         auto custom_class = get_custom_class(im);
         return custom_class && dynamic_cast<T*>(custom_class->get()) != nullptr;
+    }
+    template <typename T>
+    static bool is_custom_index_class(const sstring& class_name) {
+        auto factory = get_custom_class_factory(class_name);
+        return factory && dynamic_cast<T*>((*factory)().get()) != nullptr;
     }
 private:
     void add_index(const index_metadata& im);

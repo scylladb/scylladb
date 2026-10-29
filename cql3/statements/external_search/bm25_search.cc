@@ -10,7 +10,10 @@
 
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/functions/scoring_fcts.hh"
+#include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/statements/external_search/external_function.hh"
+#include "cql3/util.hh"
+#include "index/external_index.hh"
 #include "index/secondary_index_manager.hh"
 #include "schema/schema.hh"
 #include "utils/assert.hh"
@@ -18,6 +21,11 @@
 #include "types/types.hh"
 
 #include <seastar/coroutine/exception.hh>
+
+#include <fmt/ranges.h>
+
+#include <algorithm>
+#include <ranges>
 
 namespace cql3::statements::bm25_search {
 
@@ -58,6 +66,31 @@ void validate_restriction(const expr::binary_operator& binop) {
     if (!rhs_const || rhs_const->is_null() || rhs_const->view().deserialize<float>(*float_type) != 0.0f) {
         throw exceptions::invalid_request_exception("BM25 function comparison value must be the literal 0");
     }
+}
+
+void validate_partition_restrictions(const restrictions::select_restrictions& restrictions, const secondary_index::index& index) {
+    const auto partition_columns =
+            secondary_index::external_index::get_partition_columns(index.metadata().options().at(index_target::target_option_name));
+    const auto is_partition_restriction = [&] (const expr::binary_operator& binop) {
+        const auto* column = expr::as_if<expr::column_value>(&binop.lhs);
+        return binop.op == expr::oper_t::EQ && column && std::ranges::contains(partition_columns, column->col->name_as_text());
+    };
+    const auto check = [&] (const expr::expression& restriction) {
+        expr::for_each_expression<expr::binary_operator>(restriction, [&] (const expr::binary_operator& binop) {
+            if (is_partition_restriction(binop)) {
+                return;
+            }
+            if (partition_columns.empty()) {
+                throw exceptions::invalid_request_exception("Full-text search queries do not support additional WHERE restrictions");
+            }
+            throw exceptions::invalid_request_exception(seastar::format(
+                    "Full-text search queries on a local index support only = restrictions on the columns it is partitioned by ({})",
+                    fmt::join(partition_columns | std::views::transform(cql3::util::maybe_quote), ", ")));
+        });
+    };
+    check(restrictions.get_partition_key_restrictions());
+    check(restrictions.get_clustering_columns_restrictions());
+    check(restrictions.get_nonprimary_key_restrictions());
 }
 
 seastar::future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_client& client, const schema& schema,

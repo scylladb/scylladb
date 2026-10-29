@@ -129,12 +129,6 @@ static bool is_sai_class_name(const sstring& class_name) {
         || boost::iequals(class_name, "sai");
 }
 
-// Returns true if the custom class name refers to a vector-capable index
-// (either ScyllaDB's native vector_index or Cassandra's SAI).
-static bool is_vector_capable_class(const sstring& class_name) {
-    return class_name == "vector_index" || is_sai_class_name(class_name);
-}
-
 // When the custom class is SAI, attempt to rewrite the index to a
 // ScyllaDB-native equivalent. Returns false when the rewrite is fully
 // transparent (vector_index), or true when the resulting index is only
@@ -212,9 +206,10 @@ static bool maybe_rewrite_sai_index(
         "use a secondary index for non-vector columns");
 }
 
-static bool is_vector_index(const index_options_map& options) {
+static bool is_external_index(const index_options_map& options) {
     auto class_it = options.find(db::index::secondary_index::custom_class_option_name);
-    return class_it != options.end() && is_vector_capable_class(class_it->second);
+    return class_it != options.end()
+            && secondary_index::secondary_index_manager::is_custom_index_class<secondary_index::external_index>(class_it->second);
 }
 
 // Returns true if the custom class name refers to an index that does not
@@ -440,8 +435,6 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
         throw exceptions::invalid_request_exception(format("index names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, _index_name.c_str()));
     }
 
-    validate_for_local_index(*schema);
-
     std::vector<::shared_ptr<index_target>> targets;
     for (auto& raw_target : _raw_targets) {
         targets.emplace_back(raw_target->prepare(*schema));
@@ -454,6 +447,8 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
             "This statement was rewritten to use a regular secondary index. "
             "Metadata filtering behavior may differ from Cassandra SAI.");
     }
+
+    validate_for_local_index(*schema);
 
     // Regular secondary indexes require rf-rack-validity.
     // Custom indexes need to validate this property themselves, if they need it.
@@ -574,25 +569,30 @@ void create_index_statement::validate_for_local_index(const schema& schema) cons
         auto base_pk_identifiers = *index_pk | std::views::transform([&schema] (const ::shared_ptr<column_identifier::raw>& raw_ident) {
             return raw_ident->prepare_column_identifier(schema);
         });
-        auto const is_vector_index = _idx_properties->custom_class && is_vector_capable_class(*_idx_properties->custom_class);
+        auto const custom_class_factory = _idx_properties->custom_class
+                ? secondary_index::secondary_index_manager::get_custom_class_factory(*_idx_properties->custom_class)
+                : std::nullopt;
+        auto const custom_index = custom_class_factory ? (*custom_class_factory)() : nullptr;
+        auto const supports_local_index = custom_index && custom_index->supports_local_index();
         auto remaining_base_pk_columns = schema.partition_key_columns();
         auto next_expected_base_column = remaining_base_pk_columns.begin();
         auto used_columns = std::set<bytes>();
         for (const auto& ident : base_pk_identifiers) {
             auto it = schema.columns_by_name().find(ident->name());
 
-            if (is_vector_index) {
+            if (supports_local_index) {
+                auto const kind = custom_index->index_type_name();
                 if (it == schema.columns_by_name().end() || !(it->second->is_primary_key() || it->second->is_regular())) {
-                    throw exceptions::invalid_request_exception(format(
-                            "Local vector index definition must contain primary key or regular columns. Redundant column: {}", ident->to_string()));
+                    throw exceptions::invalid_request_exception(fmt::format(
+                            "Local {} index definition must contain primary key or regular columns. Redundant column: {}", kind, ident->to_string()));
                 }
 
                 if (used_columns.contains(ident->name())) {
-                    throw exceptions::invalid_request_exception(format("Duplicate column definition in local vector index: {}", ident->to_string()));
+                    throw exceptions::invalid_request_exception(fmt::format("Duplicate column definition in local {} index: {}", kind, ident->to_string()));
                 }
                 used_columns.insert(ident->name());
 
-                // For vector indexes, we only check that the proper columns exist in the table, but we don't require them to be partition key columns.
+                // For custom indexes which support being local, we only check that the proper columns exist in the table, but we don't require them to be partition key columns.
                 continue;
             }
 
@@ -607,7 +607,7 @@ void create_index_statement::validate_for_local_index(const schema& schema) cons
             }
             ++next_expected_base_column;
         }
-        if (!is_vector_index && next_expected_base_column != remaining_base_pk_columns.end()) {
+        if (!supports_local_index && next_expected_base_column != remaining_base_pk_columns.end()) {
             throw exceptions::invalid_request_exception(format("Local index definition must contain full partition key only. Missing column: {}", next_expected_base_column->name_as_text()));
         }
         if (_raw_targets.size() == 1) {
@@ -857,8 +857,8 @@ index_metadata create_index_statement::make_index_metadata(const std::vector<::s
                                                            const index_options_map& options)
 {
     index_options_map new_options = options;
-    auto target_option = is_vector_index(options)
-        ? secondary_index::vector_index::serialize_targets(targets)
+    auto target_option = is_external_index(options)
+        ? secondary_index::external_index::serialize_targets(targets)
         : secondary_index::target_parser::serialize_targets(targets);
     new_options.emplace(index_target::target_option_name, target_option);
 

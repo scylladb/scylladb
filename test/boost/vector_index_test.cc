@@ -40,12 +40,12 @@ namespace {
 
 BOOST_AUTO_TEST_CASE(serialize_targets_empty_targets_throws) {
     std::vector<::shared_ptr<index_target>> targets;
-    BOOST_CHECK_THROW(vector_index::serialize_targets(targets), exceptions::invalid_request_exception);
+    BOOST_CHECK_THROW(external_index::serialize_targets(targets), exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(serialize_targets_single_pk_only_target_throws) {
     std::vector<::shared_ptr<index_target>> targets = {make_multi({"p1", "p2"})};
-    BOOST_CHECK_THROW(vector_index::serialize_targets(targets), exceptions::invalid_request_exception);
+    BOOST_CHECK_THROW(external_index::serialize_targets(targets), exceptions::invalid_request_exception);
 }
 
 
@@ -53,7 +53,7 @@ BOOST_AUTO_TEST_CASE(serialize_targets_single_column) {
     std::vector<::shared_ptr<index_target>> targets = {
             make_single("v"),
     };
-    BOOST_CHECK_EQUAL(vector_index::serialize_targets(targets), "v");
+    BOOST_CHECK_EQUAL(external_index::serialize_targets(targets), "v");
 }
 
 BOOST_AUTO_TEST_CASE(serialize_targets_with_filtering_columns) {
@@ -63,7 +63,7 @@ BOOST_AUTO_TEST_CASE(serialize_targets_with_filtering_columns) {
             make_single("f2"),
     };
 
-    const auto result = vector_index::serialize_targets(targets);
+    const auto result = external_index::serialize_targets(targets);
     const auto json = rjson::parse(result);
 
     BOOST_REQUIRE(json.IsObject());
@@ -88,7 +88,7 @@ BOOST_AUTO_TEST_CASE(serialize_targets_local_index) {
             make_single("v"),
     };
 
-    const auto result = vector_index::serialize_targets(targets);
+    const auto result = external_index::serialize_targets(targets);
     const auto json = rjson::parse(result);
 
     BOOST_REQUIRE(json.IsObject());
@@ -115,7 +115,7 @@ BOOST_AUTO_TEST_CASE(serialize_targets_local_index_with_filtering_columns) {
             make_single("f2"),
     };
 
-    const auto result = vector_index::serialize_targets(targets);
+    const auto result = external_index::serialize_targets(targets);
     const auto json = rjson::parse(result);
 
     BOOST_REQUIRE(json.IsObject());
@@ -141,28 +141,28 @@ BOOST_AUTO_TEST_CASE(serialize_targets_local_index_with_filtering_columns) {
 
 BOOST_AUTO_TEST_CASE(serialize_targets_multi_column_target_throws) {
     std::vector<::shared_ptr<index_target>> targets = {make_multi({"p1"}), make_multi({"c1"})};
-    BOOST_CHECK_THROW(vector_index::serialize_targets(targets), exceptions::invalid_request_exception);
+    BOOST_CHECK_THROW(external_index::serialize_targets(targets), exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(serialize_targets_multi_column_filtering_throws) {
     std::vector<::shared_ptr<index_target>> targets = {make_single("v"), make_multi({"c1"})};
-    BOOST_CHECK_THROW(vector_index::serialize_targets(targets), exceptions::invalid_request_exception);
+    BOOST_CHECK_THROW(external_index::serialize_targets(targets), exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(get_target_column_returns_column_with_uppercase_letters_from_escaped_string) {
     std::vector<::shared_ptr<index_target>> targets = {make_single("MyCol")};
-    const auto serialized = vector_index::serialize_targets(targets);
+    const auto serialized = external_index::serialize_targets(targets);
 
     BOOST_CHECK_EQUAL(serialized, "\"MyCol\"");
-    BOOST_CHECK_EQUAL(vector_index::get_target_column(serialized), "MyCol");
+    BOOST_CHECK_EQUAL(external_index::get_target_column(serialized), "MyCol");
 }
 
 BOOST_AUTO_TEST_CASE(get_target_column_returns_column_with_quotes_from_escaped_string) {
     std::vector<::shared_ptr<index_target>> targets = {make_single("a\"b")};
-    const auto serialized = vector_index::serialize_targets(targets);
+    const auto serialized = external_index::serialize_targets(targets);
 
     BOOST_CHECK_EQUAL(serialized, "\"a\"\"b\"");
-    BOOST_CHECK_EQUAL(vector_index::get_target_column(serialized), "a\"b");
+    BOOST_CHECK_EQUAL(external_index::get_target_column(serialized), "a\"b");
 }
 
 BOOST_AUTO_TEST_CASE(get_target_column_returns_column_with_uppercase_letters_from_json) {
@@ -170,9 +170,9 @@ BOOST_AUTO_TEST_CASE(get_target_column_returns_column_with_uppercase_letters_fro
             make_single("MyCol"),
             make_single("f1"),
     };
-    const auto serialized = vector_index::serialize_targets(targets);
+    const auto serialized = external_index::serialize_targets(targets);
 
-    BOOST_CHECK_EQUAL(vector_index::get_target_column(serialized), "MyCol");
+    BOOST_CHECK_EQUAL(external_index::get_target_column(serialized), "MyCol");
 }
 
 BOOST_AUTO_TEST_CASE(get_target_column_returns_column_with_quotes_from_json) {
@@ -180,9 +180,25 @@ BOOST_AUTO_TEST_CASE(get_target_column_returns_column_with_quotes_from_json) {
             make_single("a\"b"),
             make_single("f1"),
     };
-    const auto serialized = vector_index::serialize_targets(targets);
+    const auto serialized = external_index::serialize_targets(targets);
 
-    BOOST_CHECK_EQUAL(vector_index::get_target_column(serialized), "a\"b");
+    BOOST_CHECK_EQUAL(external_index::get_target_column(serialized), "a\"b");
+}
+
+BOOST_AUTO_TEST_CASE(get_partition_columns_of_local_index) {
+    std::vector<::shared_ptr<index_target>> targets = {
+            make_multi({"P1", "a\"b"}),
+            make_single("v"),
+            make_single("f1"),
+    };
+    const auto serialized = external_index::serialize_targets(targets);
+
+    BOOST_CHECK(external_index::get_partition_columns(serialized) == (std::vector<sstring>{"P1", "a\"b"}));
+}
+
+BOOST_AUTO_TEST_CASE(get_partition_columns_of_global_index_is_empty) {
+    BOOST_CHECK(external_index::get_partition_columns(external_index::serialize_targets({make_single("v")})).empty());
+    BOOST_CHECK(external_index::get_partition_columns(external_index::serialize_targets({make_single("v"), make_single("f1")})).empty());
 }
 
 

@@ -34,14 +34,25 @@ seastar::metrics::label ks{"ks"};
 
 namespace secondary_index {
 
-index::index(const sstring& target_column, const index_metadata& im)
+using cql3::statements::index_target;
+
+index::index(const index_metadata& im)
     : _im{im}
-    , _target_type{cql3::statements::index_target::from_target_string(target_column)}
-    , _target_column{cql3::statements::index_target::column_name_from_target_string(target_column)}
-    , _columns{secondary_index_manager::is_custom_index<vector_index>(im)
-            ? vector_index::get_all_target_columns(im.options().at(cql3::statements::index_target::target_option_name))
-            : std::vector<sstring>{_target_column}}
-{}
+{
+    const sstring& target = im.options().at(index_target::target_option_name);
+    if (secondary_index_manager::is_custom_index<external_index>(im)) {
+        // An index backed by Vector Store keeps its targets in its own format,
+        // which the parser of regular index targets would misread.
+        _target_type = index_target::target_type::regular_values;
+        _target_column = external_index::get_target_column(target);
+        _columns = external_index::get_all_target_columns(target);
+    } else {
+        sstring target_column = target_parser::get_target_column_name_from_string(target);
+        _target_type = index_target::from_target_string(target_column);
+        _target_column = index_target::column_name_from_target_string(target_column);
+        _columns = {_target_column};
+    }
+}
 
 bool index::depends_on(const column_definition& cdef) const {
     return std::ranges::contains(_columns, cdef.name_as_text());
@@ -126,9 +137,7 @@ void secondary_index_manager::reload() {
 }
 
 void secondary_index_manager::add_index(const index_metadata& im) {
-    sstring index_target = im.options().at(cql3::statements::index_target::target_option_name);
-    sstring index_target_name = target_parser::get_target_column_name_from_string(index_target);
-    _indices.emplace(im.name(), index{index_target_name, im});
+    _indices.emplace(im.name(), index{im});
     if (!_metrics.contains(im.name())) {
         _metrics.emplace(im.name(), make_lw_shared<stats>(_cf.schema()->ks_name(), im.name()));
     }

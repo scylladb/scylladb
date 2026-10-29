@@ -219,6 +219,190 @@ def test_fts_with_clustering_key_returns_rows_in_bm25_order(cql, test_keyspace, 
         assert [(r.p, r.c) for r in rows] == [(2, 30), (1, 10)]
 
 
+def test_fts_local_index_is_found_by_its_text_column(cql, test_keyspace, vector_store_mock):
+    """A BM25 query is served by a local index found by its text column although its target also names the partition."""
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p, c), content) USING 'fulltext_index'")
+        cql.execute(f"INSERT INTO {table} (p, c, content) VALUES (1, 10, 'hello')")
+        vector_store_mock.set_next_bm25_response(200, json.dumps({
+            "primary_keys": {"p": [1], "c": [10]},
+            "scores": [0.5],
+        }))
+
+        rows = list(cql.execute(f"SELECT p, c FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1"))
+        assert [(r.p, r.c) for r in rows] == [(1, 10)]
+
+
+def test_fts_local_index_partition_restriction_is_sent(cql, test_keyspace, vector_store_mock):
+    """The = restrictions on the partition of a local full-text index are sent to the index, as for ANN."""
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        idx = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {idx} ON {table}((p, c), content) USING 'fulltext_index'")
+        cql.execute(f"INSERT INTO {table} (p, c, content) VALUES (1, 10, 'hello')")
+        vector_store_mock.set_next_bm25_response(200, json.dumps({
+            "primary_keys": {"p": [1], "c": [10]},
+            "scores": [0.5],
+        }))
+
+        rows = list(cql.execute(f"SELECT p, c FROM {table} WHERE p = 1 AND c = 10 AND BM25(content, 'hello') > 0 "
+                                f"ORDER BY BM25(content, 'hello') LIMIT 2"))
+        assert [(r.p, r.c) for r in rows] == [(1, 10)]
+
+        reqs = vector_store_mock.bm25_requests
+        assert len(reqs) == 1
+        assert reqs[0].path == f"/api/v1/indexes/{test_keyspace}/{idx}/bm25"
+        assert json.loads(reqs[0].body) == {
+            "query": "hello",
+            "limit": 2,
+            "filter": {
+                "restrictions": [
+                    {"type": "==", "lhs": "p", "rhs": 1},
+                    {"type": "==", "lhs": "c", "rhs": 10},
+                ],
+                "allow_filtering": False,
+            },
+        }
+
+
+def local_index_response(p, c):
+    return json.dumps({"primary_keys": {"p": [p], "c": [c]}, "scores": [0.5]})
+
+
+def eq(column, value):
+    return {"type": "==", "lhs": column, "rhs": value}
+
+
+def test_fts_local_index_restrictions_are_sent_in_schema_order(cql, test_keyspace, vector_store_mock):
+    """The restrictions are sent in the order of the table's columns, not of the index's partition columns."""
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((c, p), content) USING 'fulltext_index'")
+        vector_store_mock.set_next_bm25_response(200, local_index_response(1, 10))
+
+        cql.execute(f"SELECT p, c FROM {table} WHERE c = 10 AND p = 1 AND BM25(content, 'hello') > 0 "
+                    f"ORDER BY BM25(content, 'hello') LIMIT 1")
+
+        body = json.loads(vector_store_mock.bm25_requests[0].body)
+        assert body["filter"]["restrictions"] == [eq("p", 1), eq("c", 10)]
+
+
+def test_fts_local_index_partitioned_by_regular_column(cql, test_keyspace, vector_store_mock):
+    """A local full-text index partitioned by a regular column is searched in the partition its value names."""
+    schema = "p int, c int, r text, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((r), content) USING 'fulltext_index'")
+        cql.execute(f"INSERT INTO {table} (p, c, r, content) VALUES (1, 10, 'x', 'hello')")
+        vector_store_mock.set_next_bm25_response(200, local_index_response(1, 10))
+
+        rows = list(cql.execute(f"SELECT p, c FROM {table} WHERE r = 'x' AND BM25(content, 'hello') > 0 "
+                                f"ORDER BY BM25(content, 'hello') LIMIT 1"))
+        assert [(r.p, r.c) for r in rows] == [(1, 10)]
+
+        body = json.loads(vector_store_mock.bm25_requests[0].body)
+        assert body["filter"] == {"restrictions": [eq("r", "x")], "allow_filtering": False}
+
+
+def test_fts_local_index_partition_from_bind_markers(cql, test_keyspace, vector_store_mock):
+    """Bind markers in the partition restrictions are sent with the values of each execution."""
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p, c), content) USING 'fulltext_index'")
+        stmt = cql.prepare(f"SELECT p, c FROM {table} WHERE p = ? AND c = ? AND BM25(content, ?) > 0 "
+                           f"ORDER BY BM25(content, ?) LIMIT 1")
+        for p, c in [(1, 10), (2, 20)]:
+            vector_store_mock.set_next_bm25_response(200, local_index_response(p, c))
+            cql.execute(stmt, [p, c, "hello", "hello"])
+
+        assert [json.loads(r.body)["filter"]["restrictions"] for r in vector_store_mock.bm25_requests] == [
+            [eq("p", 1), eq("c", 10)],
+            [eq("p", 2), eq("c", 20)],
+        ]
+
+
+def test_fts_local_index_restricted_column_not_selected(cql, test_keyspace, vector_store_mock):
+    """The partition restrictions are sent although the restricted columns are not selected."""
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p, c), content) USING 'fulltext_index'")
+        cql.execute(f"INSERT INTO {table} (p, c, content) VALUES (1, 10, 'hello')")
+        vector_store_mock.set_next_bm25_response(200, local_index_response(1, 10))
+
+        rows = list(cql.execute(f"SELECT content FROM {table} WHERE p = 1 AND c = 10 AND BM25(content, 'hello') > 0 "
+                                f"ORDER BY BM25(content, 'hello') LIMIT 1"))
+        assert [r.content for r in rows] == ["hello"]
+
+        body = json.loads(vector_store_mock.bm25_requests[0].body)
+        assert body["filter"]["restrictions"] == [eq("p", 1), eq("c", 10)]
+
+
+def test_fts_local_index_incomplete_partition_is_left_to_the_index(cql, test_keyspace, vector_store_mock):
+    """As for ANN, Scylla does not check that every partition column is restricted; Vector Store does."""
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p, c), content) USING 'fulltext_index'")
+        for where in ["", "p = 1 AND "]:
+            vector_store_mock.set_next_bm25_response(200, local_index_response(1, 10))
+            cql.execute(f"SELECT p, c FROM {table} WHERE {where}BM25(content, 'hello') > 0 "
+                        f"ORDER BY BM25(content, 'hello') LIMIT 1")
+
+        bodies = [json.loads(r.body) for r in vector_store_mock.bm25_requests]
+        assert "filter" not in bodies[0]
+        assert bodies[1]["filter"]["restrictions"] == [eq("p", 1)]
+
+
+def test_fts_local_index_allow_filtering_is_sent(cql, test_keyspace, vector_store_mock):
+    """ALLOW FILTERING is sent with the partition restrictions, as for ANN."""
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p, c), content) USING 'fulltext_index'")
+        vector_store_mock.set_next_bm25_response(200, local_index_response(1, 10))
+
+        cql.execute(f"SELECT p, c FROM {table} WHERE p = 1 AND c = 10 AND BM25(content, 'hello') > 0 "
+                    f"ORDER BY BM25(content, 'hello') LIMIT 1 ALLOW FILTERING")
+
+        body = json.loads(vector_store_mock.bm25_requests[0].body)
+        assert body["filter"] == {"restrictions": [eq("p", 1), eq("c", 10)], "allow_filtering": True}
+
+
+@pytest.mark.parametrize("where", [
+    "p IN (1, 2) AND c = 10",
+    "p = 1 AND c > 10",
+    "token(p) > 0 AND c = 10",
+    "p = 1 AND c = 10 AND r = 1",
+])
+@pytest.mark.parametrize("allow_filtering", ["", " ALLOW FILTERING"])
+def test_fts_local_index_other_restrictions_rejected(cql, test_keyspace, where, allow_filtering):
+    """Only = restrictions on the columns a local full-text index is partitioned by are accepted."""
+    schema = "p int, c int, r int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p, c), content) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match=re.escape("support only = restrictions on the columns it is partitioned by (p, c)")):
+            cql.execute(f"SELECT p, c FROM {table} WHERE {where} AND BM25(content, 'hello') > 0 "
+                        f"ORDER BY BM25(content, 'hello') LIMIT 1{allow_filtering}")
+
+
+def test_fts_local_index_multi_column_restriction_rejected(cql, test_keyspace):
+    """A restriction on a tuple of partition columns is not accepted, although each of them could be restricted alone."""
+    schema = "p int, c1 int, c2 int, content text, PRIMARY KEY (p, c1, c2)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p, c1, c2), content) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match=re.escape("support only = restrictions on the columns it is partitioned by (p, c1, c2)")):
+            cql.execute(f"SELECT p FROM {table} WHERE p = 1 AND (c1, c2) = (10, 20) AND BM25(content, 'hello') > 0 "
+                        f"ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
+def test_fts_local_index_restriction_on_other_key_column_rejected(cql, test_keyspace):
+    """A key column the index is not partitioned by cannot be restricted."""
+    schema = "p int, c int, content text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p), content) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match=re.escape("support only = restrictions on the columns it is partitioned by (p)")):
+            cql.execute(f"SELECT p, c FROM {table} WHERE p = 1 AND c = 10 AND BM25(content, 'hello') > 0 "
+                        f"ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
 def test_fts_ascii_column_executes(cql, test_keyspace, vector_store_mock):
     """BM25 on an ascii column must execute and return rows in BM25 rank order."""
     with new_test_table(cql, test_keyspace, "id int primary key, content ascii") as table:
