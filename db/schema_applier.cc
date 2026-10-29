@@ -1300,6 +1300,9 @@ future<> schema_applier::apply_persisted() {
     std::exception_ptr post_commit_ex;
     co_await with_merge_lock([this, &post_commit_ex] () -> future<> {
         co_await update();
+        // The new state is built but not yet visible. Lets a test inspect that window.
+        co_await utils::get_local_injector().inject("schema_applier_pause_before_commit",
+                utils::wait_for_message(std::chrono::minutes(5)), false);
         try {
             co_await commit();
         } catch (...) {
