@@ -129,6 +129,23 @@ The search term is a query, not plain text. Some characters, such as ``'``,
 meaning. Ordinary text, especially user input, may then be rejected or match
 unexpected rows.
 
+Words separated by whitespace are combined with ``OR``: a row that contains any
+of them matches. The operators ``AND``, ``OR`` and ``NOT`` combine words, and
+parentheses group them::
+
+    SELECT * FROM ks.t
+        WHERE BM25(v, '(jupiter OR saturn) AND planet NOT rings') > 0
+        ORDER BY BM25(v, '(jupiter OR saturn) AND planet NOT rings')
+        LIMIT 10;
+
+The operators are recognized only in upper case. A lowercase ``and``, ``or`` or
+``not`` is searched as an ordinary word.
+
+A ``-`` before a word excludes it, like ``NOT``. A ``+`` before a word makes
+that word required, but the other words stay optional, so it is not the same as
+``AND``: ``planet +jupiter`` matches every row that contains *jupiter*, while
+``planet AND jupiter`` matches only the rows that contain both words.
+
 To search for text literally, wrap it in double quotes. It is then searched as
 a phrase: the words must appear next to each other, in the same order. Inside a
 CQL string literal, a single quote is written as ``''``::
