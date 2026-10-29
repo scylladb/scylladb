@@ -114,10 +114,8 @@ name                 kind       mandatory    default    description
 =================== ========== =========== =========== ===================================================================
 ``replication``      *map*      no                      The replication strategy and options to use for the keyspace (see
                                                         details below).
-``durable_writes``   *simple*   no           true       Whether to use the commit log for updates on this keyspace
-                                                        (disable this option at your own risk!). Disabling it can break
-                                                        LWT linearizability on tablet-based tables, see
-                                                        :ref:`Paxos State Tables <paxos-state-tables>`.
+``durable_writes``   *simple*   no           true       Accepted for compatibility and ignored: the commit log is always
+                                                        used, and ``false`` returns a warning.
 ``tablets``          *map*      no                      Enables or disables tablets for the keyspace (see :ref:`tablets <tablets>`)
 ``consistency``      *simple*   no          `eventual`  Configures consistency mode for the keyspace (see :ref:`consistency <consistency-option>`).
 =================== ========== =========== =========== ===================================================================
