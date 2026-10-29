@@ -12,7 +12,7 @@ import uuid
 import time
 from urllib.parse import quote
 from abc import ABCMeta
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, Optional, AsyncIterator
 
@@ -20,6 +20,7 @@ import pytest
 import universalasync
 from aiohttp import request, BaseConnector, ClientTimeout
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
+from multidict import MultiDict
 
 from test.pylib.internal_types import IPAddress, HostID
 from test.pylib.util import universalasync_typed_wrap
@@ -841,8 +842,27 @@ class ScyllaMetricsClient:
     def __init__(self, port: int = 9180):
         self.client = TCPRESTClient(port)
 
-    async def query(self, server_ip: IPAddress, timeout: Optional[float] = None) -> ScyllaMetrics:
-        data = await self.client.get_text('/metrics', host=server_ip, timeout=timeout)
+    async def query(self, server_ip: IPAddress, timeout: Optional[float] = None, *,
+                    names: Sequence[str] = (), labels: Mapping[str, str] = {}) -> ScyllaMetrics:
+        """Fetch the node's metrics, optionally filtered by name and labels.
+
+        The node applies the filters before aggregation and rendering. It still
+        collects all metrics, but excluded metrics are not aggregated, rendered,
+        or sent, reducing the overhead of repeated polling.
+
+        Args:
+            names: Metric names to return. A trailing '*' matches any suffix,
+                e.g. 'scylla_hints_manager_*'.
+            labels: Mapping of label names to regular expressions. Each expression
+                must match the entire label value. A missing label is treated as
+                an empty string, so metrics without it are dropped unless the
+                expression matches ''. Label filters apply to all metric families,
+                independently of the name filter. A label name that no metric of
+                the node has is ignored.
+        """
+        params = MultiDict([("__name__", name) for name in names])
+        params.extend(labels)
+        data = await self.client.get_text('/metrics', host=server_ip, params=params, timeout=timeout)
         return ScyllaMetrics(data.split('\n'))
 
 
