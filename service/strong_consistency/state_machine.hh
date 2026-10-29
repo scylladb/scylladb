@@ -15,6 +15,7 @@
 #include "locator/tablets.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 #include "utils/loading_cache.hh"
+#include "utils/estimated_histogram.hh"
 
 namespace db {
 class system_keyspace;
@@ -26,6 +27,11 @@ class migration_manager;
 
 namespace service::strong_consistency {
 
+struct state_machine_stats {
+    utils::time_estimated_histogram apply_latency;
+    uint64_t schema_barrier_waits = 0;
+};
+
 struct raft_command {
     frozen_mutation mutation;
 };
@@ -35,7 +41,8 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     replica::database& db,
     service::migration_manager& mm,
     db::system_keyspace& sys_ks,
-    raft_groups_storage& storage);
+    raft_groups_storage& storage,
+    lw_shared_ptr<state_machine_stats> stats);
 
 // Resolves schemas for frozen mutations and upgrades them to the current schema if needed.
 //

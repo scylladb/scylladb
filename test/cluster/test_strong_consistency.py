@@ -645,6 +645,9 @@ async def test_no_schema_when_apply_write(manager: ScyllaClusterManager):
         assert row.c == 20
         assert row.new_col == 30
 
+        metrics = await manager.metrics.query(servers[2].ip_addr)
+        assert metrics.get(f'{SC_APPLY_METRICS_PREFIX}schema_barrier_waits', {'ks': ks, 'cf': 'test'}) == 1
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_old_schema_when_apply_write(manager: ScyllaClusterManager):
     servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
@@ -996,6 +999,10 @@ async def test_timed_out_queries(manager: ScyllaClusterManager):
             await manager.api.enable_injection(s1.ip_addr, "sc_begin_mutate_wait_for_leader", one_shot=False)
             with pytest.raises(WriteTimeout, match=f"Query timed out for {table}"):
                 await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (11, 13) USING TIMEOUT 100ms")
+
+            metrics = await manager.metrics.query(s1.ip_addr)
+            timeouts = {'ks': ks, 'cf': table.split('.')[-1], 'reason': 'timeout'}
+            assert metrics.get(f'{SC_REQUEST_METRICS_PREFIX}write_errors', timeouts) == 1
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
@@ -3093,6 +3100,8 @@ async def test_bootstrap_with_existing_sc_table(manager: ScyllaClusterManager):
 
 
 SC_RAFT_METRICS_PREFIX = 'scylla_strong_consistency_raft_'
+SC_REQUEST_METRICS_PREFIX = 'scylla_strong_consistency_table_'
+SC_APPLY_METRICS_PREFIX = 'scylla_strong_consistency_state_machine_'
 
 def sc_raft_metric_lines(metrics: ScyllaMetrics) -> list[ScyllaMetricsLine]:
     return [line for l in metrics.lines_by_prefix(SC_RAFT_METRICS_PREFIX)
@@ -3106,6 +3115,14 @@ async def wait_for_sc_raft_series_gone(manager: ScyllaClusterManager, server: Se
         metrics = await manager.metrics.query(server.ip_addr)
         return True if not sc_raft_metric_lines(metrics) else None
     await wait_for(series_gone, time.time() + 60)
+
+async def wait_for_sc_applies(manager: ScyllaClusterManager, servers: list[ServerInfo], labels: dict, writes: int):
+    async def all_applied():
+        applied = [(await manager.metrics.query(s.ip_addr)).get(f'{SC_APPLY_METRICS_PREFIX}apply_latency_count', labels)
+                   for s in servers]
+        logger.info(f"Entries applied per node: {applied}")
+        return True if applied == [writes] * len(servers) else None
+    await wait_for(all_applied, time.time() + 60)
 
 async def test_sc_raft_metrics_aggregated_per_table(manager: ScyllaClusterManager):
     servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
@@ -3228,6 +3245,18 @@ async def test_sc_raft_metrics_per_shard(manager: ScyllaClusterManager):
             reporting_shards = {line.labels['shard'] for line in lines if line.name == f'{SC_RAFT_METRICS_PREFIX}leaders'}
             assert reporting_shards == replica_shards
 
+        logger.info("Every replica applies every write, the followers possibly after the write returned")
+        await wait_for_sc_applies(manager, servers, labels, 10)
+
+        logger.info("The request and apply histograms are summed over the shards, while the raft series are reported per shard")
+        metrics = [await manager.metrics.query(s.ip_addr) for s in servers]
+        for prefix in (SC_REQUEST_METRICS_PREFIX, SC_APPLY_METRICS_PREFIX):
+            lines = [line for m in metrics for l in m.lines_by_prefix(prefix)
+                     if (line := ScyllaMetricsLine.from_string(l)) is not None and '_latency_' in line.name]
+            assert lines
+            for line in lines:
+                assert 'shard' not in line.labels
+
 async def test_sc_raft_metrics_disabled(manager: ScyllaClusterManager):
     config = DEFAULT_CONFIG | {'enable_node_aggregated_table_metrics': False}
     servers = await manager.servers_add(3, config=config, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
@@ -3240,10 +3269,12 @@ async def test_sc_raft_metrics_disabled(manager: ScyllaClusterManager):
         for i in range(10):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})")
 
-        logger.info("Turning the node-aggregated table metrics off leaves out the raft metrics of the table, group 0 keeps its own")
+        logger.info("Turning the node-aggregated table metrics off leaves out the raft, request and apply metrics of the table, group 0 keeps its own")
         for server in servers:
             metrics = await manager.metrics.query(server.ip_addr)
             assert not sc_raft_metric_lines(metrics)
+            assert not metrics.lines_by_prefix(SC_REQUEST_METRICS_PREFIX)
+            assert not metrics.lines_by_prefix(SC_APPLY_METRICS_PREFIX)
             assert metrics.lines_by_prefix('scylla_raft_add_entries')
 
 async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterManager):
@@ -3297,3 +3328,74 @@ async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterMa
         logger.info("Dropping the table removes the series of that node too")
         await cql.run_async(f"DROP TABLE {ks}.test")
         await wait_for_sc_raft_series_gone(manager, src)
+
+async def test_sc_request_metrics_per_table(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        group_id = await get_table_raft_group_id(manager, ks, 'test')
+        await wait_for_leader(manager, servers[0], group_id)
+        labels = {'ks': ks, 'cf': 'test'}
+
+        logger.info("Sending the requests through every node, so that the followers redirect most of them to the leader")
+        writes = 3 * len(hosts)
+        for i in range(writes):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})", host=hosts[i % len(hosts)])
+        linearizable = SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 0", consistency_level=ConsistencyLevel.QUORUM)
+        for host in hosts:
+            await cql.run_async(linearizable, host=host)
+        non_linearizable = SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 0", consistency_level=ConsistencyLevel.ONE)
+        await cql.run_async(non_linearizable, host=hosts[0])
+
+        metrics = [await manager.metrics.query(s.ip_addr) for s in servers]
+        def total(name: str, extra_labels: dict = {}):
+            return sum(m.get(f'{SC_REQUEST_METRICS_PREFIX}{name}', labels | extra_labels) or 0 for m in metrics)
+
+        logger.info("A request counts for the table once, on the node it ended on")
+        assert total('write_latency_count') == writes
+        assert total('read_latency_count', {'read_type': 'linearizable'}) == len(hosts)
+        assert metrics[0].get(f'{SC_REQUEST_METRICS_PREFIX}read_latency_count', labels | {'read_type': 'non_linearizable'}) == 1
+        assert total('write_errors') == 0
+        assert total('read_errors') == 0
+
+        logger.info("The series are labelled with the table and summed over the shards")
+        lines = [line for m in metrics for l in m.lines_by_prefix(SC_REQUEST_METRICS_PREFIX)
+                 if (line := ScyllaMetricsLine.from_string(l)) is not None]
+        assert lines
+        for line in lines:
+            assert line.labels['ks'] == ks
+            assert line.labels['cf'] == 'test'
+            assert 'shard' not in line.labels
+
+        logger.info("Dropping the table removes its series")
+        await cql.run_async(f"DROP TABLE {ks}.test")
+        async def series_gone():
+            for server in servers:
+                if (await manager.metrics.query(server.ip_addr)).lines_by_prefix(SC_REQUEST_METRICS_PREFIX):
+                    return None
+            return True
+        await wait_for(series_gone, time.time() + 60)
+
+async def test_sc_apply_metrics_per_table(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        group_id = await get_table_raft_group_id(manager, ks, 'test')
+        await wait_for_leader(manager, servers[0], group_id)
+        labels = {'ks': ks, 'cf': 'test'}
+
+        writes = 10
+        for i in range(writes):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})")
+
+        logger.info("Every replica applies every write once, the followers possibly after the write returned")
+        await wait_for_sc_applies(manager, servers, labels, writes)
+
+        logger.info("Every node knew the schema of the writes, so none of them waited for group 0")
+        for server in servers:
+            metrics = await manager.metrics.query(server.ip_addr)
+            assert metrics.get(f'{SC_APPLY_METRICS_PREFIX}schema_barrier_waits', labels) is None

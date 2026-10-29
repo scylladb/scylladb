@@ -10,6 +10,7 @@
 
 #include <seastar/core/metrics.hh>
 #include "service/raft/raft_metrics.hh"
+#include "utils/histogram_metrics_helper.hh"
 
 namespace service::strong_consistency {
 
@@ -17,6 +18,8 @@ namespace sm = seastar::metrics;
 
 static const sm::label ks_label("ks");
 static const sm::label cf_label("cf");
+static const sm::label error_reason_label("reason");
+static const sm::label read_type_label("read_type");
 // Marks the node-aggregated per-table series, as replica/table.cc does.
 static const sm::label_instance node_table_label("__per_table", "node");
 
@@ -60,6 +63,8 @@ table_metrics::table_metrics(const sstring& ks_name, const sstring& cf_name, rep
     register_raft_server_stats_metrics(_metrics, *_server_stats, options);
     register_raft_rpc_stats_metrics(_metrics, *_rpc_stats, options);
     register_table_gauges(options);
+    register_request_metrics(options);
+    register_apply_metrics(options);
 }
 
 // The gauges of the table itself, summed over its servers by _sample.get().
@@ -94,6 +99,59 @@ void table_metrics::register_table_gauges(const raft_metrics_options& options) {
             sm::description("Number of followers the tablet raft group leaders cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight), snapshot (waiting for a snapshot transfer) or log_full (the follower reported that its log is full); followers the failure detector reports down are not counted"), with_reason("snapshot")).aggregate(aggregate),
         sm::make_gauge("blocked_followers", [this] { return _sample.get().blocked.log_full; },
             sm::description("Number of followers the tablet raft group leaders cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight), snapshot (waiting for a snapshot transfer) or log_full (the follower reported that its log is full); followers the failure detector reports down are not counted"), with_reason("log_full")).aggregate(aggregate),
+    });
+}
+
+// Like those of the other per-table metrics, the histograms are summed over the shards
+// even when the rest is reported per shard.
+void table_metrics::register_request_metrics(const raft_metrics_options& options) {
+    const auto& labels = options.labels;
+    const auto& aggregate = options.aggregate_labels;
+    auto with = [&labels] (sm::label_instance label) {
+        auto result = labels;
+        result.push_back(std::move(label));
+        return result;
+    };
+    const auto& s = *_request_stats;
+    _metrics.add_group("strong_consistency_table", {
+        sm::make_histogram("write_latency", [&s] { return to_metrics_histogram(s.write_latency); },
+            sm::description("Latency of the strongly consistent writes to the table that ended on this node"), labels)
+            .aggregate({sm::shard_label}).set_skip_when_empty(),
+        sm::make_counter("write_errors", s.write_errors_timeout,
+            sm::description("Number of strongly consistent writes to the table that failed on this node, the reason label can be timeout, status_unknown or other"),
+            with(error_reason_label("timeout"))).aggregate(aggregate).set_skip_when_empty(),
+        sm::make_counter("write_errors", s.write_errors_status_unknown,
+            sm::description("Number of strongly consistent writes to the table that failed on this node, the reason label can be timeout, status_unknown or other"),
+            with(error_reason_label("status_unknown"))).aggregate(aggregate).set_skip_when_empty(),
+        sm::make_counter("write_errors", s.write_errors_other,
+            sm::description("Number of strongly consistent writes to the table that failed on this node, the reason label can be timeout, status_unknown or other"),
+            with(error_reason_label("other"))).aggregate(aggregate).set_skip_when_empty(),
+
+        sm::make_histogram("read_latency", [&s] { return to_metrics_histogram(s.linearizable_read_latency); },
+            sm::description("Latency of the strongly consistent reads from the table that ended on this node, the read_type label can be linearizable or non_linearizable"),
+            with(read_type_label("linearizable"))).aggregate({sm::shard_label}).set_skip_when_empty(),
+        sm::make_histogram("read_latency", [&s] { return to_metrics_histogram(s.non_linearizable_read_latency); },
+            sm::description("Latency of the strongly consistent reads from the table that ended on this node, the read_type label can be linearizable or non_linearizable"),
+            with(read_type_label("non_linearizable"))).aggregate({sm::shard_label}).set_skip_when_empty(),
+        sm::make_counter("read_errors", s.read_errors_timeout,
+            sm::description("Number of strongly consistent reads from the table that failed on this node, the reason label can be timeout or other"),
+            with(error_reason_label("timeout"))).aggregate(aggregate).set_skip_when_empty(),
+        sm::make_counter("read_errors", s.read_errors_other,
+            sm::description("Number of strongly consistent reads from the table that failed on this node, the reason label can be timeout or other"),
+            with(error_reason_label("other"))).aggregate(aggregate).set_skip_when_empty(),
+    });
+}
+
+void table_metrics::register_apply_metrics(const raft_metrics_options& options) {
+    const auto& labels = options.labels;
+    const auto& s = *_apply_stats;
+    _metrics.add_group("strong_consistency_state_machine", {
+        sm::make_histogram("apply_latency", [&s] { return to_metrics_histogram(s.apply_latency); },
+            sm::description("Time it took to apply a raft log entry of the table to the replica on this node, including resolving the schema the entry was written with"), labels)
+            .aggregate({sm::shard_label}).set_skip_when_empty(),
+        sm::make_counter("schema_barrier_waits", s.schema_barrier_waits,
+            sm::description("Number of times applying the raft log entries of the table on this node waited for a group 0 read barrier, because they were written with a schema this node did not know yet"), labels)
+            .aggregate(options.aggregate_labels).set_skip_when_empty(),
     });
 }
 
