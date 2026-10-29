@@ -768,14 +768,20 @@ static void compact_corrupted_by_compression_mode(const std::string& tname,
             desc.sharder = &schema->get_sharder(); // needed to support resharding compaction
             compact_sstables(env, desc, cf, sst_gen).get();
         };
-        auto test_failing_compact = [&compact] (schema_ptr schema, std::vector<shared_sstable> to_compact, const sstring& compaction_err_msg, const sstring& integrity_err_msg) {
+        // integrity_err_msgs lists the acceptable ways the underlying corruption
+        // may be reported; the failure passes if the exception mentions any of
+        // them (and the compaction-level message).
+        auto test_failing_compact = [&compact] (schema_ptr schema, std::vector<shared_sstable> to_compact, const sstring& compaction_err_msg, std::vector<sstring> integrity_err_msgs) {
             try {
                 compact(schema, to_compact);
                 BOOST_FAIL("expecting compaction to fail with exception");
             } catch (const ExceptionType& e) {
                 std::string what = e.what();
+                testlog.info("Got: {}", what);
                 BOOST_REQUIRE(what.find(compaction_err_msg) != std::string::npos);
-                BOOST_REQUIRE(what.find(integrity_err_msg) != std::string::npos);
+                BOOST_REQUIRE(std::ranges::any_of(integrity_err_msgs, [&] (const sstring& msg) {
+                    return what.find(msg) != std::string::npos;
+                }));
             }
         };
 
@@ -797,7 +803,13 @@ static void compact_corrupted_by_compression_mode(const std::string& tname,
         auto sst = make_sstable_containing(env.make_sstable(schema), muts).get();
         corrupt_sstable(sst);
 
-        test_failing_compact(schema, {sst}, error_msg, "failed checksum");
+        // A corrupt data chunk can be reported in more than one way, so accept any
+        // of the plausible integrity errors. An uncompressed chunk fails its
+        // trailing checksum. A compressed chunk in a format that prefixes each
+        // chunk with its length (mu and later) may instead be rejected earlier,
+        // when that bogus on-disk length prefix is parsed, rather than reading a
+        // huge buffer just to fail the checksum afterwards.
+        test_failing_compact(schema, {sst}, error_msg, {"failed checksum", "length field out of range"});
 
         testlog.info("Compacting {}compressed SSTable with invalid digest", compress ? "" : "un");
 
@@ -813,7 +825,7 @@ static void compact_corrupted_by_compression_mode(const std::string& tname,
             auto close_os = deferred_close(os);
             os.write(std::move(new_digest)).get();
         }
-        test_failing_compact(schema, {sst}, error_msg, "Digest mismatch");
+        test_failing_compact(schema, {sst}, error_msg, {"Digest mismatch"});
     }, std::move(config)).get();
 }
 

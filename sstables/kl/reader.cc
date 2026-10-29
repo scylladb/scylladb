@@ -15,7 +15,6 @@
 #include "keys/clustering_key_filter.hh"
 #include "keys/clustering_ranges_walker.hh"
 #include "types/concrete_types.hh"
-#include "utils/to_string.hh"
 #include "utils/value_or_reference.hh"
 
 namespace sstables {
@@ -1098,8 +1097,8 @@ public:
     data_consume_rows_context(const schema&,
                               const shared_sstable sst,
                               mp_row_consumer_k_l& consumer,
-                              input_stream<char>&& input, uint64_t start, uint64_t maxlen)
-                : continuous_data_consumer(consumer.permit(), std::move(input), start, maxlen)
+                              std::unique_ptr<data_consumer::continuous_data_consumer_input_stream> input, sstable_position start, std::optional<sstable_position> end)
+                : continuous_data_consumer(consumer.permit(), std::move(input), start, end)
                 , _consumer(consumer)
                 , _sst(std::move(sst))
                 , _gen(do_process_state())
@@ -1311,7 +1310,7 @@ private:
             return get_index_reader().advance_to(*pos).then([this] {
                 index_reader& idx = *_index_reader;
                 auto index_position = idx.data_file_positions();
-                if (index_position.start <= _context->position()) {
+                if (sstables::sstable_position::from_logical(index_position.start) <= _context->position()) {
                     return make_ready_future<>();
                 }
                 return skip_to(idx.element_kind(), index_position.start).then([this] {
@@ -1343,7 +1342,7 @@ private:
             co_await get_index_reader().advance_to(_pr);
         }
 
-        auto [begin, end] = _index_reader->data_file_positions();
+        auto [begin, end] = _index_reader->sstable_positions();
         parse_assert(bool(end), _sst->get_filename());
 
         if (_single_partition_read) {
@@ -1351,7 +1350,7 @@ private:
             _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, integrity_check::no);
         } else {
             sstable::disk_read_range drr{begin, *end};
-            auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
+            auto last_end = _fwd_mr ? _sst->end_position() : drr.end;
             _read_enabled = bool(drr);
             _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, integrity_check::no);
         }
@@ -1366,7 +1365,8 @@ private:
         }
         return initialize();
     }
-    future<> skip_to(indexable_element el, uint64_t begin) {
+    future<> skip_to(indexable_element el, uint64_t begin_raw) {
+        auto begin = sstable_position::from_logical(begin_raw);
         sstlog.trace("sstable_reader: {}: skip_to({} -> {}, el={})", fmt::ptr(_context.get()), _context->position(), begin, static_cast<int>(el));
         if (begin <= _context->position()) {
             return make_ready_future<>();
@@ -1402,7 +1402,7 @@ public:
                         _read_enabled = true;
                         _index_in_current_partition = true;
                         _context->reset(indexable_element::partition);
-                        return _context->fast_forward_to(start, *end);
+                        return _context->fast_forward_to(sstable_position::from_logical(start), sstable_position::from_logical(*end));
                     }
                     _index_in_current_partition = false;
                     _read_enabled = false;

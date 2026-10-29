@@ -257,9 +257,11 @@ void test_index_files(
         partitions_db_cached,
         rows_db_cached,
         footer.trie_root_position,
-        data_db_size,
+        sstable_position::from_logical(0),
+        sstable_position::from_logical(data_db_size),
         bti_ver,
         s,
+        sstables::trie::bti_position_encoding::logical(),
         env.make_reader_permit(),
         trace_state
     );
@@ -268,32 +270,34 @@ void test_index_files(
     // the index gives the right results when it's forwarded to the position of each fragment. 
 
     uint64_t prev_frag_offset = 0;
-    uint64_t curr_partition_start = 0;
+    auto curr_partition_start = sstables::sstable_position::from_logical(0);
     bool curr_partition_has_row_index = false;
     // Data.db range returned by the index when forwarded to the previous fragment.
-    std::optional<std::pair<uint64_t, uint64_t>> prev_range = std::pair<uint64_t, uint64_t>{0, 0};
+    std::optional<std::pair<sstables::sstable_position, sstables::sstable_position>> prev_range
+        = std::pair{sstables::sstable_position::from_logical(0), sstables::sstable_position::from_logical(0)};
     for (const auto& [offset, rt, mf] : fragments) {
+        auto offset_pos = sstables::sstable_position::from_logical(offset);
         // We check the granularity at the points where we cross into a new Data.db range.
-        if (prev_range && offset >= prev_range.value().second) {
+        if (prev_range && offset_pos >= prev_range.value().second) {
             if (expected_index_granularity) {
                 testlog.debug("Previous pos: {}, previous range: {}, allowed max size: {}", prev_frag_offset, *prev_range, offset - prev_frag_offset + *expected_index_granularity);
-                SCYLLA_ASSERT(prev_frag_offset - prev_range->first <= *expected_index_granularity);
+                SCYLLA_ASSERT(prev_frag_offset - uint64_t(prev_range->first.to_logical()) <= *expected_index_granularity);
             }
             prev_range.reset();
         }
         if (mf.is_partition_start()) {
             auto dk = mf.as_partition_start().key();
             auto potential_match = ir->advance_lower_and_check_if_present(dk).get();
-            auto range = ir->data_file_positions();
+            auto range = ir->sstable_positions();
             auto expected_partition_tombstone = mf.as_partition_start().partition_tombstone();
             auto actual_partition_tombstone = ir->partition_tombstone().transform([] (const sstables::deletion_time& dt) { return tombstone(dt); });
             testlog.debug("After advancing to partition {}, range start: {}, offset: {}, partition_tombstone: {} (expected: {})",
                 dk, range.start, offset, actual_partition_tombstone, expected_partition_tombstone);
             SCYLLA_ASSERT(potential_match);
             SCYLLA_ASSERT(!ir->eof());
-            SCYLLA_ASSERT(range.start == offset);
+            SCYLLA_ASSERT(range.start == offset_pos);
             SCYLLA_ASSERT(ir->element_kind() == sstables::indexable_element::partition);
-            curr_partition_start = offset;
+            curr_partition_start = offset_pos;
             curr_partition_has_row_index = ir->partition_tombstone().has_value();
             if (curr_partition_has_row_index) {
                 SCYLLA_ASSERT(mf.as_partition_start().partition_tombstone() == tombstone(ir->partition_tombstone().value()));
@@ -306,7 +310,7 @@ void test_index_files(
                 : mf.as_range_tombstone_change().position();
             ir->advance_upper_past(pos).get();
             ir->advance_to(pos).get();
-            auto range = ir->data_file_positions();
+            auto range = ir->sstable_positions();
             auto ir_end_open_tombstone = ir->end_open_marker().transform([] (const open_rt_marker& m) { return m.tomb; });
             testlog.debug("At clustering row/range tombstone change, range start: {}, offset: {}, ir_end_open_tombstone: {}",
                     range.start, offset, ir_end_open_tombstone);
@@ -314,16 +318,16 @@ void test_index_files(
                 SCYLLA_ASSERT(ir->element_kind() == sstables::indexable_element::partition);
                 SCYLLA_ASSERT(range.start == curr_partition_start);
             }
-            auto pointed_entry = std::ranges::lower_bound(fragments, range.start, {}, &position_and_fragment::offset);
+            auto pointed_entry = std::ranges::lower_bound(fragments, uint64_t(range.start.to_logical()), {}, &position_and_fragment::offset);
             SCYLLA_ASSERT(pointed_entry != fragments.end());
-            SCYLLA_ASSERT(pointed_entry->offset == range.start);
+            SCYLLA_ASSERT(pointed_entry->offset == uint64_t(range.start.to_logical()));
             SCYLLA_ASSERT(pointed_entry->preceding_range_tombstone == ir_end_open_tombstone);
             auto pointed_element_kind = pointed_entry->fragment.is_partition_start()
                 ? sstables::indexable_element::partition
                 : sstables::indexable_element::cell;
             SCYLLA_ASSERT(ir->element_kind() == pointed_element_kind);
-            SCYLLA_ASSERT(range.start <= offset);
-            SCYLLA_ASSERT(range.end.has_value() && range.end.value() > offset);
+            SCYLLA_ASSERT(range.start <= offset_pos);
+            SCYLLA_ASSERT(range.end.has_value() && range.end.value() > offset_pos);
             if (prev_range) {
                 SCYLLA_ASSERT(range.start == prev_range->first);
                 SCYLLA_ASSERT(range.end.value() == prev_range->second);
@@ -334,15 +338,15 @@ void test_index_files(
         if (mf.is_end_of_partition()) {
             ir->advance_upper_past(position_in_partition::for_partition_end()).get();
             ir->advance_to(position_in_partition::for_partition_end()).get();
-            auto range = ir->data_file_positions();
+            auto range = ir->sstable_positions();
             testlog.debug("At partition end, range start: {}, offset: {}", range.start, offset);
             if (!curr_partition_has_row_index) {
                 SCYLLA_ASSERT(ir->element_kind() == sstables::indexable_element::partition);
                 SCYLLA_ASSERT(range.start == curr_partition_start);
             } else {
-                SCYLLA_ASSERT(range.start == offset);
+                SCYLLA_ASSERT(range.start == offset_pos);
             }
-            SCYLLA_ASSERT(range.end.has_value() && range.end.value() == offset + 1);
+            SCYLLA_ASSERT(range.end.has_value() && range.end.value() == sstables::sstable_position::from_logical(offset + 1));
             prev_range.reset();
         }
         prev_frag_offset = offset;
@@ -503,8 +507,10 @@ void do_test(const test_config& cfg) {
             auto close_rows_db = defer([&] () noexcept { rows_db_writer.close(); });
 
             // Construct BTI index writers on top of the `file_writer`s.
-            auto bti_partition_index_writer = sstables::trie::bti_partition_index_writer(bti_version, partitions_db_writer);
-            auto bti_row_index_writer = sstables::trie::bti_row_index_writer(rows_db_writer);
+            // This test uses the `mt` (logical) format, so the payloads use the legacy
+            // (non-physical) serialization.
+            auto bti_partition_index_writer = sstables::trie::bti_partition_index_writer(bti_version, partitions_db_writer, sstables::trie::bti_position_encoding::logical());
+            auto bti_row_index_writer = sstables::trie::bti_row_index_writer(bti_version, rows_db_writer, sstables::trie::bti_position_encoding::logical());
 
             struct current_partition_data {
                 uint64_t data_file_offset;
@@ -529,7 +535,8 @@ void do_test(const test_config& cfg) {
                     *adjusted_schema,
                     clustering_info_from_pip(current_clustering_block->first_ckp),
                     clustering_info_from_pip(current_clustering_block->last_ckp),
-                    current_clustering_block->first_data_file_offset - current_partition->data_file_offset,
+                    sstables::sstable_position::from_logical(current_partition->data_file_offset),
+                    sstables::sstable_position::from_logical(current_clustering_block->first_data_file_offset),
                     sstable_deletion_time_from_tombstone(current_clustering_block->preceding_range_tombstone));
                 current_clustering_block.reset();
             };
@@ -566,10 +573,9 @@ void do_test(const test_config& cfg) {
                     auto pk = sstables::key::from_partition_key(*adjusted_schema, current_partition->dk.key());
                     auto hash = utils::make_hashed_key(bytes_view(pk));
                     auto payload = bti_row_index_writer.finish(
-                        bti_version,
                         *adjusted_schema,
-                        current_partition->data_file_offset,
-                        frag.offset,
+                        sstables::sstable_position::from_logical(current_partition->data_file_offset),
+                        sstables::sstable_position::from_logical(frag.offset),
                         pk,
                         sstable_deletion_time_from_tombstone(current_partition->partition_tombstone)
                     );

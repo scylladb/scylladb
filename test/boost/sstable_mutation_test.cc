@@ -18,6 +18,7 @@
 #include "test/boost/sstable_test.hh"
 #include "sstables/key.hh"
 #include <seastar/core/do_with.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/core/thread.hh>
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
@@ -1177,6 +1178,18 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
             testlog.trace("count = {}", count);
             testlog.trace("est = {}", max_est);
 
+            // Logically indexed sstables know the exact uncompressed offset of
+            // every index entry, so the estimate for a range is an upper bound on
+            // the number of keys in it. Physically indexed ones (`mu`) only know
+            // which compression chunk an entry lives in, and not where that chunk
+            // begins in the uncompressed stream; the estimate converts chunk
+            // positions with the file's average compression ratio. That is accurate
+            // to a fraction of a percent, but it is no longer an upper bound, so
+            // allow a small undershoot for those.
+            const auto min_est = [&] (uint64_t keys_in_range) -> uint64_t {
+                return sst->uses_physical_positions() ? keys_in_range * 0.95 : keys_in_range;
+            };
+
             {
                 auto est = sst->estimated_keys_for_range(dht::token_range::make_open_ended_both_sides()).get();
                 testlog.trace("est([-inf; +inf]) = {}", est);
@@ -1187,7 +1200,7 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
                 auto r = dht::token_range::make(pks[0].token(), pks[size - 1].token());
                 auto est = sst->estimated_keys_for_range(r).get();
                 testlog.trace("est([0; {}] = {}", size - 1, est);
-                BOOST_REQUIRE_GE(est, size);
+                BOOST_REQUIRE_GE(est, min_est(size));
                 BOOST_REQUIRE_LE(est, max_est);
             }
 
@@ -1197,7 +1210,7 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
                 auto r = dht::token_range::make(pks[lower].token(), pks[upper].token());
                 auto est = sst->estimated_keys_for_range(r).get();
                 testlog.trace("est([{}; {}]) = {}", lower, upper, est);
-                BOOST_REQUIRE_GE(est, upper - lower + 1);
+                BOOST_REQUIRE_GE(est, min_est(upper - lower + 1));
                 BOOST_REQUIRE_LE(est, max_est);
             }
 
@@ -1528,3 +1541,211 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
     });
 }
 
+
+// A reverse read of a partition must read the data file in large blocks, not
+// once per row.
+SEASTAR_TEST_CASE(test_reversed_read_io_does_not_scale_with_row_count) {
+    return test_env::do_with_async([] (test_env& env) {
+        constexpr uint32_t rows = 2000;
+        for (const auto version : writable_sstable_versions) {
+            simple_schema ss;
+            auto s = ss.schema();
+            auto pk = ss.make_pkey();
+            mutation m(s, pk);
+            for (uint32_t i = 0; i < rows; ++i) {
+                ss.add_row(m, ss.make_ckey(i), "v");
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+            BOOST_REQUIRE(sst->has_component(component_type::CompressionInfo));
+
+            auto pr = dht::partition_range::make_singular(pk);
+            auto rev_s = s->make_reversed();
+            auto slice = partition_slice_builder(*rev_s, rev_s->full_slice())
+                    .with_option<query::partition_slice::option::reversed>()
+                    .build();
+            reactor& r = *local_engine;
+            auto reads_before = r.get_io_stats().aio_reads;
+            {
+                auto a = assert_that(sst->make_reader(rev_s, env.make_reader_permit(), pr, slice));
+                a.produces_partition_start(pk);
+                for (uint32_t i = rows; i-- > 0;) {
+                    a.produces_row_with_key(ss.make_ckey(i));
+                }
+                a.produces_partition_end().produces_end_of_stream();
+            }
+            auto reads = r.get_io_stats().aio_reads - reads_before;
+            testlog.info("version {}: {} reads to reverse {} rows", version, reads, rows);
+            BOOST_REQUIRE_LT(reads, rows / 10);
+        }
+    });
+}
+
+// Checks that data_read() returns the same bytes as a full scan of the data
+// component, for ranges that start, end or cross chunk boundaries.
+SEASTAR_TEST_CASE(test_data_read) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            simple_schema ss;
+            auto s = ss.schema();
+            auto pk = ss.make_pkey();
+            mutation m(s, pk);
+            for (uint32_t i = 0; i < 1000; ++i) {
+                ss.add_row(m, ss.make_ckey(i), tests::random::get_sstring(50));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+            BOOST_REQUIRE(sst->has_component(component_type::CompressionInfo));
+
+            const uint64_t size = sst->data_size();
+            const uint64_t chunk_len = sst->get_compression().uncompressed_chunk_length();
+            // Several chunks, so that ranges can cross chunk boundaries.
+            BOOST_REQUIRE_GT(size, 4 * chunk_len);
+
+            temporary_buffer<char> expected(size);
+            {
+                auto stream = sst->data_stream(sst->full_range(), env.make_reader_permit(), nullptr, nullptr).get();
+                auto close_stream = defer([&] noexcept { stream->close().get(); });
+                uint64_t filled = 0;
+                bool eof = false;
+                while (!eof) {
+                    stream->consume_one(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+                        eof = data.empty();
+                        BOOST_REQUIRE_LE(filled + data.size(), size);
+                        std::copy_n(data.get(), data.size(), expected.get_write() + filled);
+                        filled += data.size();
+                        return seastar::continue_consuming{};
+                    }).get();
+                }
+                BOOST_REQUIRE_EQUAL(filled, size);
+            }
+
+            auto check = [&] (uint64_t pos, uint64_t len) {
+                testlog.trace("version {}: data_read({}, {})", version, pos, len);
+                auto buf = sst->data_read(pos, len, env.make_reader_permit()).get();
+                const uint64_t want = pos < size ? std::min(len, size - pos) : 0;
+                BOOST_REQUIRE_EQUAL(buf.size(), want);
+                BOOST_REQUIRE(std::equal(buf.begin(), buf.end(), expected.begin() + std::min(pos, size)));
+            };
+            check(0, 1);
+            check(0, size);
+            check(0, size + 1);
+            check(chunk_len - 1, 2);
+            check(chunk_len, chunk_len);
+            check(chunk_len, chunk_len + 1);
+            check(chunk_len - 1, 2 * chunk_len + 2);
+            check(size - 1, 1);
+            check(size - 1, 10);
+            check(size - size % chunk_len, chunk_len);
+            check(size, 5);
+            check(0, 0);
+            check(chunk_len, 0);
+            check(size, 0);
+            check(chunk_len, std::numeric_limits<uint64_t>::max());
+            for (int i = 0; i < 20; ++i) {
+                check(tests::random::get_int<uint64_t>(0, size - 1), tests::random::get_int<uint64_t>(1, 3 * chunk_len));
+            }
+        }
+    });
+}
+
+// Checks that data_read() reports a corrupt chunk with an exception. The read
+// spans several read buffers, so read-aheads are in flight when data_read()
+// finds the corrupt first chunk. data_read() must close the stream before it
+// rethrows; destroying the stream with reads in flight aborts.
+SEASTAR_TEST_CASE(test_data_read_corrupt_chunk) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            simple_schema ss;
+            auto s = ss.schema();
+            mutation m(s, ss.make_pkey());
+            for (uint32_t i = 0; i < 40000; ++i) {
+                ss.add_row(m, ss.make_ckey(i), tests::random::get_sstring(50));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+            BOOST_REQUIRE(sst->has_component(component_type::CompressionInfo));
+            BOOST_REQUIRE_GT(sst->ondisk_data_size(), 4 * default_sstable_buffer_size);
+
+            // Flip a bit in the compressed data of the first chunk.
+            {
+                auto f = open_file_dma(test(sst).filename(component_type::Data).native(), open_flags::rw).get();
+                auto close_f = deferred_close(f);
+                const auto block_size = f.disk_write_dma_alignment();
+                auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), block_size);
+                BOOST_REQUIRE_EQUAL(f.dma_read(0, buf.get_write(), block_size).get(), block_size);
+                buf.get_write()[16] ^= 1;
+                BOOST_REQUIRE_EQUAL(f.dma_write(0, buf.get(), block_size).get(), block_size);
+            }
+
+            BOOST_REQUIRE_THROW(sst->data_read(0, sst->data_size(), env.make_reader_permit()).get(), malformed_sstable_exception);
+        }
+    });
+}
+
+// Checks that for_each_compression_offset() returns the chunk offsets of every
+// format, including `mu`, which doesn't keep them in memory. For an sstable
+// with physical positions, reads each chunk at the returned offsets and
+// compares it with the logical data.
+SEASTAR_TEST_CASE(test_for_each_compression_offset) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            simple_schema ss;
+            auto s = ss.schema();
+            auto pk = ss.make_pkey();
+            mutation m(s, pk);
+            for (uint32_t i = 0; i < 1000; ++i) {
+                ss.add_row(m, ss.make_ckey(i), tests::random::get_sstring(50));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+            BOOST_REQUIRE(sst->has_component(component_type::CompressionInfo));
+
+            const auto& c = sst->get_compression();
+            const uint64_t size = sst->data_size();
+            const uint64_t chunk_len = c.uncompressed_chunk_length();
+            BOOST_REQUIRE_GT(size, 4 * chunk_len);
+
+            std::vector<uint64_t> offsets;
+            sst->for_each_compression_offset([&] (uint64_t offset) {
+                offsets.push_back(offset);
+            }).get();
+            BOOST_REQUIRE_EQUAL(offsets.size(), c.chunk_count());
+            BOOST_REQUIRE_EQUAL(offsets.size(), (size + chunk_len - 1) / chunk_len);
+            BOOST_REQUIRE_EQUAL(offsets.front(), 0);
+            BOOST_REQUIRE(std::ranges::adjacent_find(offsets, std::ranges::greater_equal()) == offsets.end());
+            BOOST_REQUIRE_LT(offsets.back(), c.compressed_file_length());
+
+            if (!sst->uses_physical_positions()) {
+                std::vector<uint64_t> in_memory;
+                for (uint64_t offset : c.offsets) {
+                    in_memory.push_back(offset);
+                }
+                BOOST_REQUIRE(offsets == in_memory);
+                continue;
+            }
+            BOOST_REQUIRE_EQUAL(c.offsets.size(), 0);
+
+            auto expected = sst->data_read(0, size, env.make_reader_permit()).get();
+            BOOST_REQUIRE_EQUAL(expected.size(), size);
+            for (size_t i = 0; i < offsets.size(); ++i) {
+                const uint64_t end = i + 1 < offsets.size() ? offsets[i + 1] : c.compressed_file_length();
+                disk_read_range range{
+                    sstable_position::from_physical(offsets[i], end - offsets[i], 0),
+                    sstable_position::from_physical(end, 0, 0),
+                };
+                auto stream = sst->data_stream(range, env.make_reader_permit(), nullptr, nullptr).get();
+                auto close_stream = defer([&] noexcept { stream->close().get(); });
+                const uint64_t want = std::min(chunk_len, size - i * chunk_len);
+                uint64_t filled = 0;
+                bool eof = false;
+                while (!eof) {
+                    stream->consume_one(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+                        eof = data.empty();
+                        BOOST_REQUIRE_LE(filled + data.size(), want);
+                        BOOST_REQUIRE(std::equal(data.begin(), data.end(), expected.begin() + i * chunk_len + filled));
+                        filled += data.size();
+                        return seastar::continue_consuming{};
+                    }).get();
+                }
+                BOOST_REQUIRE_EQUAL(filled, want);
+            }
+        }
+    });
+}

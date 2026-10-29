@@ -78,7 +78,7 @@ class TestHelper(Tester):
         # See https://github.com/scylladb/scylladb/issues/21145
 
         sstable_re = re.compile(
-            r"""(?P<version>la|m[cdest]|n[a-b]|o[a]|d[a])- # the sstable version
+            r"""(?P<version>la|m[cdestu]|n[a-b]|o[a]|d[a])- # the sstable version
                                     (?P<id>[^-]+)-          # sstable identifier
                                     (?P<format>\w+)-        # format: 'big' or 'bti'
                                     (?P<component>.*)       # component: e.g., 'Data'""",
@@ -91,7 +91,7 @@ class TestHelper(Tester):
             fullname = os.path.join(self.get_table_path(table), fname)
             matched = sstable_re.fullmatch(os.path.basename(fname))
             if matched and matched["component"] == "TOC.txt":
-                if matched["version"] in ["ms", "mt", "da"]:
+                if matched["version"] in ["ms", "mt", "mu", "da"]:
                     bti_tocs.append(fullname)
                 else:
                     big_tocs.append(fullname)

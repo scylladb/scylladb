@@ -39,6 +39,8 @@
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/binary_search.hh"
 #include "sstables/exceptions.hh"
+#include "sstables/decompressing_cursor.hh"
+#include "sstables/consumer.hh"
 
 #include <boost/range/combine.hpp>
 
@@ -715,10 +717,92 @@ SEASTAR_TEST_CASE(sub_partitions_read) {
   });
 }
 
+// A uniform read interface over the two compressed-stream implementations that
+// test_skipping_in_compressed_stream exercises. Logically-indexed sstables (`me`
+// and earlier) are read through make_compressed_file_m_format_input_stream, which
+// yields a plain input_stream<char>. Physically-indexed sstables (`mu`) are read
+// through decompressing_cursor, which is driven by physical positions
+// and speaks the continuous_data_consumer_input_stream interface (consume_one /
+// skip) instead. This adapter lets the test drive either with the same
+// read_exactly / read / skip operations.
+namespace {
+class compressed_reader {
+    std::variant<input_stream<char>, std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> _stream;
+
+    data_consumer::continuous_data_consumer_input_stream& cds() {
+        return *std::get<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>>(_stream);
+    }
+
+    future<temporary_buffer<char>> read_via_consume() {
+        // consume_one delivers a single buffer (an empty one at end of file) and,
+        // when the consumer returns continue_consuming, treats it as fully read.
+        temporary_buffer<char> out;
+        co_await cds().consume_one(std::nullopt, [&] (temporary_buffer<char> data) {
+            out = std::move(data);
+            return continue_consuming{};
+        });
+        co_return out;
+    }
+
+    future<temporary_buffer<char>> read_exactly_via_consume(size_t n) {
+        temporary_buffer<char> out(n);
+        size_t filled = 0;
+        while (filled < n) {
+            bool got = false;
+            co_await cds().consume_one(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+                if (data.empty()) {
+                    return continue_consuming{};
+                }
+                got = true;
+                const size_t take = std::min(data.size(), n - filled);
+                std::copy_n(data.get(), take, out.get_write() + filled);
+                filled += take;
+                if (take < data.size()) {
+                    // Hand back what we didn't take so the next consume_one re-serves it.
+                    return stop_consuming<char>{data.share(take, data.size() - take)};
+                }
+                return continue_consuming{};
+            });
+            if (!got) {
+                break; // end of file
+            }
+        }
+        out.trim(filled);
+        co_return out;
+    }
+
+public:
+    explicit compressed_reader(input_stream<char> s) : _stream(std::move(s)) {}
+    explicit compressed_reader(std::unique_ptr<data_consumer::continuous_data_consumer_input_stream> s) : _stream(std::move(s)) {}
+
+    future<temporary_buffer<char>> read_exactly(size_t n) {
+        if (auto* is = std::get_if<input_stream<char>>(&_stream)) {
+            return is->read_exactly(n);
+        }
+        return read_exactly_via_consume(n);
+    }
+
+    future<temporary_buffer<char>> read() {
+        if (auto* is = std::get_if<input_stream<char>>(&_stream)) {
+            return is->read();
+        }
+        return read_via_consume();
+    }
+
+    future<> skip(uint64_t n) {
+        if (auto* is = std::get_if<input_stream<char>>(&_stream)) {
+            return is->skip(n);
+        }
+        return cds().skip(n);
+    }
+};
+} // anonymous namespace
+
 SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
+      for (const auto version : {sstables::sstable_version_types::me, sstables::sstable_version_types::mu}) {
         tmpdir tmp;
         auto file_path = (tmp.path() / "test").string();
         file f = open_file_dma(file_path, open_flags::create | open_flags::wo).get();
@@ -734,7 +818,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         sstables::compression c;
         // this initializes "c"
         auto os = make_file_output_stream(f, file_output_stream_options()).get();
-        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, cp, make_lz4_sstable_compressor_for_tests());
+        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, version, cp, make_lz4_sstable_compressor_for_tests());
 
         // Make sure that amount of written data is a multiple of chunk_len so that we hit #2143.
         temporary_buffer<char> buf1(c.uncompressed_chunk_length());
@@ -752,20 +836,39 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         auto compressed_size = seastar::file_size(file_path).get();
         c.update(compressed_size);
 
-        auto make_is = [&] {
+        auto make_is = [&] () -> compressed_reader {
+            if (index_holds_physical_positions(version)) {
+                // Physically-indexed (`mu`): navigate by chunk coordinates through
+                // decompressing_cursor, opening a fresh data source over
+                // the whole compressed file each time.
+                auto opener = [file_path, compressed_size] () -> future<data_source> {
+                    auto rf = co_await open_file_dma(file_path, open_flags::ro);
+                    file_input_stream_options options;
+                    options.read_ahead = 0;
+                    co_return make_file_data_source(std::move(rf), 0, compressed_size, std::move(options));
+                };
+                return compressed_reader(make_decompressing_cursor(
+                        sstables::decompressing_cursor_source_opener(std::move(opener)),
+                        sstables::disk_read_range(sstables::sstable_position::from_physical(0, 0, 0),
+                                sstables::sstable_position::from_physical(compressed_size, 0, 0)),
+                        c.get_compressor(), sstables::framed_chunk_codec(version, c.uncompressed_chunk_length()), compressed_size, semaphore.make_permit(), std::nullopt));
+            }
             f = open_file_dma(file_path, open_flags::ro).get();
             auto stream_creator = [f](uint64_t pos, uint64_t len, file_input_stream_options options)->future<input_stream<char>> {
                 co_return input_stream<char>(make_file_data_source(std::move(f), pos, len, std::move(options)));
             };
-            return make_compressed_file_m_format_input_stream(stream_creator, &c, 0, uncompressed_size, opts, semaphore.make_permit(), std::nullopt);
+            return compressed_reader(make_compressed_file_m_format_input_stream(stream_creator, &c, version,
+                    sstables::disk_read_range(sstables::sstable_position::from_logical(0),
+                                              sstables::sstable_position::from_logical(uncompressed_size)),
+                    opts, semaphore.make_permit(), std::nullopt));
         };
 
-        auto expect = [] (input_stream<char>& in, const temporary_buffer<char>& buf) {
+        auto expect = [] (compressed_reader& in, const temporary_buffer<char>& buf) {
             auto b = in.read_exactly(buf.size()).get();
             BOOST_REQUIRE(b == buf);
         };
 
-        auto expect_eof = [] (input_stream<char>& in) {
+        auto expect_eof = [] (compressed_reader& in) {
             auto b = in.read().get();
             BOOST_REQUIRE(b.empty());
         };
@@ -811,6 +914,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         in.skip(opts.buffer_size).get();
         in.skip(opts.buffer_size).get();
         expect_eof(in);
+      }
       }
     });
 }
@@ -1145,6 +1249,10 @@ SEASTAR_TEST_CASE(test_digest_persistence_data) {
 
 SEASTAR_TEST_CASE(test_digest_persistence_data_compressed) {
     return test_component_digest_persistence(component_type::Data, sstable::version_types::me, compress_sstable::yes);
+}
+
+SEASTAR_TEST_CASE(test_digest_persistence_data_compressed_mu) {
+    return test_component_digest_persistence(component_type::Data, sstable::version_types::mu, compress_sstable::yes);
 }
 
 static future<> test_component_digest_validation(component_type component, sstable::version_types version, sstring expected_message, compress_sstable compress = compress_sstable::no) {

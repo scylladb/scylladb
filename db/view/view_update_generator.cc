@@ -37,6 +37,7 @@ namespace db::view {
 class view_update_generator::progress_tracker final : public sstables::read_monitor_generator {
     class read_monitor final : public  sstables::read_monitor {
         sstables::shared_sstable _sst;
+        sstables::read_progress_estimator _progress_estimator;
         const sstables::reader_position_tracker* _tracker = nullptr;
         uint64_t _last_position_seen = 0;
     public:
@@ -46,12 +47,12 @@ class view_update_generator::progress_tracker final : public sstables::read_moni
 
         virtual void on_read_completed() override {
             if (auto tracker = std::exchange(_tracker, nullptr)) {
-                _last_position_seen = tracker->position;
+                _last_position_seen = _progress_estimator(tracker->position);
             }
         }
 
         uint64_t pending_work() const noexcept {
-            auto last_pos = (_tracker) ? _tracker->position : _last_position_seen;
+            auto last_pos = (_tracker) ? _progress_estimator(_tracker->position) : _last_position_seen;
             return _sst->data_size() - last_pos;
         }
 
@@ -61,7 +62,8 @@ class view_update_generator::progress_tracker final : public sstables::read_moni
         read_monitor(read_monitor&&) = delete;
 
         explicit read_monitor(sstables::shared_sstable sst)
-            : _sst(std::move(sst)) {
+            : _sst(std::move(sst))
+            , _progress_estimator(*_sst) {
         }
     };
 private:
