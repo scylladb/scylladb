@@ -265,11 +265,6 @@ public:
         return _tablet_map.get_tablet_raft_info(_tablet_id).group_id;
     }
 
-    // The tablet's migration stage, for log messages; nullopt when it isn't migrating.
-    std::optional<locator::tablet_transition_stage> transition_stage() const {
-        return _trinfo ? std::make_optional(_trinfo->stage) : std::nullopt;
-    }
-
     // Formats " at stage X" while the tablet migrates and nothing otherwise, for log
     // and trace messages.
     auto stage_suffix() const {
@@ -327,7 +322,7 @@ public:
         const auto leader_it = std::ranges::find(replicas, leader, &locator::tablet_replica::host);
         if (leader_it == replicas.end()) [[unlikely]] {
             on_internal_error(logger, fmt::format("replica_selector::routing_info: leader {} is not among the serving "
-                    "replicas {} of tablet {} at transition stage {}", leader, replicas, _tablet_id, transition_stage()));
+                    "replicas {} of tablet {}{}", leader, replicas, _tablet_id, stage_suffix()));
         }
         std::ranges::rotate(replicas, leader_it);
 
@@ -583,10 +578,10 @@ auto coordinator::mutate(schema_ptr schema,
                 // so tell the local server to forget that leader and wait for the next
                 // one. The wait may resolve with the same leader again, as long as it
                 // still leads; the retries end once it hands leadership over.
-                logger.debug("mutate(): table {}.{}, tablet {}, reported leader {} cannot be the leader "
-                    "in transition stage {}, waiting for a new leader",
+                logger.debug("mutate(): table {}.{}, tablet {}, reported leader {} cannot be the leader{}, "
+                    "waiting for a new leader",
                     schema->ks_name(), schema->cf_name(), op->replicas.tablet_id(), leader_host_id,
-                    op->replicas.transition_stage());
+                    op->replicas.stage_suffix());
                 tracing::trace(trace_state, "The reported leader {} can't lead{}, waiting for a new leader",
                     leader_host_id, op->replicas.stage_suffix());
 
@@ -762,10 +757,10 @@ auto coordinator::query(schema_ptr schema,
                     // A leader outside the serving set: a replica a migration demoted,
                     // leading for one commit. Forget it and wait for the next one; see
                     // mutate().
-                    logger.debug("query(): table {}.{}, tablet {}, reported leader {} cannot be the leader "
-                        "in transition stage {}, waiting for a new leader",
+                    logger.debug("query(): table {}.{}, tablet {}, reported leader {} cannot be the leader{}, "
+                        "waiting for a new leader",
                         schema->ks_name(), schema->cf_name(), op.replicas.tablet_id(), leader_host_id,
-                        op.replicas.transition_stage());
+                        op.replicas.stage_suffix());
                     tracing::trace(trace_state, "The reported leader {} can't lead{}, waiting for a new leader",
                         leader_host_id, op.replicas.stage_suffix());
 
