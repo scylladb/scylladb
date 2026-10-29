@@ -29,6 +29,7 @@
 #include "db/consistency_level_type.hh"
 #include "db/tri_mode_restriction.hh"
 #include "sstables/compressor.hh"
+#include "tombstone_gc_options.hh"
 
 namespace boost::program_options {
 
@@ -155,6 +156,10 @@ struct tablets_mode_t {
         enforced = 2
     };
     static std::unordered_map<sstring, mode> map(); // for enum_option<>
+};
+
+struct tombstone_gc_mode_t {
+    static std::unordered_map<sstring, tombstone_gc_mode> map(); // for enum_option<>
 };
 
 class config final : public utils::config_file {
@@ -423,6 +428,7 @@ public:
     named_value<sstring> allowed_repair_based_node_ops;
     named_value<bool> enable_compacting_data_for_streaming_and_repair;
     named_value<bool> enable_tombstone_gc_for_streaming_and_repair;
+    named_value<enum_option<tombstone_gc_mode_t>> default_tombstone_gc_mode;
     named_value<double> repair_partition_count_estimation_ratio;
     named_value<uint32_t> repair_hints_batchlog_flush_cache_time_in_ms;
     named_value<uint64_t> repair_multishard_reader_buffer_hint_size;
@@ -783,6 +789,7 @@ extern template struct utils::config_file::named_value<enum_option<db::experimen
 extern template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
 extern template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
 extern template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
+extern template struct utils::config_file::named_value<enum_option<db::tombstone_gc_mode_t>>;
 extern template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
 extern template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
 extern template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;
