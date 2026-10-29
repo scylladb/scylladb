@@ -168,7 +168,9 @@ class natural_endpoints_tracker {
 
     const token_metadata& _tm;
     const topology& _tp;
-    network_topology_strategy::dc_rep_factor_map _dc_rep_factor;
+    // Owned by the replication strategy, which outlives the tracker.
+    // The keys of _dcs below are string_views into this map's keys.
+    const network_topology_strategy::dc_rep_factor_map& _dc_rep_factor;
 
     //
     // We want to preserve insertion order so that the first added endpoint
