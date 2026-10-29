@@ -11,10 +11,16 @@
 #include <seastar/core/future.hh>
 #include "dht/i_partitioner_fwd.hh"
 #include "audit/audit.hh"
+#include "schema/schema_builder.hh"
 #include "seastarx.hh"
 #include <seastar/core/future.hh>
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <optional>
+#include <utility>
+#include <vector>
 
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
@@ -80,10 +86,20 @@ namespace alternator {
 enum class table_status;
 class rmw_operation;
 class put_or_delete_item;
+struct export_row;
 
 namespace parsed {
 class expression_cache;
 }
+
+struct create_table_params {
+    schema_builder builder;
+    std::vector<schema_builder> view_builders;
+    std::string keyspace_name;
+    std::string table_name;
+    std::map<sstring, sstring> tags_map;
+    bool has_vector_indexes;
+};
 
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
@@ -105,6 +121,71 @@ class executor : public peering_sharded_service<executor> {
 
     struct describe_table_info_manager;
     std::unique_ptr<describe_table_info_manager> _describe_table_info_manager;
+
+    // Owns the background fibers of S3 export (the export workers and the
+    // garbage collector) and their state. The member functions are in export.cc.
+    class s3_exports {
+        executor& _e;
+        // Holds the background fibers. stop() closes it, so that all fibers
+        // finish before the executor is destroyed.
+        seastar::gate _gate;
+        // stop() aborts it before it closes _gate, to stop the exports early.
+        seastar::abort_source _as;
+        // The number of export fibers running on this shard, see try_reserve_export_slot().
+        // A fiber of finish_export_in_background() also counts. It holds the slot
+        // of its export until it writes the terminal state. Until then
+        // DescribeExport still reports that export as IN_PROGRESS.
+        size_t _running_exports = 0;
+    public:
+        explicit s3_exports(executor& e) : _e(e) {}
+        // A reserved slot of the counter above. The fiber holds it while it
+        // runs. The destructor releases the slot.
+        class slot {
+            size_t* _counter;
+            friend class s3_exports;
+            explicit slot(size_t& counter) noexcept : _counter(&counter) { ++*_counter; }
+        public:
+            slot(slot&& other) noexcept : _counter(std::exchange(other._counter, nullptr)) {}
+            ~slot() { if (_counter) { --*_counter; } }
+        };
+        // Reserves an export slot on this shard. Returns nullopt if
+        // alternator_max_concurrent_exports_per_shard exports already run.
+        std::optional<slot> try_reserve_export_slot();
+        // Marks as FAILED the S3 exports that no node runs. It does not resume
+        // exports and does not delete data from S3. An export is collected if its
+        // node:
+        //  - is not a member of the cluster any more (it was removed or
+        //    replaced), or
+        //  - has a gossip generation newer than the export (this includes
+        //    previous incarnations of this node), or
+        //  - is unreachable for a long time (DOWN alone is not sufficient).
+        // A member the gossiper does not know yet counts as running, so its
+        // exports are not collected.
+        // It also collects the FAILING rows of this node that an earlier round
+        // did not move to FAILED.
+        // Runs one round at startup, then periodically, until stop().
+        // executor::start() starts it on shard 0 of each node.
+        future<> run_garbage_collector();
+        // Starts a background fiber that does the export of `row`. The fiber
+        // writes the result to the export row and holds `export_slot` until it
+        // finishes. If that write fails, the fiber passes the row and the slot
+        // to finish_export_in_background().
+        void start_export(slot export_slot, schema_ptr schema, export_row row, std::string table_arn, std::string s3_bucket,
+                std::string s3_prefix);
+        // Starts a background fiber that writes the terminal state of `row`.
+        // It retries until the write succeeds or the node stops. Use it when
+        // that write fails and the caller cannot wait. The garbage collector
+        // does not collect IN_PROGRESS rows of the current incarnation, so
+        // this node must finish them.
+        // The fiber never gives up the write. It keeps `export_slot`, which the
+        // caller must hold for the export of `row`. Thus the number of these
+        // fibers, and of the rows they hold, has the same bound as the number
+        // of exports. A write which keeps failing stops new exports.
+        void finish_export_in_background(slot export_slot, export_row row);
+        // Aborts the fibers above and waits for them to finish.
+        future<> stop();
+    };
+    s3_exports _s3_exports;
 
     future<> cache_newly_calculated_size_on_all_shards(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl);
     future<> fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting);
@@ -170,6 +251,9 @@ public:
     future<request_return_type> export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> describe_export(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> list_exports(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> import_table(client_state& client_state, tracing::trace_state_ptr, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> describe_import(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> list_imports(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
 
     future<> start();
     future<> stop();
@@ -192,6 +276,7 @@ private:
                      std::optional<audit::audit_table_set> alternator_batch_tables = std::nullopt);
 
     future<std::variant<rjson::value, api_error>> fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit);
+    future<executor::request_return_type> commit_table_creation(rjson::value&& request, create_table_params&& validated, service::client_state&& client_state, const db::tablets_mode_t::mode tablets_mode);
     future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization,
             bool warn_authorization, const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info);
 
@@ -206,10 +291,15 @@ private:
         tracing::trace_state_ptr trace_state, service_permit permit);
 
 public:
-    static bool add_stream_options(const rjson::value& stream_spec, schema_builder&, service::storage_proxy& sp, const cdc::options& existing_cdc_opts = {});
+    static bool add_stream_options(const rjson::value& stream_spec, schema_builder&, const cdc::options& existing_cdc_opts = {});
     static void supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp);
     static void supplement_table_stream_info(rjson::value& descr, const schema& schema, const service::storage_proxy& sp);
 };
+
+create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode, const char* caller);
+
+// The ARN of a table, also for one which is not created yet.
+rjson::value generate_arn_for_table(std::string_view keyspace_name, std::string_view table_name);
 
 // returns table creation time in seconds since epoch for `db_clock`
 double get_table_creation_time(const schema &schema);

@@ -1694,6 +1694,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     // alternator_max_items_in_batch_write matches DynamoDB behaviour of size limit, but with different value - for DynamoDB it's 25
     // (see DynamoDB's documentation for BatchWriteItem command)
     , alternator_max_items_in_batch_write(this, "alternator_max_items_in_batch_write", value_status::Used, 100, "Maximum amount of items in single BatchItemWrite call.")
+    , alternator_max_concurrent_exports_per_shard(this, "alternator_max_concurrent_exports_per_shard", liveness::LiveUpdate, value_status::Used, 10,
+        "Maximum number of ExportTableToPointInTime exports running at the same time on a single shard. "
+        "Every running export scans an entire table and holds an S3 multipart upload open for as long as it runs, "
+        "so their number has to be bounded - DynamoDB limits the number of concurrent exports too. "
+        "A request which would exceed the limit is rejected with LimitExceededException and can be retried later.")
     , alternator_allow_system_table_write(this, "alternator_allow_system_table_write", liveness::LiveUpdate, value_status::Used,
         false,
         "Allow writing to system tables using the .scylla.alternator.system prefix")
