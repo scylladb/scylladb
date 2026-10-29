@@ -338,11 +338,13 @@ public:
 
     // Returns the map: DC -> host_id of token owners in that DC.
     // If there are no token owners in a DC, it is not present in the result.
-    std::unordered_map<sstring, std::unordered_set<host_id>> get_datacenter_token_owners() const;
+    // The result is cached and remains valid until this token_metadata is mutated.
+    const std::unordered_map<sstring, std::unordered_set<host_id>>& get_datacenter_token_owners() const;
 
     // Returns the map: DC -> (map: rack -> host_id of token owners in that rack).
     // If there are no token owners in a DC/rack, it is not present in the result.
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>
+    // The result is cached and remains valid until this token_metadata is mutated.
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>&
     get_datacenter_racks_token_owners() const;
 
     // Returns the map: DC -> token owners in that DC.
