@@ -385,10 +385,10 @@ future<> view_building_worker::run_view_building_state_observer() {
     while (!_as.abort_requested()) {
         bool sleep = false;
         try {
-            vbw_logger.trace("view_building_state_observer() iteration");
             co_await utils::get_local_injector().inject("view_building_worker_pause_state_observer",
                     utils::wait_for_message(std::chrono::minutes(5)));
             auto read_apply_mutex_holder = co_await _group0.client().hold_read_apply_mutex(_as);
+            vbw_logger.trace("view_building_state_observer() iteration");
 
             co_await update_built_views();
             co_await clear_started_staging_tasks();

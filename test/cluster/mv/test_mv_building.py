@@ -588,3 +588,35 @@ async def test_node_operation_during_view_building(manager: ManagerClient, opera
         base_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.tab"))
         view_rows = set(await cql.run_async(f"SELECT key, c, v FROM {ks}.mv_cf_view"))
         assert view_rows == base_rows
+
+# The group0 state machine is enabled at startup before non-system keyspaces
+# are loaded. The view building state is built from the view schemas, so it
+# must be reloaded after they are loaded. Otherwise the view building worker
+# sees no built views and removes their rows from system.built_views.
+async def test_view_building_state_after_restart(manager: ScyllaClusterManager):
+    cmdline = ["--logger-log-level", "view_building_worker=trace"]
+    server = await manager.server_add(cmdline=cmdline)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': true}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (p int, c int, PRIMARY KEY (p, c))")
+        await cql.run_async(f"INSERT INTO {ks}.tab (p, c) VALUES (1, 1)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT p, c FROM {ks}.tab WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, p)")
+        await wait_for_view(cql, 'mv', 1)
+
+        async def view_in_built_views():
+            rows = await cql.run_async(f"SELECT * FROM system.built_views WHERE keyspace_name = '{ks}' AND view_name = 'mv'")
+            return len(rows) == 1 or None
+        await wait_for(view_in_built_views, time.time() + 60)
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        await manager.server_restart(server.server_id)
+        cql, _ = await manager.get_ready_cql([server])
+
+        # Wait for the first pass of the view building worker over the reloaded state.
+        await log.wait_for("view_building_state_observer\\(\\) iteration", from_mark=mark, timeout=60)
+        # The pass holds the group0 read_apply mutex, the topology reload waits for it.
+        await manager.api.reload_raft_topology_state(server.ip_addr)
+        rows = await cql.run_async(f"SELECT * FROM system.built_views WHERE keyspace_name = '{ks}' AND view_name = 'mv'")
+        assert len(rows) == 1
