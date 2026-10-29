@@ -178,6 +178,20 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
     auto& cm = table.get_compaction_manager();
     co_await coroutine::parallel_for_each(buckets, [&] (std::vector<sstables::shared_sstable>& sstlist) mutable {
         return cm.run_custom_job(t, compaction_type::Reshard, "Reshard compaction", [&] (compaction_data& info, compaction_progress_monitor& progress_monitor) -> future<> {
+            co_await utils::get_local_injector().inject("reshard_compaction_wait", [&] (auto& handler) -> future<> {
+                if (handler.get("table") != std::string_view(table.schema()->cf_name())) {
+                    co_return;
+                }
+                tasks::tmlogger.info("reshard_compaction_wait: waiting");
+                try {
+                    co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5), &info.abort);
+                } catch (const abort_requested_exception&) {
+                    // The job was stopped. Let the compaction writer notice it at the first
+                    // fragment and throw compaction_stopped_exception, as it does without the
+                    // injection.
+                }
+                tasks::tmlogger.info("reshard_compaction_wait: released");
+            });
             auto erm = table.get_effective_replication_map(); // keep alive around compaction.
 
             compaction_descriptor desc(sstlist);
