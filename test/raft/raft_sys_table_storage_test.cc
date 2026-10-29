@@ -1838,7 +1838,8 @@ SEASTAR_TEST_CASE(test_groups_dropped_table_batch_is_reported_as_applied) {
         auto state_machine = service::strong_consistency::make_state_machine(
                 locator::global_tablet_id{.table = schema->id(), .tablet = locator::tablet_id(0)},
                 gid, env.local_db(), env.migration_manager().local(),
-                env.get_system_keyspace().local(), storage);
+                env.get_system_keyspace().local(), storage,
+                make_lw_shared<service::strong_consistency::state_machine_stats>());
 
         std::vector<raft::log_entry_ptr> batch = {
             make_mutation_entry(schema, raft::term_t(1), raft::index_t(1), 0, 13),

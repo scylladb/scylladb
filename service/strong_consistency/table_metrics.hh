@@ -15,6 +15,7 @@
 #include <seastar/core/weak_ptr.hh>
 #include "raft/server.hh"
 #include "service/raft/raft_rpc.hh"
+#include "service/strong_consistency/state_machine.hh"
 #include "seastarx.hh"
 #include "utils/estimated_histogram.hh"
 #include "utils/per_task_value.hh"
@@ -42,6 +43,7 @@ class table_metrics : public seastar::weakly_referencable<table_metrics> {
     lw_shared_ptr<raft::server_stats> _server_stats = make_lw_shared<raft::server_stats>();
     lw_shared_ptr<raft_rpc::stats> _rpc_stats = make_lw_shared<raft_rpc::stats>();
     lw_shared_ptr<table_request_stats> _request_stats = make_lw_shared<table_request_stats>();
+    lw_shared_ptr<state_machine_stats> _apply_stats = make_lw_shared<state_machine_stats>();
     std::unordered_set<const raft::server*> _servers;
 
     // What one sweep of _servers yields. All gauges of a scrape read the same
@@ -64,6 +66,7 @@ class table_metrics : public seastar::weakly_referencable<table_metrics> {
 
     void register_table_gauges(const raft_metrics_options& options);
     void register_request_metrics(const raft_metrics_options& options);
+    void register_apply_metrics(const raft_metrics_options& options);
 
 public:
     enum class reporting { none, per_node, per_shard };
@@ -73,9 +76,10 @@ public:
     table_metrics(const table_metrics&) = delete;
     table_metrics& operator=(const table_metrics&) = delete;
 
-    // Shared with the raft servers and RPC modules of the tablets.
+    // Shared with the raft servers, RPC modules and state machines of the tablets.
     lw_shared_ptr<raft::server_stats> server_stats() const { return _server_stats; }
     lw_shared_ptr<raft_rpc::stats> rpc_stats() const { return _rpc_stats; }
+    lw_shared_ptr<state_machine_stats> apply_stats() const { return _apply_stats; }
 
     lw_shared_ptr<table_request_stats> request_stats() const { return _request_stats; }
 

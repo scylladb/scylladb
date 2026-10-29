@@ -175,7 +175,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
         token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,
-        lw_shared_ptr<raft_rpc::stats> rpc_stats)
+        lw_shared_ptr<raft_rpc::stats> rpc_stats,
+        lw_shared_ptr<state_machine_stats> apply_stats)
 {
     const auto my_id = to_server_id(tm->get_my_id());
     const auto this_replica = locator::tablet_replica{
@@ -209,7 +210,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         *commitlog, tablet.table, std::move(replayed_data),
         [this](db::cf_id_type id, db::replay_position pos) { request_flush(id, pos); });
 
-    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
+    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage, std::move(apply_stats));
 
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id,
@@ -906,8 +907,9 @@ void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::gr
     }
     chain_control_op(state, id, [this, &state, tablet, id, tm = std::move(tm), g = state.gate,
             m = metrics.weak_from_this(), server_stats = metrics.server_stats(),
-            rpc_stats = metrics.rpc_stats()] () mutable -> future<> {
-        co_await start_raft_group(tablet, id, std::move(tm), std::move(server_stats), std::move(rpc_stats));
+            rpc_stats = metrics.rpc_stats(), apply_stats = metrics.apply_stats()] () mutable -> future<> {
+        co_await start_raft_group(tablet, id, std::move(tm), std::move(server_stats), std::move(rpc_stats),
+            std::move(apply_stats));
         state.server = &_raft_gr.get_server(id);
         state.metrics = std::move(m);
         if (state.metrics) {
