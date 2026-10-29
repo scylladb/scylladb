@@ -47,6 +47,9 @@ since a segment's record is released only once every index it holds is committed
 what a restart resumes from, even though the group had usually committed further than
 its last release.
 
+The row also holds the resize markers (`start_resize`, `end_resize`) of a parent group
+being replaced by a tablet split or merge.
+
 The table is marked `wait_for_sync_to_commitlog`, because votes and the initial
 descriptor are written by CQL and must be durable before the write that depends
 on them is acknowledged (SCYLLADB-3828).
@@ -162,7 +165,7 @@ Key points:
   one per commitlog segment its entries landed in. A later batch in the same
   segment only advances that record's `max_index`, because retention is accounted
   per segment, not per position.
-- Each record holds two references to its segment: `pin_user_table` under the target
+- Each record holds two references to its segment: `pin_table` under the target
   table, which is what the memtable pins are cloned from, and `pin_raft_groups` under
   `system.raft_groups`, taken at record creation. That order matters: a segment
   holding only raft entries is `raft_groups`-dirty because of `pin_raft_groups`
@@ -179,9 +182,9 @@ cloned for each applied mutation:
 State machine applies entry at index N
     │
     ▼
-pin_for_apply(N)
+pin_target_table_for_apply(N)
     │
-    │  clone pin_user_table of the record covering N
+    │  clone pin_table of the record covering N
     │  (another reference to the same segment, no bytes written)
     │
     └──► handle → attached to memtable
@@ -390,3 +393,38 @@ belong to the table rather than to a group: they keep their values when a tablet
 away, stay on a shard after its last tablet has left it, and are dropped with the table.
 Gauges such as `leaders`, `uncommitted_entries` or `blocked_followers` are summed over the
 running servers of the table instead.
+
+# Tablet split
+
+A strongly consistent tablet keeps its data in a Raft group of its own, so splitting one is
+not just a matter of rewriting the tablet map: the group of the tablet being split has to be
+replaced by the groups of the two tablets it is split into. The table has to stay linearizable
+across the replacement, which comes down to two things the split has to arrange:
+
+- every write acknowledged by the parent is applied to a child before that child serves a
+  linearizable read,
+- no write is accepted by a group which the new tablet map no longer refers to.
+
+This section describes how the split achieves that. Throughout it, and in the code, the group
+being replaced is called the **parent** and the groups replacing it the **children**. The same
+machinery is meant to serve a tablet merge, where a child has several parents, hence the
+neutral name *resize* in the identifiers; merging is not implemented yet and no merge decision
+is emitted for a strongly consistent table.
+
+The markers are ordinary entries in the parent's log, so they are replicated and applied in
+log order like any write. They are *not* carried as mutations, though: each marker is recorded
+as a column of the group's own row in `system.raft_groups`, whose partition key contains
+the shard hosting the group, and replicas may host the same group on different shards. A single
+mutation could therefore not serve all of them, so `raft_command` is a variant
+(`write_mutation`, `resize_marker`) and every replica builds its own mutation when it applies
+the entry. The marker carries the timestamp of its cell, taken by the leader which appended it,
+so every replica and every replay writes the same cell. The kind of resize in progress comes from
+the tablet metadata, not from the markers.
+
+`service::strong_consistency::raft_resize_tracker` holds, per shard, which markers the parent of
+every resize the replica takes part in has applied. It is reloaded from `system.raft_groups`
+before the parent's Raft server is created: after a restart the parent's committed entries are
+applied by commitlog replay rather than by `state_machine::apply()`, so nothing else would record
+the markers. The state is created when the replica learns of the resize, from the tablet
+metadata or from the markers after a restart, and dropped by the teardown of the parent's Raft
+server.

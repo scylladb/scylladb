@@ -36,6 +36,7 @@
 #include "locator/tablets.hh"
 #include "mutation/mutation.hh"
 #include "service/migration_manager.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
@@ -239,7 +240,8 @@ static raft::log_entry_ptr make_mutation_entry(const schema_ptr& s, raft::term_t
     m.set_clustered_cell(ck, to_bytes("v"), data_value(v), ts);
     m.partition().clustered_row(*s, ck).apply(row_marker(ts));
     raft::command cmd;
-    ser::serialize(cmd, service::strong_consistency::raft_command{.mutation = freeze(m)});
+    ser::serialize(cmd, service::strong_consistency::raft_command{
+            .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
     return make_lw_shared<raft::log_entry>(
             raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
 }
@@ -522,7 +524,7 @@ SEASTAR_TEST_CASE(test_groups_truncate_log) {
         co_await storage.truncate_log(entries.back()->idx);
 
         for (size_t i = 0; i + 1 < entries.size(); ++i) {
-            auto pin = storage.pin_for_apply(entries[i]->idx);
+            auto pin = storage.pin_target_table_for_apply(entries[i]->idx);
             BOOST_CHECK(bool(pin));
         }
 
@@ -530,7 +532,7 @@ SEASTAR_TEST_CASE(test_groups_truncate_log) {
         {
             seastar::testing::scoped_no_abort_on_internal_error no_abort;
             try {
-                storage.pin_for_apply(entries.back()->idx);
+                storage.pin_target_table_for_apply(entries.back()->idx);
                 BOOST_FAIL("Expected on_internal_error for a truncated index");
             } catch (...) {
                 // Expected.
@@ -826,6 +828,33 @@ SEASTAR_TEST_CASE(test_groups_erase_persisted_state_isolation) {
     });
 }
 
+// Test that erase_persisted_state() deletes a resize marker stamped by a clock ahead of this
+// node's once it is given the marker's timestamp, and only then.
+SEASTAR_TEST_CASE(test_groups_erase_persisted_state_above_markers) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+        const auto ahead = api::new_timestamp()
+                + std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::hours(1)).count();
+
+        co_await qp.execute_internal(
+                "INSERT INTO system.raft_groups (shard, group_id, end_resize) VALUES (?, ?, true) USING TIMESTAMP ?",
+                {int16_t(test_shard), gid.id, ahead}, cql3::query_processor::cache_internal::no);
+        const auto marker_present = [&] () -> future<bool> {
+            auto rs = co_await qp.execute_internal(
+                    "SELECT end_resize FROM system.raft_groups WHERE shard = ? AND group_id = ?",
+                    {int16_t(test_shard), gid.id}, cql3::query_processor::cache_internal::no);
+            co_return !rs->empty() && rs->one().has("end_resize");
+        };
+
+        co_await raft_groups_storage::erase_persisted_state(qp, gid, test_shard);
+        BOOST_CHECK(co_await marker_present());
+
+        co_await raft_groups_storage::erase_persisted_state(qp, gid, test_shard, ahead);
+        BOOST_CHECK(!co_await marker_present());
+    });
+}
+
 // Every stored index is held by a record, and the reference it hands out is a
 // clone at the start of the segment the batch was written to.
 SEASTAR_TEST_CASE(test_groups_store_and_get_replay_positions) {
@@ -843,7 +872,7 @@ SEASTAR_TEST_CASE(test_groups_store_and_get_replay_positions) {
         // One batch, so one segment, and every entry's reference reports its start.
         std::optional<db::replay_position> batch_pos;
         for (const auto& entry : entries) {
-            auto pin = storage.pin_for_apply(entry->idx);
+            auto pin = storage.pin_target_table_for_apply(entry->idx);
             BOOST_CHECK(bool(pin));
             BOOST_CHECK_EQUAL(pin.rp().pos, 0u);
             if (!batch_pos) {
@@ -870,15 +899,15 @@ SEASTAR_TEST_CASE(test_groups_get_partial_replay_positions) {
         co_await storage.store_log_entries(entries);
 
         const auto idx = entries.front()->idx;
-        auto first = storage.pin_for_apply(idx);
-        auto second = storage.pin_for_apply(idx);
+        auto first = storage.pin_target_table_for_apply(idx);
+        auto second = storage.pin_target_table_for_apply(idx);
         BOOST_CHECK(bool(first));
         BOOST_CHECK(bool(second));
         BOOST_CHECK(first.rp() == second.rp());
 
         // Dropping one reference leaves the other, and the record, holding the segment.
         { auto dropped = std::move(first); }
-        auto third = storage.pin_for_apply(idx);
+        auto third = storage.pin_target_table_for_apply(idx);
         BOOST_CHECK(bool(third));
         BOOST_CHECK(third.rp() == second.rp());
     });
@@ -912,7 +941,7 @@ SEASTAR_TEST_CASE(test_groups_acquire_handles_skips_non_command_entries) {
         co_await storage.store_log_entries(entries);
 
         for (uint64_t i = 0; i < 6; i += 2) {
-            auto pin = storage.pin_for_apply(raft::index_t(base + i));
+            auto pin = storage.pin_target_table_for_apply(raft::index_t(base + i));
             BOOST_CHECK(bool(pin));
         }
     });
@@ -934,14 +963,14 @@ SEASTAR_TEST_CASE(test_groups_truncate_log_then_get_handles_for_remaining) {
 
         co_await storage.truncate_log(entries[1]->idx);
 
-        auto pin = storage.pin_for_apply(entries[0]->idx);
+        auto pin = storage.pin_target_table_for_apply(entries[0]->idx);
         BOOST_CHECK(bool(pin));
 
         {
             seastar::testing::scoped_no_abort_on_internal_error no_abort;
             for (size_t i = 1; i < entries.size(); ++i) {
                 try {
-                    storage.pin_for_apply(entries[i]->idx);
+                    storage.pin_target_table_for_apply(entries[i]->idx);
                     BOOST_FAIL("Expected on_internal_error for a truncated index");
                 } catch (...) {
                     // Expected.
@@ -985,7 +1014,7 @@ SEASTAR_TEST_CASE(test_groups_release_waits_for_the_commit_index) {
 
         // The record still holds its indexes, and the row still holds bootstrap's.
         {
-            auto pin = storage.pin_for_apply(entries.back()->idx);
+            auto pin = storage.pin_target_table_for_apply(entries.back()->idx);
             BOOST_CHECK(bool(pin));
         }
         const auto held = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
@@ -1026,7 +1055,7 @@ SEASTAR_TEST_CASE(test_groups_release_persists_the_descriptor) {
             }
         }
         {
-            auto pin = storage.pin_for_apply(entries.front()->idx);
+            auto pin = storage.pin_target_table_for_apply(entries.front()->idx);
             BOOST_CHECK(bool(pin));
         }
 
@@ -1036,7 +1065,7 @@ SEASTAR_TEST_CASE(test_groups_release_persists_the_descriptor) {
         {
             seastar::testing::scoped_no_abort_on_internal_error no_abort;
             try {
-                storage.pin_for_apply(entries.front()->idx);
+                storage.pin_target_table_for_apply(entries.front()->idx);
                 BOOST_FAIL("Expected the record to have been released");
             } catch (...) {
                 // Expected: no record holds the index any more.
@@ -1090,7 +1119,7 @@ SEASTAR_TEST_CASE(test_groups_truncate_persists_the_truncation_record) {
 
         // 1..5 survive, so the record is still there and still holds them.
         {
-            auto pin = storage.pin_for_apply(raft::index_t(5));
+            auto pin = storage.pin_target_table_for_apply(raft::index_t(5));
             BOOST_CHECK(bool(pin));
         }
 
@@ -1145,14 +1174,14 @@ SEASTAR_TEST_CASE(test_groups_truncate_pops_whole_records) {
         {
             seastar::testing::scoped_no_abort_on_internal_error no_abort;
             try {
-                storage.pin_for_apply(cut);
+                storage.pin_target_table_for_apply(cut);
                 BOOST_FAIL("Expected no record to hold a truncated index");
             } catch (...) {
             }
         }
         // ...and 1..5 are still held.
         {
-            auto pin = storage.pin_for_apply(raft::index_t(5));
+            auto pin = storage.pin_target_table_for_apply(raft::index_t(5));
             BOOST_CHECK(bool(pin));
         }
 
@@ -1367,7 +1396,7 @@ SEASTAR_TEST_CASE(test_groups_giving_up_the_segments_asks_the_table_to_flush) {
             entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
         co_await storage.store_log_entries(entries);
-        const auto segment = storage.pin_for_apply(entries.back()->idx).rp().id;
+        const auto segment = storage.pin_target_table_for_apply(entries.back()->idx).rp().id;
 
         // Applied 2 of 4: the gate still waits for the last command, but two
         // per-command references are already in the tablet table's memtable.
@@ -1476,8 +1505,8 @@ SEASTAR_TEST_CASE(test_groups_release_reads_the_commitlogs_flush_position) {
             entries.push_back(make_command_entry(raft::term_t(1), raft::index_t(i)));
         }
         co_await storage.store_log_entries(entries);
-        // pin_for_apply() returns a reference at the segment start: only its id is the record's.
-        const auto record_segment = storage.pin_for_apply(entries.back()->idx).rp().id;
+        // pin_target_table_for_apply() returns a reference at the segment start: only its id is the record's.
+        const auto record_segment = storage.pin_target_table_for_apply(entries.back()->idx).rp().id;
 
         // Unrelated writes under a table of their own, until the commitlog runs
         // a round covering the group's segment. The references are held: a filler
@@ -1533,7 +1562,7 @@ SEASTAR_TEST_CASE(test_groups_release_after_the_round_asks_for_the_flush) {
         }
         co_await storage.store_log_entries(entries);
         // The segment the record holds.
-        const auto segment = storage.pin_for_apply(entries.back()->idx).rp().id;
+        const auto segment = storage.pin_target_table_for_apply(entries.back()->idx).rp().id;
 
         for (const auto& entry : entries) {
             storage.note_applied(entry->idx);
@@ -1623,7 +1652,7 @@ SEASTAR_TEST_CASE(test_groups_record_without_commands_asks_only_for_raft_groups)
                     .term = raft::term_t(1), .idx = raft::index_t(i), .data = raft::log_entry::dummy{}}));
         }
         co_await storage.store_log_entries(entries);
-        const auto segment = storage.pin_for_apply(entries.back()->idx).rp().id;
+        const auto segment = storage.pin_target_table_for_apply(entries.back()->idx).rp().id;
 
         // last_cmd() is disengaged, so committing and closing is all it waits for.
         co_await storage.store_commit_idx(entries.back()->idx);
@@ -1674,7 +1703,7 @@ SEASTAR_TEST_CASE(test_groups_requested_flushes_reclaim_the_segment) {
         BOOST_REQUIRE(!entries.empty());
 
         // The round for the front record's segment, before anything is releasable.
-        const auto front_segment = storage.pin_for_apply(entries.front()->idx).rp().id;
+        const auto front_segment = storage.pin_target_table_for_apply(entries.front()->idx).rp().id;
         storage.mark_segment_closed(db::replay_position(front_segment + 1, 0));
 
         const auto dirty_after_round = cl.get_num_dirty_segments();
@@ -1735,18 +1764,18 @@ SEASTAR_TEST_CASE(test_groups_pin_for_apply_finds_an_index_past_the_front_record
         // group holds a second record behind the front one. Nothing is applied and the
         // commit index stays at 0, so neither record is released.
         co_await write_batch();
-        const auto front_segment = storage.pin_for_apply(entries.front()->idx).rp().id;
-        while (storage.pin_for_apply(entries.back()->idx).rp().id == front_segment) {
+        const auto front_segment = storage.pin_target_table_for_apply(entries.front()->idx).rp().id;
+        while (storage.pin_target_table_for_apply(entries.back()->idx).rp().id == front_segment) {
             co_await write_batch();
             BOOST_REQUIRE_LT(next_idx.value(), 4096u);
         }
 
         // Each index pins the record holding it. The first entry still pins the front
         // record, the ids only move forward, and the last entry is past the front.
-        BOOST_REQUIRE_EQUAL(storage.pin_for_apply(entries.front()->idx).rp().id, front_segment);
+        BOOST_REQUIRE_EQUAL(storage.pin_target_table_for_apply(entries.front()->idx).rp().id, front_segment);
         auto previous_segment = front_segment;
         for (const auto& entry : entries) {
-            auto pin = storage.pin_for_apply(entry->idx);
+            auto pin = storage.pin_target_table_for_apply(entry->idx);
             BOOST_REQUIRE(bool(pin));
             BOOST_REQUIRE_GE(pin.rp().id, previous_segment);
             previous_segment = pin.rp().id;
@@ -1801,11 +1830,11 @@ SEASTAR_TEST_CASE(test_groups_discarded_batch_does_not_wedge_the_queue) {
         storage.note_applied(dropped.back()->idx);
 
         // The record is gone, so no index it held pins any more. A pin of a later
-        // index proves nothing: pin_for_apply() searches the queue.
+        // index proves nothing: pin_target_table_for_apply() searches the queue.
         {
             seastar::testing::scoped_no_abort_on_internal_error no_abort;
             try {
-                storage.pin_for_apply(dropped.front()->idx);
+                storage.pin_target_table_for_apply(dropped.front()->idx);
                 BOOST_FAIL("Expected the discarded batch's record to have been released");
             } catch (...) {
                 // Expected: no record holds the index any more.
@@ -1835,10 +1864,11 @@ SEASTAR_TEST_CASE(test_groups_dropped_table_batch_is_reported_as_applied) {
         raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
         co_await storage.bootstrap(raft::configuration({srv}), false);
 
+        service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
         auto state_machine = service::strong_consistency::make_state_machine(
                 locator::global_tablet_id{.table = schema->id(), .tablet = locator::tablet_id(0)},
                 gid, env.local_db(), env.migration_manager().local(),
-                env.get_system_keyspace().local(), storage);
+                env.get_system_keyspace().local(), storage, resize_tracker);
 
         std::vector<raft::log_entry_ptr> batch = {
             make_mutation_entry(schema, raft::term_t(1), raft::index_t(1), 0, 13),

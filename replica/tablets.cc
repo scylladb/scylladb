@@ -104,12 +104,28 @@ schema_ptr make_tablets_schema() {
 
     if (strongly_consistent_tables_enabled) {
         builder
-            .with_column("raft_group_id", uuid_type);
+            .with_column("raft_group_id", uuid_type)
+            // Set only while the tablet is being resized (split or merge): the ids of the Raft
+            // groups which will replace this tablet's group. The kind of the resize in progress
+            // is the one of the resize decision, in the static `resize_type` column.
+            .with_column("transition_raft_group_ids", list_type_impl::get_instance(uuid_type, false));
     }
 
     return builder
             .with_hash_version()
             .build();
+}
+
+// Serializes the replacement Raft group ids into the frozen list stored in the
+// `transition_raft_group_ids` column.
+static data_value make_raft_group_id_list_value(const locator::raft_group_id_list& gids) {
+    auto list_type = list_type_impl::get_instance(uuid_type, false);
+    std::vector<data_value> values;
+    values.reserve(gids.size());
+    for (const auto& gid : gids) {
+        values.emplace_back(gid.uuid());
+    }
+    return make_list_value(list_type, std::move(values));
 }
 
 // Group 0's raft table: the log lives here, as a clustering row per index.
@@ -153,6 +169,10 @@ schema_ptr make_group0_raft_schema(sstring name) {
 //                   leader change discarded from which segment, so replay can drop
 //                   superseded entry copies without consulting terms. Frozen, so
 //                   one release sets the whole history as one cell
+//   start_resize,   the resize markers this group has applied, if a split or merge
+//   end_resize      is replacing it. Written by apply(), not by a release: a marker's
+//                   write time is the timestamp the leader stamped it with. The kind
+//                   of the resize in progress comes from the tablet metadata
 schema_ptr make_tablet_raft_groups_schema(sstring name) {
     if (!strongly_consistent_tables_enabled) {
         on_internal_error(tablet_logger, "Can't create raft table for strongly consistent tablets when the feature is disabled");
@@ -177,6 +197,9 @@ schema_ptr make_tablet_raft_groups_schema(sstring name) {
                         // raft_groups_storage.cc, which serializes the cell; drift
                         // between them surfaces on the first row read.
                         tuple_type_impl::get_instance({long_type, long_type, long_type}), false))
+        // the resize markers
+        .with_column("start_resize", boolean_type)
+        .with_column("end_resize", boolean_type)
         .with_hash_version()
         .set_caching_options(caching_options::get_disabled_caching_options())
         .set_comment("Persisted RAFT votes and snapshot info for strongly consistent tablets")
@@ -367,6 +390,11 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
         if (tablets.has_raft_info()) {
             const auto& raft_info = tablets.get_tablet_raft_info(tid);
             m.set_clustered_cell(ck, "raft_group_id", raft_info.group_id.uuid(), ts);
+        }
+
+        if (tablets.has_raft_resize_info(tid)) {
+            m.set_clustered_cell(ck, "transition_raft_group_ids",
+                    make_raft_group_id_list_value(tablets.get_raft_resize_info(tid).new_gids), ts);
         }
 
         tid = *tablets.next_tablet(tid);
@@ -583,6 +611,14 @@ tablet_mutation_builder::del_resize_task_info(const gms::feature_service& featur
 tablet_mutation_builder&
 tablet_mutation_builder::set_base_table(table_id base_table) {
     _m.set_static_cell("base_table", data_value(base_table.uuid()), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_raft_resize_info(dht::token last_token, const locator::tablet_raft_resize_info& raft_resize) {
+    auto ck = get_ck(last_token);
+    _m.set_clustered_cell(ck, "transition_raft_group_ids",
+            make_raft_group_id_list_value(raft_resize.new_gids), _ts);
     return *this;
 }
 
@@ -898,6 +934,20 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
             format("Raft group id is not set for tablet {} of table {}", tid, table));
     }
 
+    if (row.has("transition_raft_group_ids")) {
+        if (!map.has_raft_info()) {
+            on_internal_error(tablet_logger,
+                format("Unexpected raft resize info for tablet {} of table {}", tid, table));
+        }
+        locator::tablet_raft_resize_info raft_resize;
+        auto list_type = list_type_impl::get_instance(uuid_type, false);
+        for (const auto& v : value_cast<list_type_impl::native_type>(
+                    list_type->deserialize(row.get_blob_unfragmented("transition_raft_group_ids")))) {
+            raft_resize.new_gids.push_back(raft::group_id(value_cast<utils::UUID>(v)));
+        }
+        map.set_raft_resize_info(tid, std::move(raft_resize));
+    }
+
     if (update_repair_time && db) {
         auto myid = db->get_token_metadata().get_my_id();
         auto range = map.get_token_range(tid);
@@ -1107,6 +1157,7 @@ do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp,
             throw std::runtime_error("Failed to update tablet metadata: updated row is empty");
         } else {
             tmap.clear_tablet_transition_info(tid);
+            tmap.clear_raft_resize_info(tid);
             process_one_row(&db, hint.table_id, tmap, tid, res->one(), updating::yes);
         }
     }

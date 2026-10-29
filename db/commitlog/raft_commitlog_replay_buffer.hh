@@ -126,12 +126,14 @@ class raft_commitlog_replay_buffer {
     future<> resolve_group(replica::database& db, cql3::query_processor& qp,
         raft::group_id group_id, group_state& group);
 
-    // Apply one committed command entry to its table's memtable.
+    // Apply one committed command entry of group `group_id` to its table's memtable, or a
+    // resize marker to the group's row in system.raft_groups.
     future<> apply_committed(replica::database& db, db::system_keyspace& sys_ks,
-        const raft::log_entry_ptr& entry);
+        raft::group_id group_id, const raft::log_entry_ptr& entry);
 
     // Consume the buffered entries the floor has reached.
-    future<> drain_committed(replica::database& db, db::system_keyspace& sys_ks, group_state& group);
+    future<> drain_committed(replica::database& db, db::system_keyspace& sys_ks,
+        raft::group_id group_id, group_state& group);
 
     // Note a committed entry's term and configuration.
     static void note_committed(group_state& group, const raft::log_entry_ptr& entry);

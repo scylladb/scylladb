@@ -38,6 +38,7 @@
 #include "service/strong_consistency/raft_commitlog.hh"
 #include "service/strong_consistency/groups_manager.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
@@ -575,16 +576,16 @@ SEASTAR_TEST_CASE(test_raft_batch_record_and_truncation) {
         BOOST_REQUIRE_EQUAL(*segment_queue.front().last_cmd(), raft::index_t(10));
         // Two references to the batch's segment: the group's own at the batch's
         // position and a clone under system.raft_groups.
-        BOOST_REQUIRE(bool(segment_queue.front().pin_user_table));
+        BOOST_REQUIRE(bool(segment_queue.front().pin_table));
         BOOST_REQUIRE(bool(segment_queue.front().pin_raft_groups));
         BOOST_REQUIRE(segment_queue.front().pin_raft_groups.rp()
-                == db::replay_position(segment_queue.front().pin_user_table.rp().id, 0));
+                == db::replay_position(segment_queue.front().pin_table.rp().id, 0));
 
         // A leader change discards 6..10: max is clamped, the reference stays for 1..5.
         segment_queue.back().trim_from(raft::index_t(6));
         BOOST_REQUIRE_EQUAL(segment_queue.front().max_index, raft::index_t(5));
         BOOST_REQUIRE_EQUAL(*segment_queue.front().last_cmd(), raft::index_t(5));
-        BOOST_REQUIRE(bool(segment_queue.front().pin_user_table));
+        BOOST_REQUIRE(bool(segment_queue.front().pin_table));
     });
 }
 
@@ -845,7 +846,7 @@ SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
         for (size_t i = 0; i + 1 < segment_queue.size(); ++i) {
             BOOST_REQUIRE_LT(segment_queue[i].segment(), segment_queue[i + 1].segment());
             BOOST_REQUIRE_LT(segment_queue[i].max_index, segment_queue[i + 1].first_index);
-            BOOST_REQUIRE(bool(segment_queue[i].pin_user_table));
+            BOOST_REQUIRE(bool(segment_queue[i].pin_table));
             BOOST_REQUIRE(bool(segment_queue[i].pin_raft_groups));
         }
 
@@ -866,7 +867,7 @@ SEASTAR_TEST_CASE(test_raft_batch_records_across_segments) {
         }
         BOOST_REQUIRE(!truncations.empty());
         BOOST_REQUIRE_LT(segment_queue.back().max_index, cut);
-        BOOST_REQUIRE(bool(segment_queue.back().pin_user_table));
+        BOOST_REQUIRE(bool(segment_queue.back().pin_table));
     });
 }
 
@@ -1114,7 +1115,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_release_all_frees_the_segments) {
                 co_await rc.store_log_entries(batch, raft::index_t(0));
             }
             BOOST_REQUIRE_GT(log.get_num_dirty_segments(), 0);
-            BOOST_REQUIRE(bool(rc.pin_for_apply(raft::index_t(1))));
+            BOOST_REQUIRE(bool(rc.pin_target_table_for_apply(raft::index_t(1))));
 
             rc.release_all();
 
@@ -1122,7 +1123,7 @@ SEASTAR_TEST_CASE(test_raft_commitlog_release_all_frees_the_segments) {
             {
                 seastar::testing::scoped_no_abort_on_internal_error no_abort;
                 try {
-                    rc.pin_for_apply(raft::index_t(1));
+                    rc.pin_target_table_for_apply(raft::index_t(1));
                     BOOST_FAIL("Expected the records to have been released");
                 } catch (...) {
                     // Expected.
@@ -1649,7 +1650,8 @@ raft::log_entry_ptr make_mutation_entry(const schema_ptr& schema, raft::term_t t
     // A row marker, as an INSERT writes one, so the row exists in its own right.
     m.partition().clustered_row(*schema, ck).apply(row_marker(ts));
     raft::command cmd;
-    ser::serialize(cmd, service::strong_consistency::raft_command{.mutation = freeze(m)});
+    ser::serialize(cmd, service::strong_consistency::raft_command{
+            .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
     return make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = term, .idx = idx, .data = std::move(cmd)});
 }
@@ -2579,7 +2581,8 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
         m.set_cell(clustering_key::make_empty(), "c", data_value(10), api::new_timestamp());
 
         raft::command cmd;
-        ser::serialize(cmd, service::strong_consistency::raft_command{.mutation = freeze(m)});
+        ser::serialize(cmd, service::strong_consistency::raft_command{
+                .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
 
         auto entry = make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = raft::term_t(1),
@@ -2604,9 +2607,10 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
                 const auto segments_before = log.get_active_segment_names();
                 BOOST_REQUIRE(!segments_before.empty());
 
+                service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
                 auto state_machine = service::strong_consistency::make_state_machine(
                         locator::global_tablet_id{schema->id(), locator::tablet_id(0)}, gid, db,
-                        env.migration_manager().local(), env.get_system_keyspace().local(), storage);
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker);
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 // Abort the apply after the pin is taken and before the entry reaches a memtable.

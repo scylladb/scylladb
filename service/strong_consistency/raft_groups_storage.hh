@@ -109,7 +109,10 @@ public:
 
     // Take a reference for the command at `idx`, for the mutation apply() puts
     // in the target table's memtable: the segment lives until that flush.
-    db::rp_handle pin_for_apply(raft::index_t idx);
+    db::rp_handle pin_target_table_for_apply(raft::index_t idx);
+    // The same for a resize marker, whose row apply() puts in the system.raft_groups
+    // memtable.
+    db::rp_handle pin_raft_groups_for_apply(raft::index_t idx);
 
     // Tell the storage that the command at `idx` has been handed to a memtable.
     // May release records, so call it after the apply.
@@ -157,7 +160,15 @@ public:
     // The group's entries in the shared commitlog cannot be deleted; what makes them inert
     // is the absence of the row this erases - see raft_commitlog_replay_buffer and
     // groups_manager::start_raft_group().
-    static future<> erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    //
+    // The raft_groups row is deleted above both this node's clock and the highest timestamp of the
+    // resize markers in that row (`max_marker_timestamp`). The markers are stamped by the leader's
+    // clock, which may be ahead of this node's. Passing `max_marker_timestamp` may put the
+    // tombstone above this node's clock, so that it also hides the row which a later bootstrap of
+    // the group on this shard writes. Only a group that is never bootstrapped here again, such as
+    // a resized parent, may pass it.
+    static future<> erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
+            api::timestamp_type max_marker_timestamp = api::min_timestamp);
 
     // The whole row, for a replay that has to decide what to keep.
     static future<persisted_descriptor> load_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
