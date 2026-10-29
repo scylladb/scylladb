@@ -1467,44 +1467,49 @@ private:
         // Such an sstable was never added to the table, so it cannot be handed to
         // the replacer as an old_sstable (that would fail to be removed from the
         // sstable set).  It is sealed, so seal_sstable() already cleared
-        // mark_for_deletion::implicit and ~sstable() will not unlink it.  Mark it
-        // explicitly, or its files stay on disk forever -- neither attached nor
-        // deleted, and invisible until the next restart rescans the data
+        // mark_for_deletion::implicit and ~sstable() will not unlink it.  It has to
+        // be deleted here, or its files stay on disk forever -- neither attached
+        // nor deleted, and invisible until the next restart rescans the data
         // directory.
         //
-        // Marked on the way out rather than inline, because the replacement below
-        // can throw, and this is the last chance to do it: compaction::run() calls
+        // The deletion is committed before the final replacement below because from
+        // this point on the sstable can no longer be attached, so committing first
+        // keeps a crash during the replacement from leaking it. The files are
+        // unlinked only afterwards, so the GC sstable, which guards against data
+        // resurrection, outlives the atomic swap of inputs for outputs.
+        //
+        // The unlink happens even if the replacement throws: compaction::run() calls
         // finish(), and with it on_end_of_compaction(), outside the try/catch that
         // invokes on_interrupt(), so delete_sstables_for_interrupted_compaction()
-        // -- the only other place that marks them -- would not run either.
+        // would not get to them either, and the files would stay until a restart
+        // replays the log.
         //
-        // Done after the replacement below so the GC sstable, which guards against
-        // data resurrection, outlives the atomic swap of inputs for outputs.
-        auto mark_unused_gc_sstables = defer([this] () noexcept {
-            for (auto& sst : _unused_garbage_collected_sstables) {
-                // Kept clear of the marking below, which is what must not be
-                // skipped: this allocates, and the guard is noexcept, so letting
-                // a formatting failure escape would abort the node with the
-                // sstables still unmarked.
-                try {
-                    log_debug("Deleting unused garbage collected sstable {} for {}.{}",
-                              sst->get_filename(), _schema->ks_name(), _schema->cf_name());
-                } catch (...) {
-                }
-                sst->mark_for_deletion();
-            }
-            _unused_garbage_collected_sstables.clear();
-        });
+        // unused_gc keeps them referenced past the replacement even if the commit
+        // fails and they only get the in-memory mark, which would otherwise unlink
+        // them as soon as the helper lets go.
+        auto unused_gc = _unused_garbage_collected_sstables;
+        auto unused_gc_deletion = commit_deletion_of_unattached_sstables(std::exchange(_unused_garbage_collected_sstables, {}));
 
+        std::exception_ptr ex;
         if (!_sstables.empty() || !used_garbage_collected_sstables().empty()) {
             std::vector<sstables::shared_sstable> old_sstables;
+            old_sstables.reserve(_sstables.size() + used_garbage_collected_sstables().size());
             std::move(_sstables.begin(), _sstables.end(), std::back_inserter(old_sstables));
 
             // Remove Garbage Collected SSTables from the SSTable set if any was previously added.
             auto& used_gc_sstables = used_garbage_collected_sstables();
             old_sstables.insert(old_sstables.end(), used_gc_sstables.begin(), used_gc_sstables.end());
 
-            _replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
+            try {
+                _replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
+            } catch (...) {
+                ex = std::current_exception();
+            }
+        }
+
+        execute_deletion_of_unattached_sstables(std::move(unused_gc_deletion));
+        if (ex) {
+            std::rethrow_exception(std::move(ex));
         }
     }
 
