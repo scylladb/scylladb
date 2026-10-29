@@ -17,6 +17,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from itertools import chain
@@ -73,6 +74,23 @@ class WriteIsolation(Enum):
     UNSAFE_RMW = "unsafe_rmw"
 
 
+def datetimes_to_utc(value):
+    """
+    Return the given value - typically a boto3 response - with every datetime in it converted to UTC.
+
+    boto3 returns times (e.g., a table's CreationDateTime) as datetimes in the local time zone, each with its own
+    tzlocal() object. Python considers comparing such datetimes an inter-zone comparison, and if the time is in the
+    hour repeated when daylight saving time ends, == always returns False for it. In UTC they compare as expected.
+    """
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc)
+    if isinstance(value, dict):
+        return {k: datetimes_to_utc(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [datetimes_to_utc(v) for v in value]
+    return value
+
+
 class TableConf:
     """
     The dynamodb table metadata of schema and tags as seen by a table of a specific node resource
@@ -80,12 +98,12 @@ class TableConf:
 
     def __init__(self, table: DynamoDBServiceResource.Table):
         self.table = table
-        self.describe = table.meta.client.describe_table(TableName=table.name)["Table"]
+        self.describe = datetimes_to_utc(table.meta.client.describe_table(TableName=table.name)["Table"])
         self.arn = self.describe["TableArn"]
         self.tags = table.meta.client.list_tags_of_resource(ResourceArn=self.arn)["Tags"]
 
     def update(self):
-        self.describe = self.table.meta.client.describe_table(TableName=self.table.name)["Table"]
+        self.describe = datetimes_to_utc(self.table.meta.client.describe_table(TableName=self.table.name)["Table"])
         self.tags = self.table.meta.client.list_tags_of_resource(ResourceArn=self.arn)["Tags"]
         logger.debug(f"{self.table.name} {self.table.meta.client.meta.endpoint_url} tags: {self.tags}")
         logger.debug(f"{self.table.name} {self.table.meta.client.meta.endpoint_url} describe: {self.describe}")

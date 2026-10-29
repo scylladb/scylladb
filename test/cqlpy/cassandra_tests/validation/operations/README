@@ -1,0 +1,13 @@
+The following test file in Cassandra's
+test/unit/org/apache/cassandra/cql3/validation/operations directory, which
+this directory mirrors, was not translated, because it tests Cassandra's
+internal implementation through Java APIs instead of testing CQL:
+
+* AutoSnapshotTest.java: checks the snapshots taken automatically by DROP
+  and TRUNCATE, by changing Cassandra's auto_snapshot configuration through
+  its internal configuration API and inspecting the snapshots through
+  Cassandra's internal snapshot objects.
+
+Note also that Cassandra's CompactStorageSplit1Test.java and
+CompactStorageSplit2Test.java were split from an older CompactStorageTest.java,
+which was translated as compact_storage_test.py.

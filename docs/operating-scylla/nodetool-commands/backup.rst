@@ -57,29 +57,29 @@ Syntax
 .. code-block:: console
 
    nodetool [(-h <host> | --host <host>)] [(-p <port> | --port <port>)] cluster backup
-               [--keyspace <keyspace>] --table <table>
+               [--keyspaces <keyspace>]...
+               [--table <table>]
                [--snapshot <snapshot>]
                --location <dc>,<endpoint>,<bucket>(,<prefix>)
                [--location <dc2>,<endpoint2>,<bucket2>(,<prefix2>)]...
                [--nowait]
                [--move-files]
-               [... keyspaces ...]
 
 Example
 -------
 
 .. code-block:: console
 
-    nodetool cluster backup --locations mydc,s3.us-east-2.amazonaws.com,bucket-foo,foo/bar/baz --keyspace ks --table table --snapshot ss --move-files
+    nodetool cluster backup --location mydc,s3.us-east-2.amazonaws.com,bucket-foo,foo/bar/baz --keyspaces ks --table table --snapshot ss --move-files
 
 Options
 -------
 
 * ``-h <host>`` or ``--host <host>`` - Node hostname or IP address.
-* ``--keyspace`` - Name of a keyspace to copy SSTables from
-* ``--table`` - Name of a table to copy SSTables from
-* ``--snapshot`` - Name of a snapshot to copy sstables from
-* ``--locations`` - Tuple of <dc>,<endpoint>,<bucket> and optional <prefix> which to write the backup. This is set per DC
+* ``--keyspaces`` - Name of a keyspace to copy SSTables from. Repeat for each keyspace. By default, all keyspaces are backed up
+* ``--table`` - Name of a table to copy SSTables from, or a comma-separated list of tables. Requires exactly one keyspace
+* ``--snapshot`` - Name of a snapshot to copy sstables from. If it does not exist, it is taken first
+* ``--location`` - Tuple of <dc>,<endpoint>,<bucket> and optional <prefix> which to write the backup. Repeat for each DC
   Endpoints should be configured as per :ref:`the object storage configuration instructions <object-storage-configuration>`.
 * ``--nowait`` - Don't wait on the backup process
 * ``--move-files`` - Move files instead of copying them. This will delete the files from the local disk after they are uploaded to the object storage.

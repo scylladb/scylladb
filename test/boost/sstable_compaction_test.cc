@@ -200,7 +200,7 @@ static void assert_table_sstable_count(table_for_tests& t, size_t expected_count
     BOOST_REQUIRE(uint64_t(t->get_stats().live_sstable_count) == expected_count);
 }
 
-void compaction_manager_basic(test_env& env) {
+static table_for_tests compaction_manager_basic_prepare(test_env& env) {
     BOOST_REQUIRE(this_smp_shard_count() == 1);
     auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
                 .with_column("p1", utf8_type, column_kind::partition_key)
@@ -208,7 +208,6 @@ void compaction_manager_basic(test_env& env) {
                 .with_column("r1", int32_type)
                 .build();
     auto cf = env.make_table_for_tests(s);
-    auto& cm = cf->get_compaction_manager();
     auto close_cf = deferred_stop(cf);
     cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
     auto sst_gen = env.make_sst_factory(s);
@@ -231,6 +230,14 @@ void compaction_manager_basic(test_env& env) {
     }
 
     BOOST_REQUIRE(cf->sstables_count() == idx.size());
+    close_cf.cancel();
+    return cf;
+}
+
+void compaction_manager_basic(test_env& env) {
+    table_for_tests cf = compaction_manager_basic_prepare(env);
+    auto close_cf = deferred_stop(cf);
+    auto& cm = cf->get_compaction_manager();
     cf->trigger_compaction();
     // wait for submitted job to finish and there is no pending tasks
     do_until([&cm] {
@@ -266,21 +273,6 @@ SEASTAR_FIXTURE_TEST_CASE(compaction_manager_basic_gcs_test, gcs_fixture, *tests
                                    test_env_config{
                                        .storage = make_test_object_storage_options("GS"),
                                    });
-}
-
-// Adds count same-size sstables to cf, so STCS puts them in one bucket.
-static std::vector<shared_sstable> add_same_size_sstables(test_env& env, table_for_tests& cf, simple_schema& ss, sstable_version_types version,
-        uint32_t count) {
-    auto s = cf.schema();
-    std::vector<shared_sstable> ssts;
-    for (uint32_t i = 0; i < count; ++i) {
-        mutation m(s, ss.make_pkey(i));
-        ss.add_row(m, ss.make_ckey(0), "v");
-        auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
-        column_family_test(cf).add_sstable(sst).get();
-        ssts.push_back(std::move(sst));
-    }
-    return ssts;
 }
 
 static void regular_compaction_quarantines_malformed_sstable(test_env& env, sstable_version_types version, compress_sstable compress) {
@@ -387,6 +379,51 @@ SEASTAR_TEST_CASE(regular_compaction_quarantine_failure_test) {
             BOOST_REQUIRE(!sst->is_quarantined());
             BOOST_REQUIRE(cf->get_sstables()->contains(sst));
         }
+    });
+}
+
+void regular_compaction_validate_test(test_env& env, bool auto_scrub_enabled) {
+    table_for_tests cf = compaction_manager_basic_prepare(env);
+    auto close_cf = deferred_stop(cf);
+    auto& cm = cf->get_compaction_manager();
+
+    auto ssts = cf->get_sstables();
+    BOOST_REQUIRE(!ssts->empty());
+    auto sst = ssts->begin()->get()->shared_from_this();
+    sst->set_scrub_time(db_clock::from_time_t(0));
+    slightly_corrupt_sstable(sst, component_type::TOC);
+
+    if (auto_scrub_enabled) {
+        cf->set_scrub_period(std::chrono::hours(1));
+    }
+
+    cf->trigger_compaction();
+    // wait for submitted job to finish and there is no pending tasks
+    do_until([&cm, auto_scrub_enabled] {
+        if (auto_scrub_enabled) {
+            return cm.get_stats().errors > 0 && cm.get_stats().pending_tasks == 0;
+        }
+        return cm.get_stats().completed_tasks > 0 && cm.get_stats().pending_tasks == 0;
+    }, [] {
+        return sleep(std::chrono::milliseconds(100));
+    }).wait();
+
+    if (auto_scrub_enabled) {
+        BOOST_REQUIRE(sst->is_quarantined());
+    } else {
+        BOOST_REQUIRE(!sst->is_quarantined());
+    }
+}
+
+SEASTAR_TEST_CASE(regular_compaction_validates_sstables_which_should_be_scrubbed_auto_scrub_enabled) {
+    return test_env::do_with_async([] (test_env& env) {
+         regular_compaction_validate_test(env, true);
+    });
+}
+
+SEASTAR_TEST_CASE(regular_compaction_validates_sstables_which_should_be_scrubbed_auto_scrub_disabled) {
+    return test_env::do_with_async([] (test_env& env) {
+         regular_compaction_validate_test(env, false);
     });
 }
 
@@ -950,8 +987,8 @@ static bool key_range_overlaps(table_for_tests& cf, const dht::decorated_key& a,
 }
 
 static bool sstable_overlaps(const lw_shared_ptr<replica::column_family>& cf, sstables::shared_sstable candidate1, sstables::shared_sstable candidate2) {
-    auto range1 = wrapping_interval<dht::token>::make(candidate1->get_first_decorated_key()._token, candidate1->get_last_decorated_key()._token);
-    auto range2 = wrapping_interval<dht::token>::make(candidate2->get_first_decorated_key()._token, candidate2->get_last_decorated_key()._token);
+    auto range1 = wrapping_interval<dht::token>::make(candidate1->get_first_decorated_key().token(), candidate1->get_last_decorated_key().token());
+    auto range2 = wrapping_interval<dht::token>::make(candidate2->get_first_decorated_key().token(), candidate2->get_last_decorated_key().token());
     return range1.overlaps(range2, dht::token_comparator());
 }
 
@@ -2554,6 +2591,8 @@ void time_window_strategy_size_tiered_behavior_correctness_fn(test_env& env) {
 
     auto cf = env.make_table_for_tests(s);
     auto close_cf = deferred_stop(cf);
+    // Past windows only relax min_threshold when it isn't strictly enforced, as in production by default.
+    cf.set_compaction_enforce_min_threshold(false);
     auto major_compact_bucket = [&] (api::timestamp_type window_ts) {
         auto bound = compaction::time_window_compaction_strategy::get_window_lower_bound(window_size, window_ts);
         auto ret = compact_sstables(env, compaction::compaction_descriptor(std::move(buckets[bound])), cf, sst_gen).get();
@@ -2594,13 +2633,11 @@ void time_window_strategy_size_tiered_behavior_correctness_fn(test_env& env) {
     // now past window cannot be compacted again, because it was already compacted into a single SSTable, now it switches to STCS mode.
     BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now, *state).size() == 0);
 
-    // make past window contain more than min_threshold similar-sized SSTables, allowing it to be compacted again.
-    for (api::timestamp_type t = 1; t < min_threshold; t++) {
-        add_new_sstable_to_bucket(t, past_window_ts);
-    }
+    // make past window contain 2 similar-sized SSTables, fewer than min_threshold, which applies only to the current window.
+    add_new_sstable_to_bucket(1, past_window_ts);
 
-    // now past window can be compacted again because it switched to STCS mode and has more than min_threshold SSTables.
-    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now, *state).size() == size_t(min_threshold));
+    // now past window can be compacted again because it switched to STCS mode, where past windows need only 2 SSTables.
+    BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now, *state).size() == 2);
 }
 
 SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
@@ -2618,19 +2655,6 @@ SEASTAR_FIXTURE_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness_
                           *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_env::do_with_async([](test_env& env) { time_window_strategy_size_tiered_behavior_correctness_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
-}
-
-static void check_min_max_column_names(const sstable_ptr& sst, std::vector<bytes> min_components, std::vector<bytes> max_components) {
-    const auto& st = sst->get_stats_metadata();
-    BOOST_TEST_MESSAGE(fmt::format("min {}/{} max {}/{}", st.min_column_names.elements.size(), min_components.size(), st.max_column_names.elements.size(), max_components.size()));
-    BOOST_REQUIRE(st.min_column_names.elements.size() == min_components.size());
-    for (auto i = 0U; i < st.min_column_names.elements.size(); i++) {
-        BOOST_REQUIRE(min_components[i] == st.min_column_names.elements[i].value);
-    }
-    BOOST_REQUIRE(st.max_column_names.elements.size() == max_components.size());
-    for (auto i = 0U; i < st.max_column_names.elements.size(); i++) {
-        BOOST_REQUIRE(max_components[i] == st.max_column_names.elements[i].value);
-    }
 }
 
 future<> min_max_clustering_key_2(test_env& env) {

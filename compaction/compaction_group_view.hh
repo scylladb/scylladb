@@ -9,6 +9,9 @@
 
 #pragma once
 
+#include <chrono>
+#include <optional>
+
 #include <seastar/core/condition-variable.hh>
 
 #include "schema/schema_fwd.hh"
@@ -35,6 +38,7 @@ public:
     virtual const schema_ptr& schema() const noexcept = 0;
     // min threshold as defined by table.
     virtual unsigned min_compaction_threshold() const noexcept = 0;
+    virtual std::optional<std::chrono::seconds> scrub_period() const noexcept = 0;
     virtual bool compaction_enforce_min_threshold() const noexcept = 0;
     virtual future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const = 0;
     virtual future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const = 0;

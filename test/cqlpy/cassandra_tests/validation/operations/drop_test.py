@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit a87055d56a33a9b17606f14535f48eb461965b82
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -23,6 +23,22 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
+
+# Reproduces SCYLLADB-5200 (Scylla's CQL lexer reads the unquoted
+# identifier P as a duration literal, so it can't be used as a name).
+@pytest.mark.xfail(reason="SCYLLADB-5200")
+def testDropTableWithNameCapitalPAndColumnDuration(cql, test_keyspace):
+    # CASSANDRA-17919
+    # The Java test creates the table with the fixed name P, so this name
+    # (unquoted, so really "p") is what we use too. The Java test then
+    # checks system_schema.dropped_columns for table_name = 'P', which never
+    # matches anything because the table's name is "p", so we check 'p'.
+    try:
+        cql.execute("CREATE TABLE " + test_keyspace + ".P (a INT PRIMARY KEY, b DURATION);")
+        cql.execute("DROP TABLE " + test_keyspace + ".P")
+    finally:
+        cql.execute("DROP TABLE IF EXISTS " + test_keyspace + ".P")
+    assertRowsIgnoringOrder(cql.execute(f"SELECT * FROM system_schema.dropped_columns WHERE keyspace_name = '{test_keyspace}' AND table_name = 'p'"))
 
 def testNonExistingOnes(cql, test_keyspace):
     # The specific error message that Scylla and Cassandra print in these

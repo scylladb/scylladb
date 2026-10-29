@@ -223,6 +223,25 @@ def test_alter_keyspace_missing_rf(cql, this_dc, scylla_only, has_tablets):
         with pytest.raises(ConfigurationException):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 'foo' }}")
 
+# Like test_alter_keyspace_missing_rf, ALTER KEYSPACE with
+# NetworkTopologyStrategy but without any replication options is rejected
+# by Scylla (#10036) - like it was in Cassandra (CASSANDRA-12681) until
+# Cassandra added the default_keyspace_rf configuration (see issue #16028).
+# Now Cassandra accepts it, keeping the keyspace's replication factor, and
+# Cassandra's test for this rejection, AlterTest's
+# testAlterKeyspaceWithNoOptionThrowsConfigurationException, was removed - so
+# we moved its translation here, as a Scylla-only test.
+def test_alter_keyspace_nts_no_options(cql, this_dc, scylla_only, has_tablets):
+    if has_tablets:
+        extra_opts = " AND TABLETS = {'enabled': false}"
+    else:
+        extra_opts = ""
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 3 }" + extra_opts) as keyspace:
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy' }}")
+        # Make sure that the alter works as expected
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 2 }}")
+
 # Test trying to ALTER a keyspace with invalid options.
 # Reproduces #7595.
 def test_alter_keyspace_nonexistent_dc(cql, this_dc):

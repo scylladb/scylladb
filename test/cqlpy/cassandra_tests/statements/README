@@ -1,0 +1,23 @@
+The following test files in Cassandra's
+test/unit/org/apache/cassandra/cql3/statements directory, which this
+directory mirrors, were not translated:
+
+* DescribeStatementTest.java: almost all its tests compare the full output
+  of DESCRIBE statements, including all the table and keyspace options, the
+  list of system keyspaces and the exact formatting - all of which differ
+  between Scylla and Cassandra, and even between Cassandra versions. Scylla's
+  DESCRIBE is tested in test_describe.py instead.
+* AddIdentityStatementTest.java and DropIdentityStatementTest.java: test
+  Cassandra's ADD IDENTITY and DROP IDENTITY statements, used by Cassandra's
+  mTLS authenticators, which Scylla doesn't have. They also check the results
+  through Cassandra's internal role manager.
+* CreateRoleStatementTest.java, AlterRoleStatementTest.java and
+  CreateUserStatementTest.java: parse statements through Cassandra's internal
+  parser and check the parsed objects - the options of Cassandra's network
+  authorizer (ACCESS TO DATACENTERS) and CIDR authorizer, which Scylla
+  doesn't have.
+* PropertyDefinitionsTest.java and SelectStatementTest.java: test Cassandra's
+  internal PropertyDefinitions and SelectStatement classes directly, through
+  Java APIs.
+* TransactionStatementTest.java and TxnDataNameTest.java: test Cassandra's
+  Accord transactions (BEGIN TRANSACTION), which Scylla doesn't have.

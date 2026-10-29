@@ -376,6 +376,25 @@ template <> struct fmt::formatter<test_data> : fmt::formatter<string_view> {
     }
 };
 
+BOOST_AUTO_TEST_CASE(test_array_search_gt) {
+    constexpr int capacity = 16;
+    int64_t keys[capacity];
+    for (int size = 0; size <= capacity; size++) {
+        for (int i = 0; i < size; i++) {
+            keys[i] = (i - size / 2) * 2;
+        }
+        std::fill(keys + size, keys + capacity, utils::simple_key_unused_value);
+        std::vector<int64_t> probes = {utils::simple_key_unused_value, utils::simple_key_unused_value + 1, std::numeric_limits<int64_t>::max()};
+        for (int i = 0; i < size; i++) {
+            probes.insert(probes.end(), {keys[i] - 1, keys[i], keys[i] + 1});
+        }
+        for (int64_t v : probes) {
+            int expected = std::upper_bound(keys, keys + size, v) - keys;
+            BOOST_REQUIRE_EQUAL(utils::array_search_gt(v, keys, capacity, size), expected);
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(stress_test) {
     constexpr int TEST_NODE_SIZE = 16;
     using test_tree = tree<test_key, test_data, test_key_compare, TEST_NODE_SIZE, key_search::both, with_debug::yes>;

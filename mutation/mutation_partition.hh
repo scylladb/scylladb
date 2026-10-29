@@ -28,7 +28,6 @@
 #include "utils/managed_ref.hh"
 #include "utils/compact-radix-tree.hh"
 #include "utils/immutable-collection.hh"
-#include "tombstone_gc.hh"
 #include "mutation/compact_and_expire_result.hh"
 
 #ifdef SEASTAR_DEBUG
@@ -39,6 +38,7 @@ class mutation_fragment;
 class mutation_partition_view;
 class mutation_partition_visitor;
 namespace db { class large_data_cache_tracker; }
+class tombstone_gc_state;
 
 namespace query {
     class clustering_key_filter_ranges;

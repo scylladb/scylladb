@@ -9,6 +9,7 @@
 
 #include "result_message.hh"
 #include "cql3/cql_statement.hh"
+#include "locator/tablets.hh"
 #include "replica/tablets.hh"
 #include "types/tuple.hh"
 #include <bit>

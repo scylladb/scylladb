@@ -19,6 +19,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "cql3/untyped_result_set_idl_utils.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "replica/database.hh"
 #include "schema/schema_builder.hh"
 
@@ -31,6 +32,7 @@
 
 #include "idl/frozen_mutation.dist.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace service::paxos {
 
@@ -478,6 +480,21 @@ std::optional<std::string_view> paxos_store::try_get_base_table(std::string_view
         return std::nullopt;
     }
     return cf_name.substr(0, cf_name.size() - paxos_state_table_suffix.size());
+}
+
+namespace {
+    // A replica must not acknowledge a paxos promise or accept before it is
+    // durable, otherwise it can forget it after a crash and let a competing
+    // proposer get a different value chosen.
+    // wait_for_sync_to_commitlog is not stored in the schema tables, so it is
+    // set here rather than in create_paxos_state_schema(): initializers run
+    // for every schema built for these tables, including the ones loaded
+    // from disk or received from other nodes.
+    const auto set_wait_for_sync_to_commitlog = schema_builder::register_schema_initializer([](schema_builder& builder) {
+        if (paxos_store::try_get_base_table(builder.cf_name())) {
+            builder.set_wait_for_sync_to_commitlog(true);
+        }
+    });
 }
 
 future<cql3::untyped_result_set> paxos_store::do_execute_cql_with_timeout(const schema& s, paxos_state_query query,

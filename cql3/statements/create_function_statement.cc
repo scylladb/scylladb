@@ -31,6 +31,19 @@ seastar::future<shared_ptr<functions::function>> create_function_statement::crea
         throw exceptions::invalid_request_exception(format("Language '{}' is not supported", _language));
     }
     data_type return_type = prepare_type(qp, *_return_type);
+    if (old) {
+        // CREATE OR REPLACE may only replace the function's body, not change
+        // properties that its users, such as aggregates, depend on.
+        auto& old_function = dynamic_cast<functions::user_function&>(*old);
+        if (old_function.called_on_null_input() != _called_on_null_input) {
+            throw exceptions::invalid_request_exception(format("Function '{}' must have {} directive", _name,
+                old_function.called_on_null_input() ? "CALLED ON NULL INPUT" : "RETURNS NULL ON NULL INPUT"));
+        }
+        if (!return_type->is_compatible_with(*old_function.return_type())) {
+            throw exceptions::invalid_request_exception(format("Cannot replace function '{}', the new return type {} is not compatible with the return type {} of existing function",
+                _name, return_type->as_cql3_type(), old_function.return_type()->as_cql3_type()));
+        }
+    }
     std::vector<sstring> arg_names;
     for (const auto& arg_name : _arg_names) {
         arg_names.push_back(arg_name->to_string());
@@ -40,8 +53,19 @@ seastar::future<shared_ptr<functions::function>> create_function_statement::crea
     if (!ctx) {
         co_return nullptr;
     }
-    co_return ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
+    auto func = ::make_shared<functions::user_function>(_name, _arg_types, std::move(arg_names), _body, _language,
         std::move(return_type), _called_on_null_input, std::move(*ctx));
+    // An aggregate's state function must return exactly the aggregate's
+    // state type - CREATE AGGREGATE checks this, and so does loading the
+    // aggregate from the schema tables. So a function used by an aggregate
+    // can't change its return type, even to a compatible one.
+    if (old && func->return_type() != old->return_type()) {
+        if (auto aggregate = functions::instance().used_by_user_aggregate(func)) {
+            throw exceptions::invalid_request_exception(fmt::format("Cannot replace function '{}' with a different return type, as it is used by user-defined aggregate {}",
+                _name, *aggregate));
+        }
+    }
+    co_return func;
 }
 
 audit::statement_category
@@ -55,6 +79,7 @@ create_function_statement::audit_info() const {
 }
 
 std::unique_ptr<prepared_statement> create_function_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+    validate_name("Function");
     return std::make_unique<prepared_statement>(audit_info(), make_shared<create_function_statement>(*this));
 }
 

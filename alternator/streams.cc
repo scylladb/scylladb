@@ -37,6 +37,7 @@
 #include "alternator/executor_util.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "utils/rjson.hh"
+#include "db/system_keyspace.hh"
 
 static logging::logger slogger("alternator-streams");
 

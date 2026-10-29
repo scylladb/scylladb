@@ -11,7 +11,7 @@
 # to reproduce bugs discovered by bigger Cassandra tests.
 #############################################################################
 
-from .util import unique_name, unique_key_int, new_test_table, is_scylla
+from .util import unique_name, unique_key_int, new_test_table, is_scylla, new_type
 
 from cassandra.protocol import FunctionFailure, InvalidRequest
 from cassandra.util import Date, Time
@@ -255,6 +255,68 @@ def test_fromjson_varint_empty_string_prepared(cql, table1):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, vi) VALUES (?, fromJson(?))")
     with pytest.raises(FunctionFailure):
         cql.execute(stmt, [p, '""'])
+
+# Most types allow an "empty" value - a zero-length value, which is not the
+# same as null - and SELECT JSON returns it as an empty string. The test
+# cassandra_tests/empty_values_test.py, translated from Cassandra, checks
+# this for some of the types, and the following tests check more.
+def check_select_json_empty_value(cql, test_keyspace, typ):
+    with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, v {typ}') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES ({p}, blobAs{typ}(0x))")
+        assert list(cql.execute(f"SELECT JSON v FROM {table} WHERE p = {p}")) == [('{"v": ""}',)]
+
+# Same for the toJson() function of an empty value.
+def check_tojson_empty_value(cql, test_keyspace, typ):
+    with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, v {typ}') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES ({p}, blobAs{typ}(0x))")
+        assert list(cql.execute(f"SELECT toJson(v) FROM {table} WHERE p = {p}")) == [('""',)]
+
+EMPTY_VALUE_TYPES = ["int", "bigint", "varint", "float", "double", "decimal", "timestamp"]
+
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value failed, for some
+# of these types with a server error).
+@pytest.mark.parametrize("typ", EMPTY_VALUE_TYPES)
+def test_select_json_empty_value(cql, test_keyspace, typ):
+    check_select_json_empty_value(cql, test_keyspace, typ)
+
+# toJson() of an empty value should also return an empty string, like
+# SELECT JSON does. Cassandra did this up to version 4.1, but Cassandra 5.0
+# returns null instead - while its SELECT JSON still returns an empty string.
+# This change came, apparently by accident, with CASSANDRA-18566 - a
+# performance refactor of how functions handle their arguments, which copied
+# into toJson() the rule that a user-defined function gets an empty value of
+# a non-string type as a null. We consider this a Cassandra bug.
+# Reproduces SCYLLADB-5185.
+@pytest.mark.parametrize("typ", EMPTY_VALUE_TYPES)
+def test_tojson_empty_value(cql, test_keyspace, typ, cassandra_bug):
+    check_tojson_empty_value(cql, test_keyspace, typ)
+
+# Cassandra doesn't allow an empty value of these types at all.
+# Reproduces SCYLLADB-5185 (SELECT JSON of an empty value failed with a
+# server error).
+@pytest.mark.parametrize("typ", ["smallint", "tinyint"])
+def test_select_json_empty_value_scylla_only(cql, test_keyspace, scylla_only, typ):
+    check_select_json_empty_value(cql, test_keyspace, typ)
+    check_tojson_empty_value(cql, test_keyspace, typ)
+
+# Like smallint and tinyint, the date and time types allow an empty value
+# in Scylla but not in Cassandra (which added them in CASSANDRA-7523 without
+# empty values), and existing data may contain them. SELECT JSON and toJson()
+# of these empty values already worked before SCYLLADB-5185 was fixed, so
+# this test isn't a reproducer - just coverage.
+@pytest.mark.parametrize("typ", ["date", "time"])
+def test_select_json_empty_value_date_time(cql, test_keyspace, scylla_only, typ):
+    check_select_json_empty_value(cql, test_keyspace, typ)
+    check_tojson_empty_value(cql, test_keyspace, typ)
+
+# Cassandra fails here with a NullPointerException (CASSANDRA-21743).
+# Reproduces SCYLLADB-5185 (for an empty boolean value, SELECT JSON produced
+# the invalid JSON {"v": }).
+def test_select_json_empty_boolean(cql, test_keyspace, cassandra_bug):
+    check_select_json_empty_value(cql, test_keyspace, "boolean")
+    check_tojson_empty_value(cql, test_keyspace, "boolean")
 
 # Cassandra allows the strings "true" and "false", not just the JSON constants
 # true and false, to be assigned to a boolean column.
@@ -585,6 +647,25 @@ def test_select_json_null_component(cql, table1, type1):
     cql.execute(stmt, [('hello', None)])
     assert list(cql.execute(f"SELECT JSON t1 from {table1} where p = {p}")) == [('{"t1": {"t": "hello", "b": null}}',)]
 
+# Test that after a field is added to a UDT (with ALTER TYPE), SELECT JSON
+# and toJson() of a value written before the change print the new field as
+# null - and that SELECT JSON's output can be inserted back.
+# Reproduces #8092.
+def test_select_json_udt_added_field(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int)') as typ:
+        with new_test_table(cql, test_keyspace, f"p int primary key, v frozen<{typ}>") as table:
+            p = unique_key_int()
+            cql.execute(f"INSERT INTO {table} (p, v) VALUES ({p}, {{a: 1}})")
+            cql.execute(f"ALTER TYPE {typ} ADD b int")
+            [(j,)] = cql.execute(f"SELECT JSON p, v FROM {table} WHERE p = {p}")
+            assert json.loads(j) == {"p": p, "v": {"a": 1, "b": None}}
+            [(j2,)] = cql.execute(f"SELECT toJson(v) FROM {table} WHERE p = {p}")
+            assert json.loads(j2) == {"a": 1, "b": None}
+            p2 = unique_key_int()
+            cql.execute(cql.prepare(f"INSERT INTO {table} JSON ?"), [json.dumps({**json.loads(j), 'p': p2})])
+            [(j3,)] = cql.execute(f"SELECT JSON v FROM {table} WHERE p = {p2}")
+            assert json.loads(j3) == {"v": {"a": 1, "b": None}}
+
 # Reproducer for issue #8078: Test that the "AS" clause (alias) in
 # a SELECT JSON is honored, and the returned JSON string contains the
 # given alias instead of the original column name or function call.
@@ -708,3 +789,81 @@ def test_insert_json_invalid(cql, table1):
     # A null bound value is also an InvalidRequest error.
     with pytest.raises(InvalidRequest):
         cql.execute(stmt, [None])
+
+# Test that the field names of a user-defined type in JSON follow the same
+# case-sensitivity rules as column names: In INSERT JSON and fromJson(), a
+# field name in quotes (e.g., "\"Foo\"") is case-sensitive, and other field
+# names are case-insensitive (so "a" and "A" both mean the field a, and
+# "Foo" means foo). SELECT JSON and toJson() print a field name which has
+# uppercase letters in quotes, so it can be read back.
+# Reproduces #8086.
+def test_json_udt_case_sensitive_field(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int, "Foo" int)') as typ:
+        with new_test_table(cql, test_keyspace, f"p int primary key, v frozen<{typ}>") as table:
+            p = unique_key_int()
+            insert_json = cql.prepare(f"INSERT INTO {table} JSON ?")
+            for v in ['{"a": 1, "\\"Foo\\"": 2}', '{"A": 1, "\\"Foo\\"": 2}']:
+                cql.execute(insert_json, ['{"p": %d, "v": %s}' % (p, v)])
+                [(j,)] = cql.execute(f"SELECT JSON v FROM {table} WHERE p = {p}")
+                assert json.loads(j) == {"v": {"a": 1, '"Foo"': 2}}
+            # An unquoted "Foo" means the field foo, which doesn't exist
+            with pytest.raises(InvalidRequest):
+                cql.execute(insert_json, ['{"p": %d, "v": {"Foo": 2}}' % p])
+            insert_fromjson = cql.prepare(f"INSERT INTO {table} (p, v) VALUES (?, fromJson(?))")
+            cql.execute(insert_fromjson, [p, '{"a": 3, "\\"Foo\\"": 4}'])
+            [(j,)] = cql.execute(f"SELECT toJson(v) FROM {table} WHERE p = {p}")
+            assert json.loads(j) == {"a": 3, '"Foo"': 4}
+
+# A UDT field name may contain non-ASCII characters (in CQL, such a name
+# must be quoted). An unquoted field name in JSON is converted to lowercase,
+# which must leave its non-ASCII characters unchanged - so an unquoted JSON
+# field name with a non-ASCII lowercase letter means the field with exactly
+# that name, and SELECT JSON prints it unquoted.
+def test_json_udt_non_ascii_field(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '("\u00e9" int)') as typ:
+        with new_test_table(cql, test_keyspace, f'p int primary key, v frozen<{typ}>') as table:
+            p = unique_key_int()
+            insert_json = cql.prepare(f'INSERT INTO {table} JSON ?')
+            cql.execute(insert_json, ['{"p": %d, "v": {"\u00e9": 1}}' % p])
+            [(j,)] = cql.execute(f'SELECT JSON v FROM {table} WHERE p = {p}')
+            assert json.loads(j) == {'v': {'\u00e9': 1}}
+            # A non-ASCII field name which doesn't exist is an error
+            with pytest.raises(InvalidRequest):
+                cql.execute(insert_json, ['{"p": %d, "v": {"\u00e8": 1}}' % p])
+
+# A UDT field name may itself begin and end with a double-quote character:
+# The CQL identifier """foo""" is the name "foo", including the quotes.
+# SELECT JSON must print such a name in an additional pair of quotes,
+# otherwise INSERT JSON of its output would remove the name's own quotes,
+# and write its value to a different field - here, foo. Cassandra has this
+# bug (CASSANDRA-21746), so this test is marked cassandra_bug.
+# Reproduces #8086 (an edge case of its fix).
+def test_json_udt_quoted_field_name(cql, test_keyspace, cassandra_bug):
+    with new_type(cql, test_keyspace, '("""foo""" int, foo int)') as typ:
+        with new_test_table(cql, test_keyspace, f"p int primary key, v frozen<{typ}>") as table:
+            p = unique_key_int()
+            cql.execute(f'INSERT INTO {table} (p, v) VALUES ({p}, {{"""foo""": 1, foo: 2}})')
+            [(j,)] = cql.execute(f"SELECT JSON v FROM {table} WHERE p = {p}")
+            p2 = unique_key_int()
+            cql.execute(cql.prepare(f"INSERT INTO {table} JSON ?"), [json.dumps({**json.loads(j), 'p': p2})])
+            [(j2,)] = cql.execute(f"SELECT JSON v FROM {table} WHERE p = {p2}")
+            assert json.loads(j2) == json.loads(j)
+
+# Because field names in JSON are case-insensitive unless quoted, two
+# different names in a JSON object may refer to the same UDT field (e.g.,
+# "a" and "A"). Such ambiguous input, like a repeated name, should be
+# rejected rather than silently ignoring one of the values. This test is
+# scylla_only because Cassandra accepts this input, and silently uses one of
+# the values - not even consistently the first or the last one.
+# Reproduces #8086 (an edge case of its fix).
+def test_json_udt_duplicate_field(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, '(a int)') as typ:
+        with new_test_table(cql, test_keyspace, f'p int primary key, v frozen<{typ}>') as table:
+            p = unique_key_int()
+            insert_json = cql.prepare(f'INSERT INTO {table} JSON ?')
+            insert_fromjson = cql.prepare(f'INSERT INTO {table} (p, v) VALUES (?, fromJson(?))')
+            for v in ['{"a": 1, "A": 2}', '{"A": 1, "a": 2}', '{"a": 1, "a": 2}', '{"a": 1, "\\"a\\"": 2}']:
+                with pytest.raises(InvalidRequest, match='Duplicate field'):
+                    cql.execute(insert_json, ['{"p": %d, "v": %s}' % (p, v)])
+                with pytest.raises(FunctionFailure, match='Duplicate field'):
+                    cql.execute(insert_fromjson, [p, v])

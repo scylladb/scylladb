@@ -6,12 +6,15 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1)
  */
 
+#include <seastar/coroutine/try_future.hh>
+
 #include "multishard_query.hh"
 #include "mutation/json.hh"
 #include "mutation_query.hh"
 #include "partition_slice_builder.hh"
 #include "readers/foreign.hh"
 #include "replica/database.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "replica/mutation_dump.hh"
 #include "replica/query_state.hh"
 #include "schema/schema_builder.hh"
@@ -464,8 +467,8 @@ future<mutation_reader> make_partition_mutation_dump_reader(
     auto gts = tracing::global_trace_state_ptr(ts);
     auto remote_reader = co_await db.invoke_on(shard,
             [gos = std::move(gos), gus = std::move(gus), &dk, &ps, gts = std::move(gts), timeout] (replica::database& local_db) -> future<foreign_ptr<std::unique_ptr<mutation_reader>>> {
-        auto output_schema = gos.get();
-        auto underlying_schema = gus.get();
+        auto output_schema = co_await coroutine::try_future(gos.get(timeout));
+        auto underlying_schema = co_await coroutine::try_future(gus.get(timeout));
         auto ts = gts.get();
         auto permit = co_await local_db.obtain_reader_permit(underlying_schema, "mutation-dump-remote-read", timeout, ts);
         auto reader = make_mutation_reader<mutation_dump_reader>(std::move(output_schema), std::move(underlying_schema), std::move(permit),

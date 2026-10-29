@@ -24,6 +24,8 @@
 #include "replica/database_fwd.hh"
 #include "locator/host_id.hh"
 #include "gms/feature_service.hh"
+#include "service/topology_state_machine_fwd.hh"
+#include "service/fencing_token.hh"
 
 namespace db {
     class system_keyspace;
@@ -44,18 +46,6 @@ enum class node_state: uint16_t {
     rebuilding,          // the node is being rebuild and is streaming data from other replicas
     normal,              // the node does not do any streaming and serves the slice of the ring that belongs to it
     left,                // the node left the cluster and group0
-};
-
-// The order of the requests is a priority
-// order in which requests are executes in case
-// there are multiple requests in the queue.
-// The order tries to minimize the amount of cleanups.
-enum class topology_request: uint16_t {
-    replace,
-    join,
-    remove,
-    leave,
-    rebuild
 };
 
 enum class cleanup_status : uint16_t {
@@ -79,36 +69,8 @@ struct replace_param {
 
 using request_param = std::variant<join_param, rebuild_param, replace_param>;
 
-enum class global_topology_request: uint16_t {
-    new_cdc_generation,
-    cleanup,
-    keyspace_rf_change,
-    truncate_table,
-
-    // High priority no-operation request.
-    // Used to synchronize API calls with topology coordinator.
-    // Ensures that all later requests and tablet scheduler will see prior updates to group0.
-    noop_request,
-    snapshot_tables,
-    finalize_migration,
-    quiesce,
-    restore_tablets,
-};
-
 struct ring_slice {
     std::unordered_set<dht::token> tokens;
-};
-
-// The storage mode of a node during vnodes-to-tablets migration.
-//
-// When migrating a table from vnodes to tablets, each node needs to reshard
-// its local SSTables on vnode boundaries. Conversely, SSTables need to be
-// resharded in the opposite direction (i.e., with the static sharder) when the
-// operation is rolled back. A node reshards on restart, in the direction given
-// by replica_state::intended_storage_mode.
-enum class storage_mode : uint16_t {
-    vnodes,
-    tablets,
 };
 
 struct replica_state {
@@ -162,7 +124,7 @@ struct topology {
 
     std::optional<transition_state> tstate;
 
-    using version_t = int64_t;
+    using version_t = topology_version_t;
     static constexpr version_t initial_version = 1;
     version_t version = initial_version;
     version_t fence_version = initial_version;
@@ -301,8 +263,11 @@ struct topology_state_machine {
     std::function<void()> on_tablet_split_ready;
 
     future<> await_not_busy();
+    // Waits until the request is done and returns its error, empty on success. Throws
+    // seastar::timed_out_error if the request is not done by the deadline, when one is given.
     future<sstring> wait_for_request_completion(db::system_keyspace& sys_ks, raft_group0_client& group0_client,
-            abort_source& as, utils::UUID id, bool require_entry);
+            abort_source& as, utils::UUID id, bool require_entry,
+            std::optional<lowres_clock::time_point> deadline = std::nullopt);
 
     // Generates mutations that cancel a topology request which is active on the given node.
     // If no request is found, or it cannot be canceled at this stage, no mutations are generated.
@@ -343,18 +308,6 @@ struct raft_topology_cmd_result {
     // Carries the error description back to the topology coordinator
     // when the command fails.
     sstring error_message;
-};
-
-// This class is used in RPC's signatures to hold the topology_version of the caller.
-// The reason why we wrap the topology_version in this class is that we anticipate
-// other versions to occur in the future, such as the schema version.
-struct fencing_token {
-    topology::version_t topology_version{0};
-    // topology_version == 0 means the caller is not aware about
-    // the fencing or doesn't use it for some reason.
-    explicit operator bool() const {
-        return topology_version != 0;
-    }
 };
 
 struct topology_request_state {

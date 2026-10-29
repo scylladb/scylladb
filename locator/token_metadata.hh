@@ -25,7 +25,7 @@
 #include <seastar/core/sharded.hh>
 #include "utils/chunked_vector.hh"
 #include "utils/phased_barrier.hh"
-#include "service/topology_state_machine.hh"
+#include "service/topology_state_machine_fwd.hh"
 
 #include "locator/types.hh"
 #include "locator/topology.hh"
@@ -43,6 +43,8 @@ class gossiper;
 }
 
 namespace locator {
+
+using topology_version_t = service::topology_version_t;
 
 class abstract_replication_strategy;
 
@@ -111,7 +113,7 @@ public:
     };
 private:
     utils::phased_barrier::operation _op;
-    service::topology::version_t _version;
+    topology_version_t _version;
     const token_metadata* _tm = nullptr;
     link_type _link;
 
@@ -133,7 +135,7 @@ public:
     version_tracker(const version_tracker&) = delete;
     ~version_tracker();
 
-    service::topology::version_t version() const {
+    topology_version_t version() const {
         return _version;
     }
 
@@ -185,7 +187,7 @@ public:
         topology::config topo_cfg;
     };
     using inet_address = gms::inet_address;
-    using version_t = service::topology::version_t;
+    using version_t = topology_version_t;
     using version_tracker_t = version_tracker;
 
     token_metadata(shared_token_metadata& stm, config cfg);
@@ -449,7 +451,7 @@ public:
     }
 
     // Returns a map version -> use_count
-    std::unordered_map<service::topology::version_t, int> describe_stale_versions();
+    std::unordered_map<topology_version_t, int> describe_stale_versions();
 
     future<> stale_versions_in_use() const {
         return _stale_versions_in_use.get_future();

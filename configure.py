@@ -284,11 +284,15 @@ def generate_compdb(compdb, ninja, buildfile, modes):
             except FileExistsError:
                 # if there is already a valid compile_commands.json link in the
                 # source root, we are done. if it's a stale link, update it.
+                # concurrent configure.py runs may race on the stale link
                 if os.path.islink(compdb):
-                    current_target = os.readlink(compdb)
-                    if not os.path.exists(current_target):
-                        os.unlink(compdb)
-                        os.symlink(compdb_target, compdb)
+                    try:
+                        current_target = os.readlink(compdb)
+                        if not os.path.exists(current_target):
+                            os.unlink(compdb)
+                            os.symlink(compdb_target, compdb)
+                    except (FileNotFoundError, FileExistsError):
+                        pass
             return
 
 
@@ -586,6 +590,7 @@ scylla_tests = set([
     'test/boost/gossiping_property_file_snitch_test',
     'test/boost/hash_test',
     'test/boost/hashers_test',
+    'test/boost/hint_storage_test',
     'test/boost/hint_test',
     'test/boost/hwlb_test',
     'test/boost/idl_test',
@@ -643,6 +648,7 @@ scylla_tests = set([
     'test/boost/serialized_action_test',
     'test/boost/service_level_controller_test',
     'test/boost/small_vector_test',
+    'test/boost/api_test',
     'test/boost/snitch_reset_test',
     'test/boost/sorting_test',
     'test/boost/sstable_3_x_test',
@@ -720,6 +726,7 @@ perf_tests = set([
     'test/perf/perf_big_decimal',
     'test/perf/perf_bti_key_translation',
     'test/perf/perf_sort_by_proximity',
+    'test/perf/perf_array_search',
 ])
 
 perf_standalone_tests = set([
@@ -919,7 +926,7 @@ scylla_core = (['message/messaging_service.cc',
                 'replica/logstor/ondisk.cc',
                 'replica/logstor/segment_io.cc',
                 'replica/logstor/segment_file.cc',
-                'replica/logstor/compaction.cc',
+                'replica/logstor/compaction_policy.cc',
                 'replica/logstor/segment_manager.cc',
                 'replica/logstor/logstor.cc',
                 'replica/logstor/readers.cc',
@@ -954,7 +961,6 @@ scylla_core = (['message/messaging_service.cc',
                 'schema/schema_mutations.cc',
                 'transport/generic_server.cc',
                 'utils/alien_worker.cc',
-                'utils/array-search.cc',
                 'utils/base64.cc',
                 'utils/crypt_sha512.cc',
                 'utils/logalloc.cc',
@@ -1770,6 +1776,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/json_cql_query_test.cc',
     'test/boost/large_data_guardrail_test.cc',
     'test/boost/large_paging_state_test.cc',
+    'test/boost/largest_k_test.cc',
     'test/boost/loading_cache_test.cc',
     'test/boost/memtable_test.cc',
     'test/boost/multishard_combining_reader_as_mutation_source_test.cc',
@@ -1789,6 +1796,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/role_manager_test.cc',
     'test/boost/row_cache_test.cc',
     'test/boost/schema_change_test.cc',
+    'test/boost/schema_change_cross_shard_test.cc',
     'test/boost/schema_registry_test.cc',
     'test/boost/scrub_test.cc',
     'test/boost/secondary_index_test.cc',
@@ -1857,6 +1865,7 @@ deps['test/boost/linearizing_input_stream_test'] = [
     "test/boost/linearizing_input_stream_test.cc",
     "test/lib/log.cc",
 ]
+deps['test/boost/api_test'] += api
 deps['test/boost/expr_test'] = ['test/boost/expr_test.cc', 'test/lib/expr_test_utils.cc'] + scylla_core + alternator
 deps['test/boost/rate_limiter_test'] = ['test/boost/rate_limiter_test.cc', 'db/rate_limiter.cc', 'utils/rate_limiter.cc']
 deps['test/boost/exceptions_optimized_test'] = ['test/boost/exceptions_optimized_test.cc', 'utils/exceptions.cc']
@@ -2326,7 +2335,6 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         '-DSeastar_IO_URING=ON',
         '-DSeastar_OPENSSL=OFF',
         '-DSeastar_LTTNG=OFF', # https://scylladb.atlassian.net/browse/SCYLLADB-3797, https://bugs.lttng.org/issues/1438
-        '-DSeastar_ASSUME_C_ARES_DNS_FREEZE_FIXED=ON',
     ]
 
     if compiler_cache:

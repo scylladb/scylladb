@@ -19,6 +19,7 @@
 #include "locator/simple_strategy.hh"
 #include "locator/everywhere_replication_strategy.hh"
 #include <fmt/std.h>
+#include "service/topology_state_machine.hh"
 
 using namespace locator;
 

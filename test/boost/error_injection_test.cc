@@ -19,6 +19,7 @@
 #include "types/list.hh"
 #include "utils/log.hh"
 #include <chrono>
+#include <seastar/core/when_all.hh>
 
 BOOST_AUTO_TEST_SUITE(error_injection_test)
 

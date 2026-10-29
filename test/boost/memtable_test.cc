@@ -38,6 +38,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "utils/error_injection.hh"
 #include "db/commitlog/commitlog.hh"
+#include "test/lib/tmpdir.hh"
 #include "test/lib/make_random_string.hh"
 #include "db/extensions.hh"
 #include "db/config.hh"
@@ -539,6 +540,52 @@ SEASTAR_TEST_CASE(test_exception_safety_of_single_partition_reads) {
             assert_that(mt->make_mutation_reader(s, semaphore.make_permit(), dht::partition_range::make_singular(ms[1].decorated_key())))
                 .produces(ms[1]);
         });
+    });
+}
+
+// Apply must absorb every injected allocation failure, including those in LSA alloc points
+// reached from noexcept scopes.
+static void test_apply_under_failure_injection(std::function<void(replica::memtable&, const mutation&, const frozen_mutation&)> do_apply) {
+    random_mutation_generator gen(random_mutation_generator::generate_counters::no);
+    auto s = gen.schema();
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    for (auto&& m : gen(4)) {
+        auto fm = freeze(m);
+        {
+            // Warm-up: first use of thread_local state must not happen under injection.
+            replica::memtable warm_mt(s);
+            do_apply(warm_mt, m, fm);
+        }
+        auto& injector = memory::local_failure_injector();
+        uint64_t i = 0;
+        do {
+            // Fresh section per attempt: its std reserve doubles on every injected failure.
+            replica::table_stats tbl_stats;
+            replica::memtable_table_shared_data table_shared_data;
+            replica::dirty_memory_manager mgr;
+            auto mt = make_lw_shared<replica::memtable>(s, mgr, table_shared_data, tbl_stats);
+            injector.fail_after(i++);
+            try {
+                do_apply(*mt, m, fm);
+            } catch (...) {
+                injector.cancel();
+                throw;
+            }
+            injector.cancel();
+            assert_that(mt->make_mutation_reader(s, semaphore.make_permit())).produces(m).produces_end_of_stream();
+        } while (injector.failed());
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_apply_frozen_mutation_under_failure_injection) {
+    test_apply_under_failure_injection([] (replica::memtable& mt, const mutation& m, const frozen_mutation& fm) {
+        mt.apply(fm, m.schema());
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_apply_mutation_under_failure_injection) {
+    test_apply_under_failure_injection([] (replica::memtable& mt, const mutation& m, const frozen_mutation&) {
+        mt.apply(m);
     });
 }
 
@@ -1242,7 +1289,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
                 return env.migration_manager().invoke_on(0, [s = global_schema_ptr(std::move(s))] (service::migration_manager& mm) -> future<> {
                     auto group0_guard = co_await mm.start_group0_operation();
                     auto ts = group0_guard.write_timestamp();
-                    auto announcement = co_await service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s, ts);
+                    auto announcement = co_await service::prepare_new_column_family_announcement(mm.get_storage_proxy(), co_await s.get(db::no_timeout), ts);
                     co_await mm.announce(std::move(announcement), std::move(group0_guard), "");
                 });
             }
@@ -1669,6 +1716,65 @@ SEASTAR_THREAD_TEST_CASE(test_memtable_reader_abort) {
     BOOST_REQUIRE(eventually_true([&] { return bool(permit.get_abort_exception()); }));
 
     BOOST_REQUIRE_THROW((*reader_opt)().get(), named_semaphore_timed_out);
+}
+
+// A write visible in the memtable must keep its commitlog segment pinned via the memtable's rp_set.
+SEASTAR_THREAD_TEST_CASE(test_apply_keeps_replay_position_on_allocation_failure) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    simple_schema ss;
+    auto s = ss.schema();
+    auto pk = ss.make_pkey(0);
+
+    tmpdir tmp;
+    db::commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    cfg.commit_log_location = tmp.path().string();
+    auto log = db::commitlog::create_commitlog(cfg).get();
+    auto stop_log = defer([&] noexcept {
+        log.shutdown().get();
+        log.clear().get();
+    });
+
+    auto guardrails = db::noop_large_data_guardrail::instance();
+
+    for (bool use_frozen : {false, true}) {
+        memory::with_allocation_failures([&] {
+            db::rp_handle h;
+            lw_shared_ptr<replica::memtable> mt;
+            mutation m(s, pk);
+            {
+                memory::scoped_critical_alloc_section no_fail;
+                h = log.add_mutation(s->id(), 8, db::commitlog::force_sync::no, [] (db::commitlog::output& dst) {
+                    dst.write("12345678", 8);
+                }).get();
+                mt = make_lw_shared<replica::memtable>(s);
+                ss.add_row(m, ss.make_ckey(0), "v1");
+            }
+            auto rp = h.rp();
+            BOOST_REQUIRE(rp != db::replay_position());
+            bool applied = false;
+            try {
+                if (use_frozen) {
+                    mt->apply(freeze(m), s, *guardrails, nullptr, nullptr, std::move(h));
+                } else {
+                    mt->apply(m, nullptr, std::move(h));
+                }
+                applied = true;
+            } catch (const std::bad_alloc&) {
+            }
+            memory::scoped_critical_alloc_section no_fail;
+            auto usage = mt->get_and_discard_rp_set();
+            if (!mt->empty()) {
+                BOOST_REQUIRE_MESSAGE(usage.usage().contains(rp.id),
+                        "mutation is in the memtable but its replay position is not tracked");
+            }
+            if (applied) {
+                BOOST_REQUIRE_EQUAL(usage.usage().at(rp.id), 1);
+            } else if (usage.usage().contains(rp.id)) {
+                BOOST_REQUIRE_EQUAL(usage.usage().at(rp.id), 0);
+            }
+        });
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

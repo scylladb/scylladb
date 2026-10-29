@@ -22,6 +22,7 @@
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "db/config.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(secondary_index_test)
 

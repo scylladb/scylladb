@@ -24,6 +24,8 @@
 #include "utils/assert.hh"
 #include "utils/stall_free.hh"
 #include "gms/gossiper.hh"
+#include "service/topology_state_machine.hh"
+
 namespace locator {
 
 static logging::logger tlogger("token_metadata");

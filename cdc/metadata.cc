@@ -84,6 +84,21 @@ bool cdc::metadata::streams_available() const {
     return  it != _gens.end();
 }
 
+// The error for a write whose timestamp is too far in the past to be
+// written to the CDC log. If known, `oldest` is the oldest timestamp that
+// can be written to the CDC log.
+static exceptions::invalid_request_exception write_from_the_past_error(api::timestamp_type ts, api::timestamp_type now,
+        std::optional<api::timestamp_type> oldest = std::nullopt) {
+    return exceptions::invalid_request_exception(fmt::format(
+            "cdc: attempted to get a stream \"from the past\" ({}; current server time: {})."
+            " With CDC you cannot send writes with timestamps too far into the past, because that would break"
+            " consistency properties.{}\n"
+            "We *do* allow sending writes into the near past, but our ability to do that is limited."
+            " Are you using client-side timestamps? Make sure your clocks are well-synchronized"
+            " with the database's clocks.", format_timestamp(ts), format_timestamp(now),
+            oldest ? fmt::format(" The oldest timestamp CDC accepts for this table is {}.", format_timestamp(*oldest)) : ""));
+}
+
 cdc::stream_id cdc::metadata::get_vnode_stream(api::timestamp_type ts, dht::token tok) {
     auto now = api::new_timestamp();
     if (ts > now + get_generation_leeway().count()) {
@@ -118,13 +133,7 @@ cdc::stream_id cdc::metadata::get_vnode_stream(api::timestamp_type ts, dht::toke
         // the generation under `it` because that generation was operating at `now - generation_leeway`.
         bool is_previous_gen = it != _gens.end() && std::next(it) != _gens.end() && std::next(it)->first <= now;
         if (it == _gens.end() || ts < it->first || is_previous_gen) {
-            throw exceptions::invalid_request_exception(seastar::format(
-                    "cdc: attempted to get a stream \"from the past\" ({}; current server time: {})."
-                    " With CDC you cannot send writes with timestamps too far into the past, because that would break"
-                    " consistency properties.\n"
-                    "We *do* allow sending writes into the near past, but our ability to do that is limited."
-                    " Are you using client-side timestamps? Make sure your clocks are well-synchronized"
-                    " with the database's clocks.", format_timestamp(ts), format_timestamp(now)));
+            throw write_from_the_past_error(ts, now);
         }
     }
 
@@ -185,8 +194,11 @@ const utils::chunked_vector<cdc::stream_id>& cdc::metadata::get_tablet_stream_se
     for (; it != table_streams.crend() && it->first > ts; ++it);
 
     if (it == table_streams.crend()) {
-        throw std::runtime_error(fmt::format(
-                "cdc::metadata::get_stream: could not find any CDC streams for table {} for timestamp {}.", tid, ts));
+        // The write is older than the table's oldest stream set - which
+        // started when CDC was enabled on the table, or later if older stream
+        // sets were garbage-collected - so it is in the past.
+        throw write_from_the_past_error(ts, now,
+                table_streams.empty() ? std::nullopt : std::optional(table_streams.begin()->first));
     }
 
     return it->second.streams;

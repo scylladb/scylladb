@@ -27,6 +27,7 @@
 #include "db/config.hh"
 #include "compaction/compaction_manager.hh"
 #include "schema/schema_builder.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(cql_query_large_test)
 

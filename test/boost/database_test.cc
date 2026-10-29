@@ -62,6 +62,9 @@
 #include "test/boost/database_test.hh"
 #include "test/lib/random_schema.hh"
 #include "dht/i_partitioner.hh"
+#include <seastar/core/reactor.hh>
+#include <seastar/core/with_scheduling_group.hh>
+#include "service/qos/service_level_controller.hh"
 
 using namespace std::chrono_literals;
 using namespace sstables;
@@ -92,6 +95,10 @@ public:
 
     replica::dirty_memory_manager& get_dirty_memory_manager() {
         return _db._dirty_memory_manager;
+    }
+
+    replica::dirty_memory_manager& get_system_dirty_memory_manager() {
+        return _db._system_dirty_memory_manager;
     }
 
     flush_controller& get_memtable_controller() {
@@ -236,6 +243,19 @@ SEASTAR_TEST_CASE(test_truncate_saves_replay_position) {
     }, cfg);
 }
 
+// The system memtables share a small dirty memory pool, and a newly started node
+// already has enough of them to be over its soft limit. The dirty memory manager
+// then keeps flushing system memtables in the background, and any of them can be
+// picked, including system.truncated (SCYLLADB-5561). Raise the threshold on all
+// shards so that a test that counts the flushes of a system table only sees the
+// flushes that the test itself causes.
+static void stop_system_memtable_pressure_flushes(cql_test_env& e) {
+    e.db().invoke_on_all([] (replica::database& db) {
+        database_test_wrapper t(db);
+        t.get_system_dirty_memory_manager().update_threshold(t.available_memory());
+    }).get();
+}
+
 // DROP TABLE must not flush system.truncated: the truncation record
 // written by the truncate part of the drop has no reader once the
 // table is gone from the schema, and flushing it costs two blocking
@@ -246,6 +266,7 @@ SEASTAR_TEST_CASE(test_drop_table_does_not_flush_truncation_records) {
     auto cfg = make_shared<db::config>();
     cfg->auto_snapshot.set(false);
     return do_with_cql_env_thread([] (cql_test_env& e) {
+        stop_system_memtable_pressure_flushes(e);
         // Flushes that switch out a non-empty memtable of system.truncated, summed over all shards.
         auto truncated_flush_count = [&e] {
             return e.db().map_reduce0([] (replica::database& db) {
@@ -278,6 +299,7 @@ SEASTAR_TEST_CASE(test_drop_does_not_save_truncation_records) {
     auto cfg = make_shared<db::config>();
     cfg->auto_snapshot.set(false);
     return do_with_cql_env_thread([] (cql_test_env& e) {
+        stop_system_memtable_pressure_flushes(e);
         auto truncated_stats = [&e] (auto get) {
             return e.db().map_reduce0([get] (replica::database& db) {
                 return get(db.find_column_family(db::system_keyspace::NAME, db::system_keyspace::TRUNCATED).get_stats());

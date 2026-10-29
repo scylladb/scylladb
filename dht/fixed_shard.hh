@@ -24,7 +24,7 @@ class key_view;
 namespace dht {
 
 /// A partitioner mainly for Raft metadata tables for strongly consistent tables
-/// (raft_groups, raft_groups_snapshots, raft_groups_snapshot_config).
+/// (system.raft_groups).
 ///
 /// These tables have partition keys with the shard as the first column.
 /// The partitioner creates tokens that will be assigned to the shard specified
@@ -59,8 +59,8 @@ struct fixed_shard_partitioner final : public dht::i_partitioner {
     static unsigned shard_of(dht::token token);
 };
 
-/// A sharder for Raft metadata tables for strongly consistent tables (raft_groups,
-/// raft_groups_snapshots, raft_groups_snapshot_config).
+/// A sharder for Raft metadata tables for strongly consistent tables
+/// (system.raft_groups).
 ///
 /// These tables store raft group state for all tablets of strongly consistent tables.
 /// The sharder allows specifying the shard where the metadata should be located by

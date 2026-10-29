@@ -23,6 +23,7 @@
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(query_processor_test)
 

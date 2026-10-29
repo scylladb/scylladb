@@ -56,11 +56,13 @@ async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id
 
 async def collect_all_raft_state(cql, host):
     state = {}
-    rows = await cql.run_async(f"SELECT DISTINCT shard, group_id, vote_term, commit_idx FROM system.raft_groups", host=host)
+    # vote_term and snapshot_idx are regular columns and the table has no
+    # clustering key, so there is exactly one row per group.
+    rows = await cql.run_async(f"SELECT shard, group_id, vote_term, snapshot_idx FROM system.raft_groups", host=host)
     logger.info(f"Collected raft state from host {host}:")
     for row in rows:
         assert str(row.group_id) not in state, f"Duplicate raft state for group {row.group_id} shard {row.shard}"
-        state[str(row.group_id)] = (row.shard, row.vote_term, row.commit_idx)
+        state[str(row.group_id)] = (row.shard, row.vote_term, row.snapshot_idx)
     return state
 
 
@@ -68,13 +70,13 @@ async def collect_all_raft_state(cql, host):
 # - All raft groups present before an event are still present after the event.
 # - For each raft group, the shard did not change.
 # - For each raft group, vote_term did not decrease (if present).
-# - For each raft group, commit_idx did not decrease (if present).
+# - For each raft group, snapshot_idx did not decrease (if present).
 def assert_raft_state_continuity(state_before: dict, state_after: dict, context: str):
-    for group_id, (shard_before, vote_term_before, commit_idx_before) in state_before.items():
+    for group_id, (shard_before, vote_term_before, snapshot_idx_before) in state_before.items():
         assert group_id in state_after, (
             f"Raft state for group {group_id} shard {shard_before} missing after {context}."
         )
-        shard_after, vote_term_after, commit_idx_after = state_after[group_id]
+        shard_after, vote_term_after, snapshot_idx_after = state_after[group_id]
 
         assert shard_before == shard_after, (
             f"Raft state for group {group_id} changed shard from {shard_before} to {shard_after} after {context}."
@@ -86,10 +88,10 @@ def assert_raft_state_continuity(state_before: dict, state_after: dict, context:
                 f"{vote_term_before} -> {vote_term_after}."
             )
 
-        if commit_idx_before is not None:
-            assert commit_idx_after is not None and commit_idx_after >= commit_idx_before, (
-                f"commit_idx decreased for group {group_id} shard {shard_before} after {context}: "
-                f"{commit_idx_before} -> {commit_idx_after}."
+        if snapshot_idx_before is not None:
+            assert snapshot_idx_after is not None and snapshot_idx_after >= snapshot_idx_before, (
+                f"snapshot_idx decreased for group {group_id} shard {shard_before} after {context}: "
+                f"{snapshot_idx_before} -> {snapshot_idx_after}."
             )
 
 # Verify that reads and writes to raft tables for strongly consistent tablets
@@ -399,13 +401,16 @@ async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
             logger.info(f"Tablet distribution: {tablets}")
             assert set(shard for tablet in tablets for _, shard in tablet.replicas) != set([0]), "Strongly consistent tables shoud be allocated also on non-0 shards"
 
-            # Verify we have non-empty state
+            # Verify the state is non-empty. vote_term, not snapshot_idx:
+            # snapshot_idx only advances when a record is released, which needs
+            # the record's segment closed, so after a handful of small writes
+            # snapshot_idx is still 0.
             state = await collect_all_raft_state(cql, hosts[0])
             has_nonempty_state = any(
-                commit_idx is not None and commit_idx > 0
-                for _, commit_idx, _ in state.values()
+                vote_term is not None and vote_term > 0
+                for _, vote_term, _ in state.values()
             )
-            assert has_nonempty_state, "Expected at least one group to have commit_idx > 0 before crash"
+            assert has_nonempty_state, "Expected at least one group to have vote_term > 0 before crash"
 
             # Prepare the list of (shard, group_id) pairs for all tablets of the table.
             raft_partition_keys = []
@@ -415,12 +420,17 @@ async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
                 raft_partition_keys.append((shard, row.raft_group_id))
             assert len(raft_partition_keys) == 8, f"Expected 8 tablets, got {len(raft_partition_keys)}"
 
+            # system.raft_groups has a collection column, and a Row holding a list
+            # cannot go in a set, so compare normalized tuples instead.
+            def hashable(row):
+                return tuple(tuple(v) if isinstance(v, list) else v for v in row)
+
             # Collect raft metadata for all tablets using single-shard queries
             raft_data = {}
             for (shard, group_id) in raft_partition_keys:
-                raft_data[(shard, group_id)] = set(await cql.run_async(f"SELECT * FROM system.raft_groups WHERE shard = {shard} AND group_id = {group_id}"))
+                raft_data[(shard, group_id)] = {hashable(r) for r in await cql.run_async(f"SELECT * FROM system.raft_groups WHERE shard = {shard} AND group_id = {group_id}")}
                 # Verify that we can also obtain the same data without knowing the shard using ALLOW FILTERING
-                filtered_data = set(await cql.run_async(f"SELECT * FROM system.raft_groups WHERE group_id = {group_id} ALLOW FILTERING"))
+                filtered_data = {hashable(r) for r in await cql.run_async(f"SELECT * FROM system.raft_groups WHERE group_id = {group_id} ALLOW FILTERING")}
                 assert raft_data[(shard, group_id)] == filtered_data, f"Data mismatch for group {group_id} when read by shard vs ALLOW FILTERING: {raft_data[(shard, group_id)]} vs {filtered_data}"
 
             # Now read raft metadata using multi-shard queries and verify correctness
@@ -433,19 +443,20 @@ async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
                 # Instead, we read using a product of all involved shards and group_ids. This should return the same rows because every group_id
                 # is only assigned to one shard.
                 rows = await cql.run_async(f"SELECT * FROM system.raft_groups WHERE shard IN {shards} AND group_id IN ({group_ids})")
+                read_rows = {hashable(r) for r in rows}
                 for key in sample_keys:
                     for row_data in raft_data[key]:
-                        assert row_data in rows, f"Missing data for raft group {key} in multi-shard read: {row_data}"
+                        assert row_data in read_rows, f"Missing data for raft group {key} in multi-shard read: {row_data}"
                 for row in rows:
-                    assert row in raft_data[(row.shard, row.group_id)], f"Unexpected data for raft group {(row.shard, row.group_id)} in multi-shard read: {row}"
+                    assert hashable(row) in raft_data[(row.shard, row.group_id)], f"Unexpected data for raft group {(row.shard, row.group_id)} in multi-shard read: {row}"
 
             # Read ranges of partitions using TOKEN()
             for (boundary_shard, boundary_group_id) in raft_partition_keys:
                 ith_token = await cql.run_async(f"SELECT TOKEN(shard, group_id) as t FROM system.raft_groups WHERE shard = {boundary_shard} AND group_id = {boundary_group_id} LIMIT 1")
                 token_value = ith_token[0].t
-                range_below = await cql.run_async(f"SELECT * FROM system.raft_groups WHERE TOKEN(shard, group_id) <= {token_value}")
-                range_above = await cql.run_async(f"SELECT * FROM system.raft_groups WHERE TOKEN(shard, group_id) > {token_value}")
-                assert set(range_below) & set(range_above) == set(), f"Overlapping data in range reads up to and above token {token_value}"
+                range_below = {hashable(r) for r in await cql.run_async(f"SELECT * FROM system.raft_groups WHERE TOKEN(shard, group_id) <= {token_value}")}
+                range_above = {hashable(r) for r in await cql.run_async(f"SELECT * FROM system.raft_groups WHERE TOKEN(shard, group_id) > {token_value}")}
+                assert range_below & range_above == set(), f"Overlapping data in range reads up to and above token {token_value}"
                 for (shard, group_id) in raft_partition_keys:
                     for row_data in raft_data[(shard, group_id)]:
                         if shard < boundary_shard:
@@ -1522,6 +1533,66 @@ async def test_read_forwarding(manager: ScyllaClusterManager):
                 rows = await cql.run_async(read_stmt, host=non_leader_replica_host)
                 assert len(rows) == 1, f"Expected 1 row for pk={100 + i}, got {len(rows)}"
                 assert rows[0].c == i * 10, f"Linearizability violation: pk={100 + i}, expected c={i * 10}, got c={rows[0].c}"
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_linearizable_read_waits_for_leader_apply(manager: ScyllaClusterManager):
+    """
+    A write is acked once its raft entry is committed, not once it's applied, so
+    the leader can hold a committed write its table doesn't have yet. A CL=QUORUM
+    read on the leader still has to return it: read_barrier() waits until the
+    leader has applied everything committed before the read, and only then the
+    table is read. With the leader's applier parked, the read can't complete and
+    times out - if it returned, it would return the older value, and a client
+    that saw its write acked would read its own write undone.
+
+    A CL=ONE read on the same leader has no read barrier and returns the older
+    value right away. It's what shows that the table really lacks the write, so
+    the CL=QUORUM timeout is the barrier waiting, not something else stuck.
+    """
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc="dc1")
+    leader_server = servers[0]
+    cql, [leader_host, _, _] = await manager.get_ready_cql(servers)
+
+    wait_before_apply_injection = "strong_consistency_state_machine_wait_before_apply"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            group_id = await get_table_raft_group_id(manager, ks, table.split('.')[-1])
+            await ensure_raft_group_leader_on(manager, leader_server, group_id)
+
+            # None until the row exists in the leader's table.
+            async def read_on_leader(cl, timeout=""):
+                stmt = SimpleStatement(f"SELECT v FROM {table} WHERE pk = 1 {timeout}", consistency_level=cl,
+                                       retry_policy=FallthroughRetryPolicy())
+                rows = await cql.run_async(stmt, host=leader_host)
+                return rows[0].v if rows else None
+
+            async def leader_has_applied(v):
+                return True if await read_on_leader(ConsistencyLevel.ONE) == v else None
+
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (1, 1)", host=leader_host)
+            # The leader may still be applying this write when the ack arrives, and then
+            # the injection below would park this entry rather than the next one.
+            await wait_for(lambda: leader_has_applied(1), time.time() + 60)
+
+            logger.info("Parking the applier of the leader")
+            await manager.api.enable_injection(leader_server.ip_addr, wait_before_apply_injection, one_shot=True)
+            # Release the applier even if a check below fails: the parked apply doesn't
+            # see the node's shutdown and would hold up its stop for 20 minutes.
+            try:
+                await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (1, 2)", host=leader_host)
+                await manager.api.wait_for_injection_enter(leader_server.ip_addr, wait_before_apply_injection)
+
+                assert await read_on_leader(ConsistencyLevel.ONE) == 1, \
+                    "CL=ONE: expected the leader's table to lack the acked write while its applier is parked"
+                with pytest.raises(ReadTimeout):
+                    v = await read_on_leader(ConsistencyLevel.QUORUM, timeout="USING TIMEOUT 1s")
+                    pytest.fail(f"CL=QUORUM returned v={v} before the leader applied the acked write")
+            finally:
+                logger.info("Releasing the applier of the leader")
+                await manager.api.message_injection(leader_server.ip_addr, wait_before_apply_injection)
+            assert await read_on_leader(ConsistencyLevel.QUORUM) == 2
 
 
 async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterManager):
@@ -2890,21 +2961,20 @@ async def test_no_raft_replay_into_a_tablet_that_moved_away(manager: ScyllaClust
             # Replay must have refused the group, on either of the two counts: the
             # tablet has no replica here anymore, or the cleanup erased its raft state.
             discarded = await log.grep(
-                rf"raft_commitlog_replay - group {group_id} has no (tablet replica|persisted raft state) on this shard, discarding",
+                rf"raft_commitlog_replay - group {group_id} (is no longer hosted by this shard"
+                rf"|has no persisted raft state on this shard), discarding",
                 from_mark=mark)
+            # resolve_group() logs the recovered floor for a group it accepts, so its
+            # absence is what says the entries were not replayed.
             entries_replayed = await log.grep(
-                rf"raft_commitlog_replay - group {group_id}: \d+ entries", from_mark=mark)
+                rf"raft_commitlog_replay - group {group_id}: recovered floor", from_mark=mark)
             assert not entries_replayed, \
                 f"Replay processed entries of group {group_id} on a node that left it: {entries_replayed}"
             assert discarded, f"Expected replay to discard the entries of group {group_id}"
             logger.info(f"Replay discard messages for group {group_id}: {discarded}")
 
-            # Deliberately no assertion that the cleanup's erase survived the restart.
-            # system.raft_groups is written through the ordinary commitlog with periodic
-            # sync, so a kill within the sync window loses the delete, and the tablet no
-            # longer migrates to a stage that would retry the cleanup. That is what the
-            # ownership test above is for: it refuses the group whether or not the state
-            # is still there.
+            # No assertion on the cleanup's erase: the ownership test above refuses the
+            # group whether or not the state is still there.
             cql, hosts = await manager.get_ready_cql(servers)
             for i in range(10):
                 rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}")
@@ -3196,7 +3266,12 @@ async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterMa
         writes = 10
         for i in range(writes):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})")
-        before = await manager.metrics.query(src.ip_addr)
+        # A write waits for its entry to be committed, not applied.
+        async def writes_applied():
+            metrics = await manager.metrics.query(src.ip_addr)
+            applied_entries = metrics.get(f'{SC_RAFT_METRICS_PREFIX}applied_entries', applied) or 0
+            return metrics if applied_entries >= writes else None
+        before = await wait_for(writes_applied, time.time() + 60)
         commands_before = before.get(f'{SC_RAFT_METRICS_PREFIX}add_entries', commands) or 0
         applied_before = before.get(f'{SC_RAFT_METRICS_PREFIX}applied_entries', applied) or 0
         assert commands_before >= writes

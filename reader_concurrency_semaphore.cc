@@ -24,6 +24,7 @@
 #include "schema/schema.hh"
 #include "utils/human_readable.hh"
 #include "utils/memory_limit_reached.hh"
+#include "tracing/trace_state.hh"
 
 logger rcslog("reader_concurrency_semaphore");
 

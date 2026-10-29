@@ -37,6 +37,7 @@
 #include "audit/audit_rule.hh"
 #include "audit/audit.hh"
 #include "config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "extensions.hh"
 #include "sstables/compressor.hh"
 #include "utils/log.hh"
@@ -973,6 +974,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Whether or not to use a hard size limit for commitlog disk usage. Default is true. Enabling this can cause latency spikes, whereas disabling this can lead to occasional disk usage peaks.\n")
     , commitlog_use_fragmented_entries(this, "commitlog_use_fragmented_entries", value_status::Used, true,
         "Whether or not to allow commitlog entries to fragment across segments, allowing for larger entry sizes.\n")
+    , strongly_consistent_tables_start_on_damaged_commitlog(this, "strongly_consistent_tables_start_on_damaged_commitlog", value_status::Used, false,
+        "Whether or not to start when commitlog replay could not read a segment in full while this shard hosts strongly consistent raft groups. "
+        "The unread bytes may have held raft batches the node already acknowledged, so starting can drop committed entries and diverge the replica from the quorum. "
+        "Set it only to recover a node that cannot start because an intact segment is reported damaged.\n")
     /**
     * @Group Compaction settings
     * @GroupDescription Related information: Configuring compaction
@@ -1310,7 +1315,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Maximum concurrency allowed for sending hints. The concurrency is divided across shards and rounded up if not divisible by the number of shards. By default (or when set to 0), concurrency of 8*shard_count will be used.")
     , hinted_handoff_throttle_in_kb(this, "hinted_handoff_throttle_in_kb", value_status::Unused, 1024,
         "Maximum throttle per delivery thread in kilobytes per second. This rate reduces proportionally to the number of nodes in the cluster. For example, if there are two nodes in the cluster, each delivery thread will use the maximum rate. If there are three, each node will throttle to half of the maximum, since the two nodes are expected to deliver hints simultaneously.")
-    , max_hint_window_in_ms(this, "max_hint_window_in_ms", value_status::Used, 10800000,
+    , max_hint_window_in_ms(this, "max_hint_window_in_ms", liveness::LiveUpdate, value_status::Used, 10800000,
         "Maximum amount of time that hints are generates hints for an unresponsive node. After this interval, new hints are no longer generated until the node is back up and responsive. If the node goes down again, a new interval begins. This setting can prevent a sudden demand for resources when a node is brought back online and the rest of the cluster attempts to replay a large volume of hinted writes.\n"
         "\n"
         "Related information: Failure detection and recovery")
@@ -1689,6 +1694,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     // alternator_max_items_in_batch_write matches DynamoDB behaviour of size limit, but with different value - for DynamoDB it's 25
     // (see DynamoDB's documentation for BatchWriteItem command)
     , alternator_max_items_in_batch_write(this, "alternator_max_items_in_batch_write", value_status::Used, 100, "Maximum amount of items in single BatchItemWrite call.")
+    , alternator_max_concurrent_exports_per_shard(this, "alternator_max_concurrent_exports_per_shard", liveness::LiveUpdate, value_status::Used, 10,
+        "Maximum number of ExportTableToPointInTime exports running at the same time on a single shard. "
+        "Every running export scans an entire table and holds an S3 multipart upload open for as long as it runs, "
+        "so their number has to be bounded - DynamoDB limits the number of concurrent exports too. "
+        "A request which would exceed the limit is rejected with LimitExceededException and can be retried later.")
     , alternator_allow_system_table_write(this, "alternator_allow_system_table_write", liveness::LiveUpdate, value_status::Used,
         false,
         "Allow writing to system tables using the .scylla.alternator.system prefix")
@@ -1843,6 +1853,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Sets the maximum difference in percentages between the most loaded and least loaded nodes, below which the load balancer considers nodes balanced.")
     , minimal_tablet_size_for_balancing(this, "minimal_tablet_size_for_balancing", liveness::LiveUpdate, value_status::Used, service::default_target_tablet_size / 100,
         "Sets the minimal tablet size for the load balancer. For any tablet smaller than this, the balancer will use this size instead of the actual tablet size.")
+    , tablet_transition_abort_grace_period_in_seconds(this, "tablet_transition_abort_grace_period_in_seconds", liveness::LiveUpdate, value_status::Used, 0,
+        "Default grace period given to in-flight tablet transitions when disabling tablet balancing. Transitions which can "
+        "still be cancelled after it, tablet repairs included, are cancelled; the others are waited for. A cancelled repair "
+        "drops its tablets from the repair request without reporting them as failed. Cancelling a transition which was "
+        "adding a replica leaves that tablet below its replication factor until balancing is enabled again. Callers of the "
+        "API can pass their own grace period, which overrides this. 0, the default, cancels nothing.")
     /**
     * @Group Ungrouped properties
     */

@@ -22,7 +22,7 @@
 #include "service/topology_state_machine.hh"
 #include "db/view/view_building_state.hh"
 #include "service/qos/service_level_controller.hh"
-#include "locator/tablets.hh"
+#include "locator/tablet_types.hh"
 
 namespace db {
 class system_keyspace;
@@ -111,8 +111,12 @@ public:
         uint64_t succeeded;
     };
     std::unordered_map<locator::tablet_task_type, tablet_ops_stats> stats;
+    uint64_t cancelled_transitions = 0;
 public:
     tablet_ops_metrics();
+    void add_cancelled_transitions(uint64_t n) {
+        cancelled_transitions += n;
+    }
     void inc_failed(locator::tablet_task_type type) {
         if (type == locator::tablet_task_type::none) {
             return;

@@ -19,7 +19,7 @@
 
 #include "auth/permission.hh"
 #include "auth/resource.hh"
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
 #include "seastarx.hh"
 
 namespace auth {

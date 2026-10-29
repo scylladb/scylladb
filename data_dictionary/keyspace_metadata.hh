@@ -14,13 +14,21 @@
 
 #include "cql3/description.hh"
 #include "schema/schema.hh"
-#include "locator/abstract_replication_strategy.hh"
+#include "locator/abstract_replication_strategy_fwd.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "data_dictionary/storage_options.hh"
 #include "data_dictionary/consistency_config_options.hh"
 
 namespace gms {
 class feature_service;
+}
+
+namespace locator {
+class topology;
+}
+
+namespace replica {
+class database;
 }
 
 namespace data_dictionary {

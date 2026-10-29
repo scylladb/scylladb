@@ -18,6 +18,8 @@
 #include "dht/i_partitioner.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/from_mutations.hh"
+#include "tracing/trace_state.hh"
+#include "tombstone_gc.hh"
 
 logging::logger mlog("mutation");
 
@@ -326,7 +328,7 @@ auto fmt::formatter<mutation>::format(const mutation& m, fmt::format_context& ct
         ++column_iterator;
     }
 
-    return fmt::format_to(out, "token: {}}}, {}\n}}", dk._token, mutation_partition::printer(s, m.partition()));
+    return fmt::format_to(out, "token: {}}}, {}\n}}", dk.token(), mutation_partition::printer(s, m.partition()));
 }
 
 namespace mutation_json {

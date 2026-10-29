@@ -7,8 +7,10 @@
 #############################################################################
 
 import pytest
+from . import rest_api
 from .util import new_test_table
 from cassandra.protocol import InvalidRequest
+from cassandra.query import SimpleStatement
 
 # table1 has some pre-set data which the tests below SELECT on (the tests
 # shouldn't write to it).
@@ -185,6 +187,20 @@ def test_group_by_count_with_limit(cql, table1):
     assert len(results) == 4
     for i in range(1,4):
         assert results[:i] == list(cql.execute(f'SELECT p,c1,count(*) FROM {table1} GROUP BY p,c1 LIMIT {i}'))
+
+# A grouped query with LIMIT should stop reading once LIMIT groups are
+# complete. Each page is one read of the table on its replica.
+# Regression test for SCYLLADB-4585.
+def test_group_by_count_with_limit_stops_reading(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int, c int, PRIMARY KEY (p, c)") as table:
+        insert = cql.prepare(f'INSERT INTO {table} (p, c) VALUES (1, ?)')
+        for c in range(10):
+            cql.execute(insert, [c])
+        reads_before = rest_api.get_column_family_metric(cql, 'read', table)
+        stmt = SimpleStatement(f'SELECT c, count(*) FROM {table} WHERE p = 1 GROUP BY c LIMIT 1', fetch_size=1)
+        assert list(cql.execute(stmt)) == [(0, 1)]
+        # Group 0 is complete once the second page starts group 1.
+        assert rest_api.get_column_family_metric(cql, 'read', table) - reads_before == 2
 
 # Adding a PER PARTITION LIMIT should be honored
 # Reproduces #5363 - more results than the limit were generated

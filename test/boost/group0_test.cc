@@ -29,6 +29,7 @@
 #include "service/storage_service.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/metrics_api.hh>
+#include "replica/database.hh"
 
 static future<utils::chunked_vector<std::vector<managed_bytes_opt>>> fetch_rows(cql_test_env& e, std::string_view cql) {
     auto msg = co_await e.execute_cql(cql);

@@ -35,6 +35,7 @@
 #include <fmt/ranges.h>
 #include <utility>
 #include <algorithm>
+#include "replica/database.hh"
 
 namespace {
 
@@ -126,8 +127,8 @@ static generated_table create_test_table(
             keys.emplace_back(mut.decorated_key());
             compacted_frozen_mutations.emplace_back(freeze(mut.compacted()));
             (void)with_gate(write_gate, [&] {
-                return smp::submit_to(dht::static_shard_of(*schema, mut.decorated_key().token()), [&env, gs = global_schema_ptr(schema), mut = freeze(mut)] () mutable {
-                    return env.local_db().apply(gs.get(), std::move(mut), {}, db::commitlog_force_sync::no, db::no_timeout);
+                return smp::submit_to(dht::static_shard_of(*schema, mut.decorated_key().token()), [&env, gs = global_schema_ptr(schema), mut = freeze(mut)] () mutable -> future<> {
+                    co_await env.local_db().apply(co_await gs.get(db::no_timeout), std::move(mut), {}, db::commitlog_force_sync::no, db::no_timeout);
                 });
             });
             thread::maybe_yield();
@@ -243,7 +244,8 @@ static utils::chunked_vector<mutation> read_all_partitions_one_by_one(sharded<re
 
     for (const auto& pkey : pkeys) {
         const auto res = db.invoke_on(sharder.shard_for_reads(pkey.token()), [gs = global_schema_ptr(s), &pkey, &slice] (replica::database& db) {
-            return async([s = gs.get(), &pkey, &slice, &db] () mutable {
+            return async([&gs, &pkey, &slice, &db] () mutable {
+                auto s = gs.get(db::no_timeout).get();
                 const auto cmd = query::read_command(s->id(), s->version(), slice,
                         query::max_result_size(query::result_memory_limiter::unlimited_result_size), query::tombstone_limit::max);
                 const auto range = dht::partition_range::make_singular(pkey);
@@ -1143,8 +1145,8 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
         testlog.info("Running test workload with configuration: seed={}, concurrency={}, scans={}", cfg.seed,
                 cfg.concurrency, cfg.scans);
 
-        smp::invoke_on_all([cfg, db = &env.db(), gs = global_schema_ptr(tbl.schema), &compacted_frozen_mutations = tbl.compacted_frozen_mutations] {
-            return run_fuzzy_test_workload(cfg, *db, gs.get(), compacted_frozen_mutations);
+        smp::invoke_on_all([cfg, db = &env.db(), gs = global_schema_ptr(tbl.schema), &compacted_frozen_mutations = tbl.compacted_frozen_mutations] () -> future<> {
+            co_await run_fuzzy_test_workload(cfg, *db, co_await gs.get(db::no_timeout), compacted_frozen_mutations);
         }).handle_exception([seed] (std::exception_ptr e) {
             testlog.error("Test workload failed with exception {}."
                     " To repeat this particular run, replace the random seed of the test, with that of this run ({})."

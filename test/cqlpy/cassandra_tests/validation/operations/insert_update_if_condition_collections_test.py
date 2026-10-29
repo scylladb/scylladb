@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of Cassandra 4.1.1 (commit 8d91b469afd3fcafef7ef85c10c8acc11703ba2d)
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -710,6 +710,123 @@ def testMapItem(cql, test_keyspace):
             else:
                 assert list(execute(cql, table, "UPDATE %s set m['foo'] = 'bar', m['bar'] = 'foo' WHERE k = 1 IF m[?] IN (?, ?)", "foo", "blah", None))[0][0] == True
 
+# The following tests check conditions on null values of collections and
+# UDTs. Scylla returns the old row's values even when a conditional update
+# applies, while Cassandra returns just the "[applied]" column, so for an
+# update which applies we only check the "[applied]" column.
+def applied(result):
+    return list(result)[0][0]
+
+def testListConditionsWithNullValues(cql, test_keyspace):
+    for frozen in [True, False]:
+        type = "frozen<list<text>>" if frozen else "list<text>"
+        with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, l {type})") as table:
+            execute(cql, table, "INSERT INTO %s (k, l) VALUES (0, null)")
+            execute(cql, table, "INSERT INTO %s (k, l) VALUES (1, null)")
+
+            for operator in [">", "<", ">=", "<=", "="]:
+                assertRows(execute(cql, table, "UPDATE %s SET l = ? WHERE k = 0 IF l " + operator + " ?", ["test"], ["comparison"]), row(False, None))
+
+            assertRows(execute(cql, table, "UPDATE %s SET l = ? WHERE k = 0 IF l != NULL", ["test"]), row(False, None))
+            assert applied(execute(cql, table, "UPDATE %s SET l = ? WHERE k = 0 IF l = NULL", ["test"])) == True
+            assertRows(execute(cql, table, "SELECT l FROM %s WHERE k = 0"), row(["test"]))
+
+            if not frozen:
+                assertRows(execute(cql, table, "UPDATE %s SET l = ? WHERE k = 1 IF l != []", ["test"]), row(False, None))
+                assert applied(execute(cql, table, "UPDATE %s SET l = ? WHERE k = 1 IF l = []", ["test"])) == True
+                assertRows(execute(cql, table, "SELECT l FROM %s WHERE k = 1"), row(["test"]))
+
+            for operator in [">", "<", ">=", "<="]:
+                assertInvalidMessage(cql, table, "Invalid comparison with null for operator \"" + operator + '"',
+                                     "UPDATE %s SET l = ? WHERE k = 0 IF l " + operator + " NULL", ["test"])
+
+                if not frozen:
+                    # Scylla considers an empty non-frozen collection to be null
+                    # (see #5855), so its message is "Invalid comparison with
+                    # null for operator ...".
+                    assertInvalidMessageRE(cql, table, "Invalid comparison with (an empty list|null) for operator \"" + re.escape(operator) + '"',
+                                         "UPDATE %s SET l = ? WHERE k = 0 IF l " + operator + " []", ["test"])
+
+def testSetConditionsWithNullValues(cql, test_keyspace):
+    for frozen in [True, False]:
+        type = "frozen<set<text>>" if frozen else "set<text>"
+        with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, s {type})") as table:
+            execute(cql, table, "INSERT INTO %s (k, s) VALUES (0, null)")
+            execute(cql, table, "INSERT INTO %s (k, s) VALUES (1, null)")
+
+            for operator in [">", "<", ">=", "<=", "="]:
+                assertRows(execute(cql, table, "UPDATE %s SET s = ? WHERE k = 0 IF s " + operator + " ?", {"test"}, {"comparison"}), row(False, None))
+
+            assertRows(execute(cql, table, "UPDATE %s SET s = ? WHERE k = 0 IF s != NULL", {"test"}), row(False, None))
+            assert applied(execute(cql, table, "UPDATE %s SET s = ? WHERE k = 0 IF s = NULL", {"test"})) == True
+            assertRows(execute(cql, table, "SELECT s FROM %s WHERE k = 0"), row({"test"}))
+
+            if not frozen:
+                assertRows(execute(cql, table, "UPDATE %s SET s = ? WHERE k = 1 IF s != {}", {"test"}), row(False, None))
+                assert applied(execute(cql, table, "UPDATE %s SET s = ? WHERE k = 1 IF s = {}", {"test"})) == True
+                assertRows(execute(cql, table, "SELECT s FROM %s WHERE k = 1"), row({"test"}))
+
+            for operator in [">", "<", ">=", "<="]:
+                assertInvalidMessage(cql, table, "Invalid comparison with null for operator \"" + operator + '"',
+                                     "UPDATE %s SET s = ? WHERE k = 0 IF s " + operator + " NULL", {"test"})
+
+                if not frozen:
+                    # Scylla considers an empty non-frozen collection to be null
+                    # (see #5855), so its message is "Invalid comparison with
+                    # null for operator ...".
+                    assertInvalidMessageRE(cql, table, "Invalid comparison with (an empty set|null) for operator \"" + re.escape(operator) + '"',
+                                         "UPDATE %s SET s = ? WHERE k = 0 IF s " + operator + " {}", {"test"})
+
+def testMapConditionsWithNullValues(cql, test_keyspace):
+    for frozen in [True, False]:
+        type = "frozen<map<text,int>>" if frozen else "map<text,int>"
+        with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, m {type})") as table:
+            execute(cql, table, "INSERT INTO %s (k, m) VALUES (0, null)")
+            execute(cql, table, "INSERT INTO %s (k, m) VALUES (1, null)")
+
+            for operator in [">", "<", ">=", "<=", "="]:
+                assertRows(execute(cql, table, "UPDATE %s SET m = ? WHERE k = 0 IF m " + operator + " ?", {"test": 3}, {"comparison": 2}), row(False, None))
+
+            assertRows(execute(cql, table, "UPDATE %s SET m = ? WHERE k = 0 IF m != NULL", {"test": 3}), row(False, None))
+            assert applied(execute(cql, table, "UPDATE %s SET m = ? WHERE k = 0 IF m = NULL", {"test": 3})) == True
+            assertRows(execute(cql, table, "SELECT m FROM %s WHERE k = 0"), row({"test": 3}))
+
+            if not frozen:
+                assertRows(execute(cql, table, "UPDATE %s SET m = ? WHERE k = 1 IF m != {}", {"test": 3}), row(False, None))
+                assert applied(execute(cql, table, "UPDATE %s SET m = ? WHERE k = 1 IF m = {}", {"test": 3})) == True
+                assertRows(execute(cql, table, "SELECT m FROM %s WHERE k = 1"), row({"test": 3}))
+
+            for operator in [">", "<", ">=", "<="]:
+                assertInvalidMessage(cql, table, "Invalid comparison with null for operator \"" + operator + '"',
+                                     "UPDATE %s SET m = ? WHERE k = 0 IF m " + operator + " NULL", {"test": 3})
+
+                if not frozen:
+                    # Scylla considers an empty non-frozen collection to be null
+                    # (see #5855), so its message is "Invalid comparison with
+                    # null for operator ...".
+                    assertInvalidMessageRE(cql, table, "Invalid comparison with (an empty map|null) for operator \"" + re.escape(operator) + '"',
+                                         "UPDATE %s SET m = ? WHERE k = 0 IF m " + operator + " {}", {"test": 3})
+
+def testUdtConditionsWithNullValues(cql, test_keyspace):
+    for frozen in [True, False]:
+        with create_type(cql, test_keyspace, "(a int, b int)") as userType:
+            type = "frozen<" + userType + ">" if frozen else userType
+            with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, t {type})") as table:
+                execute(cql, table, "INSERT INTO %s (k, t) VALUES (0, null)")
+
+                for operator in [">", "<", ">=", "<=", "="]:
+                    assertRows(execute(cql, table, "UPDATE %s SET t = ? WHERE k = 0 IF t " + operator + " ?",
+                                       user_type("a", 1, "b", 2), user_type("a", 4, "b", 5)),
+                               row(False, None))
+
+                assertRows(execute(cql, table, "UPDATE %s SET t = ? WHERE k = 0 IF t != NULL", user_type("a", 1, "b", 2)), row(False, None))
+                assert applied(execute(cql, table, "UPDATE %s SET t = ? WHERE k = 0 IF t = NULL", user_type("a", 1, "b", 2))) == True
+                assertRows(execute(cql, table, "SELECT t FROM %s WHERE k = 0"), row(user_type("a", 1, "b", 2)))
+
+                for operator in [">", "<", ">=", "<="]:
+                    assertInvalidMessage(cql, table, "Invalid comparison with null for operator \"" + operator + '"',
+                                         "UPDATE %s SET t = ? WHERE k = 0 IF t " + operator + " NULL", user_type("a", 1, "b", 2))
+
 @pytest.mark.parametrize("test_keyspace",
                          ["tablets", "vnodes"],
                          indirect=True)
@@ -856,6 +973,30 @@ def testInMarkerWithUDTs(cql, test_keyspace):
                 assertInvalidMessage(cql, table, "unset",
                                  "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN ?", unset())
 
+# The Java testNonFrozenEmptyCollection also checks that an unset value in a
+# CONTAINS or CONTAINS KEY condition is an error. Cassandra 5 considers such
+# a condition to just not apply, so we split these checks into this separate
+# test, which is skipped on Cassandra 5.
+# Reproduces #13586 (CONTAINS in LWT conditions)
+@pytest.mark.xfail(reason="#13586")
+def testNonFrozenEmptyCollectionUnset(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, l list<text>)") as table:
+        execute(cql, table, "INSERT INTO %s (k, l) VALUES (0, null)")
+        assertInvalidMessage(cql, table, "Invalid 'unset' value in condition",
+                             "UPDATE %s SET l = null WHERE k = 0 IF l CONTAINS ?", unset())
+
+    with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, s set<text>)") as table:
+        execute(cql, table, "INSERT INTO %s (k, s) VALUES (0, null)")
+        assertInvalidMessage(cql, table, "Invalid 'unset' value in condition",
+                             "UPDATE %s SET s = null WHERE k = 0 IF s CONTAINS ?", unset())
+
+    with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, m map<text, text>)") as table:
+        execute(cql, table, "INSERT INTO %s (k, m) VALUES (0, null)")
+        assertInvalidMessage(cql, table, "Invalid 'unset' value in condition",
+                             "UPDATE %s SET m = null WHERE k = 0 IF m CONTAINS ?", unset())
+        assertInvalidMessage(cql, table, "Invalid 'unset' value in condition",
+                             "UPDATE %s SET m = null WHERE k = 0 IF m CONTAINS KEY ?", unset())
+
 @pytest.mark.xfail(reason="Issues #13586, #5855")
 def testNonFrozenEmptyCollection(cql, test_keyspace):
     with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, l list<text>)") as table:
@@ -866,12 +1007,13 @@ def testNonFrozenEmptyCollection(cql, test_keyspace):
         # Reproduces #5855:
         assert list(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l = ?", []))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l != ?", ["bar"]))[0][0] == True
-        # Reproduces #5855:
-        assert list(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l < ?", ["a"]))[0][0] == True
-        assert list(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l <= ?", ["a"]))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l IN (?, ?)", None, ["bar"]))[0][0] == True
 
         # Does not apply
+        assertRows(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l < ?", ["a"]),
+                   row(False, None))
+        assertRows(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l <= ?", ["a"]),
+                   row(False, None))
         assertRows(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l = ?", ["bar"]),
                    row(False, None))
         assertRows(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l > ?", ["a"]),
@@ -880,8 +1022,6 @@ def testNonFrozenEmptyCollection(cql, test_keyspace):
                    row(False, None))
         # Reproduces #13586:
         assertRows(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l CONTAINS ?", "bar"),
-                   row(False, None))
-        assertRows(execute(cql, table, "UPDATE %s SET l = null WHERE k = 0 IF l CONTAINS ?", unset()),
                    row(False, None))
 
         assertInvalidMessage(cql, table, "Invalid comparison with null for operator \"CONTAINS\"",
@@ -895,12 +1035,13 @@ def testNonFrozenEmptyCollection(cql, test_keyspace):
         # Reproduces #5855:
         assert list(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s = ?", set()))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s != ?", {"bar"}))[0][0] == True
-        # Reproduces #5855:
-        assert list(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s < ?", {"a"}))[0][0] == True
-        assert list(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s <= ?", {"a"}))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s IN (?, ?)", None, {"bar"}))[0][0] == True
 
         # Does not apply
+        assertRows(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s < ?", {"a"}),
+                   row(False, None))
+        assertRows(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s <= ?", {"a"}),
+                   row(False, None))
         assertRows(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s = ?", {"bar"}),
                    row(False, None))
         assertRows(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s > ?", {"a"}),
@@ -909,8 +1050,6 @@ def testNonFrozenEmptyCollection(cql, test_keyspace):
                    row(False, None))
         # Reproduces #13586:
         assertRows(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s CONTAINS ?", "bar"),
-                   row(False, None))
-        assertRows(execute(cql, table, "UPDATE %s SET s = null WHERE k = 0 IF s CONTAINS ?", unset()),
                    row(False, None))
 
         assertInvalidMessage(cql, table, "Invalid comparison with null for operator \"CONTAINS\"",
@@ -924,12 +1063,13 @@ def testNonFrozenEmptyCollection(cql, test_keyspace):
         # Reproduces #5855:
         assert list(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m = ?", {}))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m != ?", {"foo":"bar"}))[0][0] == True
-        # Reproduces #5855:
-        assert list(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m < ?", {"a":"a"}))[0][0] == True
-        assert list(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m <= ?", {"a":"a"}))[0][0] == True
         assert list(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m IN (?, ?)", None, {"foo":"bar"}))[0][0] == True
 
         # Does not apply
+        assertRows(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m < ?", {"a":"a"}),
+                   row(False, None))
+        assertRows(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m <= ?", {"a":"a"}),
+                   row(False, None))
         assertRows(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m = ?", {"foo":"bar"}),
                    row(False, None))
         assertRows(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m > ?", {"a": "a"}),
@@ -939,11 +1079,7 @@ def testNonFrozenEmptyCollection(cql, test_keyspace):
         # Reproduces #13586:
         assertRows(execute(cql, table, "UPDATE %s SET m = null WHERE k = 0 IF m CONTAINS ?", "bar"),
                    row(False, None))
-        assertRows(execute(cql, table, "UPDATE %s SET m = {} WHERE k = 0 IF m CONTAINS ?", unset()),
-                   row(False, None))
         assertRows(execute(cql, table, "UPDATE %s SET m = {} WHERE k = 0 IF m CONTAINS KEY ?", "foo"),
-                   row(False, None))
-        assertRows(execute(cql, table, "UPDATE %s SET m = {} WHERE k = 0 IF m CONTAINS KEY ?", unset()),
                    row(False, None))
 
         assertInvalidMessage(cql, table, "Invalid comparison with null for operator \"CONTAINS\"",

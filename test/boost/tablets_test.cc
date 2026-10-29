@@ -55,6 +55,7 @@
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "service/strong_consistency/groups_manager.hh"
+#include "gms/gossiper.hh"
 
 #include <boost/regex.hpp>
 #include <atomic>
@@ -1153,7 +1154,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
                         tablet_replica {h2, 7},
                     }
                 );
-                builder.del_transition(token);
+                builder.del_transition(token, db.features());
 
                 muts.emplace_back(builder.build());
             }
@@ -1587,7 +1588,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                 tablet_replica {h1, 2},
                 tablet_replica {h2, 3},
             });
-            b.del_transition(last_token);
+            b.del_transition(last_token, e.local_db().features());
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
 
@@ -1621,7 +1622,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h1, 2},
                     tablet_replica {h2, 3},
             });
-            b.del_transition(last_token);
+            b.del_transition(last_token, e.local_db().features());
             b.set_resize_decision(resize_decision, e.local_db().features());
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
@@ -8992,10 +8993,9 @@ SEASTAR_THREAD_TEST_CASE(test_stepdown_leaders_during_raft_group_restart) {
         // Must skip the group rather than touch its destroyed server.
         stepdown_leaders_on_home();
 
-        // Moving the tablet by rewriting its map leaves the group's commit
-        // index in system.raft_groups, while its log died with the server;
-        // raft::server::start() rejects a commit index ahead of the log.
-        // Drop it so the restart can finish.
+        // Moving the tablet by rewriting its map skips the tablet cleanup, so
+        // the group's row stays in system.raft_groups. Drop it, as the cleanup
+        // would, so the restart bootstraps the group afresh.
         e.execute_cql(format("delete from system.raft_groups where shard = {} and group_id = {}",
                 home.shard, group_id)).get();
         start_pause.reset();

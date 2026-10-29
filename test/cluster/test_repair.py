@@ -155,7 +155,9 @@ async def test_tombstone_gc_for_streaming_and_repair(manager):
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_succeeds_with_unitialized_bm(manager):
-    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+    # The failed tablet repair is retried only on the next load-stats refresh.
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = await manager.servers_add(2, config=cfg, auto_rack_dc="dc1")
     cql = manager.get_cql()
 
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
@@ -999,7 +1001,10 @@ async def test_shutdown_during_repair_master_write(manager: ScyllaClusterManager
 
     Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-4888
     """
-    cfg = storage_config.get_cluster_cfg({'hinted_handoff_enabled': False})
+    # The failed repair is retried after min_reschedule_time (5s), and nothing wakes the
+    # coordinator after that until the next load stats refresh.
+    cfg = storage_config.get_cluster_cfg({'hinted_handoff_enabled': False,
+                                          'tablet_load_stats_refresh_interval_in_seconds': 1})
     servers = await manager.servers_add(2, config=cfg, cmdline=['--logger-log-level', 'repair=debug'], property_file=[
         {'dc': 'dc1', 'rack': 'r1'},
         {'dc': 'dc1', 'rack': 'r2'}

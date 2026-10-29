@@ -10,6 +10,7 @@
 #include "replica/multishard_query.hh"
 #include "mutation_query.hh"
 #include "replica/database.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "query/query-result-writer.hh"
 #include "query/query_result_merger.hh"
 #include "readers/multishard.hh"
@@ -21,6 +22,7 @@
 #include <seastar/coroutine/try_future.hh>
 
 #include <fmt/ostream.h>
+#include "locator/tablets.hh"
 
 namespace replica {
 
@@ -584,7 +586,7 @@ future<> read_context::lookup_readers(db::timeout_clock::time_point timeout) noe
     try {
         return _db.invoke_on_all([this, cmd = &_cmd, ranges = &_ranges, gs = global_schema_ptr(_schema),
                 gts = tracing::global_trace_state_ptr(_trace_state), timeout] (replica::database& db) mutable -> future<> {
-            auto schema = gs.get();
+            auto schema = co_await coroutine::try_future(gs.get(timeout));
             auto& table = db.find_column_family(schema);
             auto& semaphore = this->semaphore();
             auto shard = this_shard_id();
@@ -822,7 +824,9 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
     while (auto range_opt = range_splitter()) {
         auto& r = *results.emplace_back(co_await db.invoke_on(range_opt->shard,
                     [&result_builder, gs = global_schema_ptr(s), &query_cmd, &range_opt, gts = tracing::global_trace_state_ptr(trace_state), timeout] (replica::database& db) {
-            return result_builder.query(db, gs, query_cmd, range_opt->range, gts, timeout);
+            return gs.get(timeout).then([&result_builder, &db, &query_cmd, &range_opt, &gts, timeout] (schema_ptr schema) {
+                return result_builder.query(db, std::move(schema), query_cmd, range_opt->range, gts, timeout);
+            });
         }));
 
         // Subtract result from limit, watch for underflow

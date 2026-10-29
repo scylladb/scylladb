@@ -8,8 +8,9 @@ import time
 import asyncio
 import logging
 from test.pylib.rest_client import get_host_api_address, read_barrier
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for, wait_for_view
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.tablets import get_tablet_replicas
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.cluster.util import trigger_snapshot, reconnect_driver, \
         wait_for_token_ring_and_group0_consistency, get_topology_coordinator
@@ -887,3 +888,121 @@ async def test_service_level_metrics(manager: ScyllaClusterManager) -> None:
     logger.info(f"Verifying service level metric for {sl_name}")
     await wait_for(verify_new_sl_metric, deadline=time.time() + 30)
 
+SL_ADD_PAUSE_INJECTION = "service_level_controller_pause_service_level_add"
+
+async def setup_view_writes_forwarded_by_replica(manager: ScyllaClusterManager, node_count: int):
+    servers = await manager.servers_add(node_count, config={**auth_config, 'tablets_mode_for_new_keyspaces': 'enabled'}, auto_rack_dc="dc1")
+    cql, hosts = await manager.get_ready_cql(servers)
+    coordinator, replica = servers[0], servers[-1]
+
+    await cql.run_async(f"CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {node_count}}}"
+                        " AND tablets = {'initial': 1}")
+    await cql.run_async("CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+    await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT * FROM ks.t"
+                        " WHERE v IS NOT NULL AND pk IS NOT NULL AND ck IS NOT NULL PRIMARY KEY (v, pk, ck)")
+    await wait_for_view(cql, "mv", node_count)
+    await cql.run_async("CREATE ROLE r WITH password = 'r' AND login = true")
+    await cql.run_async("GRANT MODIFY ON ks.t TO r")
+
+    # The driver routes a write to the coordinator's tablet shard, and the replica receives it on
+    # that same shard. The replica's tablet must be on the other shard, so that it forwards the write.
+    await manager.disable_tablet_balancing()
+    coordinator_host_id = await manager.get_host_id(coordinator.server_id)
+    replica_host_id = await manager.get_host_id(replica.server_id)
+    shards = {str(host_id): shard for host_id, shard in await get_tablet_replicas(manager, coordinator, "ks", "t", 0)}
+    receiving_shard = shards[str(coordinator_host_id)]
+    replica_shard = shards[str(replica_host_id)]
+    if replica_shard == receiving_shard:
+        replica_shard = 1 - receiving_shard
+        await manager.api.move_tablet(coordinator.ip_addr, "ks", "t", replica_host_id, receiving_shard, replica_host_id, replica_shard, 0)
+    logger.info(f"{replica} receives writes on shard {receiving_shard} and applies them on shard {replica_shard}")
+    return servers, hosts, receiving_shard, replica_shard
+
+# A service level statement ends with a read barrier on every live node, which a node held in the
+# middle of applying group0 changes answers only once released, so don't wait for the statements.
+async def create_and_attach_service_level(manager: ScyllaClusterManager, coordinator, host, sl: str):
+    cql = manager.get_cql()
+    log = await manager.server_open_log(coordinator.server_id)
+    mark = await log.mark()
+    statements = [cql.run_async(f"CREATE SERVICE LEVEL {sl}", host=host)]
+    await log.wait_for(f'service level "{sl}" was added', from_mark=mark, timeout=60)
+    statements.append(cql.run_async(f"ATTACH SERVICE LEVEL {sl} TO r", host=host))
+
+    async def attached():
+        try:
+            await cql.run_async("LIST EFFECTIVE SERVICE LEVEL OF r", host=host)
+            return True
+        except InvalidRequest:
+            return None
+    await wait_for(attached, deadline=time.time() + 60)
+    return statements
+
+async def write_while_replica_adds_service_level(manager: ScyllaClusterManager, coordinator, replica, receiving_shard: int, sl: str, mark: int):
+    log = await manager.server_open_log(replica.server_id)
+    cql = await manager.get_cql_exclusive(coordinator, PlainTextAuthProvider(username='r', password='r'))
+    insert = cql.prepare("INSERT INTO ks.t (pk, ck, v) VALUES (?, ?, ?)")
+    insert.consistency_level = ConsistencyLevel.ONE
+    for ck in range(10):
+        await cql.run_async(insert, [0, ck, ck])
+
+    semaphore_not_found = f"View update concurrency semaphore for scheduling group 'sl:{sl}' not found"
+    _, [(line, _)] = await log.wait_for(
+        rf"\[shard {receiving_shard}:[^\]]*\] messaging_service - Service level {sl} is still unknown|{semaphore_not_found}",
+        from_mark=mark, timeout=60)
+    logger.info(f"{replica} got the writes: {line.strip()}")
+
+    logger.info(f"Letting {replica} finish adding {sl}")
+    await manager.api.disable_injection(replica.ip_addr, SL_ADD_PAUSE_INJECTION)
+    insert.consistency_level = ConsistencyLevel.ALL
+    await cql.run_async(insert, [0, 10, 10])
+    assert not await log.grep(semaphore_not_found, from_mark=mark)
+
+# A view update must not run in a service level's scheduling group on a shard that doesn't know
+# that service level yet, while the replica still adds it after CREATE SERVICE LEVEL.
+# Reproduces SCYLLADB-5523.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_view_update_while_service_level_is_created(manager: ScyllaClusterManager) -> None:
+    servers, hosts, receiving_shard, replica_shard = await setup_view_writes_forwarded_by_replica(manager, 2)
+    coordinator, replica = servers
+    sl = "sl_created"
+
+    log = await manager.server_open_log(replica.server_id)
+    mark = await log.mark()
+    await manager.api.enable_injection(replica.ip_addr, SL_ADD_PAUSE_INJECTION, one_shot=False,
+                                       parameters={"service_level": sl, "shard": replica_shard})
+    statements = await create_and_attach_service_level(manager, coordinator, hosts[0], sl)
+    await log.wait_for(f"pausing for service level {sl}", from_mark=mark, timeout=60)
+    logger.info(f"{replica} is adding {sl}, with shard {replica_shard} not ready yet")
+
+    await write_while_replica_adds_service_level(manager, coordinator, replica, receiving_shard, sl, mark)
+    await asyncio.gather(*statements)
+
+# Same as above, but the replica doesn't know the service level yet and creates it itself for an
+# incoming RPC connection, as on a restarting node that hasn't loaded its service levels.
+# Reproduces SCYLLADB-5523.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_view_update_while_rpc_connection_creates_service_level(manager: ScyllaClusterManager) -> None:
+    servers, hosts, receiving_shard, replica_shard = await setup_view_writes_forwarded_by_replica(manager, 3)
+    coordinator, other, replica = servers
+    sl = "sl_from_rpc"
+
+    logger.info(f"Keeping {sl} away from {replica} by blocking its group0 state machine")
+    await manager.api.enable_injection(replica.ip_addr, "group0_state_machine::block_apply", one_shot=False)
+    statements = await create_and_attach_service_level(manager, coordinator, hosts[0], sl)
+    await read_barrier(manager.api, other.ip_addr)
+
+    log = await manager.server_open_log(replica.server_id)
+    mark = await log.mark()
+    await manager.api.enable_injection(replica.ip_addr, SL_ADD_PAUSE_INJECTION, one_shot=False,
+                                       parameters={"service_level": sl, "shard": replica_shard})
+    other_cql = await manager.get_cql_exclusive(other, PlainTextAuthProvider(username='r', password='r'))
+    await other_cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, ck, v) VALUES (1, 0, 0)", consistency_level=ConsistencyLevel.ONE))
+    await log.wait_for(f"Service level {sl} is still unknown", f"pausing for service level {sl}", from_mark=mark, timeout=60)
+    logger.info(f"{replica} is creating {sl} for a connection from {other}, with shard {replica_shard} not ready yet")
+    mark = await log.mark()
+
+    try:
+        await write_while_replica_adds_service_level(manager, coordinator, replica, receiving_shard, sl, mark)
+    finally:
+        await manager.api.disable_injection(replica.ip_addr, "group0_state_machine::block_apply")
+    await asyncio.gather(*statements)

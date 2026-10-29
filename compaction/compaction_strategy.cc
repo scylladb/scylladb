@@ -31,6 +31,7 @@
 #include "utils/to_string.hh"
 #include "incremental_compaction_strategy.hh"
 #include "sstables/sstable_set_impl.hh"
+#include "tombstone_gc.hh"
 
 namespace compaction {
 

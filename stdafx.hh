@@ -42,7 +42,6 @@
 #include <boost/intrusive/set.hpp>
 #include <boost/intrusive/slist.hpp>
 #include <boost/intrusive/unordered_set.hpp>
-#include <boost/iterator/transform_iterator.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/lockfree/queue.hpp>
 #include <boost/lockfree/spsc_queue.hpp>

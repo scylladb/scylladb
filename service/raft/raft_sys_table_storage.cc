@@ -28,6 +28,7 @@
 #include <seastar/core/loop.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include "service/raft/raft_group0_client.hh"
 
 namespace service {
 

@@ -60,7 +60,9 @@
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
 #include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
@@ -1258,8 +1260,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dirs->create_and_verify(data_dir_set, utils::directories::recursive::no).get();
             utils::directories::verify_owner_and_mode_of_data_dir(data_dir_set).get();
 
-            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
-            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
+            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory(), &cfg->extensions()).get();
+            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory(), &cfg->extensions()).get();
             if (!hinted_handoff_enabled.is_disabled_for_all()) {
                 hints_dir_initializer.ensure_created_and_verified().get();
             }
@@ -1621,7 +1623,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
               auto paths = sch_cl->get_segments_to_replay().get();
               if (!paths.empty()) {
                   checkpoint(stop_signal, "replaying schema commit log");
-                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr, {}, "schema").get();
+                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr, nullptr, {}, "schema").get();
                   rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
                   startlog.info("replaying schema commit log - flushing memtables");
                   // The schema commitlog lives only on the null shard.
@@ -2016,6 +2018,42 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 view_building_worker.stop().get();
             });
 
+            checkpoint(stop_signal, "starting cluster config manager");
+            cluster_config_manager.start(std::ref(cluster_config_manager), std::ref(db), std::ref(qp)).get();
+            auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
+                cluster_config_manager.stop().get();
+            });
+
+            static sharded<std::optional<db::cluster_config_manager::config_callback_registration>> scrub_period_registrations;
+            scrub_period_registrations.start(std::nullopt).get();
+            auto stop_scrub_period_registrations = defer_verbose_shutdown("auto scrub config callbacks", [] {
+                scrub_period_registrations.stop().get();
+            });
+
+            const auto& scrub_period_opt = *db::cluster_config_registry::find(db::cluster_config_registry::option_name::auto_scrub_period_seconds);
+            cluster_config_manager.invoke_on_all([&db, &scrub_period_opt] (db::cluster_config_manager& ccm) {
+                scrub_period_registrations.local() = ccm.register_config_callback(
+                        sstring(scrub_period_opt.name),
+                        [&db, &scrub_period_opt] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                    const auto& tables = db.local().get_tables_metadata();
+                    auto id = tables.get_table_id_if_exists({*ctx.keyspace_name, *ctx.table_name});
+                    if (!id) {
+                        return make_ready_future<>();
+                    }
+                    auto t = tables.get_table_if_exists(id);
+                    if (!t) {
+                        return make_ready_future<>();
+                    }
+                    auto seconds = std::chrono::seconds(db::cluster_config_registry::to_integer(scrub_period_opt, value));
+                    std::optional<std::chrono::seconds> period;
+                    if (seconds > std::chrono::seconds(0)) {
+                        period = seconds;
+                    }
+                    t->set_scrub_period(period);
+                    return make_ready_future<>();
+                });
+            }).get();
+
             checkpoint(stop_signal, "starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
             auto repair_config = sharded_parameter([&] {
@@ -2029,7 +2067,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     .repair_multishard_reader_enable_read_ahead = cfg->repair_multishard_reader_enable_read_ahead,
                 };
             });
-            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(mm), max_memory_repair, std::move(repair_config)).get();
+            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(mm), std::ref(cluster_config_manager), max_memory_repair, std::move(repair_config)).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
@@ -2150,12 +2188,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "initializing system schema");
             db::schema_tables::save_system_schema(qp.local()).get();
 
-            checkpoint(stop_signal, "starting cluster config manager");
-            cluster_config_manager.start(std::ref(cluster_config_manager), std::ref(db), std::ref(qp)).get();
-            auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
-                cluster_config_manager.stop().get();
-            });
-
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx, cm).get();
             auto stop_cm_api = defer_verbose_shutdown("compaction manager API", [&ctx] {
@@ -2255,6 +2287,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // the memtable when the second pass re-applies it, and the two
             // squash into the same rows.  A flush forced by memory pressure in
             // between would cost an extra sstable, not correctness.
+            //
+            // Raft replay relies on this pass too: a group's first batch reads
+            // its system.raft_groups row, and a row deleted by tablet cleanup
+            // must read as deleted, or finish_replay() writes the row back.
             if (auto* cl = db.local().commitlog(); cl != nullptr) {
                 auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
@@ -2265,7 +2301,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                             system_tables.insert(id);
                         }
                     });
-                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr,
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr, nullptr,
                             [tables = std::move(system_tables)] (table_id id) { return tables.contains(id); },
                             "system tables").get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
@@ -2290,21 +2326,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
                     checkpoint(stop_signal, "replaying commit log");
-                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, &raft_replay_buffer).get();
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, &raft_replay_buffer, &qp).get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
 
-                    // Process raft replay buffer: apply committed mutations to memtables,
-                    // rewrite uncommitted entries to the new commitlog,
-                    // and discard entries that precede the last snapshot index.
-                    // Must happen after replay (entries are in the buffer) but before flushing
-                    // and deleting old segments (committed mutations need to be flushed,
-                    // uncommitted entries are now in new segments).
+                    // Persist each group's recovered descriptor and rewrite its
+                    // uncommitted tail to the new commitlog. The committed entries were
+                    // applied to memtables as replay read them. Must run after replay and
+                    // before the memtable flush and the deletion of the old segments: the
+                    // applied mutations still need flushing, and the rewritten tail makes
+                    // the old segments expendable.
                     supervisor::notify("processing raft replay buffer");
                     raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
-                        if (buffer.remaining_groups()) {
-                            return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
-                        }
-                        return make_ready_future<>();
+                        return buffer.finish_replay(db.local(), qp.local());
                     }).get();
 
                     startlog.info("replaying commit log - flushing memtables");

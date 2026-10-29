@@ -10,6 +10,8 @@
 #include "replica/database.hh"
 #include "readers/filtering.hh"
 
+#include <seastar/coroutine/exception.hh>
+
 #include <tuple>
 
 extern logging::logger dblog;
@@ -91,24 +93,25 @@ void toppartitions_data_listener::on_write(const schema_ptr& s, const frozen_mut
     }
 }
 
-toppartitions_data_listener::global_top_k::results
+toppartitions_data_listener::global_top_k_results
 toppartitions_data_listener::globalize(top_k::results&& r) {
-    toppartitions_data_listener::global_top_k::results n;
+    toppartitions_data_listener::global_top_k_results n;
     n.reserve(r.size());
     for (auto&& e : r) {
-        n.emplace_back(global_top_k::results::value_type{toppartitions_global_item_key(std::move(e.item)), e.count, e.error});
+        n.emplace_back(global_top_k_result{toppartitions_global_item_key(std::move(e.item)), e.count, e.error});
     }
     return n;
 }
 
-toppartitions_data_listener::top_k::results
-toppartitions_data_listener::localize(const global_top_k::results& r) {
+future<toppartitions_data_listener::top_k::results>
+toppartitions_data_listener::localize(const global_top_k_results& r) {
     toppartitions_data_listener::top_k::results n;
     n.reserve(r.size());
     for (auto&& e : r) {
-        n.emplace_back(top_k::results::value_type{toppartitions_item_key(e.item), e.count, e.error});
+        auto s = co_await e.item.schema.get(db::no_timeout);
+        n.emplace_back(top_k::results::value_type{toppartitions_item_key(s, e.item.key), e.count, e.error});
     }
-    return n;
+    co_return n;
 }
 
 toppartitions_query::toppartitions_query(sharded<replica::database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
@@ -123,7 +126,7 @@ future<> toppartitions_query::scatter() {
     return _query->start(std::ref(_xdb), _table_filters, _keyspace_filters);
 }
 
-using top_t = toppartitions_data_listener::global_top_k::results;
+using top_t = toppartitions_data_listener::global_top_k_results;
 
 future<toppartitions_query::results> toppartitions_query::gather(unsigned res_size) {
     dblog.debug("toppartitions_query::gather");
@@ -134,21 +137,27 @@ future<toppartitions_query::results> toppartitions_query::gather(unsigned res_si
         top_t wr = toppartitions_data_listener::globalize(listener._top_k_write.top(res_size));
         return make_foreign(std::make_unique<std::tuple<top_t, top_t>>(std::move(rd), std::move(wr)));
     };
-    auto reduce = [] (results res, foreign_ptr<std::unique_ptr<std::tuple<top_t, top_t>>> rd_wr) {
-        res.read.append(toppartitions_data_listener::localize(std::get<0>(*rd_wr)));
-        res.write.append(toppartitions_data_listener::localize(std::get<1>(*rd_wr)));
-        return res;
-    };
-    return _query->map_reduce0(map, results{res_size}, reduce)
-        .handle_exception([] (auto ep) {
-            dblog.error("toppartitions_query::gather: {}", ep);
-            return make_exception_future<results>(ep);
-        }).finally([this] () {
-            dblog.debug("toppartitions_query::gather: stopping query");
-            return _query->stop().then([] {
-                dblog.debug("toppartitions_query::gather: query stopped");
-            });
-        });
+    results res{res_size};
+    std::exception_ptr ex;
+    try {
+        // Localize on this shard rather than in a map_reduce reducer, since it may have to wait
+        // for this shard to catch up with the schema of the other shards.
+        auto shard_results = co_await _query->map(map);
+        for (auto& rd_wr : shard_results) {
+            res.read.append(co_await toppartitions_data_listener::localize(std::get<0>(*rd_wr)));
+            res.write.append(co_await toppartitions_data_listener::localize(std::get<1>(*rd_wr)));
+        }
+    } catch (...) {
+        ex = std::current_exception();
+        dblog.error("toppartitions_query::gather: {}", ex);
+    }
+    dblog.debug("toppartitions_query::gather: stopping query");
+    co_await _query->stop();
+    dblog.debug("toppartitions_query::gather: query stopped");
+    if (ex) {
+        co_return coroutine::exception(std::move(ex));
+    }
+    co_return res;
 }
 
 } // namespace db

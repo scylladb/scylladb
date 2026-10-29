@@ -19,6 +19,8 @@
 #include "cql3/query_processor.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "timeout_config.hh"
+#include "db/config.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace auth {
 

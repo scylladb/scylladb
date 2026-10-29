@@ -34,8 +34,10 @@ value set at a broader one:
 * ``NODE`` overrides ``RACK``, which overrides ``DATACENTER``, which overrides ``CLUSTER``.
 
 Each option supports a fixed set of scopes. Options that describe a table (such as
-``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. No option
-currently supports the ``DATACENTER``, ``RACK`` or ``NODE`` scopes.
+``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. Options that
+describe the cluster as a whole (such as ``repair_hints_batchlog_flush_discard_unreplayed_hints``)
+can be set at ``CLUSTER`` scope only. No option currently supports the ``DATACENTER``, ``RACK`` or
+``NODE`` scopes.
 
 Each scope stores only the values that were explicitly set there. The *effective* value of an
 option for a table is the value stored at the narrowest scope that has one: the table's own value
@@ -89,8 +91,10 @@ The datacenter, rack, or node named in the statement must exist in the cluster.
 
 Values are validated against the option's type before anything is stored: a boolean option accepts
 ``true`` and ``false`` (in any letter case), an integer option accepts a signed 64-bit integer, and
-so on, and a text option accepts at most 4096 bytes. An unknown option name, an option used at a
-scope it does not support, or a value of the wrong type is rejected and nothing changes.
+so on, and a text option accepts at most 4096 bytes. An option may introduce further restrictions
+(see ``auto_scrub_period_seconds`` in :ref:`Available options <cql-cluster-config-options>`). An unknown
+option name, an option used at a scope it does not support, or a value of the wrong type is
+rejected and nothing changes.
 
 Removing an option
 ------------------
@@ -172,3 +176,21 @@ Available options
        automatic repair. Default: ``86400``. Until the deprecated
        ``auto_repair_threshold_default_in_seconds`` option is removed, a node that sets it in
        ``scylla.yaml`` uses that value when no scope sets this option.
+   * - ``repair_hints_batchlog_flush_discard_unreplayed_hints``
+     - boolean
+     - ``CLUSTER``
+     - A repair of a table with ``tombstone_gc`` in ``repair`` mode waits for the hints written
+       before it to be sent, and records no repair time if that times out. With this option on,
+       such a timeout discards those hints, so that the next repair does not wait for them again.
+       This drops every regular hint on the node, for all tables and destinations; a write
+       acknowledged at consistency level ``ANY`` that only hints hold is lost. Hints for
+       materialized views are never discarded. Default: ``true``, in effect once every node knows
+       the option.
+   * - ``auto_scrub_period_seconds``
+     - integer
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - Schedule every sstable written or validated more than this many seconds ago for scrub.
+       Accepts ``0`` or ``3600`` to ``4294967295``. Default: ``0``. ``0`` disables automatic scrub
+       at that scope even if a broader scope enabled it, whereas ``NULL`` removes the value and
+       falls back to the broader scope. See
+       :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.

@@ -39,6 +39,7 @@
 
 #include "readers/from_mutations.hh"
 #include "readers/evictable.hh"
+#include <seastar/core/with_scheduling_group.hh>
 
 BOOST_AUTO_TEST_SUITE(view_build_test)
 

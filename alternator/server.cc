@@ -16,7 +16,7 @@
 #include <seastar/http/function_handlers.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/coroutine.hh>
-#include <seastar/core/with_scheduling_group.hh>
+#include <seastar/core/thread.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/try_future.hh>
@@ -1191,7 +1191,12 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
             } else {
                 _credentials = creds->build_server_credentials();
             }
-            with_scheduling_group(https_accept_sg, [this, addr, https_port, https_port_proxy_protocol] {
+            // listen() may return a future that is not resolved yet, so wait for
+            // it in a seastar thread. The thread runs in https_accept_sg, so the
+            // accept loop that listen() starts runs there too.
+            seastar::thread_attributes attr;
+            attr.sched_group = https_accept_sg;
+            seastar::async(std::move(attr), [this, addr, https_port, https_port_proxy_protocol] {
                 if (https_port) {
                     _https_server.listen(socket_address{addr, *https_port}, _credentials).get();
                 }

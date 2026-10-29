@@ -61,6 +61,10 @@ seastar::future<T> func() {
 - Use `partition_key` and `clustering_key` for keys
 - Use `api::timestamp_type` for database timestamps
 - Use `gc_clock` for garbage collection timing
+- Use `utils::tagged_uuid` (see `utils/UUID.hh`) for UUID-based identifiers instead of a bare
+  `utils::UUID`, with a tag type unique to each kind of id, e.g.
+  `using table_id = utils::tagged_uuid<struct table_id_tag>;`. Different kinds of ids are then
+  distinct types and cannot be mixed up (see also `host_id`, `tablet_task_id`, `query_id`)
 
 ## Style
 - C++23 standard (prefer modern features, especially coroutines)

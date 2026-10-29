@@ -139,6 +139,110 @@ async def test_cluster_config_auto_repair_table_scope_persistence(manager: Scyll
 
 
 @pytest.mark.asyncio
+async def test_auto_scrub_period_reaches_existing_and_new_tables(manager: ScyllaClusterManager) -> None:
+    server = await manager.server_add()
+    await manager.driver_connect()
+    cql, _ = await manager.get_ready_cql([server])
+    log = await manager.server_open_log(server.server_id)
+
+    await cql.run_async("CREATE KEYSPACE ks_scrub WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    await cql.run_async("CREATE TABLE ks_scrub.before (pk int PRIMARY KEY)")
+
+    mark = await log.mark()
+    await cql.run_async("ALTER CLUSTER WITH auto_scrub_period_seconds = 86400")
+    await log.wait_for("Automatic scrub period for ks_scrub.before set to 86400s", from_mark=mark)
+
+    # A table created after the value was already stored still receives it: CREATE TABLE
+    # writes system_schema.scylla_tables, which is itself a cluster-config table, so the
+    # schema merge triggers a refresh pass and the new target has no previously delivered
+    # value to compare against.
+    mark = await log.mark()
+    await cql.run_async("CREATE TABLE ks_scrub.after (pk int PRIMARY KEY)")
+    await log.wait_for("Automatic scrub period for ks_scrub.after set to 86400s", from_mark=mark)
+
+
+@pytest.mark.asyncio
+async def test_auto_scrub_period_narrower_scope_wins_at_the_consumer(manager: ScyllaClusterManager) -> None:
+    server = await manager.server_add()
+    await manager.driver_connect()
+    cql, _ = await manager.get_ready_cql([server])
+    log = await manager.server_open_log(server.server_id)
+
+    await cql.run_async("CREATE KEYSPACE ks_scrub WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    await cql.run_async("CREATE TABLE ks_scrub.tbl (pk int PRIMARY KEY)")
+
+    mark = await log.mark()
+    await cql.run_async("ALTER CLUSTER WITH auto_scrub_period_seconds = 604800")
+    await log.wait_for("Automatic scrub period for ks_scrub.tbl set to 604800s", from_mark=mark)
+
+    mark = await log.mark()
+    await cql.run_async("ALTER KEYSPACE ks_scrub WITH auto_scrub_period_seconds = 86400")
+    await log.wait_for("Automatic scrub period for ks_scrub.tbl set to 86400s", from_mark=mark)
+
+    mark = await log.mark()
+    await cql.run_async("ALTER TABLE ks_scrub.tbl WITH auto_scrub_period_seconds = 3600")
+    await log.wait_for("Automatic scrub period for ks_scrub.tbl set to 3600s", from_mark=mark)
+
+    # 0 at table scope disables scrub for this table alone, outranking the broader scopes
+    # rather than falling back to them.
+    mark = await log.mark()
+    await cql.run_async("ALTER TABLE ks_scrub.tbl WITH auto_scrub_period_seconds = 0")
+    await log.wait_for("Automatic scrub disabled for ks_scrub.tbl", from_mark=mark)
+
+    # Removing the table override falls back to the keyspace value.
+    mark = await log.mark()
+    await cql.run_async("ALTER TABLE ks_scrub.tbl WITH auto_scrub_period_seconds = null")
+    await log.wait_for("Automatic scrub period for ks_scrub.tbl set to 86400s", from_mark=mark)
+
+
+@pytest.mark.asyncio
+async def test_auto_scrub_period_is_reapplied_after_restart(manager: ScyllaClusterManager) -> None:
+    server = await manager.server_add()
+    await manager.driver_connect()
+    cql, _ = await manager.get_ready_cql([server])
+    log = await manager.server_open_log(server.server_id)
+
+    await cql.run_async("CREATE KEYSPACE ks_scrub WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    await cql.run_async("CREATE TABLE ks_scrub.tbl (pk int PRIMARY KEY)")
+    mark = await log.mark()
+    await cql.run_async("ALTER TABLE ks_scrub.tbl WITH auto_scrub_period_seconds = 43200")
+    await log.wait_for("Automatic scrub period for ks_scrub.tbl set to 43200s", from_mark=mark)
+
+    # The period lives only in memory on replica::table, so a restarted node must rebuild it
+    # from the stored override rather than come back with automatic scrub silently off.
+    mark = await log.mark()
+    await manager.server_restart(server.server_id)
+    await manager.driver_connect()
+    cql, _ = await manager.get_ready_cql([server])
+    await log.wait_for("Automatic scrub period for ks_scrub.tbl set to 43200s", from_mark=mark)
+
+
+@pytest.mark.asyncio
+async def test_auto_scrub_period_rejects_invalid_values_and_node_scopes(manager: ScyllaClusterManager) -> None:
+    server = await manager.server_add(property_file={"dc": "dc1", "rack": "rack1"})
+    await manager.driver_connect()
+    cql, _ = await manager.get_ready_cql([server])
+
+    await cql.run_async("CREATE KEYSPACE ks_scrub WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    await cql.run_async("CREATE TABLE ks_scrub.tbl (pk int PRIMARY KEY)")
+
+    # 0 or a seconds count from one hour up to the uint32_t maximum, so no consumer has to
+    # defend against a negative, unrepresentable or shorter-than-an-hour period.
+    await cql.run_async("ALTER CLUSTER WITH auto_scrub_period_seconds = 4294967295")
+    await cql.run_async("ALTER CLUSTER WITH auto_scrub_period_seconds = 3600")
+    await cql.run_async("ALTER CLUSTER WITH auto_scrub_period_seconds = 0")
+    for bad in ("-1", "1", "3599", "4294967296", "1.5"):
+        with pytest.raises(ConfigurationException):
+            await cql.run_async(f"ALTER TABLE ks_scrub.tbl WITH auto_scrub_period_seconds = {bad}")
+
+    # The option is table-oriented, so the node-oriented scopes must refuse it.
+    with pytest.raises(InvalidRequest):
+        await cql.run_async('ALTER DATACENTER "dc1" WITH auto_scrub_period_seconds = 86400')
+    with pytest.raises(InvalidRequest):
+        await cql.run_async('ALTER RACK "dc1" "rack1" WITH auto_scrub_period_seconds = 86400')
+
+
+@pytest.mark.asyncio
 async def test_rack_name_is_not_globally_unique(manager: ScyllaClusterManager) -> None:
     """Regression guard: rack names are not required to be globally unique.
 

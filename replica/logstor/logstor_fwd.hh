@@ -18,7 +18,7 @@ class primary_index;
 class logstor_group;
 class segment_manager;
 class compaction_manager;
-struct segment_set;
+class segment_set;
 struct segment_snapshot;
 class segment_stream_sink;
 

@@ -68,6 +68,7 @@
 #include "readers/filtering.hh"
 #include "readers/evictable.hh"
 #include "readers/queue.hh"
+#include "locator/tablets.hh"
 
 BOOST_AUTO_TEST_SUITE(mutation_reader_test)
 
@@ -1256,14 +1257,15 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source, *test_label::la
                 mutations
                 | std::views::transform([] (const mutation& m) { return freeze(m); })
                 | std::ranges::to<utils::chunked_vector<frozen_mutation>>();
-            auto remote_mt = smp::submit_to(remote_shard, [s = global_schema_ptr(s), &frozen_mutations] {
-                auto mt = make_lw_shared<replica::memtable>(s.get());
+            auto remote_mt = smp::submit_to(remote_shard, [gs = global_schema_ptr(s), &frozen_mutations] () -> future<foreign_ptr<lw_shared_ptr<replica::memtable>>> {
+                auto s = co_await gs.get(db::no_timeout);
+                auto mt = make_lw_shared<replica::memtable>(s);
 
                 for (auto& mut : frozen_mutations) {
-                    mt->apply(mut, s.get());
+                    mt->apply(mut, s);
                 }
 
-                return make_foreign(mt);
+                co_return make_foreign(mt);
             }).get();
 
             auto reader_factory = [&env, remote_shard, remote_mt = std::move(remote_mt)] (schema_ptr s,
@@ -1274,8 +1276,9 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source, *test_label::la
                     streamed_mutation::forwarding fwd_sm,
                     mutation_reader::forwarding fwd_mr) {
                 auto remote_reader = env.db().invoke_on(remote_shard,
-                        [&, s = global_schema_ptr(s), fwd_sm, fwd_mr, trace_state = tracing::global_trace_state_ptr(trace_state)] (replica::database& db) {
-                    return make_foreign(std::make_unique<mutation_reader>(remote_mt->make_mutation_reader(s.get(),
+                        [&, gs = global_schema_ptr(s), fwd_sm, fwd_mr, trace_state = tracing::global_trace_state_ptr(trace_state)] (replica::database& db)
+                        -> future<foreign_ptr<std::unique_ptr<mutation_reader>>> {
+                    co_return make_foreign(std::make_unique<mutation_reader>(remote_mt->make_mutation_reader(co_await gs.get(db::no_timeout),
                             make_reader_permit(env),
                             range,
                             slice,
@@ -1825,18 +1828,17 @@ SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
     do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
         const auto shard_of_interest = (this_shard_id() + 1) % this_smp_shard_count();
         auto s = simple_schema();
-        auto remote_control_remote_reader = smp::submit_to(shard_of_interest, [&env, gs = global_simple_schema(s)] {
-            using control_type = foreign_ptr<std::unique_ptr<puppet_reader::control>>;
-            using reader_type = foreign_ptr<std::unique_ptr<mutation_reader>>;
-
+        using control_type = foreign_ptr<std::unique_ptr<puppet_reader::control>>;
+        using reader_type = foreign_ptr<std::unique_ptr<mutation_reader>>;
+        auto remote_control_remote_reader = smp::submit_to(shard_of_interest, [&env, gs = global_simple_schema(s)] () -> future<std::tuple<control_type, reader_type>> {
             auto control = make_foreign(std::make_unique<puppet_reader::control>());
-            auto reader = make_foreign(std::make_unique<mutation_reader>(make_mutation_reader<puppet_reader>(gs.get(),
+            auto reader = make_foreign(std::make_unique<mutation_reader>(make_mutation_reader<puppet_reader>(co_await gs.get(),
                     make_reader_permit(env),
                     *control,
                     std::vector{puppet_reader::fill_buffer_action::fill, puppet_reader::fill_buffer_action::block},
                     std::vector<uint32_t>{0, 1})));
 
-            return make_ready_future<std::tuple<control_type, reader_type>>(std::tuple(std::move(control), std::move(reader)));
+            co_return std::tuple(std::move(control), std::move(reader));
         }).get();
 
         auto& remote_control = std::get<0>(remote_control_remote_reader);
@@ -1921,7 +1923,7 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
     }
 
     auto factory = [gs = global_simple_schema(s), remote_controls = std::move(remote_control_refs), shard_pkeys = std::move(shard_pkeys)] (
-            schema_ptr,
+            schema_ptr local_schema,
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -1937,7 +1939,7 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
                 return {};
             }
         }();
-        return make_mutation_reader<puppet_reader>(gs.get(), permit, *remote_controls.at(shard), std::move(actions), shard_pkeys.at(shard));
+        return make_mutation_reader<puppet_reader>(gs.get(std::move(local_schema)), permit, *remote_controls.at(shard), std::move(actions), shard_pkeys.at(shard));
     };
 
     auto pr = std::make_unique<dht::partition_range>(dht::partition_range::make(dht::ring_position::starting_at(pkeys_by_tokens.begin()->first),

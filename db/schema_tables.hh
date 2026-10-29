@@ -26,6 +26,10 @@
 #include <map>
 #include <string_view>
 
+namespace cql3 {
+class query_processor;
+}
+
 namespace data_dictionary {
 class keyspace_metadata;
 class user_types_storage;

@@ -15,6 +15,7 @@
 #include "readers/filtering.hh"
 
 #include "db/data_listeners.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(data_listeners_test)
 

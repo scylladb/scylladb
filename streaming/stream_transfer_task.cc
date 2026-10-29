@@ -30,6 +30,7 @@
 #include <fmt/ranges.h>
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "streaming/table_check.hh"
 #include "gms/feature_service.hh"
 #include "utils/error_injection.hh"

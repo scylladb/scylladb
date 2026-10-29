@@ -26,7 +26,7 @@
 #include "auth/common.hh"
 #include "cql3/description.hh"
 #include "seastarx.hh"
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
 #include "utils/observable.hh"
 #include "utils/serialized_action.hh"
 #include "service/maintenance_mode.hh"
@@ -34,6 +34,10 @@
 
 namespace cql3 {
 class query_processor;
+}
+
+namespace db {
+class system_keyspace;
 }
 
 namespace service {
@@ -198,10 +202,7 @@ public:
         return *_role_manager;
     }
 
-    future<> commit_mutations(::service::group0_batch&& mc) {
-        co_await std::move(mc).commit(_group0_client, _as, ::service::raft_timeout{});
-        co_await _group0_client.send_group0_read_barrier_to_live_members();
-    }
+    future<> commit_mutations(::service::group0_batch&& mc);
 
 private:
     future<> create_legacy_keyspace_if_missing(::service::migration_manager& mm) const;

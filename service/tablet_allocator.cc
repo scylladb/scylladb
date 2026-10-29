@@ -25,6 +25,7 @@
 #include "db/config.hh"
 #include "db/cluster_config_manager.hh"
 #include "db/cluster_config_registry.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "db/tablet_options.hh"
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
@@ -40,6 +41,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <fmt/format.h>
 #include <fmt/chrono.h>
+#include "service/topology_state_machine.hh"
 
 using namespace locator;
 using namespace replica;

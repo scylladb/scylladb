@@ -68,13 +68,15 @@ private:
 private:
     utils::directories& _dirs;
     sstring _hints_directory;
+    const db::extensions* _extensions;
     state _state = state::uninitialized;
     seastar::named_semaphore _lock = {1, named_semaphore_exception_factory{"hints directory initialization lock"}};
 
 public:
-    impl(utils::directories& dirs, sstring hints_directory)
+    impl(utils::directories& dirs, sstring hints_directory, const db::extensions* extensions)
         : _dirs(dirs)
         , _hints_directory(std::move(hints_directory))
+        , _extensions(extensions)
     { }
 
 public:
@@ -106,7 +108,7 @@ public:
         const auto units = co_await seastar::get_units(_lock, 1);
 
         manager_logger.debug("Rebalancing hints in {}", _hints_directory);
-        co_await rebalance_hints(fs::path{_hints_directory});
+        co_await rebalance_hints(fs::path{_hints_directory}, _extensions);
 
         _state = state::rebalanced;
     }
@@ -116,9 +118,9 @@ directory_initializer::directory_initializer(std::shared_ptr<directory_initializ
         : _impl(std::move(impl))
 { }
 
-future<directory_initializer> directory_initializer::make(utils::directories& dirs, sstring hints_directory) {
-    return smp::submit_to(0, [&dirs, hints_directory = std::move(hints_directory)] () mutable {
-        auto impl = std::make_shared<directory_initializer::impl>(dirs, std::move(hints_directory));
+future<directory_initializer> directory_initializer::make(utils::directories& dirs, sstring hints_directory, const db::extensions* extensions) {
+    return smp::submit_to(0, [&dirs, hints_directory = std::move(hints_directory), extensions] () mutable {
+        auto impl = std::make_shared<directory_initializer::impl>(dirs, std::move(hints_directory), extensions);
         return make_ready_future<directory_initializer>(directory_initializer(std::move(impl)));
     });
 }
@@ -165,12 +167,17 @@ to_host_id_rps(const shared_ptr<const gms::gossiper>& gossiper, const sync_point
     return result;
 }
 
-manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter, int64_t max_hint_window_ms,
+manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter,
+        utils::updateable_value<uint32_t> max_hint_window_ms,
         resource_manager& res_manager, sharded<replica::database>& db, scheduling_group sg)
     : _hints_dir(fs::path(hints_directory) / fmt::to_string(this_shard_id()))
     , _host_filter(std::move(filter))
     , _proxy(proxy)
-    , _max_hint_window_us(max_hint_window_ms * 1000)
+    , _max_hint_window_us(int64_t(max_hint_window_ms()) * 1000)
+    , _max_hint_window_observer(max_hint_window_ms.observe([this] (const uint32_t& new_max_hint_window_ms) {
+        _max_hint_window_us = int64_t(new_max_hint_window_ms) * 1000;
+        manager_logger.info("Updated max_hint_window to {} ms", new_max_hint_window_ms);
+    }))
     , _local_db(db.local())
     , _draining_eps_gate(seastar::format("hints::manager::{}", _hints_dir.native()))
     , _resource_manager(res_manager)
@@ -403,7 +410,7 @@ void manager::discard_segments_up_to(const sync_point::shard_rps& rps) {
 
 future<> manager::flush_hints() {
     co_await coroutine::parallel_for_each(_ep_managers | std::views::values, [] (hint_endpoint_manager& ep_man) {
-        return ep_man.flush_current_hints();
+        return ep_man.flush_current_hints_unless_stopping();
     });
 }
 
@@ -645,8 +652,12 @@ future<> manager::drain_for(endpoint_id host_id) noexcept {
             }
 
             return ep_man.with_file_update_mutex([&ep_man] -> future<> {
-                return remove_file(ep_man.hints_dir().native()).then([&ep_man] {
-                    manager_logger.info("Removed hint directory for {}", ep_man.end_point_key());
+                // All hint segments have been sent or dropped by now, but there may still be files that
+                // commitlog or its extensions left behind. Remove them along with the directory.
+                return remove_hint_directory(ep_man.hints_dir()).then([&ep_man] (bool removed) {
+                    if (removed) {
+                        manager_logger.info("Removed hint directory for {}", ep_man.end_point_key());
+                    }
                 });
             });
         });

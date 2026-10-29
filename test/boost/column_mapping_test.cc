@@ -15,6 +15,7 @@
 
 #include "db/schema_tables.hh"
 #include "transport/messages/result_message.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(column_mapping_test)
 

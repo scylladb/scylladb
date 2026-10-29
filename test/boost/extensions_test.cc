@@ -26,6 +26,7 @@
 #include "db/paxos_grace_seconds_extension.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/overloaded_functor.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(extensions_test)
 

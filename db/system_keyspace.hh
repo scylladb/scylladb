@@ -15,7 +15,9 @@
 #include <utility>
 #include <vector>
 #include "db/view/view_build_status.hh"
-#include "gms/gossiper.hh"
+#include "gms/inet_address.hh"
+#include "gms/generation-number.hh"
+#include "gms/loaded_endpoint_state.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
 #include "query/query-result-set.hh"
@@ -30,9 +32,9 @@
 #include "cdc/generation.hh"
 #include "locator/host_id.hh"
 #include "virtual_tables.hh"
-#include "types/types.hh"
 #include "auth_version.hh"
 #include "db/view/view_building_state.hh"
+#include "service/topology_state_machine_fwd.hh"
 
 namespace netw {
     class shared_dict;
@@ -195,8 +197,6 @@ public:
     static constexpr auto RAFT_SNAPSHOTS = "raft_snapshots";
     static constexpr auto RAFT_SNAPSHOT_CONFIG = "raft_snapshot_config";
     static constexpr auto RAFT_GROUPS = "raft_groups";
-    static constexpr auto RAFT_GROUPS_SNAPSHOTS = "raft_groups_snapshots";
-    static constexpr auto RAFT_GROUPS_SNAPSHOT_CONFIG = "raft_groups_snapshot_config";
     static constexpr auto REPAIR_HISTORY = "repair_history";
     static constexpr auto REPAIR_TASKS = "repair_tasks";
     static constexpr auto GROUP0_HISTORY = "group0_history";
@@ -251,8 +251,6 @@ public:
     static schema_ptr raft();
     static schema_ptr raft_snapshots();
     static schema_ptr raft_groups();
-    static schema_ptr raft_groups_snapshots();
-    static schema_ptr raft_groups_snapshot_config();
     static schema_ptr repair_history();
     static schema_ptr repair_tasks();
     static schema_ptr group0_history();

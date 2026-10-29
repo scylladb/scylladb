@@ -1,0 +1,196 @@
+# Copyright (C) 2026 ScyllaDB
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+
+name: "Docs / Update dependencies"
+
+on:
+  schedule:
+    - cron: "00 8 * * 1" # Every Monday at 08:00 UTC.
+  workflow_dispatch:
+
+concurrency:
+  group: docs-update-dependencies
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FLAG: opensource
+
+jobs:
+  update:
+    # Manual runs must use the default branch, just like scheduled runs.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.lockfile.outputs.changed }}
+      lockfile: ${{ steps.lockfile.outputs.path }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+
+      - name: Update docs dependencies to latest compatible versions
+        run: make -C docs FLAG="${{ env.FLAG }}" update
+
+      - name: Test docs
+        run: make -C docs FLAG="${{ env.FLAG }}" test
+
+      - name: Check for lockfile changes
+        id: lockfile
+        run: |
+          if [ -f docs/uv.lock ]; then
+            lockfile=docs/uv.lock
+          elif [ -f uv.lock ]; then
+            lockfile=uv.lock
+          else
+            echo "::error::No uv.lock found in docs/ or the repository root."
+            exit 1
+          fi
+
+          echo "path=$lockfile" >> "$GITHUB_OUTPUT"
+          if [ -z "$(git status --porcelain -- "$lockfile")" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare lockfile artifact
+        if: steps.lockfile.outputs.changed == 'true'
+        env:
+          LOCKFILE: ${{ steps.lockfile.outputs.path }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/docs-dependencies"
+          cp -- "$LOCKFILE" "$RUNNER_TEMP/docs-dependencies/uv.lock"
+
+      - name: Upload updated lockfile
+        if: steps.lockfile.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs-dependencies-lockfile
+          path: ${{ runner.temp }}/docs-dependencies/uv.lock
+          if-no-files-found: error
+          retention-days: 1
+
+  pull-request:
+    needs: update
+    if: needs.update.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Download updated lockfile
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docs-dependencies-lockfile
+          path: ${{ runner.temp }}/docs-dependencies
+
+      # Treat the artifact and outputs of the dependency job as untrusted data.
+      - name: Validate and copy lockfile
+        id: validated-lockfile
+        env:
+          LOCKFILE: ${{ needs.update.outputs.lockfile }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import shutil
+          import stat
+          import tomllib
+
+          lockfile = os.environ["LOCKFILE"]
+          if lockfile not in {"uv.lock", "docs/uv.lock"}:
+              raise SystemExit("Unexpected lockfile path")
+
+          artifact = pathlib.Path(os.environ["RUNNER_TEMP"]) / "docs-dependencies"
+          source = artifact / "uv.lock"
+          if list(artifact.iterdir()) != [source] or not stat.S_ISREG(source.lstat().st_mode):
+              raise SystemExit("Artifact must contain only a regular uv.lock file")
+
+          # Parse as data; never install or execute packages in this job.
+          tomllib.loads(source.read_text(encoding="utf-8"))
+          destination = pathlib.Path.cwd() / lockfile
+          if destination.resolve() != destination:
+              raise SystemExit("Lockfile destination must not contain symlinks")
+          shutil.copyfile(source, destination)
+          PY
+
+          echo "path=$LOCKFILE" >> "$GITHUB_OUTPUT"
+          if [ -z "$(git status --porcelain -- "$LOCKFILE")" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Requires "Allow GitHub Actions to create and approve pull requests"
+      # in the repository's Actions settings.
+      - name: Close previous update PR and create a new one
+        if: steps.validated-lockfile.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          LOCKFILE: ${{ steps.validated-lockfile.outputs.path }}
+          PR_BRANCH: automation/docs-update-dependencies
+          PR_TITLE: "chore(docs): update dependencies to latest compatible versions"
+          PR_BODY: |
+            Updates the Python dependencies used to build the docs to the latest
+            versions allowed by the project's `pyproject.toml`.
+
+            Review the updated dependencies in the lockfile before merging, including
+            version changes, added or removed packages, and relevant release notes.
+
+            ### How to test
+
+            Check out this PR and run the following from the `docs` folder:
+
+            ```sh
+            make preview
+            ```
+
+            Make sure the docs build completes without errors and the site renders
+            correctly at http://localhost:5500.
+        run: |
+          gh auth setup-git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Only replace the automation branch if it has not changed since checkout.
+          expected_head=$(git rev-parse --verify "refs/remotes/origin/$PR_BRANCH" 2>/dev/null || true)
+          git switch -c "$PR_BRANCH"
+          git add -- "$LOCKFILE"
+          git commit -m "chore(docs): update dependencies"
+          git push --force-with-lease="refs/heads/$PR_BRANCH:$expected_head" \
+            origin "HEAD:refs/heads/$PR_BRANCH"
+
+          body_file="$RUNNER_TEMP/docs-update-dependencies-pr.md"
+          printf '%s\n' "$PR_BODY" > "$body_file"
+          pr_number=$(gh pr list --head "$PR_BRANCH" --base "$BASE_BRANCH" \
+            --state open --json number --jq '.[0].number // empty')
+
+          if [ -n "$pr_number" ]; then
+            gh pr close "$pr_number"
+          fi
+
+          gh pr create --head "$PR_BRANCH" --base "$BASE_BRANCH" \
+            --title "$PR_TITLE" --body-file "$body_file"

@@ -4,6 +4,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include <seastar/core/coroutine.hh>
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 
 dictionary_service::dictionary_service(
     netw::dict_sampler& ds,

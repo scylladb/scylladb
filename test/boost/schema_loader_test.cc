@@ -136,6 +136,18 @@ SEASTAR_THREAD_TEST_CASE(test_bind_markers_rejected) {
     ).get(), std::exception);
 }
 
+// Assert that loading the schema fails with the message the check under test emits.
+// Matching just std::exception is not enough here: a rejected statement can also blow up
+// during parsing or while preparing against the mock database, and such a failure would
+// satisfy the assertion without the check ever running.
+static void require_load_schemas_fails_with(const db::config& dbcfg, std::string_view schema_str, std::string_view expected_msg) {
+    BOOST_REQUIRE_EXCEPTION(tools::load_schemas(dbcfg, schema_str).get(), std::runtime_error, [&] (const std::runtime_error& e) {
+        const auto matches = std::string_view(e.what()).find(expected_msg) != std::string_view::npos;
+        BOOST_CHECK_MESSAGE(matches, seastar::format("expected an exception message containing \"{}\", got: {}", expected_msg, e.what()));
+        return matches;
+    });
+}
+
 SEASTAR_THREAD_TEST_CASE(test_dropped_columns) {
     db::config dbcfg;
     dbcfg.rf_rack_valid_keyspaces(true);
@@ -170,6 +182,34 @@ SEASTAR_THREAD_TEST_CASE(test_dropped_columns) {
                 "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
                 "INSERT INTO system_schema.dropped_columns (keyspace_name, table_name, column_name, dropped_time, type) VALUES ('ks', 'unknown_cf', 'v2', 1631011979170675, 'int'); "
     ).get(), std::exception);
+    // An UPDATE records a dropped column just as well as an INSERT does.
+    BOOST_REQUIRE_EQUAL(tools::load_schemas(
+                dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
+                "UPDATE system_schema.dropped_columns SET dropped_time = 1631011979170675, type = 'int' WHERE keyspace_name = 'ks' AND table_name = 'cf' AND column_name = 'v2'; "
+    ).get().size(), 1);
+    // A modification statement is only understood against system_schema.dropped_columns.
+    // Matching just one of the keyspace/table name is not enough.
+    require_load_schemas_fails_with(dbcfg,
+                "CREATE TABLE ks.dropped_columns (keyspace_name text, table_name text, column_name text, dropped_time timestamp, type text, PRIMARY KEY ((keyspace_name), table_name, column_name)); "
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
+                "INSERT INTO ks.dropped_columns (keyspace_name, table_name, column_name, dropped_time, type) VALUES ('ks', 'cf', 'v2', 1631011979170675, 'int'); ",
+                "but it is against ks.dropped_columns");
+    require_load_schemas_fails_with(dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
+                "INSERT INTO system_schema.columns (keyspace_name, table_name, column_name) VALUES ('ks', 'cf', 'v2'); ",
+                "but it is against system_schema.columns");
+    // Of the modification statements against system_schema.dropped_columns, only INSERT and
+    // UPDATE are understood. The rest are rejected up-front, before they can be mistaken for
+    // an update by the prepared statement dispatch.
+    require_load_schemas_fails_with(dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
+                "DELETE FROM system_schema.dropped_columns WHERE keyspace_name = 'ks' AND table_name = 'cf' AND column_name = 'v1'; ",
+                "to be an INSERT or an UPDATE, but it is a DELETE");
+    require_load_schemas_fails_with(dbcfg,
+                "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
+                "INSERT INTO system_schema.dropped_columns JSON '{\"keyspace_name\": \"ks\", \"table_name\": \"cf\", \"column_name\": \"v2\", \"dropped_time\": 1631011979170675, \"type\": \"int\"}'; ",
+                "to be an INSERT or an UPDATE, but it is an INSERT JSON");
 }
 
 // A described schema - a snapshot's schema.cql, or the output of DESC SCHEMA WITH INTERNALS -

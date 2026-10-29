@@ -17,6 +17,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/smp.hh>
+#include "tracing/trace_state.hh"
 
 namespace mutation_writer {
 
@@ -116,13 +117,13 @@ future<> multishard_writer::make_shard_writer(unsigned shard) {
     _queue_reader_handles[shard] = std::move(handle);
     return smp::submit_to(shard, [gs = global_schema_ptr(_s),
             consumer = _consumer,
-            reader = make_foreign(std::make_unique<mutation_reader>(std::move(reader)))] () mutable {
-        auto s = gs.get();
+            reader = make_foreign(std::make_unique<mutation_reader>(std::move(reader)))] () mutable -> future<foreign_ptr<std::unique_ptr<shard_writer>>> {
+        auto s = co_await gs.get(db::no_timeout);
         auto semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "shard_writer",
                 reader_concurrency_semaphore::register_metrics::no);
         auto permit = semaphore->make_tracking_only_permit(s, "multishard-writer", db::no_timeout, {});
         auto this_shard_reader = make_foreign_reader(s, std::move(permit), std::move(reader));
-        return make_foreign(std::make_unique<shard_writer>(gs.get(), std::move(semaphore), std::move(this_shard_reader), consumer));
+        co_return make_foreign(std::make_unique<shard_writer>(s, std::move(semaphore), std::move(this_shard_reader), consumer));
     }).then([this, shard] (foreign_ptr<std::unique_ptr<shard_writer>> writer) {
         _shard_writers[shard] = std::move(writer);
         _pending_consumers.push_back(consume(shard));

@@ -10,13 +10,16 @@
 
 #include "schema.hh"
 #include "replica/database_fwd.hh"
-#include "cdc/log.hh"
 #include "mutation/timestamp.hh"
 #include "tombstone_gc_options.hh"
 #include "db/view/base_info.hh"
 
 namespace db {
 class per_partition_rate_limit_options;
+}
+
+namespace cdc {
+class options;
 }
 
 struct schema_builder {

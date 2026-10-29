@@ -29,6 +29,8 @@
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/exception_utils.hh"
+#include "exceptions/exceptions.hh"
 
 #include <vector>
 #include <numeric>
@@ -821,6 +823,23 @@ SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
             }
         }        
     }, small_cache_config);
+}
+
+// A statement which is too big to fit in the prepared statement cache cannot
+// be prepared. Check that this is reported as an InvalidRequest (as in
+// Cassandra), and not as a generic server error.
+SEASTAR_TEST_CASE(test_prepared_statement_too_big_for_cache) {
+    // A cache smaller than any single prepared statement
+    constexpr auto CACHE_SIZE = 100;
+
+    cql_test_config tiny_cache_config;
+    tiny_cache_config.qp_mcfg = {CACHE_SIZE, CACHE_SIZE};
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tbl1 (a int, b int, PRIMARY KEY (a))").get();
+        BOOST_REQUIRE_EXCEPTION(e.prepare("SELECT * FROM tbl1 WHERE a = 1").get(),
+                exceptions::invalid_request_exception,
+                exception_predicate::message_contains("Prepared statement is too big"));
+    }, tiny_cache_config);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_loading_cache_insert) {

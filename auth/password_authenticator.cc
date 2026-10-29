@@ -29,6 +29,8 @@
 #include "service/migration_manager.hh"
 #include "cql3/query_processor.hh"
 #include "db/system_keyspace.hh"
+#include "utils/error_injection.hh"
+#include "service/raft/raft_group_registry.hh"
 
 namespace auth {
 

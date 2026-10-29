@@ -50,14 +50,16 @@ async def _test_impl(
     host_ip = servers[0].ip_addr
     host = hosts[0]
 
-    metrics_before = await get_metrics(manager, servers)
-
     async with new_test_keyspace(manager, db.ks_opts, host) as ks:
         async with new_test_table(manager, ks, db.tbl_schema, db.tbl_opts, host) as tbl:
             if db.prep_stmt_gen is not None:
                 prep_stmt = db.prep_stmt_gen(tbl)
                 if prep_stmt is not None and prep_stmt != "":
                     cql.execute(prep_stmt)
+            # Take the metrics just before and after the requests, so the count
+            # of C++ exceptions doesn't include those thrown while creating and
+            # dropping the keyspace and table, or by other work before the requests.
+            metrics_before = await get_metrics(manager, servers)
             async with inject_error(manager.api, host_ip, injection.name):
                 futures = []
                 for i in range(measurement.run_count):
@@ -72,8 +74,7 @@ async def _test_impl(
                         f.result()
                     except Exception:
                         pass
-
-    metrics_after = await get_metrics(manager, servers)
+            metrics_after = await get_metrics(manager, servers)
 
     metrics_errors = get_metric_count(metrics_after, measurement.metric_name) - get_metric_count(metrics_before, measurement.metric_name)
     assert metrics_errors >= measurement.metric_error_threshold

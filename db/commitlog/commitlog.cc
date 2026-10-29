@@ -518,6 +518,10 @@ public:
     void flush_segments(uint64_t size_to_remove);
     void check_no_data_older_than_allowed();
 
+    replay_position flush_position() const {
+        return _flush_position;
+    }
+
     // whitebox testing
     std::function<future<>()> _oversized_pre_wait_memory_func;
 
@@ -3289,57 +3293,6 @@ db::commitlog::add_entries(utils::chunked_vector<commitlog_mutation_entry_writer
     force_sync sync(std::any_of(entry_writers.begin(), entry_writers.end(), [](auto& w) { return bool(w.sync()); }));
     return _segment_manager->allocate_when_possible(cl_entries_writer(sync, std::move(entry_writers)), timeout);
 }
-future<utils::chunked_vector<db::rp_handle>> db::commitlog::add_raft_entries(
-        const cf_id_type& id, utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers) {
-    class cl_raft_entries_writer final : public entry_writer {
-        utils::chunked_vector<commitlog_raft_log_entry_writer> _writers;
-        cf_id_type _id;
-
-    public:
-        utils::chunked_vector<rp_handle> res;
-
-        cl_raft_entries_writer(utils::chunked_vector<commitlog_raft_log_entry_writer> entry_writers, cf_id_type id)
-            : entry_writer(force_sync::yes, entry_writers.size())
-            , _writers(std::move(entry_writers))
-            , _id(id) {
-            res.reserve(_writers.size());
-        }
-        const cf_id_type& id(size_t) const override {
-            return _id;
-        }
-        size_t size(segment&) override {
-            size_t res = 0;
-            for (auto& w : _writers) {
-                res += w.size();
-            }
-            return res;
-        }
-        size_t size(segment&, size_t i) override {
-            return _writers.at(i).size();
-        }
-        size_t size() const override {
-            size_t res = 0;
-            for (auto& w : _writers) {
-                res += w.size();
-            }
-            return res;
-        }
-        void write(segment&, output& out, size_t i) const override {
-            _writers.at(i).write(out);
-        }
-        void result(size_t i, rp_handle h) override {
-            SCYLLA_ASSERT(i == res.size());
-            res.emplace_back(std::move(h));
-        }
-
-        using result_type = utils::chunked_vector<db::rp_handle>;
-
-        result_type result() {
-            return std::move(res);
-        }
-    };
-    return _segment_manager->allocate_when_possible(cl_raft_entries_writer(std::move(entry_writers), id), db::no_timeout);
-}
 
 db::commitlog::commitlog(config cfg)
         : _segment_manager(::make_shared<segment_manager>(std::move(cfg))) {
@@ -4132,6 +4085,10 @@ db::replay_position db::commitlog::current_position() const {
     return _segment_manager->current_position();
 }
 
+db::replay_position db::commitlog::flush_position() const {
+    return _segment_manager->flush_position();
+}
+
 size_t db::commitlog::sector_overhead(segment_id_type id, size_t size) const {
     return _segment_manager->sector_overhead(id, size);
 }
@@ -4150,6 +4107,30 @@ future<std::vector<sstring>> db::commitlog::get_segments_to_replay() const {
 
 future<> db::commitlog::delete_segments(std::vector<sstring> files) const {
     return _segment_manager->delete_segments(std::move(files));
+}
+
+future<> db::commitlog::rename_segment(sstring from, sstring to, const db::extensions* exts) {
+    const auto file_exts = exts ? exts->commitlog_file_extensions() : std::vector<commitlog_file_extension*>{};
+
+    for (auto* ext : file_exts) {
+        co_await ext->before_rename(from, to);
+    }
+
+    co_await rename_file(from, to);
+
+    // The rename must be persisted before the extensions drop the files kept for the old name.
+    // When the segment changes directories, both of them must be synced: otherwise, the segment
+    // may reappear at the old path after a crash.
+    const auto from_dir = std::filesystem::path(std::string_view(from)).parent_path().native();
+    const auto to_dir = std::filesystem::path(std::string_view(to)).parent_path().native();
+    co_await sync_directory(to_dir);
+    if (from_dir != to_dir) {
+        co_await sync_directory(from_dir);
+    }
+
+    for (auto* ext : file_exts) {
+        co_await ext->after_rename(from, to);
+    }
 }
 
 db::rp_handle::rp_handle() noexcept
@@ -4177,7 +4158,7 @@ db::rp_handle::~rp_handle() {
     }
 }
 
-db::replay_position db::rp_handle::release() {
+db::replay_position db::rp_handle::release() noexcept {
     return std::exchange(_rp, {});
 }
 

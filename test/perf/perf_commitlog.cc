@@ -220,7 +220,7 @@ int main(int argc, char** argv) {
         cfg.min_data_size = app.configuration()["min-data-size"].as<size_t>();
         cfg.max_data_size = app.configuration()["max-data-size"].as<size_t>();
         cfg.min_flush_delay_in_ms = app.configuration()["min-flush-delay-in-ms"].as<uint64_t>();
-        cfg.max_flush_delay_in_ms = app.configuration()["min-flush-delay-in-ms"].as<uint64_t>();
+        cfg.max_flush_delay_in_ms = app.configuration()["max-flush-delay-in-ms"].as<uint64_t>();
 
         if (cfg.min_data_size > cfg.max_data_size) {
             cfg.max_data_size = cfg.min_data_size;

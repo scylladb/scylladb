@@ -18,8 +18,10 @@
 #include "utils/maybe_yield.hh"
 #include "utils/sequenced_set.hh"
 #include "utils/simple_hashers.hh"
-#include "tablets.hh"
+#include "locator/tablet_types.hh"
 #include "data_dictionary/consistency_config_options.hh"
+#include "locator/replication_strategy_type.hh"
+#include "locator/abstract_replication_strategy_fwd.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -37,16 +39,6 @@ extern logging::logger rslogger;
 
 using inet_address = gms::inet_address;
 using token = dht::token;
-
-enum class replication_strategy_type {
-    simple,
-    local,
-    network_topology,
-    everywhere_topology,
-};
-
-using replication_strategy_config_option = std::variant<sstring, rack_list>;
-using replication_strategy_config_options = std::map<sstring, replication_strategy_config_option>;
 
 // Returns the number of replicas inferred by the option.
 // Throws configuration_exception when option is not a valid replication factor specifier.
@@ -240,8 +232,6 @@ public:
     auto& operator*();
 };
 
-using replication_strategy_ptr = seastar::shared_ptr<const abstract_replication_strategy>;
-using mutable_replication_strategy_ptr = seastar::shared_ptr<abstract_replication_strategy>;
 
 /// \brief Represents effective replication (assignment of replicas to keys).
 ///
@@ -358,9 +348,6 @@ public:
     virtual bool is_leaving(locator::host_id host, const dht::token& token) const = 0;
 };
 
-using effective_replication_map_ptr = seastar::shared_ptr<const effective_replication_map>;
-using mutable_effective_replication_map_ptr = seastar::shared_ptr<effective_replication_map>;
-
 /// Replication strategies which support per-table replication extend this trait.
 ///
 /// It will be accessed only if the replication strategy actually works in per-table mode,
@@ -380,10 +367,6 @@ class static_effective_replication_map;
 class vnode_effective_replication_map;
 class local_effective_replication_map;
 
-using static_effective_replication_map_ptr = shared_ptr<const static_effective_replication_map>;
-using mutable_static_effective_replication_map_ptr = shared_ptr<static_effective_replication_map>;
-using static_erm_ptr = static_effective_replication_map_ptr;
-using mutable_static_erm_ptr = mutable_static_effective_replication_map_ptr;
 
 // Holds the full replication_map resulting from applying the
 // effective replication strategy over the given token_metadata
@@ -633,11 +616,6 @@ inline mutable_static_erm_ptr make_local_effective_replication_map_ptr(replicati
 }
 
 } // namespace locator
-
-template <>
-struct fmt::formatter<locator::replication_strategy_type> : fmt::formatter<string_view> {
-    auto format(locator::replication_strategy_type, fmt::format_context& ctx) const -> decltype(ctx.out());
-};
 
 template <>
 struct fmt::formatter<locator::static_effective_replication_map::factory_key> : fmt::formatter<string_view> {

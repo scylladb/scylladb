@@ -23,6 +23,7 @@
 #include "readers/empty.hh"
 #include "readers/mutation_source.hh"
 #include "db/large_data_handler.hh"
+#include "tombstone_gc.hh"
 
 class frozen_mutation;
 class row_cache;
@@ -205,7 +206,7 @@ private:
 
     std::optional<tombstone_gc_state_snapshot> _tombstone_gc_snapshot;
 
-    void update(db::rp_handle&&);
+    void update(db::rp_handle&&) noexcept;
     friend class ::row_cache;
     friend class memtable_entry;
     friend class flush_reader;

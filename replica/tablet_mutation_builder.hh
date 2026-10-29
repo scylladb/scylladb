@@ -38,7 +38,12 @@ public:
     tablet_mutation_builder& set_transition(dht::token last_token, locator::tablet_transition_kind);
     tablet_mutation_builder& set_session(dht::token last_token, service::session_id);
     tablet_mutation_builder& del_session(dht::token last_token);
-    tablet_mutation_builder& del_transition(dht::token last_token);
+    tablet_mutation_builder& del_transition(dht::token last_token, const gms::feature_service& features);
+    // Clears the session, which aborts the replicas' work for the stage, and marks the transition
+    // cancelled: a repair by clearing repair_task_info, as del_repair_tablet_request() does,
+    // anything else by the cancel flag, which needs features.tablet_transition_cancel.
+    tablet_mutation_builder& cancel_transition(dht::token last_token, const locator::tablet_transition_info&,
+                                               const gms::feature_service&);
     tablet_mutation_builder& set_resize_decision(locator::resize_decision, const gms::feature_service&);
     tablet_mutation_builder& set_repair_time(dht::token last_token, db_clock::time_point repair_time);
     tablet_mutation_builder& set_sstables_repair_at(dht::token last_token, int64_t sstables_repaired_at);

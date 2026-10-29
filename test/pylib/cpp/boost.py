@@ -41,10 +41,16 @@ class BoostTestFile(CppFile):
             path = self.build_basedir / COMBINED_TESTS
             if not path.is_file() or self.test_name not in get_boost_test_list_content(executable=path, combined=True):
                 raise FileNotFoundError(
-                    f"There is no separate {self.build_mode} binary built for {self.path.name},"
-                    " and it's not built into the combined tests binary",
+                    "No binary found for the test. Pass --build to pytest or build the appropriate binary"
+                    " (consider that the test may be part of combined_tests binary).",
                 )
         return path
+
+    @property
+    def exe_names(self) -> list[str]:
+        # A test file which has no separate executable is built into the
+        # combined tests one.
+        return [*super().exe_names, COMBINED_TESTS]
 
     @cached_property
     def combined(self) -> bool:

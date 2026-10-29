@@ -32,6 +32,8 @@ import random
 import re
 
 from test.cluster.util import get_replication
+from test.pylib.internal_types import ServerInfo
+from test.pylib.object_storage import StorageFactory
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 from test.pylib.rest_client import inject_error
@@ -2163,3 +2165,79 @@ async def test_export_to_s3_system_tables_readable_on_all_nodes(manager: ScyllaC
                 keys.add(row[0])
             assert keys == expected_keys, \
                 f"node {host} sees {keys} in {table}, expected {expected_keys}"
+
+
+# Stops the export fiber during the table scan, so that the export stays
+# IN_PROGRESS while a test interrupts it.
+export_pause_injection = 'alternator_export_to_s3_pause_in_item_handler'
+
+
+async def start_paused_export(manager: ScyllaClusterManager,
+                              object_storage_factory: StorageFactory) -> tuple[ServerInfo, str]:
+    """Start a one-node cluster and an export that does not finish.
+
+    The export fiber waits in `export_pause_injection` with the export row
+    IN_PROGRESS. Returns the node and the export ARN.
+    """
+    object_storage = await object_storage_factory('s3')
+    server = await manager.server_add(config=alternator_config | {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+    })
+
+    alternator = get_alternator(server.ip_addr)
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[ {'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ {'AttributeName': 'p', 'AttributeType': 'N' } ])
+    for p in range(10):
+        table.put_item(Item={'p': p})
+
+    client = table.meta.client
+    table_arn = client.describe_table(TableName=table.name)['Table']['TableArn']
+    await manager.api.enable_injection(server.ip_addr, export_pause_injection, one_shot=False)
+    export_arn = client.export_table_to_point_in_time(
+        TableArn=table_arn,
+        S3Bucket=object_storage.bucket_name,
+    )['ExportDescription']['ExportArn']
+    # Wait until the fiber gets to the scan.
+    await manager.api.wait_for_injection_enter(server.ip_addr, export_pause_injection)
+    return server, export_arn
+
+
+async def describe_finished_export(server: ServerInfo, export_arn: str, timeout: float = 120) -> dict:
+    """Call DescribeExport until the export is finished, and return its description.
+
+    An export that the garbage collector takes is IN_PROGRESS until the collector
+    writes the final row.
+    """
+    client = get_alternator(server.ip_addr).meta.client
+    async def export_finished():
+        desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
+        return desc if desc['ExportStatus'] != 'IN_PROGRESS' else None
+    return await wait_for(export_finished, time.time() + timeout)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_export_of_dead_incarnation_fails_after_restart(manager: ScyllaClusterManager, object_storage_factory):
+    """A killed node leaves its export IN_PROGRESS with the old incarnation. The first garbage
+       collection round after the restart writes FAILED with NodeFailure."""
+    server, export_arn = await start_paused_export(manager, object_storage_factory)
+    await manager.server_stop(server.server_id, convict=False)
+    await manager.server_start(server.server_id)
+    desc = await describe_finished_export(server, export_arn)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == 'NodeFailure', desc
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_export_fails_when_the_node_shuts_down(manager: ScyllaClusterManager, object_storage_factory):
+    """A graceful shutdown aborts the running exports, and each export writes its own
+       FAILED row with the failure code Exception. (The garbage collector writes
+       NodeFailure, so this is not the garbage collector.)"""
+    server, export_arn = await start_paused_export(manager, object_storage_factory)
+    await manager.server_stop_gracefully(server.server_id)
+    # Start the node again for DescribeExport. The row is from the export fiber.
+    await manager.server_start(server.server_id)
+    desc = await describe_finished_export(server, export_arn)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == 'Exception', desc

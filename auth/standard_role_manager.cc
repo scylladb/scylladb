@@ -38,6 +38,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "service/migration_manager.hh"
 #include "utils/managed_string.hh"
+#include "service/raft/raft_group_registry.hh"
 
 namespace auth {
 

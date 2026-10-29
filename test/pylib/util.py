@@ -13,12 +13,15 @@ import threading
 import time
 import asyncio
 import concurrent.futures
+import fcntl
 import logging
 import os
 import random
 import string
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Iterator
+from contextlib import contextmanager
 from functools import cache, partial
+from pathlib import Path
 from typing import Optional, TypeVar, Any, cast
 
 import colorama
@@ -29,7 +32,7 @@ from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-modu
 from cassandra.query import Statement # type: ignore # pylint: disable=no-name-in-module
 from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
-from test import BUILD_DIR, TOP_SRC_DIR, MODES_TIMEOUT_FACTOR
+from test import BUILD_DIR, TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, use_traditional_build
 from test.pylib.internal_types import ServerInfo
 
 logger = logging.getLogger(__name__)
@@ -226,15 +229,29 @@ class KeyGenerator:
         with self.pk_lock:
             return self.pk
 
-async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int = 3, ignore_errors=False):
-    logger.info(f"Starting to asynchronously write, concurrency = {concurrency}")
+async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int = 3, ignore_errors=False,
+                       key_count: Optional[int] = None):
+    """Write to the table until the returned finish() is called, and read each write back.
+
+    Each write goes to a new key, unless `key_count` is given: then the writes reuse the keys
+    0..key_count-1 in turn, which keeps the data size bounded however long the writes run.
+    finish() returns the number of keys written.
+    """
+    logger.info(f"Starting to asynchronously write, concurrency = {concurrency}, key_count = {key_count}")
 
     stop_event = asyncio.Event()
 
     warmup_writes = 128 // concurrency
     warmup_event = asyncio.Event()
 
-    stmt = cql.prepare(f"INSERT INTO {keyspace}.{table} (pk, c) VALUES (?, ?)")
+    if key_count is None:
+        stmt = cql.prepare(f"INSERT INTO {keyspace}.{table} (pk, c) VALUES (?, ?)")
+    else:
+        # Two writes to the same key can be in flight together, so a write cannot expect to read
+        # back its own value. The timestamp makes the later write win, so a read returns the value
+        # of this write or of a later one.
+        stmt = cql.prepare(f"INSERT INTO {keyspace}.{table} (pk, c) VALUES (?, ?) USING TIMESTAMP ?")
+        base_timestamp = int(time.time() * 1_000_000)
     stmt.consistency_level = ConsistencyLevel.QUORUM
     rd_stmt = cql.prepare(f"SELECT * FROM {keyspace}.{table} WHERE pk = ?")
     rd_stmt.consistency_level = ConsistencyLevel.QUORUM
@@ -259,18 +276,25 @@ async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int
 
         write_count = 0
         while not stop_event.is_set():
-            pk = key_gen.next_pk()
+            seq = key_gen.next_pk()
+            pk = seq if key_count is None else seq % key_count
 
             # Once next_pk() is produced, key_gen.last_key() is assumed to be in the database
             # hence we can't give up on it.
             while True:
                 start_time = time.time()
                 try:
-                    await cql.run_async(stmt, [pk, pk])
+                    if key_count is None:
+                        await cql.run_async(stmt, [pk, seq])
+                    else:
+                        await cql.run_async(stmt, [pk, seq, base_timestamp + seq])
                     # Check read-your-writes
                     rows = await run_retry_async(cql, rd_stmt, [pk])
                     assert(len(rows) == 1)
-                    assert(rows[0].c == pk)
+                    if key_count is None:
+                        assert(rows[0].c == seq)
+                    else:
+                        assert(rows[0].c >= seq and rows[0].c % key_count == pk)
                     write_count += 1
                     break
                 except Exception as e:
@@ -280,7 +304,7 @@ async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int
                         logger.error(f"Exception occurred during read/write operation for pk={pk} started {time.time() - start_time}s ago: {e}")
                         raise e
 
-            if pk == warmup_writes:
+            if seq == warmup_writes:
                 warmup_event.set()
 
         logger.info(f"Worker #{worker_id} did {write_count} successful writes")
@@ -295,9 +319,11 @@ async def start_writes(cql: Session, keyspace: str, table: str, concurrency: int
         await asyncio.gather(*tasks)
 
         last = key_gen.last_pk()
-        if last is not None:
+        if last is None:
+            return 0
+        if key_count is None:
             return last + 1
-        return 0
+        return min(last + 1, key_count)
 
     return finish
 
@@ -368,26 +394,115 @@ async def wait_all(coros: list[Coroutine], timeout: int|None = None):
     return result
 
 
-def ninja(target: str) -> str:
-    """Build specified target using ninja."""
+def build_is_configured() -> bool:
+    """Is there a build ninja can be run in?  Neither build system has
+    generated its build.ninja in a tree which was never configured."""
 
-    return subprocess.Popen(
-        # cmake places build.ninja in build/, traditional is in ./.
-        # We choose to test for traditional, not cmake, because IDEs may
-        # invoke cmake to learn the configuration and generate false positives
-        args=["ninja", *(["-C", str(BUILD_DIR)] if not TOP_SRC_DIR.joinpath("build.ninja").exists() else []), target],
-        stdout=subprocess.PIPE,
-        cwd=TOP_SRC_DIR,
-    ).communicate()[0].decode()
+    return use_traditional_build() or BUILD_DIR.joinpath("build.ninja").exists()
+
+
+NO_BUILD_CONFIGURED = (
+    f"There is no configured build: neither {TOP_SRC_DIR / 'build.ninja'} nor {BUILD_DIR / 'build.ninja'}"
+    " exists.  Please run ./configure.py (or cmake, for a cmake build) first."
+)
+
+
+def ninja_cwd() -> Path:
+    """The directory ninja is invoked from, which its targets are relative to."""
+
+    return TOP_SRC_DIR if use_traditional_build() else BUILD_DIR
+
+
+def ninja_args() -> list[str]:
+    return [] if use_traditional_build() else ["-C", str(BUILD_DIR)]
+
+
+@contextmanager
+def ninja_lock() -> Iterator[None]:
+    """Serialize ninja invocations.
+
+    xdist workers collect in parallel and would otherwise run several ninja
+    instances in the same build directory, which ninja does not guard against
+    itself.  Querying is serialized along with building, because a query on a
+    stale build.ninja regenerates it first.
+    """
+
+    lock_path = BUILD_DIR / ".pytest-ninja-lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open(mode="w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        yield
+
+
+def ninja(target: str) -> str:
+    """Query the build by running a ninja target which prints to stdout.
+
+    The output is captured and returned, which is what separates this from
+    ninja_build(): the targets it is used with (mode_list, unit_test_list)
+    build nothing, they report the configuration.
+
+    Raises RuntimeError if the query fails.
+    """
+
+    with ninja_lock():
+        process = subprocess.run(args=["ninja", *ninja_args(), target], stdout=subprocess.PIPE, cwd=TOP_SRC_DIR,
+                                 check=False)
+    if process.returncode:
+        raise RuntimeError(f"Failed to query {target}: ninja exited with {process.returncode}")
+    return process.stdout.decode()
+
+
+def ninja_build(*targets: str) -> None:
+    """Build the given targets with ninja, with its output going to the terminal.
+
+    Raises RuntimeError if the build fails.
+    """
+
+    with ninja_lock():
+        process = subprocess.run(args=["ninja", *ninja_args(), *targets], cwd=TOP_SRC_DIR, check=False)
+    if process.returncode:
+        raise RuntimeError(f"Failed to build {' '.join(targets)}: ninja exited with {process.returncode}")
 
 
 @cache
 def get_configured_modes() -> list[str]:
-    out = ninja('mode_list')
+    try:
+        out = ninja('mode_list')
+    except (OSError, RuntimeError):
+        # Best-effort: every session resolves the modes, including the ones
+        # which run nothing that was built -- the framework's own tests in
+        # test/pylib_test, for one, which CI runs in a tree it has not
+        # configured yet, and which a developer can run outside the build
+        # toolchain.  Whatever does need a build says so itself: --build is
+        # rejected unless build_is_configured(), and ninja_build() raises.
+        # Keep yielding the one unnamed mode such a tree used to, since
+        # config.build_modes[0] is read unconditionally, e.g. by the
+        # build_mode fixture.
+        return [""]
     # [1/1] List configured modes
     # debug release dev
     return re.sub(r'.* List configured modes\n(.*)\n', r'\1',
                             out, count=1, flags=re.DOTALL).split('\n')[-1].split(' ')
+
+
+@cache
+def get_configured_tests() -> frozenset[str]:
+    """Names of the tests the build system is configured to build.
+
+    The names are of the `test/<suite>/<test name>` form, i.e. the source
+    directory of a test and the name of the executable it is built into --
+    which is not necessarily the name of the test: tests can be built into a
+    shared executable, like test/boost/combined_tests.
+    """
+
+    # [1/1] List configured unit tests
+    # test/boost/UUID_test
+    # ...
+    # The cmake build quotes the whole list, so strip the quotes as well.
+    return frozenset(
+        stripped for line in ninja("unit_test_list").splitlines()
+        if (stripped := line.strip().strip("'")).startswith("test/")
+    )
 
 
 def get_modes_to_run(config) -> list[str]:

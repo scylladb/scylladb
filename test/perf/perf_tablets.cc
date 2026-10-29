@@ -34,6 +34,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/topology_builder.hh"
+#include "service/storage_service.hh"
 
 using namespace locator;
 using namespace replica;

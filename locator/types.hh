@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <vector>
 #include <seastar/core/sstring.hh>
 
 #include "gms/inet_address.hh"
@@ -32,6 +33,8 @@ struct endpoint_dc_rack {
 };
 
 using dc_rack_fn = seastar::noncopyable_function<std::optional<endpoint_dc_rack>(host_id)>;
+
+using rack_list = std::vector<sstring>;
 
 } // namespace locator
 

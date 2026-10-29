@@ -70,6 +70,7 @@
 #include <algorithm>
 #include <bit>
 #include "locator/local_strategy.hh"
+#include "locator/network_topology_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "utils/user_provided_param.hh"
 #include "version.hh"
@@ -89,6 +90,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "db/schema_tables.hh"
 #include "db/view/view_builder.hh"
 #include "replica/database.hh"
@@ -120,6 +122,7 @@
 #include "node_ops/task_manager_module.hh"
 #include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
+#include "db/view/view_build_status.hh"
 #include "cql3/query_processor.hh"
 #include <csignal>
 #include "utils/labels.hh"
@@ -3239,13 +3242,14 @@ future<> storage_service::reset_cleanup_needed() {
     }
 }
 
-future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {
+future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry,
+                                                                     std::optional<lowres_clock::time_point> deadline) {
     // Lets a test delay the caller between submitting the request and its first
     // read of system.topology_requests.
     co_await utils::get_local_injector().inject("topology_request_pause_before_wait",
             utils::wait_for_message(std::chrono::minutes(5)));
     co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(),
-            _group0->client(), _group0_as, id, require_entry);
+            _group0->client(), _group0_as, id, require_entry, deadline);
 }
 
 future<> storage_service::abort_topology_request(utils::UUID request_id) {
@@ -4354,11 +4358,130 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
         }, uint64_t(0), std::plus<uint64_t>());
         auto estimated_total_size = static_cast<uint64_t>(local_size / local_fraction);
         table_sizes.emplace(tid, estimated_total_size);
-        slogger.info("Estimated size of table {}.{}: {} byte(s) (local data set is {} byte(s))",
-                ks_name, cf_name, estimated_total_size, local_size);
+        slogger.info("Estimated size of {} {}.{}: {} byte(s) (local data set is {} byte(s))",
+                _db.local().find_schema(tid)->is_view() ? "view" : "table", ks_name, cf_name,
+                estimated_total_size, local_size);
     }
 
     co_return table_sizes;
+}
+
+// Validates that a keyspace's replication factors will be valid once it
+// migrates from vnodes to tablets.
+//
+// Tablet-based keyspaces must not have an RF larger than the number of
+// token-owning nodes in a datacenter: allocating tablets for new tables fails
+// otherwise. Vnode-based keyspaces allow it, so the migration rejects such
+// keyspaces up front.
+//
+// Additionally, tablet-based keyspaces must be RF-rack-valid if:
+// - they have materialized views, or
+// - the rf_rack_valid_keyspaces config option is enabled.
+// Nodes refuse to start otherwise, so the migration rejects such
+// keyspaces up front.
+//
+// Finally, the migration cannot run at all if the enforce_rack_list config
+// option enabled. The option causes nodes to refuse to start if a tablet-based
+// keyspace has a numeric replication factor. Vnode-based keyspaces only have
+// numeric replication factors, which the migration carries to the tablets world.
+// FIXME: Convert numeric RFs to rack lists on migration finalization if
+// enforce_rack_list is enabled.
+static void validate_rf_for_tablets_migration(const replica::database& db,
+        const locator::token_metadata_ptr& tmptr,
+        const locator::network_topology_strategy& nts,
+        const sstring& ks_name) {
+    const auto& ks = db.find_keyspace(ks_name);
+
+    if (db.get_config().enforce_rack_list()) {
+        throw std::runtime_error(fmt::format(
+                "Cannot migrate keyspace {} to tablets: the enforce_rack_list option is enabled, but the migrated"
+                " keyspace would keep its numeric replication factors. Disable enforce_rack_list, migrate, convert"
+                " the replication factors to rack lists with ALTER KEYSPACE, then enable it again.", ks_name));
+    }
+
+    // Check that RF <= #nodes.
+    // (copied from `natural_endpoints_tracker::check_enough_endpoints()`)
+    auto dc_token_owners = tmptr->get_datacenter_token_owners();
+    for (const auto& dc : nts.get_datacenters()) {
+        auto it = dc_token_owners.find(dc);
+        auto node_count = it != dc_token_owners.end() ? it->second.size() : size_t(0);
+        auto rf = nts.get_replication_factor(dc);
+        if (rf > node_count) {
+            throw std::runtime_error(fmt::format(
+                    "Cannot migrate keyspace {} to tablets: datacenter {} doesn't have enough token-owning nodes"
+                    " for replication_factor={}", ks_name, dc, rf));
+        }
+    }
+
+    // Check the keyspace as it will look after the migration: the same
+    // replication options, but with tablets.
+    locator::replication_strategy_params params(nts.get_config_options(), 0, std::nullopt);
+    auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(
+            ks.metadata()->strategy_name(), params, tmptr->get_topology());
+    try {
+        locator::assert_rf_rack_valid_keyspace(ks_name, tmptr, *tablet_rs);
+    } catch (const std::invalid_argument& e) {
+        if (db.enforce_rf_rack_validity_for_keyspace(ks)) {
+            throw std::runtime_error(fmt::format("Cannot migrate keyspace {} to tablets: {}", ks_name, e.what()));
+        }
+        // e.what() states that RF-rack-validity is required, which doesn't
+        // hold here, so don't include it.
+        slogger.warn("Keyspace '{}' will not be RF-rack-valid after the migration to tablets: the replication"
+                " factor doesn't match the rack count in at least one datacenter. A rack failure may reduce"
+                " availability.", ks_name);
+    }
+}
+
+// Validates that the materialized views of a keyspace can be migrated from
+// vnodes to tablets.
+//
+// Views whose partition key consists of exactly the base table's partition
+// key columns, in the same order, are migrated as tables co-located with
+// their base table, sharing the base table's tablet map. Other views,
+// including the backing views of global secondary indexes, get a tablet map
+// of their own, derived from the vnodes the same way as the base table's.
+//
+// Views must be fully built on all normal nodes. The migration
+// doesn't hand over in-progress builds: once the keyspace uses tablets, the
+// node-local view builder ignores it, and the view building coordinator only
+// builds views it has build tasks for. Those tasks are created by CREATE
+// MATERIALIZED VIEW on a tablets keyspace, so a view created under vnodes
+// never gets any. A partially built view would never be completed, and the
+// tablet bookkeeping would treat it as unbuilt, because not all of its
+// entries in system.view_build_status_v2 are SUCCESS.
+//
+// Co-located tables don't support the 'repair' tombstone_gc mode, but views
+// using it are accepted: finalizing the migration switches them to 'timeout'.
+//
+// Throws std::runtime_error if any view cannot be migrated.
+static future<> validate_keyspace_views_for_tablets_migration(
+        replica::database& db,
+        db::system_keyspace& sys_ks,
+        const topology& topology,
+        const sstring& ks_name) {
+    auto& ks = db.find_keyspace(ks_name);
+    auto views = ks.metadata()->views();
+    if (views.empty()) {
+        co_return;
+    }
+
+    auto build_statuses = co_await sys_ks.get_view_build_status_map();
+
+    for (const auto& view : views) {
+        auto it = build_statuses.find({view->ks_name(), view->cf_name()});
+        for (const auto& server_id : topology.normal_nodes | std::views::keys) {
+            auto host_id = locator::host_id{server_id.uuid()};
+            bool built = it != build_statuses.end()
+                    && it->second.contains(host_id)
+                    && it->second.at(host_id) == db::view::build_status::SUCCESS;
+            if (!built) {
+                throw std::runtime_error(fmt::format(
+                        "Cannot migrate keyspace {} to tablets: materialized view {}.{} is not built on node {}."
+                        " Wait for the view build to finish and retry.",
+                        ks_name, ks_name, view->cf_name(), host_id));
+            }
+        }
+    }
 }
 
 future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) {
@@ -4397,20 +4520,40 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             }
         }
 
-        std::vector<std::pair<table_id, sstring>> tables_to_migrate;
+        const auto* nts = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
+        if (!nts) {
+            throw std::runtime_error(fmt::format(
+                "Keyspace '{}' uses a replication strategy that does not support tablets. Please convert to NetworkTopologyStrategy first.",
+                ks_name));
+        }
+
+        validate_rf_for_tablets_migration(db, get_token_metadata_ptr(), *nts, ks_name);
+        co_await validate_keyspace_views_for_tablets_migration(db, get_system_keyspace(), topology, ks_name);
+
+        // Tables that get a tablet map of their own: base tables, and views
+        // that cannot be co-located with their base table.
+        std::vector<std::pair<table_id, sstring>> tables_to_build_maps;
+        // Tables that share the tablet map of another table, keyed by the
+        // table whose map they share. Currently, these are views co-located
+        // with their base table.
+        std::unordered_map<table_id, std::vector<std::pair<table_id, sstring>>> tables_to_colocate;
 
         for (const auto& [name, schema] : cf_meta_data) {
             auto tid = schema->id();
             auto& cf = db.find_column_family(tid);
 
             if (cf.uses_tablets()) {
-                slogger.info("Table {}.{} already uses tablets, skipping", ks_name, name);
+                slogger.info("{} {}.{} already uses tablets, skipping", schema->is_view() ? "View" : "Table", ks_name, name);
                 continue;
             }
-            tables_to_migrate.push_back({tid, name});
+            if (auto base_id = schema->is_view() ? db.get_base_table_for_tablet_colocation(*schema, {}) : std::nullopt) {
+                tables_to_colocate[*base_id].push_back({tid, name});
+            } else {
+                tables_to_build_maps.push_back({tid, name});
+            }
         }
 
-        if (tables_to_migrate.empty()) {
+        if (tables_to_build_maps.empty() && tables_to_colocate.empty()) {
             slogger.info("All tables in keyspace {} already use tablets, nothing to do", ks_name);
             co_return;
         }
@@ -4463,20 +4606,25 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // Estimate table sizes when pow2 convergence is enabled.
         // The estimates are used by the tablet allocator to determine the
         // target pow2 tablet count per table.
-        auto& rs = ks.get_replication_strategy();
-        const auto* trs = dynamic_cast<const locator::tablet_aware_replication_strategy*>(&rs);
-        if (!trs) {
-            throw std::runtime_error(fmt::format(
-                "Keyspace '{}' uses a replication strategy that does not support tablets. Please convert to NetworkTopologyStrategy first.",
-                ks_name));
-        }
-
         target_pow2_per_table_map target_pow2s;
         bool use_pow2_presplit = bool(_feature_service.tablet_pow2_convergence);
         if (use_pow2_presplit) {
+            // Estimate the sizes of all tables, including co-located ones.
+            // Co-located tables share a single tablet map, so size each tablet
+            // map by the total size of the whole colocation group.
+            auto tables_to_estimate = tables_to_build_maps;
+            for (const auto& colocated : tables_to_colocate | std::views::values) {
+                tables_to_estimate.insert(tables_to_estimate.end(), colocated.begin(), colocated.end());
+            }
             auto erm = ks.get_static_effective_replication_map();
-            auto estimated_sizes = co_await collect_table_sizes_for_migration(ks_name, erm, trs, tables_to_migrate);
-            target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(trs, estimated_sizes);
+            auto estimated_sizes = co_await collect_table_sizes_for_migration(ks_name, erm, nts, tables_to_estimate);
+            for (const auto& [base_id, colocated] : tables_to_colocate) {
+                for (const auto& [tid, cf_name] : colocated) {
+                    estimated_sizes[base_id] += estimated_sizes[tid];
+                    estimated_sizes.erase(tid);
+                }
+            }
+            target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(nts, estimated_sizes);
         }
 
         // Build tablet map mutations for all tables and persist them to group0 (system.tablets)
@@ -4508,19 +4656,37 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                     });
             };
 
+            // Co-located tables don't get a tablet map of their own; instead,
+            // they are registered in system.tablets as co-located with the
+            // table whose tablet map they share.
+            auto append_colocated_tablet_map_mutations = [&] (table_id base_id) -> future<> {
+                auto it = tables_to_colocate.find(base_id);
+                if (it == tables_to_colocate.end()) {
+                    co_return;
+                }
+                for (const auto& [tid, cf_name] : it->second) {
+                    slogger.info("Built co-located tablet map for {}.{} (shares the tablet map of {})",
+                                 ks_name, cf_name, base_id);
+                    auto m = replica::colocated_tablet_map_to_mutation(tid, ks_name, cf_name, base_id, guard.write_timestamp());
+                    updates.emplace_back(co_await make_canonical_mutation_gently(std::move(m)));
+                }
+            };
+
             if (use_pow2_presplit) {
-                for (const auto& [tid, cf_name] : tables_to_migrate) {
+                for (const auto& [tid, cf_name] : tables_to_build_maps) {
                     size_t target_pow2 = 0;
                     if (auto it = target_pow2s.find(tid); it != target_pow2s.end()) {
                         target_pow2 = it->second;
                     }
                     auto tmap = co_await build_tablet_map_for_migration(erm, target_pow2);
                     co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
+                    co_await append_colocated_tablet_map_mutations(tid);
                 }
             } else {
                 auto shared_tmap = co_await build_tablet_map_for_migration(erm, 0);
-                for (const auto& [tid, cf_name] : tables_to_migrate) {
+                for (const auto& [tid, cf_name] : tables_to_build_maps) {
                     co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
+                    co_await append_colocated_tablet_map_mutations(tid);
                 }
             }
         }
@@ -4552,9 +4718,15 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             continue;
         }
 
-        for (const auto& [tid, cf_name] : tables_to_migrate) {
+        for (const auto& [tid, cf_name] : tables_to_build_maps) {
             slogger.info("Successfully built tablet map for table {}.{}",
                          ks_name, cf_name);
+        }
+        for (const auto& colocated : tables_to_colocate | std::views::values) {
+            for (const auto& [tid, cf_name] : colocated) {
+                slogger.info("Successfully built co-located tablet map for {}.{}",
+                             ks_name, cf_name);
+            }
         }
         break;
     }
@@ -4643,11 +4815,11 @@ storage_service::migration_status storage_service::get_tablets_migration_status(
     const auto& tm = get_token_metadata();
     const auto& tablet_metadata = tm.tablets();
 
-    auto tables = ks.metadata()->tables();
+    const auto& cf_meta_data = ks.metadata().get()->cf_meta_data();
 
-    // Check whether all tables have tablet maps (i.e. migration was started).
-    bool has_tablet_maps = !tables.empty() && std::ranges::all_of(tables, [&] (const auto& schema) {
-        return tablet_metadata.has_tablet_map(schema->id());
+    // Check whether all tables and views have tablet maps (i.e. migration was started).
+    bool has_tablet_maps = !cf_meta_data.empty() && std::ranges::all_of(cf_meta_data, [&] (const auto& e) {
+        return tablet_metadata.has_tablet_map(e.second->id());
     });
 
     if (!has_tablet_maps) {
@@ -4766,10 +4938,7 @@ storage_service::get_tablets_pow2_convergence_status(const sstring& ks_name) con
     status.tables_converging = 0;
     status.tables_total = 0;
 
-    for (const auto& schema : ks.metadata()->tables()) {
-        if (!tablet_metadata.has_tablet_map(schema->id())) {
-            continue;
-        }
+    for (const auto& schema : tablet_metadata.base_tables(*ks.metadata())) {
         auto& tmap = tablet_metadata.get_tablet_map(schema->id());
         bool converging = tmap.is_converging_to_pow2();
 
@@ -4809,20 +4978,20 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
         const auto& tm = get_token_metadata();
         const auto& tablet_metadata = tm.tablets();
 
-        auto tables = ks.metadata()->tables();
+        const auto& tables = ks.metadata()->cf_meta_data();
         if (tables.empty()) {
             throw std::runtime_error(fmt::format("Keyspace '{}' has no tables", ks_name));
         }
 
-        for (const auto& schema : tables) {
+        for (const auto& schema : tables | std::views::values) {
             if (!tablet_metadata.has_tablet_map(schema->id())) {
-                throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
-                    "all tables in keyspace '{}' must be prepared for migration before finalizing",
-                    ks_name, schema->cf_name(), ks_name));
+                throw std::runtime_error(fmt::format("{} {}.{} does not have a tablet map; "
+                    "all tables and views in keyspace '{}' must be prepared for migration before finalizing",
+                    schema->is_view() ? "View" : "Table", ks_name, schema->cf_name(), ks_name));
             }
         }
 
-        slogger.info("All {} table(s) in keyspace '{}' have tablet maps, submitting finalization request",
+        slogger.info("All {} table(s) and view(s) in keyspace '{}' have tablet maps, submitting finalization request",
                      tables.size(), ks_name);
 
         request_id = guard.new_group0_state_id();
@@ -5559,9 +5728,9 @@ future<tablet_operation_result> storage_service::do_tablet_operation(locator::gl
 
     locator::tablet_metadata_guard guard(_db.local().find_column_family(tablet.table), tablet);
     auto& as = guard.get_abort_source();
-    auto sub = _group0_as.subscribe([&as] () noexcept {
-        as.request_abort();
-    });
+    auto sub = utils::chain_abort_source(as, _group0_as);
+    // Also follow shutdown, so that operations can rely on the guard's abort source alone.
+    auto shutdown_sub = utils::chain_abort_source(as, _abort_source);
 
     auto async_gate_holder = _async_gate.hold();
     promise<tablet_operation_result> p;
@@ -5786,7 +5955,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                     auto& table = _db.local().find_column_family(tablet.table);
                     slogger.debug("stream_sstables[{}] Streaming for tablet {} of {} started table={}.{} range={} src={}",
                             ops_id, transition, tablet, table.schema()->ks_name(), table.schema()->cf_name(), range, src);
-                    auto resp = co_await streaming::tablet_stream_files(ops_id, table, range, src.host, dst_node, dst_shard_id, _messaging.local(), _abort_source, topo_guard);
+                    auto resp = co_await streaming::tablet_stream_files(ops_id, table, range, src.host, dst_node, dst_shard_id, _messaging.local(), guard.get_abort_source(), topo_guard);
                     stream_bytes = resp.stream_bytes;
                     slogger.debug("stream_sstables[{}] Streaming for tablet migration of {} successful", ops_id, tablet);
                     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
@@ -5952,9 +6121,10 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 // replica's hosting was applied, which do_tablet_operation()'s read barrier
                 // guarantees here. The persisted raft state goes too, or a later return of
                 // the tablet would rejoin the group claiming a commit index whose entries it
-                // no longer holds. A crash can still lose that delete (system.raft_groups
-                // uses the periodic commitlog); commitlog replay then refuses the group,
-                // because the tablet has no replica on this shard.
+                // no longer holds. system.raft_groups asks for wait_for_sync_to_commitlog,
+                // so the delete is durable once it returns. Commitlog replay also discards
+                // the entries of a group that hosts_raft_group() says this shard no longer
+                // hosts.
                 co_await gm.local().cleanup_group(tablet, *group_id);
             }
             auto& table = db.find_column_family(tablet.table);
@@ -6638,15 +6808,149 @@ future<bool> storage_service::try_transit_tablet(table_id table, dht::token toke
     co_return true;
 }
 
-future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
+future<> storage_service::cancel_tablet_transitions() {
+    if (!_feature_service.tablet_transition_cancel) {
+        rtlogger.warn("Not cancelling tablet transitions, the cluster does not support the "
+                      "TABLET_TRANSITION_CANCEL feature yet, waiting for them to finish");
+        co_return;
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        // Disabling balancing doesn't stop a drain, so a cancelled drain migration would just be
+        // scheduled again. With parallel_tablet_draining, the migrations of a paused drain are
+        // skipped below.
+        if (_topology_state_machine._topology.tstate == topology::transition_state::tablet_draining) {
+            rtlogger.info("Not cancelling tablet transitions, a node is being drained");
+            co_return;
+        }
+
+        // Keeps the command within raft's limit: an RF change puts every tablet of a keyspace
+        // into transition. TODO: move into group0_update_collector (SCYLLADB-4327).
+        constexpr size_t estimated_bytes_per_tablet = 512;
+        const size_t max_tablets_per_pass = std::max<size_t>(1,
+                _group0->group0_server().max_command_size() / 2 / estimated_bytes_per_tablet);
+
+        auto tm = get_token_metadata_ptr();
+        std::unordered_map<table_id, replica::tablet_mutation_builder> builders;
+        size_t cancelled = 0;
+        bool capped = false;
+        for (auto&& [base_table, tables] : tm->tablets().all_table_groups()) {
+            const auto& tmap = tm->tablets().get_tablet_map(base_table);
+            for (auto&& [tid, trinfo] : tmap.transitions()) {
+                co_await coroutine::maybe_yield();
+                if (cancelled >= max_tablets_per_pass) {
+                    capped = true;
+                    break;
+                }
+                const auto& tinfo = tmap.get_tablet_info(tid);
+                if (!locator::can_cancel_tablet_transition(trinfo.stage)
+                        || locator::is_tablet_transition_cancelled(tinfo, trinfo)) {
+                    continue;
+                }
+                auto leaving = locator::get_leaving_replica(tinfo, trinfo);
+                if (leaving && _topology_state_machine._topology.paused_requests.contains(
+                        raft::server_id(leaving->host.uuid()))) {
+                    continue;
+                }
+                auto last_token = tmap.get_last_token(tid);
+                auto i = builders.try_emplace(base_table, guard.write_timestamp(), base_table).first;
+                i->second.cancel_transition(last_token, trinfo, _feature_service);
+                cancelled++;
+                rtlogger.debug("Cancelling {} of tablet {} at stage {}", trinfo.transition,
+                               locator::global_tablet_id{base_table, tid}, trinfo.stage);
+            }
+            if (capped) {
+                break;
+            }
+        }
+        if (!cancelled) {
+            co_return;
+        }
+
+        group0_update_collector updates;
+        for (auto& [table, builder] : builders) {
+            co_await coroutine::maybe_yield();
+            updates.add_large(builder.build());
+        }
+        auto reason = format("Cancelling {} tablet transitions", cancelled);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))
+                && !capped) {
+            co_return;
+        }
+        // Lost a group0 race, or capped. Cancelled tablets are skipped by the next scan.
+    }
+}
+
+future<> storage_service::cancel_tablet_transition(locator::global_tablet_id tablet, locator::tablet_task_id task_id) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [tablet, task_id] (auto& ss) {
+            return ss.cancel_tablet_transition(tablet, task_id);
+        });
+    }
+
+    if (!_feature_service.tablet_transition_cancel) {
+        throw std::runtime_error("Cannot cancel the tablet transition: the cluster does not "
+                                 "support the TABLET_TRANSITION_CANCEL feature yet");
+    }
+
+    // The coordinator writes to group0 concurrently, so bound the retries.
+    auto deadline = lowres_clock::now() + std::chrono::minutes(1);
+
+    while (true) {
+        if (lowres_clock::now() >= deadline) {
+            rtlogger.warn("Gave up cancelling the transition of tablet {}, group0 is busy", tablet);
+            throw seastar::timed_out_error{};
+        }
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        // The migration may have finished, and another transition started, since the task was
+        // looked up.
+        auto tm = get_token_metadata_ptr();
+        const auto* tmap = tm->tablets().has_tablet_map(tablet.table) ? &tm->tablets().get_tablet_map(tablet.table) : nullptr;
+        const auto* task_info = tmap ? tmap->get_tablet_info(tablet.tablet).migration_task_info.get() : nullptr;
+        auto* trinfo = tmap ? tmap->get_tablet_transition_info(tablet.tablet) : nullptr;
+        if (!task_info || task_info->tablet_task_id != task_id || !trinfo) {
+            throw tasks::task_manager::task_not_found(tasks::task_id{task_id.uuid()});
+        }
+        if (trinfo->cancelled) {
+            co_return;
+        }
+        if (!locator::can_cancel_tablet_transition(trinfo->stage)) {
+            throw std::runtime_error(format("Transition of tablet {} is at stage {}, which cannot be "
+                                            "rolled back", tablet,
+                                            locator::tablet_transition_stage_to_string(trinfo->stage)));
+        }
+
+        auto base_table = tm->tablets().get_base_table(tablet.table);
+        replica::tablet_mutation_builder builder(guard.write_timestamp(), base_table);
+        builder.cancel_transition(tmap->get_last_token(tablet.tablet), *trinfo, _feature_service);
+        group0_update_collector updates;
+        updates.add_large(builder.build());
+
+        auto reason = format("Cancelling transition of tablet {}", tablet);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
+            co_return;
+        }
+    }
+}
+
+future<> storage_service::set_tablet_balancing_enabled(bool enabled, std::optional<std::chrono::seconds> grace_period_opt) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.set_tablet_balancing_enabled(enabled);
+            return ss.set_tablet_balancing_enabled(enabled, grace_period_opt);
         });
     }
+
+    auto grace_period = grace_period_opt.value_or(
+            std::chrono::seconds(_db.local().get_config().tablet_transition_abort_grace_period_in_seconds()));
 
     utils::UUID request_id;
     auto reason = format("Setting tablet balancing to {}", enabled);
@@ -6686,8 +6990,32 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     }
 
     if (request_id) {
-        co_await wait_for_topology_request_completion(request_id);
+        auto check = [] (const sstring& error) {
+            if (!error.empty()) {
+                throw std::runtime_error(format("Failed to disable tablet balancing: {}", error));
+            }
+        };
+
+        if (grace_period != std::chrono::seconds::zero()) {
+            // One cancelling pass is enough: the queued request preempts balancing.
+            try {
+                check(co_await wait_for_topology_request_completion(request_id, true,
+                                                                   lowres_clock::now() + grace_period));
+                co_return;
+            } catch (const seastar::timed_out_error&) {
+                rtlogger.info("Tablet transitions did not finish within {}, cancelling the ones "
+                              "which can be rolled back so that disabling tablet balancing can "
+                              "complete", grace_period);
+            }
+            co_await cancel_tablet_transitions();
+        }
+
+        check(co_await wait_for_topology_request_completion(request_id));
     } else if (!enabled) {
+        if (grace_period != std::chrono::seconds::zero()) {
+            rtlogger.warn("Ignoring the grace period, this cluster does not support queueing the "
+                          "request which disabling tablet balancing waits for");
+        }
         while (_topology_state_machine._topology.is_busy()) {
             rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
             co_await _topology_state_machine.event.when();

@@ -7,6 +7,7 @@
  */
 
 #include "server.hh"
+#include "gms/gossiper.hh"
 
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
@@ -27,6 +28,7 @@
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
 #include "service/qos/service_level_controller.hh"
+#include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
 #include <seastar/core/coroutine.hh>
@@ -783,7 +785,37 @@ std::unique_ptr<cql_server::response> cql_server::make_read_timeout_error(int16_
     return response;
 }
 
-std::unique_ptr<cql_server::response> cql_server::make_read_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version)
+std::optional<cql_server::failure_reason_map> cql_server::make_failure_reason_map(const exceptions::request_failure_exception& ex, const service::client_state& client_state) const {
+    if (!client_state.is_protocol_extension_set(cql_protocol_extension::FAILURE_REASON_MAP)) {
+        return std::nullopt;
+    }
+    failure_reason_map map;
+    map.reserve(ex.failed_replicas.size());
+    for (const auto& [replica, reason] : ex.failed_replicas) {
+        if (auto ip = _gossiper.get_address_map().find(replica)) {
+            map.emplace_back(ip->addr(), std::to_underlying(reason));
+        } else {
+            clogger.debug("Omitting failed replica {} from the failure reason map: its address is unknown", replica);
+        }
+    }
+    return map;
+}
+
+// Writes <numfailures>, or <reason_map> if the client negotiated SCYLLA_FAILURE_REASON_MAP.
+void cql_server::write_failures(cql_server::response& response, int32_t numfailures, const std::optional<failure_reason_map>& reason_map) {
+    if (!reason_map) {
+        response.write_int(numfailures);
+        return;
+    }
+    response.write_int(int32_t(reason_map->size()));
+    for (const auto& [addr, code] : *reason_map) {
+        response.write_inetaddr(addr);
+        response.write_short(code);
+    }
+}
+
+std::unique_ptr<cql_server::response> cql_server::make_read_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures,
+        const std::optional<failure_reason_map>& reason_map, int32_t blockfor, bool data_present, const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version)
 {
     if (version < 4) {
         return make_read_timeout_error(stream, exceptions::exception_code::READ_TIMEOUT, std::move(msg), cl, received, blockfor, data_present, tr_state);
@@ -794,7 +826,7 @@ std::unique_ptr<cql_server::response> cql_server::make_read_failure_error(int16_
     response->write_consistency(cl);
     response->write_int(received);
     response->write_int(blockfor);
-    response->write_int(numfailures);
+    write_failures(*response, numfailures, reason_map);
     response->write_byte(data_present);
     return response;
 }
@@ -811,7 +843,8 @@ std::unique_ptr<cql_server::response> cql_server::make_mutation_write_timeout_er
     return response;
 }
 
-std::unique_ptr<cql_server::response> cql_server::make_mutation_write_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version)
+std::unique_ptr<cql_server::response> cql_server::make_mutation_write_failure_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t received, int32_t numfailures,
+        const std::optional<failure_reason_map>& reason_map, int32_t blockfor, db::write_type type, const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version)
 {
     if (version < 4) {
         return make_mutation_write_timeout_error(stream, exceptions::exception_code::WRITE_TIMEOUT, std::move(msg), cl, received, blockfor, type, tr_state);
@@ -822,7 +855,7 @@ std::unique_ptr<cql_server::response> cql_server::make_mutation_write_failure_er
     response->write_consistency(cl);
     response->write_int(received);
     response->write_int(blockfor);
-    response->write_int(numfailures);
+    write_failures(*response, numfailures, reason_map);
     response->write_string(format("{}", type));
     return response;
 }
@@ -907,7 +940,8 @@ std::unique_ptr<cql_server::response> cql_server::handle_exception(int16_t strea
         clogger.debug("{}: request resulted in read_failure_error, stream {}, code {}, message [{}]",
             client_state.get_remote_address(), stream, exp->code(), exp->what());
         try { ++_stats.errors[exp->code()]; } catch(...) {}
-        return make_read_failure_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->failures, exp->block_for, exp->data_present, trace_state, version);
+        return make_read_failure_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->failures, make_failure_reason_map(*exp, client_state),
+                exp->block_for, exp->data_present, trace_state, version);
     } else if (auto* exp = try_catch<exceptions::mutation_write_timeout_exception>(eptr)) {
         clogger.debug("{}: request resulted in mutation_write_timeout_error, stream {}, code {}, message [{}]",
             client_state.get_remote_address(), stream, exp->code(), exp->what());
@@ -917,7 +951,8 @@ std::unique_ptr<cql_server::response> cql_server::handle_exception(int16_t strea
         clogger.debug("{}: request resulted in mutation_write_failure_error, stream {}, code {}, message [{}]",
             client_state.get_remote_address(), stream, exp->code(), exp->what());
         try { ++_stats.errors[exp->code()]; } catch(...) {}
-        return make_mutation_write_failure_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->failures, exp->block_for, exp->type, trace_state, version);
+        return make_mutation_write_failure_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->failures, make_failure_reason_map(*exp, client_state),
+                exp->block_for, exp->type, trace_state, version);
     } else if (auto* exp = try_catch<exceptions::already_exists_exception>(eptr)) {
         clogger.debug("{}: request resulted in already_exists_error, stream {}, code {}, message [{}]",
             client_state.get_remote_address(), stream, exp->code(), exp->what());
@@ -1613,8 +1648,10 @@ static void record_client_timestamp_drift(cql_sg_stats& sg_stats, bool init_trac
     if (!init_trace || client_ts == api::missing_timestamp) {
         return;
     }
-    auto drift = std::abs(server_ts - client_ts);
-    sg_stats._client_timestamp_drift.add_micro(drift);
+    // The client picks its timestamp, so subtract unsigned to avoid overflow, and cap
+    // the drift at the top bucket's bound so that it cannot wrap the histogram's sum.
+    uint64_t drift = uint64_t(std::max(server_ts, client_ts)) - uint64_t(std::min(server_ts, client_ts));
+    sg_stats._client_timestamp_drift.add_micro(std::min(drift, utils::time_estimated_histogram::MAX));
 }
 
 // Runs user statements under the user service level. The connection's scheduling
@@ -2621,6 +2658,12 @@ void cql_server::response::write_inet(socket_address inet)
     auto * p = static_cast<const int8_t*>(addr.data());
     _body.write(bytes_view(p, addr.size()));
     write_int(inet.port());
+}
+
+void cql_server::response::write_inetaddr(const net::inet_address& addr)
+{
+    write_byte(uint8_t(addr.size()));
+    _body.write(bytes_view(static_cast<const int8_t*>(addr.data()), addr.size()));
 }
 
 void cql_server::response::write_consistency(db::consistency_level c)

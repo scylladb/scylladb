@@ -55,6 +55,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include "replica/database.hh"
 
 // Tests of the export (sink) and import (source) pipelines from alternator/export.hh.
 // Except for test_s3_flush_and_close_result, which needs an S3 server, they use the in-memory storage backend,

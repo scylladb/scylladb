@@ -48,8 +48,9 @@ void validate_write_consistency_level(const db::consistency_level& cl) {
 }
 
 std::optional<locator::tablet_version_block> tablet_version_block_for(const service::query_state& qs,
-        const query_options& options) {
-    return qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)
+        const query_options& options, bool may_use_token_aware_routing) {
+    return may_use_token_aware_routing
+            && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)
             ? options.get_tablet_version_block()
             : std::nullopt;
 }

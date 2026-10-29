@@ -16,11 +16,12 @@ class mutation_entry [[writable]] {
     frozen_mutation mutation();
 };
 
-struct raft_commitlog_entry [[writable]] {
+struct raft_commitlog_batch [[writable]] {
     raft::group_id group_id;
-    raft::log_entry_ptr entry;
+    raft::index_t commit_idx;
+    std::vector<raft::log_entry_ptr> entries;
 };
 
 struct commitlog_entry [[writable]] {
-    std::variant<raft_commitlog_entry, mutation_entry> item;
+    std::variant<raft_commitlog_batch, mutation_entry> item;
 };

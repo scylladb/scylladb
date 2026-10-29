@@ -17,6 +17,7 @@
 #include "db/config.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
+#include "replica/database.hh"
 
 namespace db {
 

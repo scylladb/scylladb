@@ -7,6 +7,7 @@
  */
 #pragma once
 #include "service/raft/group0_fwd.hh"
+#include <unordered_set>
 
 namespace service {
 

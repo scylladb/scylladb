@@ -13,6 +13,7 @@
 #include "mutation/mutation.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/system_keyspace.hh"
+#include "service/raft/raft_group0_client.hh"
 
 static logging::logger crlogger("client_routes");
 

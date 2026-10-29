@@ -22,6 +22,7 @@
 #include "test/lib/exception_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "seastarx.hh"
+#include <seastar/core/when_all.hh>
 
 const auto sockpath = std::getenv("SASLAUTHD_MUX_PATH");
 

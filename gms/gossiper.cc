@@ -51,6 +51,8 @@
 #include <csignal>
 #include "build_mode.hh"
 #include "utils/labels.hh"
+#include "service/topology_state_machine.hh"
+#include "raft/raft_fwd.hh"
 
 namespace gms {
 

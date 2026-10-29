@@ -44,6 +44,8 @@
 #include <string_view>
 #include <utility>
 
+using namespace std::chrono_literals;
+
 namespace db::hints {
 namespace internal {
 

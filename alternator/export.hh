@@ -129,7 +129,7 @@ struct in_memory_target_config {
 };
 
 // Configuration for the S3 target of either pipeline. The sink writes the object with
-// `s3::client::make_upload_jumbo_sink`, the source reads it with
+// `s3::client::make_upload_jumbo_sink_and_get_etag`, the source reads it with
 // `s3::client::make_chunked_download_source`; see utils/s3/client.hh for the object size limits.
 // `as`, if set, is handed to the S3 client by both pipelines:
 //  - source: an abort makes `read_all()` fail with an exception; `close()` is still required,

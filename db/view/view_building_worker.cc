@@ -21,6 +21,7 @@
 #include "db/view/view_consumer.hh"
 #include "dht/token.hh"
 #include "replica/database.hh"
+#include "db/view/view.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
@@ -28,6 +29,9 @@
 #include "idl/view.dist.hh"
 #include "sstables/sstables.hh"
 #include "utils/exponential_backoff_retry.hh"
+#include "locator/tablets.hh"
+
+using namespace std::chrono_literals;
 
 static logging::logger vbw_logger("view_building_worker");
 
@@ -345,7 +349,7 @@ std::set<view_building_worker::staging_sstable_task_info> view_building_worker::
     auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
 
     _db.get_tables_metadata().for_each_table([&] (table_id table_id, lw_shared_ptr<replica::table> table) {
-        if (!table->uses_tablets()) {
+        if (!_db.find_keyspace(table->schema()->ks_name()).uses_tablets()) {
             return;
         }
 

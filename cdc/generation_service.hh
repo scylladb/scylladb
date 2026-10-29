@@ -12,6 +12,8 @@
 #include "cdc/metadata.hh"
 #include "cdc/generation_id.hh"
 
+class canonical_mutation;
+
 namespace db {
 class system_keyspace;
 }

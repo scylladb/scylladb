@@ -22,6 +22,7 @@
 #include "version.hh"
 
 #include <atomic>
+#include "replica/database.hh"
 
 struct shared_load_stats {
     locator::load_stats stats;

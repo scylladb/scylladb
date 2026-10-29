@@ -40,6 +40,9 @@ def gdb_cmd(scylla_server, request):
         str(scylla_server.cmd.pid),
         "-ex",
         "set python print-stack full",
+        # Printing static members pulls in huge amounts of debug info (13GB/104s on one frame).
+        "-ex",
+        "set print static-members off",
         "-x",
         scylla_gdb_py,
         "-x",

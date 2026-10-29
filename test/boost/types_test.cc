@@ -328,8 +328,18 @@ void test_timestamp_like_string_conversions(data_type timestamp_type) {
     db_clock::time_point now_tp(db_clock::duration(now * 1000));
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S%z", &local_now);
     BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string(buf), timestamp_type->decompose(now_tp)));
+    // Without a zone offset, the string is in the local time zone. But in the
+    // hour repeated when daylight saving time ends, the same local time is
+    // two different times an hour apart, and the parser may return either -
+    // not necessarily now. So check that the parsed time is this local time.
+    // Requiring that it is now failed in that hour - see SCYLLADB-5675.
     strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &local_now);
-    BOOST_REQUIRE(timestamp_type->equal(timestamp_type->from_string(buf), timestamp_type->decompose(now_tp)));
+    auto parsed = db_clock::to_time_t(value_cast<db_clock::time_point>(timestamp_type->deserialize(timestamp_type->from_string(buf))));
+    ::tm parsed_local;
+    ::localtime_r(&parsed, &parsed_local);
+    char parsed_buf[100];
+    strftime(parsed_buf, sizeof(parsed_buf), "%Y-%m-%d %H:%M:%S", &parsed_local);
+    BOOST_REQUIRE_EQUAL(std::string_view(parsed_buf), std::string_view(buf));
 
     struct tm dst = { 0 };
     dst.tm_isdst = -1;

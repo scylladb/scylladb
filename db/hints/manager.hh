@@ -26,6 +26,7 @@
 #include "db/hints/sync_point.hh"
 #include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "utils/updateable_value.hh"
 
 // STD.
 #include <chrono>
@@ -56,7 +57,9 @@ public:
     static directory_initializer make_dummy() noexcept {
         return {nullptr};
     }
-    static future<directory_initializer> make(utils::directories& dirs, sstring hints_directory);
+    /// \param extensions The extensions whose commitlog file extensions must follow segments moved
+    ///                   during rebalancing. Must outlive the initializer.
+    static future<directory_initializer> make(utils::directories& dirs, sstring hints_directory, const db::extensions* extensions);
 
     future<> ensure_created_and_verified();
     future<> ensure_rebalanced();
@@ -107,6 +110,7 @@ private:
     service::storage_proxy& _proxy;
     shared_ptr<const gms::gossiper> _gossiper_anchor;
     int64_t _max_hint_window_us = 0;
+    utils::observer<uint32_t> _max_hint_window_observer;
     replica::database& _local_db;
 
     seastar::named_gate _draining_eps_gate; // gate used to control the progress of endpoint_managers stopping not in the context of manager::stop() call
@@ -125,7 +129,7 @@ private:
 
 public:
     manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter,
-            int64_t max_hint_window_ms, resource_manager& res_manager, sharded<replica::database>& db, scheduling_group sg);
+            utils::updateable_value<uint32_t> max_hint_window_ms, resource_manager& res_manager, sharded<replica::database>& db, scheduling_group sg);
 
     manager(const manager&) = delete;
     manager& operator=(const manager&) = delete;

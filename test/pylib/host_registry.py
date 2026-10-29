@@ -5,12 +5,11 @@
 #
 import asyncio
 import errno
-import fcntl
 import os
 import random
+import socket
 from collections.abc import Iterator
-from pathlib import Path
-from typing import NewType, Optional
+from typing import NewType
 
 
 Host = NewType('Host', str)
@@ -22,11 +21,12 @@ class HostRegistry:
     all shared external resources within this class to make sure
     nothing is leaked by the harness. Lease addresses with lease_host(),
     release with release_host(). Each returned address is from a unique
-    class-C subnet created just for this test run, so each address
-    is quaranteed to have a unique 4th component. I.e. in X.Y.Z.W
-    X.Y.Z is unique for each test.py invocation, and W is unique
-    across all hosts in a single run.
+    class-B (/16) subnet created just for this test run. I.e. in X.Y.Z.W
+    X.Y is unique for each test.py invocation, while Z and W together form
+    a host counter that is unique across all hosts in a single run.
     """
+    # Abstract AF_UNIX socket name (leading NUL, see unix(7)) + the subnet, see __init__.
+    LOCK_PREFIX = "\0scylla-test/subnet-"
     _instance = None
     _initialized = False
 
@@ -51,52 +51,49 @@ class HostRegistry:
         # pid? The pid changes between restarts, and harness does start and
         # stops Scyllas.
         #
-        # To create a subnet let's randomly generate a number and put
-        # a file with this name into a well-known directory. If the file
-        # doesn't exist, the subnet is free. If it already exists and is
-        # locked, there is another process running with this subnet and
-        # we should try again with another subnet. If the file isn't
-        # locked, it remains from some previous invocation and can be
-        # locked and reused.
-
+        # A subnet is held by binding an abstract socket named after it. The name
+        # lives in the kernel, not on disk, and is scoped to the network namespace:
+        # exactly the runs that share our loopback, and so could collide on the
+        # subnet, see it, whichever user or container they run in (dbuild runs with
+        # --network host). bind() fails with EADDRINUSE while another run holds the
+        # name. The kernel drops it when this process exits, however it exits, so
+        # the subnet is ours for as long as this process runs; children that outlive
+        # it are on their own (see ldap_server.kill_leaked_toxiproxy).
         worker_id = os.getenv('PYTEST_XDIST_WORKER', 'gw0')
         second_octet = int(worker_id[2:]) + 1
-        # HostRegistry is a singleton, so there should be no possibility to mess and overlap in IP for one use
-        # however, when there are several users using the same machine for testing, they can overlap,
-        # so this simple retry should help to eliminate the overlap and just find another random IP
-        max_attempts = 20
-        for attempt in range(max_attempts):
-            # Avoid 127.0.*.* since CCM (a different test framework)
-            # assumes it will be available for it to run Scylla
-            # instances. 127.255.255.255 is also illegal.
-            subnet = f"127.{second_octet}.{random.randrange(0, 255)}"
-            self._lock_filename: Optional[Path] = Path("/tmp") / f"scylla-{subnet}"
-            self._lock_file = self._lock_filename.open("w")
+        # Try the worker-derived octet first, so xdist workers of the same run never clash, then
+        # every other octet once in random order, to find a subnet not used by another test.py
+        # invocation on the same machine. Avoid 127.0.*.* since CCM (a different test framework)
+        # assumes it will be available for it to run Scylla instances.
+        other_octets = [octet for octet in range(1, 255) if octet != second_octet]
+        random.shuffle(other_octets)
+        for octet in [second_octet, *other_octets]:
+            subnet = f"127.{octet}"
+            self._lock = socket.socket(socket.AF_UNIX)
             try:
-                fcntl.lockf(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._lock.bind(self.LOCK_PREFIX + subnet)
                 break
             except OSError as e:
-                self._lock_file.close()
-                if e.errno not in (errno.EACCES, errno.EAGAIN):
+                self._lock.close()
+                if e.errno != errno.EADDRINUSE:
                     raise
         else:
-            raise RuntimeError(
-                f"Failed to acquire a subnet lock after {max_attempts} attempts"
-            )
+            raise RuntimeError("Failed to acquire a subnet lock: all 127.<1..254> subnets are in use")
 
-        # Never-yet-leased hosts, minted on demand: one for each of the 254 usable 4th-octet values.
-        self._new_hosts: Iterator[Host] = (Host(f"{subnet}.{host_id}") for host_id in range(1, 255))
+        # Never-yet-leased hosts, minted on demand as 127.<octet>.<hi>.<lo>, skipping the .0 and .255
+        # 4th octets. Older test.py branches lease class-C subnets 127.<octet>.<0..254> under other
+        # lock file names, so start with hi=255, which they never use: released hosts are reused
+        # first, so a run that holds at most 254 hosts at once never clashes with them.
+        # Hosts past #254 (scale tests only) can still clash with an older-branch run on the same machine.
+        self._new_hosts: Iterator[Host] = (Host(f"{subnet}.{hi}.{lo}")
+                                           for hi in (255, *range(255)) for lo in range(1, 255))
 
         # Hosts released by their previous user, available for reuse.
         self._released_hosts: list[Host] = []
 
-        # Limits the number of leased hosts to the number of usable 4th-octet values: lease #255 waits for a release.
-        self._semaphore = asyncio.Semaphore(254)
-
-    async def cleanup(self) -> None:
-        if self._lock_filename:
-            self._lock_filename.unlink()
-            self._lock_filename = None
+        # Limits the number of leased hosts to the number of minted ones (256 3rd x 254 4th octets):
+        # lease #65025 waits for a release.
+        self._semaphore = asyncio.Semaphore(256 * 254)
 
     async def lease_host(self) -> Host:
         await self._semaphore.acquire()

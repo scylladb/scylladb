@@ -38,17 +38,21 @@
 #include "replica/exceptions.hh"
 #include "locator/host_id.hh"
 #include "dht/token_range_endpoints.hh"
-#include "service/storage_service.hh"
 #include "service/cas_shard.hh"
 #include "service/maintenance_mode.hh"
 #include "timeout_config.hh"
 #include "service/storage_proxy_fwd.hh"
+#include "service/fencing_token.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
 class frozen_mutation;
 class cache_temperature;
 class query_ranges_to_vnodes_generator;
+
+namespace data_dictionary {
+class database;
+}
 
 namespace seastar::rpc {
 
@@ -83,6 +87,8 @@ struct view_building_state_machine;
 }
 
 namespace service {
+
+struct topology_state_machine;
 
 namespace paxos {
     class prepare_summary;
@@ -372,7 +378,8 @@ private:
     void remove_response_handler(response_id_type id);
     void remove_response_handler_entry(response_handlers_map::iterator entry);
     void got_response(response_id_type id, locator::host_id from, std::optional<db::view::update_backlog> backlog, db::large_data_violation_type violations = {});
-    void got_failure_response(response_id_type id, locator::host_id from, size_t count, std::optional<db::view::update_backlog> backlog, error err, std::optional<sstring> msg);
+    void got_failure_response(response_id_type id, locator::host_id from, size_t count, std::optional<db::view::update_backlog> backlog, error err,
+            exceptions::request_failure_reason reason, std::optional<sstring> msg);
     future<result<>> response_wait(response_id_type id, clock_type::time_point timeout);
     ::shared_ptr<abstract_write_response_handler>& get_write_response_handler(storage_proxy::response_id_type id);
 
@@ -873,7 +880,8 @@ public:
     const db::hints::host_filter& get_hints_host_filter() const;
 
     future<db::hints::sync_point> create_hint_sync_point(std::vector<locator::host_id> target_hosts) const;
-    future<> wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline);
+    enum class hint_kind { all, regular, view };
+    future<> wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline, hint_kind kind = hint_kind::all);
     /// Makes the regular hint managers on all shards discard hint segments up to the given sync point.
     /// See `db::hints::manager::discard_segments_up_to()`. Only meant to be used in tests.
     future<> discard_hint_segments_up_to(const db::hints::sync_point& spoint);

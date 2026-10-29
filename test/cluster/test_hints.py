@@ -12,10 +12,12 @@ import time
 import logging
 import re
 
+from cassandra import WriteFailure
 from cassandra.cluster import NoHostAvailable  # type: ignore
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.internal_types import IPAddress, ServerInfo
+from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError, ScyllaMetricsClient, TCPRESTClient, inject_error
 from test.pylib.tablets import get_tablet_replicas
@@ -23,6 +25,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, wait_for
 
 from test.pylib import nodetool
+from test.pylib.encryption_provider import LocalFileSystemKeyProviderFactory
 from test.cluster.util import (commitlog_sector_has_data, corrupt_commitlog_segment,
                                get_commitlog_segment_id, get_topology_coordinator,
                                keyspace_has_tablets, new_test_keyspace, new_test_table)
@@ -31,20 +34,25 @@ from test.cluster.util import (commitlog_sector_has_data, corrupt_commitlog_segm
 logger = logging.getLogger(__name__)
 
 
-async def get_metric(client: ScyllaMetricsClient, server_ip: IPAddress, metric_name: str) -> float | None:
+async def get_metric(client: ScyllaMetricsClient, server_ip: IPAddress, metric_name: str,
+                     shard: int | None = None) -> float | None:
     metrics = await client.query(server_ip)
-    return metrics.get(metric_name)
+    labels = {"shard": str(shard)} if shard is not None else {}
+    return metrics.get(metric_name, labels=labels)
 
 
-async def get_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress, metric_name: str):
-    return await get_metric(client, server_ip, f"scylla_hints_manager_{metric_name}")
+async def get_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress,
+                           metric_name: str, shard: int | None = None):
+    return await get_metric(client, server_ip, f"scylla_hints_manager_{metric_name}", shard)
 
 
-async def get_all_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress) -> dict:
+async def get_all_hint_metrics(client: ScyllaMetricsClient, server_ip: IPAddress,
+                               shard: int | None = None) -> dict:
     metrics = await client.query(server_ip)
+    labels = {"shard": str(shard)} if shard is not None else {}
 
     def resolve_metric(name: str):
-        return metrics.get(f"scylla_hints_manager_{name}") or 0.0
+        return metrics.get(f"scylla_hints_manager_{name}", labels=labels) or 0.0
 
     metric_names = [
         "size_of_hints_in_progress",
@@ -77,13 +85,23 @@ def list_hint_target_dirs(hints_dir: str) -> set[str]:
     return {os.path.basename(path) for path in glob.glob(os.path.join(hints_dir, "*", "*"))}
 
 
-def list_hint_segments(hints_dir: str, target_host_id: str, shard: int | None = None) -> list[str]:
+def list_hint_segments(hints_dir: str, target_host_id: str, shard: int | None = None) -> tuple[list[str], list[str]]:
     shard_glob = "*" if shard is None else str(shard)
-    return glob.glob(os.path.join(hints_dir, shard_glob, str(target_host_id), "HintsLog-*.log"))
+    # Sorted, so that the results of different scans can be compared.
+    segments = sorted(glob.glob(os.path.join(hints_dir, shard_glob, str(target_host_id), "HintsLog-*.log")))
+    encrypted, unencrypted = [], []
+    for segment in segments:
+        sidecar = os.path.join(os.path.dirname(segment), "." + os.path.basename(segment))
+        if os.path.exists(sidecar):
+            encrypted.append(segment)
+        else:
+            unencrypted.append(segment)
+    return encrypted, unencrypted
 
 
 def count_hint_segments(hints_dir: str, target_host_id: str, shard: int | None = None) -> int:
-    return len(list_hint_segments(hints_dir, target_host_id, shard))
+    encrypted, unencrypted = list_hint_segments(hints_dir, target_host_id, shard)
+    return len(encrypted) + len(unencrypted)
 
 
 def get_hint_segment_id(path: str) -> int:
@@ -954,6 +972,145 @@ async def test_hints_rebalance(manager: ScyllaClusterManager):
 
     cql = await manager.get_cql_exclusive(s2)
     await assert_rows_present(cql, "ks.t", "pk", list(range(expected_rows)), present=True)
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections aren't enabled in release mode")
+async def test_hints_encrypted_segments_after_rebalancing(manager: ScyllaClusterManager, tmpdir):
+    """
+    Verify that after rebalancing, encrypted hint segments are still readable
+    and can be replayed.
+
+    Refs: SCYLLADB-4295.
+    """
+    shard_count = 3
+    # The shard that disappears after decreasing the shard count.
+    highest_shard = shard_count - 1
+    cmdline = ["--smp", str(shard_count)]
+    config = {
+        "error_injections_at_startup": ["decrease_hints_flush_period"],
+        "system_info_encryption": {
+            "enabled": True,
+            "key_provider": "LocalFileSystemKeyProviderFactory",
+        }
+    } | LocalFileSystemKeyProviderFactory(tmpdir).configuration_parameters()
+    s1 = await manager.server_add(cmdline=cmdline, config=config, property_file={"dc": "dc1", "rack": "r1"})
+    s2 = await manager.server_add(property_file={"dc": "dc1", "rack": "r2"})
+
+    s1_hints_dir = await get_hints_dir(manager, s1)
+    s2_host_id = await manager.get_host_id(s2.server_id)
+
+    cql = await manager.get_cql_exclusive(s1)
+    # Use vnodes: with tablets, decreasing the shard count isn't allowed if a tablet replica
+    # is on the shard that disappears (https://github.com/scylladb/scylladb/issues/16739).
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} "
+                        "AND tablets = {'enabled': false}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+
+    await manager.server_stop_gracefully(s2.server_id)
+    await manager.others_not_see_server(s2.ip_addr)
+
+    stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ONE
+
+    # It's virtually impossible that no hint will be stored on highest_shard
+    # if we send 1000 mutations.
+    row_count = 1000
+    await gather_safely(*[cql.run_async(stmt, (i, i)) for i in range(row_count)])
+    await wait_until_hint_writing_settled(manager, [s1])
+    written_highest_shard = await get_hint_metrics(manager.metrics, s1.ip_addr, "written", shard=highest_shard)
+    assert written_highest_shard > 0, f"No hint was written for shard {highest_shard}"
+
+    written_total = await get_hint_metrics(manager.metrics, s1.ip_addr, "written")
+
+    await manager.server_stop_gracefully(s1.server_id)
+
+    # Sanity check: there must be hint segments on the highest shard, and they must be encrypted.
+    # Otherwise, something's very wrong.
+    encrypted, unencrypted = list_hint_segments(s1_hints_dir, s2_host_id, shard=highest_shard)
+    assert encrypted, f"No encrypted hint segments on shard {highest_shard}"
+    assert not unencrypted, f"Unexpected unencrypted hint segments: {unencrypted}"
+
+    # Decrease the shard count to enforce segment movement.
+    await manager.server_update_cmdline(s1.server_id, ["--smp", str(shard_count - 1)])
+    await gather_safely(*[
+        asyncio.create_task(manager.server_start(s1.server_id)),
+        asyncio.create_task(manager.server_start(s2.server_id))])
+
+    await wait_until_hints_are_sent_from(manager, [s1], expected_count=written_total)
+    await manager.server_stop_gracefully(s1.server_id)
+
+    cql = await manager.get_cql_exclusive(s2)
+    stmt = SimpleStatement("SELECT count(*) FROM ks.t", consistency_level=ConsistencyLevel.ONE)
+    results = await cql.run_async(stmt)
+    assert results[0].count == written_total
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections aren't enabled in release mode")
+async def test_hints_after_enabling_commitlog_encryption(manager: ScyllaClusterManager, tmpdir):
+    """
+    Verify that enabling commitlog encryption on a node that stores hints doesn't affect them:
+    the hints written before are stored in unencrypted segments, the ones written after that
+    in encrypted segments, and all of them must be delivered.
+
+    Note that disabling commitlog encryption is not supported in general: encrypted segments
+    can't be read without it.
+    """
+    cmdline = ["--smp", "1"]
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    s1, s2 = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+
+    s1_hints_dir = await get_hints_dir(manager, s1)
+    s2_host_id = await manager.get_host_id(s2.server_id)
+
+    cql = await manager.get_cql_exclusive(s1)
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+
+    await manager.server_stop_gracefully(s2.server_id)
+    await manager.others_not_see_server(s2.ip_addr)
+
+    async def write_hints(keys) -> None:
+        stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
+        stmt.consistency_level = ConsistencyLevel.ONE
+        await gather_safely(*[cql.run_async(stmt, (pk, pk)) for pk in keys])
+        await wait_until_hint_writing_settled(manager, [s1])
+        assert await get_hint_metrics(manager.metrics, s1.ip_addr, "dropped") == 0
+        assert await get_hint_metrics(manager.metrics, s1.ip_addr, "errors") == 0
+
+    row_count = 100
+    await write_hints(range(row_count))
+
+    logger.info("Restarting s1 with commitlog encryption enabled")
+    await manager.server_stop_gracefully(s1.server_id)
+    encrypted1, unencrypted1 = list_hint_segments(s1_hints_dir, s2_host_id)
+    assert unencrypted1, "No unencrypted hint segments"
+    assert not encrypted1, f"Unexpected encrypted hint segments: {encrypted1}"
+    await manager.server_update_config(s1.server_id, config_options={
+        "system_info_encryption": {
+            "enabled": True,
+            "key_provider": "LocalFileSystemKeyProviderFactory",
+        },
+    } | LocalFileSystemKeyProviderFactory(tmpdir).configuration_parameters())
+    await manager.server_start(s1.server_id)
+    cql = await manager.get_cql_exclusive(s1)
+
+    await write_hints(range(row_count, 2 * row_count))
+
+    # Stop s1 to check which hint segments store the hints.
+    await manager.server_stop_gracefully(s1.server_id)
+    encrypted2, unencrypted2 = list_hint_segments(s1_hints_dir, s2_host_id)
+    assert unencrypted2, "The unencrypted hint segments are gone"
+    assert encrypted2, "No encrypted hint segments"
+    assert unencrypted1 == unencrypted2, "The set of unencrypted segments has changed"
+
+    await manager.server_start(s1.server_id)
+    await manager.server_start(s2.server_id)
+    await wait_until_hints_are_sent_from(manager, [s1], 2 * row_count)
+
+    await manager.server_stop_gracefully(s1.server_id)
+
+    cql = await manager.get_cql_exclusive(s2)
+    await assert_rows_present(cql, "ks.t", "pk", list(range(2 * row_count)), present=True)
 
 
 async def test_hints_removenode(manager: ScyllaClusterManager):
@@ -1835,7 +1992,7 @@ async def test_corrupted_segment(manager: ScyllaClusterManager):
     assert written > 0, "No hints have been written"
 
     await manager.server_stop_gracefully(node1.server_id)
-    segments = list_hint_segments(hints_dir, host_id)
+    _, segments = list_hint_segments(hints_dir, host_id)
     assert len(segments) > 0, "No segments present on disk"
 
     # Pick the first segment to be replayed.
@@ -1946,7 +2103,7 @@ async def test_corrupted_segment_hint_fails_before_corruption(manager: ScyllaClu
     assert written > 0, "No hints have been written"
 
     await manager.server_stop_gracefully(node1.server_id)
-    segments = list_hint_segments(hints_dir, host_id)
+    _, segments = list_hint_segments(hints_dir, host_id)
     assert len(segments) > 0, "No segments present on disk"
 
     # Pick the first segment to be replayed.
@@ -1973,19 +2130,23 @@ async def test_corrupted_segment_hint_fails_before_corruption(manager: ScyllaClu
 
     injections = [
         *injections,
-        # Only the first hint fails. Note that the failure will be reported *before*
-        # the corruption. At most two hints can be processed at a time (1 being sent,
-        # the other getting scheduled), and the corruption is in the second sector.
+        # Only the first hint fails. Hint sender may run into the corruption
+        # (in the second sector) after this failure, or while the first hint is
+        # still blocked: the reader parses the next entry before it waits for the
+        # first hint to finish, and if the first hint is alone in the first sector,
+        # that entry is in the corrupted one. The segment must be kept either way.
         {"name": "hinted_handoff_fail_hint_send", "one_shot": True}]
     await manager.server_update_config(node1.server_id, "error_injections_at_startup", injections)
     await manager.server_start(node1.server_id)
 
+    # Take the mark before hint sender can start: it may log the corruption
+    # as soon as it starts processing the hints (see above).
+    log = await manager.server_open_log(node1.server_id)
+    mark = await log.mark()
+
     # Wait until hint sender starts processing the hints.
     await manager.server_start(node2.server_id)
     await manager.api.wait_for_injection_enter(node1.ip_addr, "hinted_handoff_fail_hint_send")
-
-    log = await manager.server_open_log(node1.server_id)
-    mark = await log.mark()
 
     # Prevent hint sender from trying to replay the segment again after it runs
     # into the corruption. Note that this doesn't prevent us from reaching it
@@ -2051,3 +2212,111 @@ async def test_corrupted_segment_hint_fails_before_corruption(manager: ScyllaClu
         assert 0 < row_count <= expected_row_count, \
             f"Unexpected number of rows: {row_count} vs. {expected_row_count} " \
             f"({send_errors_after - send_errors} send errors after the first pass)"
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_no_hints_after_max_hint_window_exceeded(manager: ScyllaClusterManager):
+    """
+    Hints must be generated for a node that has been dead for no longer than
+    the configuration option max_hint_window_in_ms, and must not be generated
+    once the node has been dead for longer than that.
+    """
+
+    # Use a single shard to make the test simpler. We wait for the configuration
+    # to be updated, etc.
+    cmdline = ["--smp", "1", "--logger-log-level", "hints_manager=trace"]
+    # To speed up the test.
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    node1, node2 = await manager.servers_add(2, config=config, cmdline=cmdline,
+                                             property_file={"dc": "dc1", "rack": "r1"})
+
+    cql = await manager.get_cql_exclusive(node1)
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', "
+                        "'replication_factor': 1}")
+    await cql.run_async("CREATE TABLE ks.tbl (pk int, ck int, PRIMARY KEY(pk, ck))")
+    # Pin the replica of the key below.
+    await manager.disable_tablet_balancing()
+
+    async def set_max_hint_window_in_ms(node: ServerInfo, log: ScyllaLogFile,
+                                        mark: int, value: int) -> int:
+        await manager.server_update_config(node.server_id, "max_hint_window_in_ms", value)
+        # Both the regular and view hint manager are going to update their values.
+        # That's why we need to wait for two copies of the logs.
+        mark, _ = await log.wait_for(f"Updated max_hint_window to {value} ms", from_mark=mark)
+        mark, _ = await log.wait_for(f"Updated max_hint_window to {value} ms", from_mark=mark)
+        return mark
+
+    async def confirm_written_count(expected_written: int):
+        await wait_until_hint_writing_settled(manager, [node1])
+        metrics = await get_all_hint_metrics(manager.metrics, node1.ip_addr)
+        assert metrics["written"] == expected_written, f"Unexpected number of hints: {metrics}"
+
+    # First, find the replica for the key. We're going to save hints for it.
+    key = 17
+    natural_endpoints = await manager.api.natural_endpoints(node1.ip_addr, "ks", "tbl", str(key))
+    assert len(natural_endpoints) == 1, \
+        f"Unexpected number of natural endpoints: {len(natural_endpoints)}"
+
+    natural_endpoint = natural_endpoints[0]
+    assert natural_endpoint in [node1.ip_addr, node2.ip_addr], \
+        f"Unknown natural endpoint: {natural_endpoint} vs. [{node1.ip_addr}, {node2.ip_addr}]"
+
+    if natural_endpoint == node1.ip_addr:
+        logger.info("Swapping the nodes")
+        node1, node2 = node2, node1
+        cql = await manager.get_cql_exclusive(node1)
+
+    logger.info(f"The natural endpoint for key={key} is: {node2.server_id} / {node2.ip_addr}")
+
+    # Now that we know which node owns the partition, we can move on to the actual test.
+    await manager.server_stop_gracefully(node2.server_id)
+    await manager.server_not_sees_other_server(node1.ip_addr, node2.ip_addr)
+
+    insert = cql.prepare("INSERT INTO ks.tbl (pk, ck) VALUES (?, ?)")
+    insert.consistency_level = ConsistencyLevel.ANY
+
+    log = await manager.server_open_log(node1.server_id)
+    mark = await log.mark()
+
+    # First set a relatively large window (1 hour) so that we can freely
+    # write hints for the replica.
+    mark = await set_max_hint_window_in_ms(node1, log, mark, 1000 * 60 * 60)
+    await cql.run_async(insert, (key, 1))
+    await confirm_written_count(1)
+
+    # Next, reduce the window to a small value (100 ms) to force
+    # a rejection of the write.
+    mark = await set_max_hint_window_in_ms(node1, log, mark, 100)
+    await asyncio.sleep(0.1)
+    with pytest.raises(WriteFailure):
+        await cql.run_async(insert, (key, 2))
+    await confirm_written_count(1)
+
+    # If we set the window to 0, it should also force a write to be rejected.
+    mark = await set_max_hint_window_in_ms(node1, log, mark, 0)
+    with pytest.raises(WriteFailure):
+        await cql.run_async(insert, (key, 3))
+    await confirm_written_count(1)
+
+    # Set the window to a large value again and observe that a write is accepted.
+    mark = await set_max_hint_window_in_ms(node1, log, mark, 1000 * 60 * 60)
+    await cql.run_async(insert, (key, 4))
+    await confirm_written_count(2)
+
+    # Confirm the coordinator is NOT a replica of any of the keys.
+    await manager.api.enable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay",
+                                       one_shot=False)
+    await manager.server_start(node2.server_id)
+    await manager.servers_see_each_other([node1, node2])
+
+    result = await cql.run_async("SELECT pk, ck FROM ks.tbl")
+    rows = set((row.pk, row.ck) for row in result)
+    assert rows == set()
+
+    # Now confirm which hints were saved.
+    await manager.api.disable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay")
+    await wait_until_hints_are_sent_from(manager, [node1], expected_count=2)
+
+    result = await cql.run_async("SELECT pk, ck FROM ks.tbl")
+    rows = set((row.pk, row.ck) for row in result)
+    assert rows == {(key, 1), (key, 4)}
