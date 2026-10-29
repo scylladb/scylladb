@@ -134,7 +134,6 @@ compaction_driver::candidate candidate_of(fake_group& group, const compaction_ca
 // and only the free level below the anchor moves the threshold.
 compaction_driver::config make_config(utils::updateable_value<double> threshold = utils::updateable_value<double>(0.5)) {
     return compaction_driver::config{
-        .max_segments_per_compaction = 32,
         .space_floor = utils::updateable_value<double>(1.0 / 32),
         .utilization_threshold = threshold,
         .threshold_anchor = utils::updateable_value<double>(0),

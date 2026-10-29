@@ -289,9 +289,6 @@ public:
 
     struct compaction_config {
         bool compaction_enabled;
-        // Upper bound on the batch cap; the cap actually used is derived from the compaction
-        // space floor by make_compaction_limits().
-        size_t max_segments_per_compaction;
         // The space floor as a fraction of the disk.
         utils::updateable_value<double> compaction_space_floor;
         // A segment is a candidate for automatic compaction while its utilization is under this,
@@ -379,7 +376,6 @@ public:
             _shares_controller.set_shares_range(_cfg.compaction_min_shares.get(), new_max_shares);
         }))
         , _driver(*this, compaction_driver::config{
-                .max_segments_per_compaction = _cfg.max_segments_per_compaction,
                 .space_floor = _cfg.compaction_space_floor,
                 .utilization_threshold = _cfg.compaction_utilization_threshold,
                 .threshold_anchor = _cfg.compaction_threshold_anchor,
@@ -928,7 +924,6 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     : _file_mgr(make_file_manager_config(validated_geometry(config)))
     , _compaction_mgr(*this, compaction_manager_impl::compaction_config{
             .compaction_enabled = config.compaction_enabled,
-            .max_segments_per_compaction = config.max_segments_per_compaction,
             .compaction_space_floor = config.compaction_space_floor,
             .compaction_utilization_threshold = config.compaction_utilization_threshold,
             .compaction_threshold_anchor = config.compaction_threshold_anchor,

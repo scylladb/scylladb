@@ -41,6 +41,10 @@ constexpr size_t max_auto_compaction_parallelism = std::min<size_t>(4, max_compa
 // packed. It also anchors the minimum of the space floor.
 constexpr size_t min_segments_per_compaction = 8;
 
+// The largest batch. A job frees its inputs only when it ends, so a larger batch holds more of the
+// space floor for longer.
+constexpr size_t max_segments_per_compaction = 32;
+
 // The fraction of the best reclamation efficiency that a longer batch must keep to be selected
 // instead. On its own the efficiency score picks short batches, which is per-job overhead for no
 // write-amplification benefit; extending within this tolerance trades about 1% of efficiency for
@@ -81,8 +85,8 @@ struct compaction_limits {
 // A job allocates its output segments while it runs and frees its inputs only when it ends, so each
 // job in flight can hold up to `batch_cap` segments. Both limits come from the space floor, so that
 // `auto_parallelism * batch_cap <= space_floor`. Otherwise the jobs can use all of the space floor
-// and then wait for a segment that only one of them can free. `max_batch_cap` is
-// segment_manager_config::max_segments_per_compaction, the upper limit of the batch cap.
+// and then wait for a segment that only one of them can free. `max_batch_cap` is the upper limit of
+// the batch cap, max_segments_per_compaction outside of tests.
 //
 // When the space floor is less than one batch the relation cannot hold, and the limits are one job
 // of `min_segments_per_compaction` segments, the smallest batch that can reclaim.

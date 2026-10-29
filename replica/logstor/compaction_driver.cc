@@ -56,7 +56,7 @@ void compaction_driver::set_space_floor(double fraction) noexcept {
                 fraction, max_space_floor_fraction);
     }
     _space_floor = compaction_space_floor(_geometry.segment_count, fraction);
-    _limits = make_compaction_limits(_space_floor, _cfg.max_segments_per_compaction);
+    _limits = make_compaction_limits(_space_floor, max_segments_per_compaction);
 
     // The jobs in flight keep their slots. When the parallelism decreases, the semaphore goes below
     // zero, and no job starts until enough of them end. After the stop, run() waits for all the slots.
