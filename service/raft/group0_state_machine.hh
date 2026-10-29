@@ -9,6 +9,7 @@
 
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/util/noncopyable_function.hh>
 #include <unordered_map>
 
 #include "data_dictionary/data_dictionary.hh"
@@ -235,6 +236,9 @@ class group0_state_machine : public raft_state_machine {
     // therefore, we should not observe broken invariants in the schema module.
     bool _in_memory_state_machine_enabled;
 
+    // Stops the group 0 raft server on this node, the same way an error from apply() does.
+    noncopyable_function<void(std::exception_ptr)> _on_fatal_error;
+
     modules_to_reload get_modules_to_reload(const utils::chunked_vector<canonical_mutation>& mutations);
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
@@ -242,7 +246,8 @@ class group0_state_machine : public raft_state_machine {
     future<> sync_audit_known_entities();
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-            gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately);
+            gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately,
+            noncopyable_function<void(std::exception_ptr)> on_fatal_error);
     future<> apply(raft::log_entry_ptr_list commands) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;

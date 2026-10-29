@@ -126,6 +126,8 @@ class raft_group0 {
     // Refers to the group 0 server, so it is cleared before the server is destroyed.
     seastar::metrics::metric_groups _server_metrics;
     void register_server_metrics(raft::server_id my_id, const raft::server& server, const raft::server_stats& stats);
+    // Aborts the group 0 raft server in the background after an unrecoverable error.
+    void abort_server_on_error(raft::group_id gid, sstring reason);
 
     // Status of the raft group0 for monitoring.
     enum class status_for_monitoring : uint8_t {
