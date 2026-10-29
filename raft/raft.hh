@@ -590,6 +590,14 @@ public:
     // that can be aborted and waiting for all the rest to complete
     // any unfinished apply/snapshot operation may return an error after
     // this function is called
+    //
+    // No function of this interface is called after abort() is called,
+    // so implementations don't have to handle that case.
+    //
+    // A call in progress when abort() is called may continue. It's expected
+    // to promptly fail with abort_requested_exception, possibly nested, unless
+    // it cannot be interrupted. Failing with any other error means that the
+    // state machine broke, not that it was aborted.
     virtual future<> abort() = 0;
 };
 
