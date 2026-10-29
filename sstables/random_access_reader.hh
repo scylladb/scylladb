@@ -38,6 +38,11 @@ public:
 
     bool eof() const noexcept { return _in->eof(); }
 
+    // Total size of the underlying source. Parsers use it to reject on-disk
+    // lengths that cannot possibly fit in the component before allocating
+    // for them.
+    virtual uint64_t size() const noexcept = 0;
+
     virtual future<> close() noexcept;
 
     virtual ~random_access_reader() {}
@@ -55,6 +60,8 @@ public:
     explicit file_random_access_reader(file f, uint64_t file_size, size_t buffer_size = 8192, unsigned read_ahead = 4);
 
     virtual future<> close() noexcept override;
+
+    virtual uint64_t size() const noexcept override { return _file_size; }
 };
 
 class digest_file_random_access_reader : public file_random_access_reader {
