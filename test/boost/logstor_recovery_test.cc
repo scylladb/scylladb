@@ -26,6 +26,7 @@
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/segment_manager.hh"
 #include "schema/schema_builder.hh"
+#include "test/lib/exception_utils.hh"
 #include "test/lib/logstor_test_utils.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/tmpdir.hh"
@@ -776,4 +777,35 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_lifecycle_misuse_is_an_internal_error) {
         ls.start().get();
         BOOST_REQUIRE_THROW(ls.do_recovery(no_tables).get(), std::runtime_error);
     });
+}
+
+// The segment manager calculates the number of segments in a file from the configured file size,
+// so recovery refuses a file of another size, and the error tells the user to restore the size.
+SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_rejects_a_file_of_another_size) {
+    constexpr size_t segment_size = 128 * 1024;
+    const logstor_params written{
+        .segment_size = segment_size,
+        .file_size = 16 * segment_size,
+        .disk_size = 32 * segment_size,
+    };
+    auto other = written;
+    other.file_size = 8 * segment_size;
+    tmpdir dir;
+
+    {
+        test_store store(dir, written);
+        auto& ls = store.ls();
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
+        ls.start().get();
+        ls.stop().get();
+    }
+
+    test_store store(dir, other);
+    auto& ls = store.ls();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+    test_recovery_catalog no_tables;
+    BOOST_REQUIRE_EXCEPTION(ls.do_recovery(no_tables).get(), std::runtime_error,
+            exception_predicate::message_matches(".*is 2097152 bytes, but the configured file size is 1048576 bytes.*"
+                    "set logstor_file_size_in_mb back to the value that created the files.*"));
 }
