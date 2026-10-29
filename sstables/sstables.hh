@@ -115,6 +115,7 @@ struct sstable_writer_config {
     size_t promoted_index_block_size;
     size_t promoted_index_auto_scale_threshold;
     uint64_t max_sstable_size = std::numeric_limits<uint64_t>::max();
+    // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
     bool backup = false;
     bool leave_unsealed = false;
     mutation_fragment_stream_validation_level validation_level;
@@ -349,6 +350,7 @@ public:
 
     encoding_stats get_encoding_stats_for_compaction() const;
 
+    // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
     future<> seal_sstable(bool backup);
 
     // Size at full sampling is calculated as if sampling were static, using minimum index as a strict sampling interval.

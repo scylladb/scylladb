@@ -2278,6 +2278,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
       std::exception_ptr ex;
       try {
         sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
+        // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
         cfg.backup = incremental_backups_enabled();
 
         auto newtab = make_sstable();

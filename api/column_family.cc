@@ -1189,6 +1189,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         co_return json_void();
     });
 
+    // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
     ss::is_incremental_backups_enabled.set(r, [&db] (std::unique_ptr<http::request> req) {
         // If this is issued in parallel with an ongoing change, we may see values not agreeing.
         // Reissuing is asking for trouble, so we will just return true upon seeing any true value.
@@ -1205,8 +1206,13 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         });
     });
 
+    // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
     ss::set_incremental_backups_enabled.set(r, [&db] (std::unique_ptr<http::request> req) {
         bool value = get_query_param<bool>(*req, "value");
+        if (value) {
+            apilog.warn("Enabling incremental backups, but this feature is deprecated"
+                    " and support for it may be removed in a future release.");
+        }
         return db.invoke_on_all([value] (replica::database& db) {
             db.set_enable_incremental_backups(value);
 
