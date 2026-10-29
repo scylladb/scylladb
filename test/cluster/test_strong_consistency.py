@@ -837,6 +837,47 @@ async def test_forward_cql_exception_passthrough(manager: ScyllaClusterManager):
             await manager.api.message_injection(leader_host.address, "wait_before_handling_forwarded_request")
             await manager.api.message_injection(non_leader_replica_host.address, "wait_before_handling_forwarded_request")
 
+@pytest.mark.skip_mode('release', "error injections aren't enabled in release mode")
+async def test_forward_cql_prepare_exception_passthrough(manager: ScyllaClusterManager):
+    """
+    Regression test for SCYLLADB-5549: when the target of a forwarded request has to prepare
+    the statement again and that fails, the client gets the target's error, not SERVER_ERROR.
+    """
+    cmdline = ['--logger-log-level', 'cql_server=trace']
+    target, forwarder = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=cmdline,
+                                                  property_file=[{'dc': 'dc1', 'rack': 'rack1'}, {'dc': 'dc2', 'rack': 'rack1'}])
+    (cql, hosts) = await manager.get_ready_cql([target, forwarder])
+    target_host = next(h for h in hosts if h.address == target.rpc_address)
+    forwarder_host = next(h for h in hosts if h.address == forwarder.rpc_address)
+    # The driver's schema agreement wait would stall once the forwarding node stops applying schema changes.
+    cql.cluster.max_schema_agreement_wait = 0
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} AND tablets = {'initial': 1} AND consistency = 'global'"
+    async with new_test_keyspace(manager, ks_opts, host=target_host) as ks:
+        table = f"{ks}.tbl"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)", host=target_host)
+        await read_barrier(manager.api, forwarder.ip_addr)
+        stmt = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+        stmt.retry_policy = FallthroughRetryPolicy()
+
+        logger.info("Drop the table while the forwarding node doesn't apply schema changes")
+        await manager.api.enable_injection(forwarder.ip_addr, "group0_state_machine::block_apply", one_shot=True)
+        try:
+            await cql.run_async(f"DROP TABLE {table}", host=target_host)
+
+            metrics = await manager.metrics.query(forwarder.ip_addr)
+            prepared_not_found_before = metrics.get('scylla_transport_requests_forwarded_prepared_not_found') or 0
+
+            with pytest.raises(InvalidRequest, match="unconfigured table"):
+                await cql.run_async(stmt, [0, 0], host=forwarder_host)
+
+            metrics = await manager.metrics.query(forwarder.ip_addr)
+            prepared_not_found_after = metrics.get('scylla_transport_requests_forwarded_prepared_not_found') or 0
+            logger.info(f"Forwarded requests whose statement was not prepared on the target: {prepared_not_found_before} -> {prepared_not_found_after}")
+            assert prepared_not_found_after > prepared_not_found_before
+        finally:
+            await manager.api.message_injection(forwarder.ip_addr, "group0_state_machine::block_apply")
+
 
 @pytest.mark.skip_mode("release", "error injections aren't enabled in release mode")
 async def test_drop_table_during_insert(manager: ScyllaClusterManager):

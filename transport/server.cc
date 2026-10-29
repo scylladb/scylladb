@@ -472,7 +472,7 @@ void cql_server::init_messaging_service() {
         });
 
     ser::forward_cql_rpc_verbs::register_forward_cql_prepare(&_ms,
-        [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, forward_cql_prepare_request req) -> future<bytes> {
+        [this](const rpc::client_info& cinfo, rpc::opt_time_point timeout, forward_cql_prepare_request req) -> future<rpc::tuple<bytes, std::optional<forward_cql_prepare_error>>> {
             auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
             clogger.trace("Handling forward prepare request from {}", src_host);
 
@@ -484,13 +484,24 @@ void cql_server::init_messaging_service() {
             }
             service::query_state qs(cs, trace_state_ptr, empty_service_permit());
 
-            co_await _query_processor.invoke_on_all(
+            auto f = co_await coroutine::as_future(_query_processor.invoke_on_all(
                 [&] (cql3::query_processor& qp) {
                     return qp.prepare(req.query_string, qs.get_client_state(), req.dialect).discard_result();
-                });
+                }));
+            if (f.failed()) {
+                auto response = handle_exception(0, f.get_exception(), qs.get_trace_state(), req.cql_version, cs);
+                clogger.trace("Preparation of forwarded statement failed with an error");
+                tracing::trace(qs.get_trace_state(), "Preparation of forwarded statement failed with an error");
+
+                auto flags = response->flags();
+                co_return rpc::tuple(bytes(), std::optional(forward_cql_prepare_error{
+                    .response_body = std::move(*response.get()).extract_body(),
+                    .response_flags = flags,
+                }));
+            }
             auto prepare_id = _query_processor.local().compute_id(req.query_string, qs.get_client_state().get_raw_keyspace(), req.dialect).key();
             clogger.trace("Successfully prepared statement {} from forward request", prepare_id);
-            co_return prepare_id;
+            co_return rpc::tuple(std::move(prepare_id), std::optional<forward_cql_prepare_error>());
         });
 }
 
@@ -646,9 +657,18 @@ cql_server::forward_cql(
                 .client_state = req.client_state,
                 .trace_info = req.trace_info,
                 .dialect = req.dialect,
+                .cql_version = req.cql_version,
             };
 
-            auto prepared_id = co_await ser::forward_cql_rpc_verbs::send_forward_cql_prepare(&_ms, current_host, timeout, prepare_req);
+            auto [prepared_id, prepare_error] = co_await ser::forward_cql_rpc_verbs::send_forward_cql_prepare(&_ms, current_host, timeout, prepare_req);
+
+            if (prepare_error) {
+                _stats.requests_forwarded_failed++;
+                clogger.trace("Preparing forwarded CQL request failed on replica: {}", current_host);
+                tracing::trace(trace_state, "Preparing forwarded CQL request failed on replica: {}", current_host);
+                co_return std::make_unique<cql_transport::response>(stream, cql_binary_opcode::ERROR,
+                                                        prepare_error->response_flags, std::move(prepare_error->response_body));
+            }
 
             if (prepared_id != cache_key.key()) {
                 on_internal_error(clogger, format("Prepared ID returned from target node does not match local prepared ID for the same query. Local ID: {}, Target ID: {}", cache_key.key(), prepared_id));
