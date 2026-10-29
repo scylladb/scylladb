@@ -182,15 +182,17 @@ class natural_endpoints_tracker {
 
     //
     // all token owners in each DC, so we can check when we have exhausted all
-    // the token-owning members of a DC
+    // the token-owning members of a DC.
+    // Owned and cached by the token_metadata, which outlives the tracker.
     //
-    std::unordered_map<sstring, std::unordered_set<locator::host_id>> _token_owners;
+    const std::unordered_map<sstring, std::unordered_set<locator::host_id>>& _token_owners;
 
     //
     // all racks (with non-token owners filtered out) in a DC so we can check
-    // when we have exhausted all racks in a DC
+    // when we have exhausted all racks in a DC.
+    // Owned and cached by the token_metadata, which outlives the tracker.
     //
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<locator::host_id>>> _racks;
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<locator::host_id>>>& _racks;
 
     std::unordered_map<std::string_view, data_center_endpoints> _dcs;
 
@@ -244,7 +246,7 @@ public:
     }
 
     static void check_enough_endpoints(const token_metadata& tm, const network_topology_strategy::dc_rep_factor_map& dc_rf) {
-        auto dc_endpoints = tm.get_datacenter_token_owners();
+        const auto& dc_endpoints = tm.get_datacenter_token_owners();
         auto endpoints_in = [&dc_endpoints](sstring dc) {
             auto i = dc_endpoints.find(dc);
             return i != dc_endpoints.end() ? i->second.size() : size_t(0);
