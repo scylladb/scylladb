@@ -587,6 +587,8 @@ void seal_statistics(sstable_version_types, statistics&, metadata_collector&,
 void write(sstable_version_types, file_writer&, const utils::estimated_histogram&);
 void write(sstable_version_types, file_writer&, const utils::streaming_histogram&);
 void write(sstable_version_types, file_writer&, const commitlog_interval&);
-void write(sstable_version_types, file_writer&, const compression&);
+// Non-const: writing the component of a `mu` sstable frees the sampled offsets
+// and records where they landed in the file (compression::set_sample_location()).
+void write(sstable_version_types, file_writer&, compression&);
 
 }
