@@ -56,6 +56,105 @@ All of those values are always present and represent strings using UTF-8 encodin
 The value ``keyspace_name`` can be equal to ``null`` if the corresponding entity is not part of any keyspace,
 e.g. in the case of a role or a service level.
 
+Entity types
+^^^^^^^^^^^^
+
+The ``type`` column takes one of the following values. A tool processing the output, e.g. to restore only a
+part of it, should select rows by ``keyspace_name``, ``type`` and ``name`` rather than by parsing
+``create_statement``.
+
+.. list-table::
+   :widths: 22 14 22 42
+   :header-rows: 1
+
+   * - ``type``
+     - ``keyspace_name``
+     - ``name``
+     - ``create_statement``
+   * - ``keyspace``
+     - the keyspace
+     - the keyspace
+     - ``CREATE KEYSPACE``
+   * - ``type``
+     - the keyspace
+     - the user-defined type
+     - ``CREATE TYPE``
+   * - ``function``
+     - the keyspace
+     - the function
+     - ``CREATE FUNCTION``
+   * - ``aggregate``
+     - the keyspace
+     - the aggregate
+     - ``CREATE AGGREGATE``
+   * - ``table``
+     - the keyspace
+     - the table
+     - ``CREATE TABLE``; for the CDC log table of a table with CDC enabled, an ``ALTER TABLE`` statement
+       restoring the log table's properties
+   * - ``index``
+     - the keyspace
+     - the index
+     - ``CREATE INDEX``
+   * - ``view``
+     - the keyspace
+     - the materialized view
+     - ``CREATE MATERIALIZED VIEW``
+   * - ``cluster_config``
+     - ``null``
+     - ``cluster``
+     - The cluster configuration overrides stored at cluster scope, one ``ALTER CLUSTER`` statement per line.
+       See :doc:`Cluster configuration </cql/cluster-config>`.
+   * - ``keyspace_config``
+     - the keyspace
+     - the keyspace
+     - The cluster configuration overrides stored at keyspace scope, one ``ALTER KEYSPACE`` statement per line.
+   * - ``table_config``
+     - the keyspace
+     - the table
+     - The cluster configuration overrides stored at table scope, one ``ALTER TABLE`` statement per line.
+   * - ``role``
+     - ``null``
+     - the role
+     - ``CREATE ROLE``
+   * - ``grant_role``
+     - ``null``
+     - the granted role
+     - ``GRANT <role> TO <role>``
+   * - ``grant_permission``
+     - ``null``
+     - the role the permission is granted to
+     - ``GRANT <permission> ON <resource> TO <role>``
+   * - ``service_level``
+     - ``null``
+     - the service level
+     - ``CREATE SERVICE LEVEL``; for the built-in ``driver`` service level, an ``ALTER`` or ``DROP`` statement may
+       follow or replace it, so there can be more than one row with the same name
+   * - ``service_level_attachment``
+     - ``null``
+     - the service level
+     - ``ATTACH SERVICE LEVEL <service level> TO <role>``
+
+The rows of type ``keyspace_config``, ``table_config``, ``role``, ``grant_role``, ``grant_permission``,
+``service_level`` and ``service_level_attachment`` are emitted only with ``WITH INTERNALS``. The rows of the three
+``*_config`` types are the cluster configuration; they can be selected or skipped as a group, e.g. to apply the
+configuration only after the data is restored.
+
+Some ``create_statement`` values are informational CQL comments that must not be executed: the materialized
+view backing a secondary index (restored by restoring the index), and the CDC log and paxos tables, which ScyllaDB
+creates automatically.
+
+The rows are emitted in an order in which the statements can be executed one after the other:
+
+1. without ``WITH INTERNALS`` only: the cluster-scope ``cluster_config`` row,
+2. for each keyspace, in alphabetical order: the keyspace, its user-defined types (each after the types it depends
+   on), functions, aggregates and tables; each table is followed by its indexes, its materialized views and the
+   ``ALTER TABLE`` statement of its CDC log table,
+3. with ``WITH INTERNALS`` only: the ``cluster_config`` row, then the ``keyspace_config`` and ``table_config`` rows,
+   in keyspace order, each keyspace's row before its tables' rows,
+4. with ``WITH INTERNALS`` only: roles, role grants, permission grants, service levels and service level
+   attachments.
+
 Required permissions
 --------------------
 
