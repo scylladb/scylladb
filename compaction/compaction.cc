@@ -1087,40 +1087,20 @@ private:
         // was either stopped abruptly (e.g. out of disk space) or deliberately
         // (e.g. nodetool stop COMPACTION).
         //
-        // _new_partial_sstables are marked so that their space is reclaimed right
-        // away. They were never sealed, so they need no pending deletion log: a
-        // restart garbage collects them through their temporary TOC.
+        // Partial sstables were never sealed: a restart garbage collects them
+        // through their temporary TOC, so marking them is enough.
         for (auto& sst : _new_partial_sstables) {
             log_debug("Deleting partially written sstable {} of interrupted compaction for {}.{}",
                     sst->get_filename(), _schema->ks_name(), _schema->cf_name());
             sst->mark_for_deletion();
         }
 
-        // The sealed ones have a complete TOC, so nothing on disk tells a restart
-        // that they are stale: they have to go through the pending deletion log.
+        // Sealed outputs never handed to the replacer and sealed GC sstables never
+        // consumed go through the pending deletion log. The used GC sstables are not
+        // included: they are in the sstable set and leave it through the replacer.
         //
-        // _new_unused_sstables hold the outputs that were finished but not yet
-        // handed over. maybe_replace_exhausted_sstables_by_sst() moves out of the
-        // vector when it hands them to the replacer, so whatever is still in it was
-        // never attached.
-        //
-        // _unused_garbage_collected_sstables is included because a sealed GC sstable
-        // that was never consumed is not tracked anywhere else: it is not in
-        // _new_unused_sstables (it only lands there once
-        // consume_unused_garbage_collected_sstables() runs) and sealing cleared its
-        // implicit deletion mark, so ~sstable() would leave its files behind.
-        //
-        // _used_garbage_collected_sstables are deliberately not included: they were
-        // added to the table's sstable set and leave it through the replacer, so
-        // deleting their files here would break reads.
-        //
-        // Both come from the compaction's own sstable creator, so they share the
-        // table's storage and can go into one deletion. Unlike the successful path
-        // there is no replacement to protect here, so there is nothing to do
-        // between committing and unlinking.
-        //
-        // Reserved up front, so nothing is moved out of the members until the
-        // moves can no longer fail.
+        // Reserve before moving anything out of the members, so that nothing can
+        // fail once they are emptied.
         std::vector<sstables::shared_sstable> unattached;
         unattached.reserve(_new_unused_sstables.size() + _unused_garbage_collected_sstables.size());
         std::ranges::move(std::exchange(_new_unused_sstables, {}), std::back_inserter(unattached));
