@@ -40,17 +40,17 @@ bool auto_compaction_wanted(bool running, uint64_t available_segments, free_segm
     return available_segments < (running ? watermarks.high : watermarks.low);
 }
 
-compaction_limits make_compaction_limits(free_segment_watermarks watermarks, size_t max_batch_cap) noexcept {
+compaction_limits make_compaction_limits(free_segment_watermarks watermarks) noexcept {
     // With the trigger disabled there is no target to protect, and automatic compaction never runs;
     // the limits still have to be sane for compaction submitted explicitly, so fall back to the
     // smallest batch rather than to zero.
     const auto budget = std::max<uint64_t>(watermarks.low, min_segments_per_compaction);
     // Spend the budget on concurrency first, up to the number of jobs the buffer pool can carry,
     // then give what is left to the batch. Both directions of the clamp matter: a batch below
-    // min_segments_per_compaction cannot reclaim, and one above max_batch_cap makes a single job
-    // hold too much of the target.
+    // min_segments_per_compaction cannot reclaim, and one above max_segments_per_compaction makes a
+    // single job hold too much of the target.
     const auto parallelism = std::clamp<uint64_t>(budget / min_segments_per_compaction, 1, max_auto_compaction_parallelism);
-    const auto batch_cap = std::clamp<uint64_t>(budget / parallelism, min_segments_per_compaction, std::max<uint64_t>(max_batch_cap, min_segments_per_compaction));
+    const auto batch_cap = std::clamp<uint64_t>(budget / parallelism, min_segments_per_compaction, max_segments_per_compaction);
 
     return {
         .auto_parallelism = static_cast<size_t>(parallelism),

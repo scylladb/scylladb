@@ -91,48 +91,39 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_free_segment_watermarks) {
 // Checks that compaction limits enforce that concurrent jobs don't exceed the free-segment target,
 // preventing deadlock, with batch size shrinking first and parallelism second as target shrinks.
 SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_limits) {
-    constexpr size_t max_batch_cap = 32;
-
     // A compaction job frees its inputs only when it is done, so what all the jobs in flight can
     // hold at once has to fit in the free-segment target. This is the relation the two limits exist
-    // to maintain, and it has to survive any combination of disk size, threshold and configured cap.
+    // to maintain, and it has to survive any combination of disk size and threshold.
     for (uint64_t segment_count : {32u, 128u, 256u, 1024u, 4096u, 100000u}) {
         for (double fraction : {0.0, 0.01, 0.05, 0.2, 1.0}) {
-            for (size_t cap : {1u, 8u, 32u, 1024u}) {
-                const auto watermarks = make_free_segment_watermarks(segment_count, fraction);
-                const auto limits = make_compaction_limits(watermarks, cap);
-                BOOST_TEST_CONTEXT("segment_count=" << segment_count << " fraction=" << fraction << " cap=" << cap) {
-                    BOOST_REQUIRE_GE(limits.auto_parallelism, 1u);
-                    BOOST_REQUIRE_LE(limits.auto_parallelism, max_auto_compaction_parallelism);
-                    // A smaller batch could not reclaim anything, so it would never be worth running.
-                    BOOST_REQUIRE_GE(limits.batch_cap, min_segments_per_compaction);
-                    BOOST_REQUIRE_LE(limits.batch_cap, std::max(cap, min_segments_per_compaction));
-                    // Except on a disk whose target is below a single batch, where the target has
-                    // already been capped by the disk size and there is nothing left to give.
-                    if (watermarks.low >= min_segments_per_compaction) {
-                        BOOST_REQUIRE_LE(limits.auto_parallelism * limits.batch_cap, watermarks.low);
-                    }
+            const auto watermarks = make_free_segment_watermarks(segment_count, fraction);
+            const auto limits = make_compaction_limits(watermarks);
+            BOOST_TEST_CONTEXT("segment_count=" << segment_count << " fraction=" << fraction) {
+                BOOST_REQUIRE_GE(limits.auto_parallelism, 1u);
+                BOOST_REQUIRE_LE(limits.auto_parallelism, max_auto_compaction_parallelism);
+                // A smaller batch could not reclaim anything, so it would never be worth running.
+                BOOST_REQUIRE_GE(limits.batch_cap, min_segments_per_compaction);
+                BOOST_REQUIRE_LE(limits.batch_cap, max_segments_per_compaction);
+                // Except on a disk whose target is below a single batch, where the target has
+                // already been capped by the disk size and there is nothing left to give.
+                if (watermarks.low >= min_segments_per_compaction) {
+                    BOOST_REQUIRE_LE(limits.auto_parallelism * limits.batch_cap, watermarks.low);
                 }
             }
         }
     }
 
-    // A disk large enough for the target to cover every job in flight gets the configured batch
-    // bound and the full parallelism.
-    const auto large = make_compaction_limits(make_free_segment_watermarks(100000, 0.05), max_batch_cap);
+    // A disk large enough for the target to cover every job in flight gets the largest batch and the
+    // full parallelism.
+    const auto large = make_compaction_limits(make_free_segment_watermarks(100000, 0.05));
     BOOST_REQUIRE_EQUAL(large.auto_parallelism, max_auto_compaction_parallelism);
-    BOOST_REQUIRE_EQUAL(large.batch_cap, max_batch_cap);
+    BOOST_REQUIRE_EQUAL(large.batch_cap, max_segments_per_compaction);
 
     // A disabled trigger leaves no target to protect and no automatic compaction to protect it
     // from, but compaction submitted explicitly still needs a batch it can reclaim with.
-    const auto no_trigger = make_compaction_limits(make_free_segment_watermarks(100000, 0.0), max_batch_cap);
+    const auto no_trigger = make_compaction_limits(make_free_segment_watermarks(100000, 0.0));
     BOOST_REQUIRE_EQUAL(no_trigger.auto_parallelism, 1u);
     BOOST_REQUIRE_EQUAL(no_trigger.batch_cap, min_segments_per_compaction);
-
-    // A configured bound below the smallest useful batch would leave every batch unable to reclaim,
-    // so it is raised rather than honoured.
-    const auto tiny_bound = make_compaction_limits(make_free_segment_watermarks(100000, 0.05), 1);
-    BOOST_REQUIRE_EQUAL(tiny_bound.batch_cap, min_segments_per_compaction);
 }
 
 // Verifies that compaction shares pressure scales with free space, stays monotone and within [0, 1],

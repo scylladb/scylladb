@@ -52,7 +52,6 @@ struct segment_manager_config {
     // fragmentation and of not reserving space up front.
     bool sparse_files = false;
     bool compaction_enabled = true;
-    size_t max_segments_per_compaction = 32;
     utils::updateable_value<double> trigger_compaction_threshold{0.05};
     seastar::scheduling_group compaction_sg;
     utils::updateable_value<float> compaction_static_shares;

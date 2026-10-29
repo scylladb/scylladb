@@ -69,7 +69,6 @@ struct logstor_params {
     bool format_on_startup = true;
     bool sparse_files = true;
     bool compaction_enabled = true;
-    size_t max_segments_per_compaction = 8;
 };
 
 inline replica::logstor::logstor_config make_test_logstor_config(const std::filesystem::path& base_dir, logstor_params params = {}) {
@@ -82,7 +81,6 @@ inline replica::logstor::logstor_config make_test_logstor_config(const std::file
             .format_on_startup = params.format_on_startup,
             .sparse_files = params.sparse_files,
             .compaction_enabled = params.compaction_enabled,
-            .max_segments_per_compaction = params.max_segments_per_compaction,
             .compaction_sg = seastar::current_scheduling_group(),
             .compaction_static_shares = utils::updateable_value<float>(0.0f),
             .compaction_max_shares = utils::updateable_value<float>(2000.0f),

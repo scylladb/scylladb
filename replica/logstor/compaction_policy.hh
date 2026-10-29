@@ -41,6 +41,11 @@ constexpr size_t max_auto_compaction_parallelism = std::min<size_t>(4, max_compa
 // packed. It also anchors the free-segment target's absolute floor.
 constexpr size_t min_segments_per_compaction = 8;
 
+// The largest batch. A job frees its inputs only when it ends, so a larger batch holds more of the
+// free-segment target for longer.
+constexpr size_t max_segments_per_compaction = 32;
+static_assert(max_segments_per_compaction >= min_segments_per_compaction);
+
 // The fraction of the best reclamation efficiency that a longer batch must keep to be selected
 // instead. On its own the efficiency score picks short batches, which is per-job overhead for no
 // write-amplification benefit; extending within this tolerance trades about 1% of efficiency for
@@ -84,13 +89,12 @@ struct compaction_limits {
 // done, so every job in flight can hold up to `batch_cap` segments of the free-segment target at
 // once. Deriving both limits from `low` is what keeps `auto_parallelism * batch_cap <= low`: without
 // it, concurrent jobs can consume the whole target and then wait for a segment that only one of them
-// could free. `max_batch_cap` is segment_manager_config::max_segments_per_compaction, the upper bound
-// the derived cap is clamped to.
+// could free. The batch cap is at most max_segments_per_compaction.
 //
 // The invariant cannot hold on a disk so small that the target is below one batch; there the floor
 // of make_free_segment_watermarks() has already been capped by the disk size and a batch of
 // `min_segments_per_compaction` is the least that can reclaim anything.
-compaction_limits make_compaction_limits(free_segment_watermarks watermarks, size_t max_batch_cap) noexcept;
+compaction_limits make_compaction_limits(free_segment_watermarks watermarks) noexcept;
 
 // The cost of one candidate compaction batch: `n_in` segments are read and rewritten into `n_out`
 // segments, copying `live_bytes` of live data.

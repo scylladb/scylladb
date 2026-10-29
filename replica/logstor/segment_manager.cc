@@ -311,9 +311,6 @@ public:
 
     struct compaction_config {
         bool compaction_enabled;
-        // Upper bound on the batch cap; the cap actually used is derived from the free-segment
-        // target by make_compaction_limits().
-        size_t max_segments_per_compaction;
         seastar::scheduling_group compaction_sg;
         utils::updateable_value<float> compaction_static_shares;
         utils::updateable_value<float> compaction_max_shares;
@@ -986,7 +983,7 @@ float compaction_manager_impl::compaction_pressure() const noexcept {
 
 void compaction_manager_impl::refresh_free_segment_watermarks() noexcept {
     _free_segment_watermarks = make_free_segment_watermarks(_sm._configured_max_segments, _sm._cfg.trigger_compaction_threshold());
-    _compaction_limits = make_compaction_limits(_free_segment_watermarks, _cfg.max_segments_per_compaction);
+    _compaction_limits = make_compaction_limits(_free_segment_watermarks);
 
     logstor_logger.debug("Free segment target {} (stop at {}), compaction parallelism {}, up to {} segments per compaction",
             _free_segment_watermarks.low, _free_segment_watermarks.high,
@@ -1048,7 +1045,6 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     : _file_mgr(make_file_manager_config(validated_geometry(config)))
     , _compaction_mgr(*this, compaction_manager_impl::compaction_config{
             .compaction_enabled = config.compaction_enabled,
-            .max_segments_per_compaction = config.max_segments_per_compaction,
             .compaction_sg = config.compaction_sg,
             .compaction_static_shares = config.compaction_static_shares,
             .compaction_max_shares = config.compaction_max_shares,
