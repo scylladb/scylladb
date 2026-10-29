@@ -151,7 +151,6 @@ def test_mv_quoted_column_names_build(cql, test_keyspace):
 # build the view. A type hint to a user type in it must keep the quotes that
 # the type name "int" needs, otherwise writes to the base table fail.
 # Reproduces SCYLLADB-5202.
-@pytest.mark.xfail(reason="SCYLLADB-5202: the type hint is written out with the type name unquoted")
 def test_mv_where_type_hint_udt_named_int(cql, test_keyspace):
     with new_type(cql, test_keyspace, '(a int)', name='"int"') as typ, \
             new_test_table(cql, test_keyspace, f'p int, b frozen<{typ}>, PRIMARY KEY (p, b)') as table, \
@@ -163,7 +162,6 @@ def test_mv_where_type_hint_udt_named_int(cql, test_keyspace):
 # Same as above, with a user type in a keyspace whose mixed case name needs
 # the quotes.
 # Reproduces SCYLLADB-5202.
-@pytest.mark.xfail(reason="SCYLLADB-5202: the type hint is written out with the keyspace name unquoted")
 def test_mv_where_type_hint_udt_in_mixed_case_keyspace(cql):
     keyspace = f'"{unique_name().capitalize()}"'
     cql.execute(f"CREATE KEYSPACE {keyspace} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }}")

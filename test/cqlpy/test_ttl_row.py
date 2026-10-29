@@ -77,7 +77,6 @@ def test_create_table_with_bad_ttl_type(cql, test_keyspace):
 # A user type named like an allowed TTL column type, like "int", is still
 # a user type, and must be rejected as the TTL column type.
 # Reproduces SCYLLADB-5202.
-@pytest.mark.xfail(reason="SCYLLADB-5202: the type name is written out unquoted and matches the native type name")
 def test_create_table_with_udt_ttl_type(cql, test_keyspace):
     for t in ['"timestamp"', '"bigint"', '"int"']:
         with new_type(cql, test_keyspace, '(a int)', name=t):
