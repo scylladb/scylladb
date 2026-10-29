@@ -1,0 +1,52 @@
+{# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1 #}
+{# Copyright (C) 2026 ScyllaDB #}
+<script>
+window.addEventListener('load', async function() {
+    try {
+        // The server assembles these fragments at runtime; static documentation must do the same.
+        const urls = [
+            {{ custom_pathto('_static/api/api-doc/swagger20_header.json', 1) | tojson }},
+            {{ custom_pathto(swagger_file_path, 1) | tojson }},
+            {{ custom_pathto('_static/api/api-doc/client_routes.def.json', 1) | tojson }},
+        ];
+        const [header, paths, definitions] = await Promise.all(urls.map(async function(url) {
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`Failed to load ${url}: ${response.status}`);
+            }
+            return response.text();
+        }));
+        const spec = JSON.parse(header + '}}');
+        const parseFragment = text => JSON.parse('{' + text.replace(/^\s*,/, '') + '}');
+        spec.paths = parseFragment(paths);
+        spec.definitions = parseFragment(definitions);
+        spec.host = '127.0.0.1:10000';
+        // Error responses use Seastar's HTTP exception schema.
+        spec.definitions.ErrorModel = {
+            type: 'object',
+            properties: {message: {type: 'string'}, code: {type: 'integer'}},
+        };
+        const swaggerUi = new SwaggerUi({
+            url: urls[1],
+            spec: spec,
+            dom_id: "swagger-ui-{{swagger_file_name}}",
+            docExpansion: "full",
+            jsonEditor: false,
+            onComplete: function() {
+                document.querySelectorAll('#swagger-ui-{{swagger_file_name}} .footer').forEach(function(element) {
+                    element.className = 'swagger-footer';
+                });
+            },
+        });
+        swaggerUi.load();
+    } catch (error) {
+        document.getElementById('loader-{{swagger_file_name}}').textContent =
+            'Unable to load the Client Routes API reference: ' + error.message;
+    }
+});
+</script>
+<div class="swagger-section">
+    <div id="swagger-ui-{{swagger_file_name}}" class="swagger-ui-wrap">
+        <div id="loader-{{swagger_file_name}}" class="loader">Loading...</div>
+    </div>
+</div>
