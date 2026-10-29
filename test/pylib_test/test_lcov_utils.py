@@ -6,6 +6,7 @@
 """Tests for merging lcov traces produced by different binaries."""
 
 import pathlib
+import xml.etree.ElementTree as ET
 
 from test.pylib.lcov_utils import LcovFile
 
@@ -35,3 +36,26 @@ def test_union_of_one_function_reported_at_different_lines(tmp_path: pathlib.Pat
 
     record = next(iter(LcovFile(tmp_path / "merged.info").records.values()))
     assert record.function_hits == {(67, "ctor"): 2}
+
+
+def test_cobertura_report(tmp_path: pathlib.Path) -> None:
+    """SonarQube takes the hits of every line and the covered/total branches of
+    the lines that branch from the Cobertura report."""
+    (tmp_path / "trace.info").write_text(
+        "SF:utils/uuid.cc\n"
+        "DA:3,0\n"
+        "DA:5,2\n"
+        "BRDA:5,0,0,2\n"
+        "BRDA:5,0,1,-\n"
+        "end_of_record\n"
+    )
+    LcovFile(tmp_path / "trace.info").write_cobertura(tmp_path / "coverage.xml")
+
+    root = ET.parse(tmp_path / "coverage.xml").getroot()
+    assert root.find("sources/source").text is None
+    [cls] = root.iter("class")
+    assert cls.get("filename") == "utils/uuid.cc"
+    assert [line.attrib for line in cls.iter("line")] == [
+        {"number": "3", "hits": "0", "branch": "false"},
+        {"number": "5", "hits": "2", "branch": "true", "condition-coverage": "50% (1/2)"},
+    ]
