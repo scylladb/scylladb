@@ -144,9 +144,28 @@ Removing the leading ``--`` marker and running the statement pins the inherited 
 scope as an explicit setting. An option that no scope stores is not shown at all.
 
 ``DESCRIBE SCHEMA`` lists the cluster-scope values first, before any keyspace, as
-``ALTER CLUSTER WITH ...`` statements, so a schema dump carries them. Under
-``DESCRIBE SCHEMA WITH INTERNALS`` the trailing comments are omitted and only stored values are
-emitted, which is the form used for backup and restore. See :doc:`DESCRIBE SCHEMA </cql/describe-schema>`.
+``ALTER CLUSTER WITH ...`` statements, so a schema dump carries them.
+
+``DESCRIBE ... WITH INTERNALS`` is the form used for backup and restore. It emits only stored
+values, without comments, and not as properties of the ``CREATE`` statements: the values stored
+at each scope are a separate row, of type ``cluster_config``, ``keyspace_config`` or ``table_config``,
+holding one ``ALTER`` statement per option, one per line. The ``name`` of the row is ``cluster``, the
+keyspace, or the table (whose keyspace is in ``keyspace_name``). In ``DESCRIBE SCHEMA WITH INTERNALS``
+these rows follow all keyspaces, with the cluster row first:
+
+.. code-block:: none
+
+    keyspace_name | type            | name    | create_statement
+   ---------------+-----------------+---------+--------------------------------------------------
+    ks            | keyspace        | ks      | CREATE KEYSPACE ks WITH replication = ...;
+    ks            | table           | t       | CREATE TABLE ks.t (...) WITH ...;
+    null          | cluster_config  | cluster | ALTER CLUSTER WITH auto_repair_enabled = true;
+    ks            | keyspace_config | ks      | ALTER KEYSPACE ks WITH auto_repair_enabled = false;
+    ks            | table_config    | t       | ALTER TABLE ks.t WITH auto_repair_enabled = true;
+
+This lets a restore tool restore the configuration separately from the schema, for example only
+after the data is restored, without parsing CQL. The rows hold every stored value, including options
+the target cluster may not support; replaying such a statement fails instead of losing the value silently. See :doc:`DESCRIBE SCHEMA </cql/describe-schema>`.
 
 .. _cql-cluster-config-options:
 

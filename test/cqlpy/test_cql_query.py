@@ -319,11 +319,12 @@ def test_describe_schema_with_inherited_auto_repair_scope_config(cql, scylla_onl
         assert "\n    AND auto_repair_enabled = true  -- from table (table=true, keyspace=false, cluster=true)\n;" in table_desc
         assert "-- AND auto_repair_enabled" not in table_desc
 
-        # WITH INTERNALS keeps the stored override as a property, still without comments.
-        internals_desc = describe_create_statement(cql, f"DESCRIBE TABLE {ks}.tbl WITH INTERNALS")
-        assert "auto_repair_enabled = true" in internals_desc
-        assert "-- AND auto_repair_enabled" not in internals_desc
-        assert "-- from" not in internals_desc
+        # WITH INTERNALS moves the stored override out of the CREATE statement, into a
+        # trailing table_config row holding a bare ALTER TABLE statement.
+        internals_rows = list(cql.execute(f"DESCRIBE TABLE {ks}.tbl WITH INTERNALS"))
+        assert [(row.type, row.name) for row in internals_rows] == [("table", "tbl"), ("table_config", "tbl")]
+        assert "auto_repair_enabled" not in internals_rows[0].create_statement
+        assert internals_rows[1].create_statement == f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = true;"
 
         cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = null")
         table_desc = describe_create_statement(cql, f"DESCRIBE TABLE {ks}.tbl")
@@ -345,11 +346,12 @@ def describe_create_statements(cql, query):
     return [row.create_statement for row in cql.execute(query) if row.create_statement is not None]
 
 
-# The DESC SCHEMA cluster-config block: stored cluster-scope overrides lead the dump,
-# before any keyspace, in all tiers - the executable slot is stored-only, so without this
-# block a schema dump would silently lose cluster scope. The plain tier annotates each
-# statement with a trailing provenance comment (and so keeps a final newline, which the
-# COMMENT lexer token requires); WITH INTERNALS stays pure CQL.
+# The DESC SCHEMA cluster-config block: stored cluster-scope overrides are emitted in all
+# tiers - the executable slot is stored-only, so without this block a schema dump would
+# silently lose cluster scope. The plain tier leads with it and annotates each statement
+# with a trailing provenance comment (and so keeps a final newline, which the COMMENT lexer
+# token requires); WITH INTERNALS stays pure CQL and emits it after all keyspaces, leading
+# the block of config rows.
 def test_describe_schema_emits_cluster_config_block(cql, scylla_only):
     with new_config_test_keyspace(cql) as ks, cluster_config_cleanup(cql):
         cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
@@ -364,9 +366,74 @@ def test_describe_schema_emits_cluster_config_block(cql, scylla_only):
         assert schema_stmts
         assert schema_stmts[0] == "ALTER CLUSTER WITH auto_repair_enabled = false;  -- from cluster (cluster=false)\n"
 
-        internals_stmts = describe_create_statements(cql, "DESCRIBE SCHEMA WITH INTERNALS")
-        assert internals_stmts
-        assert internals_stmts[0] == "ALTER CLUSTER WITH auto_repair_enabled = false;"
+        internals_rows = [(row.keyspace_name, row.type, row.name, row.create_statement)
+                          for row in cql.execute("DESCRIBE SCHEMA WITH INTERNALS")]
+        cluster_rows = [i for i, row in enumerate(internals_rows) if row[1] == "cluster_config"]
+        assert len(cluster_rows) == 1
+        assert internals_rows[cluster_rows[0]] == (None, "cluster_config", "cluster", "ALTER CLUSTER WITH auto_repair_enabled = false;")
+        assert all(row[1] not in ("keyspace", "table") for row in internals_rows[cluster_rows[0]:])
+
+
+# DESC SCHEMA WITH INTERNALS emits the config overrides stored at keyspace and table scope
+# as standalone keyspace_config and table_config rows, not as properties of the CREATE
+# statements, so a restore tool can tell config from schema by the type column alone. Like
+# every other row, their name is a single identifier: the keyspace or the table. The rows
+# form one block, led by the cluster row and following all keyspaces, since they ALTER the
+# objects the CREATE statements create.
+def test_describe_schema_with_internals_emits_config_rows(cql, scylla_only):
+    config_types = ("cluster_config", "keyspace_config", "table_config")
+    def describe(query):
+        return [(row.keyspace_name, row.type, row.name, row.create_statement) for row in cql.execute(query)]
+    # All config rows must follow all keyspace and table rows.
+    def assert_config_rows_trail_schema(rows):
+        config_indexes = [i for i, row in enumerate(rows) if row[1] in config_types]
+        schema_indexes = [i for i, row in enumerate(rows) if row[1] in ("keyspace", "table")]
+        assert config_indexes and schema_indexes
+        assert max(schema_indexes) < min(config_indexes)
+        assert config_indexes == list(range(min(config_indexes), max(config_indexes) + 1))
+
+    with new_config_test_keyspace(cql) as ks, cluster_config_cleanup(cql):
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+        cql.execute(f'CREATE TABLE {ks}."Quoted" (pk int PRIMARY KEY)')
+        cql.execute(f"CREATE TABLE {ks}.inheriting (pk int PRIMARY KEY)")
+        cql.execute("ALTER CLUSTER WITH auto_repair_enabled = true")
+        cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = false")
+        cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = true")
+        cql.execute(f'ALTER TABLE {ks}."Quoted" WITH auto_repair_enabled = true')
+
+        rows = describe("DESCRIBE SCHEMA WITH INTERNALS")
+
+        # No config inside the CREATE statements.
+        for row in rows:
+            if row[1] in ("keyspace", "table"):
+                assert "auto_repair_enabled" not in row[3], row
+
+        config_rows = [row for row in rows if row[1] in config_types]
+        assert config_rows[0] == (None, "cluster_config", "cluster", "ALTER CLUSTER WITH auto_repair_enabled = true;")
+        ks_config_rows = [
+            (ks, "keyspace_config", ks, f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = false;"),
+            (ks, "table_config", '"Quoted"', f'ALTER TABLE {ks}."Quoted" WITH auto_repair_enabled = true;'),
+            (ks, "table_config", "tbl", f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = true;"),
+        ]
+        assert [row for row in config_rows if row[0] == ks] == ks_config_rows
+        assert_config_rows_trail_schema(rows)
+
+        # The same rows are emitted by the per-keyspace and per-table describes, also after
+        # the keyspace and its tables.
+        ks_rows = describe(f"DESCRIBE KEYSPACE {ks} WITH INTERNALS")
+        assert [row for row in ks_rows if row[1] in config_types] == ks_config_rows
+        assert_config_rows_trail_schema(ks_rows)
+        assert [row[1:3] for row in describe(f"DESCRIBE ONLY KEYSPACE {ks} WITH INTERNALS")] == [("keyspace", ks), ("keyspace_config", ks)]
+        assert [row[1:3] for row in describe(f"DESCRIBE TABLE {ks}.inheriting WITH INTERNALS")] == [("table", "inheriting")]
+
+        # Each config statement replays line by line.
+        cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = null")
+        cql.execute(f'ALTER TABLE {ks}."Quoted" WITH auto_repair_enabled = null')
+        for row in ks_config_rows:
+            for statement in row[3].splitlines():
+                cql.execute(statement)
+        assert fetch_configs(cql, keyspace_configs_query(ks)) == [{'auto_repair_enabled': 'false'}]
+        assert fetch_configs(cql, table_configs_query(ks, 'Quoted')) == [{'auto_repair_enabled': 'true'}]
 
 
 # Every emitted create_statement must replay verbatim as a single request, comment lines

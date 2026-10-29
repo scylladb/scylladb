@@ -60,6 +60,7 @@
 #include "utils/sorting.hh"
 #include "replica/database.hh"
 #include "cql3/description.hh"
+#include "cql3/util.hh"
 #include "replica/schema_describe_helper.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
@@ -473,6 +474,12 @@ future<description> keyspace_description(config_snapshot& snapshot, const lw_sha
         co_return desc;
     }
 
+    // WITH INTERNALS emits the keyspace's stored overrides as a separate keyspace_config
+    // row instead, see keyspace_config_description().
+    if (with_internals) {
+        co_return desc;
+    }
+
     std::vector<described_config_option> options;
     for (const auto& config_name : config_option_names_for_scope(db::cluster_config_registry::scope::keyspace, db.features())) {
         if (auto described = co_await described_keyspace_config_option(snapshot, ks_meta->name(), config_name)) {
@@ -480,8 +487,88 @@ future<description> keyspace_description(config_snapshot& snapshot, const lw_sha
         }
     }
 
-    append_create_statement_options(desc, options, !with_internals);
+    append_create_statement_options(desc, options, true);
     co_return desc;
+}
+
+constexpr std::string_view cluster_config_type = "cluster_config";
+constexpr std::string_view keyspace_config_type = "keyspace_config";
+constexpr std::string_view table_config_type = "table_config";
+
+bool is_config_description(const description& desc) {
+    return desc.type == cluster_config_type || desc.type == keyspace_config_type || desc.type == table_config_type;
+}
+
+// WITH INTERNALS describes the config overrides stored at each scope as standalone rows, one
+// type per scope (cluster_config, keyspace_config, table_config), rather than as properties of
+// the CREATE statements, so a restore tool can tell them apart from the schema (and e.g. defer
+// them until after the data is restored) by looking at the type column alone, without parsing
+// CQL. The name is a single identifier, like for every other row type: `cluster`, the keyspace,
+// or the table. The create_statement holds one `ALTER <scope> WITH <option> = <value>;`
+// statement per option stored at the scope, one per line. Like the cluster row, it dumps the
+// stored map as is, including options this node's registry does not know: the backup tier
+// reproduces stored state, and replaying it on a cluster that does not support an option fails
+// loudly instead of losing the override silently.
+description make_config_description(std::string_view type, std::optional<sstring> keyspace, sstring name, const sstring& alter_target,
+        db::cluster_config_registry::scope scope, config_origin origin, const std::map<sstring, sstring>& configs) {
+    std::vector<scope_chain_entry> chain{{origin, configs}};
+    return description{
+        .keyspace = std::move(keyspace),
+        .type = sstring(type),
+        .name = std::move(name),
+        .create_statement = make_scope_create_statement(alter_target, scope, chain, false),
+    };
+}
+
+// The keyspace_config row of a keyspace, nullopt if the keyspace stores no config override.
+future<std::optional<description>> keyspace_config_description(config_snapshot& snapshot, const gms::feature_service& features, const sstring& ks) {
+    if (!db::cluster_config_registry::enabled(features)) {
+        co_return std::nullopt;
+    }
+    const auto& configs = (co_await snapshot.keyspace(ks)).get();
+    if (configs.empty()) {
+        co_return std::nullopt;
+    }
+    co_return make_config_description(keyspace_config_type, ks, ks, format("ALTER KEYSPACE {}", cql3::util::maybe_quote(ks)),
+            db::cluster_config_registry::scope::keyspace, config_origin::keyspace, configs);
+}
+
+// The table_config row of a table, nullopt if the table stores no config override.
+future<std::optional<description>> table_config_description(config_snapshot& snapshot, const gms::feature_service& features, const sstring& ks, const sstring& table) {
+    if (!db::cluster_config_registry::enabled(features)) {
+        co_return std::nullopt;
+    }
+    const auto& configs = (co_await snapshot.table(ks, table)).get();
+    if (configs.empty()) {
+        co_return std::nullopt;
+    }
+    co_return make_config_description(table_config_type, ks, table,
+            format("ALTER TABLE {}.{}", cql3::util::maybe_quote(ks), cql3::util::maybe_quote(table)),
+            db::cluster_config_registry::scope::table, config_origin::table, configs);
+}
+
+// The keyspace description, followed under WITH INTERNALS by its config row, if any.
+future<utils::chunked_vector<description>> keyspace_descriptions(config_snapshot& snapshot, const lw_shared_ptr<keyspace_metadata>& ks_meta, const replica::database& db, bool with_internals) {
+    utils::chunked_vector<description> result;
+    result.push_back(co_await keyspace_description(snapshot, ks_meta, db, with_create_statement::yes, with_internals));
+    if (with_internals) {
+        if (auto config_desc = co_await keyspace_config_description(snapshot, db.features(), ks_meta->name())) {
+            result.push_back(std::move(*config_desc));
+        }
+    }
+    co_return result;
+}
+
+// Moves the config rows to the end, keeping the relative order within both groups.
+// The config rows ALTER objects described by the other rows, so they must come after them.
+void move_config_descriptions_to_end(utils::chunked_vector<description>& descs) {
+    utils::chunked_vector<description> config_descs;
+    utils::chunked_vector<description> other_descs;
+    for (auto& desc : descs) {
+        (is_config_description(desc) ? config_descs : other_descs).push_back(std::move(desc));
+    }
+    other_descs.insert(other_descs.end(), std::make_move_iterator(config_descs.begin()), std::make_move_iterator(config_descs.end()));
+    descs = std::move(other_descs);
 }
 
 /**
@@ -697,16 +784,27 @@ future<utils::chunked_vector<description>> table(config_snapshot& snapshot, cons
     // table
     auto describe_helper = replica::make_schema_describe_helper(schema, db);
     auto table_desc = schema->describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
-    std::vector<described_config_option> table_config_options;
-    for (const auto& config_name : config_option_names_for_scope(db::cluster_config_registry::scope::table, db.features())) {
-        if (auto described = co_await described_table_config_option(snapshot, ks_meta->name(), name, config_name)) {
-            table_config_options.push_back(std::move(*described));
+    const bool is_cdc_log = cdc::is_log_for_some_table(db.real_database(), ks_meta->name(), name);
+    const bool is_paxos = bool(service::paxos::paxos_store::try_get_base_table(name));
+    // A CDC log or paxos table is described as an informational comment, so its config
+    // stays inline in the commented-out statement instead of becoming a replayable
+    // table_config row.
+    const bool config_as_row = with_internals && !is_cdc_log && !is_paxos;
+    std::optional<description> table_config_desc;
+    if (config_as_row) {
+        table_config_desc = co_await table_config_description(snapshot, db.features(), ks_meta->name(), name);
+    } else {
+        std::vector<described_config_option> table_config_options;
+        for (const auto& config_name : config_option_names_for_scope(db::cluster_config_registry::scope::table, db.features())) {
+            if (auto described = co_await described_table_config_option(snapshot, ks_meta->name(), name, config_name)) {
+                table_config_options.push_back(std::move(*described));
+            }
+        }
+        if (!table_config_options.empty()) {
+            append_create_statement_options(table_desc, table_config_options, !with_internals);
         }
     }
-    if (!table_config_options.empty()) {
-        append_create_statement_options(table_desc, table_config_options, !with_internals);
-    }
-    if (cdc::is_log_for_some_table(db.real_database(), ks_meta->name(), name)) {
+    if (is_cdc_log) {
         // If the table the user wants to describe is a CDC log table, we want to print it as a CQL comment.
         // This way, the user learns about the internals of the table, but they're also told not to execute it.
         fragmented_ostringstream os{};
@@ -720,7 +818,7 @@ future<utils::chunked_vector<description>> table(config_snapshot& snapshot, cons
                 *table_desc.create_statement);
 
         table_desc.create_statement = std::move(os).to_managed_string();
-    } else if (service::paxos::paxos_store::try_get_base_table(name)) {
+    } else if (is_paxos) {
         // Paxos state table is internally managed by Scylla and it shouldn't be exposed to the user.
         // The table is allowed to be described as a comment to ease administrative work but it's hidden from all listings.
         fragmented_ostringstream os{};
@@ -759,6 +857,10 @@ future<utils::chunked_vector<description>> table(config_snapshot& snapshot, cons
         if (cdc_log_alter) {
             result.push_back(std::move(*cdc_log_alter));
         }
+    }
+
+    if (table_config_desc) {
+        result.push_back(std::move(*table_config_desc));
     }
 
     co_return result;
@@ -847,7 +949,7 @@ future<utils::chunked_vector<description>> describe_element(config_snapshot& sna
     case element_type::table:            co_return co_await table(snapshot, db, ks_meta, name, with_internals);
     case element_type::index:            co_return wrap_in_vector(index(db, ks, name, with_internals));
     case element_type::view:             co_return wrap_in_vector(view(db, ks, name, with_internals));
-    case element_type::keyspace:         co_return wrap_in_vector(co_await keyspace_description(snapshot, ks_meta, replica_db, with_create_statement::yes, with_internals));
+    case element_type::keyspace:         co_return co_await keyspace_descriptions(snapshot, ks_meta, replica_db, with_internals);
     }
 }
 
@@ -869,13 +971,14 @@ future<utils::chunked_vector<description>> describe_all_keyspace_elements(config
         result.insert(result.end(), std::make_move_iterator(elements.begin()), std::make_move_iterator(elements.end()));
     };
 
-    result.push_back(co_await keyspace_description(snapshot, ks_meta, replica_db, with_create_statement::yes, with_internals));
+    inserter(co_await keyspace_descriptions(snapshot, ks_meta, replica_db, with_internals));
     inserter(co_await types(replica_db, ks_meta, with_create_statement::yes));
     inserter(co_await functions(replica_db, ks, with_create_statement::yes));
     inserter(co_await aggregates(replica_db, ks, with_create_statement::yes));
     inserter(co_await tables(snapshot, db, ks_meta, with_internals));
+    move_config_descriptions_to_end(result);
 
-    co_return result; 
+    co_return result;
 }
 
 }
@@ -1060,19 +1163,20 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
             std::ranges::sort(keyspaces);
             utils::chunked_vector<description> schema_result;
 
-            // Cluster-scope config leads the dump, before any keyspace and in all tiers:
-            // it is portable operator state that lower scopes inherit from, and emitting it
-            // only under INTERNALS would make the default dump silently lossy.
+            // Cluster-scope config is emitted in all tiers: it is portable operator state that
+            // lower scopes inherit from, and emitting it only under INTERNALS would make the
+            // default dump silently lossy. The plain tier leads with it; under INTERNALS it
+            // leads the block of config rows, which follows all keyspaces.
             if (db::cluster_config_registry::enabled(db.features())) {
                 const auto& cluster_configs = (co_await snapshot.cluster()).get();
                 if (!cluster_configs.empty()) {
                     std::vector<scope_chain_entry> chain{{config_origin::cluster, cluster_configs}};
-                    description cluster_desc;
-                    cluster_desc.keyspace = std::nullopt;
-                    cluster_desc.type = "cluster_config";
-                    cluster_desc.name = "cluster";
-                    cluster_desc.create_statement = make_scope_create_statement("ALTER CLUSTER", db::cluster_config_registry::scope::cluster, chain, !_with_internals);
-                    schema_result.push_back(std::move(cluster_desc));
+                    schema_result.push_back(description{
+                        .keyspace = std::nullopt,
+                        .type = sstring(cluster_config_type),
+                        .name = "cluster",
+                        .create_statement = make_scope_create_statement("ALTER CLUSTER", db::cluster_config_registry::scope::cluster, chain, !_with_internals),
+                    });
                 }
             }
 
@@ -1083,8 +1187,9 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
                 auto ks_result = co_await describe_all_keyspace_elements(snapshot, db, ks, _with_internals);
                 schema_result.insert(schema_result.end(), std::make_move_iterator(ks_result.begin()), std::make_move_iterator(ks_result.end()));
             }
-
             if (_with_internals) {
+                move_config_descriptions_to_end(schema_result);
+
                 // The order is important here. We need to first restore auth
                 // because we can only attach a service level to an existing role.
                 auto auth_descs = co_await auth_service.describe_auth(config.with_hashed_passwords);
@@ -1106,9 +1211,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
 
             if (config.only_keyspace) {
                 auto ks_meta = get_keyspace_metadata(db, ks);
-                auto ks_desc = co_await keyspace_description(snapshot, ks_meta, db.real_database(), with_create_statement::yes, _with_internals);
-
-                co_return wrap_in_vector(std::move(ks_desc));
+                co_return co_await keyspace_descriptions(snapshot, ks_meta, db.real_database(), _with_internals);
             } else {
                 co_return co_await describe_all_keyspace_elements(snapshot, db, ks, _with_internals);
             }
