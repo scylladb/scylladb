@@ -40,6 +40,8 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/net/tcp.hh>
+#include <map>
+#include <optional>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -71,6 +73,39 @@ auto get_metrics_value(sstring metric_name, const auto& all_metrics) {
         return x.mf.name == metric_name;
     });
     return all_metrics->values[distance(cbegin(all_metadata), m)].cbegin();
+}
+
+/// Value of the series of `metric_name` on this shard whose labels include all of `labels`.
+auto get_labelled_metrics_value(sstring metric_name, const std::map<sstring, sstring>& labels) -> std::optional<seastar::metrics::impl::metric_value> {
+    auto all_metrics = seastar::metrics::impl::get_values();
+    const auto& all_metadata = *all_metrics->metadata;
+    for (size_t family = 0; family < all_metadata.size(); ++family) {
+        if (all_metadata[family].mf.name != metric_name) {
+            continue;
+        }
+        const auto& series = all_metadata[family].metrics;
+        for (size_t i = 0; i < series.size(); ++i) {
+            if (std::ranges::all_of(labels, [&](const auto& l) {
+                    auto it = series[i].labels().find(l.first);
+                    return it != series[i].labels().end() && it->second.value() == l.second;
+                })) {
+                return all_metrics->values[family][i];
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+auto vs_requests(sstring op, sstring status) -> uint64_t {
+    auto v = get_labelled_metrics_value("vector_store_requests", {{"op", op}, {"status", status}});
+    BOOST_REQUIRE_MESSAGE(v, format("vector_store_requests{{op={},status={}}} is not registered", op, status));
+    return v->ui();
+}
+
+auto vs_gauge(sstring name) -> int64_t {
+    auto v = get_labelled_metrics_value(name, {});
+    BOOST_REQUIRE_MESSAGE(v, format("{} is not registered", name));
+    return v->i();
 }
 
 timeout_config make_query_timeout(std::chrono::seconds timeout) {
@@ -853,6 +888,102 @@ SEASTAR_TEST_CASE(vector_search_metrics_test) {
                 BOOST_CHECK_EQUAL(get_metrics_value("vector_store_dns_refreshes", metrics)->i(), 1);
             },
             cfg);
+}
+
+/// Every op/status series exists before the first request, and a request on a node
+/// without Vector Store URIs is counted as disabled.
+SEASTAR_TEST_CASE(vector_store_client_requests_metrics_disabled) {
+    co_await do_with_cql_env([](cql_test_env& env) -> future<> {
+        auto as = abort_source_timeout();
+        auto schema = co_await create_test_table(env, "ks", "vs");
+        auto& vs = env.vector_store_client().local();
+
+        for (auto op : {"ann", "bm25", "like", "highlight"}) {
+            for (auto status : {"ok", "disabled", "unavailable", "aborted", "bad_query", "forbidden", "index_not_found", "index_unservable", "index_not_ready",
+                         "service_error", "format_error"}) {
+                BOOST_CHECK_EQUAL(vs_requests(op, status), 0);
+            }
+        }
+        BOOST_CHECK_EQUAL(vs_gauge("vector_store_enabled"), 0);
+
+        auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+        BOOST_REQUIRE(!keys);
+        BOOST_CHECK_EQUAL(vs_requests("ann", "disabled"), 1);
+        BOOST_CHECK_EQUAL(vs_requests("bm25", "disabled"), 0);
+    });
+}
+
+/// Each reply of the Vector Store is counted under the status it maps to.
+SEASTAR_TEST_CASE(vector_store_client_requests_metrics_replies) {
+    auto server = co_await make_vs_mock_server();
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
+    co_await do_with_cql_env(
+            [&server](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto as = abort_source_timeout();
+                auto& vs = env.vector_store_client().local();
+                configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", server->host()}});
+                vs.start_background_tasks();
+
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                BOOST_REQUIRE(keys);
+                BOOST_CHECK_EQUAL(vs_requests("ann", "ok"), 1);
+                BOOST_CHECK_EQUAL(vs_gauge("vector_store_enabled"), 1);
+
+                struct reply_case {
+                    status_type status;
+                    sstring body;
+                    sstring want;
+                };
+                auto cases = std::vector<reply_case>{
+                        // 503 without NODE_BOOTSTRAPPING, as the Vector Store answers while an index is building.
+                        {status_type::service_unavailable, R"({"reason":"INDEX_BUILDING"})", "index_not_ready"},
+                        {status_type::bad_request, R"("ALLOW FILTERING required")", "bad_query"},
+                        {status_type::forbidden, R"("TLS is required")", "forbidden"},
+                        {status_type::not_found, R"("idx not found")", "index_not_found"},
+                        {status_type::unprocessable_entity, R"("unsupported column")", "index_unservable"},
+                        {status_type::internal_server_error, R"("boom")", "service_error"},
+                        // A 200 with a body the client cannot parse.
+                        {status_type::ok, R"({"primary_keys1":{}})", "format_error"},
+                };
+                for (const auto& c : cases) {
+                    server->next_ann_response({c.status, c.body});
+                    auto before = vs_requests("ann", c.want);
+                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                    BOOST_REQUIRE(!keys);
+                    BOOST_CHECK_MESSAGE(vs_requests("ann", c.want) == before + 1, format("HTTP {} not counted as {}", int(c.status), c.want));
+                }
+                BOOST_CHECK_EQUAL(vs_requests("ann", "ok"), 1);
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
+}
+
+/// A request to an endpoint that does not answer is counted as unavailable.
+SEASTAR_TEST_CASE(vector_store_client_requests_metrics_unavailable) {
+    auto cfg = make_config();
+    auto server = co_await make_unavailable_server();
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
+    co_await do_with_cql_env(
+            [&server](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "vs");
+                auto as = abort_source_timeout();
+                auto& vs = env.vector_store_client().local();
+                configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", server->host()}});
+                vs.start_background_tasks();
+
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK_EQUAL(vs_requests("ann", "unavailable"), 1);
+                BOOST_CHECK_EQUAL(vs_gauge("vector_store_enabled"), 1);
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
 }
 
 SEASTAR_TEST_CASE(vector_store_client_node_recovery_after_backoff) {
