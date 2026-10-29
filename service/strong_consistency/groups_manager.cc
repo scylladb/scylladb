@@ -263,6 +263,29 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // table starts with many tablets).
         .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
     };
+    // Tests may shrink the in-memory raft log, so that a follower with a stalled state
+    // machine reaches its bound after a few thousand small writes instead of ~21MB of
+    // them. The trailing part is half of the log: a follower which stopped taking
+    // entries stays reachable until its leader writes that much more, and with no
+    // snapshot transfer it is lost after that. A snapshot keeps at most
+    // snapshot_trailing entries as well, 200 by default, which small writes reach
+    // long before the byte limit, so that one is lifted. The value has to be at least
+    // twice max_command_size, or raft::server refuses the configuration.
+    //
+    // The threshold and the trailing part can be set on their own, e.g. for a follower
+    // whose log fills up below the threshold. A leader admits a command only once it
+    // fits into max_log_size, and frees room only by a snapshot at the threshold, so a
+    // node which may be a leader needs max_log_size - snapshot_threshold_log_size of at
+    // least max_command_size, or it can stop admitting commands for good.
+    auto& injector = utils::get_local_injector();
+    if (auto size = injector.inject_parameter<size_t>("sc_raft_max_log_size")) {
+        config.max_log_size = *size;
+        config.snapshot_threshold_log_size = injector.inject_parameter<size_t>("sc_raft_max_log_size", "snapshot_threshold_log_size")
+                .value_or(*size / 4 * 3);
+        config.snapshot_trailing_size = injector.inject_parameter<size_t>("sc_raft_max_log_size", "snapshot_trailing_size")
+                .value_or(*size / 2);
+        config.snapshot_trailing = std::numeric_limits<size_t>::max();
+    }
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config, std::move(server_stats));
 
