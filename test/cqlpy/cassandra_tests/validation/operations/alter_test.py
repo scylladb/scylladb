@@ -222,15 +222,17 @@ def testCreateAlterKeyspaces(cql, test_keyspace, this_dc):
 
     with create_keyspace(cql, "replication={ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }") as ks1:
         with create_keyspace(cql, "replication={ 'class' : 'SimpleStrategy', 'replication_factor' : 1 } AND durable_writes=false") as ks2:
+            # Scylla accepts durable_writes = false but ignores it and stores true.
+            dw = is_scylla(cql)
             assert_rows_ignoring_order_and_extra(execute(cql, ks1, "SELECT keyspace_name, durable_writes FROM system_schema.keyspaces"),
                [ks1, True],
-               [ks2, False])
+               [ks2, dw])
 
             execute(cql, ks1, "ALTER KEYSPACE %s WITH replication = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 } AND durable_writes=False")
             execute(cql, ks2, "ALTER KEYSPACE %s WITH durable_writes=true")
 
             assert_rows_ignoring_order_and_extra(execute(cql, ks1, "SELECT keyspace_name, durable_writes, replication FROM system_schema.keyspaces"),
-               [ks1, False, {"class": "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc: "1"}],
+               [ks1, dw, {"class": "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc: "1"}],
                [ks2, True, {"class": "org.apache.cassandra.locator.SimpleStrategy", "replication_factor": "1"}])
 
             assert_invalid_throw(cql, ks1, ConfigurationException, "CREATE TABLE %s.cf1 (a int PRIMARY KEY, b int) WITH compaction = { 'min_threshold' : 4 }")

@@ -666,7 +666,7 @@ SEASTAR_TEST_CASE(test_prepared_statement_is_not_invalidated_by_existing_keyspac
             e.execute_cql("create table tests.table1 (pk int primary key, c1 int);").get();
             auto id = e.prepare("select * from tests.table1;").get();
 
-            e.execute_cql("alter keyspace tests with durable_writes = false;").get();
+            e.execute_cql("alter keyspace tests with auto_repair_enabled = true;").get();
 
             BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, {}).get());
         });

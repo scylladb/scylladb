@@ -536,85 +536,31 @@ class TestCommitLog(Tester):
         """
         self._test_total_space_limit_of_commitlog(commitlog_segment_size_in_mb=5, commitlog_total_space_in_mb=30)
 
-    def test_alter_keyspace_durable_writes_false(self):
+    def test_alter_keyspace_durable_writes_false_is_ignored(self):
         """
-        Test 'CREATE KEYSPACE ... WITH durable_writes = false;'
-        The commitlog should not be used when durable_writes is false.
+        'ALTER KEYSPACE ... WITH durable_writes = false' is accepted but ignored:
+        the commitlog is still used, so all inserts survive an abrupt stop.
         """
         node1 = self.node1
         node1.set_configuration_options(batch_commitlog=True)
         node1.start()
         session = self.patient_cql_connection(node1)
 
-        logger.debug("Create keyspace")
         create_ks(session, "dw", 1)
-
-        logger.debug("Create table")
         session.execute("CREATE TABLE dw.cf(id int PRIMARY KEY)")
 
-        logger.debug("Set durable_writes")
-        session.execute("ALTER KEYSPACE dw WITH durable_writes = true")
-
-        logger.debug("Insert data")
         session.execute("INSERT INTO dw.cf(id) VALUES (1);")
         session.execute("INSERT INTO dw.cf(id) VALUES (2);")
 
-        logger.debug("Unset durable_writes")
         session.execute("ALTER KEYSPACE dw WITH durable_writes = false")
-
-        logger.debug("Insert data")
         session.execute("INSERT INTO dw.cf(id) VALUES (3);")
         session.execute("INSERT INTO dw.cf(id) VALUES (4);")
 
-        logger.debug("Stop node abruptly")
         node1.stop(gently=False)
-
-        logger.debug("Start node again")
         node1.start()
 
         session = self.patient_cql_connection(node1)
-        assert_all(session=session, query="SELECT * FROM dw.cf", expected=[[1], [2]], ignore_order=True)
-
-    def test_alter_keyspace_durable_writes_true(self):
-        """
-        Test 'ALTER KEYSPACE ... WITH durable_writes = true;'
-
-        After changing durable_writes from false to true, following inserts should
-        become persistent immediately.
-        """
-        node1 = self.node1
-        node1.set_configuration_options(batch_commitlog=True)
-        node1.start()
-        session = self.patient_cql_connection(node1)
-
-        logger.debug("Create keyspace")
-        create_ks(session, "dw", 1)
-
-        logger.debug("Create table")
-        session.execute("CREATE TABLE dw.cf(id int PRIMARY KEY);")
-
-        logger.debug("Unset durable_writes")
-        session.execute("ALTER KEYSPACE dw WITH durable_writes = false;")
-
-        logger.debug("Insert data")
-        session.execute("INSERT INTO dw.cf(id) VALUES (1);")
-        session.execute("INSERT INTO dw.cf(id) VALUES (2);")
-
-        logger.debug("Set durable_writes")
-        session.execute("ALTER KEYSPACE dw WITH durable_writes = true;")
-
-        logger.debug("Insert data")
-        session.execute("INSERT INTO dw.cf(id) VALUES (3);")
-        session.execute("INSERT INTO dw.cf(id) VALUES (4);")
-
-        logger.debug("Stop node abruptly")
-        node1.stop(gently=False)
-
-        logger.debug("Start node again")
-        node1.start()
-
-        session = self.patient_cql_connection(node1)
-        assert_all(session=session, query="SELECT * FROM dw.cf;", expected=[[3], [4]], ignore_order=True)
+        assert_all(session=session, query="SELECT * FROM dw.cf", expected=[[1], [2], [3], [4]], ignore_order=True)
 
     def prepare_big_mutation(self):
         self.prepare(batch_commitlog=True)

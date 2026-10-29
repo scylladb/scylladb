@@ -436,8 +436,8 @@ void ks_prop_defs::set_default_replication_strategy_class_option() {
     }
 }
 
-bool ks_prop_defs::get_durable_writes() const {
-    return get_boolean(KW_DURABLE_WRITES, true);
+bool ks_prop_defs::durable_writes_disabled() const {
+    return !get_boolean(KW_DURABLE_WRITES, true);
 }
 
 bool ks_prop_defs::has_keyspace_config_properties(const gms::feature_service& feat) const {
@@ -467,8 +467,8 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat.rack_list_rf;
     auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), {}, rack_list_enabled, uses_tablets);
     auto config_options = apply_config_updates({}, *this, feat);
-    return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
-            std::move(options), initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, std::nullopt, std::move(config_options));
+    return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc, std::move(options), initial_tablets, get_consistency_option(),
+            true /* durable_writes = false is ignored */, get_storage_options(), {}, std::nullopt, std::move(config_options));
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
@@ -489,7 +489,8 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
         options = old_options;
     }
     auto config_options = apply_config_updates(old->config_options(), *this, feat);
-    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt(), std::move(config_options));
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_consistency_option(),
+            true /* durable_writes = false is ignored */, get_storage_options(), {}, old->next_strategy_options_opt(), std::move(config_options));
 }
 
 namespace {
@@ -518,12 +519,8 @@ property_definitions::map_type ks_prop_defs::flattened() const {
         }
     }
 
-    for (auto kw : {ks_prop_defs::KW_DURABLE_WRITES}) {
-        if (auto val_opt = get_simple(kw)) {
-            // Use nested map for backwards compatibility, ks_prop_defs() constructor expects this.
-            add_prefixed_key(kw, std::map<sstring, sstring>({{sstring(kw), to_sstring(*val_opt)}}), result);
-        }
-    }
+    // durable_writes is ignored, so it is not forwarded: an older topology coordinator
+    // applying this payload would otherwise still honor false.
 
     return {result};
 }

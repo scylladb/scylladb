@@ -512,7 +512,9 @@ SEASTAR_TEST_CASE(test_alter_keyspace_mixing_config_and_non_tablets_legacy_prope
 
         e.execute_cql("ALTER KEYSPACE ks_cfg WITH durable_writes = false AND auto_repair_enabled = true").get();
 
-        BOOST_REQUIRE(!e.local_db().find_keyspace("ks_cfg").metadata()->durable_writes());
+        // durable_writes = false is accepted but ignored; the legacy property still routes
+        // the statement through the full rebuild path.
+        BOOST_REQUIRE(e.local_db().find_keyspace("ks_cfg").metadata()->durable_writes());
 
         with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
             db::cluster_config_manager::lookup_context ctx;

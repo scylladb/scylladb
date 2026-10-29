@@ -103,6 +103,9 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
 
     try {
         auto ksm = _attrs->as_ks_metadata(_name, *tmptr, feat, cfg);
+        if (_attrs->durable_writes_disabled()) {
+            warnings.push_back("durable_writes = false is ignored; the keyspace uses the commitlog.");
+        }
         m = service::prepare_new_keyspace_announcement(qp.db().real_database(), ksm, ts);
         // If the new keyspace uses tablets, as long as there are features
         // which aren't supported by tablets we want to warn the user that

@@ -1414,7 +1414,9 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
         next_strategy_options->erase("class");
     }
 
-    bool durable_writes = row.get_nonnull<bool>("durable_writes");
+    // durable_writes = false is ignored for CQL keyspaces, including ones stored before
+    // the option stopped being honored; internal keyspaces are not loaded from here.
+    constexpr bool durable_writes = true;
 
     data_dictionary::storage_options storage_opts;
     std::optional<unsigned> initial_tablets;

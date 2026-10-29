@@ -7,6 +7,7 @@
  */
 
 
+#include <ranges>
 #include <boost/test/tools/old/interface.hpp>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shard_id.hh>
@@ -2697,9 +2698,43 @@ SEASTAR_TEST_CASE(test_table_links_to_its_keyspace) {
         BOOST_REQUIRE_EQUAL(ks->metadata()->name(), "ks");
         BOOST_REQUIRE(ks->metadata()->durable_writes());
 
+        // durable_writes = false is accepted but ignored.
         e.execute_cql("alter keyspace ks with durable_writes = false;").get();
         BOOST_REQUIRE_EQUAL(table.get_keyspace(), &db.find_keyspace("ks"));
-        BOOST_REQUIRE(!table.as_data_dictionary().keyspace()->metadata()->durable_writes());
+        BOOST_REQUIRE(table.as_data_dictionary().keyspace()->metadata()->durable_writes());
+        BOOST_REQUIRE(table.durable_writes());
+    });
+}
+
+// Only CQL ignores durable_writes = false. Keyspace metadata built internally (local system
+// keyspaces, the object-storage page cache) must still turn the commitlog off for its tables.
+SEASTAR_TEST_CASE(test_internal_durable_writes_false_is_honored) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k int primary key, v int);").get();
+        auto& db = e.local_db();
+        auto& table = db.find_column_family("ks", "cf");
+        BOOST_REQUIRE(table.durable_writes());
+
+        auto apply = [&] (bool durable) {
+            const auto& old = *db.find_keyspace("ks").metadata();
+            auto ksm = make_lw_shared<data_dictionary::keyspace_metadata>(old.name(), old.strategy_name(), old.strategy_options(), old.initial_tablets(),
+                    old.consistency_option(), durable, old.cf_meta_data() | std::views::values | std::ranges::to<std::vector>(),
+                    old.user_types(), old.get_storage_options(), old.next_strategy_options_opt(), old.config_options());
+            locator::pending_token_metadata pending;
+            pending.assign(e.shared_token_metadata().local().make_token_metadata_ptr(e.local_token_metadata_ptr()->clone_async().get())).get();
+            auto changes = replica::database::prepare_update_keyspace_on_all_shards(e.db(), *ksm, pending).get();
+            e.db().invoke_on_all([&] (replica::database& db) {
+                db.update_keyspace(changes[this_shard_id()].release());
+            }).get();
+            pending.destroy().get();
+        };
+
+        apply(false);
+        BOOST_REQUIRE(!db.find_keyspace("ks").metadata()->durable_writes());
+        BOOST_REQUIRE(!table.durable_writes());
+
+        apply(true);
+        BOOST_REQUIRE(table.durable_writes());
     });
 }
 
