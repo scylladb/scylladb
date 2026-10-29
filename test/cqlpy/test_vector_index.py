@@ -661,6 +661,18 @@ def test_local_and_global_vector_indexes_on_same_column(cql, test_keyspace, scyl
         cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1, p2), v) USING 'sai'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'sai'")
 
+# A local vector index partitioned by a regular column serves that column only
+# within an ANN query, so in an ordinary query a restriction on it is filtered
+# as if no index covered the column.
+def test_local_vector_index_not_used_for_partition_column_restriction(cql, test_keyspace, scylla_only, skip_without_tablets):
+    schema = 'p int PRIMARY KEY, r int, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((r), v) USING 'vector_index'")
+        cql.execute(f"INSERT INTO {table} (p, r, v) VALUES (1, 5, [1, 2, 3])")
+        with pytest.raises(InvalidRequest, match="might involve data filtering"):
+            cql.execute(f"SELECT p, r FROM {table} WHERE p = 1 AND r = 5")
+        assert list(cql.execute(f"SELECT p, r FROM {table} WHERE p = 1 AND r = 5 ALLOW FILTERING")) == [(1, 5)]
+
 # Even with both local and global indexes, creating a second index of the
 # same locality on the same column should still be rejected as duplicate.
 def test_duplicate_global_vector_index_rejected(cql, test_keyspace, skip_on_scylla_vnodes):

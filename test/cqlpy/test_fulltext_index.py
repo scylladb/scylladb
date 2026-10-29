@@ -10,6 +10,7 @@
 # It does not test the actual indexing or querying behavior.
 ###############################################################################
 
+import json
 import pytest
 import re
 from test.pylib.skip_types import skip_env
@@ -423,6 +424,210 @@ def test_fulltext_index_if_not_exists_cross_column(cql, test_keyspace):
         rows = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name='{ks}' AND table_name='{cf}'"))
         assert len(rows) == 1
         assert rows[0].index_name == idx
+
+
+###############################################################################
+# Tests for local fulltext indexes
+#
+# A local fulltext index is created with
+#   CREATE CUSTOM INDEX ... ON t((k1, k2, ...), body) USING 'fulltext_index'
+# The inner parentheses list primary key or regular columns of the base table,
+# in any order. The full partition key is not required.
+# After them comes exactly one regular text, varchar or ascii column to index.
+###############################################################################
+
+LOCAL_SCHEMA = 'p1 text, p2 text, c1 text, c2 text, body text, s text static, r int, l list<int>, PRIMARY KEY ((p1, p2), c1, c2)'
+
+
+def index_options(cql, table, index_name):
+    ks, cf = table.split('.')
+    rows = list(cql.execute(
+        f"SELECT * FROM system_schema.indexes "
+        f"WHERE keyspace_name = '{ks}' AND table_name = '{cf}' AND index_name = '{index_name}'"
+    ))
+    assert len(rows) == 1
+    return rows[0].options
+
+
+def test_create_local_fulltext_index_accepts_primary_key_and_regular_columns(cql, test_keyspace):
+    """Any non-empty set of primary key or regular columns in any order is accepted before the indexed column."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        for keys in ["p1, p2", "p1, p2, c1, c2", "p1", "p2", "c1", "c2, p1", "r", "p1, r", "r, c1"]:
+            index_name = unique_name()
+            cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(({keys}), body) USING 'fulltext_index'")
+            cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+
+
+def test_create_local_fulltext_index_with_options(cql, test_keyspace):
+    """A local fulltext index accepts the same WITH OPTIONS as a global one."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        for keys in ["p1, p2", "c1", "c2, p1"]:
+            index_name = unique_name()
+            cql.execute(
+                f"CREATE CUSTOM INDEX {index_name} ON {table}(({keys}), body) USING 'fulltext_index' "
+                f"WITH OPTIONS = {{'analyzer': 'english'}}"
+            )
+            cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+
+
+def test_create_local_fulltext_index_on_ascii_column(cql, test_keyspace):
+    """A local fulltext index accepts an ascii target column."""
+    schema = 'p text, c text, body ascii, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p, c), body) USING 'fulltext_index'")
+
+
+@pytest.mark.parametrize("definition,message", [
+    pytest.param("((s), body)", "Local fulltext index definition must contain primary key or regular columns. Redundant column: s", id="static_in_parentheses"),
+    pytest.param("((nosuch), body)", "Local fulltext index definition must contain primary key or regular columns. Redundant column: nosuch", id="unknown_in_parentheses"),
+    pytest.param("((p1, p1), body)", "Duplicate column definition in local fulltext index: p1", id="duplicate_in_parentheses"),
+    pytest.param("((p1), c1)", "Creating a fulltext index requires a regular column, but column c1 is a clustering key column", id="clustering_target"),
+    pytest.param("((p1), s)", "Local indexes containing static columns are not supported.", id="static_target"),
+    pytest.param("((p1), r)", "Fulltext index is only supported on text, varchar, or ascii columns", id="int_target"),
+    pytest.param("((p1), body, r)", "Fulltext index must have exactly one target column", id="two_targets"),
+    pytest.param("((p1), body, body)", "Fulltext index must have exactly one target column", id="repeated_target"),
+    pytest.param("((p1))", "Local index definition must provide an indexed column, not just partition key", id="parentheses_only"),
+    pytest.param("((body), body)", "Local fulltext index cannot be partitioned by its indexed column body", id="indexed_column_in_parentheses"),
+    pytest.param("((l), body)", "Unsupported local fulltext index partition column l type", id="unsupported_type_in_parentheses"),
+])
+def test_create_local_fulltext_index_invalid_definition_fails(cql, test_keyspace, definition, message):
+    """Invalid local fulltext index definitions must be rejected with a message naming the problem."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        with pytest.raises(InvalidRequest, match=re.escape(message)):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}{definition} USING 'fulltext_index'")
+
+
+def test_local_fulltext_index_target_in_system_schema(cql, test_keyspace):
+    """A local index stores its target as JSON naming the column and the key columns, a global one stores the plain column name."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        local_idx = unique_name()
+        global_idx = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {local_idx} ON {table}((p1, c1), body) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX {global_idx} ON {table}(body) USING 'fulltext_index'")
+        local_options = index_options(cql, table, local_idx)
+        assert local_options['class_name'] == 'fulltext_index'
+        assert json.loads(local_options['target']) == {"tc": "body", "pk": ["p1", "c1"]}
+        global_options = index_options(cql, table, global_idx)
+        assert global_options['class_name'] == 'fulltext_index'
+        assert global_options['target'] == 'body'
+
+
+def test_local_fulltext_index_with_regular_column_target_in_system_schema(cql, test_keyspace):
+    """A regular column inside the parentheses is stored among the key columns of the target."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}((r, p1), body) USING 'fulltext_index'")
+        assert json.loads(index_options(cql, table, index_name)['target']) == {"tc": "body", "pk": ["r", "p1"]}
+
+
+def test_describe_local_fulltext_index(cql, test_keyspace):
+    """DESCRIBE INDEX of a local fulltext index lists the key columns in their own parentheses before the indexed column."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}((p1, c1), body) USING 'fulltext_index'")
+        desc_stmt = cql.execute(f"DESCRIBE INDEX {test_keyspace}.{index_name}").one().create_statement
+        expected_desc_pattern = (
+            rf"CREATE CUSTOM INDEX {re.escape(index_name)} "
+            rf"ON {re.escape(table)}\(\(p1, c1\), body\) "
+            r"USING 'fulltext_index';?"
+        )
+        assert re.fullmatch(expected_desc_pattern, desc_stmt)
+
+
+def test_describe_local_fulltext_index_round_trip(cql, test_keyspace):
+    """The statement DESCRIBE INDEX prints for a local fulltext index recreates the same index on an identical table."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table1, new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table2:
+        index1 = unique_name()
+        index2 = unique_name()
+        cql.execute(
+            f"CREATE CUSTOM INDEX {index1} ON {table1}((c2, p1), body) USING 'fulltext_index' "
+            f"WITH OPTIONS = {{'analyzer': 'english'}}"
+        )
+        desc1 = cql.execute(f"DESCRIBE INDEX {test_keyspace}.{index1}").one().create_statement
+        recreate_stmt = desc1.replace(table1, table2).replace(index1, index2)
+        cql.execute(recreate_stmt)
+        desc2 = cql.execute(f"DESCRIBE INDEX {test_keyspace}.{index2}").one().create_statement
+        assert desc2 == recreate_stmt
+        assert json.loads(index_options(cql, table2, index2)['target']) == {"tc": "body", "pk": ["c2", "p1"]}
+
+
+def test_local_fulltext_index_on_case_sensitive_columns(cql, test_keyspace):
+    """Quoted, case-sensitive column names work in local and global fulltext indexes, are described quoted and are stored unquoted."""
+    schema = '"P" text, c text, "Body" text, PRIMARY KEY (("P"), c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        local_idx = unique_name()
+        global_idx = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {local_idx} ON {table}((\"P\"), \"Body\") USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX {global_idx} ON {table}(\"Body\") USING 'fulltext_index'")
+        local_desc = cql.execute(f"DESCRIBE INDEX {test_keyspace}.{local_idx}").one().create_statement
+        assert f"ON {table}((\"P\"), \"Body\") USING 'fulltext_index'" in local_desc
+        global_desc = cql.execute(f"DESCRIBE INDEX {test_keyspace}.{global_idx}").one().create_statement
+        assert f"ON {table}(\"Body\") USING 'fulltext_index'" in global_desc
+        assert json.loads(index_options(cql, table, local_idx)['target']) == {"tc": "Body", "pk": ["P"]}
+
+
+def test_local_and_global_fulltext_index_on_same_column_coexist(cql, test_keyspace):
+    """An unnamed local and an unnamed global fulltext index on the same column do not count as duplicates."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        ks, cf = table.split(".")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(body) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}((p1), body) USING 'fulltext_index'")
+        rows = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name='{ks}' AND table_name='{cf}'"))
+        assert len(rows) == 2
+
+
+def test_create_local_fulltext_index_if_not_exists(cql, test_keyspace):
+    """IF NOT EXISTS on a repeated unnamed local fulltext index silently succeeds without creating a duplicate."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        ks, cf = table.split(".")
+        cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ON {table}((p1, c1), body) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ON {table}((p1, c1), body) USING 'fulltext_index'")
+        rows = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name='{ks}' AND table_name='{cf}'"))
+        assert len(rows) == 1
+
+
+def test_drop_column_with_local_fulltext_index_fails(cql, test_keyspace):
+    """The indexed column of a local fulltext index cannot be dropped until the index is dropped."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}((p1, c1), body) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match=f"Cannot drop column body from base table {table} because it has dependent indexes \\({index_name}\\)"):
+            cql.execute(f"ALTER TABLE {table} DROP body")
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        cql.execute(f"ALTER TABLE {table} DROP body")
+
+
+def test_rename_key_column_of_local_fulltext_index_fails(cql, test_keyspace):
+    """A clustering column named in the parentheses of a local fulltext index cannot be renamed until the index is dropped."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}((p1, c1), body) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match=f"Cannot rename column c1 because it has dependent secondary indexes \\({index_name}\\)"):
+            cql.execute(f"ALTER TABLE {table} RENAME c1 TO c3")
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        cql.execute(f"ALTER TABLE {table} RENAME c1 TO c3")
+
+
+def test_drop_regular_key_column_of_local_fulltext_index_fails(cql, test_keyspace):
+    """A regular column named in the parentheses of a local fulltext index cannot be dropped until the index is dropped."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}((r), body) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match=f"Cannot drop column r from base table {table} because it has dependent indexes \\({index_name}\\)"):
+            cql.execute(f"ALTER TABLE {table} DROP r")
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        cql.execute(f"ALTER TABLE {table} DROP r")
+
+
+def test_drop_local_fulltext_index(cql, test_keyspace):
+    """DROP INDEX on a local fulltext index should succeed and remove its metadata."""
+    with new_test_table(cql, test_keyspace, LOCAL_SCHEMA) as table:
+        ks, cf = table.split(".")
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}((p1, c1), body) USING 'fulltext_index'")
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        rows = list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name='{ks}' AND table_name='{cf}'"))
+        assert len(rows) == 0
 
 
 ###############################################################################

@@ -229,7 +229,7 @@ search_schema_info get_search_schema_info(const index_metadata& index);
 /// Recover the name of the attribute which a vector index indexes, from the
 /// "tc" of the index's stored "target" option, as written by
 /// build_vector_index_target().
-/// This is used instead of the CQL-side vector_index::get_target_column(),
+/// This is used instead of the CQL-side external_index::get_target_column(),
 /// which for a target which isn't this JSON quietly falls back to unescaping
 /// it as a CQL target - which for Alternator would yield a mangled attribute
 /// name. Such a target is a bug, so we'd rather catch it.
