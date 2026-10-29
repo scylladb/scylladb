@@ -248,6 +248,8 @@ class group0_state_machine : public raft_state_machine {
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
     future<> reload_state();
+    // Persists the topology and raft parts of a transferred snapshot.
+    future<> persist_snapshot_state(std::optional<service::raft_snapshot> topology_snp, std::optional<service::raft_snapshot> raft_snp);
     future<> sync_audit_known_entities();
     future<> do_reload_schema_dependent_state();
 public:

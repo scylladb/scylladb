@@ -801,17 +801,17 @@ future<> storage_service::finish_topology_state_change(topology_state_change& ch
     slogger.debug("topology_state_load: excluded tablet nodes: {}", topology.excluded_tablet_nodes);
 }
 
-future<> storage_service::topology_state_load(state_change_hint hint) {
+future<> storage_service::topology_state_load() {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    db::schema_tables::schema_applier ap(_qp.proxy().container(), container(), _sys_ks, std::move(hint));
+    db::schema_tables::schema_applier ap(_qp.proxy().container(), container(), _sys_ks, state_change_hint{});
     co_await ap.apply_persisted().finally([&ap] {
         return ap.destroy();
     });
 }
 
-future<> storage_service::topology_transition(state_change_hint hint) {
+future<> storage_service::topology_transition() {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    co_await topology_state_load(std::move(hint)); // reload new state
+    co_await topology_state_load(); // reload new state
     _topology_state_machine.event.broadcast();
 }
 

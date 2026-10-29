@@ -30,6 +30,7 @@
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "service/storage_service.hh"
+#include "db/schema_applier.hh"
 #include "idl/storage_service.dist.hh"
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
@@ -338,59 +339,82 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     // If we crash before appending the state ID, when we reapply the command after restart, the change will be applied because
     // the state ID was not yet appended so the above check will pass.
 
+    bool state_change = false;
     std::optional<storage_service::state_change_hint> topology_state_change_hint;
     modules_to_reload modules_to_reload;
+    utils::chunked_vector<canonical_mutation>* mutations = nullptr;
 
-    co_await std::visit(make_visitor(
-    [&] (schema_change& chng) -> future<> {
+    std::visit(make_visitor(
+    [&] (schema_change& chng) {
         modules_to_reload = get_modules_to_reload(chng.mutations);
-        if (_in_memory_state_machine_enabled) {
-            co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
-        } else {
-            // Just write the mutations to system_schema tables without
-            // creating in-memory keyspace/table representations.
-            // This is used during early raft log replay before non-system
-            // keyspaces are loaded.
-            co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
-        }
+        state_change = true;
+        mutations = &chng.mutations;
     },
-    [] (unused&) -> future<> {
+    [] (unused&) {
         slogger.warn("Ignoring unused group0 command");
-        co_return;
     },
-    [&] (topology_change& chng) -> future<> {
+    [&] (topology_change& chng) {
         modules_to_reload = get_modules_to_reload(chng.mutations);
+        state_change = true;
         // Only system.tablets mutations change the tablet metadata, so the hint describes
         // all of its changes, also when it is empty. It is always engaged here.
         topology_state_change_hint = {.tablets_hint = replica::get_tablet_metadata_change_hint(chng.mutations)};
-        co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
+        mutations = &chng.mutations;
     },
-    [&] (mixed_change& chng) -> future<> {
+    [&] (mixed_change& chng) {
         modules_to_reload = get_modules_to_reload(chng.mutations);
+        state_change = true;
         topology_state_change_hint.emplace();
-        if (_in_memory_state_machine_enabled) {
-            co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
-        } else {
-            co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
-        }
+        mutations = &chng.mutations;
     },
-    [&] (write_mutations& muts) -> future<> {
+    [&] (write_mutations& muts) {
         modules_to_reload = get_modules_to_reload(muts.mutations);
-        co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(muts.mutations));
+        mutations = &muts.mutations;
     }
     ), cmd.change);
 
-    // The mutations are now readable from the tables, but the in-memory state they
-    // describe is only rebuilt below. Lets a test hold the command in that window.
-    co_await utils::get_local_injector().inject("group0_pause_before_topology_transition",
-            utils::wait_for_message(std::chrono::minutes(5)), false);
-
-    if (_in_memory_state_machine_enabled) {
-        if (topology_state_change_hint) {
-            co_await _ss.topology_transition(std::move(*topology_state_change_hint));
+    // The schema applier builds the in-memory schema, topology, token metadata and
+    // effective replication maps from the persisted state and commits them together.
+    // Before non-system keyspaces are loaded (early raft log replay) the mutations
+    // are only persisted.
+    std::unique_ptr<db::schema_tables::schema_applier> applier;
+    if (state_change && _in_memory_state_machine_enabled) {
+        applier = std::make_unique<db::schema_tables::schema_applier>(_sp.container(), _ss.container(), _ss._sys_ks, topology_state_change_hint);
+    }
+    std::exception_ptr ex;
+    try {
+        if (mutations) {
+            auto muts = co_await to_mutations(_sp, cmd.creator_addr, std::move(*mutations));
+            if (applier) {
+                // Captures the persisted schema state before the mutations are applied.
+                co_await applier->prepare(muts);
+            }
+            co_await write_mutations_to_database(_ss, _sp, std::move(muts));
         }
-        co_await utils::get_local_injector().inject("group0_state_machine_pause_before_reload_modules", utils::wait_for_message(60s));
-        co_await reload_modules(std::move(modules_to_reload));
+
+        // The mutations are now readable from the tables, but the in-memory state they
+        // describe is only rebuilt below. Lets a test hold the command in that window.
+        co_await utils::get_local_injector().inject("group0_pause_before_topology_transition",
+                utils::wait_for_message(std::chrono::minutes(5)), false);
+
+        if (applier) {
+            co_await applier->apply_persisted();
+        }
+        if (_in_memory_state_machine_enabled) {
+            if (topology_state_change_hint) {
+                _ss._topology_state_machine.event.broadcast();
+            }
+            co_await utils::get_local_injector().inject("group0_state_machine_pause_before_reload_modules", utils::wait_for_message(60s));
+            co_await reload_modules(std::move(modules_to_reload));
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (applier) {
+        co_await applier->destroy();
+    }
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
     }
 
     co_await _sp.mutate_locally({std::move(history)}, nullptr);
@@ -638,27 +662,69 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(as);
 
+    // The schema in the snapshot is applied to memory together with the topology
+    // in it, once both are persisted.
+    std::unique_ptr<db::schema_tables::schema_applier> applier;
     if (_in_memory_state_machine_enabled) {
-        try {
-            co_await _mm.merge_schema_from(hid, std::move(*cm));
+        applier = std::make_unique<db::schema_tables::schema_applier>(_sp.container(), _ss.container(), _ss._sys_ks, storage_service::state_change_hint{});
+    }
+    std::exception_ptr ex;
+    bool persisted = false;
+    try {
+        auto mutations = co_await to_mutations(_sp, gms::inet_address{}, std::move(*cm));
+        if (applier) {
+            co_await applier->prepare(mutations);
+            // The schema is written as one commitlog batch, so a crash persists either
+            // all of it or none of it. Unlike a command, the snapshot is not replayed
+            // from the raft log on restart.
+            utils::chunked_vector<frozen_mutation> frozen;
+            frozen.reserve(mutations.size());
+            for (const auto& m : mutations) {
+                frozen.push_back(co_await freeze_gently(m));
+            }
+            co_await _sp.get_db().local().apply(frozen, db::no_timeout);
+        } else {
+            co_await write_mutations_to_database(_ss, _sp, std::move(mutations));
+        }
+        persisted = true;
+        co_await persist_snapshot_state(std::move(topology_snp), std::move(raft_snp));
+        if (applier) {
             // Lets a test fail the snapshot transfer after the snapshot is persisted,
             // but before the in-memory state is updated from it.
             co_await utils::get_local_injector().inject("group0_snapshot_transfer_apply_fail", [] {
-                return std::make_exception_ptr(db::schema_tables::schema_persisted_but_not_applied());
+                return std::make_exception_ptr(std::runtime_error("injected failure in applying the transferred group 0 snapshot"));
             });
-        } catch (const db::schema_tables::schema_persisted_but_not_applied&) {
-            // Raft retries a failed snapshot transfer, but the retry finds the schema
-            // already persisted and does not update the in-memory schema. Stop the
-            // group 0 server, as raft does when apply() fails.
-            slogger.error("The group 0 snapshot from {} was persisted, but applying it to the in-memory state failed: {:t}. Stopping group 0.", hid, std::current_exception());
-            fail();
-            _on_fatal_error(std::current_exception());
-            throw;
+            co_await applier->apply_persisted();
         }
-    } else {
-        co_await write_mutations_to_database(_ss, _sp, gms::inet_address{}, std::move(*cm));
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (applier) {
+        co_await applier->destroy();
+    }
+    if (ex) {
+        if (applier && persisted && !_abort_source.abort_requested()) {
+            // Raft retries a failed snapshot transfer, but the retry finds the snapshot
+            // already persisted and does not update the in-memory state. Stop the
+            // group 0 server, as raft does when apply() fails. A failure caused by
+            // shutdown is not fatal: the state is reloaded from disk after the restart.
+            slogger.error("The group 0 snapshot from {} was persisted, but applying it to the in-memory state failed: {:t}. Stopping group 0.", hid, ex);
+            fail();
+            _on_fatal_error(ex);
+        }
+        std::rethrow_exception(std::move(ex));
     }
 
+    co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
+
+    slogger.info("transfer snapshot from {} index {} snp id {} completed", hid, snp.idx, snp.id);
+  } catch (const abort_requested_exception&) {
+    throw raft::request_aborted(fmt::format(
+        "Abort requested while transferring snapshot from ID: {}, snapshot descriptor id: {}, snapshot index: {}", from_id, snp.id, snp.idx));
+  }
+}
+
+future<> group0_state_machine::persist_snapshot_state(std::optional<service::raft_snapshot> topology_snp, std::optional<service::raft_snapshot> raft_snp) {
     if (topology_snp && !topology_snp->mutations.empty()) {
         co_await _ss.merge_topology_snapshot(std::move(*topology_snp));
         // Flush so that current supported and enabled features are readable before commitlog replay
@@ -681,14 +747,6 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     }
 
     co_await notify_client_route_change_if_needed(_ss, client_routes_update);
-
-    co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
-
-    slogger.info("transfer snapshot from {} index {} snp id {} completed", hid, snp.idx, snp.id);
-  } catch (const abort_requested_exception&) {
-    throw raft::request_aborted(fmt::format(
-        "Abort requested while transferring snapshot from ID: {}, snapshot descriptor id: {}, snapshot index: {}", from_id, snp.id, snp.idx));
-  }
 }
 
 future<> group0_state_machine::abort() {

@@ -964,10 +964,9 @@ private:
         std::optional<locator::tablet_metadata_change_hint> tablets_hint;
     };
 
-    // This is called on all nodes for each new command received through raft
+    // Reloads the topology state from disk and notifies its listeners.
     // raft_group0_client::_read_apply_mutex must be held
-    // Precondition: the topology mutations were already written to disk; the function only transitions the in-memory state machine.
-    future<> topology_transition(state_change_hint hint = {});
+    future<> topology_transition();
     
     // This is called on all nodes for each new command related to tablet-view-building, received through raft
     // raft_group0_client::_read_apply_mutex must be held
@@ -1135,7 +1134,7 @@ private:
     future<> finish_topology_state_change(topology_state_change& change);
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
-    future<> topology_state_load(state_change_hint hint = {});
+    future<> topology_state_load();
     // Applies received raft snapshot to local state machine persistent storage
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_snapshot snp);
