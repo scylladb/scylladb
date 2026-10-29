@@ -267,9 +267,12 @@ fn create_engine(max_size: u32) -> Result<Box<Engine>> {
         max_size as usize,
     )));
     // The following configuration settings make wasmtime allocate only as much memory as it needs
-    config.static_memory_maximum_size(0);
-    config.dynamic_memory_reserved_for_growth(0);
-    config.dynamic_memory_guard_size(0);
+    config.memory_reservation(0);
+    config.memory_reservation_for_growth(0);
+    config.memory_guard_size(0);
+    // Copy-on-write memory initialization requires mmap-based memories,
+    // but ScyllaMemoryCreator allocates memory with malloc
+    config.memory_init_cow(false);
     config.max_wasm_stack(128 * 1024);
     config.async_stack_size(256 * 1024);
 
@@ -290,9 +293,12 @@ fn create_test_engine(max_size: u32, fail_after: usize) -> Result<Box<Engine>> {
         fail_after,
     )));
     // The following configuration settings make wasmtime allocate only as much memory as it needs
-    config.static_memory_maximum_size(0);
-    config.dynamic_memory_reserved_for_growth(0);
-    config.dynamic_memory_guard_size(0);
+    config.memory_reservation(0);
+    config.memory_reservation_for_growth(0);
+    config.memory_guard_size(0);
+    // Copy-on-write memory initialization requires mmap-based memories,
+    // but ScyllaMemoryCreator allocates memory with malloc
+    config.memory_init_cow(false);
     config.max_wasm_stack(128 * 1024);
     config.async_stack_size(256 * 1024);
 
@@ -335,6 +341,8 @@ impl Val {
             wasmtime::Val::FuncRef(_) => Ok(ffi::ValKind::FuncRef),
             wasmtime::Val::ExternRef(_) => Ok(ffi::ValKind::ExternRef),
             wasmtime::Val::AnyRef(_) => Ok(ffi::ValKind::AnyRef),
+            // Exception references require the exceptions proposal, which we don't enable
+            wasmtime::Val::ExnRef(_) => Err(anyhow!("Unsupported value kind: exnref")),
         }
     }
     fn i32(&self) -> Result<i32> {

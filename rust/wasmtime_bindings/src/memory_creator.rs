@@ -7,7 +7,6 @@
  */
 
 use anyhow::{anyhow, Result};
-use std::ops::Range;
 use std::ffi::c_void;
 use std::{cmp, ptr};
 use wasmtime::LinearMemory;
@@ -41,8 +40,9 @@ unsafe impl LinearMemory for ScyllaLinearMemory {
     fn byte_size(&self) -> usize {
         self.size
     }
-    fn maximum_byte_size(&self) -> Option<usize> {
-        self.maximum_size
+    // grow_to() always reallocates, so there is no spare capacity
+    fn byte_capacity(&self) -> usize {
+        self.size
     }
     fn grow_to(&mut self, new_size: usize) -> Result<()> {
         let new_size_maybe_extra_page = new_size.checked_add(WASM_PAGE_SIZE - 1).ok_or(anyhow!(
@@ -91,12 +91,12 @@ unsafe impl LinearMemory for ScyllaLinearMemory {
         Ok(())
     }
     fn as_ptr(&self) -> *mut u8 {
-        self.ptr
-    }
-    fn wasm_accessible(&self) -> Range<usize> {
-        Range {
-            start: self.ptr as usize,
-            end: self.ptr as usize + self.size,
+        // An empty memory has no allocation, but wasmtime requires a non-null,
+        // page-aligned pointer, so return a dangling one - it is never dereferenced.
+        if self.ptr.is_null() {
+            ptr::without_provenance_mut(WASM_PAGE_SIZE)
+        } else {
+            self.ptr
         }
     }
 }
@@ -123,7 +123,7 @@ unsafe impl wasmtime::MemoryCreator for ScyllaMemoryCreator {
     ) -> Result<Box<dyn wasmtime::LinearMemory>, String> {
         // assert that this is a memory that only allocates as much as it needs
         assert_eq!(guard_size_in_bytes, 0);
-        assert!(reserved_size_in_bytes.is_none());
+        assert_eq!(reserved_size_in_bytes.unwrap_or(0), 0);
         assert!(!ty.is_64());
         let max_size = std::cmp::min(
             self.max_scylla_size,
