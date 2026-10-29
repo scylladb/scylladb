@@ -59,6 +59,7 @@
 #include "service/strong_consistency/coordinator.hh"
 #include "service/strong_consistency/groups_manager.hh"
 #include "gms/gossiper.hh"
+#include "db/schema_applier.hh"
 
 #include <boost/regex.hpp>
 #include <atomic>
@@ -66,13 +67,20 @@
 #include "cql3/query_processor.hh"
 
 namespace service {
-// Test access to the private storage_service::topology_state_load()
+// Test access to the private storage_service::state_change_hint
 // (friend declaration in storage_service.hh).
 struct topology_state_load_test_access {
-    static future<> reload(storage_service& ss, topology_change_hint::scope scope) {
+    // Applies a change without mutations through the schema applier, which
+    // reloads the topology state within the given scope.
+    static void reload(cql_test_env& e, topology_change_hint::scope scope) {
         storage_service::state_change_hint hint;
         hint.topology_hint = topology_change_hint{.reload_scope = scope};
-        return ss.topology_state_load(std::move(hint));
+        db::schema_tables::schema_applier ap(e.get_storage_proxy(), e.get_storage_service(), e.get_system_keyspace(), std::move(hint));
+        utils::chunked_vector<mutation> muts;
+        ap.prepare(muts).get();
+        ap.apply_persisted().finally([&ap] {
+            return ap.destroy();
+        }).get();
     }
 };
 }
@@ -1536,8 +1544,7 @@ SEASTAR_TEST_CASE(test_topology_state_load_tablets_only_reload_with_left_nodes_r
         topology.left_nodes_rs.emplace(h_leaving, replica_state{});
         topology.excluded_tablet_nodes.insert(h_leaving);
 
-        service::topology_state_load_test_access::reload(e.get_storage_service().local(),
-                service::topology_change_hint::scope::tablets_only).get();
+        service::topology_state_load_test_access::reload(e, service::topology_change_hint::scope::tablets_only);
 
         BOOST_REQUIRE_EQUAL(topology.tablet_balancing_enabled, flipped);
         BOOST_REQUIRE(!topology.left_nodes_rs.contains(h_leaving));
@@ -1545,8 +1552,7 @@ SEASTAR_TEST_CASE(test_topology_state_load_tablets_only_reload_with_left_nodes_r
 
         // Restore state so token metadata is consistent for teardown.
         topology.tablet_balancing_enabled = !flipped;
-        service::topology_state_load_test_access::reload(e.get_storage_service().local(),
-                service::topology_change_hint::scope::tablets_only).get();
+        service::topology_state_load_test_access::reload(e, service::topology_change_hint::scope::tablets_only);
     }, tablet_cql_test_config());
 }
 
