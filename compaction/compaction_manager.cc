@@ -2874,6 +2874,24 @@ const std::unordered_set<sstables::shared_sstable>& compaction_manager::sstables
     return cs.sstables_requiring_cleanup();
 }
 
+future<> compaction_manager::check_quarantined_sstables_requiring_cleanup(compaction_group_view& t, const dht::token_range_vector& sorted_owned_ranges) {
+    std::vector<sstables::shared_sstable> quarantined;
+    auto collect = [&] (lw_shared_ptr<const sstables::sstable_set> set) -> future<> {
+        co_await set->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) {
+            if (sst->is_quarantined() && needs_cleanup(sst, sorted_owned_ranges)) {
+                quarantined.push_back(sst);
+            }
+        });
+    };
+    co_await collect(co_await t.main_sstable_set());
+    co_await collect(co_await t.maintenance_sstable_set());
+    if (!quarantined.empty()) {
+        auto msg = ::format("cleanup request failed: {} has quarantined sstables requiring cleanup, scrub or drop them first: {}", t, quarantined);
+        cmlog.error("{}", msg);
+        co_await coroutine::return_exception(std::runtime_error(std::move(msg)));
+    }
+}
+
 future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info) {
     auto gh = start_compaction(t);
     if (!gh) {
@@ -2884,6 +2902,30 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     constexpr auto max_idle_duration = std::chrono::seconds(300);
     auto& cs = get_compaction_state(&t);
 
+    // Reject a concurrent cleanup before touching the compaction state:
+    // calculate_sstables_cleanup_state() rewrites sstables_requiring_cleanup
+    // and the cleanup owned ranges, which the ongoing cleanup is still using.
+    // The marker is held until we return, so it also covers the waits
+    // between compaction tasks below, when no cleanup task is registered
+    // in _tasks.
+    if (cs.cleanup_in_progress) {
+        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}", t));
+    }
+    cs.cleanup_in_progress = true;
+    auto clear_cleanup_in_progress = defer([&cs] noexcept { cs.cleanup_in_progress = false; });
+
+    // A quarantined sstable is never eligible for compaction, so a cleanup
+    // that samples one can only wait for the idle timeout and fail.  Fail
+    // right away instead, naming the sstables, so the operator can scrub or
+    // drop them.  Check before disabling compaction below, so that retried
+    // cleanup requests do not keep interrupting such a scrub.
+    co_await check_quarantined_sstables_requiring_cleanup(t, *sorted_owned_ranges);
+
+    // Sample the sstables requiring cleanup only once. Sstables added to the
+    // table after this point (e.g. flushed while waiting for staging sstables
+    // below) are not cleaned up by this invocation; the caller flushes the
+    // table before calling us, so they contain only data written since then.
+    co_await calculate_sstables_cleanup_state(sorted_owned_ranges, t);
     co_await try_perform_cleanup(sorted_owned_ranges, t, info);
     auto last_idle = seastar::lowres_clock::now();
 
@@ -2919,16 +2961,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     }
 }
 
-future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info) {
-    auto check_for_cleanup = [this, &t] {
-        return std::ranges::any_of(_tasks, [&t] (auto& task) {
-            return task.compacting_table() == &t && task.compaction_type() == compaction_type::Cleanup;
-        });
-    };
-    if (check_for_cleanup()) {
-        throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}", t));
-    }
-
+future<> compaction_manager::calculate_sstables_cleanup_state(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t) {
     auto& cs = get_compaction_state(&t);
     co_await run_with_compaction_disabled(t, [&] () -> future<> {
         auto update_sstables_cleanup_state = [&] (lw_shared_ptr<const sstables::sstable_set> set) -> future<> {
@@ -2949,7 +2982,10 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
             cs.set_cleanup_owned_ranges(std::move(sorted_owned_ranges));
         }
     }, "cleanup");
+}
 
+future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info) {
+    auto& cs = get_compaction_state(&t);
     if (!cs.has_sstables_requiring_cleanup()) {
         cmlog.debug("perform_cleanup for {} found no sstables requiring cleanup", t);
         co_return;
