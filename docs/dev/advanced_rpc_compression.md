@@ -252,16 +252,35 @@ Switching dictionaries should be cheaper than keeping multiple copies of the com
 
 ### Wire protocol details
 
-This section describes the layout of a compressed frame produced by `advanced_rpc_compressor::compress()`.
+This section describes the layout of a compressed frame produced by `advanced_rpc_compressor`.
 
-The compression algorithm is selected on per-message basis.
-(Rationale: this allows the sender to weaken the compression unilaterally if it doesn't have the resources for the "normal" algorithm.)
-The 7 least significant bits of byte 0 of each compressed message
-contain an enum value describing the compression algorithm used for this message.
+The format is identified by the RPC compressor name, `SCYLLA_V4`.
+(The previous version, `SCYLLA_V3`, is the same, except that a frame always has exactly one segment.
+It isn't supported anymore. Connections between nodes which support different versions fall back
+to Seastar's LZ4_FRAGMENTED compressor.)
 
-The most significant bit of byte 0 tells if there is a control (negotiation)
-header present. If this bit is set, then bytes 1-133 contain a packed `control_protocol_frame` struct,
-carrying the negotiation protocol described earlier. See `control_protocol_frame::serialize()` for details.
+A compressed frame consists of one or more segments. A large message can be split into several segments.
+(Rationale: compressing a large message in one go stalls the reactor. Each segment is compressed
+as a complete, independent frame of the underlying algorithm, so the sender can yield between segments
+without holding a compression context, and the receiver can do the same when decompressing.)
 
-After byte 0 and the optional negotiation header, the rest of the message contains the actual contents
-of the RPC frame, compressed with the selected algorithm. The details of this part are different for each algorithm.
+Each segment has the following layout:
+
+1. Byte 0. Bits 0-4 contain an enum value describing the compression algorithm used for this segment.
+   Bit 5 (`0x20`) is set if another segment follows this one.
+   Bit 6 (`0x40`) is set if a checksum is present.
+   Bit 7 (`0x80`) is set if a control (negotiation) header is present.
+2. If bit 6 is set: the CRC32 of the uncompressed contents of this segment, as a 4-byte little-endian integer.
+3. If bit 7 is set: a packed `control_protocol_frame` struct, carrying the negotiation protocol described earlier.
+   See `control_protocol_frame::serialize()` for details. Only the first segment of a message may contain it.
+4. If bit 5 is set: the length of the compressed contents of this segment, as a 4-byte little-endian integer.
+5. The compressed contents of this segment. If bit 5 is not set, they extend to the end of the frame.
+   The details of this part are different for each algorithm.
+
+The compression algorithm is selected on a per-segment basis.
+(Rationale: this allows the sender to weaken the compression unilaterally if it doesn't have the resources for the "normal" algorithm,
+even in the middle of a large message.)
+
+The control header is produced once per message, before the first segment is compressed,
+and consumed once per message, before the first segment is decompressed.
+The dictionary which it selects is used for all segments of the message.

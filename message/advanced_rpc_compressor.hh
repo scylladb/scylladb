@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/preempt.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <utility>
 #include "utils/refcounted.hh"
@@ -24,6 +25,8 @@ class zstd_cstream;
 class zstd_dstream;
 class stream_compressor;
 class stream_decompressor;
+class snd_buf_cursor;
+class rcv_buf_reader;
 class dict_sampler;
 using dict_ptr = lw_shared_ptr<foreign_ptr<lw_shared_ptr<shared_dict>>>;
 class control_protocol_frame;
@@ -168,6 +171,9 @@ public:
     compression_algorithm sender_current_algorithm() const noexcept;
     const shared_dict& sender_current_dict() const noexcept;
     const shared_dict& receiver_current_dict() const noexcept;
+    // These keep the dict alive, so that a message can use it across preemption points.
+    dict_ptr sender_current_dict_ptr() const noexcept;
+    dict_ptr receiver_current_dict_ptr() const noexcept;
 };
 
 class advanced_rpc_compressor final : public rpc::compressor {
@@ -193,20 +199,38 @@ private:
     std::function<future<>()> _send_empty_frame;
     future<> _progress_fiber;
 
-    // These return global compression contexts (for non-streaming compression modes), lazily initializing them.
-    zstd_dstream& get_global_zstd_dstream();
-    zstd_cstream& get_global_zstd_cstream();
-    lz4_dstream& get_global_lz4_dstream();
-    lz4_cstream& get_global_lz4_cstream();
+    // These return global compression contexts (for non-streaming compression modes), lazily initializing them,
+    // and plug the given dict into them.
+    zstd_dstream& get_global_zstd_dstream(const shared_dict&);
+    zstd_cstream& get_global_zstd_cstream(const shared_dict&);
+    lz4_dstream& get_global_lz4_dstream(const shared_dict&);
+    lz4_cstream& get_global_lz4_cstream(const shared_dict&);
 
     // Calls the appropriate get_*_cstream() function.
-    stream_compressor& get_compressor(compression_algorithm);
+    stream_compressor& get_compressor(compression_algorithm, const shared_dict&);
     // Calls the appropriate get_*_dstream() function.
-    stream_decompressor& get_decompressor(compression_algorithm);
+    stream_decompressor& get_decompressor(compression_algorithm, const shared_dict&);
 
-    // Decides the algorithm used for the next message, based
-    // on the state of the negotiation and the size of the message.
-    compression_algorithm get_algo_for_next_msg(size_t msgsize);
+    // Decides the algorithm used for the next segment, based on the
+    // algorithm negotiated for the message and on the size of the message.
+    compression_algorithm get_algo_for_next_segment(compression_algorithm negotiated, size_t msgsize);
+
+    // The parts of the state of the compressor and of the negotiation which are
+    // fixed for the duration of a message.
+    struct outgoing_message;
+    struct incoming_message;
+    outgoing_message start_outgoing_message(size_t msgsize);
+    // Compresses one segment of a message. Moves `in` past the compressed data.
+    // The segment can end before the end of the message.
+    rpc::snd_buf compress_segment(size_t head_space, snd_buf_cursor& in, outgoing_message& msg, bool first);
+    // Decompresses one segment of a message from the front of `in`.
+    // Returns the decompressed data and whether more segments follow.
+    std::pair<rpc::rcv_buf, bool> decompress_segment(rcv_buf_reader& in, incoming_message& msg, bool first);
+    // The slow paths of compress_async() and decompress_async(), for messages split into
+    // several segments. They continue after the first segment, yielding between segments.
+    // `consumed` is the number of bytes of `data` already compressed into `first_segment`.
+    future<rpc::snd_buf> compress_remaining_segments(rpc::snd_buf data, size_t consumed, outgoing_message msg, rpc::snd_buf first_segment);
+    future<rpc::rcv_buf> decompress_remaining_segments(rcv_buf_reader in, incoming_message msg, rpc::rcv_buf first_segment);
 
     // Starts a worker fiber responsible for sending _control's messages.
     future<> start_progress_fiber();
@@ -218,8 +242,13 @@ public:
     ~advanced_rpc_compressor();
 
     // The public interface of rpc::compressor.
+    //
+    // compress() and compress_async() split large messages into segments in the same way.
+    // Only compress_async() yields between segments.
     rpc::snd_buf compress(size_t head_space, rpc::snd_buf data) override;
     rpc::rcv_buf decompress(rpc::rcv_buf data) override;
+    future<rpc::snd_buf> compress_async(size_t head_space, rpc::snd_buf data) override;
+    future<rpc::rcv_buf> decompress_async(rpc::rcv_buf data) override;
     sstring name() const override;
     future<> close() noexcept override;
 };
@@ -259,6 +288,12 @@ public:
         utils::updateable_value<algo_config> algo_config{{compression_algorithm::type::ZSTD, compression_algorithm::type::LZ4}};
         bool register_metrics = false;
         utils::updateable_value<bool> checksumming{true};
+        // compress_async() ends a segment at the first fragment boundary of the message
+        // at which need_preempt() is true. So each segment has at least one fragment.
+        // It yields between segments if need_preempt() is true.
+        //
+        // Can be replaced in tests, to make the splitting deterministic.
+        bool (*need_preempt)() = seastar::need_preempt;
     };
 private:
     friend advanced_rpc_compressor;
@@ -290,12 +325,9 @@ private:
     lz4_dstream& get_global_lz4_dstream();
     lz4_cstream& get_global_lz4_cstream();
 
-    void ingest(const rpc::snd_buf& data);
+    // Ingests the `size` bytes which follow `from`.
+    void ingest(snd_buf_cursor from, size_t size);
     void ingest(const rpc::rcv_buf& data);
-
-    template <typename T>
-    requires std::same_as<T, rpc::rcv_buf> || std::same_as<T, rpc::snd_buf>
-    void ingest_generic(const T& data);
 
     size_t register_compressor(advanced_rpc_compressor*);
     void unregister_compressor(size_t);
