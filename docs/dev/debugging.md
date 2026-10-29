@@ -706,7 +706,7 @@ determining where the memory is. Lets look at a concrete example:
       free:             232512
 
     Memtables:
-     total:          1067319296
+     total:          1064960000
      Regular:
       real dirty:    1064566784
       unspooled:      811568656
