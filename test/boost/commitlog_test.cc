@@ -3113,7 +3113,16 @@ SEASTAR_TEST_CASE(test_descriptor_roundtrip) {
 
 SEASTAR_TEST_CASE(test_commitlog_add_entries_retain_schemas) {
     commitlog::config cfg;
+<<<<<<< HEAD
     cfg.commitlog_segment_size_in_mb = 32;
+||||||| parent of 5214c27188 (test/boost/commitlog_test: use larger segments in test_commitlog_add_entries_retain_schemas)
+    cfg.commitlog_segment_size_in_mb = 4;
+=======
+    // add_entries() below writes a batch of 10 random mutations, which is
+    // typically around 2MB in total, and must fit in one entry - at most
+    // half a segment. So use 32MB segments.
+    cfg.commitlog_segment_size_in_mb = 32;
+>>>>>>> 5214c27188 (test/boost/commitlog_test: use larger segments in test_commitlog_add_entries_retain_schemas)
 
     co_await cl_test(cfg, [](commitlog& log) -> future<> {
         using force_sync = commitlog_mutation_entry_writer::force_sync;
