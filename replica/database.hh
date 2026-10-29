@@ -2411,11 +2411,28 @@ private:
     // for which this shard is the coordinator.
     // The `local` semaphore serializes the number of SSTable sampling operations
     // in which this shard is a participant.
-    size_t _memory_for_data_file_samples = 16*1024*1024;
+    //
+    // The memory limit allows twice the largest round that the coordinator
+    // (storage_service::do_sample_sstables()) requests. See sample_data_files().
+    size_t _memory_for_data_file_samples = 32*1024*1024;
     semaphore _sample_data_files_memory_limiter{_memory_for_data_file_samples};
     semaphore _sample_data_files_local_concurrency_limiter{1};
+
+    struct data_file_samples {
+        // Full samples, without memory accounting.
+        utils::chunked_vector<temporary_buffer<char>> samples;
+        // The number of samples whose sstable was deleted while it was read.
+        // Another round, with fresh sstable snapshots, can replace them.
+        uint64_t n_gone = 0;
+    };
+    // Reads `n_chunks` samples, with replacement, from the current sstables of
+    // the table. Returns fewer if the table has no data, if some sstables were
+    // deleted, or if some samples run past the end of the data.
+    future<data_file_samples> sample_data_files_once(table_id id, uint64_t chunk_size, uint64_t n_chunks);
 public:
     // Returns a vector of file chunks randomly sampled from all Data.db files of this table.
+    // Returns fewer than `n_chunks` chunks if the table has no data, or if
+    // sampling keeps failing because sstables are deleted while they are read.
     future<utils::chunked_vector<temporary_buffer<char>>> sample_data_files(
         table_id id,
         uint64_t chunk_size,

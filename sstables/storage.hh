@@ -177,4 +177,12 @@ future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::s
 
 std::vector<std::filesystem::path> get_local_directories(const std::vector<sstring>& data_file_directories, const data_dictionary::storage_options::local& so);
 
+// Whether `ep` reports that a component of an sstable doesn't exist in its
+// storage. This happens when a component that isn't kept open is opened or read
+// after the sstable is unlinked, e.g. by compaction.
+//
+// A filesystem reports this when the file is opened. Object storage opens
+// lazily, so it reports this at the first read.
+bool is_sstable_gone(std::exception_ptr ep) noexcept;
+
 } // namespace sstables

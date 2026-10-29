@@ -108,6 +108,10 @@ public:
     size_t available_memory() const {
         return _db._dbcfg.available_memory;
     }
+
+    semaphore& get_sample_data_files_memory_limiter() {
+        return _db._sample_data_files_memory_limiter;
+    }
 };
 
 static future<> apply_mutation(sharded<replica::database>& sharded_db, table_id uuid, const mutation& m, bool do_flush = false,
@@ -2854,6 +2858,110 @@ SEASTAR_TEST_CASE(test_lowering_dirty_memory_threshold_triggers_flush) {
         BOOST_REQUIRE(eventually_true([&] { return !dmm.region_group().over_unspooled_soft_limit(); }));
         BOOST_REQUIRE_LT(dmm.unspooled_dirty_memory(), dirty);
     });
+}
+
+// Returns the decompressed data component of each sstable of the table.
+static std::vector<sstring> read_data_files(sharded<replica::database>& db, table_id id) {
+    return db.map_reduce0([id] (replica::database& db) -> future<std::vector<sstring>> {
+        auto& t = db.find_column_family(id);
+        std::vector<sstring> ret;
+        for (const auto& sst : co_await t.take_sstable_set_snapshot()) {
+            auto permit = co_await db.obtain_reader_permit(t, "test", db::no_timeout, {});
+            auto buf = co_await sst->data_read(0, sst->data_size(), std::move(permit));
+            BOOST_REQUIRE_EQUAL(buf.size(), sst->data_size());
+            ret.emplace_back(buf.get(), buf.size());
+        }
+        co_return ret;
+    }, std::vector<sstring>(), [] (std::vector<sstring> a, std::vector<sstring> b) {
+        std::ranges::move(b, std::back_inserter(a));
+        return a;
+    }).get();
+}
+
+// Checks that every sample is a full chunk of some data component, so that
+// it contains no uninitialized bytes.
+static void check_samples(const utils::chunked_vector<temporary_buffer<char>>& samples, const std::vector<sstring>& data_files, uint64_t chunk_size) {
+    for (const auto& sample : samples) {
+        BOOST_REQUIRE_EQUAL(sample.size(), chunk_size);
+        const std::string_view s(sample.get(), sample.size());
+        BOOST_REQUIRE(std::ranges::any_of(data_files, [&] (const sstring& data) {
+            return std::string_view(data).find(s) != std::string_view::npos;
+        }));
+    }
+}
+
+// Checks that sample_data_files() skips the samples of an sstable that is
+// deleted while it is read, and replaces them in a later round. Also checks
+// that it fails on other errors.
+SEASTAR_TEST_CASE(test_sample_data_files_skips_deleted_sstables) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipped because error injection is not enabled");
+    return make_ready_future<>();
+#else
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.t (pk int, ck int, v text, PRIMARY KEY (pk, ck))"
+                " WITH compaction = {'class': 'NullCompactionStrategy'}").get();
+        const auto id = e.local_db().find_schema("ks", "t")->id();
+        auto insert = e.prepare("INSERT INTO ks.t (pk, ck, v) VALUES (?, ?, ?)").get();
+        // Several sstables on each shard.
+        for (int flush = 0; flush < 3; ++flush) {
+            for (int i = 0; i < 300; ++i) {
+                e.execute_prepared(insert, {
+                    cql3::raw_value::make_value(int32_type->decompose(i % 10)),
+                    cql3::raw_value::make_value(int32_type->decompose(flush * 1000 + i)),
+                    cql3::raw_value::make_value(utf8_type->decompose(tests::random::get_sstring(1000))),
+                }).get();
+            }
+            replica::database::flush_table_on_all_shards(e.db(), id).get();
+        }
+        const auto data_files = read_data_files(e.db(), id);
+
+        const uint64_t chunk_size = 4096;
+        const uint64_t n_chunks = 32;
+        auto& db = e.local_db();
+        auto& memory_limiter = database_test_wrapper(db).get_sample_data_files_memory_limiter();
+        const auto all_units = memory_limiter.available_units();
+        const auto injection = "sample_data_files_read_error";
+
+        auto sample = [&] {
+            auto samples = db.sample_data_files(id, chunk_size, n_chunks).get();
+            check_samples(samples, data_files, chunk_size);
+            // Only the returned samples hold units.
+            BOOST_REQUIRE_EQUAL(all_units - memory_limiter.available_units(), ssize_t(samples.size() * chunk_size));
+            return samples;
+        };
+
+        BOOST_REQUIRE_EQUAL(sample().size(), n_chunks);
+        BOOST_REQUIRE_EQUAL(memory_limiter.available_units(), all_units);
+
+        // One read on each shard fails as if its sstable were deleted. The
+        // other samples of the round are kept, and the next round fills the result.
+        utils::get_local_injector().enable_on_all(injection, true).get();
+        BOOST_REQUIRE_EQUAL(sample().size(), n_chunks);
+        const auto n_injected = e.db().map_reduce0([&] (replica::database&) {
+            return utils::get_local_injector().is_enabled(injection) ? 0 : 1;
+        }, 0, std::plus<int>()).get();
+        BOOST_REQUIRE_GT(n_injected, 0);
+        utils::get_local_injector().disable_on_all(injection).get();
+        BOOST_REQUIRE_EQUAL(memory_limiter.available_units(), all_units);
+
+        // If every read fails, the result is empty after the last round.
+        {
+            scoped_error_injection inj(injection);
+            BOOST_REQUIRE_EQUAL(sample().size(), 0);
+        }
+        BOOST_REQUIRE_EQUAL(memory_limiter.available_units(), all_units);
+
+        // Any other error fails the request.
+        {
+            scoped_error_injection inj(injection, {{"errno", fmt::to_string(EIO)}});
+            BOOST_REQUIRE_EXCEPTION(db.sample_data_files(id, chunk_size, n_chunks).get(), std::system_error, [] (const std::system_error& e) {
+                return e.code().value() == EIO;
+            });
+        }
+        BOOST_REQUIRE_EQUAL(memory_limiter.available_units(), all_units);
+    });
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()
