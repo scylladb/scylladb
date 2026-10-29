@@ -539,6 +539,32 @@ def test_udf_permissions_with_udt(cql):
                             grant(cql, 'EXECUTE', f'FUNCTION {keyspace}.{fun}({udt})', username)
                             user_session.execute(f'SELECT {keyspace}.{fun}(a) FROM {table}')
 
+# Test GRANT and REVOKE on a function whose argument is a user type with a
+# name that is valid only when quoted: "byte" is a reserved type name and
+# "int" is a native type name.
+# Reproduces SCYLLADB-5202.
+@pytest.mark.xfail(reason="SCYLLADB-5202: the argument type is written out with the type name unquoted")
+def test_udf_permissions_with_quoted_udt_name(cql):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
+        for name in ['"byte"', '"int"']:
+            with new_type(cql, keyspace, '(v int)', name=name) as udt, \
+                    new_test_table(cql, keyspace, f"a frozen<{udt}> primary key") as table:
+                fun_body_lua = f"(i {udt}) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
+                fun_body_java = f"(i {udt}) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
+                fun_body = fun_body_lua
+                try:
+                    with new_function(cql, keyspace, fun_body):
+                        pass
+                except:
+                    fun_body = fun_body_java
+                with new_function(cql, keyspace, fun_body) as fun, \
+                        new_user(cql) as username, \
+                        new_session(cql, username) as user_session:
+                    cql.execute(f"INSERT INTO {table}(a) VALUES ({{v: 7}})")
+                    grant(cql, 'SELECT', table, username)
+                    check_enforced(cql, username, permission='EXECUTE', resource=f'function {keyspace}.{fun}({udt})',
+                            function=lambda: user_session.execute(f'SELECT {keyspace}.{fun}(a) FROM {table}'))
+
 # Test that permissions on user-defined functions with no arguments work
 def test_udf_permissions_no_args(cql):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
