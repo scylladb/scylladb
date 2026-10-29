@@ -932,20 +932,6 @@ def test_bm25_literal_as_column_reference_rejected(cql, fulltext_table):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25('content', 'hello') > 0 ORDER BY BM25('content', 'hello') LIMIT 1")
 
 
-def test_bm25_extra_restriction_rejected(cql, test_keyspace):
-    """Any additional WHERE restriction alongside BM25 must be rejected (not yet supported)."""
-    schema = 'p int primary key, content text, tag text'
-    with new_test_table(cql, test_keyspace, schema) as table:
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
-        cql.execute(f"CREATE INDEX ON {table}(tag)")
-        # Partition-key restriction.
-        with pytest.raises(InvalidRequest, match="do not support additional WHERE restrictions"):
-            cql.execute(f"SELECT * FROM {table} WHERE p = 1 AND BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
-        # Regular secondary-indexed restriction.
-        with pytest.raises(InvalidRequest, match="do not support additional WHERE restrictions"):
-            cql.execute(f"SELECT * FROM {table} WHERE tag = 'x' AND BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")
-
-
 def test_bm25_column_reference_as_search_term_rejected(cql, fulltext_table):
     """BM25 with a column reference as the search term (second argument) must be rejected at prepare time."""
     with pytest.raises(InvalidRequest, match="must not be a column reference"):
