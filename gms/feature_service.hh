@@ -202,6 +202,10 @@ public:
     // rolling upgrade.
     gms::feature small_table_optimization_size_probe { *this, "SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"sv };
     gms::feature alternator_composite_gsi_keys { *this, "ALTERNATOR_COMPOSITE_GSI_KEYS"sv };
+    // Gates setting Alternator's system:timestamp_attribute tag: a node which
+    // doesn't support it would store the attribute instead of using it as the
+    // write timestamp, so the tag can't be set during a rolling upgrade.
+    gms::feature alternator_timestamp_attribute { *this, "ALTERNATOR_TIMESTAMP_ATTRIBUTE"sv };
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
