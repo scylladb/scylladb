@@ -72,6 +72,9 @@ public:
         uint64_t export_table_to_point_in_time = 0;
         uint64_t describe_export = 0;
         uint64_t list_exports = 0;
+        uint64_t import_table = 0;
+        uint64_t describe_import = 0;
+        uint64_t list_imports = 0;
 
 
         utils::timed_rate_moving_average_summary_and_histogram put_item_latency;

@@ -37,6 +37,7 @@ import requests
 from botocore.exceptions import ClientError
 
 from test.alternator.test_cql_rbac import new_dynamodb, new_dynamodb_streams, new_role
+from test.alternator.test_import import delete_table_afterwards
 from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request, unique_table_name, metrics, get_metrics, get_metric, check_increases_metric, check_increases_metric_exact, check_increases_operation, check_table_increases_operation
 from test.pylib.skip_types import skip_env
 from test.alternator.test_streams import wait_for_active_stream
@@ -349,6 +350,39 @@ def test_table_scan_operations(test_table_s, metrics):
         test_table_s.scan(Limit=1)
         test_table_s.query(Limit=1, KeyConditionExpression='p=:p',
             ExpressionAttributeValues={':p': 'dog'})
+
+def test_import_table_operations(dynamodb, metrics):
+    client = dynamodb.meta.client
+    table_name = unique_table_name()
+    with delete_table_afterwards(client, table_name):
+        with check_increases_operation(metrics, ['ImportTable']):
+            client.import_table(
+                S3BucketSource={'S3Bucket': 'my-bucket'},
+                InputFormat='DYNAMODB_JSON',
+                TableCreationParameters={
+                    'TableName': table_name,
+                    'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                    'AttributeDefinitions': [{'AttributeName': 'p', 'AttributeType': 'S'}],
+                    'BillingMode': 'PAY_PER_REQUEST'})
+
+# DescribeImport counts against the table named by the import ARN, whether the import exists or
+# not - the counter tracks the request, not its outcome. A table outside Alternator gets no
+# per-table counter.
+def test_describe_import_operations(test_table_s, metrics):
+    client = test_table_s.meta.client
+    table_arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    with check_increases_operation(metrics, ['DescribeImport']):
+        with check_table_increases_operation(metrics, ['DescribeImport'], test_table_s.name):
+            with pytest.raises(ClientError, match='ImportNotFoundException'):
+                client.describe_import(ImportArn=f'{table_arn}/import/01790264607542-abcdef12')
+    with pytest.raises(ClientError, match='ImportNotFoundException'):
+        client.describe_import(ImportArn='arn:aws:dynamodb:us-east-1:000000000000:table/system@peers/import/01790264607542-abcdef12')
+    assert get_metric(metrics, 'scylla_alternator_table_operation', {'ks': 'system', 'cf': 'peers'}) == 0
+
+# ListImports has no table of its own, so like ListTables it only counts against the cluster.
+def test_list_imports_operations(dynamodb, metrics):
+    with check_increases_operation(metrics, ['ListImports']):
+        dynamodb.meta.client.list_imports(PageSize=1)
 
 def test_export_table_operations(test_table_s, metrics):
     table_arn = test_table_s.meta.client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
