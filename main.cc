@@ -2125,8 +2125,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             groups_manager.start(std::ref(messaging), std::ref(raft_gr), std::ref(qp), 
                 std::ref(db), std::ref(mm), std::ref(sys_ks), std::ref(feature_service), std::ref(gossiper),
                 std::ref(raft_replay_buffer)).get();
+            // The groups are normally drained by storage_service::do_drain(), before
+            // group0 and the database, and by the defer registered after the group0 ones
+            // below for an initialization that fails before that drain is registered.
+            // None is started before that defer, so here the drain only unregisters the
+            // RPC handlers, which the constructor registers, for an initialization that
+            // fails earlier, and then the sharded service is stopped.
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [&] {
-                groups_manager.invoke_on_all(&service::strong_consistency::groups_manager::uninit_messaging_service).get();
+                groups_manager.local().drain().get();
                 groups_manager.stop().get();
             });
 
@@ -2401,6 +2407,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             early_stop_group0_usage_in_storage_service->cancel();
             early_stop_group0_service->cancel();
+
+            // The strongly consistent groups sit above group0: their state machines take
+            // its barriers. So they go before it, as in storage_service::do_drain(), for
+            // an initialization that fails before that drain is registered.
+            auto drain_groups_manager = defer_verbose_shutdown("strongly consistent groups manager drain", [&] {
+                groups_manager.local().drain().get();
+            });
 
             checkpoint(stop_signal, "starting hinted handoff manager");
             if (!hinted_handoff_enabled.is_disabled_for_all()) {

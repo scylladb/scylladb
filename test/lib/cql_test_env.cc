@@ -1041,7 +1041,7 @@ private:
                 std::ref(_db), std::ref(_mm), std::ref(_sys_ks), std::ref(_feature_service), std::ref(_gossiper),
                 std::ref(_raft_replay_buffer)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] {
-                _groups_manager.invoke_on_all(&service::strong_consistency::groups_manager::uninit_messaging_service).get();
+                _groups_manager.local().drain().get();
                 _groups_manager.stop().get();
             });
 
@@ -1185,6 +1185,15 @@ private:
 
             auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in storage service", [this] {
                 _ss.local().wait_for_group0_stop().get();
+            });
+
+            // As in storage_service::do_drain(): the groups sit above group0 and the
+            // database, so they go before either. The stop registered at their start
+            // stays for an initialization that fails before this point. drain() expects
+            // the transport to be stopped, so that no request reaches acquire_server();
+            // this env runs a single node and no CQL server, so none can.
+            auto drain_groups_manager = defer_verbose_shutdown("strongly consistent groups manager drain", [this] {
+                _groups_manager.local().drain().get();
             });
 
             if (!group0_service.maintenance_mode() && _sys_ks.local().bootstrap_complete()) {

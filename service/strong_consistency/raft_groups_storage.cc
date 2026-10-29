@@ -15,6 +15,7 @@
 #include "replica/database.hh"
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 
 #include "serializer.hh"
@@ -233,7 +234,10 @@ future<> raft_groups_storage::store_snapshot_descriptor(const raft::snapshot_des
 }
 
 future<> raft_groups_storage::store_log_entries(const std::vector<raft::log_entry_ptr>& entries) {
-    return _raft_commitlog.store_log_entries(entries, _commit_index);
+    // Lets a test hold the io fiber of a group with entries not yet stored.
+    co_await utils::get_local_injector().inject("sc_raft_groups_storage_wait_before_store_log_entries",
+            utils::wait_for_message(std::chrono::minutes(5)));
+    co_await _raft_commitlog.store_log_entries(entries, _commit_index);
 }
 
 future<> raft_groups_storage::truncate_log(raft::index_t idx) {

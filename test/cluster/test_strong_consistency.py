@@ -20,6 +20,7 @@ from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
 from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
 
+import contextlib
 import asyncio
 import pytest
 import logging
@@ -1341,6 +1342,97 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
         rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0", host=target_host)
         assert len(rows) == 1
         assert rows[0].v == 13
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_raft_groups_torn_down_before_database_drain(manager: ScyllaClusterManager):
+    """
+    A graceful shutdown tears the raft groups of strongly consistent tablets down
+    before it drains the database: their persistence writes the raft log to the
+    commitlog, which the drain shuts down, and a group alive past it fails those
+    writes, which kills its raft fibers with an internal error.
+
+    Holds a follower's io fiber before it stores a replicated entry, stops the
+    follower, and holds groups_manager::stop() once the shutdown reaches it. Then
+    lets the io fiber go, so that the group stores the entry while the shutdown is
+    held. Before the fix the shutdown reached stop() only after the database drain,
+    so the store hit a shut down commitlog and the node aborted on the internal error.
+
+    Regression test for SCYLLADB-2423.
+    """
+    cmdline = DEFAULT_CMDLINE + ["--logger-log-level", "raft_commitlog=debug"]
+    leader_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline,
+                                             property_file={"dc": "dc1", "rack": "rack1"})
+    # A leader hands its leadership over as the first step of the shutdown, so the
+    # target would be a follower by the time it matters anyway. Keep it one from the
+    # start, so that the entry it stores late is one the leader replicated to it.
+    config = DEFAULT_CONFIG | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    target_server = await manager.server_add(config=config, cmdline=cmdline,
+                                             property_file={"dc": "dc1", "rack": "rack2"})
+
+    cql, [leader_host, _] = await manager.get_ready_cql([leader_server, target_server])
+    target_host_id = await manager.get_host_id(target_server.server_id)
+
+    store_wait_injection = "sc_raft_groups_storage_wait_before_store_log_entries"
+    stop_wait_injection = "sc_groups_manager_stop_wait"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table_name = "my_table"
+        table = f"{ks}.{table_name}"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+
+        group_id = await get_table_raft_group_id(manager, ks, table_name)
+        leader_host_id = await wait_for_leader(manager, leader_server, group_id)
+        assert leader_host_id != target_host_id
+        # Leaves nothing of the leader's election in flight to the follower, so the
+        # store held below is the one of the next insert.
+        await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=leader_host)
+
+        await manager.api.enable_injection(target_server.ip_addr, store_wait_injection, one_shot=True)
+        try:
+            # Can't commit while the follower holds it: both replicas make the quorum.
+            # The entry commits once the follower is back.
+            insert = cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (1, 14)", host=leader_host)
+            await manager.api.wait_for_injection_enter(target_server.ip_addr, store_wait_injection)
+
+            await manager.api.enable_injection(target_server.ip_addr, stop_wait_injection, one_shot=True)
+            log = await manager.server_open_log(target_server.server_id)
+            mark = await log.mark()
+            stop_task = asyncio.create_task(manager.server_stop_gracefully(target_server.server_id))
+            await manager.api.wait_for_injection_enter(target_server.ip_addr, stop_wait_injection)
+
+            # Storing the entry now writes it to the commitlog. A node that aborts on the
+            # write may do so before it answers, and shows up as its stop finishing first.
+            with contextlib.suppress(Exception):
+                await manager.api.message_injection(target_server.ip_addr, store_wait_injection)
+            stored = asyncio.create_task(log.wait_for(rf"store_log_entries: group_id={group_id}, entries=", from_mark=mark, timeout=60))
+            done, _ = await asyncio.wait({stop_task, stored}, return_when=asyncio.FIRST_COMPLETED)
+            if stored not in done:
+                stored.cancel()
+                await stop_task
+                pytest.fail("the node stopped while groups_manager::stop() was held")
+            await stored
+        finally:
+            # Leave nothing held behind: no io fiber parked for five minutes and no node
+            # held in stop(). An injection not enabled, released already or gone with the
+            # node fails here, which is fine. A stop left running is reaped by the manager.
+            for injection in (store_wait_injection, stop_wait_injection):
+                with contextlib.suppress(Exception):
+                    await manager.api.message_injection(target_server.ip_addr, injection)
+        await stop_task
+
+        errors = await log.grep(r"fiber stopped because of the error", from_mark=mark)
+        assert not errors, f"raft fibers died during the shutdown: {errors}"
+
+        await manager.server_start(target_server.server_id)
+        cql, [target_host] = await manager.get_ready_cql([target_server])
+        # Awaited only now: the client gets the ack once the follower is back, or
+        # a timeout if that took too long. The row is there either way.
+        with contextlib.suppress(Exception):
+            await insert
+        for pk, v in [(0, 13), (1, 14)]:
+            rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {pk}", host=target_host)
+            assert len(rows) == 1
+            assert rows[0].v == v
 
 async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
     """
