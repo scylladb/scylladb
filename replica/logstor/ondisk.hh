@@ -45,11 +45,11 @@ static constexpr uint32_t chunk_header_magic = 0x4c475342;
 // write_buffer and the reads in segment_io, so a mismatch silently truncates or pads records on disk
 // instead of failing. Nothing enforces this at compile time - the serializers bottom out in
 // reinterpret_cast, which cannot be evaluated in a constant expression - so it is verified at runtime
-// by test_logstor_ondisk_serialized_sizes in test/boost/logstor_test.cc.
+// by test_logstor_ondisk_layout in test/boost/logstor_test.cc.
 //
 // When adding a field to one of these types, or adding a new fixed-size on-disk type: update or write
 // all four of write(), read(), skip() and serialized_size together, add an alias in the ondisk block
-// at the bottom of the file if the size is needed elsewhere, and add a check_serialized_size() call
+// at the bottom of the file if the size is needed elsewhere, and add a check_ondisk_layout() call
 // for the type to that test with a value whose fields are all distinct and non-zero.
 
 struct segment_header;
