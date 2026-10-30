@@ -218,6 +218,7 @@ private:
         uint64_t requests_shed = 0;
         // forwarding stats
         uint64_t requests_forwarded_successfully = 0;
+        uint64_t group0_requests_forwarded_successfully = 0;
         uint64_t requests_forwarded_failed = 0;
         uint64_t requests_forwarded_redirected = 0;
         uint64_t requests_forwarded_prepared_not_found = 0;
@@ -398,7 +399,7 @@ private:
     future<forward_cql_execute_response> handle_forward_execute(service::query_state& qs, forward_cql_execute_request& req);
 
     future<foreign_ptr<std::unique_ptr<cql_transport::response>>> forward_cql(locator::host_id target_host, unsigned target_shard, seastar::lowres_clock::time_point timeout,
-            bool is_write, uint16_t stream, tracing::trace_state_ptr trace_state, forward_cql_execute_request req,
+            bool is_write, bool group0, uint16_t stream, tracing::trace_state_ptr trace_state, forward_cql_execute_request req,
             const locator::host_id_or_exception_callback& on_forwarding_finished = {});
 
     virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override;

@@ -349,12 +349,13 @@ static need_redirect redirect_to_leader(locator::tablet_replica target, groups_m
         // The `local()` here is needed to update the cache on the shard handling
         // the client request which may be different from the shard currently
         // executing the statement.
-        .on_forwarding_finished = [container = &gm.container(), group_id] (locator::host_id_or_exception leader) {
+        .on_forwarding_finished = [container = &gm.container(), group_id] (locator::host_id_or_exception leader) -> future<> {
             if (std::holds_alternative<locator::host_id>(leader)) {
                 container->local().leader_cache().put(group_id, std::get<locator::host_id>(leader));
             } else {
                 container->local().leader_cache().erase(group_id);
             }
+            return make_ready_future<>();
         },
     };
 }

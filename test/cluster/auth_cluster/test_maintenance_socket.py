@@ -320,3 +320,27 @@ async def test_maintenance_socket_grant_revoke(manager: ScyllaClusterManager, cq
 
     rows = list(session.execute("LIST ALL PERMISSIONS OF role1"))
     assert len(rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_maintenance_socket_on_group0_follower(manager: ScyllaClusterManager, cql_clusters: CqlClusters):
+    """
+    DDL and DCL issued through the maintenance socket run locally, also on a node
+    that is not the group 0 leader: the socket bypasses auth and a forwarded
+    client state cannot carry that, so the leader would reject the statement.
+    Covers the documented superuser creation and password reset procedures.
+    """
+    servers = await manager.servers_add(3, config=auth_config, auto_rack_dc='dc1')
+    leader_id = await manager.api.get_raft_leader(servers[0].ip_addr)
+    leader = (await manager.all_servers_by_host_id())[leader_id]
+    follower, other = [s for s in servers if s.server_id != leader.server_id]
+    logger.info(f"group0 leader {leader.ip_addr}, follower {follower.ip_addr}")
+
+    socket = await manager.server_get_maintenance_socket_path(follower.server_id)
+    session = await get_ready_maintenance_session(manager, socket)
+    session.execute("CREATE ROLE admin WITH PASSWORD = 'first' AND SUPERUSER = true AND LOGIN = true")
+    session.execute("ALTER ROLE admin WITH PASSWORD = 'reset'")
+    session.execute("GRANT ALL ON ALL KEYSPACES TO admin")
+
+    admin_session = await connect_with_credentials(manager, other.ip_addr, "admin", "reset")
+    admin_session.execute("SELECT * FROM system.local")

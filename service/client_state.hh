@@ -318,6 +318,10 @@ public:
         return _is_internal;
     }
 
+    bool bypass_auth_checks() const {
+        return _bypass_auth_checks;
+    }
+
     /**
      * @return a ClientState object for internal C* calls (not limited by any kind of auth).
      */

@@ -24,7 +24,9 @@
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
 #include "service/strong_consistency/coordinator.hh"
+#include "gms/feature_service.hh"
 #include "cql3/CqlParser.hpp"
+#include "cql3/statements/authentication_statement.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/eventual_consistency/modification_executor.hh"
@@ -116,6 +118,8 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
 
     sm::label ks_label("ks");
     const auto system_ks_label_instance = ks_label("system");
+
+    sm::label subsystem_label("subsystem");
 
     std::vector<sm::metric_definition> qp_group;
     qp_group.push_back(sm::make_counter(
@@ -528,8 +532,17 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
                     sm::make_counter(
                             "forwarded_requests",
                             _cql_stats.forwarded_requests,
-                            sm::description("Counts the total number of attempts to forward CQL requests to other nodes. One request may be forwarded multiple times, "
-                                            "particularly when a write is handled by a non-replica node.")).set_skip_when_empty(),
+                            sm::description("Counts the total number of attempts to forward CQL requests to other nodes: to a tablet replica (strong_consistency) "
+                                            "or to the group 0 leader (group0). One request may be forwarded multiple times, "
+                                            "particularly when a write is handled by a non-replica node."),
+                            {subsystem_label("strong_consistency")}).set_skip_when_empty(),
+                    sm::make_counter(
+                            "forwarded_requests",
+                            _cql_stats.forwarded_group0_requests,
+                            sm::description("Counts the total number of attempts to forward CQL requests to other nodes: to a tablet replica (strong_consistency) "
+                                            "or to the group 0 leader (group0). One request may be forwarded multiple times, "
+                                            "particularly when a write is handled by a non-replica node."),
+                            {subsystem_label("group0")}).set_skip_when_empty(),
             });
 
     std::vector<sm::metric_definition> cql_cl_group;
@@ -608,6 +621,37 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
     }
 
     auto [remote_, holder] = remote();
+
+    // Run on the group 0 leader, where the operation mutex serializes the
+    // statement with the other group 0 writers; a follower's guard loses every
+    // conflict against them. Wait for a leader as the local path would.
+    // Stay local for:
+    // - a stopped group 0
+    // - internal callers (they cannot handle a bounce)
+    // - the maintenance socket (its auth bypass is not forwarded)
+    // - role statements: CREATE/ALTER ROLE may carry a plaintext password;
+    //   the rest stay local too rather than inspect the options.
+    // A forwarded statement that finds a new leader bounces again; the transport
+    // turns that into a redirect which the forwarding node follows.
+    const auto& client_state = query_state.get_client_state();
+    if (!client_state.is_internal() && !client_state.bypass_auth_checks()
+            && !dynamic_cast<const statements::authentication_statement*>(statement.get())
+            && _proxy.features().ddl_forwarding) {
+        auto leader = co_await remote_.get().group0_client.wait_for_group0_leader(remote_.get().mm.get_abort_source(), service::raft_timeout{});
+        if (leader && *leader != _proxy.get_token_metadata_ptr()->get_topology().my_host_id()) {
+            log.debug("Forwarding guarded statement to group0 leader {}", *leader);
+            // On reply catch up with the leader, so the change is applied here when
+            // the client gets the answer, as with local execution. A failed forward
+            // leaves the outcome unknown: the leader may have committed already.
+            auto on_finished = [mm = &remote_.get().mm.container()] (locator::host_id_or_exception result) -> future<> {
+                if (std::holds_alternative<std::exception_ptr>(result)) {
+                    return make_exception_future<>(service::group0_hard_timeout());
+                }
+                return mm->local().get_group0_barrier().trigger();
+            };
+            co_return bounce_to_node({*leader, 0}, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()), db::no_timeout, true, std::move(on_finished), true);
+        }
+    }
     size_t retries = remote_.get().mm.get_concurrent_ddl_retries();
     while (true)  {
         try {
@@ -1392,9 +1436,10 @@ shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_n
         cql3::computed_function_values cached_fn_calls,
         seastar::lowres_clock::time_point timeout,
         bool is_write,
-        locator::host_id_or_exception_callback on_forwarding_finished) {
-    get_cql_stats().forwarded_requests++;
-    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, is_write, std::move(on_forwarding_finished));
+        locator::host_id_or_exception_callback on_forwarding_finished,
+        bool group0) {
+    ++(group0 ? get_cql_stats().forwarded_group0_requests : get_cql_stats().forwarded_requests);
+    return ::make_shared<cql_transport::messages::result_message::bounce>(replica.host, replica.shard, std::move(cached_fn_calls), timeout, is_write, std::move(on_forwarding_finished), group0);
 }
 
 query_processor::consistency_level_set query_processor::to_consistency_level_set(const query_processor::cl_option_list& levels) {

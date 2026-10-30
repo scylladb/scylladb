@@ -584,6 +584,26 @@ future<> raft_server_with_timeouts::read_barrier(seastar::abort_source* as, std:
     }, "read_barrier", as, timeout);
 }
 
+future<raft::server_id> raft_server_with_timeouts::wait_for_leader(seastar::abort_source* as, std::optional<raft_timeout> timeout,
+        raft::server_id known_dead)
+{
+    // Coroutine, so the lambda outlives run_with_timeout's suspensions.
+    co_return co_await run_with_timeout([&](abort_source* as) -> future<raft::server_id> {
+        auto& server = *_group_server.server;
+        while (true) {
+            auto leader = server.current_leader();
+            if (!leader) {
+                co_await server.wait_for_leader(as);
+            } else if (!_fd->is_alive(leader) || leader == known_dead) {
+                // Forget the dead leader and wait until the new one speaks up.
+                co_await server.wait_for_leader(as, true);
+            } else {
+                co_return leader;
+            }
+        }
+    }, "wait_for_leader", as, timeout);
+}
+
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, direct_failure_detector::clock::timepoint_t timeout, abort_source& as, direct_failure_detector::clock& c) {
     auto dst_id = raft::server_id{id};
 

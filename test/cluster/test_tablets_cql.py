@@ -7,6 +7,8 @@ import asyncio
 import logging
 
 import pytest
+from cassandra.connection import UnixSocketEndPoint
+from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.protocol import InvalidRequest
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -105,11 +107,15 @@ async def test_alter_tablets_keyspace_concurrent_modification(manager: ScyllaClu
 
         logger.info(f"creating another keyspace from the follower node {servers[1]} so that the leader, which hangs on injected sleep, "
                     f"wakes up with a changed schema")
-        host = manager.get_cql().cluster.metadata.get_host(servers[1].ip_addr)
-        with disable_schema_agreement_wait(manager.get_cql()):
-            ks2 = await create_new_test_keyspace(manager.get_cql(), "with "
+        # Over the maintenance socket the follower runs the DDL itself instead of
+        # forwarding it to the group 0 leader, which is deliberately stuck here.
+        socket_endpoint = UnixSocketEndPoint(await manager.server_get_maintenance_socket_path(servers[1].server_id))
+        follower_cql = manager.con_gen([socket_endpoint], load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint])).connect()
+        with disable_schema_agreement_wait(follower_cql):
+            ks2 = await create_new_test_keyspace(follower_cql, "with "
                                             "replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
-                                            "and tablets = {'enabled': true}", host=host)
+                                            "and tablets = {'enabled': true}")
+        follower_cql.cluster.shutdown()
 
         logger.info("waking up the leader to continue processing ALTER on a changed schema, which should cause a retry")
         await injection_handler.message()
