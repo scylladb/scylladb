@@ -40,22 +40,22 @@ future<> cql3::statements::permission_altering_statement::check_access(query_pro
     state.ensure_not_anonymous();
     maybe_correct_resource(_resource, state, qp);
 
-    return state.ensure_exists(_resource).then([this, &state] {
-        if (_resource.kind() == auth::resource_kind::functions) {
-            // Even if the resource exists, it may be a builtin function or all builtin functions, in which case we disallow altering permissions on it.
-            auth::functions_resource_view v(_resource);
-            if (v.keyspace() && *v.keyspace() == db::system_keyspace::NAME) {
-                return make_exception_future<>(exceptions::invalid_request_exception("Altering permissions on builtin functions is not supported"));
-            }
+    if (_resource.kind() == auth::resource_kind::functions) {
+        // The resource may be a builtin function or all builtin functions, in which case we disallow altering permissions on it.
+        auth::functions_resource_view v(_resource);
+        if (v.keyspace() && *v.keyspace() == db::system_keyspace::NAME) {
+            throw exceptions::invalid_request_exception("Altering permissions on builtin functions is not supported");
         }
-        // check that the user has AUTHORIZE permission on the resource or its parents, otherwise reject
-        // GRANT/REVOKE.
-        return state.ensure_has_permission({auth::permission::AUTHORIZE, _resource}).then([this, &state] {
-            return do_for_each(_permissions, [this, &state](auth::permission p) {
-                // TODO: how about we re-write the access check to check a set
-                // right away.
-                return state.ensure_has_permission({p, _resource});
-            });
-        });
-    });
+    }
+    // check that the user has AUTHORIZE permission on the resource or its parents, otherwise reject
+    // GRANT/REVOKE.
+    co_await state.ensure_has_permission({auth::permission::AUTHORIZE, _resource});
+    for (auth::permission p : _permissions) {
+        // TODO: how about we re-write the access check to check a set
+        // right away.
+        co_await state.ensure_has_permission({p, _resource});
+    }
+    // Check that the resource exists only after checking access, so the error
+    // doesn't tell an unauthorized user whether it exists (e.g., ON ROLE r).
+    co_await state.ensure_exists(_resource);
 }
