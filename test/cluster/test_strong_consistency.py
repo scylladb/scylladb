@@ -1052,7 +1052,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
     immediately (no in-flight ops). On the leader, the raft server is aborted
     as part of group deletion (SCYLLADB-2080 fix), causing the paused
     operations to fail with raft::stopped_error which the coordinator converts
-    to "no such column family" / "unconfigured table".
+    to "no such column family" / "does not exist".
 
     We also verify that new reads/writes after the drop are rejected
     immediately.
@@ -1115,9 +1115,9 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
         await cql.run_async(f"DROP TABLE {table}")
 
         # Sanity check: new queries are rejected immediately.
-        with pytest.raises(InvalidRequest, match="unconfigured table"):
+        with pytest.raises(InvalidRequest, match=f"Table '{table}' does not exist"):
             await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0")
-        with pytest.raises(InvalidRequest, match="unconfigured table"):
+        with pytest.raises(InvalidRequest, match=f"Table '{table}' does not exist"):
             await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (13, 11)")
 
         # Confirm the follower destroyed its raft group.
@@ -1135,7 +1135,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
         # FallthroughRetryPolicy prevents a driver retry from replacing ServerError
         # with InvalidRequest from a new request.
         # Use a timeout to detect the old buggy behavior (write stuck forever).
-        missing_table_error = r"[Uu]nconfigured table|[Cc]an't find a column family|[Nn]o such column family"
+        missing_table_error = r"does not exist|[Cc]an't find a column family|[Nn]o such column family"
         try:
             with pytest.raises((InvalidRequest, ServerError), match=missing_table_error):
                 await asyncio.wait_for(asyncio.shield(write_fut), timeout=15)

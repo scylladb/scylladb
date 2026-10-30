@@ -35,7 +35,7 @@ async def test_new_table(manager, random_tables):
     await random_tables.drop_table(table)
     # NOTE: On rare occasions the exception is ReadFailure
     with pytest.raises((InvalidRequest, ReadFailure),
-                       match='(unconfigured table|failed to execute read)'):
+                       match='(does not exist|failed to execute read)'):
         await cql.run_async(f"SELECT * FROM {table}")
     await random_tables.verify_schema()
 
