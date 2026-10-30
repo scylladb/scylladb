@@ -347,6 +347,85 @@ schema_ptr alternator_export_to_s3_client_tokens() {
     return schema;
 }
 
+// Note: this table has no default TTL on purpose. As for alternator_export_to_s3_exports,
+// each write of a row must set a TTL of 90 days with USING TTL and write all non-key columns,
+// so a row expires 90 days after its last write. The INSERT must set the TTL too: an UPDATE
+// does not set the TTL of the row marker, so without it a key-only row stays forever.
+schema_ptr alternator_import_from_s3_imports() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_IMPORTS);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_IMPORTS, std::make_optional(id))
+                // The ARN of this import, as returned to the user in ImportTableDescription.ImportArn.
+                // It has the form <TableArn>/import/<import_id_token>, so the ARN of the target table
+                // (ImportTableDescription.TableArn) is recovered from it.
+                .with_column("import_arn", utf8_type, column_kind::partition_key)
+                // The idempotency token of the ImportTable request which created this import. The row
+                // keyed by it in alternator_import_from_s3_client_tokens points back to this import.
+                .with_column("client_token", utf8_type)
+                // The ImportTable request which created this import, as JSON. DescribeImport and
+                // ListImports echo its parameters back to the user, and when the target table did not
+                // exist, the import creates it from its TableCreationParameters.
+                .with_column("request", utf8_type)
+                // The role which called ImportTable; the import creates (if needed) and writes the target table on its behalf
+                .with_column("requester_role", utf8_type)
+                // Id of the target table (ImportTableDescription.TableId): the id allocated for the new
+                // table when the request was accepted, or the current id of an existing target table
+                .with_column("table_id", uuid_type)
+                // True if the target table existed when the request was accepted (an Alternator
+                // extension). The import then writes into that table and does not create it.
+                .with_column("target_table_existed", boolean_type)
+                // Name of the state of the import state machine: NOT_STARTED, IN_PROGRESS, COMPLETED,
+                // FAILING or FAILED. NOT_STARTED and FAILING are reported to the user as IN_PROGRESS.
+                .with_column("import_status", utf8_type)
+                // Why the import failed; set only when import_status is FAILING or FAILED
+                .with_column("failure_code", utf8_type)
+                .with_column("failure_message", utf8_type)
+                // Progress counters, refreshed while the import runs (ImportTableDescription.ProcessedItemCount,
+                // ImportedItemCount, ErrorCount and ProcessedSizeBytes). Errors of single items are only
+                // logged, so error_count is the only trace of them here.
+                .with_column("processed_item_count", long_type)
+                .with_column("imported_item_count", long_type)
+                .with_column("error_count", long_type)
+                .with_column("processed_size_bytes", long_type)
+                // The identifier generated for this import: the part of import_arn which follows "/import/".
+                // Unlike client_token, it is never chosen by the user.
+                .with_column("import_id_token", utf8_type)
+                // When the import request was accepted
+                .with_column("accepted_at", timestamp_type)
+                // When the import reached a terminal state (COMPLETED or FAILED)
+                .with_column("completed_at", timestamp_type)
+                // The node which drives this import, in the format of node_id in alternator_export_to_s3_exports
+                .with_column("node_id", utf8_type)
+                .set_comment("Alternator import from S3 import metadata")
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr alternator_import_from_s3_client_tokens() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_CLIENT_TOKENS);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_CLIENT_TOKENS, std::make_optional(id))
+                // The idempotency token of an ImportTable request: a repeated request with the same
+                // token must return the import which the first one created, instead of starting a new one
+                .with_column("client_token", utf8_type, column_kind::partition_key)
+                // ARN of that import - the key into alternator_import_from_s3_imports
+                .with_column("import_arn", utf8_type)
+                // The request this token was used with, as JSON. Needed because repeating a token
+                // with a different TableName is an error (ImportConflictException), so the two
+                // requests have to be compared.
+                .with_column("request", utf8_type)
+                // The node which accepted that request, in the format of node_id in alternator_import_from_s3_imports
+                .with_column("node_id", utf8_type)
+                .set_comment("Alternator import from S3 client token idempotency")
+                .set_default_time_to_live(std::chrono::hours(8))
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 // This is the set of tables which this node ensures to exist in the cluster.
 // It does that by announcing the creation of these schemas on initialization
 // of the `system_distributed_keyspace` service (see `start()`), unless it first
@@ -372,6 +451,8 @@ static std::vector<schema_ptr> ensured_tables() {
         snapshot_remote_locations(),
         alternator_export_to_s3_exports(),
         alternator_export_to_s3_client_tokens(),
+        alternator_import_from_s3_imports(),
+        alternator_import_from_s3_client_tokens(),
     };
 }
 
@@ -386,6 +467,8 @@ std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
         snapshot_sstables(),
         alternator_export_to_s3_exports(),
         alternator_export_to_s3_client_tokens(),
+        alternator_import_from_s3_imports(),
+        alternator_import_from_s3_client_tokens(),
     };
 }
 
