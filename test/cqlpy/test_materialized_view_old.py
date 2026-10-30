@@ -3585,3 +3585,49 @@ def test_3362_row_deletion_2(cql, test_keyspace):
             # row will re-emerge, and so should the view row
             cql.execute(f"update {table} using timestamp 11 set b = 1 where p = 1 and c = 1")
             check([(1, 1)])
+
+# Reproduces SCYLLADB-4069: an INSERT naming only key columns changes the
+# base row's marker but no cell. The view row carries the base row's marker,
+# so it has to receive the new marker too - otherwise it keeps the old TTL
+# and expires while the base row is still live.
+def test_marker_only_insert_clears_view_row_ttl(cql, test_keyspace, clock):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'c, p',
+                'p is not null and c is not null') as mv:
+            cql.execute(f"insert into {table} (p, c) values (1, 7) using ttl {clock.ttl}")
+            cql.execute(f"insert into {table} (p, c) values (1, 7)")
+            clock.jump(clock.ttl + 1)
+            assert [(1, 7)] == list(cql.execute(f"select p, c from {table}"))
+            assert [(1, 7)] == list(cql.execute(f"select p, c from {mv}"))
+
+# Reproduces SCYLLADB-4238: a row deletion which shadows the base row's
+# marker but not a newer cell changes no cell's liveness. The view row has
+# to receive the row tombstone anyway - otherwise it keeps the live marker
+# and outlives the base row once the cell expires.
+def test_row_deletion_shadowing_only_the_marker_reaches_view(cql, test_keyspace, clock):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'c, p',
+                'p is not null and c is not null') as mv:
+            cql.execute(f"insert into {table} (p, c) values (1, 1) using timestamp 5")
+            cql.execute(f"update {table} using timestamp 20 and ttl {clock.ttl} set v = 1 where p = 1 and c = 1")
+            cql.execute(f"delete from {table} using timestamp 15 where p = 1 and c = 1")
+            assert [(1, 1, 1)] == list(cql.execute(f"select p, c, v from {mv}"))
+            clock.jump(clock.ttl + 1)
+            assert [] == list(cql.execute(f"select * from {table}"))
+            assert [] == list(cql.execute(f"select * from {mv}"))
+
+# Reproduces SCYLLADB-4239: re-inserting a row moves the base row's marker
+# to a newer timestamp without changing any cell. The view row has to
+# receive the newer marker - otherwise a partition deletion timestamped
+# between the two markers kills the view row but not the base row. The view
+# partition key is a permutation of the base partition key, so the partition
+# deletion is applied to the view partition as a whole.
+def test_partition_deletion_between_marker_timestamps_keeps_view_row(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p1 int, p2 int, c int, v int, primary key ((p1, p2), c)') as table:
+        with new_materialized_view(cql, table, '*', '(p2, p1), c',
+                'p1 is not null and p2 is not null and c is not null') as mv:
+            cql.execute(f"insert into {table} (p1, p2, c) values (1, 2, 7) using timestamp 3000")
+            cql.execute(f"insert into {table} (p1, p2, c) values (1, 2, 7) using timestamp 8000")
+            cql.execute(f"delete from {table} using timestamp 5000 where p1 = 1 and p2 = 2")
+            assert [(1, 2, 7)] == list(cql.execute(f"select p1, p2, c from {table}"))
+            assert [(1, 2, 7)] == list(cql.execute(f"select p1, p2, c from {mv}"))
