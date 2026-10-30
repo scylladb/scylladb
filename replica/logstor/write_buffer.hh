@@ -288,7 +288,9 @@ public:
 
 private:
     raw_write_buffer _raw;
-    shared_promise<segment_position> _written;
+    // One per record rather than a shared_promise, whose waiter queue allocates a 32 KB block per
+    // chunk. Cleared, not freed, by reset() so a reused buffer allocates nothing for its waiters.
+    std::vector<promise<segment_position>> _waiters;
     seastar::gate _write_gate;
 
     std::vector<record_in_buffer> _records_copy;

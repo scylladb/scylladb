@@ -185,6 +185,7 @@ template raw_write_buffer::append_result raw_write_buffer::append<log_record_byt
 write_buffer::write_buffer(size_t buffer_size, segment_kind kind)
         : _raw(buffer_size, kind)
 {
+    _waiters.reserve(_raw.buffer_size() / 100);
     if (with_record_copy()) {
         _records_copy.reserve(_raw.buffer_size() / 100);
     }
@@ -192,7 +193,7 @@ write_buffer::write_buffer(size_t buffer_size, segment_kind kind)
 
 void write_buffer::reset() {
     _raw.reset();
-    _written = {};
+    _waiters.clear();
     _records_copy.clear();
     _write_gate = {};
 }
@@ -229,7 +230,7 @@ future<record_location_with_holder> write_buffer::write(Writer writer, write_tar
     // as index updates.
     auto op = _write_gate.hold();
 
-    return _written.get_shared_future().then(
+    return _waiters.emplace_back().get_future().then(
             [frame_offset = append_result.frame_offset, frame_size = append_result.frame_size, op = std::move(op)]
             (segment_position chunk_position) mutable {
         return std::make_tuple(locate_record(chunk_position, frame_offset, frame_size), std::move(op));
@@ -237,14 +238,18 @@ future<record_location_with_holder> write_buffer::write(Writer writer, write_tar
 }
 
 future<> write_buffer::complete_writes(segment_position chunk_position) {
-    _written.set_value(chunk_position);
+    for (auto& waiter : _waiters) {
+        waiter.set_value(chunk_position);
+    }
+    _waiters.clear();
     co_await close();
 }
 
 future<> write_buffer::abort_writes(std::exception_ptr ex) {
-    if (!_written.available()) {
-        _written.set_exception(std::move(ex));
+    for (auto& waiter : _waiters) {
+        waiter.set_exception(ex);
     }
+    _waiters.clear();
 
     // Mixed buffers keep copies of their records for separator rewriting. A failed flush has no
     // separator pass to consume them, and they were never written anywhere, so drop them.
