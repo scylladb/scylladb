@@ -426,6 +426,13 @@ select_statement::execute_without_checking_exception_message(query_processor& qp
                              const query_options& options,
                              std::optional<service::group0_guard> guard) const
 {
+    // Reject an unset value in the WHERE clause before executing the query,
+    // not when evaluating a filter - which never happens if no row reaches
+    // it. Whether the query fails shouldn't depend on the data.
+    if (auto idx = _restrictions->find_unset_bind_variable(options)) {
+        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(
+                exceptions::invalid_request_exception(fmt::format("Unexpected unset value for bind variable {}", *idx)));
+    }
     return select_stage(this, seastar::ref(qp), seastar::ref(state), seastar::cref(options));
 }
 
