@@ -1550,3 +1550,17 @@ def test_create_role_with_invalid_hashed_password(cql):
             cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = 'this_is_an_invalid_hash'")
     finally:
         cql.execute(f"DROP ROLE IF EXISTS {role}")
+
+# GRANT, REVOKE and LIST PERMISSIONS accept a comma-separated list of
+# permissions, which Cassandra added in Cassandra 4.1 (CASSANDRA-17030).
+# Reproduces SCYLLADB-5145 (only a single permission, or ALL, was accepted).
+def test_grant_revoke_list_multiple_permissions(cql, test_keyspace):
+    with new_user(cql) as user:
+        def listed(what):
+            return {r.permission for r in cql.execute(f"LIST {what} ON KEYSPACE {test_keyspace} OF {user}")}
+        cql.execute(f"GRANT SELECT, MODIFY PERMISSION ON KEYSPACE {test_keyspace} TO {user}")
+        assert listed("ALL PERMISSIONS") == {"SELECT", "MODIFY"}
+        # LIST with a list of permissions lists only the requested ones
+        assert listed("SELECT, ALTER") == {"SELECT"}
+        cql.execute(f"REVOKE MODIFY, SELECT ON KEYSPACE {test_keyspace} FROM {user}")
+        assert listed("ALL PERMISSIONS") == set()
