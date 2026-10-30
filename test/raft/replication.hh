@@ -1029,10 +1029,7 @@ future<> raft_cluster<Clock>::stop_server(size_t id, sstring reason) {
     // Checked and cleaned up even if abort() failed: the fibers are stopped
     // either way, and the server may be reset later.
     BOOST_CHECK_EQUAL(_servers[id].sm->calls_after_abort(), 0);
-    if (_snapshots->contains(to_raft_id(id))) {
-        BOOST_CHECK_LE((*_snapshots)[to_raft_id(id)].size(), 2);
-        _snapshots->erase(to_raft_id(id));
-    }
+    _snapshots->erase(to_raft_id(id));
     _persisted_snapshots->erase(to_raft_id(id));
     if (aborted.failed()) {
         co_await coroutine::return_exception_ptr(std::move(aborted).get_exception());

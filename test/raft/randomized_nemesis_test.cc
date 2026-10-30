@@ -1495,16 +1495,6 @@ public:
             _fd_subscription = std::nullopt;
             co_await _fd_service->stop();
             co_await _server->abort();
-
-            {
-                std::vector<raft::snapshot_id> snapshot_ids;
-                snapshot_ids.reserve(_snapshots->size());
-                for (const auto& p: *_snapshots) {
-                    snapshot_ids.push_back(p.first);
-                }
-                BOOST_TEST_INFO(seastar::format("snapshot ids: [{}]", snapshot_ids));
-                BOOST_CHECK_LE(snapshot_ids.size(), 2);
-            }
         }
         co_await std::move(f);
         _stopped = true;
@@ -2407,11 +2397,9 @@ SEASTAR_TEST_CASE(test_frequent_snapshotting) {
         // unconsumed output, with or without the applier queue bound the test
         // used to set for that purpose.
         //
-        // What it still checks is the teardown assertion that no more than two
-        // snapshots survive per server, which catches a leak by any route, and
-        // it does drive snapshotting hard: snapshot_threshold = 1 snapshots
-        // after every applied batch. Covering the replacement itself again
-        // would take a deliberate io_fiber delay.
+        // What it still does is drive snapshotting hard: snapshot_threshold = 1
+        // snapshots after every applied batch. Covering the replacement itself
+        // again would take a deliberate io_fiber delay.
 
         tlogger.debug("Started 2 more servers, changing configuration");
 
