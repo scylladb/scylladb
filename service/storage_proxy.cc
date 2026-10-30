@@ -3205,6 +3205,10 @@ void storage_proxy_stats::stats::register_stats() {
                        sm::description("number of speculative data read requests that were sent"),
                        {storage_proxy_stats::current_scheduling_group_label(), basic_level}).set_skip_when_empty(),
 
+        sm::make_total_operations("speculative_retries_redirected", speculative_retries_redirected,
+                       sm::description("number of speculative retries sent to a spare replica instead of the local one, which had reads queued for admission"),
+                       {storage_proxy_stats::current_scheduling_group_label(), basic_level}).set_skip_when_empty(),
+
         sm::make_summary("cas_read_latency_summary", sm::description("CAS read latency summary"), [this] {return to_metrics_summary(cas_read.summary());})(storage_proxy_stats::current_scheduling_group_label())(basic_level)(cas_label).set_skip_when_empty(),
         sm::make_summary("cas_write_latency_summary", sm::description("CAS write latency summary"), [this] {return to_metrics_summary(cas_write.summary());})(storage_proxy_stats::current_scheduling_group_label())(basic_level)(cas_label).set_skip_when_empty(),
 
@@ -6221,8 +6225,32 @@ public:
 // this executor sends request to an additional replica after some time below timeout
 class speculating_read_executor : public abstract_read_executor {
     timer<storage_proxy::clock_type> _speculate_timer;
+    // A live local-DC replica outside the original targets, to redirect an overloaded local retry to.
+    std::optional<locator::host_id> _spare;
+    bool _got_cl = false;
+
+    void speculate(const digest_resolver_ptr& resolver, clock_type::time_point timeout) {
+        resolver->add_wait_targets(1); // we send one more request so wait for it too
+        // FIXME: consider disabling for CL=*ONE
+        if (resolver->has_data()) {
+            _proxy->get_stats().speculative_digest_reads++;
+            tracing::trace(_trace_state, "Launching speculative retry for digest");
+            make_digest_requests(resolver, _targets.end() - 1, _targets.end(), timeout);
+        } else {
+            _proxy->get_stats().speculative_data_reads++;
+            tracing::trace(_trace_state, "Launching speculative retry for data");
+            make_data_requests(resolver, _targets.end() - 1, _targets.end(), timeout, true);
+        }
+    }
 public:
-    using abstract_read_executor::abstract_read_executor;
+    speculating_read_executor(schema_ptr s, lw_shared_ptr<replica::column_family> cf, shared_ptr<storage_proxy> proxy,
+            locator::effective_replication_map_ptr ermp,
+            lw_shared_ptr<query::read_command> cmd, dht::partition_range pr, db::consistency_level cl, size_t block_for,
+            host_id_vector_replica_set targets, tracing::trace_state_ptr trace_state, service_permit permit, db::per_partition_rate_limit::info rate_limit_info,
+            std::optional<locator::host_id> spare)
+        : abstract_read_executor(std::move(s), std::move(cf), std::move(proxy), std::move(ermp), std::move(cmd), std::move(pr), cl, block_for,
+                std::move(targets), std::move(trace_state), std::move(permit), rate_limit_info)
+        , _spare(spare) {}
     virtual void make_requests(digest_resolver_ptr resolver, storage_proxy::clock_type::time_point timeout) override {
         if (_targets.size() < 2) {
             on_internal_error(slogger,
@@ -6231,22 +6259,43 @@ public:
                                               _targets.size()));
         }
         _speculate_timer.set_callback([this, resolver, timeout] {
-            if (!resolver->is_completed()) { // at the time the callback runs request may be completed already
-                resolver->add_wait_targets(1); // we send one more request so wait for it too
-                // FIXME: consider disabling for CL=*ONE
-                auto send_request = [&] (bool has_data) {
-                    if (has_data) {
-                        _proxy->get_stats().speculative_digest_reads++;
-                        tracing::trace(_trace_state, "Launching speculative retry for digest");
-                        make_digest_requests(resolver, _targets.end() - 1, _targets.end(), timeout);
-                    } else {
-                        _proxy->get_stats().speculative_data_reads++;
-                        tracing::trace(_trace_state, "Launching speculative retry for data");
-                        make_data_requests(resolver, _targets.end() - 1, _targets.end(), timeout, true);
-                    }
-                };
-                send_request(resolver->has_data());
+            if (resolver->is_completed()) { // at the time the callback runs request may be completed already
+                return;
             }
+            const auto& erm = *_effective_replication_map_ptr;
+            if (!_spare || !_proxy->is_me(erm, _targets.back())) {
+                speculate(resolver, timeout);
+                return;
+            }
+            auto shard = dht::is_single_shard(erm.get_sharder(*_schema), *_schema, _partition_range);
+            if (!shard) {
+                speculate(resolver, timeout);
+                return;
+            }
+            // The extra replica is this node; a retry queued behind the owning shard's
+            // admission queue is unlikely to beat the original request.
+            (void)_proxy->get_db().invoke_on(*shard, default_smp_service_group(), [] (replica::database& db) {
+                return db.get_reader_concurrency_semaphore().has_admission_waiters();
+            }).then_wrapped([this, resolver, timeout, exec = shared_from_this()] (future<bool> f) {
+                bool overloaded = false; // on probe failure, speculate as before
+                if (f.failed()) {
+                    f.ignore_ready_future();
+                } else {
+                    overloaded = f.get();
+                }
+                // got_cl() may have run while the probe was in flight.
+                if (_got_cl || resolver->is_completed()) {
+                    return;
+                }
+                if (overloaded) {
+                    _proxy->get_stats().speculative_retries_redirected++;
+                    tracing::trace(_trace_state, "Local replica has reads queued for admission, redirecting speculative retry to {}", *_spare);
+                    _targets.back() = *_spare;
+                }
+                speculate(resolver, timeout);
+            }).handle_exception([] (std::exception_ptr ep) {
+                slogger.warn("Failed to send speculative retry: {}", ep);
+            });
         });
         auto& sr = _schema->speculative_retry();
         auto t = (sr.get_type() == speculative_retry::type::PERCENTILE) ?
@@ -6278,6 +6327,7 @@ public:
         }
     }
     virtual void got_cl() override {
+        _got_cl = true;
         _speculate_timer.cancel();
     }
     virtual void adjust_targets_for_reconciliation() override {
@@ -6377,7 +6427,15 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         return ::make_shared<always_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     } else {// PERCENTILE or CUSTOM.
         tracing::trace(trace_state, "Creating speculating_read_executor");
-        return ::make_shared<speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+        auto local_dc_filter = erm->get_topology().get_local_dc_filter();
+        std::optional<locator::host_id> spare;
+        for (const auto& ep : all_replicas) {
+            if (!std::ranges::contains(target_replicas, ep) && local_dc_filter(ep)) {
+                spare = ep;
+                break;
+            }
+        }
+        return ::make_shared<speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info, spare);
     }
 }
 
