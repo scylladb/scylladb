@@ -29,7 +29,7 @@ static constexpr int64_t simple_key_unused_value = std::numeric_limits<int64_t>:
  *    to std::numeric_limits<int64_t>::min()
  */
 inline int array_search_gt(int64_t val, const int64_t* array, const int capacity, const int size) noexcept {
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__aarch64__)
     using v4i64 = int64_t __attribute__((vector_size(32)));
     const v4i64 k = v4i64{} + val;
     v4i64 acc = {};
@@ -96,11 +96,30 @@ inline unsigned array_search_32_eq(uint8_t val, const uint8_t* arr) noexcept {
     return __builtin_ctzll(m | 0x100000000ull);
 }
 
+#elif defined(__aarch64__)
+
+inline unsigned array_search_16_eq(uint8_t val, const uint8_t* arr) noexcept {
+    using v16u8 = uint8_t __attribute__((vector_size(16)));
+    using v8u16 = uint16_t __attribute__((vector_size(16)));
+    using v8u8 = uint8_t __attribute__((vector_size(8)));
+    v16u8 a;
+    __builtin_memcpy(&a, arr, sizeof(a));
+    // shrn by 4 turns the 0x00/0xff lanes into a 64-bit mask, 4 bits per lane
+    v8u8 n = __builtin_convertvector((v8u16)(a == v16u8{} + val) >> 4, v8u8);
+    uint64_t m;
+    __builtin_memcpy(&m, &n, sizeof(m));
+    return m ? __builtin_ctzll(m) / 4 : 16;
+}
+
 #else
 
 inline unsigned array_search_16_eq(uint8_t val, const uint8_t* arr) noexcept {
     return std::find(arr, arr + 16, val) - arr;
 }
+
+#endif
+
+#ifndef __x86_64__
 
 inline unsigned array_search_32_eq(uint8_t val, const uint8_t* arr) noexcept {
     unsigned i = array_search_16_eq(val, arr);
