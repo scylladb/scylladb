@@ -2118,22 +2118,24 @@ async def test_alternator_mtls_and_plain_http(manager: ScyllaClusterManager, tmp
         alternator_bad.meta.client.list_tables()
 
 
-# The Alternator S3 export feature stores its metadata in tables under the
-# replicated system_distributed keyspace. Like the rest of that keyspace, these
-# tables are created by system_distributed_keyspace::start() on every cluster,
-# whether or not Alternator is enabled. Verify that they are created on every
-# node of a multi-node cluster and each node sees other nodes' data.
+# The Alternator S3 export and import features store their metadata in tables
+# under the replicated system_distributed keyspace. Like the rest of that
+# keyspace, these tables are created by system_distributed_keyspace::start() on
+# every cluster, whether or not Alternator is enabled. Verify that they are
+# created on every node of a multi-node cluster and each node sees other nodes' data.
 # The test will write one row per node
 # into each table and run SELECT from every node to verify that all rows are visible.
 # Writes and reads use QUORUM so that, on the RF=3 system_distributed keyspace, every read is
 # guaranteed to observe every write.
-async def test_export_to_s3_system_tables_readable_on_all_nodes(manager: ScyllaClusterManager):
+async def test_s3_system_tables_readable_on_all_nodes(manager: ScyllaClusterManager):
     # Each entry holds a table name, the name of its primary key column, and a
     # pattern used to build a key value unique to each node ("%s" is replaced
     # by the node's index).
     table_name_primary_key_primary_value_pattern_list = [
         ('alternator_export_to_s3_exports', 'export_arn', 'export-%s'),
         ('alternator_export_to_s3_client_tokens', 'client_token', 'token-%s'),
+        ('alternator_import_from_s3_imports', 'import_arn', 'import-%s'),
+        ('alternator_import_from_s3_client_tokens', 'client_token', 'token-%s'),
     ]
 
     servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
@@ -2160,3 +2162,10 @@ async def test_export_to_s3_system_tables_readable_on_all_nodes(manager: ScyllaC
                 keys.add(row[0])
             assert keys == expected_keys, \
                 f"node {host} sees {keys} in {table}, expected {expected_keys}"
+
+    # Rows of finished imports expire through the per-row TTL column
+    # metadata_expires_at, which every node must know about.
+    for host in hosts:
+        desc = (await cql.run_async("DESC TABLE system_distributed.alternator_import_from_s3_imports", host=host))[0].create_statement
+        assert 'metadata_expires_at timestamp TTL' in desc, \
+            f"node {host} has no TTL column metadata_expires_at in alternator_import_from_s3_imports: {desc}"
