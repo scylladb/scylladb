@@ -316,6 +316,10 @@ bool view_should_exist(const index_metadata& im);
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);
 data_type parse_type(sstring str);
+// Returns the given type with every user type in it replaced by a tuple of
+// its field types. This is how the type of a dropped column is stored, as the
+// user type may later be dropped too.
+data_type expand_user_type(data_type);
 
 sstring serialize_index_kind(index_metadata_kind kind);
 index_metadata_kind deserialize_index_kind(sstring kind);
