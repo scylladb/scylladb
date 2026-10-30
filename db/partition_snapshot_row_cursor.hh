@@ -258,6 +258,9 @@ class partition_snapshot_row_cursor final {
                         rt = pos->range_tombstone();
                         if (pos != rows.begin()) {
                             --pos;
+                            if (first) {
+                                _latest_it = pos;
+                            }
                         } else {
                             _background_continuity |= bool(cont);
                             if (cont) {
@@ -288,6 +291,9 @@ class partition_snapshot_row_cursor final {
                 if (_reversed) [[unlikely]] {
                     if (!rows.empty()) {
                         pos = std::prev(rows.end());
+                        if (first) {
+                            _latest_it = pos;
+                        }
                     } else {
                         _background_continuity = true;
                     }
@@ -452,6 +458,7 @@ public:
                             it = {};
                         } else {
                             --it;
+                            _latest_it = it;
                         }
                     } else {
                         // We can put anything in the match case since this continuity will not be used
@@ -464,6 +471,7 @@ public:
                 if (_reversed) [[unlikely]] {
                     if (!rows.empty()) {
                         it = std::prev(rows.end());
+                        _latest_it = it;
                         cont = is_continuous::yes;
                         rt = {};
                     } else {
