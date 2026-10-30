@@ -2503,6 +2503,18 @@ void table::deregister_metrics() {
     _view_stats._metrics.clear();
 }
 
+void table::set_aggregated_metrics(bool enabled) {
+    if (_config.enable_node_aggregated_table_metrics == enabled) {
+        return;
+    }
+    _config.enable_node_aggregated_table_metrics = enabled;
+    // With per-table reporting on, the aggregation setting isn't used.
+    if (!_config.enable_metrics_reporting) {
+        deregister_metrics();
+        set_metrics();
+    }
+}
+
 size_t compaction_group::live_sstable_count() const noexcept {
     return _main_sstables->size() + _maintenance_sstables->size();
 }

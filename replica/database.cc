@@ -1726,7 +1726,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.streaming_scheduling_group = _config.streaming_scheduling_group;
     cfg.maintenance_scheduling_group = _config.maintenance_scheduling_group;
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
-    cfg.enable_node_aggregated_table_metrics = db_config.enable_node_aggregated_table_metrics();
+    cfg.enable_node_aggregated_table_metrics = db.aggregated_metrics(s);
     cfg.tombstone_warn_threshold = db_config.tombstone_warn_threshold();
     cfg.view_update_memory_semaphore_limit = _config.view_update_memory_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
@@ -3876,6 +3876,19 @@ void database::plug_view_update_generator(db::view::view_update_generator& gener
 
 void database::unplug_view_update_generator() noexcept {
     _view_update_generator = nullptr;
+}
+
+void database::plug_aggregated_metrics(std::function<std::optional<bool>(const schema&)> fn) noexcept {
+    _aggregated_metrics = std::move(fn);
+}
+
+void database::unplug_aggregated_metrics() noexcept {
+    _aggregated_metrics = nullptr;
+}
+
+bool database::aggregated_metrics(const schema& s) const {
+    auto v = _aggregated_metrics ? _aggregated_metrics(s) : std::nullopt;
+    return v.value_or(_cfg.enable_node_aggregated_table_metrics());
 }
 
 void database::plug_snapshot_ctl(db::snapshot_ctl& snapshot_ctl) noexcept {

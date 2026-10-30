@@ -66,6 +66,7 @@ inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
 inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
 inline constexpr std::string_view repair_hints_batchlog_flush_discard_unreplayed_hints = "repair_hints_batchlog_flush_discard_unreplayed_hints";
 inline constexpr std::string_view auto_scrub_period_seconds = "auto_scrub_period_seconds";
+inline constexpr std::string_view aggregated_metrics = "aggregated_metrics";
 
 }
 
@@ -116,6 +117,10 @@ bool is_supported(const option& opt, const gms::feature_service& features);
 // scheduler falls back to when no scope stores an override, so the two cannot drift apart.
 constexpr bool auto_repair_enabled_default = false;
 constexpr int64_t auto_repair_threshold_default_seconds = 24 * 3600;
+
+// Default of aggregated_metrics, and of the yaml option enable_node_aggregated_table_metrics,
+// which tables fall back to when no scope stores an override.
+constexpr bool aggregated_metrics_default = true;
 
 // Returns nullopt on success. On failure, returns a human-readable reason.
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value);

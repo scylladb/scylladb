@@ -267,4 +267,11 @@ private:
     std::vector<config_callback> _config_callbacks;
 };
 
+// Applies aggregated_metrics to each table and its views, now and on every change.
+// Unplug before stopping `ccm`.
+future<> plug_aggregated_metrics(sharded<replica::database>& db, sharded<cluster_config_manager>& ccm,
+        sharded<cluster_config_manager::config_callback_registration>& callbacks);
+future<> unplug_aggregated_metrics(sharded<replica::database>& db,
+        sharded<cluster_config_manager::config_callback_registration>& callbacks);
+
 }
