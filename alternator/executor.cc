@@ -524,7 +524,7 @@ future<> executor::fill_table_size(rjson::value &table_description, schema_ptr s
         // there's no point in trying to estimate value of table that is being deleted, as other nodes more often than not might
         // move forward with deletion faster than we calculate the size
         if (!deleting) {
-            total_size = co_await _ss.estimate_total_sstable_volume(schema->id(), service::storage_service::ignore_errors::yes);
+            total_size = co_await _ss.estimate_total_sstable_volume(schema->id(), service::storage_service::ignore_errors::yes, executor::default_timeout());
             const auto expiry = std::chrono::seconds{ _proxy.data_dictionary().get_config().alternator_describe_table_info_cache_validity_in_seconds() };
             // Note: we don't care when the notification of other shards will finish, as long as it will be done
             // it's possible to get into race condition (next DescribeTable comes to other shard, that new shard doesn't have
