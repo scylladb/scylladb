@@ -17,6 +17,7 @@
 #include <exception>
 #include <stdexcept>
 #include <fmt/std.h>
+#include <seastar/core/loop.hh>
 #include <seastar/core/when_all.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -894,6 +895,8 @@ future<size_t> object_storage_base::num_references(const sstable& sst) const {
     return num_references(get_sstable_identifier(sst));
 }
 
+static constexpr size_t max_concurrent_component_deletes = 4;
+
 future<> object_storage_base::delete_components(std::vector<sstring> components, sstable_id sid, bool log_errors) const {
     auto prefix = this->prefix();
     auto delete_component = [this, &prefix, &sid, log_errors] (std::string_view component) -> future<> {
@@ -907,7 +910,11 @@ future<> object_storage_base::delete_components(std::vector<sstring> components,
         }
     };
 
-    co_await coroutine::parallel_for_each(components, [&delete_component] (const sstring& component) -> future<> {
+    // Deleting every component at once opens as many connections as there are
+    // names, into a pool that S3 has emptied while it sat idle since the last
+    // deletion, and each of those is a TLS handshake on this shard. A few at a
+    // time keeps the pool small and reuses what it opens.
+    co_await max_concurrent_for_each(components, max_concurrent_component_deletes, [&delete_component] (const sstring& component) -> future<> {
         co_await delete_component(component);
     });
     co_await delete_component(sstable_version_constants::TOC_SUFFIX);
