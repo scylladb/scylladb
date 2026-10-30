@@ -262,6 +262,7 @@ public:
     bool is_alive() const override;
     term_t get_current_term() const override;
     future<> read_barrier(seastar::abort_source* as) override;
+    future<index_t> wait_for_apply_committed(seastar::abort_source* as) override;
     void wait_until_candidate() override;
     future<> wait_election_done() override;
     future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) override;
@@ -2137,6 +2138,13 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
 
     logger.trace("[{}] read_barrier read index {}, applied index {}", _tag, read_idx, _applied_idx);
     co_return co_await wait_for_apply(read_idx, as);
+}
+
+future<index_t> server_impl::wait_for_apply_committed(seastar::abort_source* as) {
+    const auto commit_idx = _fsm->commit_idx();
+    logger.trace("[{}] wait_for_apply_committed commit index {}, applied index {}", _tag, commit_idx, _applied_idx);
+    co_await wait_for_apply(commit_idx, as);
+    co_return commit_idx;
 }
 
 void server_impl::abort_snapshot_transfer(server_id id) {
