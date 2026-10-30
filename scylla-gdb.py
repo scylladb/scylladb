@@ -2161,7 +2161,7 @@ def find_vptrs():
             continue
         objsize = int(pool.dereference()['_object_size'])
         span_size = pages[idx]['span_size'] * page_size
-        for idx2 in range(0, int(span_size / objsize) + 1):
+        for idx2 in range(int(span_size) // objsize):
             obj_addr = mem_start + idx * page_size + idx2 * objsize
             vptr = obj_addr.reinterpret_cast(vptr_type).dereference()
             if is_vptr(vptr):
