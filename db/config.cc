@@ -1545,7 +1545,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , sstable_compression_dictionaries_memory_budget_fraction(this, "sstable_compression_dictionaries_memory_budget_fraction", liveness::LiveUpdate, value_status::Used, 0.01,
         "Fall back to compression without dictionaries if RAM usage by dictionaries is greater or equal to this fraction of the shard's memory.")
     , sstable_compression_dictionaries_retrain_period_in_seconds(this, "sstable_compression_dictionaries_retrain_period_in_seconds", liveness::LiveUpdate, value_status::Used, 86400,
-        "Minimum age of the current compression dictionary before another dictionary for this table is trained.")
+        "Minimum age of the current compression dictionary (or of the last check which confirmed that it is still good enough) before another dictionary for this table is trained.")
     , sstable_compression_dictionaries_autotrainer_tick_period_in_seconds(this, "sstable_compression_dictionaries_autotrainer_tick_period_in_seconds", liveness::LiveUpdate, value_status::Used, 900,
         "The period with which automatic dictionary training is attempted.")
     , sstable_compression_dictionaries_min_training_dataset_bytes(this, "sstable_compression_dictionaries_min_training_dataset_bytes", liveness::LiveUpdate, value_status::Used, 1*1024*1024*1024,
