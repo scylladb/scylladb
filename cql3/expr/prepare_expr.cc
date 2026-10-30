@@ -209,7 +209,7 @@ column_specification_of(const expression& e) {
 static
 lw_shared_ptr<column_specification>
 usertype_field_spec_of(const column_specification& column, size_t field) {
-    auto&& ut = static_pointer_cast<const user_type_impl>(column.type);
+    auto&& ut = static_pointer_cast<const user_type_impl>(column.type->underlying_type());
     auto&& name = ut->field_name(field);
     auto&& sname = sstring(reinterpret_cast<const char*>(name.data()), name.size());
     return make_lw_shared<column_specification>(
@@ -222,11 +222,13 @@ usertype_field_spec_of(const column_specification& column, size_t field) {
 static
 void
 usertype_constructor_validate_assignable_to(const usertype_constructor& u, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver, prepare_memo& memo) {
-    if (!receiver.type->is_user_type()) {
+    // A DESC clustering column has a reversed type, so we need to look at its
+    // underlying type to find the user type.
+    if (!receiver.type->underlying_type()->is_user_type()) {
         throw exceptions::invalid_request_exception(format("Invalid user type literal for {} of type {}", *receiver.name, receiver.type->as_cql3_type()));
     }
 
-    auto ut = static_pointer_cast<const user_type_impl>(receiver.type);
+    auto ut = static_pointer_cast<const user_type_impl>(receiver.type->underlying_type());
     for (size_t i = 0; i < ut->size(); i++) {
         column_identifier field(to_bytes(ut->field_name(i)), utf8_type);
         if (!u.elements.contains(field)) {
@@ -258,7 +260,7 @@ usertype_constructor_prepare_expression(const usertype_constructor& u, data_dict
         return std::nullopt; // cannot infer type from {field: value}
     }
     usertype_constructor_validate_assignable_to(u, db, keyspace, schema_opt, *receiver, memo);
-    auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type);
+    auto&& ut = static_pointer_cast<const user_type_impl>(receiver->type->underlying_type());
     bool all_terminal = true;
 
     usertype_constructor::elements_map_type prepared_elements;
