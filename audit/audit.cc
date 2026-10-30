@@ -271,22 +271,30 @@ future<> audit::start_storage(const db::config& cfg) {
     co_await audit_instance().invoke_on_all([] (audit& local_audit) {
         local_audit._migration_notifier.register_listener(local_audit._schema_listener.get());
     });
-    co_await audit_instance().invoke_on_all([&cfg] (audit& local_audit) -> future<> {
-        co_await local_audit._storage_helper_ptr->start(cfg);
+    co_await audit_instance().invoke_on_all([&cfg] (audit& local_audit) {
+        return local_audit._storage_helper_ptr->start(cfg);
+    });
+    // A helper may write the records of other shards, so no shard takes
+    // records before every shard has started its helper.
+    co_await audit_instance().invoke_on_all([] (audit& local_audit) {
         local_audit._storage_started = true;
     });
 }
 
 future<> audit::stop_storage() {
     if (!audit_instance().local_is_initialized()) {
-        return make_ready_future<>();
+        co_return;
     }
-    return audit_instance().invoke_on_all([] (audit& local_audit) -> future<> {
+    co_await audit_instance().invoke_on_all([] (audit& local_audit) {
         // Closing the gate is the single shutdown signal: in-flight writes are
         // drained and any write entering afterwards is rejected by try_with_gate.
         // The storage-ready flag is not cleared here; it only guards startup.
-        co_await local_audit._pending_writes.close();
-        co_await local_audit._storage_helper_ptr->stop();
+        return local_audit._pending_writes.close();
+    });
+    // A helper may write the records of other shards, so none stops before
+    // every shard has closed its gate.
+    co_await audit_instance().invoke_on_all([] (audit& local_audit) {
+        return local_audit._storage_helper_ptr->stop();
     });
 }
 
