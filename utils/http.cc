@@ -9,15 +9,83 @@
 #include "http.hh"
 #include "rest/client.hh"
 
+#include <array>
+
 #include <boost/regex.hpp>
+#include <seastar/core/file.hh>
+#include <seastar/core/fstream.hh>
 #include <seastar/coroutine/all.hh>
+
+static logging::logger trust_log("http_trust");
+
+// The bundle is a few hundred KB. Reading it whole would be an oversized
+// allocation on the shard (seastar warns above 128 KiB, and SCT turns that
+// warning into a test error), so it goes to gnutls one certificate at a time.
+static future<> load_ca_bundle(tls::certificate_credentials& cred, const char* path) {
+    auto f = co_await open_file_dma(path, open_flags::ro);
+    auto in = make_file_input_stream(std::move(f), file_input_stream_options{.buffer_size = 32 * 1024});
+    std::exception_ptr ex;
+    try {
+        static constexpr std::string_view end_marker = "-----END CERTIFICATE-----";
+        std::string pending;
+        for (auto buf = co_await in.read(); !buf.empty(); buf = co_await in.read()) {
+            pending.append(buf.get(), buf.size());
+            for (auto pos = pending.find(end_marker); pos != std::string::npos; pos = pending.find(end_marker)) {
+                auto end = pos + end_marker.size();
+                cred.set_x509_trust(tls::blob(pending.data(), end), tls::x509_crt_format::PEM);
+                pending.erase(0, end);
+            }
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await in.close();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+}
+
+// The CA bundles the distributions generate from their trust store. Loading one
+// puts the trust list in memory. set_system_trust() instead hands gnutls its
+// default trust store, which in the build we ship is the p11-kit trust module
+// (the package bundles pkcs11/p11-kit-trust.so and points it at the host's
+// trust through SCYLLA_P11_TRUST_PATHS), and every certificate verification
+// then goes through that module. Measured against s3.us-east-1.amazonaws.com
+// with gnutls 3.8.13: a verification costs ~9.5 ms of CPU through p11-kit and
+// ~0.6-2 ms from an in-memory list, on top of ~2.3 ms for the handshake
+// itself. Every new object storage connection pays it, on the shard, without
+// preemption. Both bundles are generated from the trusted set only, by
+// update-ca-trust and update-ca-certificates, so for server authentication
+// they trust what p11-kit trusts.
+static constexpr std::array ca_bundle_paths = {
+    "/etc/pki/tls/certs/ca-bundle.crt",                  // RHEL, Fedora, Amazon Linux
+    "/etc/ssl/certs/ca-certificates.crt",                // Debian, Ubuntu
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // what the RHEL link points at
+};
 
 future<shared_ptr<tls::certificate_credentials>> utils::http::system_trust_credentials() {
     static thread_local shared_ptr<tls::certificate_credentials> system_trust_credentials;
     if (!system_trust_credentials) {
         // can race, and overwrite the object. that is fine.
         auto cred = make_shared<tls::certificate_credentials>();
-        co_await cred->set_system_trust();
+        bool loaded = false;
+        for (auto path : ca_bundle_paths) {
+            if (!co_await file_exists(path)) {
+                continue;
+            }
+            try {
+                co_await load_ca_bundle(*cred, path);
+                trust_log.info("Loaded the CA trust list from {}", path);
+                loaded = true;
+                break;
+            } catch (...) {
+                trust_log.warn("Could not load the CA trust list from {}: {}", path, std::current_exception());
+            }
+        }
+        if (!loaded) {
+            trust_log.info("No CA bundle file found, using the system trust store");
+            co_await cred->set_system_trust();
+        }
         system_trust_credentials = std::move(cred);
     }
     co_return system_trust_credentials;
