@@ -66,7 +66,9 @@ protected:
     lw_shared_ptr<const parameters> _parameters;
     ::shared_ptr<selection::selection> _selection;
     const ::shared_ptr<const restrictions::statement_restrictions> _restrictions;
-    const bool _restrictions_need_filtering;
+private:
+    const bool _restrictions_need_filtering; // Access via needs_post_filtering()
+protected:
     ::shared_ptr<std::vector<size_t>> _group_by_cell_indices; ///< Indices in result row of cells holding GROUP BY values.
     bool _is_reversed;
     expr::unset_bind_variable_guard _limit_unset_guard;
@@ -167,6 +169,10 @@ protected:
         std::unique_ptr<service::pager::query_pager> pager, const query_options& options, gc_clock::time_point now,
         int32_t page_size, db::timeout_clock::time_point timeout, uint64_t limit) const;
 
+    virtual bool needs_post_filtering() const {
+        return _restrictions_need_filtering;
+    }
+
     bool needs_post_query_ordering() const;
     virtual void update_stats_rows_read(int64_t rows_read) const {
         _stats.rows_read += rows_read;
@@ -231,6 +237,8 @@ public:
 private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
             service::query_state& state, const query_options& options) const override;
+
+    bool needs_post_filtering() const override;
 
     lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
             const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const;
