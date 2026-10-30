@@ -75,6 +75,7 @@ public:
     ///
     ///   ks_prop_defs(flattened()) == *this
     ///
+    /// except for durable_writes, which is ignored and not forwarded.
     map_type flattened() const;
 
     void validate(const gms::feature_service&);
@@ -84,7 +85,7 @@ public:
     std::optional<unsigned> get_initial_tablets(std::optional<unsigned> default_value, bool enforce_tablets = false) const;
     std::optional<data_dictionary::consistency_config_option> get_consistency_option() const;
     data_dictionary::storage_options get_storage_options() const;
-    bool get_durable_writes() const;
+    bool durable_writes_disabled() const;
     bool has_keyspace_config_properties(const gms::feature_service&) const;
     bool has_non_keyspace_config_properties(const gms::feature_service&) const;
     std::vector<std::pair<sstring, std::optional<sstring>>> get_keyspace_config_updates(const gms::feature_service&) const;

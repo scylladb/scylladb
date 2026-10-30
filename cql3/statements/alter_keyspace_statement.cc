@@ -181,10 +181,9 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         // keyspace_metadata verbatim and swaps only config_options. This is a correctness
         // requirement, not an optimization: the generic path below rebuilds the metadata from
         // _attrs via as_ks_metadata_update(), which re-applies DEFAULTS for every legacy
-        // property the statement did not mention -- get_boolean(KW_DURABLE_WRITES, true) and
-        // get_storage_options() (a default-constructed, i.e. local, storage_options). Routing
-        // "ALTER KEYSPACE ks WITH <config_prop> = ..." through that rebuild would silently reset
-        // durable_writes to true and clobber non-local storage options.
+        // property the statement did not mention -- get_storage_options() (a default-constructed,
+        // i.e. local, storage_options). Routing "ALTER KEYSPACE ks WITH <config_prop> = ..."
+        // through that rebuild would silently clobber non-local storage options.
         //
         // Note the resulting asymmetry: a MIXED statement (config + legacy properties) does go
         // through the rebuild, so it still re-applies those defaults. That is pre-existing
@@ -220,6 +219,9 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, *tmptr, feat, qp.db().get_config());
         utils::chunked_vector<mutation> muts;
         std::vector<sstring> warnings;
+        if (_attrs->durable_writes_disabled()) {
+            warnings.push_back("durable_writes = false is ignored; the keyspace uses the commitlog.");
+        }
 
         auto ts = mc.write_timestamp();
         auto global_request_id = mc.new_group0_state_id();

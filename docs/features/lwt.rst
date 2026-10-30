@@ -530,17 +530,6 @@ operations — such as migration, split, or merge — are consistently applied t
 tablets and its corresponding `$paxos` table tablets. As a result, Paxos state remains intact
 and consistent during such operations.
 
-.. warning::
-
-   Since the `$paxos` table belongs to the user table's keyspace, it inherits the keyspace's
-   ``durable_writes`` option. If the keyspace has ``durable_writes = false``, Paxos state is
-   not written to the commit log, and a replica that crashes, or is otherwise shut down
-   uncleanly, can lose Paxos state it has already acknowledged. LWT on tablet-based tables in such
-   a keyspace is then not linearizable: for example, two conditional updates that expect the
-   same old value can both be applied. Keep ``durable_writes`` enabled in keyspaces that use
-   LWT with tablets. Vnode-based tables are not affected, since `system.paxos` is always
-   written to the commit log.
-
 Access to the `$paxos` tables is restricted. ScyllaDB does not grant any explicit permissions on them.
 Only superusers can view these tables, and even they cannot execute `ALTER` or `DROP` commands.
 

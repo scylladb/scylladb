@@ -376,6 +376,22 @@ def test_storage_options_alter_type(cql, scylla_only):
         with pytest.raises(InvalidRequest):
             cql.execute(f"ALTER KEYSPACE {keyspace} {ksdef_local}")
 
+# durable_writes = false is accepted for compatibility but ignored: the
+# keyspace is stored as durable and the client gets a warning.
+def test_durable_writes_false_ignored(cql, this_dc, scylla_only):
+    ks = unique_name()
+    f = cql.execute_async(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND DURABLE_WRITES = false")
+    f.result()
+    try:
+        assert f.warnings and 'durable_writes' in '\n'.join(f.warnings)
+        assert cql.execute(f"SELECT durable_writes FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'").one().durable_writes
+        f = cql.execute_async(f"ALTER KEYSPACE {ks} WITH DURABLE_WRITES = false")
+        f.result()
+        assert f.warnings and 'durable_writes' in '\n'.join(f.warnings)
+        assert cql.execute(f"SELECT durable_writes FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'").one().durable_writes
+    finally:
+        cql.execute(f"DROP KEYSPACE {ks}")
+
 # Reproducer for scylladb#14139
 def test_alter_keyspace_preserves_udt(cql):
     ks = unique_name()
