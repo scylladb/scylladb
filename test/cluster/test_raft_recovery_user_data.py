@@ -19,7 +19,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, unique_name, wait_for_cql_and_get_hosts
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
         check_token_ring_and_group0_consistency, delete_discovery_state_and_group0_id, delete_raft_group_data, \
-        reconnect_driver, start_writes, wait_for_cdc_generations_publishing
+        find_recovery_leader_after_apply_committed, reconnect_driver, start_writes, wait_for_cdc_generations_publishing
 
 
 @pytest.mark.parametrize("remove_dead_nodes_with", ["remove", "replace"])
@@ -93,25 +93,21 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
 
     logging.info('Starting the recovery procedure')
 
-    logging.info(f'Restarting {live_servers}')
-    await manager.rolling_restart(live_servers)
-
-    await reconnect_driver(manager)
-    cql, _ = await manager.get_ready_cql(live_servers)
+    logging.info(f'Finding the recovery leader among {live_servers}')
+    recovery_leader = await find_recovery_leader_after_apply_committed(manager, live_servers)
 
     logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
     await gather_safely(*(delete_discovery_state_and_group0_id(cql, h) for h in hosts))
 
-    # FIXME: use the API to find the recovery leader here when it is implemented. A background operation like a tablet
-    # migration could change the group 0 state just before losing the majority. Then, node 0 could be an incorrect
-    # recovery leader because there could be another node in dc1 with a newer group 0 state.
-    recovery_leader_id = await manager.get_host_id(live_servers[0].server_id)
+    recovery_leader_id = await manager.get_host_id(recovery_leader.server_id)
 
     async def set_recovery_leader(srv: ServerInfo):
         await manager.server_update_config(srv.server_id, 'recovery_leader', recovery_leader_id)
 
-    logging.info(f'Restarting {live_servers} with recovery leader {live_servers[0].server_id}')
-    await manager.rolling_restart(live_servers, with_down=set_recovery_leader)
+    # The recovery leader must be restarted first.
+    restart_order = [recovery_leader] + [srv for srv in live_servers if srv.server_id != recovery_leader.server_id]
+    logging.info(f'Restarting {restart_order} with recovery leader {recovery_leader.server_id}')
+    await manager.rolling_restart(restart_order, with_down=set_recovery_leader)
 
     await reconnect_driver(manager)
     cql, hosts = await manager.get_ready_cql(live_servers)
@@ -224,9 +220,9 @@ async def test_raft_recovery_user_data_sc(manager: ScyllaClusterManager):
     holds all the data written so far and accepts writes.
     5. Replace the dead nodes from dc2 and check the keyspace again.
 
-    FIXME: give the keyspace replicas in dc2 and write to it during the rolling restarts, as
+    FIXME: give the keyspace replicas in dc2 and write to it during the rolling restart, as
     test_raft_recovery_user_data does, once raft snapshot transfer is implemented for strongly consistent tables. Both
-    need a snapshot transfer: after the rolling restarts, the replicas in dc1 have no log entries a new replica in dc2
+    need a snapshot transfer: after the rolling restart, the replicas in dc1 have no log entries a new replica in dc2
     could catch up from, and a replica restarted before the leader misses the entries the leader drops from its log on
     its own restart.
     test_minority_dc_loss in test_strong_consistency_multidc.py covers a raft group of a strongly consistent tablet
@@ -308,29 +304,25 @@ async def test_raft_recovery_user_data_sc(manager: ScyllaClusterManager):
 
     logging.info('Starting the recovery procedure')
 
-    logging.info(f'Restarting {live_servers}')
-    await manager.rolling_restart(live_servers)
-
-    await reconnect_driver(manager)
-    cql, _ = await manager.get_ready_cql(live_servers)
-    await write_and_check(2)
+    logging.info(f'Finding the recovery leader among {live_servers}')
+    recovery_leader = await find_recovery_leader_after_apply_committed(manager, live_servers)
 
     logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
     await gather_safely(*(delete_discovery_state_and_group0_id(cql, h) for h in hosts))
 
-    # FIXME: use the API to find the recovery leader here when it is implemented. See test_raft_recovery_user_data.
-    recovery_leader = live_servers[0]
     recovery_leader_id = await manager.get_host_id(recovery_leader.server_id)
 
     async def set_recovery_leader(srv: ServerInfo):
         await manager.server_update_config(srv.server_id, 'recovery_leader', recovery_leader_id)
 
-    logging.info(f'Restarting {live_servers} with recovery leader {recovery_leader.server_id}')
-    await manager.rolling_restart(live_servers, with_down=set_recovery_leader)
+    # The recovery leader must be restarted first.
+    restart_order = [recovery_leader] + [srv for srv in live_servers if srv.server_id != recovery_leader.server_id]
+    logging.info(f'Restarting {restart_order} with recovery leader {recovery_leader.server_id}')
+    await manager.rolling_restart(restart_order, with_down=set_recovery_leader)
 
     await reconnect_driver(manager)
     cql, hosts = await manager.get_ready_cql(live_servers)
-    await write_and_check(3)
+    await write_and_check(2)
 
     # Mark the dead nodes as permanently dead, so that every replace request ignores the dead nodes replaced by the
     # other requests, and the requests can run concurrently.
@@ -353,4 +345,4 @@ async def test_raft_recovery_user_data_sc(manager: ScyllaClusterManager):
 
     await reconnect_driver(manager)
     await manager.get_ready_cql(live_servers + new_servers)
-    await write_and_check(4)
+    await write_and_check(3)
