@@ -340,6 +340,19 @@ class fsm {
     // only feeds a leadership decision gated on the failure persisting for
     // multiples of delta -- a tick of staleness cannot matter.
     bool _clock_ok = false;
+    // memory_usage_of() the first entry the last append_request that carried
+    // entries had no room for, or 0 if it had room for all of them. The log is
+    // contiguous, so it is the entry a leader has to send us next.
+    //
+    // A new leader may have a different entry at that index, so the value is
+    // stale until that leader sends us entries. It never makes us report full
+    // to that leader: every request it sends us until we accept one carries
+    // entries, since it starts at the dummy it appends on election and walks
+    // back from there. One that does not match our log is rejected with
+    // log_full = false, and the first one that matches goes through
+    // maybe_append(), which overwrites the value before the reply reports
+    // log_full.
+    size_t _refused_entry_size = 0;
     // The value of log_is_full() report_log_full() last reported to a leader.
     // Its log lines mark the transitions, and apply_snapshot() prods the leader
     // to resume while it is true and the log has room.
@@ -760,9 +773,10 @@ public:
         return _log[idx.value()];
     }
 
-    // True if the applier fiber can shrink the log on its own: it snapshots
-    // once it applies past the snapshot index, and it applies only committed
-    // entries, so something has to be committed above the snapshot.
+    // True if the applier fiber can shrink the log on its own: it takes a
+    // snapshot whenever log_is_full() and it has applied past the snapshot
+    // index, and it applies only committed entries, so something has to be
+    // committed above the snapshot.
     //
     // While this is false append_entries() lets one entry through per request;
     // see max_follower_log_size for the bound that costs.
@@ -770,9 +784,11 @@ public:
         return _commit_idx > _log.get_snapshot().idx;
     }
 
-    // True if we will refuse further entries from a leader until a snapshot
-    // shrinks the log. Reported to the leader in every append_reply, so it can
-    // stop replicating to us. Always false if the limit is disabled.
+    // True if the entry a leader has to send us next does not fit into
+    // max_follower_log_size, so we will refuse it until a snapshot shrinks the
+    // log. Reported to the leader in every append_reply, so it can stop
+    // replicating to us. Turns false by itself once the log has room for that
+    // entry. Always false if the limit is disabled.
     //
     // Requires can_shrink_log(): while we cannot shrink we let one entry
     // through per request, so the flag would promise a refusal we do not make.
@@ -781,7 +797,7 @@ public:
     // log - and those are what let us shrink again.
     bool log_is_full() const {
         return _config.max_follower_log_size != 0 &&
-               _log.memory_usage() >= _config.max_follower_log_size &&
+               _log.memory_usage() + _refused_entry_size > _config.max_follower_log_size &&
                can_shrink_log();
     }
 

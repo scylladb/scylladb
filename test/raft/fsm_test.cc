@@ -3460,8 +3460,12 @@ struct follower_log_limit_fixture {
     size_t entry_size = command_memory_usage(cmd);
 
     raft::fsm_config config(size_t entries_budget) {
+        return config_bytes(entries_budget * entry_size);
+    }
+
+    raft::fsm_config config_bytes(size_t limit) {
         auto fcfg = fsm_cfg;
-        fcfg.max_follower_log_size = entries_budget * entry_size;
+        fcfg.max_follower_log_size = limit;
         return fcfg;
     }
 
@@ -3579,7 +3583,7 @@ BOOST_AUTO_TEST_CASE(test_follower_log_limit_allows_overlapping_entries) {
     fsm.step(f.leader_id, f.request(index_t{3}, term_t{1}, 0, index_t{1}));
     (void)fsm.get_output();
     BOOST_CHECK_EQUAL(fsm.commit_idx(), index_t{1});
-    BOOST_CHECK(fsm.log_is_full());
+    BOOST_CHECK(fsm.can_shrink_log());
 
     // Re-sending entries the follower already has is accepted in full even
     // though it is at the limit, and does not grow the log.
@@ -3654,8 +3658,10 @@ BOOST_AUTO_TEST_CASE(test_follower_log_limit_enforced_when_able_to_shrink) {
     // An empty request commits what we already have without growing the log.
     fsm.step(f.leader_id, f.request(index_t{3}, term_t{1}, 0, index_t{3}));
     (void)fsm.get_output();
-    // Now we can drain and snapshot, so we will refuse - and say so.
-    BOOST_CHECK(fsm.log_is_full());
+    // Now we can drain and snapshot, so we will refuse. Nothing has been
+    // refused yet, so we are not full until an entry does not fit.
+    BOOST_CHECK(fsm.can_shrink_log());
+    BOOST_CHECK(!fsm.log_is_full());
     BOOST_CHECK_EQUAL(fsm.commit_idx(), index_t{3});
     BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{3});
 
@@ -3667,6 +3673,73 @@ BOOST_AUTO_TEST_CASE(test_follower_log_limit_enforced_when_able_to_shrink) {
     auto reply = f.reply_of(output);
     BOOST_CHECK_EQUAL(f.accepted_idx(reply), index_t{3});
     BOOST_CHECK(reply.log_full);
+}
+
+// Entries rarely fill max_follower_log_size exactly. A follower which refuses an
+// entry because it does not fit is full, with its log short of the limit.
+BOOST_AUTO_TEST_CASE(test_follower_log_full_when_entries_do_not_fill_the_limit) {
+    follower_log_limit_fixture f;
+    const size_t limit = 2 * f.entry_size + f.entry_size / 2;
+    fsm_debug fsm(f.follower_id, term_t{1}, server_id{}, f.make_log(2),
+            trivial_failure_detector, f.config_bytes(limit));
+    // Commit what we have, so that we can shrink and refuse.
+    fsm.step(f.leader_id, f.request(index_t{2}, term_t{1}, 0, index_t{2}));
+    (void)fsm.get_output();
+    BOOST_CHECK(fsm.can_shrink_log());
+    // Short of the limit, with nothing refused yet.
+    BOOST_CHECK_LT(fsm.get_log().memory_usage(), limit);
+    BOOST_CHECK(!fsm.log_is_full());
+
+    // The third entry does not fit.
+    fsm.step(f.leader_id, f.request(index_t{2}, term_t{1}, 1, index_t{2}));
+    auto output = fsm.get_output();
+    BOOST_CHECK_EQUAL(fsm.get_log().last_idx(), index_t{2});
+    BOOST_CHECK_LT(fsm.get_log().memory_usage(), limit);
+    auto reply = f.reply_of(output);
+    BOOST_CHECK_EQUAL(f.accepted_idx(reply), index_t{2});
+    BOOST_CHECK(fsm.log_is_full());
+    BOOST_CHECK(reply.log_full);
+
+    // The leader's entry-less probe gets the same answer: the entry we wait for
+    // is still the one which did not fit.
+    fsm.step(f.leader_id, f.request(index_t{2}, term_t{1}, 0, index_t{2}));
+    output = fsm.get_output();
+    BOOST_CHECK(f.reply_of(output).log_full);
+}
+
+// A follower stays full only while the refused entry does not fit. A snapshot
+// which frees room for it makes the follower ask the leader to resume, while
+// something is still committed above the snapshot.
+BOOST_AUTO_TEST_CASE(test_follower_log_full_clears_when_the_refused_entry_fits) {
+    follower_log_limit_fixture f;
+    const size_t limit = 2 * f.entry_size + f.entry_size / 2;
+    fsm_debug fsm(f.follower_id, term_t{1}, server_id{}, f.make_log(2),
+            trivial_failure_detector, f.config_bytes(limit));
+    fsm.step(f.leader_id, f.request(index_t{2}, term_t{1}, 0, index_t{2}));
+    (void)fsm.get_output();
+    fsm.step(f.leader_id, f.request(index_t{2}, term_t{1}, 1, index_t{2}));
+    auto output = fsm.get_output();
+    BOOST_REQUIRE(f.reply_of(output).log_full);
+
+    // Snapshot the first entry only, keeping no trailing entries.
+    BOOST_REQUIRE(fsm.apply_snapshot(
+            raft::snapshot_descriptor{.idx = index_t{1}, .term = term_t{1}, .config = f.cfg},
+            0, 0, true));
+    BOOST_CHECK(fsm.can_shrink_log());
+    BOOST_CHECK(!fsm.log_is_full());
+    output = fsm.get_output();
+    BOOST_REQUIRE_EQUAL(output.messages.size(), 1);
+    BOOST_CHECK_EQUAL(output.messages.back().first, f.leader_id);
+    auto prod = std::get<raft::append_reply>(output.messages.back().second);
+    BOOST_CHECK(std::holds_alternative<raft::append_reply::rejected>(prod.result));
+    BOOST_CHECK(!prod.log_full);
+
+    // The entry which did not fit is accepted now.
+    fsm.step(f.leader_id, f.request(index_t{2}, term_t{1}, 1, index_t{2}));
+    output = fsm.get_output();
+    auto reply = f.reply_of(output);
+    BOOST_CHECK_EQUAL(f.accepted_idx(reply), index_t{3});
+    BOOST_CHECK(!reply.log_full);
 }
 
 // The leader stops replicating to a follower which reported a full log, and
@@ -3921,14 +3994,21 @@ BOOST_AUTO_TEST_CASE(test_leader_replicates_to_full_follower_with_diverged_tail)
             trivial_failure_detector, cfg);
     BOOST_REQUIRE_EQUAL(B.get_log().memory_usage(), 6 * f.entry_size);
     // A previous leader told B that its prefix is committed, so it has something
-    // to apply - and therefore reports itself full. Its applier never runs here,
-    // which models the slow state machine this whole limit exists for: the
-    // snapshot index stays at 0, so it can never stop reporting full on its own.
+    // to apply and refuses an entry which does not fit - and reports itself full.
+    // Its applier never runs here, which models the slow state machine this whole
+    // limit exists for: the snapshot index stays at 0, so it can never stop
+    // reporting full on its own.
     B.step(old_leader, raft::append_request{.current_term = term_t{1},
             .prev_log_idx = index_t{3}, .prev_log_term = term_t{1},
             .leader_commit_idx = index_t{3}, .entries = {}});
     (void)B.get_output();
     BOOST_REQUIRE_EQUAL(B.commit_idx(), index_t{3});
+    // The old leader's next entry does not fit.
+    B.step(old_leader, raft::append_request{.current_term = term_t{1},
+            .prev_log_idx = index_t{6}, .prev_log_term = term_t{1},
+            .leader_commit_idx = index_t{3}, .entries = {entry(term_t{1}, index_t{7})}});
+    (void)B.get_output();
+    BOOST_REQUIRE_EQUAL(B.get_log().last_idx(), index_t{6});
     BOOST_REQUIRE(B.log_is_full());
 
     // A holds a longer log whose tail is from a later term, so it conflicts with

@@ -401,12 +401,12 @@ struct append_reply {
     // transfer and nothing more. False on a node with leases disabled, and on
     // one that predates this field.
     bool clock_ok = false;
-    // Set if the in-memory log of the follower has reached
-    // max_follower_log_size, so it will refuse further entries until a snapshot
-    // shrinks the log. Advisory: it lets the leader stop sending entries the
-    // follower would discard. The follower enforces the bound itself, so a
-    // leader which ignores the flag - an older version during an upgrade -
-    // costs only bandwidth.
+    // Set if the in-memory log of the follower has no room under
+    // max_follower_log_size for the next entry, so it will refuse further
+    // entries until a snapshot shrinks the log. Advisory: it lets the leader
+    // stop sending entries the follower would discard. The follower enforces
+    // the bound itself, so a leader which ignores the flag - an older version
+    // during an upgrade - costs only bandwidth.
     bool log_full = false;
 };
 
@@ -890,8 +890,8 @@ struct server_status {
     size_t in_memory_log_size = 0;
     // Bytes used by the in-memory part of the log.
     size_t log_memory_usage = 0;
-    // The in-memory log reached max_follower_log_size, so entries from a
-    // leader are being refused.
+    // The in-memory log has no room under max_follower_log_size for the next
+    // entry from a leader, so entries from it are being refused.
     bool log_full = false;
     index_t last_idx;
     term_t last_term;
