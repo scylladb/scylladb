@@ -94,6 +94,17 @@ public:
      * detect a repeated request. */
     static constexpr auto ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS = "alternator_export_to_s3_client_tokens";
 
+    /* This table is used by the Alternator import from S3 code to store the metadata of each
+     * import, keyed by its ARN. The node driving an import writes its progress here, and
+     * DescribeImport/ListImports read from it. */
+    static constexpr auto ALTERNATOR_IMPORT_FROM_S3_IMPORTS = "alternator_import_from_s3_imports";
+
+    /* This table is used by the Alternator import from S3 code to make ImportTable
+     * idempotent: it maps the client token of a request to the import which that request
+     * created. The node accepting a request writes the token here and later looks it up to
+     * detect a repeated request. */
+    static constexpr auto ALTERNATOR_IMPORT_FROM_S3_CLIENT_TOKENS = "alternator_import_from_s3_client_tokens";
+
     static constexpr uint64_t SNAPSHOT_SSTABLES_TTL_SECONDS = std::chrono::seconds(std::chrono::days(3)).count();
 
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
