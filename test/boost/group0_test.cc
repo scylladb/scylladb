@@ -11,6 +11,7 @@
 #include "test/lib/cql_assertions.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/shared_future.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/util/defer.hh>
 
 #include "clocks-impl.hh"
@@ -18,6 +19,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/error_injection.hh"
 
+#include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "schema/schema_builder.hh"
 #include "tasks/task_manager.hh"
@@ -249,6 +251,72 @@ SEASTAR_TEST_CASE(test_concurrent_group0_modifications) {
         // Each execution should have succeeded on first attempt because the mutex serialized them all.
         BOOST_REQUIRE_EQUAL(successes, N*M);
 
+    });
+}
+
+// A group0 operation's timeout has to cover the group0 mutexes that start_operation() takes,
+// not only the read barrier between them: an operation queued behind a slow holder must fail
+// on its own timeout instead of waiting until the holder lets go.
+SEASTAR_TEST_CASE(test_group0_operation_timeout_covers_the_group0_mutexes) {
+    return do_with_cql_env([] (cql_test_env& e) -> future<> {
+        auto& rclient = e.get_raft_group0_client();
+        abort_source as;
+        // Well above what a single-node read barrier takes, even in debug.
+        constexpr auto timeout = std::chrono::seconds(1);
+        // A holder lets go after this at the latest, so an operation that ignores its timeout
+        // makes the check fail instead of hanging the test.
+        constexpr auto hold_time = std::chrono::seconds(15);
+
+        auto with_timeout = [&] {
+            return service::raft_timeout{.value = lowres_clock::now() + timeout};
+        };
+
+        // Runs `op` while `holder` keeps one of the group0 mutexes, and requires it to fail with
+        // the group0 timeout naming that mutex.
+        auto require_timeout = [&] <typename Holder> (Holder holder, std::string_view mutex_name, std::function<future<>()> op) -> future<> {
+            std::optional<Holder> held(std::move(holder));
+            abort_source stop_holding;
+            auto release = sleep_abortable(hold_time, stop_holding).handle_exception([] (std::exception_ptr) {}).then([&held] {
+                held.reset();
+            });
+            std::exception_ptr ex;
+            try {
+                co_await op();
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            stop_holding.request_abort();
+            co_await std::move(release);
+
+            BOOST_REQUIRE_MESSAGE(ex, fmt::format("the operation completed instead of timing out on the {}", mutex_name));
+            const auto expected = fmt::format("raft operation [{}] timed out", mutex_name);
+            try {
+                std::rethrow_exception(ex);
+            } catch (const std::exception& err) {
+                BOOST_REQUIRE_MESSAGE(std::string_view(err.what()).find(expected) != std::string_view::npos,
+                        fmt::format("expected \"{}\", got: {}", expected, err.what()));
+            }
+        };
+
+        testlog.info("A guard holds the operation mutex");
+        co_await require_timeout(co_await rclient.start_operation(as), "group0 operation mutex", [&] {
+            return rclient.start_operation(as, with_timeout()).discard_result();
+        });
+
+        testlog.info("Only the read-apply mutex is held");
+        co_await require_timeout(co_await get_units(rclient.read_apply_mutex(), 1), "group0 read apply mutex", [&] {
+            return rclient.start_operation(as, with_timeout()).discard_result();
+        });
+
+        // A DDL statement takes its guard with the default timeout, group0_raft_op_timeout_in_ms.
+        testlog.info("A DDL statement waits for a guard held elsewhere");
+        auto& op_timeout = e.db_config().group0_raft_op_timeout_in_ms;
+        const auto saved_op_timeout = op_timeout();
+        op_timeout.set(std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count());
+        auto restore_op_timeout = defer([&] () noexcept { op_timeout.set(uint32_t(saved_op_timeout)); });
+        co_await require_timeout(co_await rclient.start_operation(as), "group0 operation mutex", [&] {
+            return e.execute_cql("CREATE TABLE blocked (pk int PRIMARY KEY)").discard_result();
+        });
     });
 }
 
