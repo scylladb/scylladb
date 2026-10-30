@@ -97,6 +97,7 @@ public:
         uint64_t commitlog_total_space_in_mb = 0;
         std::optional<uint64_t> commitlog_flush_threshold_in_mb = {};
         std::optional<uint64_t> commitlog_data_max_lifetime_in_seconds = {};
+        // Overwritten by from_db_config; the effective default is in db/config.cc/scylla.yaml.
         uint64_t commitlog_segment_size_in_mb = 32;
         uint64_t commitlog_sync_period_in_ms = 10 * 1000; //TODO: verify default!
         // Max number of segments to keep in pre-alloc reserve.
