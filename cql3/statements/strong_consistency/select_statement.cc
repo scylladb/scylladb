@@ -12,6 +12,7 @@
 #include "query/query-request.hh"
 #include "cql3/query_processor.hh"
 #include "replica/database.hh"
+#include "service/storage_proxy.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 
@@ -43,11 +44,15 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
         throw exceptions::invalid_request_exception("Strongly consistent queries can only target a single partition");
     }
     const auto now = gc_clock::now();
+    auto slice = make_partition_slice(options);
+    // The read is not paged, so its result is bounded like an unpaged regular read: by
+    // max_memory_for_unlimited_query_{soft,hard}_limit.
+    auto max_result_size = qp.proxy().get_max_result_size(slice);
     auto read_command = make_lw_shared<query::read_command>(
         _query_schema->id(),
         _query_schema->version(),
-        make_partition_slice(options),
-        query::max_result_size(query::result_memory_limiter::maximum_result_size),
+        std::move(slice),
+        max_result_size,
         query::tombstone_limit(query::tombstone_limit::max),
         query::row_limit(get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate())),
         query::partition_limit(query::max_partitions),
