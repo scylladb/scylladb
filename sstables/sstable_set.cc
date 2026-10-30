@@ -58,6 +58,15 @@ bool completely_ordered_before(const shared_sstable& s1, const shared_sstable& s
     return r < 0;
 }
 
+std::strong_ordering sstable_last_position_tri_compare(const shared_sstable& s1, const shared_sstable& s2) {
+    auto& s = *s1->get_schema();
+    auto r = s1->get_last_decorated_key().tri_compare(s, s2->get_last_decorated_key());
+    if (r != 0) {
+        return r;
+    }
+    return position_in_partition::tri_compare(s)(s1->last_partition_last_position(), s2->last_partition_last_position());
+}
+
 bool sstable_run::will_introduce_overlapping(const shared_sstable& sst) const {
     // lower bound will be the 1st element which is not *all* before the candidate sstable.
     // upper bound will be the 1st element which the candidate sstable is *all* before.

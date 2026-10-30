@@ -35,6 +35,10 @@ struct sstable_first_key_less_comparator {
 // Returns true if s1 ends before s2 starts, meaning that they don't overlap.
 bool completely_ordered_before(const shared_sstable& s1, const shared_sstable& s2);
 
+// Orders sstables by their last position. Consistent with completely_ordered_before():
+// if s1 doesn't end after s2, then s1 is completely ordered before every sstable s2 is.
+std::strong_ordering sstable_last_position_tri_compare(const shared_sstable& s1, const shared_sstable& s2);
+
 // Structure holds all sstables (a.k.a. fragments) that belong to same run identifier, which is an UUID.
 // SStables in that same run will not overlap with one another.
 class sstable_run {
