@@ -18,9 +18,9 @@ runs. bpcov does this with one-shot breakpoints:
 
 1. Before the program starts, write a breakpoint instruction (`int3` on
    x86-64, a single byte) at the start of the code of every source line.
-2. When a thread reaches a breakpoint, the CPU traps to the tracer, which
-   records that the line was executed, puts the original byte back, and lets
-   the thread continue from the same address.
+2. When a thread reaches a breakpoint, the CPU traps, and bpcov records
+   that the line was executed, puts the original byte back, and lets the
+   thread continue from the same address.
 3. A line's breakpoint is therefore hit at most once. After the code a
    test uses has been reached for the first time, the program runs at
    full speed, exactly the same code as without bpcov.
@@ -141,17 +141,17 @@ preparation right away, for those who prefer to wait for it before running
 tests.
 
 **`scripts/bpcov/scylla`** stands in for the Scylla executable. It runs
-`build/dev/scylla` (or `$BPCOV_SCYLLA`) under the tracer, with the same
-arguments. Anything that takes the path of the Scylla executable in `$SCYLLA`
-can use it, including `test/cqlpy/run`, `test/alternator/run` and
-`test/rest_api/run`. Each run records the breakpoints it hit in a new file in
-the `hits/` subdirectory, with one byte per breakpoint. The tracer maps this
-file into its memory, so a hit is recorded as it happens, without a system
-call, and nothing is lost when Scylla is killed (see "Killing Scylla loses
-nothing" below). The tracer's own messages (how many breakpoints were
-inserted and hit) go to a `.log` file next to it, never to Scylla's output:
-some tests read Scylla's log, and expect it to start with Scylla's first log
-line.
+`build/dev/scylla` (or `$BPCOV_SCYLLA`) under bpcov's tracer (see "The two
+tracers" below), with the same arguments. Anything that takes the path of
+the Scylla executable in `$SCYLLA` can use it, including `test/cqlpy/run`,
+`test/alternator/run` and `test/rest_api/run`. Each run records the
+breakpoints it hit in a new file in the `hits/` subdirectory, with one byte
+per breakpoint. This file is mapped into memory, so a hit is recorded as it
+happens, without a system call, and nothing is lost when Scylla is killed
+(see "Killing Scylla loses nothing" below). The tracer's own messages (how
+many breakpoints were inserted, and with the ptrace tracer, how many were
+hit) go to a `.log` file next to it, never to Scylla's output: some tests
+read Scylla's log, and expect it to start with Scylla's first log line.
 
 **`cat FILE`** prints a source or header file, putting `* ` before every
 line that has compiled code that never ran, and two spaces before the other
@@ -269,16 +269,17 @@ Scylla does not need to shut down cleanly for its coverage to be saved. It
 can be killed with SIGKILL, crash or abort, and every line it executed until
 that moment is still recorded:
 
-- A thread that reaches a breakpoint stays stopped until the tracer has
-  recorded the hit, so a line is recorded before it runs - even a line that
-  then crashes Scylla.
-- The hit is recorded in the tracer, a separate process, not in Scylla's
-  memory: the tracer maps the hits file with `MAP_SHARED`, so setting a byte
-  in it puts the change straight into the kernel's page cache of the file.
-  Nothing is buffered or written at exit. Even if the tracer itself is
-  killed (`test/cqlpy/run`, for example, kills the whole process group with
-  SIGKILL), the hits it recorded remain in the file. Only a crash of the
-  whole machine could lose hits that the kernel did not yet write to disk.
+- A thread that reaches a breakpoint doesn't continue until the hit is
+  recorded, so a line is recorded before it runs - even a line that then
+  crashes Scylla.
+- The hits file is mapped into memory with `MAP_SHARED` (into Scylla's own
+  memory with the default tracer, into the tracer process's with the ptrace
+  tracer), so setting a byte in it puts the change straight into the
+  kernel's page cache of the file. Nothing is buffered or written at exit.
+  Even if the process that recorded the hits is killed (`test/cqlpy/run`,
+  for example, kills the whole process group with SIGKILL), the hits remain
+  in the file. Only a crash of the whole machine could lose hits that the
+  kernel did not yet write to disk.
 
 Conventional coverage tools keep their counters in the program's own memory
 and write them to a file when the program exits normally: gcc's
@@ -320,10 +321,10 @@ the comparisons below are of `alternator/`:
 - **Debug** runs exactly the same tests as dev, and already has line tables
   (as part of its full debug information), so it doesn't need
   `--line-tables`. But it is several times slower - the Alternator tests
-  took 5:47 under bpcov, instead of 1:05 in dev - and the sanitizers'
-  instrumentation makes its line table a bit less accurate, in both
-  directions. Some lines' ordinary code is not marked as the beginning of
-  the line, and the only marked code of the line is the sanitizer's error
+  took 5:47 under bpcov with the ptrace tracer, instead of 1:05 in dev - and
+  the sanitizers' instrumentation makes its line table a bit less accurate,
+  in both directions. Some lines' ordinary code is not marked as the beginning
+  of the line, and the only marked code of the line is the sanitizer's error
   handler, so the line appears never executed. And exception-cleanup code
   shared by the whole function is sometimes attributed to a `throw` line, so
   that line appears executed when any exception passes through the function.
@@ -345,10 +346,76 @@ the comparisons below are of `alternator/`:
 ## Cost at run time
 
 The program runs at full speed, except for one trap for each line the first
-time it runs. A trap is a round trip to the tracer process, about 8
-microseconds. Most of these happen while Scylla boots, which reaches a large
-part of its code - the boot takes about 1.6 seconds longer; later, a test that
-reaches code not executed before pays a trap for each such line, once.
+time it runs. With the default tracer, a trap costs a signal, about 2
+microseconds; with the ptrace tracer, it is a round trip to the tracer
+process, about 8 microseconds. Most of the traps happen while Scylla boots,
+which reaches a large part of its code: the boot takes about 0.4 seconds
+longer (1.6 seconds with the ptrace tracer). Later, a test that reaches code
+not executed before pays a trap for each such line, once. So a whole test
+suite takes about as long as without bpcov, and uses about as much CPU time
+(see "`test/alternator/run`" under "The cost of bpcov" below).
+
+## The two tracers
+
+bpcov can handle the breakpoints in two ways:
+
+- By default, Scylla runs with `LD_PRELOAD` of a library, `preload.c`.
+  Before any of Scylla's code runs, the library inserts the breakpoints, and
+  installs a handler for the SIGTRAP signal that a breakpoint causes; the
+  handler records the hit and restores the instruction, inside Scylla's own
+  process.
+- With `BPCOV_TRACER=ptrace` (for example, `SCYLLA=scripts/bpcov/scylla
+  BPCOV_TRACER=ptrace test/alternator/run`), Scylla runs under `tracer.c`
+  instead: a separate process that handles the breakpoints with ptrace, the
+  way a debugger does.
+
+Both use the same data files, so all the commands that show coverage work
+the same with either, and they record the same coverage: in a run of all of
+`test/alternator/run` with each, the two agreed on all the lines of
+`alternator/` (6,885 of 8,192 executed), and differed elsewhere by less than
+repeated runs with the same tracer do (39 and 69 lines).
+
+The `LD_PRELOAD` tracer is the default because it is faster: a trap costs a
+signal in the same process, instead of a round trip to another process, so
+Scylla boots in about 0.9 seconds instead of 2.1 (0.45 without bpcov). It
+also leaves ptrace free, so LeakSanitizer works (see "Limitations" below).
+Programs that Scylla runs inherit `LD_PRELOAD`, but the library does nothing
+in a program other than the one that `bpcov.py` started. A process that
+Scylla forks records its hits in the same file as Scylla, as hits (1, not 3
+as with the ptrace tracer).
+
+Use `BPCOV_TRACER=ptrace` if the `LD_PRELOAD` tracer doesn't work:
+
+- **Scylla is killed by SIGTRAP** ("Trace/breakpoint trap", or exit status
+  133 in a shell). A SIGTRAP caused by a breakpoint can't be blocked: if the
+  thread that reaches a breakpoint blocks SIGTRAP, the kernel kills the
+  process instead of running the handler. Seastar blocks all signals in some
+  of its threads, so the library replaces `pthread_sigmask()` and
+  `sigprocmask()` with versions that never block SIGTRAP. It also replaces
+  `sigaction()` and `signal()`, so that the program can't replace its
+  handler (a SIGTRAP that isn't one of the breakpoints still goes to the
+  handler the program asked for). Code that blocks SIGTRAP or sets its
+  handler with a direct system call, bypassing these functions, would get
+  Scylla killed. Scylla doesn't do this today - Seastar does pass signal
+  masks directly to the system calls that wait for events (`io_pgetevents()`
+  and `epoll_pwait()`), but these masks are copies of what
+  `pthread_sigmask()` returned, so they never block SIGTRAP - but a new
+  library or a change in Seastar could. The ptrace tracer doesn't depend on
+  the program's signal handling at all.
+- **Nothing is recorded** (no new file in `hits/` for the run): the dynamic
+  linker ignores `LD_PRELOAD` for executables that are statically linked,
+  setuid, or have file capabilities. Scylla's executable is none of these.
+
+The `LD_PRELOAD` tracer was also tested with a small program built with
+AddressSanitizer, whose own interceptors of `sigaction()` and
+`pthread_sigmask()` come before the library's: the interceptors call the
+library's versions, so a thread that blocked all signals, a signal handler
+running during a `ppoll()` with all other signals blocked, and the program's
+attempt to install its own SIGTRAP handler all worked, and LeakSanitizer
+reported the program's leak. And all of `test/cqlpy/run` passed under it
+(3497 passed, 178 skipped, 652 xfailed, in 6:45), including the tests of
+Lua and WebAssembly user-defined functions, whose runtimes install signal
+handlers of their own.
 
 ## Measurements
 
@@ -459,12 +526,36 @@ traps are from the boot and this short test, about 205,000-209,000 of them):
 | without the tracer | 0.5, 0.6, 0.5 s |
 | tracer with 7 system calls per trap (waitpid, PTRACE_GETREGS, PTRACE_PEEKTEXT, PTRACE_POKETEXT, PTRACE_SETREGS, write of the hit, PTRACE_CONT) | 2.6, 2.4, 2.4 s |
 | tracer with 5 system calls per trap (the hits file is mapped into memory, and one pwrite to /proc/PID/mem restores the instruction) | 2.1, 2.2, 2.2 s |
+| the `LD_PRELOAD` tracer (a signal handler in Scylla restores the instruction with one pwrite to /proc/self/mem) | 0.7-0.9 s (13 runs of the whole suite) |
 
-So a trap costs about 8 microseconds, down from 9.4: most of the cost of a
-trap is switching from Scylla to the tracer process and back, not the system
-calls. Inserting the breakpoints took 0.03 seconds.
+So with the ptrace tracer, a trap costs about 8 microseconds, down from 9.4:
+most of the cost of a trap is switching from Scylla to the tracer process and
+back, not the system calls. With the `LD_PRELOAD` tracer, which needs no
+other process, a trap costs about 2 microseconds. Inserting the breakpoints
+took 0.02-0.03 seconds with either tracer.
 
-**`test/alternator/run`** (the whole suite): with the tracer, Scylla hit
+**`test/alternator/run`** (the whole suite, 2026-10-30), without bpcov and
+with each of the tracers, alternating: 10 runs of each measuring the elapsed
+time, and then 3 more of each measuring also the CPU time of all the
+processes - Scylla, the tracer and pytest (each run in a cgroup of its own,
+with `systemd-run --user --scope`, reading its `cpu.stat`):
+
+| | the tests (pytest's time, median of 10) | boot | CPU time |
+|---|---|---|---|
+| without bpcov | 63.5 s | 0.4-0.5 s | 65.2, 65.3, 67.4 s |
+| `LD_PRELOAD` tracer | 63.7 s | 0.7-0.9 s | 67.3, 68.1, 68.9 s |
+| ptrace tracer | 65.2 s | 2.0-2.3 s | 66.8, 69.0, 69.1 s |
+
+All the runs had the same results (1528 passed, 123 skipped, 213 xfailed),
+except one run with the ptrace tracer, in which 7 more tests were skipped
+(its log was not kept). In 8 of the 30 runs, in all three ways, the tests
+took about 10 seconds longer (71-75 seconds instead of 61-65) - noise of the
+tests themselves, which the medians leave out. With either tracer, the run
+used about 2 seconds more CPU time, about 3%: each breakpoint traps only
+once, and most of the traps are in the boot. The tests mostly don't wait:
+their CPU time is about their elapsed time.
+
+An earlier run with the ptrace tracer: Scylla hit
 307,535 breakpoints in 324,745 traps (the extra traps are threads reaching a
 breakpoint at the same time). The tests took 64.94 seconds; without the
 tracer, they took between 63.9 and 70.8 seconds in different runs. The
@@ -499,11 +590,15 @@ without the tracer). `report` took 0.25 seconds.
   what clang produces for Scylla. Debug sections may be compressed (`-gz`)
   with zstd or zlib; it decompresses them with the zstd and zlib libraries,
   which building Scylla requires anyway.
-- `tracer.c`: the tracer. A small ptrace-based program that runs a command,
-  inserts the breakpoints, and records the hits.
+- `preload.c`: the default tracer, a library for `LD_PRELOAD` that inserts
+  the breakpoints and records the hits inside the program (see "The two
+  tracers" above).
+- `tracer.c`: the ptrace tracer, used with `BPCOV_TRACER=ptrace`. A small
+  program that runs a command under ptrace, inserts the breakpoints, and
+  records the hits.
 - `bpcov.py`: the `prepare`, `run`, `cat`, `less` and `report` commands. It
-  compiles the two C programs into `build/bpcov-prepare` and
-  `build/bpcov-tracer` when needed, and needs the Python module `numpy`.
+  compiles the C code into `build/bpcov-prepare`, `build/bpcov-tracer` and
+  `build/bpcov-preload.so` when needed, and needs the Python module `numpy`.
 - `scylla`: the wrapper script for `$SCYLLA`.
 
 ### The data in `build/dev/bpcov/`
@@ -552,15 +647,23 @@ of the hit files. To find a row's breakpoint, look up its address in
 - x86-64 Linux only.
 - Only the main executable is measured, not shared libraries (in dev mode,
   Seastar is a shared library, but it is not Scylla's own code anyway).
-- Since the tracer is a ptrace tracer, a debugger such as gdb cannot attach
-  to Scylla while it runs under bpcov.
-- For the same reason, in builds with AddressSanitizer (debug and sanitize
-  modes), LeakSanitizer cannot check for leaks when the program exits: it
-  needs ptrace itself, so it reports "LeakSanitizer has encountered a fatal
-  error" and the exit status becomes 1. The Scylla server is not affected,
-  because it always ends with `_exit()`, which skips LeakSanitizer's check.
-  But a program that exits normally, such as Scylla's tools (`scylla
-  sstable` and the like), would fail this way if run under the tracer.
+- Scylla can't be debugged while it runs under bpcov. With the ptrace
+  tracer, a debugger can't attach at all, since a process can have only one
+  tracer. With the `LD_PRELOAD` tracer, gdb can attach, but stops at every
+  breakpoint's SIGTRAP. If told to pass them on to Scylla (`handle SIGTRAP
+  nostop noprint pass`), a gdb breakpoint on a line that hasn't run yet
+  kills Scylla when it continues from there (gdb saves bpcov's `int3` as
+  the original instruction, and executes it), and starting Scylla from gdb kills it even
+  before the library has installed its handler. To debug, run Scylla
+  without bpcov.
+- With the ptrace tracer, in builds with AddressSanitizer (debug and
+  sanitize modes), LeakSanitizer cannot check for leaks when the program
+  exits: it needs ptrace itself, so it reports "LeakSanitizer has
+  encountered a fatal error" and the exit status becomes 1. The Scylla
+  server is not affected, because it always ends with `_exit()`, which
+  skips LeakSanitizer's check. But a program that exits normally, such as
+  Scylla's tools (`scylla sstable` and the like), would fail this way if
+  run under the ptrace tracer.
 - Only the Scylla process started by the test runner through
   `scripts/bpcov/scylla` is measured. Tests that run Scylla's tools (for
   example, `test/cqlpy/test_tools.py`) find the executable through the

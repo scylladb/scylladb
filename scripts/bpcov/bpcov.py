@@ -15,7 +15,7 @@ It only needs the line-number table, which dev mode has when configured with
 "./configure.py --line-tables" (release and debug builds have it unless
 configured with --debuginfo 0).
 The program runs at full speed, except for one trap the first time each line
-is reached; see tracer.c.
+is reached; see preload.c (and tracer.c for the alternative ptrace tracer).
 
 Typical use with test/alternator/run:
 
@@ -158,7 +158,9 @@ def prepare(binary: str) -> tuple[str, bool]:
 def tool_path(name: str) -> str:
     """Build the tool scripts/bpcov/<name>.c if it is missing or older than its source, and return its path."""
     src = os.path.join(SOURCE_DIR, 'scripts', 'bpcov', f'{name}.c')
-    exe = os.path.join(SOURCE_DIR, 'build', f'bpcov-{name}')
+    # preload.c is a library for LD_PRELOAD, the others are programs.
+    library = name == 'preload'
+    exe = os.path.join(SOURCE_DIR, 'build', f'bpcov-{name}' + ('.so' if library else ''))
     if not os.path.exists(exe) or os.path.getmtime(exe) < os.path.getmtime(src):
         os.makedirs(os.path.dirname(exe), exist_ok=True)
         # Build under a temporary name, as other runs may be using or building it.
@@ -166,18 +168,34 @@ def tool_path(name: str) -> str:
         # prepare.c decompresses compressed debug sections (-gz), with the
         # zstd and zlib libraries which Scylla's build needs anyway.
         libs = ['-lzstd', '-lz'] if name == 'prepare' else []
-        subprocess.check_call(['cc', '-O2', '-Wall', '-o', tmp, src] + libs)
+        shared = ['-shared', '-fPIC'] if library else []
+        subprocess.check_call(['cc', '-O2', '-Wall'] + shared + ['-o', tmp, src] + libs)
         os.rename(tmp, exe)
     return exe
 
 
 def run(binary: str, args: list[str]):
-    """Replace this process with the tracer running the binary with these arguments."""
+    """Replace this process with the binary, run with these arguments under a tracer.
+
+    The tracer is the library bpcov-preload.so, which handles the breakpoints
+    inside the program, or with BPCOV_TRACER=ptrace, bpcov-tracer, a separate
+    process that handles them with ptrace (see README.md for when to use it).
+    """
+    tracer = os.environ.get('BPCOV_TRACER') or 'preload'
+    if tracer not in ('preload', 'ptrace'):
+        sys.exit(f'BPCOV_TRACER should be "preload" (the default) or "ptrace", not "{tracer}"')
     binary = os.path.realpath(binary)
     d, _ = prepare(binary)
-    tracer = tool_path('tracer')
+    if tracer == 'preload':
+        env = dict(os.environ)
+        env['LD_PRELOAD'] = ' '.join(filter(None, [tool_path('preload'), env.get('LD_PRELOAD')]))
+        env['BPCOV_PROGRAM'] = binary
+        env['BPCOV_BREAKPOINTS'] = os.path.join(d, 'breakpoints.bin')
+        env['BPCOV_HITS_DIR'] = os.path.join(d, 'hits')
+        os.execve(binary, [binary] + args, env)
+    exe = tool_path('tracer')
     hits = os.path.join(d, 'hits', f'{os.getpid()}.bin')
-    os.execv(tracer, [tracer, os.path.join(d, 'breakpoints.bin'), hits, binary] + args)
+    os.execv(exe, [exe, os.path.join(d, 'breakpoints.bin'), hits, binary] + args)
 
 
 def load_coverage(binary: str):

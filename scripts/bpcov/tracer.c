@@ -8,6 +8,9 @@
 
 /*
  * bpcov-tracer: measure which code a program runs, using one-shot breakpoints.
+ * bpcov.py uses it with BPCOV_TRACER=ptrace, instead of the default,
+ * bpcov-preload.so, which is faster but doesn't work in some cases (see
+ * README.md).
  *
  * Usage: bpcov-tracer BREAKPOINTS HITS PROGRAM [ARGS...]
  *
