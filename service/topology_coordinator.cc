@@ -4044,6 +4044,31 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
             }
 
+            // Test-only: records a split of the strongly consistent table named by the injection's parameter
+            // the way the resize finalization will - a split decision and the ids of the two groups replacing
+            // each tablet's group. Nothing carries the split further, because the load balancer plans no resize
+            // of these tables, so it stays recorded until the table is dropped.
+            if (auto table = utils::get_local_injector().inject_parameter<std::string_view>("sc_record_raft_split")) {
+                const auto id = table_id(utils::UUID(*table));
+                const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(id);
+                // Recorded once: the injection stays enabled until the test sees the ids.
+                if (!tmap.has_raft_resizes()) {
+                    group0_update_collector updates;
+                    locator::resize_decision decision;
+                    decision.way = locator::resize_decision::split{};
+                    generate_resize_update(updates, guard, id, std::move(decision));
+                    replica::tablet_mutation_builder builder(guard.write_timestamp(), id);
+                    for (auto tid : tmap.tablet_ids()) {
+                        builder.set_raft_resize_info(tmap.get_last_token(tid), locator::tablet_raft_resize_info{
+                            .new_gids = {raft::group_id(utils::UUID_gen::get_time_UUID()), raft::group_id(utils::UUID_gen::get_time_UUID())},
+                        });
+                    }
+                    updates.add_large(builder.build());
+                    co_await update_topology_state(std::move(guard), std::move(updates), "Recording an injected split");
+                    co_return true;
+                }
+            }
+
             // If there is no other work, evaluate load and start tablet migration if there is imbalance.
             if (auto guard_opt = co_await maybe_start_tablet_migration(std::move(guard)); !guard_opt) {
                 co_return true;
