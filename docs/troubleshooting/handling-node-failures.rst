@@ -122,8 +122,6 @@ will leave the recovery mode and remove the obsolete internal Raft data.
 
 **Procedure**
 
-#. Perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` of your live nodes.
-
 #. Find the group 0 ID by performing the following query on any live node, using e.g. ``cqlsh``:
 
    .. code-block:: cql
@@ -132,13 +130,15 @@ will leave the recovery mode and remove the obsolete internal Raft data.
 
    The group 0 ID is needed in the following steps.
 
-#. Find ``commit_idx`` of all live nodes by performing the following query on **every live node**:
+#. Send the following REST API request to **every live node**:
 
-   .. code-block:: cql
+   .. code-block:: console
 
-        cqlsh> SELECT commit_idx FROM system.raft WHERE group_id = <group 0 ID>;
+        $ curl -X POST "http://<node's REST API address>:10000/raft/wait_for_apply"
 
-   Choose a node with the largest ``commit_idx``. If there are multiple such nodes, choose any of them.
+   The node applies all group 0 changes it knows to be committed and returns the index of the last such change.
+
+   Choose a node with the largest returned index. If there are multiple such nodes, choose any of them.
    The chosen node will be the *recovery leader*.
 
 #. Perform the following queries on **every live node**:
