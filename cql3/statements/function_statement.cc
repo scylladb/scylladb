@@ -13,6 +13,8 @@
 #include "gms/feature_service.hh"
 #include "service/storage_proxy.hh"
 #include "cql3/query_processor.hh"
+#include "auth/resource.hh"
+#include "auth/service.hh"
 
 namespace cql3 {
 namespace statements {
@@ -26,6 +28,27 @@ future<> create_function_statement_base::check_access(query_processor& qp, const
         sstring encoded_signature = auth::encode_signature(_name.name, _arg_types);
 
         co_await state.has_function_access(_name.keyspace, encoded_signature, auth::permission::ALTER);
+    }
+}
+
+future<> create_function_statement_base::grant_permissions_to_creator(const service::client_state& cs, service::group0_batch& mc) const {
+    // The creator of a function or aggregate gets all permissions on it.
+    // But CREATE OR REPLACE of an existing one doesn't create anything, so
+    // it doesn't grant anything. This is called before the statement's
+    // schema change is applied, so if the function exists, it existed
+    // before the statement. The argument types were already prepared by
+    // validate_while_executing().
+    if (functions::instance().find(_name, _arg_types)) {
+        co_return;
+    }
+    try {
+        co_await auth::grant_applicable_permissions(
+                *cs.get_auth_service(),
+                *cs.user(),
+                auth::make_functions_resource(_name.keyspace, auth::encode_signature(_name.name, _arg_types)),
+                mc);
+    } catch (const auth::unsupported_authorization_operation&) {
+        // Nothing.
     }
 }
 
