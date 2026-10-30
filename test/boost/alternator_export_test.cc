@@ -12,6 +12,8 @@
 
 #include "alternator/export.hh"
 #include "alternator/executor.hh"
+#include "sstables/dictionary_service.hh"
+#include "utils/alien_worker.hh"
 #include "alternator/error.hh"
 #include "alternator/rmw_operation.hh"
 #include "cdc/metadata.hh"
@@ -711,9 +713,13 @@ SEASTAR_TEST_CASE(test_in_memory_roundtrip_gzip_decompressed_larger_than_buffer)
 // Alternator Scan request). See SCYLLADB-1888.
 
 namespace {
+static seastar::logger dict_trainer_logger("alternator_export_test_dict_trainer");
+
 // Wraps a sharded<alternator::executor>, taking DynamoDB-style JSON requests.
 class alternator_test_executor {
     sharded<cdc::metadata> _cdc_md;
+    utils::alien_worker _dict_trainer{dict_trainer_logger, 19, "test-dict"};
+    sharded<sstables::dictionary_service> _dicts;
     sharded<alternator::executor> _exec;
     alternator::rmw_operation::write_isolation _saved_write_isolation;
 public:
@@ -724,10 +730,11 @@ public:
         alternator::rmw_operation::set_default_write_isolation("forbid_rmw");
         // Pass sharded<> services, so each shard gets its local instances.
         _cdc_md.start().get();
+        _dicts.start(std::ref(e.db()), std::ref(e.get_messaging_service()), std::ref(e.get_system_keyspace()), std::ref(e.get_feature_service()), std::ref(_dict_trainer)).get();
         _exec.start(
             std::ref(e.gossiper()),
             std::ref(e.get_storage_proxy()),
-            std::ref(e.get_storage_service()),
+            std::ref(_dicts),
             std::ref(e.migration_manager()),
             std::ref(e.get_system_distributed_keyspace()),
             std::ref(e.get_system_keyspace()),
@@ -739,6 +746,7 @@ public:
 
     void stop() {
         _exec.stop().get();
+        _dicts.stop().get();
         _cdc_md.stop().get();
         alternator::rmw_operation::default_write_isolation = _saved_write_isolation;
     }

@@ -10,6 +10,7 @@
 
 #include "replica/database.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "sstables/dictionary_service.hh"
 
 // Responsible for re-training the SSTable compression dicts
 // (for dict-aware tables) periodically.
@@ -31,7 +32,7 @@ public:
         utils::updateable_value<float> min_improvement_factor;
     };
 private:
-    service::storage_service& _ss;
+    sstables::dictionary_service& _dicts;
     service::raft_group0_client& _group0_client;
     config _cfg;
     abort_source _as;
@@ -41,7 +42,7 @@ private:
     future<> run();
 public:
     // Must be constructed and run on shard 0.
-    sstable_dict_autotrainer(service::storage_service&, service::raft_group0_client&, config);
+    sstable_dict_autotrainer(sstables::dictionary_service&, service::raft_group0_client&, config);
     future<> stop();
 };
 

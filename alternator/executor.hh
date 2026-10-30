@@ -55,11 +55,14 @@ namespace cql3::selection {
 namespace service {
     class storage_proxy;
     class cas_shard;
-    class storage_service;
 }
 
 namespace vector_search {
     class vector_store_client;
+}
+
+namespace sstables {
+    class dictionary_service;
 }
 
 namespace cdc {
@@ -87,7 +90,7 @@ class expression_cache;
 
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
-    service::storage_service& _ss;
+    sstables::dictionary_service& _dicts;
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
     db::system_distributed_keyspace& _sdks;
@@ -132,7 +135,7 @@ public:
 
     executor(gms::gossiper& gossiper,
              service::storage_proxy& proxy,
-             service::storage_service& ss,
+             sstables::dictionary_service& dicts,
              service::migration_manager& mm,
              db::system_distributed_keyspace& sdks,
              db::system_keyspace& system_keyspace,

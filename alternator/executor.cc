@@ -79,6 +79,7 @@
 #include "utils/simple_value_with_expiry.hh"
 #include "service/paxos/paxos_state.hh"
 #include "service/storage_service.hh"
+#include "sstables/dictionary_service.hh"
 #include "service/raft/raft_group0_client.hh"
 
 using namespace std::chrono_literals;
@@ -304,7 +305,7 @@ public:
 
 executor::executor(gms::gossiper& gossiper,
          service::storage_proxy& proxy,
-         service::storage_service& ss,
+         sstables::dictionary_service& dicts,
          service::migration_manager& mm,
          db::system_distributed_keyspace& sdks,
          db::system_keyspace& system_keyspace,
@@ -313,7 +314,7 @@ executor::executor(gms::gossiper& gossiper,
          smp_service_group ssg,
          utils::updateable_value<uint32_t> default_timeout_in_ms)
     : _gossiper(gossiper),
-      _ss(ss),
+      _dicts(dicts),
       _proxy(proxy),
       _mm(mm),
       _sdks(sdks),
@@ -524,7 +525,7 @@ future<> executor::fill_table_size(rjson::value &table_description, schema_ptr s
         // there's no point in trying to estimate value of table that is being deleted, as other nodes more often than not might
         // move forward with deletion faster than we calculate the size
         if (!deleting) {
-            total_size = co_await _ss.estimate_total_sstable_volume(schema->id(), service::storage_service::ignore_errors::yes);
+            total_size = co_await _dicts.estimate_total_sstable_volume(schema->id(), sstables::dictionary_service::ignore_errors::yes);
             const auto expiry = std::chrono::seconds{ _proxy.data_dictionary().get_config().alternator_describe_table_info_cache_validity_in_seconds() };
             // Note: we don't care when the notification of other shards will finish, as long as it will be done
             // it's possible to get into race condition (next DescribeTable comes to other shard, that new shard doesn't have
