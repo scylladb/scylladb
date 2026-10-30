@@ -119,6 +119,46 @@ The rank is the position in the index's result, not in the result set. If the in
 that is no longer in the base table, that row's rank is missing from the result and the ranks after
 it are not renumbered.
 
+.. _fulltext-search-term:
+
+Search term syntax
+~~~~~~~~~~~~~~~~~~
+
+The search term is a query, not plain text. Some characters, such as ``'``,
+``"``, ``:``, ``~``, ``*``, ``^``, ``+``, ``-`` and parentheses, have a special
+meaning. Ordinary text, especially user input, may then be rejected or match
+unexpected rows.
+
+Words separated by whitespace are combined with ``OR``: a row that contains any
+of them matches. The operators ``AND``, ``OR`` and ``NOT`` combine words, and
+parentheses group them::
+
+    SELECT * FROM ks.t
+        WHERE BM25(v, '(jupiter OR saturn) AND planet NOT rings') > 0
+        ORDER BY BM25(v, '(jupiter OR saturn) AND planet NOT rings')
+        LIMIT 10;
+
+The operators are recognized only in upper case. A lowercase ``and``, ``or`` or
+``not`` is not an operator.
+
+A ``-`` before a word excludes it, like ``NOT``. A ``+`` before a word makes
+that word required, but the other words stay optional, so it is not the same as
+``AND``: ``planet +jupiter`` matches every row that contains *jupiter*, while
+``planet AND jupiter`` matches only the rows that contain both words.
+
+To search for text literally, wrap it in double quotes. It is then searched as
+a phrase: the words must appear next to each other, in the same order. Inside a
+CQL string literal, a single quote is written as ``''``::
+
+    SELECT * FROM ks.t
+        WHERE BM25(v, '"don''t panic"') > 0
+        ORDER BY BM25(v, '"don''t panic"')
+        LIMIT 10;
+
+A phrase of several words needs token positions, which the index stores by
+default. On an index created with ``'positions': 'false'``, such a phrase is
+rejected.
+
 .. _fulltext-highlighting:
 
 Highlighting
