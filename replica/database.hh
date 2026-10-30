@@ -410,6 +410,17 @@ struct cf_stats {
 class table;
 using column_family = table;
 struct table_stats;
+
+// The per-table metrics a table reports, see the table_metrics cluster config option.
+enum class table_metrics_mode {
+    none,
+    per_node,
+    per_shard,
+};
+
+// The mode a value of the table_metrics option names, nullopt for any other text.
+std::optional<table_metrics_mode> parse_table_metrics_mode(std::string_view value);
+std::string_view to_string(table_metrics_mode mode);
 using column_family_stats = table_stats;
 
 class database_sstable_write_monitor;
@@ -576,6 +587,8 @@ private:
     secondary_index::secondary_index_manager _index_manager;
     bool _compaction_disabled_by_user = false;
     std::optional<std::chrono::seconds> _scrub_period;
+    // The mode the metrics are registered in.
+    table_metrics_mode _metrics_mode = table_metrics_mode::none;
     bool _tombstone_gc_enabled = true;
     utils::phased_barrier _flush_barrier;
     std::vector<view_ptr> _views;
@@ -588,6 +601,8 @@ private:
     db::rate_limiter::label _rate_limiter_label_for_writes;
     db::rate_limiter::label _rate_limiter_label_for_reads;
 
+    // The mode the scylla.yaml options select.
+    table_metrics_mode default_metrics_mode() const;
     void set_metrics();
     seastar::metrics::metric_groups _metrics;
 
@@ -1357,6 +1372,14 @@ public:
     }
 
     void set_scrub_period(std::optional<std::chrono::seconds> period);
+
+    table_metrics_mode metrics_mode() const noexcept {
+        return _metrics_mode;
+    }
+
+    // Sets the mode the table_metrics cluster config option selects, nullopt to follow the
+    // scylla.yaml options. Registers the metrics again if the mode in effect changes.
+    void set_metrics_mode_override(std::optional<table_metrics_mode> mode);
 
     utils::phased_barrier::operation write_in_progress() {
         return _pending_writes_phaser.start();

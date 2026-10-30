@@ -385,19 +385,28 @@ std::optional<raft_server> groups_manager::try_acquire_server(raft_group_state& 
     return raft_server(state, std::move(*h));
 }
 
-static table_metrics::reporting table_metrics_reporting(const db::config& cfg) {
-    if (cfg.enable_keyspace_column_family_metrics()) {
+static table_metrics::reporting table_metrics_reporting(replica::table_metrics_mode mode) {
+    switch (mode) {
+    case replica::table_metrics_mode::none:
+        return table_metrics::reporting::none;
+    case replica::table_metrics_mode::per_node:
+        return table_metrics::reporting::per_node;
+    case replica::table_metrics_mode::per_shard:
         return table_metrics::reporting::per_shard;
     }
-    if (cfg.enable_node_aggregated_table_metrics()) {
-        return table_metrics::reporting::per_node;
-    }
-    return table_metrics::reporting::none;
+    __builtin_unreachable();
 }
 
 table_metrics& groups_manager::get_table_metrics(const schema& s) {
+    // Reported the way the table reports its own metrics.
     return _table_metrics.try_emplace(std::make_pair(s.ks_name(), s.cf_name()), s.ks_name(), s.cf_name(),
-        table_metrics_reporting(_db.get_config())).first->second;
+        table_metrics_reporting(_db.find_column_family(s.id()).metrics_mode())).first->second;
+}
+
+void groups_manager::update_table_metrics_reporting(const schema& s, replica::table_metrics_mode mode) {
+    if (auto it = _table_metrics.find(std::make_pair(s.ks_name(), s.cf_name())); it != _table_metrics.end()) {
+        it->second.set_reporting(s.ks_name(), s.cf_name(), table_metrics_reporting(mode));
+    }
 }
 
 void groups_manager::drop_dropped_tables_metrics() {

@@ -66,6 +66,16 @@ inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
 inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
 inline constexpr std::string_view repair_hints_batchlog_flush_discard_unreplayed_hints = "repair_hints_batchlog_flush_discard_unreplayed_hints";
 inline constexpr std::string_view auto_scrub_period_seconds = "auto_scrub_period_seconds";
+inline constexpr std::string_view table_metrics = "table_metrics";
+
+}
+
+// The values of the table_metrics option.
+namespace table_metrics_value {
+
+inline constexpr std::string_view none = "none";
+inline constexpr std::string_view per_node = "per_node";
+inline constexpr std::string_view per_shard = "per_shard";
 
 }
 

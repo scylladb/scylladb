@@ -40,6 +40,7 @@
 #include "db/schema_tables.hh"
 #include "alternator/ttl_tag.hh"
 #include "db/system_keyspace.hh"
+#include "db/cluster_config_registry.hh"
 
 namespace cql3 {
 
@@ -74,8 +75,11 @@ future<> alter_table_statement::check_access(query_processor& qp, const service:
     using cdt = auth::command_desc::type;
     auto type = cdt::OTHER;
     if (_type == type::opts) {
-        // can modify only KW_MEMTABLE_FLUSH_PERIOD property for system tables (see issue #21223)
-        if (is_system_keyspace(keyspace()) && _properties->count() == 1 && _properties->has_property(cf_prop_defs::KW_MEMTABLE_FLUSH_PERIOD)) {
+        // can modify only KW_MEMTABLE_FLUSH_PERIOD property (see issue #21223) and the
+        // table_metrics cluster config option for system tables
+        const auto allowed_for_system_tables = int(_properties->has_property(cf_prop_defs::KW_MEMTABLE_FLUSH_PERIOD))
+                + int(_properties->has_property(sstring(db::cluster_config_registry::option_name::table_metrics)));
+        if (is_system_keyspace(keyspace()) && allowed_for_system_tables > 0 && size_t(allowed_for_system_tables) == _properties->count()) {
             type = cdt::ALTER_SYSTEM_WITH_ALLOWED_OPTS;
         } else {
             type = cdt::ALTER_WITH_OPTS;

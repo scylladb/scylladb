@@ -53,6 +53,8 @@ public:
     enum class reporting { none, per_node, per_shard };
 
     table_metrics(const sstring& ks_name, const sstring& cf_name, reporting mode);
+    // Registers the metrics again if `mode` differs from the current one. The stats are kept.
+    void set_reporting(const sstring& ks_name, const sstring& cf_name, reporting mode);
     // The gauges and the sample capture `this`.
     table_metrics(const table_metrics&) = delete;
     table_metrics& operator=(const table_metrics&) = delete;
@@ -64,6 +66,11 @@ public:
     // A server must be removed before it is destroyed.
     void add_server(const raft::server& server) { _servers.insert(&server); }
     void remove_server(const raft::server& server) { _servers.erase(&server); }
+
+private:
+    reporting _mode = reporting::none;
+
+    void register_metrics(const sstring& ks_name, const sstring& cf_name);
 };
 
 }

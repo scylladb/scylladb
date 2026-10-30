@@ -194,3 +194,13 @@ Available options
        at that scope even if a broader scope enabled it, whereas ``NULL`` removes the value and
        falls back to the broader scope. See
        :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.
+   * - ``table_metrics``
+     - text
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - The per-table metrics a table reports: ``'none'``, ``'per_node'`` (the metrics of the table
+       summed over the shards of the node) or ``'per_shard'`` (the full set of per-table metrics,
+       per shard). When no scope sets it, the ``enable_keyspace_column_family_metrics`` and
+       ``enable_node_aggregated_table_metrics`` options in ``scylla.yaml`` decide, which by default
+       means ``'per_node'`` for the user tables and ``'none'`` for the tables of the internal
+       keyspaces (``system``, ``system_schema`` and so on). The internal keyspaces cannot be altered,
+       but ``ALTER TABLE`` accepts this option for their tables.
