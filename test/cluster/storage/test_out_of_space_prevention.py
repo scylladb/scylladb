@@ -628,8 +628,17 @@ async def test_sstables_incrementally_released_during_streaming(manager: Manager
                 logger.info(f"Workdir {workdir}")
 
                 decomm_task = asyncio.create_task(manager.decommission_node(servers[1].server_id))
+<<<<<<< HEAD
                 await manager.enable_tablet_balancing()
                 mark, _ = await log.wait_for("tablet_stream_files_end_wait: waiting", from_mark=mark)
+||||||| parent of 8f4e2d34e0 (test: keep tablet balancing disabled during decommission in test_sstables_incrementally_released_during_streaming)
+                await manager.enable_tablet_balancing()
+                await manager.api.wait_for_injection_enter(servers[1].ip_addr, "tablet_stream_files_end_wait",
+                                                           deadline=time.time() + 600.0)
+=======
+                await manager.api.wait_for_injection_enter(servers[1].ip_addr, "tablet_stream_files_end_wait",
+                                                           deadline=time.time() + 600.0)
+>>>>>>> 8f4e2d34e0 (test: keep tablet balancing disabled during decommission in test_sstables_incrementally_released_during_streaming)
 
                 disk_info = psutil.disk_usage(workdir)
                 with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
