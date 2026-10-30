@@ -34,7 +34,8 @@ function(default_target_arch arch)
     # we have to add "+crypto" in the architecture flags passed to -march. the
     # same applies to crc32 instructions, which need the ARMv8-A CRC32 extension
     # please note, Seastar also sets -march when compiled with DPDK enabled.
-    set(${arch} "armv8-a+crc+crypto" PARENT_SCOPE)
+    # armv8.2-a+rcpc+dotprod matches Neoverse N1 (Graviton2+), enabling LSE atomics.
+    set(${arch} "armv8.2-a+crc+crypto+rcpc+dotprod" PARENT_SCOPE)
   else()
     set(${arch} "" PARENT_SCOPE)
   endif()
