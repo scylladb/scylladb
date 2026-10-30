@@ -2353,3 +2353,97 @@ async def test_no_hints_after_max_hint_window_exceeded(manager: ScyllaClusterMan
     result = await cql.run_async("SELECT pk, ck FROM ks.tbl")
     rows = set((row.pk, row.ck) for row in result)
     assert rows == {(key, 1), (key, 4)}
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_hints_older_than_gc_grace_are_not_replayed(manager: ScyllaClusterManager):
+    """
+    Replaying a hint older than the table's gc_grace_seconds could resurrect data
+    because a tombstone that shadows the hinted write may have already been purged
+    on other replicas. The hint sender prevents that by dropping such hints, regardless
+    of the table's tombstone_gc mode. Repair depends on this for tables with mode
+    'repair': it creates a hint sync point and waits for it before proceeding, so
+    the sync point must complete even when hints are dropped.
+
+    For both the 'timeout' and 'repair' modes, check that hints of a table with
+    a short gc_grace_seconds are skipped without blocking the sync point. As a control,
+    hints of a table with a long gc_grace_seconds written at the same time must be
+    delivered. The age of the hints is simulated with an error injection.
+    """
+
+    cmdline = [
+        "--logger-log-level", "hints_manager=trace",
+        # For simplicity: save all hints in the same place.
+        "--smp", "1",
+    ]
+    # To speed up the test.
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    s1, s2 = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+
+    cql = await manager.get_cql_exclusive(s1)
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                        "'replication_factor': 2}")
+
+    gc_grace_seconds_long = 300
+    gc_grace_seconds_short = 1
+
+    table_specs = [
+        ("short_gc_timeout", "timeout", gc_grace_seconds_short),
+        ("long_gc_timeout", "timeout", gc_grace_seconds_long),
+        ("short_gc_repair", "repair", gc_grace_seconds_short),
+        ("long_gc_repair", "repair", gc_grace_seconds_long),
+    ]
+
+    for table_name, tombstone_gc_mode, gc_grace_seconds in table_specs:
+        await cql.run_async(f"CREATE TABLE ks.{table_name} (pk int PRIMARY KEY, v int) "
+                            f"WITH tombstone_gc = {{'mode': '{tombstone_gc_mode}'}} "
+                            f"AND gc_grace_seconds = {gc_grace_seconds}")
+
+    await manager.server_stop_gracefully(s2.server_id)
+    await manager.others_not_see_server(s2.ip_addr)
+
+    for table_name, _, _ in table_specs:
+        await cql.run_async(SimpleStatement(
+            f"INSERT INTO ks.{table_name} (pk, v) VALUES (0, 1)",
+            consistency_level=ConsistencyLevel.ONE))
+
+    await wait_until_hint_writing_settled(manager, [s1])
+    written = await get_hint_metrics(manager.metrics, s1.ip_addr, "written")
+    assert written >= len(table_specs)
+
+    sync_point = await create_sync_point(manager.api.client, s1.ip_addr)
+
+    # The hint sender drops a hint if it's *strictly older* than:
+    #   gc_grace_seconds - manager::hints_flush_period
+    # Although this expression is equal to 0 (for the tables with the smaller
+    # gc_grace_seconds), the unit of time the hint sender uses is *second*.
+    # If less than a second has elapsed since the segment was flushed, all
+    # hints could pass and the test fail. Prevent this by making the segment
+    # seem as if it were older by a second.
+    await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_make_segment_older",
+                                       one_shot=False,
+                                       parameters={"sec_count": 1})
+
+    await manager.server_start(s2.server_id)
+    # The skipped hint must not block the sync point.
+    assert await await_sync_point(manager.api.client, s1.ip_addr, sync_point, 120)
+
+    metrics = await get_all_hint_metrics(manager.metrics, s1.ip_addr)
+    assert metrics["sent_total"] == 2, f"Unexpected number of sent hints: {metrics}"
+    assert metrics["discarded"] == 2, f"Unexpected number of discarded hints: {metrics}"
+
+    await manager.server_stop_gracefully(s1.server_id)
+    cql = await manager.get_cql_exclusive(s2)
+
+    for table_name, _, gc_grace_seconds in table_specs:
+        rows = await cql.run_async(SimpleStatement(
+            f"SELECT * FROM ks.{table_name}",
+            consistency_level=ConsistencyLevel.ONE))
+
+        if gc_grace_seconds == gc_grace_seconds_short:
+            assert list(rows) == [], f"A hint to {table_name} has been replayed"
+        elif gc_grace_seconds == gc_grace_seconds_long:
+            assert [(row.pk, row.v) for row in rows] == [(0, 1)], \
+                f"A hint to {table_name} has NOT been replayed"
+        else:
+            pytest.fail(f"Unknown gc_grace_seconds value for {table_name}: {gc_grace_seconds}")
