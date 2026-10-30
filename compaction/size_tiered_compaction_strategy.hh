@@ -26,7 +26,7 @@ class size_tiered_backlog_tracker;
 
 class size_tiered_compaction_strategy_options {
 public:
-    static constexpr uint64_t DEFAULT_MIN_SSTABLE_SIZE = 50L * 1024L * 1024L;
+    static constexpr uint64_t DEFAULT_MIN_SSTABLE_SIZE = default_min_sstable_size;
     static constexpr std::chrono::seconds DEFAULT_MIN_SSTABLE_AGE = std::chrono::hours(1);
     static constexpr double DEFAULT_BUCKET_LOW = 0.5;
     static constexpr double DEFAULT_BUCKET_HIGH = 1.5;
@@ -43,7 +43,10 @@ private:
     double bucket_high = DEFAULT_BUCKET_HIGH;
     double cold_reads_to_omit =  DEFAULT_COLD_READS_TO_OMIT;
 public:
-    size_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options);
+    /// @param defaults provides the values of the options that aren't set in @param options.
+    /// Defaults to the values used when the expected memtable size isn't known.
+    size_tiered_compaction_strategy_options(const std::map<sstring, sstring>& options,
+            const strategy_options_defaults& defaults = {});
 
     size_tiered_compaction_strategy_options();
     size_tiered_compaction_strategy_options(const size_tiered_compaction_strategy_options&) = default;

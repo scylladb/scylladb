@@ -82,7 +82,11 @@ public:
     using bucket_t = std::vector<sstables::shared_sstable>;
     enum class bucket_compaction_mode { none, size_tiered, major };
 public:
-    time_window_compaction_strategy(const std::map<sstring, sstring>& options);
+    /// @param defaults provides the values of the options that aren't set in @param options,
+    /// for the size-tiered compaction this strategy performs within a time window.
+    /// Defaults to the values used when the expected memtable size isn't known.
+    time_window_compaction_strategy(const std::map<sstring, sstring>& options,
+            const strategy_options_defaults& defaults = {});
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 
     virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const override;
