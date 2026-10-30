@@ -584,6 +584,13 @@ future<> raft_server_with_timeouts::read_barrier(seastar::abort_source* as, std:
     }, "read_barrier", as, timeout);
 }
 
+future<raft::index_t> raft_server_with_timeouts::wait_for_apply_committed(seastar::abort_source* as, std::optional<raft_timeout> timeout)
+{
+    return run_with_timeout([&](abort_source* as) {
+        return _group_server.server->wait_for_apply_committed(as);
+    }, "wait_for_apply_committed", as, timeout);
+}
+
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, direct_failure_detector::clock::timepoint_t timeout, abort_source& as, direct_failure_detector::clock& c) {
     auto dst_id = raft::server_id{id};
 

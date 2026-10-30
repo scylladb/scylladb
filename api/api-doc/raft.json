@@ -96,6 +96,38 @@
          ]
       },
       {
+         "path": "/raft/wait_for_apply",
+         "operations": [
+            {
+               "method": "POST",
+               "summary": "Waits until all commands of the given Raft group that this node knows to be committed are applied locally. Returns the index of the last such command. Unlike read_barrier, it does not communicate with other nodes, so it works without a quorum. However, it doesn't guarantee that commands committed by other members of the group are applied (no linearizability).",
+               "type": "long",
+               "nickname": "wait_for_apply",
+               "produces": [
+                  "application/json"
+               ],
+               "parameters": [
+                  {
+                     "name": "group_id",
+                     "description": "The ID of the group. When absent, group0 is used.",
+                     "required": false,
+                     "allowMultiple": false,
+                     "type": "string",
+                     "paramType": "query"
+                  },
+                  {
+                     "name": "timeout",
+                     "description": "Timeout in seconds after which the endpoint returns a failure. If not provided, 60s is used.",
+                     "required": false,
+                     "allowMultiple": false,
+                     "type": "long",
+                     "paramType": "query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/raft/trigger_stepdown/",
          "operations":[
             {
