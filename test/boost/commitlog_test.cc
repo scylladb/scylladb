@@ -1909,6 +1909,502 @@ SEASTAR_TEST_CASE(test_wait_for_delete) {
     co_await log.clear();
 }
 
+// SCYLLADB-4094: min_position() must not pass a segment whose file is still on disk.
+// S1 is released and disposed. S2 stays dirty through a live handle, so _segments
+// never goes empty (an empty _segments returns _ids, which would hide the bug).
+enum class disposal_fault {
+    none,       // before_delete() parks the disposal of S1 until the test releases it
+    fail,       // before_delete() throws for S1 until the test allows the retry
+    vanish,     // before_delete() removes S1's file, so the disposal finds it gone
+};
+
+static future<> do_test_min_position_covers_pending_deletes(bool recycle, disposal_fault fault) {
+    struct parking_extension : public db::commitlog_file_extension {
+        std::string prefix;
+        disposal_fault fault;
+        // Set once the segment under test is known; any other file passes through.
+        std::optional<segment_id_type> want;
+        // fail: set by the test to let the next disposal of S1 through.
+        bool allow_retry = false;
+        sstring parked;
+        promise<> entered;
+        promise<> release;
+
+        parking_extension(std::string p, disposal_fault f) : prefix(std::move(p)), fault(f) {}
+        seastar::future<seastar::file> wrap_file(const seastar::sstring&, seastar::file f, seastar::open_flags) override {
+            co_return f;
+        }
+        // Runs inside do_pending_deletes() with the file still on disk under its own name.
+        seastar::future<> before_delete(const seastar::sstring& filename) override {
+            if (!want) {
+                co_return;
+            }
+            try {
+                if (commitlog::descriptor(filename, prefix).id != *want) {
+                    co_return;
+                }
+            } catch (std::domain_error&) {
+                co_return; // not a segment name we know
+            }
+            parked = filename;
+            if (fault == disposal_fault::fail) {
+                // Every pass fails until the test allows the retry, so a pass the
+                // test did not trigger cannot take the retry early.
+                if (!allow_retry) {
+                    throw std::runtime_error("injected disposal failure");
+                }
+                co_return;
+            }
+            want.reset();
+            if (fault == disposal_fault::vanish) {
+                co_await seastar::remove_file(filename);
+                co_return;
+            }
+            entered.set_value();
+            co_await release.get_future();
+        }
+    };
+
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    // Recycling needs room under the limit. A zero limit forces the unlink branch
+    // while another file is on disk, as S2 is. Which branch ran is not asserted:
+    // the replenisher renames recycled files, so a directory listing races it.
+    cfg.commitlog_total_space_in_mb = recycle ? 8 * this_smp_shard_count() : 0;
+    cfg.metrics_category_name = "commitlog";
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    auto ep = std::make_unique<parking_extension>(cfg.fname_prefix, fault);
+    auto& ex = *ep;
+    db::extensions exts;
+    exts.add_commitlog_file_extension("park", std::move(ep));
+    cfg.extensions = &exts;
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    bool released = false;
+    auto unpark = [&] {
+        if (fault == disposal_fault::none && !std::exchange(released, true)) {
+            ex.release.set_value();
+        }
+    };
+
+    auto body = [&] () -> future<> {
+        auto uuid = make_table_id();
+        auto write = [&] {
+            return log.add_mutation(uuid, 100, db::commitlog::force_sync::no, [](db::commitlog::output& dst) {
+                dst.fill('1', 100);
+            });
+        };
+
+        rp_handle h1 = co_await write();           // S1
+        auto s1 = h1.rp().id;
+        ex.want = s1;
+        co_await log.force_new_active_segment();   // S1 closed, kept dirty by h1
+        rp_handle h2 = co_await write();           // S2, the active segment
+        auto s2 = h2.rp().id;
+        BOOST_REQUIRE_GT(s2, s1);
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+
+        // rp_set::put() clears the handle's position but keeps its segment
+        // reference, so discard_completed_segments() erases S1 from _segments
+        // while its destructor, and with it the disposal, cannot run yet.
+        rp_set rps;
+        rps.put(std::move(h1));
+        log.discard_completed_segments(uuid, rps);
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+
+        // Now S1 is destroyed and its file queued; nothing disposes it yet.
+        h1 = {};
+        BOOST_REQUIRE_GE(log.get_num_segments_destroyed(), 1);
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+
+        // Closing S2 triggers a sweep, which runs do_pending_deletes() on S1's file.
+        co_await log.force_new_active_segment();
+        if (fault == disposal_fault::fail) {
+            co_await log.wait_for_pending_deletes();
+            BOOST_REQUIRE(!ex.parked.empty());
+            BOOST_REQUIRE(co_await file_exists(ex.parked));
+            BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+            // Closing S3 runs the next pass, which retries S1's file.
+            ex.allow_retry = true;
+            rp_handle h3 = co_await write();        // S3
+            co_await log.force_new_active_segment();
+            co_await log.wait_for_pending_deletes();
+            BOOST_REQUIRE(!co_await file_exists(ex.parked));
+            BOOST_REQUIRE_EQUAL(log.min_position().id, s2);
+            co_return;
+        }
+        if (fault == disposal_fault::vanish) {
+            co_await log.wait_for_pending_deletes();
+            BOOST_REQUIRE(!ex.parked.empty());
+            BOOST_REQUIRE(!co_await file_exists(ex.parked));
+            BOOST_REQUIRE_EQUAL(log.min_position().id, s2);
+            co_return;
+        }
+        co_await ex.entered.get_future();
+        BOOST_REQUIRE(co_await file_exists(ex.parked));
+        BOOST_REQUIRE_EQUAL(commitlog::descriptor(ex.parked, cfg.fname_prefix).id, s1);
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+
+        unpark();
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE(!co_await file_exists(ex.parked));
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s2);
+    };
+
+    // A failed assertion must not leave do_pending_deletes() parked across shutdown.
+    std::exception_ptr error;
+    try {
+        co_await body();
+    } catch (...) {
+        error = std::current_exception();
+    }
+    unpark();
+    co_await log.shutdown();
+    co_await log.clear();
+    if (error) {
+        std::rethrow_exception(error);
+    }
+}
+
+SEASTAR_TEST_CASE(test_min_position_covers_pending_deletes_recycle) {
+    return do_test_min_position_covers_pending_deletes(true, disposal_fault::none);
+}
+
+SEASTAR_TEST_CASE(test_min_position_covers_pending_deletes_delete) {
+    return do_test_min_position_covers_pending_deletes(false, disposal_fault::none);
+}
+
+SEASTAR_TEST_CASE(test_min_position_holds_until_failed_delete_is_retried) {
+    return do_test_min_position_covers_pending_deletes(false, disposal_fault::fail);
+}
+
+SEASTAR_TEST_CASE(test_min_position_advances_when_file_vanishes_recycle) {
+    return do_test_min_position_covers_pending_deletes(true, disposal_fault::vanish);
+}
+
+SEASTAR_TEST_CASE(test_min_position_advances_when_file_vanishes_delete) {
+    return do_test_min_position_covers_pending_deletes(false, disposal_fault::vanish);
+}
+
+// An exception after the unlink must not leave the segment pinned: once the
+// directory is synced, min_position() moves past it.
+SEASTAR_TEST_CASE(test_min_position_advances_when_disposal_throws_after_unlink) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#else
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    // With a zero limit the unlink branch is taken while any other file is on disk.
+    cfg.commitlog_total_space_in_mb = 0;
+    cfg.metrics_category_name = "commitlog";
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto uuid = make_table_id();
+    auto write = [&] {
+        return log.add_mutation(uuid, 100, db::commitlog::force_sync::no, [](db::commitlog::output& dst) {
+            dst.fill('1', 100);
+        });
+    };
+
+    // A failed assertion must not leave the injection enabled for later tests.
+    std::exception_ptr error;
+    try {
+        rp_handle h1 = co_await write();           // S1
+        auto s1 = h1.rp().id;
+        co_await log.force_new_active_segment();
+        rp_handle h2 = co_await write();           // S2 stays dirty, so _segments never empties
+        auto s2 = h2.rp().id;
+        auto s1_file = (tmp.path() / commitlog::descriptor(s1, cfg.fname_prefix).filename()).string();
+        BOOST_REQUIRE(co_await file_exists(s1_file));
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+
+        // Every unlink from here on throws right after removing the file.
+        utils::get_local_injector().enable("commitlog_throw_after_unlink");
+        rp_set rps;
+        rps.put(std::move(h1));
+        log.discard_completed_segments(uuid, rps);
+        h1 = {};
+        // Closing S2 triggers a sweep, which runs do_pending_deletes() on S1's file.
+        co_await log.force_new_active_segment();
+        co_await log.wait_for_pending_deletes();
+
+        // Proves the injected throw ran. Without the throw the test degrades to
+        // the plain unlink case.
+        BOOST_REQUIRE_GE(utils::get_local_injector().enter_count("commitlog_throw_after_unlink"), 1);
+        BOOST_REQUIRE(!co_await file_exists(s1_file));
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s2);
+    } catch (...) {
+        error = std::current_exception();
+    }
+    utils::get_local_injector().disable("commitlog_throw_after_unlink");
+    co_await log.shutdown();
+    co_await log.clear();
+    if (error) {
+        std::rethrow_exception(error);
+    }
+#endif
+}
+
+// A sync after a failed one need not persist the earlier unlinks, so a failed
+// directory sync pins their segments for good. A later successful sync still
+// releases the segments it covers.
+SEASTAR_TEST_CASE(test_min_position_holds_when_dir_sync_fails) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#else
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    // With a zero limit the unlink branch is taken while any other file is on disk.
+    cfg.commitlog_total_space_in_mb = 0;
+    cfg.metrics_category_name = "commitlog";
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto uuid = make_table_id();
+    auto write = [&] {
+        return log.add_mutation(uuid, 100, db::commitlog::force_sync::no, [](db::commitlog::output& dst) {
+            dst.fill('1', 100);
+        });
+    };
+    auto file_of = [&] (segment_id_type id) {
+        return (tmp.path() / commitlog::descriptor(id, cfg.fname_prefix).filename()).string();
+    };
+
+    // A failed assertion must not leave the injection enabled for later tests.
+    std::exception_ptr error;
+    try {
+        rp_handle h1 = co_await write();           // S1
+        auto s1 = h1.rp().id;
+        co_await log.force_new_active_segment();
+        rp_handle h2 = co_await write();           // S2
+        auto s2 = h2.rp().id;
+        co_await log.force_new_active_segment();
+        rp_handle h3 = co_await write();           // S3 stays dirty, so _segments never empties
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+
+        // The first pass unlinks S2, and its directory sync fails. S1 stays dirty.
+        utils::get_local_injector().enable("commitlog_fail_dir_sync");
+        rp_set rps1;
+        rps1.put(std::move(h2));
+        log.discard_completed_segments(uuid, rps1);
+        h2 = {};
+        co_await log.force_new_active_segment();
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE_GE(utils::get_local_injector().enter_count("commitlog_fail_dir_sync"), 1);
+        utils::get_local_injector().disable("commitlog_fail_dir_sync");
+        BOOST_REQUIRE(!co_await file_exists(file_of(s2)));
+
+        // The second pass unlinks S1 and its sync succeeds. S1 is released, S2 stays pinned.
+        // S3 is closed, and force_new_active_segment() closes only an active segment with data.
+        rp_handle h4 = co_await write();           // S4
+        rp_set rps2;
+        rps2.put(std::move(h1));
+        log.discard_completed_segments(uuid, rps2);
+        h1 = {};
+        co_await log.force_new_active_segment();
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE(!co_await file_exists(file_of(s1)));
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s2);
+    } catch (...) {
+        error = std::current_exception();
+    }
+    utils::get_local_injector().disable("commitlog_fail_dir_sync");
+    co_await log.shutdown();
+    co_await log.clear();
+    if (error) {
+        std::rethrow_exception(error);
+    }
+#endif
+}
+
+// A failed sync inside named_file::rename() pins like a failed sync of the pass.
+// The recycled file falls through to an unlink, which must not release it.
+SEASTAR_TEST_CASE(test_min_position_holds_when_rename_sync_fails) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#else
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    // Room under the limit, so disposal takes the recycle branch. A single reserve
+    // segment keeps the files on disk well under it.
+    cfg.commitlog_total_space_in_mb = 8 * this_smp_shard_count();
+    cfg.max_reserve_segments = 1;
+    cfg.metrics_category_name = "commitlog";
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto uuid = make_table_id();
+    auto write = [&] {
+        return log.add_mutation(uuid, 100, db::commitlog::force_sync::no, [](db::commitlog::output& dst) {
+            dst.fill('1', 100);
+        });
+    };
+    auto file_of = [&] (segment_id_type id) {
+        return (tmp.path() / commitlog::descriptor(id, cfg.fname_prefix).filename()).string();
+    };
+
+    // A failed assertion must not leave the injection enabled for later tests.
+    std::exception_ptr error;
+    try {
+        rp_handle h1 = co_await write();           // S1
+        auto s1 = h1.rp().id;
+        co_await log.force_new_active_segment();
+        rp_handle h2 = co_await write();           // S2
+        auto s2 = h2.rp().id;
+        co_await log.force_new_active_segment();
+        rp_handle h3 = co_await write();           // S3 stays dirty, so _segments never empties
+
+        // The first pass recycles S2, and the sync inside its rename fails. S1 stays dirty.
+        utils::get_local_injector().enable("commitlog_fail_rename_sync");
+        rp_set rps1;
+        rps1.put(std::move(h2));
+        log.discard_completed_segments(uuid, rps1);
+        h2 = {};
+        co_await log.force_new_active_segment();
+        co_await log.wait_for_pending_deletes();
+        // Proves the recycle branch ran. Without the recycle the test degrades
+        // to the plain unlink case.
+        BOOST_REQUIRE_GE(utils::get_local_injector().enter_count("commitlog_fail_rename_sync"), 1);
+        utils::get_local_injector().disable("commitlog_fail_rename_sync");
+        BOOST_REQUIRE(!co_await file_exists(file_of(s2)));
+
+        // The second pass disposes S1 and its directory change is synced. S1 is
+        // released, S2 stays pinned.
+        // S3 is closed, and force_new_active_segment() closes only an active segment with data.
+        rp_handle h4 = co_await write();           // S4
+        rp_set rps2;
+        rps2.put(std::move(h1));
+        log.discard_completed_segments(uuid, rps2);
+        h1 = {};
+        co_await log.force_new_active_segment();
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE(!co_await file_exists(file_of(s1)));
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s2);
+    } catch (...) {
+        error = std::current_exception();
+    }
+    utils::get_local_injector().disable("commitlog_fail_rename_sync");
+    co_await log.shutdown();
+    co_await log.clear();
+    if (error) {
+        std::rethrow_exception(error);
+    }
+#endif
+}
+
+// Replayed files have no _pending_disposal entry, but main.cc drops the truncation and
+// cleanup records once delete_segments() returns. So their unlinks must be synced, and
+// a failed sync must fail delete_segments().
+SEASTAR_TEST_CASE(test_delete_segments_syncs_directory) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#else
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    // With a zero limit a file is unlinked while any other file is on disk.
+    cfg.commitlog_total_space_in_mb = 0;
+    cfg.metrics_category_name = "commitlog";
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    std::vector<sstring> files;
+    for (int i = 0; i < 3; ++i) {
+        files.emplace_back(seastar::format("{}/fake{}.log", cfg.commit_log_location, i));
+        auto f = co_await open_file_dma(files.back(), open_flags::wo | open_flags::create);
+        co_await f.truncate(1024 * 1024);
+        co_await f.close();
+    }
+
+    utils::get_local_injector().enable("commitlog_fail_dir_sync");
+    const auto syncs = utils::get_local_injector().enter_count("commitlog_fail_dir_sync");
+    // A failed assertion must not leave the injection enabled for later tests.
+    std::exception_ptr error;
+    try {
+        bool failed = false;
+        try {
+            co_await log.delete_segments(files);
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
+        BOOST_REQUIRE(failed);
+        BOOST_REQUIRE_GT(utils::get_local_injector().enter_count("commitlog_fail_dir_sync"), syncs);
+        for (const auto& name : files) {
+            BOOST_REQUIRE(!co_await file_exists(name));
+        }
+    } catch (...) {
+        error = std::current_exception();
+    }
+    utils::get_local_injector().disable("commitlog_fail_dir_sync");
+    co_await log.shutdown();
+    co_await log.clear();
+    if (error) {
+        std::rethrow_exception(error);
+    }
+#endif
+}
+
+// release() orphans the segments without deleting a dirty one's file, which is
+// left on disk to be replayed. min_position() must keep reporting it.
+SEASTAR_TEST_CASE(test_min_position_covers_released_segments) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.metrics_category_name = "commitlog";
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto uuid = make_table_id();
+    rp_handle h = co_await log.add_mutation(uuid, 100, db::commitlog::force_sync::no, [](db::commitlog::output& dst) {
+        dst.fill('1', 100);
+    });
+    auto s1 = h.rp().id;
+
+    // A failed assertion must not skip the teardown below.
+    std::exception_ptr error;
+    try {
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+
+        // database::stop() shuts the commitlog down before releasing it. release()
+        // with unwritten buffers strands the request controller units they hold, so
+        // a shutdown that waits for all of them never completes.
+        co_await log.shutdown();
+        // The handle keeps the segment dirty, so shutdown leaves it in place.
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+
+        // release() empties _segments without deleting the dirty segment's file.
+        co_await log.release();
+        BOOST_REQUIRE_EQUAL(log.min_position().id, s1);
+    } catch (...) {
+        error = std::current_exception();
+    }
+
+    h = {};
+    // shutdown() is idempotent: a second call awaits the same promise.
+    co_await log.shutdown();
+    co_await log.clear();
+    if (error) {
+        std::rethrow_exception(error);
+    }
+}
+
 SEASTAR_TEST_CASE(test_commitlog_max_data_lifetime) {
     commitlog::config cfg;
 
