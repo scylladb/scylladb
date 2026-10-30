@@ -102,6 +102,7 @@ public:
     future<> modify_config(std::vector<raft::config_member> add, std::vector<raft::server_id> del, seastar::abort_source* as, std::optional<raft_timeout> timeout);
     future<bool> trigger_snapshot(seastar::abort_source* as, std::optional<raft_timeout> timeout);
     future<> read_barrier(seastar::abort_source* as, std::optional<raft_timeout> timeout);
+    future<> wait_for_apply(raft::index_t idx, seastar::abort_source* as, std::optional<raft_timeout> timeout);
 };
 
 class direct_fd_pinger;
