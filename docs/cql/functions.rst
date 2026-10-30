@@ -103,8 +103,12 @@ The following table describes the conversions supported by the ``cast`` function
                  ``varchar``
 =============== =======================================================================================================
 
-The conversions rely strictly on Java's semantics. For example, the double value 1 will be converted to the text value
-'1.0'. For instance::
+A cast of a value that does not fit the target type fails the query. For example, casting the ``bigint`` value 128
+or the ``double`` value 300.5 to ``tinyint``, the ``double`` value 1e300 to ``float``, or NaN to ``int`` fails. A
+floating-point value cast to an integer type is truncated toward zero, so the ``double`` value 2.7 cast to ``int`` gives 2.
+
+Otherwise, the conversions rely strictly on Java's semantics. For example, the double value 1 will be converted to the
+text value '1.0'. For instance::
 
     SELECT avg(cast(count as double)) FROM myTable
 

@@ -12,6 +12,10 @@
 #include "cql3/functions/native_scalar_function.hh"
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <chrono>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <utility>
 
 namespace cql3 {
 namespace functions {
@@ -44,7 +48,14 @@ public:
             return std::nullopt;
         }
         auto val_from = from_type->deserialize(managed_bytes_view(*val));
-        auto val_to = _func(val_from);
+        auto val_to = [&] {
+            try {
+                return _func(val_from);
+            } catch (std::out_of_range& e) {
+                throw exceptions::function_execution_exception(name().name, e.what(), name().keyspace,
+                    {from_type->without_reversed().as_cql3_type().to_string()});
+            }
+        }();
         return managed_bytes(to_type->decompose(val_to));
     }
 };
@@ -66,16 +77,67 @@ static data_value identity_castas_fctn(data_value val) {
 
 using bytes_opt = std::optional<bytes>;
 
+// Converts with static_cast, but fails the cast when the value does not fit
+// the target type, as in SQL, instead of wrapping around or saturating.
 template<typename ToType, typename FromType>
 static data_value castas_fctn_simple(data_value from) {
     auto val_from = value_cast<FromType>(from);
+    if constexpr (std::is_floating_point_v<FromType> && std::is_integral_v<ToType>) {
+        // Truncates toward zero.  Converting a value outside the target's
+        // range is undefined behaviour in C++, so check the range first.  The
+        // limits are -2^(n-1) and 2^(n-1), exact in any floating-point type.
+        constexpr auto min = static_cast<FromType>(std::numeric_limits<ToType>::min());
+        auto val = std::trunc(val_from);
+        if (!(val >= min && val < -min)) {
+            throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
+        }
+        return static_cast<ToType>(val);
+    } else if constexpr (std::is_integral_v<FromType> && std::is_integral_v<ToType>) {
+        if (!std::in_range<ToType>(val_from)) {
+            throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
+        }
+    } else if constexpr (std::is_same_v<FromType, double> && std::is_same_v<ToType, float>) {
+        // IEEE 754 rounds a double beyond float's range to an infinity (C++
+        // alone leaves that undefined).  Infinities and NaN convert as they are.
+        static_assert(std::numeric_limits<float>::is_iec559);
+        auto val = static_cast<float>(val_from);
+        if (std::isinf(val) && std::isfinite(val_from)) {
+            throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
+        }
+        return val;
+    }
     return static_cast<ToType>(val_from);
+}
+
+// Exact, truncating toward zero.  NaN and infinities have no integer value.
+template<typename FromType>
+static data_value castas_fctn_from_float_to_varint(data_value from) {
+    auto val_from = value_cast<FromType>(from);
+    if (!std::isfinite(val_from)) {
+        throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<utils::multiprecision_int>()->cql3_type_name()));
+    }
+    return utils::multiprecision_int(val_from);
+}
+
+// Boost converts a number beyond the target's range to an infinity.
+template<typename ToType>
+static data_value castas_fctn_from_varint_to_float(data_value from) {
+    const auto& varint = value_cast<utils::multiprecision_int>(from);
+    auto val = static_cast<ToType>(varint);
+    if (std::isinf(val)) {
+        throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
+    }
+    return val;
 }
 
 template<typename ToType>
 static data_value castas_fctn_from_decimal_to_float(data_value from) {
     auto val_from = value_cast<big_decimal>(from);
-    return static_cast<ToType>(val_from.as_rational());
+    auto val = static_cast<ToType>(val_from.as_rational());
+    if (!std::isfinite(val)) {
+        throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
+    }
+    return val;
 }
 
 static utils::multiprecision_int from_decimal_to_cppint(const data_value& from) {
@@ -87,13 +149,19 @@ static utils::multiprecision_int from_decimal_to_cppint(const data_value& from) 
 template<typename ToType>
 static data_value castas_fctn_from_varint_to_integer(data_value from) {
     const auto& varint = value_cast<utils::multiprecision_int>(from);
-    return static_cast<ToType>(from_varint_to_integer(varint));
+    if (varint < std::numeric_limits<ToType>::min() || varint > std::numeric_limits<ToType>::max()) {
+        throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
+    }
+    return static_cast<ToType>(varint);
 }
 
 template<typename ToType>
 static data_value castas_fctn_from_decimal_to_integer(data_value from) {
     auto varint = from_decimal_to_cppint(from);
-    return static_cast<ToType>(from_varint_to_integer(varint));
+    if (varint < std::numeric_limits<ToType>::min() || varint > std::numeric_limits<ToType>::max()) {
+        throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<ToType>()->cql3_type_name()));
+    }
+    return static_cast<ToType>(varint);
 }
 
 static data_value castas_fctn_from_decimal_to_varint(data_value from) {
@@ -109,6 +177,9 @@ static data_value castas_fctn_from_integer_to_decimal(data_value from) {
 template<typename FromType>
 static data_value castas_fctn_from_float_to_decimal(data_value from) {
     auto val_from = value_cast<FromType>(from);
+    if (!std::isfinite(val_from)) {
+        throw std::out_of_range(fmt::format("value is out of range for {}", data_type_for<big_decimal>()->cql3_type_name()));
+    }
     return big_decimal(fmt::to_string(val_from));
 }
 
@@ -260,7 +331,7 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     case cast_switch_case_val(kind::float_kind, kind::double_kind):
         return castas_fctn_simple<float, double>;
     case cast_switch_case_val(kind::float_kind, kind::varint):
-        return castas_fctn_simple<float, utils::multiprecision_int>;
+        return castas_fctn_from_varint_to_float<float>;
     case cast_switch_case_val(kind::float_kind, kind::decimal):
         return castas_fctn_from_decimal_to_float<float>;
 
@@ -275,7 +346,7 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     case cast_switch_case_val(kind::double_kind, kind::float_kind):
         return castas_fctn_simple<double, float>;
     case cast_switch_case_val(kind::double_kind, kind::varint):
-        return castas_fctn_simple<double, utils::multiprecision_int>;
+        return castas_fctn_from_varint_to_float<double>;
     case cast_switch_case_val(kind::double_kind, kind::decimal):
         return castas_fctn_from_decimal_to_float<double>;
 
@@ -288,9 +359,9 @@ castas_fctn get_castas_fctn(data_type to_type, data_type from_type) {
     case cast_switch_case_val(kind::varint, kind::long_kind):
         return castas_fctn_simple<utils::multiprecision_int, int64_t>;
     case cast_switch_case_val(kind::varint, kind::float_kind):
-        return castas_fctn_simple<utils::multiprecision_int, float>;
+        return castas_fctn_from_float_to_varint<float>;
     case cast_switch_case_val(kind::varint, kind::double_kind):
-        return castas_fctn_simple<utils::multiprecision_int, double>;
+        return castas_fctn_from_float_to_varint<double>;
     case cast_switch_case_val(kind::varint, kind::decimal):
         return castas_fctn_from_decimal_to_varint;
 
