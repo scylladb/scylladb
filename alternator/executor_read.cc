@@ -373,6 +373,9 @@ filter::filter(parsed::expression_cache& parsed_expression_cache, const rjson::v
         if (rjson::find(request, "ProjectionExpression")) {
             throw api_error::validation(format("Cannot use both old-style and new-style parameters in same request: {} and ProjectionExpression", conditions_attribute));
         }
+        if (conditions->IsObject()) {
+            validate_condition_values(*conditions, conditions_attribute);
+        }
         bool require_all = conditional_operator != conditional_operator_type::OR;
         _imp = conditions_filter { require_all, rjson::copy(*conditions) };
     }

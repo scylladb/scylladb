@@ -3502,7 +3502,8 @@ public:
 
 // Verify that a value parsed from the user input is legal. In particular,
 // we check that the value is not an empty set, string or bytes - which is
-// (somewhat artificially) forbidden by DynamoDB.
+// (somewhat artificially) forbidden by DynamoDB - and that a set has only
+// string elements and no duplicates.
 void validate_value(const rjson::value& v, const char* caller) {
     if (!v.IsObject() || v.MemberCount() != 1) {
         throw api_error::validation(format("{}: improperly formatted value '{}'", caller, v));
@@ -3515,6 +3516,20 @@ void validate_value(const rjson::value& v, const char* caller) {
         }
         if (it->value.Size() == 0) {
             throw api_error::validation(format("{}: empty set not allowed", caller));
+        }
+        std::vector<const rjson::value*> elems;
+        elems.reserve(it->value.Size());
+        for (const auto& e : it->value.GetArray()) {
+            if (!e.IsString()) {
+                // DynamoDB uses a SerializationException in this case, not ValidationException.
+                throw api_error::serialization(format("{}: set elements must be encoded as strings '{}'", caller, v));
+            }
+            elems.push_back(&e);
+        }
+        const rjson::single_value_ptr_comp less;
+        std::ranges::sort(elems, less);
+        if (std::ranges::adjacent_find(elems, [&] (auto a, auto b) { return !less(a, b); }) != elems.end()) {
+            throw api_error::validation(format("{}: Input collection {} contains duplicates", caller, it->value));
         }
     } else if (type == "S" || type == "B") {
         if (!it->value.IsString()) {

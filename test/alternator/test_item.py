@@ -8,7 +8,7 @@ import pytest
 from concurrent.futures import ThreadPoolExecutor
 from botocore.exceptions import ClientError
 from decimal import Decimal
-from test.alternator.util import random_string, random_bytes
+from test.alternator.util import random_string, random_bytes, client_no_transform
 
 # Basic test for creating a new item with a random name, and reading it back
 # with strong consistency.
@@ -757,6 +757,76 @@ def test_put_item_empty_attribute(test_table_s):
     # But empty lists, maps, strings and binary blobs *are* allowed:
     test_table_s.put_item(Item={'p': p, 'a': [], 'b': {}, 'c': '', 'd': bytearray('', 'utf-8')})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': [], 'b': {}, 'c': '', 'd': bytearray('', 'utf-8')}
+
+# DynamoDB rejects a set value that contains an element two times, in every
+# request that takes a value (SCYLLADB-3888).
+@pytest.mark.parametrize('typ,vals', [('SS', ['c', 'c']), ('NS', ['1', '1']), ('BS', [b'c', b'c'])])
+def test_set_value_with_duplicates_rejected(test_table_s, typ, vals):
+    table = test_table_s.name
+    key = {'p': {'S': random_string()}}
+    v = {typ: vals}
+    match = 'ValidationException.*contains duplicates'
+    with client_no_transform(test_table_s.meta.client) as client:
+        with pytest.raises(ClientError, match=match):
+            client.put_item(TableName=table, Item={**key, 'a': v})
+        with pytest.raises(ClientError, match=match):
+            client.batch_write_item(RequestItems={table: [{'PutRequest': {'Item': {**key, 'a': v}}}]})
+        for expr in ['ADD a :v', 'DELETE a :v', 'SET a = :v']:
+            with pytest.raises(ClientError, match=match):
+                client.update_item(TableName=table, Key=key, UpdateExpression=expr,
+                    ExpressionAttributeValues={':v': v})
+        for action in ['PUT', 'ADD', 'DELETE']:
+            with pytest.raises(ClientError, match=match):
+                client.update_item(TableName=table, Key=key,
+                    AttributeUpdates={'a': {'Value': v, 'Action': action}})
+        with pytest.raises(ClientError, match=match):
+            client.update_item(TableName=table, Key=key, UpdateExpression='SET b = :one',
+                ConditionExpression='a = :v', ExpressionAttributeValues={':one': {'N': '1'}, ':v': v})
+        assert 'Item' not in client.get_item(TableName=table, Key=key, ConsistentRead=True)
+
+# The legacy condition parameters (Expected, QueryFilter, ScanFilter) must
+# reject a set with a duplicate element too, even when the stored set would
+# match it. KeyConditions cannot hold a set, as a key cannot be a set.
+@pytest.mark.parametrize('typ,vals', [('SS', ['a', 'a']), ('NS', ['1', '1']), ('BS', [b'a', b'a'])])
+def test_legacy_condition_set_with_duplicates_rejected(test_table_s, typ, vals):
+    table = test_table_s.name
+    p = random_string()
+    key = {'p': {'S': p}}
+    v = {typ: vals}
+    match = 'ValidationException.*contains duplicates'
+    with client_no_transform(test_table_s.meta.client) as client:
+        client.put_item(TableName=table, Item={**key, 'a': {typ: vals[:1]}})
+        for expected in [
+                {'a': {'Value': v}},
+                {'a': {'ComparisonOperator': 'EQ', 'AttributeValueList': [v]}},
+                {'a': {'ComparisonOperator': 'NE', 'AttributeValueList': [v]}}]:
+            with pytest.raises(ClientError, match=match):
+                client.put_item(TableName=table, Item={**key, 'b': {'N': '1'}}, Expected=expected)
+        filt = {'a': {'ComparisonOperator': 'EQ', 'AttributeValueList': [v]}}
+        with pytest.raises(ClientError, match=match):
+            client.scan(TableName=table, ScanFilter=filt)
+        with pytest.raises(ClientError, match=match):
+            client.query(TableName=table, QueryFilter=filt,
+                KeyConditions={'p': {'ComparisonOperator': 'EQ', 'AttributeValueList': [{'S': p}]}})
+        assert 'b' not in client.get_item(TableName=table, Key=key, ConsistentRead=True)['Item']
+
+# Alternator checks only a top-level set value for duplicates, not a set
+# nested in a list or map.
+@pytest.mark.xfail(reason='sets nested in L or M are not checked for duplicates')
+def test_nested_set_value_with_duplicates_rejected(test_table_s):
+    with client_no_transform(test_table_s.meta.client) as client:
+        with pytest.raises(ClientError, match='ValidationException.*contains duplicates'):
+            client.put_item(TableName=test_table_s.name,
+                Item={'p': {'S': random_string()}, 'a': {'L': [{'SS': ['a', 'a']}]}})
+
+# A set whose element has the wrong type is an improperly formatted set, not
+# a comparison error.
+def test_set_value_with_mixed_types_rejected(test_table_s):
+    table = test_table_s.name
+    key = {'p': {'S': random_string()}}
+    with client_no_transform(test_table_s.meta.client) as client:
+        with pytest.raises(ClientError, match='SerializationException'):
+            client.put_item(TableName=table, Item={**key, 'a': {'SS': ['x', 5]}})
 
 # Test that empty strings are not accepted for keys
 def test_put_item_empty_key(test_table_s, test_table_b, test_table_ss, test_table_sb):

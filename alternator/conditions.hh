@@ -33,6 +33,8 @@ enum class conditional_operator_type {
 };
 conditional_operator_type get_conditional_operator(const rjson::value& req);
 
+// Validate the values in legacy conditions (Expected, QueryFilter, ScanFilter).
+void validate_condition_values(const rjson::value& conditions, const char* caller);
 bool verify_expected(const rjson::value& req, const rjson::value* previous_item);
 bool verify_condition(const rjson::value& condition, bool require_all, const rjson::value* previous_item);
 
