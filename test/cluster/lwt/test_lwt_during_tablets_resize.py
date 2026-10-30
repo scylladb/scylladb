@@ -16,6 +16,7 @@ from test.cluster.lwt.lwt_common import (
     DEFAULT_NUM_KEYS,
 )
 from test.cluster.util import new_test_keyspace, FeatureConfig
+from test.pylib.object_storage import Storage
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_tablet_count
 
@@ -31,6 +32,9 @@ PHASE_POST = "post"
 PHASE_RESIZE = "resize"
 MIN_TABLETS = 1
 MAX_TABLETS = 20
+# On fake-gcs-server every sstable operation is a chain of round trips to the
+# mock, and the resizes to 16 tablets dominated the gs flavor's runtime.
+GS_MAX_TABLETS = 4
 RESIZE_TIMEOUT = 240
 
 
@@ -51,7 +55,8 @@ async def run_random_resizes(
     ks: str,
     table: str,
     target_steps: int = TARGET_RESIZE_COUNT,
-    pause_range=(0.5, 2.0)
+    pause_range=(0.5, 2.0),
+    max_tablets: int = MAX_TABLETS,
 ):
     """
     Perform randomized tablet count changes (splits/merges) until target resize count is reached
@@ -60,7 +65,7 @@ async def run_random_resizes(
     split_count = 0
     merge_count = 0
     current_resize_count = 0
-    pow2_targets = powers_of_two_in_range(MIN_TABLETS, MAX_TABLETS)
+    pow2_targets = powers_of_two_in_range(MIN_TABLETS, max_tablets)
 
     while not stop_event_.is_set() and current_resize_count < target_steps:
         current_count = await get_tablet_count(manager, servers[0], ks, table)
@@ -132,11 +137,8 @@ async def run_random_resizes(
 
 
 @pytest.mark.no_parallel
-@pytest.mark.skip_storage('gs', reason='GCS flavor intermittently stalls a tablet split, with the '
-                                       'count never leaving the pre-split value, and takes 9x the '
-                                       'local runtime; deeper investigation is needed')
 async def test_multi_column_lwt_during_split_merge(manager: ScyllaClusterManager, scale_timeout,
-                                                   storage_config: FeatureConfig):
+                                                   storage: Storage | None, storage_config: FeatureConfig):
     """
     Test scenario:
       1. Start N servers with tablets enabled
@@ -205,6 +207,7 @@ async def test_multi_column_lwt_during_split_merge(manager: ScyllaClusterManager
                 ks=ks,
                 table=table,
                 target_steps=TARGET_RESIZE_COUNT,
+                max_tablets=GS_MAX_TABLETS if storage is not None and storage.type == 'GS' else MAX_TABLETS,
             )
             logger.info("LWT resize complete: %d ops", tester.get_phase_ops(PHASE_RESIZE))
 
