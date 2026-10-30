@@ -130,6 +130,13 @@ static std::optional<raft::server_id> injected_stale_leader() {
     return std::nullopt;
 }
 
+// Test-only: shift the clock this replica takes its write timestamps from while it
+// leads, so that tests can hand the leadership to a replica whose clock is behind.
+static api::timestamp_type leader_clock_now() {
+    return api::new_timestamp()
+            + utils::get_local_injector().inject_parameter<int64_t>("sc_leader_timestamp_offset_us").value_or(0);
+}
+
 auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
     if (const auto stale_leader = injected_stale_leader()) {
         return raft::not_a_leader{*stale_leader};
@@ -158,7 +165,7 @@ auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
         // so callers wait on leader_info_cond until their own deadline fires.
         return need_wait_for_leader{wait_with_abort_source(_state.leader_info_cond, as)};
     }
-    const auto new_ts = std::max(api::new_timestamp(), _state.leader_info->last_timestamp + 1);
+    const auto new_ts = std::max(leader_clock_now(), _state.leader_info->last_timestamp + 1);
     _state.leader_info->last_timestamp = new_ts;
     return timestamp_with_term{new_ts, term};
 }

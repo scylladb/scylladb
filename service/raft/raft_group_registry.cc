@@ -147,7 +147,11 @@ void raft_group_registry::init_rpc_verbs() {
 
     ser::raft_rpc_verbs::register_raft_append_entries_reply(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_reply reply) mutable {
-        return handle_raft_rpc(cinfo, gid, from, dst, [from, reply = std::move(reply)] (raft_rpc& rpc) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, reply = std::move(reply), gid] (raft_rpc& rpc) mutable {
+            if (drop_for_group("raft_drop_incoming_append_entries_reply_for_specified_group", gid)) {
+                rslog.debug("Dropping append reply from {} for group {}", from, gid);
+                return;
+            }
             rpc.append_entries_reply(std::move(from), std::move(reply));
         });
     });
