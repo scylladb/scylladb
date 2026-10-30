@@ -85,10 +85,11 @@ static constexpr char GCP_KMS_DEFAULT_ENDPOINT[] = "https://cloudkms.googleapis.
 class encryption::gcp_host::impl {
 public:
     // set a rather long expiry. normal KMS policies are 365-day rotation of keys.
-    // we can do with 10 minutes. CMH. maybe even longer.
+    // we can do with 20 minutes. CMH. maybe even longer.
     // (see comments below on what keys are here)
-    static inline constexpr std::chrono::milliseconds default_expiry = 600s;
-    static inline constexpr std::chrono::milliseconds default_refresh = 1200s;
+    static inline constexpr std::chrono::milliseconds default_expiry = 1200s;
+    static inline constexpr std::chrono::milliseconds default_refresh = 600s;
+    static_assert(default_refresh < default_expiry);
 
     impl(encryption_context& ctxt, const std::string& name, const host_options& options)
         : _ctxt(ctxt)

@@ -116,7 +116,7 @@ This key must be pre-created with access policy allowing the above credentials E
 
 The unique name of Azure Key Vault host that can be referenced in table schema.
 
-host.yourdomain.com={ azure_tenant_id=<the tenant hosting your service principal>, azure_client_id=<ID of your service principal>, azure_client_secret=<secret of the service principal>, azure_client_certificate_path=<path to PEM-encoded certificate and private key of the service principal>, master_key=<vault name>/<keyname>, truststore=/path/to/truststore.pem, priority_string=<tls priority string>, key_cache_expiry=<cache expiry in ms>, key_cache_refersh=<cache refresh in ms>}:...
+host.yourdomain.com={ azure_tenant_id=<the tenant hosting your service principal>, azure_client_id=<ID of your service principal>, azure_client_secret=<secret of the service principal>, azure_client_certificate_path=<path to PEM-encoded certificate and private key of the service principal>, master_key=<vault name>/<keyname>, truststore=/path/to/truststore.pem, priority_string=<tls priority string>, key_cache_expiry=<cache expiry in ms>, key_cache_refresh=<cache refresh in ms>}:...
 
 Authentication can be explicit with Service Principal credentials or by resolving default credentials (see Azure docs).
 

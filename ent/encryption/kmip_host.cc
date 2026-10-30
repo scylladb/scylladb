@@ -142,8 +142,9 @@ public:
 
     using key_and_id_type = std::tuple<shared_ptr<symmetric_key>, id_type>;
 
-    inline static constexpr std::chrono::milliseconds default_expiry = 30s;
-    inline static constexpr std::chrono::milliseconds default_refresh = 100s;
+    inline static constexpr std::chrono::milliseconds default_expiry = 100s;
+    inline static constexpr std::chrono::milliseconds default_refresh = 30s;
+    static_assert(default_refresh < default_expiry);
     inline static constexpr uintptr_t max_hosts = 1<<8;
 
     inline static constexpr size_t def_max_pooled_connections_per_host = 8;
