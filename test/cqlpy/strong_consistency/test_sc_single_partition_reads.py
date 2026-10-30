@@ -27,7 +27,7 @@ from cassandra.cluster import NoHostAvailable
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.query import SimpleStatement
 
-from ..util import new_test_table
+from ..util import config_value_context, new_test_table
 
 
 SCHEMA = "pk int, ck int, s int static, v int, PRIMARY KEY (pk, ck)"
@@ -129,13 +129,11 @@ def test_paging(cql, tables, query):
 
 # Paged strongly consistent reads are deferred (SCYLLADB-2589), so a result
 # has to fit in a single read, bounded like an unpaged regular read by
-# max_memory_for_unlimited_query_hard_limit (100 MB by default). The strongly
-# consistent path hardcodes 1 MB instead and ignores the option. 150 rows of
-# 10 KB each go over 1 MB while staying far under the configured limit, and
-# each write stays well under the raft command size limit. count(*) reads no
-# cells, so its result stays small and it passes, while count(v) and max(v)
-# read every cell and fail like the plain read - on the regular path
-# aggregates are paged internally whatever the client's page size.
+# max_memory_for_unlimited_query_hard_limit (100 MB by default). 150 rows of
+# 10 KB each go over 1 MB - the regular page size - while staying far under
+# that default, and each write stays well under the raft command size
+# limit. count(v) and max(v) read every cell, like the plain read - on the
+# regular path aggregates are paged internally whatever the client's page size.
 LARGE_ROWS = 150
 LARGE_VALUE = b'x' * 10 * 1024
 
@@ -151,17 +149,26 @@ def large_partition_tables(cql, sc_keyspace, test_keyspace):
             yield sc_table, ec_table
 
 
-# The read fails with a SERVER_ERROR, which the driver reports as NoHostAvailable.
-over_result_size_limit = pytest.mark.xfail(strict=True, raises=NoHostAvailable,
-    reason="SCYLLADB-5430: strongly consistent read hardcodes a 1 MB result size limit, ignoring max_memory_for_unlimited_query_hard_limit")
-
-
 @pytest.mark.parametrize("query", [
-    pytest.param("SELECT ck, v FROM {table} WHERE pk = 1", marks=over_result_size_limit),
-    pytest.param("SELECT ck, v FROM {table} WHERE pk = 1 ORDER BY ck DESC", marks=over_result_size_limit),
+    "SELECT ck, v FROM {table} WHERE pk = 1",
+    "SELECT ck, v FROM {table} WHERE pk = 1 ORDER BY ck DESC",
     "SELECT count(*) FROM {table} WHERE pk = 1",
-    pytest.param("SELECT count(v) FROM {table} WHERE pk = 1", marks=over_result_size_limit),
-    pytest.param("SELECT max(v) FROM {table} WHERE pk = 1", marks=over_result_size_limit),
+    "SELECT count(v) FROM {table} WHERE pk = 1",
+    "SELECT max(v) FROM {table} WHERE pk = 1",
 ])
 def test_partition_larger_than_result_size_limit(cql, large_partition_tables, query):
     assert_same_result(cql, large_partition_tables, query, fetch_size=10)
+
+
+# The limit is the configured one: with the hard limit lowered to 512 KB, a
+# read of 80 rows (~800 KB) fails, and with the limit restored it succeeds.
+@pytest.mark.parametrize("order", ["ASC", "DESC"])
+def test_result_size_limit_is_configurable(cql, large_partition_tables, order):
+    sc_table, _ = large_partition_tables
+    limit = str(512 * 1024)
+    query = f"SELECT ck, v FROM {sc_table} WHERE pk = 1 ORDER BY ck {order} LIMIT 80"
+    with config_value_context(cql, 'max_memory_for_unlimited_query_soft_limit', limit), \
+            config_value_context(cql, 'max_memory_for_unlimited_query_hard_limit', limit):
+        with pytest.raises(NoHostAvailable, match=f"exceeds hard limit of {limit}"):
+            cql.execute(SimpleStatement(query, fetch_size=10))
+    assert len(list(cql.execute(SimpleStatement(query, fetch_size=10)))) == 80
