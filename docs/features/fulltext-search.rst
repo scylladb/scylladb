@@ -139,7 +139,7 @@ parentheses group them::
         LIMIT 10;
 
 The operators are recognized only in upper case. A lowercase ``and``, ``or`` or
-``not`` is searched as an ordinary word.
+``not`` is not an operator.
 
 A ``-`` before a word excludes it, like ``NOT``. A ``+`` before a word makes
 that word required, but the other words stay optional, so it is not the same as
