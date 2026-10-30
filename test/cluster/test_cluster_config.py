@@ -537,7 +537,7 @@ async def stored_config_state(cql) -> dict:
 
 
 # The round-trip acceptance test for the DESCRIBE format (the executable slot carries only
-# stored overrides; DESC SCHEMA WITH INTERNALS leads with the ALTER CLUSTER block): dump,
+# stored overrides; DESC SCHEMA WITH INTERNALS emits them as a trailing block of config rows): dump,
 # wipe, replay, and require the stored configs maps to be reproduced exactly at every
 # scope. Then prove inheritance survived the trip: a broader-scope ALTER in the restored
 # cluster still propagates to the purely-inheriting table.
@@ -575,10 +575,17 @@ async def test_describe_schema_internals_round_trips_stored_config(manager: Scyl
 
     dump = dump_schema()
 
-    # The cluster block leads the dump, before any keyspace, and INTERNALS output is pure
-    # CQL (no comment lines).
-    assert dump[0][1] == "cluster_config" and dump[0][2] == "cluster", f"dump starts with {dump[0]}"
-    assert dump[0][3] == "ALTER CLUSTER WITH auto_repair_enabled = true;"
+    # The config overrides of all scopes follow all keyspaces as config rows, led by the
+    # cluster row, and INTERNALS output is pure CQL (no comment lines).
+    config_types = ("cluster_config", "keyspace_config", "table_config")
+    config_rows = [row for row in dump if row[1] in config_types]
+    assert config_rows[0] == (None, "cluster_config", "cluster", "ALTER CLUSTER WITH auto_repair_enabled = true;")
+    assert [row for row in config_rows if (row[0] or "").startswith("ks_rt")] == [
+        ("ks_rt1", "keyspace_config", "ks_rt1", "ALTER KEYSPACE ks_rt1 WITH auto_repair_enabled = false;"),
+        ("ks_rt1", "table_config", "t1", "ALTER TABLE ks_rt1.t1 WITH auto_repair_enabled = true;"),
+        ("ks_rt2", "keyspace_config", "ks_rt2", "ALTER KEYSPACE ks_rt2 WITH auto_repair_enabled = false;"),
+    ]
+    assert all(row[1] not in ("keyspace", "table") for row in dump[dump.index(config_rows[0]):])
 
     # Determinism: a second dump of the unchanged source is identical.
     assert dump_schema() == dump
@@ -593,12 +600,13 @@ async def test_describe_schema_internals_round_trips_stored_config(manager: Scyl
     wiped = await stored_config_state(cql)
     assert wiped == {"cluster": {}, "keyspaces": {}, "tables": {}}
 
-    # Replay only what this test wiped: the cluster block and the ks_rt* keyspaces (the
-    # dump also carries unrelated pre-existing objects such as the audit keyspace, roles,
-    # and service levels, which still exist in the target).
+    # Replay only what this test wiped: the cluster config and the ks_rt* keyspaces with
+    # their config (the dump also carries unrelated pre-existing objects such as the audit
+    # keyspace, roles, and service levels, which still exist in the target).
     for row_keyspace, row_type, row_name, create_statement in dump:
-        if row_type == "cluster_config" and row_name == "cluster":
-            # The cluster block holds one ALTER CLUSTER statement per line.
+        if row_type in config_types and (row_type == "cluster_config" or (row_keyspace or "").startswith("ks_rt")):
+            # A config row holds one ALTER statement per line. The rows follow all CREATE
+            # statements in the dump, so the objects they alter exist by now.
             for statement in create_statement.splitlines():
                 await cql.run_async(statement)
         elif row_type in ("keyspace", "table") and (row_keyspace or "").startswith("ks_rt"):
