@@ -615,3 +615,48 @@ async def test_describe_schema_internals_round_trips_stored_config(manager: Scyl
     assert len(t3_rows) == 1
     assert "\n    -- AND auto_repair_enabled = false  -- from cluster (table=NULL, keyspace=NULL, cluster=false)" in t3_rows[0].create_statement
     assert "\n    AND auto_repair_enabled" not in t3_rows[0].create_statement
+
+
+# A native option with no yaml or command-line form, so only the framework's
+# ALTER CLUSTER can have set it.
+FRAMEWORK_OPTION = "repair_hints_batchlog_flush_discard_unreplayed_hints"
+
+
+@pytest.mark.asyncio
+async def test_framework_applies_cluster_config(manager: ScyllaClusterManager) -> None:
+    """
+    The framework sets the cluster config options a test (or a suite, through
+    extra_scylla_cluster_config_options) gives it with ALTER CLUSTER on the first
+    server that reaches CQL, and a server added later reads the stored value.
+
+    Steps: add two servers concurrently with the option, check the stored
+    cluster-scope value on both, then add a third server and check it there.
+    Then add a fourth server with the option set to None, which the framework
+    applies on that server, and check the stored value is gone.
+    """
+    servers = await manager.servers_add(2, cluster_config={FRAMEWORK_OPTION: False})
+    cql, hosts = await manager.get_ready_cql(servers)
+    await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], FRAMEWORK_OPTION, "false")
+
+    servers.append(await manager.server_add())
+    cql, hosts = await manager.get_ready_cql(servers)
+    await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], FRAMEWORK_OPTION, "false")
+
+    servers.append(await manager.server_add(cluster_config={FRAMEWORK_OPTION: None}))
+    cql, hosts = await manager.get_ready_cql(servers)
+    await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], FRAMEWORK_OPTION, None)
+
+
+@pytest.mark.asyncio
+async def test_framework_applies_cluster_config_on_server_start(manager: ScyllaClusterManager) -> None:
+    """
+    A server added stopped is not queried over CQL, so the framework applies the
+    cluster config options when the server is started instead.
+
+    Steps: add a stopped server with the option, start it, check the stored
+    cluster-scope value.
+    """
+    server = await manager.server_add(start=False, cluster_config={FRAMEWORK_OPTION: False})
+    await manager.server_start(server.server_id)
+    cql, hosts = await manager.get_ready_cql([server])
+    await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], FRAMEWORK_OPTION, "false")

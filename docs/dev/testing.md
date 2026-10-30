@@ -391,6 +391,13 @@ extend the options of a used server, you can do it by adding
 `extra_scylla_cmdline_options` or `extra_scylla_config_options`
 to your test_config.yaml.
 
+A native cluster config option (see [cluster_config.md](cluster_config.md))
+has no command-line or scylla.yaml form. Set it with
+`extra_scylla_cluster_config_options`, a map of option name to value, which
+the framework applies with `ALTER CLUSTER` on the next server of the cluster
+that reaches CQL. A test sets or overrides such an option for its own cluster
+with the `cluster_config` argument of `server_add()` and `servers_add()`.
+
 ## Topology pytests
 
 Some pytest suites run against Scylla clusters

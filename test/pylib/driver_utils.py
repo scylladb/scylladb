@@ -7,6 +7,7 @@
 """Utilities for working with the scylla-driver (cassandra-driver)."""
 
 import logging
+import math
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -79,3 +80,19 @@ def safe_shutting_down(cluster: Cluster) -> Iterator[Cluster]:
         yield cluster
     finally:
         safe_driver_shutdown(cluster)
+
+
+def cql_literal(value: object) -> str:
+    """Render a scalar as a CQL literal: None as NULL, a bool as true/false,
+       a finite number as is, a str quoted. Anything else raises TypeError."""
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        if not math.isfinite(value):
+            raise TypeError(f"not a CQL literal: {value!r}")
+        return str(value)
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    raise TypeError(f"not a CQL literal: {value!r}")
