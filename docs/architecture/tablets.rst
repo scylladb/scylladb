@@ -150,6 +150,16 @@ config option:
 Please note that because of this alignment, the scaling may not be effective and in the worst case may be
 overshot by a factor of 2, and that the ``tablets_per_shard_goal`` is a soft limit and not a hard constraint.
 
+The tablet load balancer runs on one node at a time and uses that node's ``tablets_per_shard_goal``.
+The recommended way to set it is therefore cluster-wide through CQL, which keeps the value the same
+on all nodes:
+
+.. code-block:: cql
+
+   ALTER CLUSTER WITH tablets_per_shard_goal = 200;
+
+See :doc:`Configuring a Cluster with CQL </cql/cluster-config>`.
+
 Finally, the computed tablet count is compared with the current tablet count for each table, and if there is
 a difference, a table resize (split or merge) is executed.
 

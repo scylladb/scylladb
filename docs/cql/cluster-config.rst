@@ -13,7 +13,9 @@ keyspaces, and they appear in ``DESCRIBE`` output.
 
 The options and scopes currently available through CQL are listed in
 :ref:`Available options <cql-cluster-config-options>` at the end of this page. They are a
-separate set from the ``scylla.yaml`` parameters; more options will be added over time.
+separate set from the ``scylla.yaml`` parameters, except for a few ``scylla.yaml`` parameters that
+can also be set through CQL; see :ref:`Options also set in scylla.yaml <cql-cluster-config-yaml-options>`.
+More options will be added over time.
 
 .. note::
 
@@ -90,9 +92,10 @@ The statements for the node-oriented scopes exist for options that will support 
 The datacenter, rack, or node named in the statement must exist in the cluster.
 
 Values are validated against the option's type before anything is stored: a boolean option accepts
-``true`` and ``false`` (in any letter case), an integer option accepts a signed 64-bit integer, and
-so on, and a text option accepts at most 4096 bytes. An option may introduce further restrictions
-(see ``auto_scrub_period_seconds`` in :ref:`Available options <cql-cluster-config-options>`). An unknown
+``true`` and ``false`` (in any letter case), an integer option accepts a signed 64-bit integer
+within the option's range, and so on, and a text option accepts at most 4096 bytes. An option may
+introduce further restrictions (see ``auto_scrub_period_seconds`` in
+:ref:`Available options <cql-cluster-config-options>`). An unknown
 option name, an option used at a scope it does not support, or a value of the wrong type is
 rejected and nothing changes.
 
@@ -194,3 +197,34 @@ Available options
        at that scope even if a broader scope enabled it, whereas ``NULL`` removes the value and
        falls back to the broader scope. See
        :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.
+
+.. _cql-cluster-config-yaml-options:
+
+Options also set in scylla.yaml
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The following options are also ``scylla.yaml`` parameters. A value set through CQL overrides the
+node's own value on every node it applies to:
+
+* While the value is stored, it is the option's effective value on the node, and ``system.config``
+  shows it with the source ``cluster_config``.
+* Writing the option through the REST API or ``UPDATE system.config`` is rejected, and a
+  ``scylla.yaml`` reload does not change it.
+* Removing the value with ``= NULL`` returns the node to the value it had when the option was
+  first set through CQL. A ``scylla.yaml`` change made while the value was stored is not applied
+  until the next ``scylla.yaml`` reload or restart.
+
+.. list-table::
+   :widths: 25 10 25 40
+   :header-rows: 1
+
+   * - Option
+     - Type
+     - Scopes
+     - Description
+   * - ``tablets_per_shard_goal``
+     - integer
+     - ``CLUSTER``
+     - The goal for the maximum number of tablet replicas per shard that the tablet load balancer
+       tries to keep; see :doc:`Tablets </architecture/tablets>`. Range: 1 to 4294967295. Without
+       a stored value, each node uses its ``scylla.yaml`` value (default ``100``).

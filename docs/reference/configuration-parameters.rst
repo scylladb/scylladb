@@ -13,9 +13,11 @@ and override the current configuration with the new value.
 **Configuration Precedence**
 
 As the parameters can be configured in more than one place, ScyllaDB applies them
-in the following order with ``scylla.yaml`` parameters updated via ``SIGHUP``
-having the highest priority:
+in the following order, with the first having the highest priority:
 
+#. A value set through CQL cluster configuration, for the parameters that support it
+   (see :ref:`Options also set in scylla.yaml <cql-cluster-config-yaml-options>`).
+   While it is set, it takes precedence over all the node-local sources below.
 #. Live update via ``scylla.yaml`` (with ``SIGHUP``) or REST API
 #. ``system.config`` table
 #. command line options

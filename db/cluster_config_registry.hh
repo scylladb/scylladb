@@ -69,12 +69,31 @@ inline constexpr std::string_view auto_scrub_period_seconds = "auto_scrub_period
 
 }
 
+// Who owns the effective value.
+//   native: cluster config is the only source; consumers read it through the manager.
+//   db_config: the option is an existing db::config entry. Cluster config stores overrides
+//   in front of it and db::cluster_config_db_config_bridge applies the effective value to
+//   db::config; consumers keep reading db::config. The fallback when no scope stores an
+//   override is the node's own pre-cluster db::config value, so the manager's typed
+//   accessors must not be used for such an option (they report an internal error).
+enum class option_kind : uint8_t {
+    native,
+    db_config,
+};
+
+// Inclusive bounds on the value of an integer option.
+struct integer_range {
+    int64_t min;
+    int64_t max;
+};
+
 struct option {
     std::string_view name;
     std::string_view description;
     scope_set scopes;
     // The value a consumer gets when no scope stores an override. Its alternative also
     // defines the option's type. Read it through the to_* converters, not directly.
+    // For a db_config option it only declares the type.
     config_value default_value;
     // Optional per-option custom parser.
     // When defined, it is used instead of the type-specific parser and validator.
@@ -83,6 +102,11 @@ struct option {
     // If set, the custom_excpected_description will be used in validation errors.
     config_value (*custom_parser)(std::string_view) = nullptr;
     std::string_view custom_expected_description = "";
+    option_kind kind = option_kind::native;
+    // When set, validate_value() rejects an integer value outside this range. Only valid for
+    // an integer option, and the default must fall within it. A db_config option bound to an
+    // integral db::config entry narrower than int64_t must declare one that fits the entry's type.
+    std::optional<integer_range> valid_range = std::nullopt;
 
     constexpr value_type type() const {
         return static_cast<value_type>(default_value.index());
