@@ -233,6 +233,27 @@ future<> client::update_credentials_and_rearm() {
     }
 }
 
+// URI-encodes the path of a request the way SigV4 does it for S3: every byte
+// except the unreserved characters and '/' becomes %XX. S3 signs the encoded
+// path, so the request line must carry it encoded too, or the signature of a
+// key with e.g. '(' or '!' in it does not match.
+static sstring uri_encode_path(std::string_view path) {
+    static constexpr auto keep = [] (char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                || c == '-' || c == '.' || c == '_' || c == '~' || c == '/';
+    };
+    std::string ret;
+    ret.reserve(path.size());
+    for (char c : path) {
+        if (keep(c)) {
+            ret += c;
+        } else {
+            fmt::format_to(std::back_inserter(ret), "%{:02X}", static_cast<unsigned char>(c));
+        }
+    }
+    return sstring(ret);
+}
+
 future<> client::authorize(http::request& req) {
     if (!_credentials) [[unlikely]] {
         auto units = co_await get_units(_creds_sem, 1);
@@ -597,6 +618,9 @@ future<> client::make_request(http::request req,
     // the http clients, so no http connection can outlive them.
     auto holder = _requests_gate.hold();
     auto request = std::move(req);
+    // Encoded here, once, rather than in authorize(): a request can be signed
+    // again on retry, and its path must not be encoded twice.
+    request._url = uri_encode_path(request._url);
     auto handler = wrap_handler(request, std::move(handle), expected);
     auto& gc = co_await find_or_create_client();
 
@@ -1153,7 +1177,7 @@ private:
         if (_tag) {
             req._headers["x-amz-tagging"] = seastar::format("{}={}", _tag->key, _tag->value);
         }
-        req._headers["x-amz-copy-source"] = _source_object;
+        req._headers["x-amz-copy-source"] = uri_encode_path(_source_object);
         if (!_metadata.empty()) {
             req._headers["x-amz-metadata-directive"] = "REPLACE";
             add_object_metadata_headers(req, _metadata);
@@ -1200,7 +1224,7 @@ private:
 
     future<> copy_part(size_t offset, size_t part_size, size_t part_number) {
         auto req = http::request::make("PUT", _client->_host, _object_name);
-        req._headers["x-amz-copy-source"] = _source_object;
+        req._headers["x-amz-copy-source"] = uri_encode_path(_source_object);
         auto range = format("bytes={}-{}", offset, offset + part_size - 1);
         s3l.trace("PUT part {}, Upload range: {}, Upload ID: {}", part_number, range, _upload_id);
 
@@ -1599,7 +1623,7 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
     auto req = http::request::make("PUT", _client->_host, _object_name);
     req.set_query_param("partNumber", format("{}", part_number + 1));
     req.set_query_param("uploadId", _upload_id);
-    req._headers["x-amz-copy-source"] = piece._object_name;
+    req._headers["x-amz-copy-source"] = uri_encode_path(piece._object_name);
 
     // See comment in upload_part(memory_data_sink_buffers) overload regarding the
     // _bg_flushes usage and _part_etags assignments
