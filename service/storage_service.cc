@@ -3387,7 +3387,7 @@ future<> storage_service::abort_rf_change(utils::UUID request_id) {
         utils::chunked_vector<canonical_mutation> updates;
         if (std::ranges::contains(_topology_state_machine._topology.paused_rf_change_requests, request_id)) {    // keyspace_rf_change_kind::conversion_to_rack_list
             updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
-                                .resume_rf_change_request(_topology_state_machine._topology.paused_rf_change_requests, request_id).build()));
+                                .resume_rf_change_requests(_topology_state_machine._topology.paused_rf_change_requests, {request_id}).build()));
             updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(request_id)
                                 .done("Aborted by user request")
                                 .build()));
