@@ -73,6 +73,16 @@ public:
 
     void on_configuration_change(raft::server_address_set add, raft::server_address_set del) override {
     }
+
+    // Test-only: the leader hears nothing back from this follower, so the entries it
+    // sends here are not committed while it needs this follower for a quorum, while
+    // its failure detector, which does not go through raft, still sees it alive.
+    void send_append_entries_reply(raft::server_id id, const raft::append_reply& reply) override {
+        if (utils::get_local_injector().enter("sc_drop_append_entries_reply")) {
+            return;
+        }
+        service::raft_rpc::send_append_entries_reply(id, reply);
+    }
 };
 
 raft_server::raft_server(groups_manager::raft_group_state& state, gate::holder holder)
