@@ -131,13 +131,14 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
     dc1_cql = ccluster_dc1.connect()
     finish_writes_dc1 = await start_writes(dc1_cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=3, ks_name=ks_name)
 
+    # Mark dead nodes as permanently dead so that they are ignored in topology commands. For remove, without this step,
+    # ALTER KEYSPACE below would fail on the global token metadata barrier. For replace, it lets every replace request
+    # ignore the dead nodes replaced by the other requests, so the requests can run concurrently.
+    logging.info(f'Marking {dead_servers} as permanently dead')
+    await manager.api.exclude_node(live_servers[0].ip_addr, dead_host_ids)
+
     new_servers: list[ServerInfo] = []
     if remove_dead_nodes_with == "remove":
-        # We must mark dead nodes as permanently dead so that they are ignored in topology commands. Without this step,
-        # ALTER KEYSPACE below would fail on the global token metadata barrier.
-        logging.info(f'Marking {dead_servers} as permanently dead')
-        await manager.api.exclude_node(live_servers[0].ip_addr, dead_host_ids)
-
         logging.info(f'Decreasing RF of {ks_name} to 0 in dc2')
         await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
                             {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': 0}}""")
@@ -151,33 +152,13 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
     else:
         # Replace dead nodes concurrently. Not recommended for users, but it should work, and it significantly speeds up
         # the test in debug mode.
-        # Enable topology_coordinator_pause_before_processing_backlog and wait for all join requests to be placed before
-        # unblocking the topology coordinator to prevent the request rejection due to a non-ignored node being down.
-        # Ignoring all dead nodes in all replace requests would also result in rejection due to ignoring a left node.
-        recovery_leader = live_servers[0]
-        inj = 'topology_coordinator_pause_before_processing_backlog'
-        await manager.api.enable_injection(recovery_leader.ip_addr, inj, one_shot=True)
-        log = await manager.server_open_log(recovery_leader.server_id)
-        mark = await log.mark()
-
         async def replace_server(i, being_replaced):
-            replace_cfg = ReplaceConfig(replaced_id=being_replaced.server_id, reuse_ip_addr=False, use_host_id=True,
-                                        ignore_dead_nodes=[dead_srv.ip_addr for dead_srv in dead_servers[i + 1:]])
-            # Specify the leader as the only seed to make sure it receives all join requests (for simplicity).
+            replace_cfg = ReplaceConfig(replaced_id=being_replaced.server_id, reuse_ip_addr=False, use_host_id=True)
             return await manager.server_add(replace_cfg=replace_cfg, config=cfg,
-                                            property_file={'dc': 'dc2', 'rack': f'rack{i + 1}'},
-                                            seeds=[recovery_leader.ip_addr])
-        replace_tasks = []
-        for i, srv in enumerate(dead_servers):
-            logging.info(f'Starting replacement of {srv}')
-            replace_tasks.append(asyncio.create_task(replace_server(i, srv)))
-            mark, _ = await log.wait_for("placed join request for", from_mark=mark)
+                                            property_file={'dc': 'dc2', 'rack': f'rack{i + 1}'})
 
-        await manager.api.message_injection(recovery_leader.ip_addr, inj)
-
-        logging.info('Waiting for replace operations to complete')
-        replace_results = await gather_safely(*replace_tasks)
-        new_servers.extend(replace_results)
+        logging.info(f'Replacing {dead_servers} concurrently')
+        new_servers.extend(await gather_safely(*(replace_server(i, srv) for i, srv in enumerate(dead_servers))))
 
     logging.info(f'Unsetting the recovery_leader config option on {live_servers}')
     await gather_safely(*(manager.server_remove_config_option(srv.server_id, 'recovery_leader') for srv in live_servers))
