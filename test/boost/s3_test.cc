@@ -1574,6 +1574,68 @@ SEASTAR_THREAD_TEST_CASE(test_client_delete_absent_object_s3) {
     do_test_client_delete_absent_object(make_s3_client);
 }
 
+// A chunked download used to lose its connection every time its 5 MiB window filled:
+// the stream was closed with the rest of the body unread, and seastar's http client
+// destroys a connection it cannot drain instead of pooling it. Every request is now
+// bounded by the window and read to its end, so a download of any size stays on the
+// connection it started with. Counted through the metrics, as the tests above do, and
+// like them only against the plain server: the fuzzing proxy resets connections on
+// purpose.
+void do_test_chunked_download_keeps_connection(const client_maker_function& client_maker, bool pass_size) {
+    tmpdir tmp;
+    const auto file_path = tmp.path() / "test_object";
+    constexpr size_t object_size = 20_MiB;
+    create_file(file_path, object_size).get();
+
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    // The per-method request counters are registered by the client's owner, which the
+    // fixture is not; the test needs them to count HEADs and GETs.
+    cln->report_object_storage_metrics({.type = "s3", .endpoint = "test"});
+    const auto object_name = guard.object_path("test_object");
+    cln->upload_file(file_path, object_name).get();
+
+    auto metric = [] (const char* name) {
+        auto value = sum_s3_metric(name);
+        BOOST_REQUIRE_MESSAGE(value.has_value(), format("{} metric not registered", name));
+        return *value;
+    };
+    const auto connections = metric("s3_total_new_connections");
+    const auto gets = metric("object_storage_total_get_requests");
+    const auto heads = metric("object_storage_total_head_requests");
+
+    testlog.info("Download object (size passed = {})", pass_size);
+    auto in = input_stream<char>(cln->make_chunked_download_source(object_name, pass_size ? s3::range{0, object_size} : s3::full_range));
+    auto close = seastar::deferred_close(in);
+    size_t total_size = 0;
+    while (true) {
+        // Let the filling fiber reach the window and wait for the reader, so the
+        // download spans several requests rather than one.
+        seastar::sleep(100us).get();
+        auto buf = in.read().get();
+        if (buf.empty()) {
+            break;
+        }
+        total_size += buf.size();
+    }
+    BOOST_REQUIRE_EQUAL(total_size, object_size);
+
+    // 20 MiB through a 5 MiB window is at least four requests...
+    BOOST_REQUIRE_GE(metric("object_storage_total_get_requests") - gets, double(object_size / 5_MiB));
+    // ...all of them on a connection the upload left in the pool.
+    BOOST_REQUIRE_EQUAL(metric("s3_total_new_connections"), connections);
+    // The size comes from the first reply's Content-Range, never from a HEAD.
+    BOOST_REQUIRE_EQUAL(metric("object_storage_total_head_requests") - heads, 0.0);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_keeps_connection_s3) {
+    do_test_chunked_download_keeps_connection(make_s3_client, true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_without_size_keeps_connection_s3) {
+    do_test_chunked_download_keeps_connection(make_s3_client, false);
+}
+
 // Integration test: drive a real upload through the fuzzing S3 proxy with the
 // actual AWS throttling controller wired in, and verify the
 // throttling machinery is exercised end-to-end by watching its metrics.
