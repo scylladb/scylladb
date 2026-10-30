@@ -1809,6 +1809,10 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
         new_sst->seal_sstable(false).get();
         new_sst->open_data().get();
+        // open_data() loads the run identifier stored on disk, but the one in memory might
+        // have been changed since this sstable was loaded, e.g. when its run was spliced with
+        // another. The rewritten sstable replaces this one, so it must stay in the same run.
+        new_sst->_run_identifier = _run_identifier;
 
         _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
         return new_sst;

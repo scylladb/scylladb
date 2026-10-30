@@ -1099,6 +1099,13 @@ public:
         _run_identifier = run_id::create_random_id();
     }
 
+    // This will change the run identifier only in memory.
+    // Sstable sets index their sstables by run identifier, so any set holding this
+    // sstable must be rebuilt afterwards.
+    void set_run_identifier(run_id identifier) noexcept {
+        _run_identifier = identifier;
+    }
+
     double get_compression_ratio() const;
 
     const sstables::compression& get_compression() const {
