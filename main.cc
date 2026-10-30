@@ -2632,11 +2632,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     });
             }).get();
 
-            groups_manager.invoke_on_all([](service::strong_consistency::groups_manager& m) {
-                return m.wait_for_groups_to_start(lowres_clock::now() + std::chrono::seconds(30)).handle_exception([] (auto&& e) {
-                    startlog.warn("Not all Raft groups started: {}", e);
-                });
-            }).get();
+            // Until this node starts its group 0 server, which the Raft-based recovery procedure
+            // defers to join_cluster(), other nodes see it as dead in all raft groups, so the
+            // tablets' raft groups can't get a leader. Don't wait for them in vain then.
+            if (raft_gr.local().is_group0_alive()) {
+                groups_manager.invoke_on_all([](service::strong_consistency::groups_manager& m) {
+                    return m.wait_for_groups_to_start(lowres_clock::now() + std::chrono::seconds(30)).handle_exception([] (auto&& e) {
+                        startlog.warn("Not all Raft groups started: {}", e);
+                    });
+                }).get();
+            }
 
             api::set_server_client_routes(ctx, client_routes).get();
             auto stop_cr_api = defer_verbose_shutdown("client routes API", [&ctx] {
