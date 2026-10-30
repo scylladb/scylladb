@@ -7,7 +7,9 @@
 #############################################################################
 
 from .util import new_test_table, unique_key_int
-from cassandra.query import UNSET_VALUE
+from cassandra.query import UNSET_VALUE, BoundStatement
+from cassandra.protocol import InvalidRequest
+import struct
 import pytest
 import time
 
@@ -68,3 +70,29 @@ def test_default_ttl_unset_override(cql, table_ttl_100):
     # possible in case of delays to be somewhat lower. But it wouldn't
     # be None - which would mean that the item will never expire.
     assert list(cql.execute(f'SELECT ttl(v) from {table_ttl_100} where p={p}')) != [(None,)]
+
+# A null value bound to USING TTL ? means "no TTL" - like a zero TTL, and
+# unlike an unset TTL, it overrides the table's default TTL (table_ttl_100 has
+# a default TTL of 100 seconds).
+# Reproduces #12243 (a null TTL was rejected).
+def test_null_ttl(cql, table_ttl_100):
+    p = unique_key_int()
+    stmt = cql.prepare(f'INSERT INTO {table_ttl_100} (p, v) VALUES (?, 1) USING TTL ?')
+    cql.execute(stmt, [p, None])
+    assert list(cql.execute(f'SELECT ttl(v) from {table_ttl_100} where p={p}')) == [(None,)]
+
+# An empty (zero-length) value bound to USING TTL ? is rejected with
+# InvalidRequest, like an empty USING TIMESTAMP ? (see
+# test_using_timestamp.py::test_empty_timestamp). Cassandra treats an empty
+# TTL like a null one (CASSANDRA-17822 made it behave like null), but empty
+# values are a misfeature which we don't want to support in new places, so
+# this test is scylla_only.
+# Reproduces SCYLLADB-5208 (an empty TTL caused a server error).
+def test_empty_ttl(cql, table_ttl_100, scylla_only):
+    stmt = cql.prepare(f'INSERT INTO {table_ttl_100} (p, v) VALUES (?, 1) USING TTL ?')
+    # The Python driver can't send an empty value for an int bind variable,
+    # so we send the raw serialized values ourselves.
+    bound = BoundStatement(stmt)
+    bound.values = [struct.pack('>i', unique_key_int()), b'']
+    with pytest.raises(InvalidRequest, match='empty'):
+        cql.execute(bound)

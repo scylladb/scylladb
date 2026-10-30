@@ -294,9 +294,8 @@ def test_null_timestamp(cql, table1):
 # (SCYLLADB-5208). Cassandra fails here too, with a NullPointerException
 # server error (CASSANDRA-21738). For USING TTL ?, Cassandra fixed the same
 # NullPointerException in CASSANDRA-17822 by treating an empty TTL like a
-# null one, and the translated Cassandra test testEmptyTTL (in
-# cassandra_tests/validation/operations/insert_test.py) checks that.
-@pytest.mark.xfail(reason="SCYLLADB-5208")
+# null one, but Scylla rejects an empty TTL just like an empty timestamp
+# (see test_ttl.py::test_empty_ttl).
 def test_empty_timestamp(cql, table1, cassandra_bug):
     p = unique_key_int()
     write = cql.prepare(f"INSERT INTO {table1} (k, v) VALUES (?, ?) USING TIMESTAMP ?")
