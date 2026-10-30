@@ -18,7 +18,7 @@ import pytest
 from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 
-from test.alternator.util import random_string, random_bytes, full_query, multiset
+from test.alternator.util import random_string, random_bytes, full_query, multiset, scylla_config_temporary
 
 python_compare_op_dict = {"LE": operator.le, "LT": operator.lt, "GE": operator.ge, "GT": operator.gt}
 
@@ -395,7 +395,6 @@ def test_query_exclusivestartkey_missing_sortkey(test_table_sn):
 # When Query'ing on the partition key 'right', ExclusiveStartKey must be in
 # the same partition 'right' being queried - it must not be some other
 # partition. Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
 def test_query_exclusivestartkey_wrong_partition(test_table_sn):
     # The error that DynamoDB reports if the wrong partition is mentioned
     # in ExclusiveStartKey is "The provided starting key is outside query
@@ -410,7 +409,6 @@ def test_query_exclusivestartkey_wrong_partition(test_table_sn):
 # Check that ExclusiveStartKey cannot contain any spurious column names
 # beyond the actual primary key (here a partition key and sort key)
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
 def test_query_exclusivestartkey_spurious_column(test_table_sn):
     p = random_string()
     # The error that DynamoDB reports if ExclusiveStartKey has spurious
@@ -453,21 +451,164 @@ def test_query_no_sort_key(test_table_s):
             KeyConditions={'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})['Items']
     assert got == [item]
 
+# A Query reads a single partition, and in a table without a sort key, a
+# partition has at most one item. When a page reaches its Limit (here, 1),
+# the server generally doesn't know if more items match, without trying to
+# read them - but here it does know: no other item can match, so the page
+# shouldn't have a LastEvaluatedKey. Paging such a query - e.g., with boto3's
+# paginator - must not fail: ExclusiveStartKey isn't allowed in this case
+# (see test_query_no_sort_key_exclusive_start_key below), so a
+# LastEvaluatedKey would make the request for the next page fail.
+def test_query_no_sort_key_paging(test_table_s):
+    p = random_string()
+    item = {'p': p, 'animal': 'dog'}
+    test_table_s.put_item(Item=item)
+    key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+    response = test_table_s.query(ConsistentRead=True, KeyConditions=key_conditions, Limit=1)
+    assert response['Items'] == [item]
+    assert 'LastEvaluatedKey' not in response
+    assert full_query(test_table_s, ConsistentRead=True, KeyConditions=key_conditions, Limit=1) == [item]
+
+# Like test_query_no_sort_key_paging, but without a Limit: The item is bigger
+# than Scylla's page size limit (1 MB), so the page stops after it, without
+# knowing that no more items follow. This test is scylla_only because
+# DynamoDB limits items to 400 KB.
+def test_query_no_sort_key_paging_big_item(test_table_s, scylla_only):
+    p = random_string()
+    item = {'p': p, 'big': 'x' * 1200000}
+    test_table_s.put_item(Item=item)
+    key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+    response = test_table_s.query(ConsistentRead=True, KeyConditions=key_conditions)
+    assert response['Items'] == [item]
+    assert 'LastEvaluatedKey' not in response
+
+# Like test_query_no_sort_key_paging, but the partition also has tombstones
+# (of the item's deletion), and query_tombstone_page_limit is lowered to 1, so
+# a page might end after a tombstone before seeing an item. Paging such a
+# query must still work and return the item if it exists. The test is
+# scylla_only because it lowers Scylla's query_tombstone_page_limit.
+def test_query_no_sort_key_paging_tombstones(dynamodb, test_table_s, scylla_only):
+    p1 = random_string()
+    p2 = random_string()
+    # p1 is deleted, p2 is deleted and then written again.
+    test_table_s.put_item(Item={'p': p1, 'animal': 'cat'})
+    test_table_s.delete_item(Key={'p': p1})
+    item = {'p': p2, 'animal': 'dog'}
+    test_table_s.put_item(Item={'p': p2, 'animal': 'mouse'})
+    test_table_s.delete_item(Key={'p': p2})
+    test_table_s.put_item(Item=item)
+    with scylla_config_temporary(dynamodb, 'query_tombstone_page_limit', '1'):
+        for p, expected in [(p1, []), (p2, [item])]:
+            key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+            assert full_query(test_table_s, ConsistentRead=True, KeyConditions=key_conditions) == expected
+            assert full_query(test_table_s, ConsistentRead=True, KeyConditions=key_conditions, Limit=1) == expected
+
 # Although a Query is allowed on a table with just a partition key and no
 # sort key (and always returns a single item), ExclusiveStartKey makes no
 # sense for these one-item partitions: Since it is *exclusive*, i.e., the
 # response shouldn't include the given key, the response would be completely
 # empty...  So DynamoDB doesn't allow this case at all.
 # Reproduces issue #26988.
-@pytest.mark.xfail(reason="issue #26988")
 def test_query_no_sort_key_exclusive_start_key(test_table_s):
     p = random_string()
     # DynamoDB gives the error message "The provided exclusive start key
-    # is invalid: ExclusiveStartKey: {p=AttributeValue: {S:KPQ4X3JE19}}"
-    with pytest.raises(ClientError, match='ValidationException.*ExclusiveStartKey'):
+    # is invalid" (older versions of DynamoDB added the key, e.g.,
+    # ": ExclusiveStartKey: {p=AttributeValue: {S:KPQ4X3JE19}}")
+    with pytest.raises(ClientError, match='ValidationException.*exclusive start key'):
         test_table_s.query(
                 KeyConditions={'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
                 ExclusiveStartKey={'p': p})
+
+# When a Query has a condition on the sort key, the sort key in
+# ExclusiveStartKey must match this condition. Reproduces issue #26988.
+# The last sort key which the condition allows is checked by the next test.
+def test_query_exclusivestartkey_sort_key_condition(test_table_sn):
+    p = random_string()
+    with test_table_sn.batch_writer() as batch:
+        for c in range(0, 31, 5):
+            batch.put_item({'p': p, 'c': c})
+    def query(op, values, start, forward=True):
+        return [x['c'] for x in test_table_sn.query(ConsistentRead=True,
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                           'c': {'AttributeValueList': values, 'ComparisonOperator': op}},
+            ExclusiveStartKey={'p': p, 'c': start}, ScanIndexForward=forward)['Items']]
+    # Start keys which match the condition, so items can follow them:
+    assert query('BETWEEN', [10, 20], 10) == [15, 20]
+    assert query('BETWEEN', [10, 20], 15) == [20]
+    assert query('BETWEEN', [10, 20], 20, forward=False) == [15, 10]
+    assert query('GE', [10], 10) == [15, 20, 25, 30]
+    # Start keys which don't match the condition. DynamoDB's error is "The
+    # provided starting key does not match the range key predicate".
+    for op, values, start, forward in [
+            ('BETWEEN', [10, 20], 5, True),
+            ('BETWEEN', [10, 20], 25, True),
+            ('BETWEEN', [10, 20], 5, False),
+            ('BETWEEN', [10, 20], 25, False),
+            ('GT', [10], 10, True),
+            ('GT', [10], 9, True),
+            ('GE', [10], 9, True),
+            ('LT', [10], 10, True),
+            ('LT', [10], 11, True),
+            ('LE', [10], 11, True),
+            ('EQ', [10], 11, True)]:
+        with pytest.raises(ClientError, match='ValidationException.*starting key'):
+            query(op, values, start, forward)
+
+# The sort key in ExclusiveStartKey can't be the last one which the query's
+# sort key condition allows (in the query's direction), because no item can
+# follow it. So when a page ends with this last key, the response shouldn't
+# have a LastEvaluatedKey - which the next page couldn't use. This test checks
+# both. Reproduces issue #26988.
+def test_query_exclusivestartkey_last_key_of_condition(test_table_sn):
+    p = random_string()
+    numbers = list(range(0, 31, 5))
+    with test_table_sn.batch_writer() as batch:
+        for c in numbers:
+            batch.put_item({'p': p, 'c': c})
+    for op, values, match, forward in [
+            ('BETWEEN', [10, 20], lambda c: 10 <= c <= 20, True),
+            ('BETWEEN', [10, 20], lambda c: 10 <= c <= 20, False),
+            ('LE', [10], lambda c: c <= 10, True),
+            ('GE', [10], lambda c: c >= 10, False),
+            ('EQ', [10], lambda c: c == 10, True)]:
+        key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                          'c': {'AttributeValueList': values, 'ComparisonOperator': op}}
+        expected = [c for c in numbers if match(c)]
+        if not forward:
+            expected.reverse()
+        # A page with exactly the matching items, so it ends with the last
+        # key the condition allows, has no LastEvaluatedKey.
+        response = test_table_sn.query(ConsistentRead=True, KeyConditions=key_conditions,
+            ScanIndexForward=forward, Limit=len(expected))
+        assert [x['c'] for x in response['Items']] == expected
+        assert 'LastEvaluatedKey' not in response
+        # And this last key can't be used as ExclusiveStartKey. DynamoDB's
+        # error is "The provided starting key does not match the range key
+        # predicate", except for EQ, where it is "The provided exclusive
+        # start key is invalid".
+        with pytest.raises(ClientError, match='ValidationException.*(starting|exclusive start) key'):
+            test_table_sn.query(ConsistentRead=True, KeyConditions=key_conditions,
+                ScanIndexForward=forward, ExclusiveStartKey={'p': p, 'c': expected[-1]})
+
+# Like test_query_exclusivestartkey_sort_key_condition, for a BEGINS_WITH
+# condition on the sort key. Reproduces issue #26988.
+def test_query_exclusivestartkey_begins_with(test_table_ss):
+    p = random_string()
+    with test_table_ss.batch_writer() as batch:
+        for c in ['aa', 'ab', 'abc', 'abd', 'ac']:
+            batch.put_item({'p': p, 'c': c})
+    def query(start):
+        return [x['c'] for x in test_table_ss.query(ConsistentRead=True,
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                           'c': {'AttributeValueList': ['ab'], 'ComparisonOperator': 'BEGINS_WITH'}},
+            ExclusiveStartKey={'p': p, 'c': start})['Items']]
+    assert query('ab') == ['abc', 'abd']
+    assert query('abc') == ['abd']
+    # 'abz' isn't an existing key, but it begins with 'ab'
+    assert query('abz') == []
+    for start in ['aa', 'ac']:
+        with pytest.raises(ClientError, match='ValidationException.*starting key'):
+            query(start)
 
 # Test that the ScanIndexForward parameter works, and can be used to
 # return items sorted in reverse order. Combining this with Limit can
@@ -532,6 +673,109 @@ def test_query_reverse_paging(sort_key_op, test_table_sn):
         got_items = full_query(test_table_sn, KeyConditions=key_condition, ScanIndexForward=False, Limit=limit)
         got_sort_keys = [x['c'] for x in got_items]
         assert got_sort_keys == list(filter(op, reversed_numbers))
+
+# Test paging a Query through a long run of deleted items. Scylla ends a page
+# after reading query_tombstone_page_limit tombstones, so a page may end on a
+# deleted item, and its LastEvaluatedKey is the key of an item which doesn't
+# exist. It must be accepted as the next page's ExclusiveStartKey, also when
+# the query has a condition on the sort key and when it is reversed. We
+# temporarily lower query_tombstone_page_limit, so the test doesn't need many
+# thousands of deletions. The test is scylla_only because DynamoDB doesn't
+# have this limit.
+def test_query_paging_deleted_items(dynamodb, test_table_sn, scylla_only):
+    p = random_string()
+    live = [c for c in range(100) if c % 10 == 0]
+    with test_table_sn.batch_writer() as batch:
+        for c in range(100):
+            if c in live:
+                batch.put_item({'p': p, 'c': c})
+            else:
+                batch.delete_item(Key={'p': p, 'c': c})
+    with scylla_config_temporary(dynamodb, 'query_tombstone_page_limit', '5'):
+        for condition, match in [
+                (None, lambda c: True),
+                ({'AttributeValueList': [15, 65], 'ComparisonOperator': 'BETWEEN'}, lambda c: 15 <= c <= 65),
+                ({'AttributeValueList': [33], 'ComparisonOperator': 'GT'}, lambda c: c > 33),
+                ({'AttributeValueList': [77], 'ComparisonOperator': 'LT'}, lambda c: c < 77)]:
+            key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+            if condition:
+                key_conditions['c'] = condition
+            for forward in [True, False]:
+                got = []
+                start_keys = []
+                response = test_table_sn.query(ConsistentRead=True, KeyConditions=key_conditions, ScanIndexForward=forward)
+                got.extend(response['Items'])
+                while 'LastEvaluatedKey' in response:
+                    start_keys.append(response['LastEvaluatedKey']['c'])
+                    response = test_table_sn.query(ConsistentRead=True, KeyConditions=key_conditions,
+                        ScanIndexForward=forward, ExclusiveStartKey=response['LastEvaluatedKey'])
+                    got.extend(response['Items'])
+                expected = [c for c in live if match(c)]
+                assert [x['c'] for x in got] == (expected if forward else expected[::-1])
+                # Check that the test really did what it intended: Some pages
+                # ended on a deleted item.
+                assert any(c not in live for c in start_keys)
+
+# Alternator never writes range tombstones (deletions of a range of sort
+# keys), but they can be written through CQL. A page may end on a range
+# tombstone's boundary, a position between items, which a LastEvaluatedKey -
+# which only has the key attributes - can't represent. Check that paging such
+# a query doesn't get stuck - returning the same LastEvaluatedKey over and
+# over, as it used to - but either returns the right items or fails with a
+# clear error. The test is scylla_only because it uses CQL and lowers
+# Scylla's query_tombstone_page_limit.
+def test_query_paging_cql_range_tombstones(dynamodb, cql, test_table_ss, scylla_only):
+    p = random_string()
+    item = {'p': p, 'c': 'zz'}
+    test_table_ss.put_item(Item=item)
+    ks = 'alternator_' + test_table_ss.name
+    for low, high in [('a', 'x'), ('b', 'y'), ('c', 'w')]:
+        cql.execute(f'DELETE FROM "{ks}"."{test_table_ss.name}" WHERE p = %s AND c > %s AND c < %s',
+            [p, low, high])
+    with scylla_config_temporary(dynamodb, 'query_tombstone_page_limit', '1'):
+        for condition in [None, {'AttributeValueList': ['m'], 'ComparisonOperator': 'GT'}]:
+            key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+            if condition:
+                key_conditions['c'] = condition
+            try:
+                response = test_table_ss.query(ConsistentRead=True, KeyConditions=key_conditions)
+                items = response['Items']
+                start_keys = []
+                while 'LastEvaluatedKey' in response:
+                    start_key = response['LastEvaluatedKey']
+                    # If a LastEvaluatedKey repeats, paging is stuck in a loop.
+                    assert start_key not in start_keys, f'paging is stuck at {start_key}'
+                    start_keys.append(start_key)
+                    response = test_table_ss.query(ConsistentRead=True, KeyConditions=key_conditions,
+                        ExclusiveStartKey=start_key)
+                    items.extend(response['Items'])
+                assert items == [item]
+            except ClientError as e:
+                assert 'ValidationException' in str(e) and 'range tombstone' in str(e)
+
+# Test paging, in both directions, of a query with a sort key condition, when
+# a page ends with the last item in the condition's range: Paging must return
+# all the items. Such a page has no LastEvaluatedKey, because no item can
+# follow it (test_query_exclusivestartkey_last_key_of_condition checks this).
+# The previous test (test_query_reverse_paging) only reaches this case for
+# some of its random bounds.
+def test_query_paging_page_ends_at_bound(test_table_sn):
+    p = random_string()
+    numbers = list(range(10))
+    with test_table_sn.batch_writer() as batch:
+        for c in numbers:
+            batch.put_item({'p': p, 'c': c})
+    for op, values, expected in [
+            ('LE', [5], [c for c in numbers if c <= 5]),
+            ('GE', [5], [c for c in numbers if c >= 5]),
+            ('BETWEEN', [3, 6], [c for c in numbers if 3 <= c <= 6])]:
+        key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                          'c': {'AttributeValueList': values, 'ComparisonOperator': op}}
+        for forward in [True, False]:
+            for limit in [1, 2, 3, 4]:
+                got_items = full_query(test_table_sn, ConsistentRead=True, KeyConditions=key_conditions,
+                    ScanIndexForward=forward, Limit=limit)
+                assert [x['c'] for x in got_items] == (expected if forward else expected[::-1])
 
 # Test that a reverse query also works for long partitions. This test
 # reproduces #7586, where reverse queries had to read the entire partition
