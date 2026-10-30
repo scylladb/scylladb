@@ -258,8 +258,8 @@ future<> write_buffer::abort_writes(std::exception_ptr ex) {
     co_await close();
 }
 
-std::vector<write_buffer::record_in_buffer> write_buffer::take_separator_records() {
-    return std::move(_records_copy);
+std::vector<write_buffer::record_in_buffer> write_buffer::take_separator_records(std::vector<record_in_buffer> spare) noexcept {
+    return std::exchange(_records_copy, std::move(spare));
 }
 
 template future<record_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);

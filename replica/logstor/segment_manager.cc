@@ -661,6 +661,9 @@ class segment_manager_impl {
     static constexpr size_t separator_queue_depth = 16;
 
     seastar::queue<separator_task> _separator_task_queue;
+    // Record vectors the separator is done with, handed back to the next chunk so it need not regrow
+    // one. Reserved for separator_queue_depth up front, so returning one never allocates.
+    std::vector<std::vector<write_buffer::record_in_buffer>> _spare_separator_records;
     seastar::semaphore _separator_enqueue_sem{1};
     future<> _separator_fiber{make_ready_future<>()};
 
@@ -1026,6 +1029,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     }
 
     _free_segments.reserve(static_cast<size_t>(_configured_max_segments));
+    _spare_separator_records.reserve(separator_queue_depth);
 
     namespace sm = seastar::metrics;
 
@@ -1193,16 +1197,26 @@ future<> segment_manager_impl::run_separator_fiber() {
             co_return;
         }
 
-        auto write_to_separator_failed = defer([seg_ref = task.seg_ref] mutable noexcept {
-            seg_ref.set_flush_failure();
-        });
+        {
+            auto write_to_separator_failed = defer([seg_ref = task.seg_ref] mutable noexcept {
+                seg_ref.set_flush_failure();
+            });
 
-        try {
-            co_await write_to_separator(task.records, task.chunk_position, std::move(task.seg_ref), task.seq_num);
-            write_to_separator_failed.cancel();
-        } catch (...) {
-            ++_stats.separator_task_failures;
-            logstor_logger.debug("logstor separator task failure in separator fiber: {:t}", std::current_exception());
+            try {
+                co_await write_to_separator(task.records, task.chunk_position, std::move(task.seg_ref), task.seq_num);
+                write_to_separator_failed.cancel();
+            } catch (...) {
+                ++_stats.separator_task_failures;
+                logstor_logger.debug("logstor separator task failure in separator fiber: {:t}", std::current_exception());
+            }
+        }
+
+        // Keep the release order of destroying the task: the records' holders go last.
+        auto records = std::move(task.records);
+        task = {};
+        records.clear();
+        if (_spare_separator_records.size() < separator_queue_depth) {
+            _spare_separator_records.push_back(std::move(records));
         }
     }
 }
@@ -1263,7 +1277,12 @@ future<> segment_manager_impl::write(write_buffer& wb) {
         // for them to be updated in the index.
         co_await wb.complete_writes(pos);
 
-        auto records = wb.take_separator_records();
+        std::vector<write_buffer::record_in_buffer> spare;
+        if (!_spare_separator_records.empty()) {
+            spare = std::move(_spare_separator_records.back());
+            _spare_separator_records.pop_back();
+        }
+        auto records = wb.take_separator_records(std::move(spare));
         if (!records.empty()) {
             co_await with_semaphore(_separator_enqueue_sem, 1, [&] {
                 return _separator_task_queue.push_eventually(separator_task{
@@ -1274,6 +1293,8 @@ future<> segment_manager_impl::write(write_buffer& wb) {
                     .write_op = std::move(write_op),
                 });
             });
+        } else if (_spare_separator_records.size() < separator_queue_depth) {
+            _spare_separator_records.push_back(std::move(records));
         }
         write_to_separator_failed.cancel();
         break;
