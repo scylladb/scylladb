@@ -8,7 +8,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from test.alternator.util import new_test_table, wait_for_gsi, unique_table_name
+from test.alternator.util import new_test_table, new_test_table_description, wait_for_gsi
 
 # When creating a table with PROVISIONED billing mode, ProvisionedThroughput must be explicitly set,
 # and the same values should be reflected when the table is described.
@@ -131,7 +131,9 @@ def test_gsi_created_by_update_table(dynamodb):
 
 # A GSI's ProvisionedThroughput must be given when, and only when, the table is
 # in PROVISIONED billing mode. Both mismatches below are rejected by DynamoDB,
-# with the messages quoted here, so Alternator rejects them too.
+# with the messages quoted here, so Alternator rejects them too. Alternator
+# deliberately tolerates one mismatch DynamoDB rejects, a throughput of zeros
+# on a PAY_PER_REQUEST table, so the throughputs given here are not zeros.
 # Reproduces issue #19718.
 def test_gsi_throughput_required_in_provisioned_mode(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*ProvisionedThroughput.*not specified'):
@@ -243,14 +245,16 @@ def test_gsi_partial_throughput_rejected_by_update_table(dynamodb, gsi_throughpu
 # completeness above - before the billing mode, so a PAY_PER_REQUEST table which
 # may carry no throughput at all rejects the value rather than its presence -
 # and again with a protocol-level message Alternator does not reproduce.
+# Alternator deliberately accepts zeros, an incompatibility with DynamoDB, so
+# only negative capacities are tested here.
 @pytest.mark.parametrize('billing_args', [
         {'BillingMode': 'PROVISIONED',
          'ProvisionedThroughput': {'ReadCapacityUnits': 2, 'WriteCapacityUnits': 3}},
         {'BillingMode': 'PAY_PER_REQUEST'}])
 @pytest.mark.parametrize('gsi_throughput', [
-        {'ReadCapacityUnits': 0, 'WriteCapacityUnits': 5},
+        {'ReadCapacityUnits': -1, 'WriteCapacityUnits': 5},
         {'ReadCapacityUnits': 4, 'WriteCapacityUnits': -1}])
-def test_gsi_nonpositive_throughput_rejected_by_create_table(dynamodb, billing_args, gsi_throughput):
+def test_gsi_negative_throughput_rejected_by_create_table(dynamodb, billing_args, gsi_throughput):
     with pytest.raises(ClientError, match='ValidationException'):
         with new_test_table(dynamodb,
                 KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
@@ -267,9 +271,9 @@ def test_gsi_nonpositive_throughput_rejected_by_create_table(dynamodb, billing_a
 
 # The same rule for a GSI added by UpdateTable.
 @pytest.mark.parametrize('gsi_throughput', [
-        {'ReadCapacityUnits': 0, 'WriteCapacityUnits': 5},
+        {'ReadCapacityUnits': -1, 'WriteCapacityUnits': 5},
         {'ReadCapacityUnits': 4, 'WriteCapacityUnits': -1}])
-def test_gsi_nonpositive_throughput_rejected_by_update_table(dynamodb, gsi_throughput):
+def test_gsi_negative_throughput_rejected_by_update_table(dynamodb, gsi_throughput):
     with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
@@ -284,31 +288,59 @@ def test_gsi_nonpositive_throughput_rejected_by_update_table(dynamodb, gsi_throu
                     'Projection': {'ProjectionType': 'ALL'},
                     'ProvisionedThroughput': gsi_throughput}}])
 
+# A switch to PAY_PER_REQUEST by UpdateTable takes effect: the table reports
+# that billing mode and its GSI zero capacities, and a GSI added afterwards
+# comes without a ProvisionedThroughput, as that mode requires. This is the
+# sequence the Terraform AWS Provider sends when one apply moves a table to
+# PAY_PER_REQUEST and adds a GSI.
+def test_update_table_switch_to_pay_per_request(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'}],
+            BillingMode='PROVISIONED',
+            ProvisionedThroughput={'ReadCapacityUnits': 2, 'WriteCapacityUnits': 3},
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi1',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+                'ProvisionedThroughput': {'ReadCapacityUnits': 4, 'WriteCapacityUnits': 5}}]) as table:
+        table.meta.client.update_table(TableName=table.name, BillingMode='PAY_PER_REQUEST')
+        # DynamoDB applies the switch asynchronously.
+        wait_for_gsi(table, 'gsi1')
+        got = table.meta.client.describe_table(TableName=table.name)['Table']
+        assert got['BillingModeSummary']['BillingMode'] == 'PAY_PER_REQUEST'
+        gsi = got['GlobalSecondaryIndexes'][0]
+        assert gsi['ProvisionedThroughput']['ReadCapacityUnits'] == 0
+        assert gsi['ProvisionedThroughput']['WriteCapacityUnits'] == 0
+        table.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{'AttributeName': 'y', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexUpdates=[{'Create': {
+                'IndexName': 'gsi2',
+                'KeySchema': [{'AttributeName': 'y', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'}}}])
+        # DynamoDB cannot delete the table while the new GSI is being built.
+        wait_for_gsi(table, 'gsi2')
+
 # DynamoDB's CreateTable response reports each GSI's ProvisionedThroughput -
 # zeros for a PAY_PER_REQUEST table - but, unlike its DescribeTable response,
 # carries no WarmThroughput for a table which configured none. Verified against
 # DynamoDB.
 def test_gsi_create_table_response(dynamodb):
-    name = unique_table_name()
-    got = dynamodb.meta.client.create_table(TableName=name,
-        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-        AttributeDefinitions=[
-            {'AttributeName': 'p', 'AttributeType': 'S'},
-            {'AttributeName': 'x', 'AttributeType': 'S'}],
-        BillingMode='PAY_PER_REQUEST',
-        GlobalSecondaryIndexes=[{
-            'IndexName': 'gsi',
-            'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
-            'Projection': {'ProjectionType': 'ALL'}}])['TableDescription']
-    try:
+    with new_test_table_description(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'}],
+            BillingMode='PAY_PER_REQUEST',
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'}}]) as got:
         gsi = got['GlobalSecondaryIndexes'][0]
         assert gsi['ProvisionedThroughput']['ReadCapacityUnits'] == 0
         assert gsi['ProvisionedThroughput']['WriteCapacityUnits'] == 0
         assert gsi['ProvisionedThroughput']['NumberOfDecreasesToday'] == 0
         assert not 'WarmThroughput' in got
         assert not 'WarmThroughput' in gsi
-    finally:
-        # Unlike Alternator's, DynamoDB's CreateTable is asynchronous, and a
-        # table cannot be deleted until it and its GSI finish being created.
-        wait_for_gsi(dynamodb.Table(name), 'gsi')
-        dynamodb.meta.client.delete_table(TableName=name)
