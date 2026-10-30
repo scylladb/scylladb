@@ -73,6 +73,32 @@ void mutation_fragment::reset_memory(const schema& s, std::optional<reader_resou
     }
 }
 
+mutation_fragment::mutation_fragment(const schema& s, reader_permit permit, mutation_fragment&& o)
+    : _data(std::make_unique<data>(std::move(permit), o._data->_kind))
+{
+    switch (_data->_kind) {
+    case kind::static_row:
+        new (&_data->_static_row) static_row(std::move(o._data->_static_row));
+        break;
+    case kind::clustering_row:
+        new (&_data->_clustering_row) clustering_row(std::move(o._data->_clustering_row));
+        break;
+    case kind::range_tombstone:
+        new (&_data->_range_tombstone) range_tombstone(std::move(o._data->_range_tombstone));
+        break;
+    case kind::partition_start:
+        new (&_data->_partition_start) partition_start(std::move(o._data->_partition_start));
+        break;
+    case kind::partition_end:
+        new (&_data->_partition_end) partition_end(std::move(o._data->_partition_end));
+        break;
+    }
+    auto res = o._data->_memory.resources();
+    o.destroy_data();
+    o._data.reset();
+    reset_memory(s, res);
+}
+
 void mutation_fragment::destroy_data() noexcept
 {
     switch (_data->_kind) {

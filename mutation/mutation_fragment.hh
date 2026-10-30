@@ -323,6 +323,8 @@ public:
         }
         reset_memory(s, o._data->_memory.resources());
     }
+    // Moves o onto permit: o's memory is released from its permit and charged to permit.
+    mutation_fragment(const schema& s, reader_permit permit, mutation_fragment&& o);
     mutation_fragment(mutation_fragment&& other) = default;
     mutation_fragment& operator=(mutation_fragment&& other) noexcept {
         if (this != &other) {
