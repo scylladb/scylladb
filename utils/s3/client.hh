@@ -123,6 +123,10 @@ struct stats {
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 [[noreturn]] void map_s3_client_exception(std::exception_ptr ex);
 
+// seastar's status enum has no name for 416, which a byte range draws on an empty
+// object (RFC 9110 15.5.17).
+constexpr http::reply::status_type range_not_satisfiable = http::reply::status_type(416);
+
 // The reply statuses a request accepts; the rest go to the error-and-retry path. A
 // request that accepts an error status -- the 404 of object_exists(), say -- gets the
 // reply handed to its handler instead of an exception, which keeps the http connection
@@ -130,11 +134,12 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 // that quietly accepts nothing.
 class expected_status {
     enum class bits : uint8_t {
-        none            = 0,
-        ok              = 1 << 0, // 200
-        no_content      = 1 << 1, // 204
-        partial_content = 1 << 2, // 206
-        not_found       = 1 << 3, // 404
+        none                  = 0,
+        ok                    = 1 << 0, // 200
+        no_content            = 1 << 1, // 204
+        partial_content       = 1 << 2, // 206
+        not_found             = 1 << 3, // 404
+        range_not_satisfiable = 1 << 4, // 416
     };
     bits _accepted = bits::none;
 
@@ -146,6 +151,7 @@ class expected_status {
         case http::reply::status_type::no_content:      return bits::no_content;
         case http::reply::status_type::partial_content: return bits::partial_content;
         case http::reply::status_type::not_found:       return bits::not_found;
+        case s3::range_not_satisfiable:                 return bits::range_not_satisfiable;
         default:                                        return bits::none;
         }
     }
