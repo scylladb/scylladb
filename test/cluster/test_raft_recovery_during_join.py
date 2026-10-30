@@ -16,7 +16,7 @@ from test.pylib.rest_client import read_barrier
 from test.pylib.util import gather_safely, wait_for_cql_and_get_hosts
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
         check_token_ring_and_group0_consistency, delete_discovery_state_and_group0_id, delete_raft_group_data, \
-        reconnect_driver, wait_for_cdc_generations_publishing
+        find_recovery_leader_after_apply_committed, reconnect_driver, wait_for_cdc_generations_publishing
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -98,22 +98,21 @@ async def test_raft_recovery_during_join(manager: ScyllaClusterManager):
 
     logging.info('Starting the recovery procedure')
 
-    logging.info(f'Restarting {live_servers}')
-    await manager.rolling_restart(live_servers)
-
-    await reconnect_driver(manager)
-    cql, _ = await manager.get_ready_cql(live_servers)
+    logging.info(f'Finding the recovery leader among {live_servers}')
+    recovery_leader = await find_recovery_leader_after_apply_committed(manager, live_servers)
 
     logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
     await gather_safely(*(delete_discovery_state_and_group0_id(cql, h) for h in hosts))
 
-    recovery_leader_id = await manager.get_host_id(live_servers[0].server_id)
+    recovery_leader_id = await manager.get_host_id(recovery_leader.server_id)
 
     async def set_recovery_leader(srv: ServerInfo):
         await manager.server_update_config(srv.server_id, 'recovery_leader', recovery_leader_id)
 
-    logging.info(f'Restarting {live_servers} with recovery leader {live_servers[0].server_id}')
-    await manager.rolling_restart(live_servers, with_down=set_recovery_leader)
+    # The recovery leader must be restarted first.
+    restart_order = [recovery_leader] + [srv for srv in live_servers if srv.server_id != recovery_leader.server_id]
+    logging.info(f'Restarting {restart_order} with recovery leader {recovery_leader.server_id}')
+    await manager.rolling_restart(restart_order, with_down=set_recovery_leader)
 
     logging.info(f'Removing {dead_servers}')
     for i, being_removed in enumerate(dead_servers):

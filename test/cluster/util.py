@@ -25,7 +25,7 @@ from cassandra.cluster import ConnectionException, ConsistencyLevel, NoHostAvail
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.rest_client import HTTPError, get_host_api_address, read_barrier
+from test.pylib.rest_client import HTTPError, get_host_api_address, read_barrier, wait_for_apply
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, get_available_host, unique_name
 from typing import Optional, List, Union
 
@@ -344,6 +344,18 @@ async def wait_for_token_ring_and_group0_consistency(manager: ScyllaClusterManag
                 return None
             return True
         await wait_for(token_ring_and_group0_match, deadline, period=.5)
+
+
+async def find_recovery_leader_after_apply_committed(manager: ScyllaClusterManager, servers: list[ServerInfo]) -> ServerInfo:
+    """Find a recovery leader for the Raft-based recovery procedure among live `servers`.
+
+    Each server first applies all group 0 entries it knows to be committed. Then, the server with the largest
+    group 0 commit index is chosen (the first one in `servers` in case of a tie).
+    """
+    indexes = await asyncio.gather(*(wait_for_apply(manager.api, srv.ip_addr) for srv in servers))
+    logging.info(f'Group 0 commit indexes of {servers}: {indexes}')
+    assert all(idx > 0 for idx in indexes), f'Unexpected group 0 commit indexes of {servers}: {indexes}'
+    return max(zip(servers, indexes), key=lambda p: p[1])[0]
 
 
 async def delete_discovery_state_and_group0_id(cql: Session, host: Host) -> None:

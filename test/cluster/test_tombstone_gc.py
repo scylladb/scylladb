@@ -16,7 +16,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.cluster.util import delete_discovery_state_and_group0_id, delete_raft_group_data, disable_schema_agreement_wait, new_test_keyspace, new_test_table, reconnect_driver
+from test.cluster.util import delete_discovery_state_and_group0_id, delete_raft_group_data, disable_schema_agreement_wait, find_recovery_leader_after_apply_committed, new_test_keyspace, new_test_table, reconnect_driver
 
 logger = logging.getLogger(__name__)
 
@@ -222,25 +222,25 @@ async def test_group0_tombstone_gc(manager: ScyllaClusterManager):
             tombstone_mark = datetime.now(timezone.utc)
 
             # Start the Raft-based recovery procedure.
-            await manager.rolling_restart(servers, wait_for_cql=False)
+            recovery_leader = await find_recovery_leader_after_apply_committed(manager, servers)
 
-            # TODO: do not reconnect the driver (here and below) once scylladb/python-driver#295 is fixed.
-            # It doesn't go well with disable_schema_agreement_wait above.
-            cql = await reconnect_driver(manager)
-            cql.cluster.max_schema_agreement_wait = 0
             hosts = [(await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60))[0]
                      for s in servers]
 
             for h in hosts:
                 await delete_discovery_state_and_group0_id(cql, h)
 
-            recovery_leader_id = await manager.get_host_id(servers[0].server_id)
+            recovery_leader_id = await manager.get_host_id(recovery_leader.server_id)
 
             async def set_recovery_leader(srv: ServerInfo):
                 await manager.server_update_config(srv.server_id, 'recovery_leader', recovery_leader_id)
 
-            await manager.rolling_restart(servers, with_down=set_recovery_leader, wait_for_cql=False)
+            # The recovery leader must be restarted first.
+            restart_order = [recovery_leader] + [s for s in servers if s.server_id != recovery_leader.server_id]
+            await manager.rolling_restart(restart_order, with_down=set_recovery_leader, wait_for_cql=False)
 
+            # TODO: do not reconnect the driver once scylladb/python-driver#295 is fixed.
+            # It doesn't go well with disable_schema_agreement_wait above.
             cql = await reconnect_driver(manager)
             cql.cluster.max_schema_agreement_wait = 0
             await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
