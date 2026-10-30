@@ -515,3 +515,8 @@ endif()
 
 add_executable(patchelf
   tools/patchelf.cc)
+
+if(Scylla_USE_PRECOMPILED_HEADER_USE)
+  include(heavy_precompiled_headers)
+  scylla_add_heavy_precompiled_headers()
+endif()
