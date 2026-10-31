@@ -811,9 +811,6 @@ async def test_lwts_for_special_tables(manager: ScyllaClusterManager, storage_co
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.skip_storage('s3', 'gs',
-                          reason='a node aborts during shutdown (exit code -6) on object storage, '
-                                 'intermittently on either backend; deeper investigation is needed')
 async def test_lwt_shutdown(manager: ScyllaClusterManager, storage_config: FeatureConfig):
     """
     This is a regression test for #26355:
@@ -892,6 +889,60 @@ async def test_lwt_shutdown(manager: ScyllaClusterManager, storage_config: Featu
         row = rows[0]
         assert row.pk == 1
         assert row.v == 2
+
+
+async def stop_during_held_paxos_write(manager: ScyllaClusterManager, storage_config: FeatureConfig,
+                                       injection: str, coordinator_idx: int):
+    """
+    Start a two-node cluster, hold a paxos write to <table>$paxos on s0 with
+    `injection`, stop s0 gracefully and release the write while drain is held
+    after flushing the user tables. On object storage the write must be
+    rejected, or the close-time flush aborts the node (SCYLLADB-4366).
+    """
+    cfg = storage_config.get_cluster_cfg()
+    servers = await manager.servers_add(2, config=cfg, cmdline=['--logger-log-level', 'paxos=trace'], property_file=[
+        {'dc': 'my_dc', 'rack': 'r1'},
+        {'dc': 'my_dc', 'rack': 'r2'}
+    ])
+    s0 = servers[0]
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+
+        await manager.api.enable_injection(s0.ip_addr, injection, one_shot=False)
+        await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.test (pk, v) VALUES (1, 2) IF NOT EXISTS",
+                                            consistency_level=ConsistencyLevel.ONE),
+                            host=hosts[coordinator_idx])
+        await manager.api.wait_for_injection_enter(s0.ip_addr, injection)
+
+        await manager.api.enable_injection(s0.ip_addr, 'database_drain_after_user_flush', one_shot=False)
+        stop_task = asyncio.create_task(manager.server_stop_gracefully(s0.server_id))
+        await manager.api.wait_for_injection_enter(s0.ip_addr, 'database_drain_after_user_flush')
+        await manager.api.message_injection(s0.ip_addr, injection)
+        await manager.api.message_injection(s0.ip_addr, 'database_drain_after_user_flush')
+        await stop_task
+
+        await manager.server_start(s0.server_id)
+        cql = await reconnect_driver(manager)
+        [h0, _] = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 1",
+                                                   consistency_level=ConsistencyLevel.ONE),
+                                   host=h0)
+        assert [(r.pk, r.v) for r in rows] == [(1, 2)]
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_lwt_shutdown_during_coordinator_prune(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+    """The coordinator's background prune writes locally without a write-response handler."""
+    await stop_during_held_paxos_write(manager, storage_config, 'paxos_state_prune_wait', coordinator_idx=0)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_lwt_shutdown_during_replica_learn(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+    """A PAXOS_LEARN from a remote coordinator keeps running after stop_transport()."""
+    await stop_during_held_paxos_write(manager, storage_config, 'paxos_state_learn_after_mutate', coordinator_idx=1)
 
 
 @pytest.mark.skip_mode(mode='debug', reason='dev is enough')
