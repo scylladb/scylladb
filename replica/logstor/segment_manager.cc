@@ -21,7 +21,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <system_error>
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/fstream.hh>
@@ -47,203 +46,13 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/coroutine/as_future.hh>
 #include "replica/logstor/write_buffer.hh"
-#include "utils/disk-error-handler.hh"
 #include "utils/dynamic_bitset.hh"
 #include "utils/serialized_action.hh"
 #include "replica/database.hh"
 
 namespace replica::logstor {
 
-class segment {
-protected:
-    log_segment_id _id;
-    seastar::file _file;
-    uint64_t _file_offset; // Offset within the shared file where this segment starts
-    uint64_t _max_size;
-
-public:
-    segment(log_segment_id id, seastar::file file, uint64_t file_offset, uint64_t max_size);
-
-    virtual ~segment() = default;
-
-    log_segment_id id() const noexcept { return _id; }
-    seastar::file& get_file() noexcept { return _file; }
-
-protected:
-    uint64_t absolute_offset(uint64_t relative_offset) const noexcept {
-        return _file_offset + relative_offset;
-    }
-};
-
-class writeable_segment : public segment {
-    seastar::gate _write_gate;
-    seastar::semaphore _append_sem{1};
-    segment_ref _seg_ref;
-    segment_sequence _seq_num;
-
-    uint32_t _current_offset = 0; // next offset for write
-
-    // Set when a write to this segment failed. The segment is retired: it accepts no
-    // further appends, and reserve() returns nullopt so that the caller switches to a
-    // new segment.
-    bool _failed = false;
-
-    future<> do_write(segment_position, bytes_view data);
-
-    bool can_fit(size_t size) const noexcept {
-        return _current_offset + size <= _max_size;
-    }
-
-public:
-    using segment::segment;
-
-    void start(segment_ref, segment_sequence);
-
-    future<> stop();
-
-    struct append_reservation {
-        segment_position pos;
-        seastar::semaphore_units<> units;
-    };
-
-    // Reserve the next append offset for this segment and keep the permit held
-    // until the DMA write completes.
-    // Returns nullopt if the data doesn't fit in the segment, or if the segment was
-    // retired by a failed write. In both cases nothing was written and the caller is
-    // expected to move on to another segment.
-    future<std::optional<append_reservation>> reserve(size_t size);
-
-    future<segment_position> write_reserved(append_reservation reservation, bytes_view data);
-
-    // Convenience helper for callers that do not need to split reservation and write.
-    // Fails if the segment cannot fit the write.
-    future<segment_position> append(bytes_view data);
-
-    size_t bytes_remaining() const noexcept {
-        return _max_size - _current_offset;
-    }
-
-    seastar::gate::holder hold() {
-        return _write_gate.hold();
-    }
-
-    segment_ref ref() {
-        return _seg_ref;
-    }
-
-    segment_sequence seq_num() const noexcept {
-        return _seq_num;
-    }
-};
-
-segment::segment(log_segment_id id, seastar::file file, uint64_t file_offset, uint64_t max_size)
-    : _id(id)
-    , _file(std::move(file))
-    , _file_offset(file_offset)
-    , _max_size(max_size) {
-}
-
-void writeable_segment::start(segment_ref seg_ref, segment_sequence seq_num) {
-    _seg_ref = std::move(seg_ref);
-    _seq_num = seq_num;
-}
-
-future<> writeable_segment::stop() {
-    if (_write_gate.is_closed()) {
-        co_return;
-    }
-    co_await _write_gate.close();
-}
-
-future<std::optional<writeable_segment::append_reservation>> writeable_segment::reserve(size_t size) {
-    if (_failed) [[unlikely]] {
-        co_return std::nullopt;
-    }
-
-    std::optional<seastar::semaphore_units<>> units;
-    try {
-        units = co_await get_units(_append_sem, 1);
-    } catch (...) {
-        // The only way _append_sem breaks is a failed write retiring the segment, which
-        // may have happened while we were waiting for the permit. Nothing was reserved,
-        // so the caller can retry on another segment.
-        co_return std::nullopt;
-    }
-
-    if (!can_fit(size)) {
-        co_return std::nullopt;
-    }
-
-    append_reservation reservation {
-        .pos = segment_position {
-            .segment = _id,
-            .offset = _current_offset,
-        },
-        .units = std::move(*units),
-    };
-
-    _current_offset += size;
-
-    co_return std::move(reservation);
-}
-
-future<segment_position> writeable_segment::write_reserved(append_reservation reservation, bytes_view data) {
-    auto write_result = co_await coroutine::as_future(do_write(reservation.pos, data));
-    if (write_result.failed()) {
-        auto ex = write_result.get_exception();
-
-        // if a write fails, fail also all later writes to the segment, since we assume no holes in a segment.
-        // the segment is retired, so that callers switch to a new segment instead of failing forever.
-        _failed = true;
-        _append_sem.broken(ex);
-        logstor_logger.warn("Write to segment {} seq {} failed: {}, retiring segment", _id, _seq_num, ex);
-
-        co_await coroutine::return_exception_ptr(std::move(ex));
-    }
-    co_return reservation.pos;
-}
-
-future<segment_position> writeable_segment::append(bytes_view data) {
-    auto reservation = co_await reserve(data.size());
-    if (!reservation) {
-        co_return coroutine::return_exception(std::runtime_error(_failed
-                ? fmt::format("Can't append write of size {} to segment {} retired by a failed write", data.size(), _id)
-                : fmt::format("Can't append write of size {} to segment with {} bytes remaining", data.size(), bytes_remaining())));
-    }
-    co_return co_await write_reserved(std::move(*reservation), data);
-}
-
-future<> writeable_segment::do_write(segment_position pos, bytes_view data) {
-    utils::get_local_injector().inject("logstor_fail_segment_write", [] {
-        throw std::runtime_error("segment write failed by injection");
-    });
-
-    utils::get_local_injector().inject("logstor_segment_write_io_error", [] {
-        // Simulates a device error reported by the file layer: the handler fires the logstor
-        // disk error signal, which isolates the node, and turns it into a storage_io_error.
-        logstor_error_handler(std::make_exception_ptr(std::system_error(EIO, std::system_category(),
-                "segment write I/O error by injection")));
-    });
-
-    const auto alignment = _file.disk_write_dma_alignment();
-    const uint64_t total = data.size();
-    auto base_offset = absolute_offset(pos.offset);
-    uint64_t written = 0;
-
-    while (written < total) {
-        auto new_written = co_await _file.dma_write(
-                base_offset + written, data.data() + written, total - written);
-
-        written += new_written;
-        if (written == total) {
-            break;
-        }
-
-        written = align_down(written, alignment);
-    }
-}
-
-using seg_ptr = lw_shared_ptr<writeable_segment>;
+using seg_ptr = lw_shared_ptr<segment>;
 
 // Maps compaction_shares_pressure() to CPU shares. The backlog is the pressure itself, so control
 // point inputs are in [0, 1]. The maximum output is logstor_compaction_max_shares.
@@ -615,17 +424,11 @@ class segment_manager_impl {
         uint64_t segment_free_failures{0};
     };
 
+    segment_geometry _geometry;
     file_manager _file_mgr;
     compaction_manager_impl _compaction_mgr;
 
     segment_manager_config _cfg;
-    uint64_t _segments_per_file;
-
-    // The segment count of the current configuration. New segment ids are allocated only below it.
-    // Recovery can find more segments, in files from an earlier, larger configuration, see
-    // actual_max_segments(). Those segments stay usable until they are freed, and a freed segment
-    // at or above this count is retired and not allocated again.
-    uint64_t _configured_max_segments;
 
     uint64_t _next_new_segment_id{0};
 
@@ -731,7 +534,7 @@ public:
     }
 
     sstring get_segment_file_path(log_segment_id segment_id) const {
-        return sstring(_file_mgr.file_path(segment_id_to_file_location(segment_id).file_id).native());
+        return sstring(_file_mgr.file_path(_geometry.location_of(segment_id).file_id).native());
     }
 
     future<> discard_segments(logstor_group&);
@@ -776,7 +579,7 @@ public:
     future<std::unique_ptr<segment_stream_sink>> create_segment_output_stream(replica::database&);
 
     uint64_t allocatable_new_segment_count() const noexcept {
-        return _next_new_segment_id < _configured_max_segments ? _configured_max_segments - _next_new_segment_id : 0;
+        return _next_new_segment_id < _geometry.segment_count() ? _geometry.segment_count() - _next_new_segment_id : 0;
     }
 
     uint64_t available_segment_count() const noexcept {
@@ -786,7 +589,7 @@ public:
     // The segments on disk: the configured segments, and the segments in the files from an earlier,
     // larger configuration that recovery kept.
     uint64_t actual_max_segments() const noexcept {
-        return std::max(_configured_max_segments, _file_mgr.allocated_file_count() * _segments_per_file);
+        return std::max(_geometry.segment_count(), _file_mgr.allocated_file_count() * _geometry.segments_per_file());
     }
 
     // The segments holding records: the ones the compaction groups own, the one being written and
@@ -868,32 +671,6 @@ private:
         return log_segment_id(index);
     }
 
-    struct segment_location {
-        file_id_t file_id;
-        uint64_t file_offset;
-    };
-
-    uint64_t file_offset_to_segment_index(uint64_t file_offset) const noexcept {
-        return file_offset / _cfg.segment_size;
-    }
-
-    uint64_t segment_index_to_file_offset(uint64_t segment_index) const noexcept {
-        return segment_index * _cfg.segment_size;
-    }
-
-    segment_location segment_id_to_file_location(log_segment_id segment_id) const noexcept {
-        file_id_t file_id = segment_id.value / _segments_per_file;
-        uint64_t file_offset = (segment_id.value % _segments_per_file) * _cfg.segment_size;
-        return segment_location{file_id, file_offset};
-    }
-
-    auto segments_in_file(file_id_t file_id) const noexcept {
-        return std::views::iota(file_id * _segments_per_file, (file_id + 1) * _segments_per_file)
-            | std::views::transform([] (uint64_t i) {
-                return log_segment_id(i);
-            });
-    }
-
     friend class compaction_manager_impl;
     friend struct compaction_buffer;
     friend class segment_stream_sink_impl;
@@ -904,7 +681,7 @@ float compaction_manager_impl::compaction_pressure() const noexcept {
 }
 
 void compaction_manager_impl::refresh_free_segment_watermarks() noexcept {
-    _free_segment_watermarks = make_free_segment_watermarks(_sm._configured_max_segments, _sm._cfg.trigger_compaction_threshold());
+    _free_segment_watermarks = make_free_segment_watermarks(_sm._geometry.segment_count(), _sm._cfg.trigger_compaction_threshold());
     _compaction_limits = make_compaction_limits(_free_segment_watermarks, _cfg.max_segments_per_compaction);
 
     logstor_logger.debug("Free segment target {} (stop at {}), compaction parallelism {}, up to {} segments per compaction",
@@ -941,21 +718,11 @@ future<owned_write_buffer> compaction_manager_impl::allocate_separator_buffer() 
     return _sm.allocate_separator_buffer();
 }
 
-static const segment_manager_config& validated_geometry(const segment_manager_config& config) {
-    if (config.segment_size == 0) {
-        throw exceptions::configuration_exception("Segment size must not be zero");
-    }
-    if (config.file_size == 0) {
-        throw exceptions::configuration_exception("File size must not be zero");
-    }
-    return config;
-}
-
-static file_manager_config make_file_manager_config(const segment_manager_config& config) {
+static file_manager_config make_file_manager_config(const segment_manager_config& config, const segment_geometry& geometry) {
     return file_manager_config{
         .base_dir = config.base_dir,
         .file_size = config.file_size,
-        .file_count = config.disk_size / config.file_size,
+        .file_count = geometry.file_count(),
         // The format of a file is background work of the store, not of a write.
         .format_sg = config.compaction_sg,
         .format_on_startup = config.format_on_startup,
@@ -964,7 +731,8 @@ static file_manager_config make_file_manager_config(const segment_manager_config
 }
 
 segment_manager_impl::segment_manager_impl(segment_manager_config config)
-    : _file_mgr(make_file_manager_config(validated_geometry(config)))
+    : _geometry(config.segment_size, config.file_size, config.disk_size)
+    , _file_mgr(make_file_manager_config(config, _geometry))
     , _compaction_mgr(*this, compaction_manager_impl::compaction_config{
             .compaction_enabled = config.compaction_enabled,
             .max_segments_per_compaction = config.max_segments_per_compaction,
@@ -975,9 +743,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
             .split_compaction_sg = config.split_compaction_sg
         })
     , _cfg(config)
-    , _segments_per_file(config.file_size / config.segment_size)
-    , _configured_max_segments((config.disk_size / config.file_size) * _segments_per_file)
-    , _segment_descs(static_cast<size_t>(_configured_max_segments))
+    , _segment_descs(static_cast<size_t>(_geometry.segment_count()))
     // A compaction job takes one segment from the pool per flush, so the reserve that keeps normal
     // writes from draining the pool is one segment per concurrent job.
     , _segment_pool(segment_pool_size, max_compaction_parallelism)
@@ -1009,10 +775,6 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
       }))
     {
 
-    if (_segments_per_file == 0) {
-        throw exceptions::configuration_exception(fmt::format("Segment size {} must be less than or equal to file size {}", config.segment_size, config.file_size));
-    }
-
     // The free space of a segment is bucketed by segment_descriptor_hist, which indexes a
     // fixed-size bucket array without checking its bounds. A segment larger than the histogram's
     // maximum would compute an out of range bucket for a fully free segment.
@@ -1021,11 +783,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                 config.segment_size, segment_descriptor_hist_options.max_size));
     }
 
-    if (_configured_max_segments == 0) {
-        throw exceptions::configuration_exception(fmt::format("Disk size {} must be greater than or equal to file size {}", config.disk_size, config.file_size));
-    }
-
-    _free_segments.reserve(static_cast<size_t>(_configured_max_segments));
+    _free_segments.reserve(static_cast<size_t>(_geometry.segment_count()));
 
     namespace sm = seastar::metrics;
 
@@ -1358,7 +1116,7 @@ future<log_record> segment_manager_impl::read(record_location location) {
             location.segment, location.offset, location.size, _cfg.segment_size))));
     }
 
-    auto [file_id, file_offset] = segment_id_to_file_location(location.segment);
+    auto [file_id, file_offset] = _geometry.location_of(location.segment);
     // The file it reads from outlives the read: it is held here, on the frame of this coroutine,
     // because the read is issued on it and seastar keeps reading from it after the first suspension.
     auto file = _file_mgr.get_open_file(file_id);
@@ -1403,7 +1161,7 @@ future<> segment_manager_impl::switch_active_segment() {
     }
 
     // trigger separator flush for separator buffers that hold old segments
-    auto u = std::max<size_t>(1, _configured_max_segments / 100);
+    auto u = std::max<size_t>(1, _geometry.segment_count() / 100);
     if (_next_segment_seq.value % u == 0 && _next_segment_seq.value > 5*u) {
         (void)_compaction_mgr.flush_all_separator_buffers(segment_sequence(_next_segment_seq.value - 5*u)).handle_exception([] (std::exception_ptr) {});
     }
@@ -1436,9 +1194,9 @@ future<> segment_manager_impl::replenish_reserve() {
 future<seg_ptr> segment_manager_impl::allocate_segment() {
     auto make_segment = [this] (log_segment_id seg_id) -> future<seg_ptr> {
         try {
-            auto seg_loc = segment_id_to_file_location(seg_id);
+            auto seg_loc = _geometry.location_of(seg_id);
             auto file = co_await _file_mgr.get_file_for_new_segment(seg_loc.file_id);
-            auto seg = make_lw_shared<writeable_segment>(seg_id, std::move(file), seg_loc.file_offset, _cfg.segment_size);
+            auto seg = make_lw_shared<segment>(seg_id, std::move(file), seg_loc.file_offset, _cfg.segment_size);
             get_segment_descriptor(seg_id).reset(_cfg.segment_size);
             _stats.segments_allocated++;
             co_return std::move(seg);
@@ -1451,7 +1209,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
 
     while (true) {
         // first, allocate all new segments sequentially
-        if (_next_new_segment_id < _configured_max_segments) {
+        if (_next_new_segment_id < _geometry.segment_count()) {
             auto seg_id = log_segment_id(_next_new_segment_id++);
             co_return co_await make_segment(seg_id);
         }
@@ -1492,7 +1250,7 @@ void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
     if (desc.ref_count != 0) {
         on_fatal_internal_error(logstor_logger, format("Freeing segment {} with non-zero reference count", segment_id));
     }
-    if (segment_id.value < _configured_max_segments) {
+    if (segment_id.value < _geometry.segment_count()) {
         // _free_segments is pre-reserved to fit every configured segment (see the constructor), so
         // this should never grow the vector.
         _free_segments.push_back(segment_id);
@@ -1548,7 +1306,7 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
     // Invalidate the first header block so recovery treats the slot as empty.
     co_await max_concurrent_for_each(segments, 32, [this] (log_segment_id seg_id) -> future<> {
         logstor_logger.trace("Discard segment {}", seg_id);
-        auto [file_id, file_offset] = segment_id_to_file_location(seg_id);
+        auto [file_id, file_offset] = _geometry.location_of(seg_id);
         // The segments being discarded were written, so their file is allocated.
         co_await _file_mgr.zero_region(file_id, file_offset, block_alignment);
         free_segment(seg_id);
@@ -2226,7 +1984,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     const file_id_t found_file_count = co_await files.open_found_files();
 
     // Recovery reads every found segment, so each of them needs a descriptor.
-    const uint64_t found_segment_count = found_file_count * _segments_per_file;
+    const uint64_t found_segment_count = found_file_count * _geometry.segments_per_file();
     _segment_descs.resize(std::max(_segment_descs.size(), static_cast<size_t>(found_segment_count)));
 
     // A found segment is not new, so a new segment comes after the found segments. Set it before
@@ -2254,7 +2012,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
 
     for (file_id_t file_id = 0; file_id < found_file_count; ++file_id) {
         logstor_logger.info("Recovering segments from file {}: {}%", _file_mgr.file_path(file_id).string(), (file_id + 1) * 100 / found_file_count);
-        co_await max_concurrent_for_each(segments_in_file(file_id), 32,
+        co_await max_concurrent_for_each(_geometry.segments_in_file(file_id), 32,
             [this, &db, &cmp_with_seq, &segment_seqs, &max_segment_seq] (log_segment_id seg_id) {
                 return recover_segment(db, seg_id, cmp_with_seq,
                     [seg_id, &segment_seqs, &max_segment_seq] (const segment_info& seg_info) {
@@ -2290,7 +2048,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
         co_await coroutine::maybe_yield();
         log_segment_id seg_id(seg_idx);
         if (!used_segments.test(seg_idx)) {
-            if (seg_idx < _configured_max_segments) {
+            if (seg_idx < _geometry.segment_count()) {
                 _free_segments.push_back(seg_id);
                 free_segment_count++;
             }
@@ -2301,7 +2059,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     }
     logstor_logger.info("Found {} used segments and {} free segments", used_segment_count, free_segment_count);
 
-    const file_id_t used_file_count = used_segment_count > 0 ? max_used_seg_idx / _segments_per_file + 1 : 0;
+    const file_id_t used_file_count = used_segment_count > 0 ? max_used_seg_idx / _geometry.segments_per_file() + 1 : 0;
     co_await files.retire_unused_files(used_file_count);
 
     uint64_t recovered_used_segment_count = 0;
@@ -2554,6 +2312,12 @@ public:
     segment_data_sink_impl(seg_ptr segment)
         : _segment(std::move(segment))
         , _rewriter(_segment->id(), _segment->seq_num(), [segment = _segment] (bytes_view data) {
+            // The data comes from another node. Bad data fails the stream, and must not reach the
+            // internal error of segment::reserve().
+            if (data.size() % ondisk::block_alignment != 0) [[unlikely]] {
+                return make_exception_future<>(std::runtime_error(fmt::format("Streamed data of {} bytes for {} is not a multiple of the block size {}",
+                        data.size(), segment->id(), ondisk::block_alignment)));
+            }
             return segment->append(data).discard_result();
         })
     {}
@@ -2572,7 +2336,7 @@ public:
 };
 
 future<seastar::input_stream<char>> segment_manager_impl::create_segment_input_stream(log_segment_id segment_id, const seastar::file_input_stream_options& opts) {
-    auto [file_id, file_offset] = segment_id_to_file_location(segment_id);
+    auto [file_id, file_offset] = _geometry.location_of(segment_id);
     auto stream = make_file_input_stream(_file_mgr.get_open_file(file_id), file_offset, _cfg.segment_size, opts);
     co_return std::move(stream);
 }

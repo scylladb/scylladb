@@ -13,6 +13,7 @@
 #include "write_buffer.hh"
 #include "utils/log_heap.hh"
 #include "segment_stats.hh"
+#include "segment_ref.hh"
 #include <seastar/core/format.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -39,7 +40,6 @@ class primary_index;
 struct segment_descriptor;
 class segment_set;
 struct separator_buffer;
-class segment_ref;
 class logstor_group;
 
 // What the separator owes the index for one record it rewrote: the entry that pointed at the record
@@ -311,42 +311,6 @@ private:
         desc.owner = nullptr;
         desc.index_in_set = segment_descriptor::no_index;
     }
-};
-
-class segment_ref {
-    struct state {
-        log_segment_id id;
-        std::function<void()> on_last_release;
-        std::function<void()> on_failure;
-        bool flush_failure{false};
-        ~state() {
-            if (!flush_failure) {
-                if (on_last_release) on_last_release();
-            } else {
-                if (on_failure) on_failure();
-            }
-        }
-    };
-    lw_shared_ptr<state> _state;
-public:
-    segment_ref() = default;
-
-    // Copyable: copying increments the shared ref count
-    segment_ref(const segment_ref&) = default;
-    segment_ref& operator=(const segment_ref&) = default;
-    segment_ref(segment_ref&&) noexcept = default;
-    segment_ref& operator=(segment_ref&&) noexcept = default;
-
-    log_segment_id id() const noexcept { return _state->id; }
-    bool empty() const noexcept { return !_state; }
-
-    void set_flush_failure() noexcept { if (_state) _state->flush_failure = true; }
-
-private:
-    friend class segment_manager_impl;
-    explicit segment_ref(log_segment_id id, std::function<void()> on_last_release, std::function<void()> on_failure)
-        : _state(make_lw_shared<state>(id, std::move(on_last_release), std::move(on_failure)))
-    {}
 };
 
 struct separator_buffer {
