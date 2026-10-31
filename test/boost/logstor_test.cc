@@ -1033,6 +1033,31 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_abort_writes_reclaims_unflush
     BOOST_REQUIRE(!wb.has_data());
 }
 
+// Checks that every write to a reused buffer resolves to its own record's location, chunk after chunk.
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_reuse_resolves_each_write) {
+    auto schema = make_kv_schema();
+
+    write_buffer wb(32 * 1024, segment_kind::mixed);
+    for (uint32_t chunk = 0; chunk < 3; ++chunk) {
+        std::vector<future<record_location_with_holder>> written;
+        for (int i = 0; i < 3; ++i) {
+            written.push_back(wb.write(log_record_writer(make_log_record(schema, fmt::format("pk{}", i), "v", api::timestamp_type(1)))));
+        }
+        wb.seal(segment_sequence{chunk + 1}, std::nullopt, ondisk::block_alignment);
+        const auto chunk_position = segment_position{.segment = log_segment_id{chunk}, .offset = 0};
+        auto completed = wb.complete_writes(chunk_position);
+        std::optional<record_location> prev;
+        for (auto& f : written) {
+            auto [location, holder] = f.get();
+            BOOST_REQUIRE(location.segment == chunk_position.segment);
+            BOOST_REQUIRE(!prev || location.offset > prev->offset);
+            prev = location;
+        }
+        completed.get();
+        wb.reset();
+    }
+}
+
 // Checks that a pool builds its buffers at the point of use and keeps only max_cached of them once
 // they are returned, so that a pool whose capacity is rarely reached does not hold the memory for it.
 SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_pool_builds_buffers_on_demand) {
