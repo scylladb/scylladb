@@ -24,7 +24,6 @@ from test.pylib.tablets import get_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, wait_for
 
-from test.pylib import nodetool
 from test.pylib.encryption_provider import LocalFileSystemKeyProviderFactory
 from test.cluster.util import (check_token_ring_and_group0_consistency,
                                commitlog_sector_has_data, corrupt_commitlog_segment,
@@ -730,28 +729,35 @@ async def test_canceling_hint_draining(manager: ScyllaClusterManager):
     but it's resumed after starting the node again.
     """
     config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
-    s1, s2, s3 = await manager.servers_add(3, config=config, auto_rack_dc="dc")
+    # s2 and s3 share a rack, so s3 takes over s2's replicas when s2 is removed.
+    s1, s2, s3 = await manager.servers_add(3, config=config, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack2"},
+        {"dc": "dc1", "rack": "rack2"},
+    ])
 
-    cql = manager.get_cql()
+    # All writes go through s1, so all hints are stored there.
+    cql = await manager.get_cql_exclusive(s1)
     host_id2 = await manager.get_host_id(s2.server_id)
 
     await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")
 
-    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
-    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2']}")
+    # A row is hinted towards s2 only if s2 is its rack2 replica. With enough
+    # tablets, the load balancer places some of rack2's replicas on s2.
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int) WITH tablets = {'min_tablet_count': 8}")
 
     await manager.server_stop_gracefully(s2.server_id)
+    await manager.others_not_see_server(s2.ip_addr)
 
-    # Generate hints towards s2 on s1 with probability 1 - ((#nodes - 1) / #nodes)^100 ~= 1.
     await gather_safely(*[cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
                           for i in range(100)])
     await settle_and_flush_hints(manager, [s1])
+    assert await get_hint_metrics(manager.metrics, s1.ip_addr, "written") > 0
 
     sync_point = await create_sync_point(manager.api.client, s1.ip_addr)
 
     await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", False, {})
-    await nodetool.excludenode(cql, host_id2)
-    await cql.run_async(f"ALTER KEYSPACE ks WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'dc': {[s1.rack, s3.rack]}}}")
 
     await manager.remove_node(s1.server_id, s2.server_id)
     await manager.server_stop_gracefully(s1.server_id)
