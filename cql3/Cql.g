@@ -1322,6 +1322,7 @@ resource returns [uninitialized<auth::resource> res]
     : d=dataResource     { $res = std::move(d); }
     | r=roleResource     { $res = std::move(r); }
     | f=functionResource { $res = std::move(f); }
+    | o=objectStorageResource { $res = std::move(o); }
     ;
 
 dataResource returns [uninitialized<auth::resource> res]
@@ -1352,6 +1353,10 @@ functionResource returns [uninitialized<auth::resource> res]
         ')'
       )
       { $res = auth::make_functions_resource($fn.s.keyspace, $fn.s.name, args_types); }
+    ;
+
+objectStorageResource returns [uninitialized<auth::resource> res]
+    : K_ALL K_OBJECT K_STORAGE { $res = auth::resource(auth::resource_kind::object_storage); }
     ;
 
 /**
@@ -2308,6 +2313,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_EXECUTE
         | K_MUTATION_FRAGMENTS
         | K_EFFECTIVE
+        | K_OBJECT
         ) { $str = $k.text; }
     ;
 
@@ -2532,6 +2538,8 @@ K_MUTATION_FRAGMENTS:    M U T A T I O N '_' F R A G M E N T S;
 K_VECTOR_SEARCH_INDEXING: V E C T O R '_' S E A R C H '_' I N D E X I N G;
 K_TEXT_SEARCH_INDEXING: T E X T '_' S E A R C H '_' I N D E X I N G;
 K_PATTERN_SEARCH_INDEXING: P A T T E R N '_' S E A R C H '_' I N D E X I N G;
+
+K_OBJECT: O B J E C T;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');
