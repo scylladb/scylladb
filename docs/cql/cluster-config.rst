@@ -99,6 +99,14 @@ introduce further restrictions (see ``auto_scrub_period_seconds`` in
 option name, an option used at a scope it does not support, or a value of the wrong type is
 rejected and nothing changes.
 
+Some options take a structured value: a set of objects rather than a single scalar. Such a value
+can be written as a CQL literal - a map, a list, or the ``{name: value}`` form whose names need no
+quotes - nested as deep as the option needs, for example
+``{first: {text: 'abc', number: 1, flag: true}, second: {list: [1, 2]}}``. String values are quoted
+as usual; numbers, ``true``, ``false`` and ``null`` are not. The same value can also be given as a
+string holding its YAML or JSON text. Only a structured option takes a literal; any other option
+rejects one.
+
 Removing an option
 ------------------
 
