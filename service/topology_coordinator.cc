@@ -14,6 +14,7 @@
 #include <memory>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -44,6 +45,9 @@
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
+#include "sstables/open_info.hh"
+#include "sstables/sstables_manager.hh"
+#include "sstables/storage.hh"
 #include "db/config.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "db/schema_tables.hh"
@@ -3691,6 +3695,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     using desc_func = std::function<std::string()>;
     using before_finalize_func = std::function<future<>()>;
 
+    // `bf` runs after the operation's session is cleared
+    // and with the group0 guard RELEASED, so its I/O does not stall
+    // group0 operations on this node. Nothing serializes coordinators while
+    // the guard is out: a deposed coordinator can still be inside bf() when
+    // the new one retries the request and runs it again, so bf must tolerate
+    // a concurrent bf of the same request.
     future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_rpc_func send_rpc, desc_func desc, std::string_view what, before_finalize_func bf = {}) {
         // Execute a barrier to make sure the nodes we are performing truncate on see the session
         // and are able to create a topology_guard using the frozen_guard we are sending over RPC
@@ -3789,8 +3799,24 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
         guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
 
+        std::optional<sstring> bf_error;
         if (bf) {
-            co_await bf();
+            // See the bf contract above.
+            release_guard(std::move(guard));
+            try {
+                co_await bf();
+            } catch (term_changed_error&) {
+                throw;
+            } catch (raft::request_aborted&) {
+                throw;
+            } catch (seastar::abort_requested_exception&) {
+                throw;
+            } catch (...) {
+                // A failed finalize step fails the REQUEST instead of running
+                // the coordinator into an infinite loop.
+                bf_error = fmt::format("{}", std::current_exception());
+                rtlogger.warn("{} finalize step failed: {}", desc(), *bf_error);
+            }
         }
 
         // Finalize the request
@@ -3805,7 +3831,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 .del_global_topology_request_id()
                                 .build());
             updates.push_back(topology_request_tracking_mutation_builder(global_request_id)
-                                .done()
+                                .done(bf_error)
                                 .build());
 
             try {
@@ -3844,16 +3870,213 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         );
     }
 
+    // Cleanup before (re)taking a snapshot tag.
+    // Rows under an uncommitted tag are residue of a crashed or failed
+    // attempt. Runs before the snapshot RPCs, so every row and reference
+    // under the tag is residue, whoever wrote it. The snapshot_nodes rows
+    // name the (dc, rack) partitions the previous attempt wrote.
+    // A node that stopped being a replica since the
+    // crashed attempt would leave its rows behind, and the retake's commit
+    // marker would sneak them into the committed snapshot.
+    // Important to note here that we release, not plain delete, a ref may be a
+    // compacted-away sstable's last claim, and its components must go away
+    // too. The registry is node-local, so a peer's retained snapshot_owned
+    // entry is left to that peer's boot GC.
+    // Local tables have no references, their residue is the rows alone.
+    future<> cleanup_snapshot_residue(const std::set<std::pair<sstring, sstring>>& tables, const sstring& tag, db::snapshot_table_helper& sth) {
+        auto nodes = co_await sth.get_snapshot_nodes(tag, {}, {}, db::consistency_level::QUORUM);
+        std::set<std::pair<std::string, std::string>> partitions;
+        for (const auto& n : nodes) {
+            partitions.emplace(n.datacenter, n.rack);
+        }
+        if (partitions.empty()) {
+            co_return;
+        }
+        // The guard is released, a successor coordinator may be running this
+        // same request concurrently, we want to avoid cleaning up its fresh rows.
+        // FIXME: even with this check, there is still a chance we can end up with a bad snapshot
+        // but the edge case needs a quite a few planets to align: a crashed snapshot and a new re-attempt
+        // plus a failover in the middle of the cleanup phase of the retake, plus a failedover coordinator
+        // that falls behind and doesnt notice the reelection.
+        auto bail_on_failover = [this] {
+            _as.check();
+            if (_term != _raft.get_current_term()) {
+                throw term_changed_error{};
+            }
+        };
+        const auto me = locator::host_id(_raft.id().uuid());
+        for (const auto& [ks_name, cf_name] : tables) {
+            auto tp = _db.get_tables_metadata().get_table_if_exists(
+                    _db.get_tables_metadata().get_table_id_if_exists({std::string_view(ks_name), std::string_view(cf_name)}));
+            if (!tp) {
+                rtlogger.warn("Snapshot '{}': table {}.{} no longer exists, deleting its catalog rows,"
+                        " its leftover references can only be reclaimed by bucket healing", tag, ks_name, cf_name);
+            }
+            const bool remote_table = tp && tp->get_storage_options().is_object_storage_type();
+            std::optional<data_dictionary::storage_options::s3> os;
+            shared_ptr<sstables::object_storage_client> client;
+            sstables::sstables_registry* registry = nullptr;
+            if (remote_table) {
+                os = std::get<data_dictionary::storage_options::s3>(tp->get_storage_options().value);
+                try {
+                    client = tp->get_sstables_manager().get_endpoint_client(os->endpoint);
+                } catch (const std::invalid_argument&) {
+                    throw std::runtime_error(fmt::format("Snapshot '{}' of {}.{}: object-storage endpoint '{}' is not configured on this node,"
+                            " cannot release the previous attempt's references", tag, ks_name, cf_name, os->endpoint));
+                }
+                // There should always be a registry here, but in case it's missing, the cleanup will proceed without it, deleting the
+                // ref and the components if it was the last ref. Next reboot will delete the registry entry.
+                registry = tp->get_sstables_manager().has_sstables_registry() ? &tp->get_sstables_manager().sstables_registry() : nullptr;
+            }
+            for (const auto& [dc, rack] : partitions) {
+                if ((co_await sth.get_snapshot(tag)).has_value()) {
+                    // Only a successor of this very request can have written
+                    // the marker mid-sweep, the local raft just has not seen
+                    // the election yet.
+                    throw term_changed_error{};
+                }
+                auto residue = co_await sth.get_snapshot_sstables_for_cleanup(tag, ks_name, cf_name, dc, rack);
+                if (residue.empty()) {
+                    continue;
+                }
+                rtlogger.warn("Snapshot '{}' of {}.{} left {} catalog rows in ({}, {}) from a previous crashed or failed attempt,"
+                        " cleaning them up", tag, ks_name, cf_name, residue.size(), dc, rack);
+                co_await max_concurrent_for_each(residue, 16, [&] (const db::snapshot_sstable_cleanup_entry& e) -> future<> {
+                    bail_on_failover();
+                    if (remote_table) {
+                        // The reference goes first
+                        bool released = false;
+                        if (!e.toc_name.empty()) {
+                            auto desc = sstables::parse_path(std::filesystem::path(std::string_view(e.toc_name)), ks_name, cf_name);
+                            if (desc) {
+                                desc->sid = e.sstable_id;
+                                // The row's writer owns the node reference and the registry
+                                // entry, so the release checks the claims of e.node, not ours.
+                                co_await sstables::release_object_storage_snapshot_ref(*client, *os, e.node == me ? registry : nullptr, tp->schema()->id(), e.node, tag, *desc);
+                                released = true;
+                            } else {
+                                rtlogger.warn("Snapshot '{}' of {}.{}: cannot derive the snapshot reference of {} from toc_name '{}': {}",
+                                        tag, ks_name, cf_name, e.sstable_id, e.toc_name, desc.error());
+                            }
+                        }
+                        if (!released) {
+                            // The row cannot name its reference, but we can do it with the
+                            // sstable_id and a list op. Deleting every reference of the tag
+                            // is safe behind the deposition checks above: residue is all
+                            // these refs can be. Next boot GC will check if refs exist, if it sees
+                            // a) none and then deletes the components
+                            // and registry entry if sstable was compacted in the meantime.
+                            // b) node refs, does nothing, sstable needs to keep chilling
+                            co_await sstables::release_object_storage_snapshot_refs_by_listing(*client, *os, e.sstable_id, tag);
+                        }
+                    }
+
+                    auto ts = e.write_timestamp ? e.write_timestamp : api::new_timestamp();
+                    co_await sth.delete_snapshot_sstable_entry(tag, ks_name, cf_name, dc, rack,
+                            e.first_token, e.sstable_id, ts);
+                });
+            }
+        }
+    }
+
+    // Called from within handle_snapshot_tables before the RPCs are sent out.
+    // Rejects duplicate tags, cleans up the catalog residue of a prior crashed attempt for
+    // this tag, and writes the snapshot's schema rows so a later failure
+    // leaves residue that is enumerable by tag.
+    future<> prepare_snapshot_tables(const db::system_keyspace::topology_requests_entry& entry) {
+        const auto& tag = *entry.snapshot_tag;
+        db::snapshot_table_helper sth(_sys_ks.query_processor());
+        // A request for an already commited snapshot must fail.
+        if ((co_await sth.get_snapshot(tag)).has_value()) {
+            throw std::invalid_argument(fmt::format("Cannot take snapshot '{}': a snapshot with this tag already exists in the snapshot catalog", tag));
+        }
+
+        std::vector<lw_shared_ptr<replica::table>> tables;
+        for (auto& id : *entry.snapshot_table_ids) {
+            if (auto table = _db.get_tables_metadata().get_table_if_exists(id)) {
+                tables.emplace_back(std::move(table));
+            }
+        }
+        // Any table row present before the RPCs is residue of a crashed attempt.
+        // The targets are the union of the request's live tables and the names on the previous attempt's
+        // schema rows, which cover tables dropped since.
+        auto cleanup_schema_rows = co_await sth.get_snapshot_schema_rows_for_cleanup(tag);
+        std::set<std::pair<sstring, sstring>> prune_targets;
+        for (const auto& t : tables) {
+            prune_targets.emplace(t->schema()->ks_name(), t->schema()->cf_name());
+        }
+        for (const auto& t : cleanup_schema_rows.tables) {
+            prune_targets.insert(t);
+        }
+
+        // Release the previous attempt's references and delete its sstable
+        // rows. Must run before the snapshot_nodes prune below, the nodes
+        // rows name the partitions holding the residue.
+        co_await cleanup_snapshot_residue(prune_targets, tag, sth);
+
+        const auto tmptr = get_token_metadata_ptr();
+        const auto& dcs = tmptr->get_topology().get_datacenters();
+        for (const auto& [ks_name, table_name] : prune_targets) {
+            for (const auto& dc : dcs) {
+                auto rows = co_await sth.get_snapshot_tablets_for_cleanup(tag, ks_name, table_name, dc);
+                for (const auto& row : rows) {
+                    co_await sth.delete_snapshot_tablet_entry(tag, ks_name, table_name, dc, row.first_token, row.write_timestamp);
+                }
+            }
+        }
+        // Cleanup the previous attempt's snapshot_nodes rows.
+        // Prevent a failedover coordinator to delete the rows of the newly elected one.
+        _as.check();
+        if (_term != _raft.get_current_term() || (co_await sth.get_snapshot(tag)).has_value()) {
+            throw term_changed_error{};
+        }
+        co_await sth.delete_snapshot_nodes_rows(tag, api::new_timestamp());
+
+        // Delete-then-rewrite the schema partitions so stale rows die with
+        // the residue.
+        if (cleanup_schema_rows.max_write_timestamp) {
+            co_await sth.delete_snapshot_schema_rows(tag, cleanup_schema_rows.max_write_timestamp);
+        }
+        co_await sth.insert_snapshot_schema_rows(tag, tables);
+    }
+
     future<> handle_snapshot_tables(group0_guard guard) {
         utils::chunked_vector<table_id> ids;
-        std::vector<lw_shared_ptr<replica::table>> tables;
         sstring tag;
         bool skip_flush;
         gc_clock::time_point t;
         std::optional<gc_clock::time_point> expiry;
 
+        const auto topo_entry = co_await _sys_ks.get_topology_request_entry(_topo_sm._topology.global_request_id.value());
+        // Read the session under the guard: the prepare step must run only
+        // before the RPCs
+        const bool session_active = bool(_topo_sm._topology.session);
+        // A prepare failure must fail the request, not the coordinator fiber
+        std::optional<sstring> prepare_error;
+        if (session_active && topo_entry.snapshot_tag && topo_entry.snapshot_table_ids) {
+            release_guard(std::move(guard));
+            try {
+                co_await prepare_snapshot_tables(topo_entry);
+            } catch (term_changed_error&) {
+                throw;
+            } catch (raft::request_aborted&) {
+                throw;
+            } catch (seastar::abort_requested_exception&) {
+                throw;
+            } catch (...) {
+                prepare_error = fmt::format("{}", std::current_exception());
+            }
+            guard = co_await start_operation();
+        }
+
         co_await handle_topology_ordered_op(std::move(guard)
             , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
+                if (prepare_error) {
+                    throw std::runtime_error(*prepare_error);
+                }
+                if (!topology_requests_entry.snapshot_tag || !topology_requests_entry.snapshot_table_ids) {
+                    throw std::runtime_error(fmt::format("SNAPSHOT request {} has no tag or table ids", topology_requests_entry.id));
+                }
                 tag = *topology_requests_entry.snapshot_tag;
                 skip_flush = topology_requests_entry.snapshot_skip_flush;
                 t = gc_clock::from_time_t(db_clock::to_time_t(topology_requests_entry.start_time));
@@ -3866,7 +4089,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         throw std::invalid_argument(fmt::format("Cannot SNAPSHOT table with UUID {} because it does not exist.", id));
                     }
                     ids.emplace_back(id);
-                    tables.emplace_back(table);
                 }
                 rtlogger.info("Performing SNAPSHOT TABLES for {}", ids);
                 return *topology_requests_entry.snapshot_table_ids;
@@ -3874,17 +4096,41 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             , [&](locator::host_id host_id, const service::frozen_topology_guard& frozen_guard) {
                 return ser::storage_proxy_rpc_verbs::send_snapshot_with_tablets(&_messaging, host_id, ids, tag, t, skip_flush, expiry, frozen_guard);
             }
-            , [&] { 
+            , [&] {
                 return fmt::format("SNAPSHOT on tables {}", ids);
             }
             , "snapshot"
-            , [&]() -> future<> {
+            , [this]() -> future<> {
+                // This callback is seal-only, the residue cleanup and the schema rows ran
+                // before the RPCs.
+                // Uses the persisted request entry, not session locals: after a coordinator
+                // failover this step re-runs with an empty session, and a failed request also reaches it
+                auto entry = co_await _sys_ks.get_topology_request_entry(_topo_sm._topology.global_request_id.value());
+                if (!entry.error.empty()) {
+                    rtlogger.warn("SNAPSHOT request {} failed ({}); not writing the snapshot commit marker", entry.id, entry.error);
+                    co_return;
+                }
+                if (!entry.snapshot_tag || !entry.snapshot_table_ids) {
+                    throw std::runtime_error(fmt::format("SNAPSHOT request {} has no tag or table ids", entry.id));
+                }
                 db::snapshot_table_helper sth(_sys_ks.query_processor());
-                co_await sth.insert_snapshot_info(tag
-                    , db_clock::from_time_t(gc_clock::to_time_t(t))
-                    , db_clock::from_time_t(gc_clock::to_time_t(expiry.value_or({})))
-                    , tables
-                );
+                if ((co_await sth.get_snapshot(*entry.snapshot_tag)).has_value()) {
+                    co_return;
+                }
+                for (auto& id : *entry.snapshot_table_ids) {
+                    if (!_db.get_tables_metadata().get_table_if_exists(id)) {
+                        throw std::runtime_error(fmt::format("Cannot commit snapshot '{}': table {} was dropped during the operation",
+                                *entry.snapshot_tag, id));
+                    }
+                }
+                // The snapshots row is the commit marker for remote tables,
+                // the insert needs to happen last.
+                co_await sth.insert_snapshot(db::snapshot_entry{
+                    .name = std::string(*entry.snapshot_tag),
+                    .created_at = entry.start_time,
+                    .expires_at = entry.snapshot_expiry.value_or(db_clock::time_point{}),
+                    // TODO: namespace/manifest version?
+                });
             }
         );
     }

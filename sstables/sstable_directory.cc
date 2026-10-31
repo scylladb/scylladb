@@ -483,6 +483,12 @@ future<> sstable_directory::sstables_registry_components_lister::process(sstable
         if (state != directory._state) {
             return make_ready_future<>();
         }
+        if (status == "snapshot_owned") {
+            // The live sstable is gone; only snapshot references pin its data
+            // and the entry is kept for whoever clears the last snapshot reference. Nothing to load.
+            dirlog.debug("Skip processing snapshot_owned {} entry from {}", desc.generation, _table_id);
+            return make_ready_future<>();
+        }
         if (status != "sealed") {
             dirlog.warn("Skip processing {} {} entry from {} (must have been picked up by garbage collector)", status, desc.generation, _table_id);
             return make_ready_future<>();
@@ -559,17 +565,48 @@ future<> sstable_directory::restore_components_lister::commit() {
 
 future<> sstable_directory::sstables_registry_components_lister::garbage_collect(storage& st) {
     std::set<generation_type> gens_to_remove;
-    co_await _sstables_registry.sstables_registry_list(_table_id, _node_owner, coroutine::lambda([this, &st, &gens_to_remove] (sstring status, sstable_state state, entry_descriptor desc) -> future<> {
+    std::vector<generation_type> gens_to_retain;
+    std::vector<entry_descriptor> owned_entries;
+    std::vector<entry_descriptor> dangling_entries;
+    co_await _sstables_registry.sstables_registry_list(_table_id, _node_owner,
+            coroutine::lambda([&owned_entries, &dangling_entries] (sstring status, sstable_state state, entry_descriptor desc) -> future<> {
         if (status == "sealed") {
             co_return;
         }
-
+        desc.state = state;
+        if (status == "snapshot_owned") {
+            owned_entries.push_back(std::move(desc));
+            co_return;
+        }
         dirlog.info("Removing dangling {} {} entry", desc.generation, status);
-        gens_to_remove.insert(desc.generation);
-        co_await st.remove_by_registry_entry(std::move(desc), _node_owner);
+        dangling_entries.push_back(std::move(desc));
     }));
+    co_await max_concurrent_for_each(dangling_entries, 16, [this, &st, &gens_to_remove, &gens_to_retain] (entry_descriptor& desc) -> future<> {
+        auto gen = desc.generation;
+        if (co_await st.remove_by_registry_entry(std::move(desc), _node_owner, delete_node_ref::yes)) {
+            // Still pinned by this node's snapshot references. Keep the entry until the last one is cleared.
+            gens_to_retain.push_back(gen);
+        } else {
+            gens_to_remove.insert(gen);
+        }
+    });
     co_await coroutine::parallel_for_each(gens_to_remove, [this] (auto gen) -> future<> {
         co_await _sstables_registry.delete_entry(_table_id, _node_owner, gen);
+    });
+    if (!gens_to_retain.empty()) {
+        dirlog.debug("Retaining {} entries as snapshot_owned (snapshot references remain)", gens_to_retain.size());
+        // A plain status update suffices at boot, nothing deletes entries
+        // concurrently here. destroy() races the release paths and writes
+        // the full row instead (see storage.cc).
+        co_await _sstables_registry.batch_update_entry_status(_table_id, _node_owner, gens_to_retain, "snapshot_owned");
+    }
+
+    co_await max_concurrent_for_each(owned_entries, 16, [this, &st] (entry_descriptor& desc) -> future<> {
+        dirlog.debug("Re-evaluating snapshot_owned {} entry", desc.generation);
+        auto gen = desc.generation;
+        if (!co_await st.remove_by_registry_entry(std::move(desc), _node_owner, delete_node_ref::no)) {
+            co_await _sstables_registry.delete_entry(_table_id, _node_owner, gen);
+        }
     });
 }
 

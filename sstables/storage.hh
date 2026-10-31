@@ -41,8 +41,10 @@ namespace sstables {
 enum class sstable_state;
 class delayed_commit_changes;
 class object_storage_client;
+class object_name;
 class sstable;
 class sstables_manager;
+class sstables_registry;
 class atomic_deletion;
 class entry_descriptor;
 
@@ -98,6 +100,15 @@ public:
     }
 };
 
+// Distinguishes the two snapshot callers at the type level: a user snapshot
+// carries the tag that names it, an incremental backup carries no tag.
+using incremental_backup = bool_class<class incremental_backup_tag>;
+
+// Whether remove_by_registry_entry() also deletes the sstable's node
+// reference. Callers that know it is already gone (a retained snapshot_owned
+// entry) pass delete_node_ref::no.
+using delete_node_ref = bool_class<class delete_node_ref_tag>;
+
 class storage {
     friend class test;
 
@@ -122,7 +133,7 @@ public:
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
 
     virtual future<> seal(const sstable& sst) = 0;
-    virtual future<> snapshot(const sstable& sst, sstring name) const = 0;
+    virtual future<> snapshot(const sstable& sst, sstring tag, incremental_backup incremental) const = 0;
     // `may_use_reference_sharing` is a hint: storage backends may ignore it
     // and use their natural clone method.
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const = 0;
@@ -153,7 +164,13 @@ public:
     virtual future<> destroy(const sstable& sst) = 0;
     virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const = 0;
     virtual bool operator==(const storage&) const noexcept = 0;
-    virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const = 0;
+    // Removes this node's reference to the sstable described by the registry
+    // entry, and the component objects if no references remain. Returns true
+    // when this node's snapshot references still pin the sstable. The caller
+    // must then retain the entry as "snapshot_owned".
+    // `delete_node_ref::no` skips deleting the node reference, for callers
+    // that know it is already gone (a retained snapshot_owned entry).
+    virtual future<bool> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner, delete_node_ref del_node_ref) const = 0;
     // Free space available in the underlying storage.
     virtual future<uint64_t> free_space() const = 0;
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept = 0;
@@ -171,6 +188,58 @@ public:
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state);
 future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, sstable_id sid);
+
+// The bucket prefix the given location resolves to.
+sstring object_storage_prefix(const std::optional<sstring>& location);
+// The bucket prefix the given storage options resolve to.
+sstring object_storage_prefix(const data_dictionary::storage_options::object_storage& os);
+
+// Snapshot reference name, relative to "{prefix}/{sid}/". Single source
+// of the format for storage::snapshot(), the helpers below,
+// has_own_snapshot_ref() and db/snapshot/cluster_backup.cc.
+sstring object_storage_snapshot_ref_name(std::string_view tag, generation_type gen);
+
+// Deletes one snapshot reference object by its full object name. A missing
+// reference is not an error. Only for references on sstables known to be
+// alive. A reference that may be the sstable's last claim must go
+// through release_object_storage_snapshot_ref() instead.
+future<> delete_object_storage_snapshot_ref(object_storage_client& client, object_name ref_name);
+
+// Releases a tag's snapshot references of one sstable by listing
+// {prefix}/{sid}/refs/. This function is useful to cover an edge case
+// where toc_name got corrupted and we cannot name the
+// reference to clean it up, so we use this more expensive method (on a rare error path)
+// to make sure we don't leak refs permanently.
+future<> release_object_storage_snapshot_refs_by_listing(object_storage_client& client,
+        const data_dictionary::storage_options::object_storage& os,
+        sstable_id sid, std::string_view tag);
+
+// Releases one snapshot reference of an sstable that may no longer be alive.
+// Deletes the reference object (missing is not an error). If this node holds
+// no other claim on the sstable, also deletes the component objects when no
+// references remain at all, and the retained "snapshot_owned" registry entry.
+// `desc` must carry sid, generation, version and format.
+future<> release_object_storage_snapshot_ref(object_storage_client& client,
+        const data_dictionary::storage_options::object_storage& os,
+        sstables_registry* registry, table_id owner, locator::host_id node,
+        std::string_view tag, const entry_descriptor& desc);
+
+// Deletes the component objects of one sstable, forgiving missing objects.
+// TOC goes last, so a crash mid-way leaves the sstable discoverable.
+// `components` must not contain the TOC.
+future<> delete_object_storage_components(object_storage_client& client, sstring bucket,
+        sstring prefix, sstable_id sid, std::vector<sstring> components,
+        seastar::abort_source* as = nullptr, bool log_errors = false);
+
+// Deletes the component objects of one sstable, forgiving missing objects.
+// TOC goes last, so a crash mid-way leaves the sstable discoverable.
+future<> delete_object_storage_components(object_storage_client& client, sstring bucket,
+        sstring prefix, sstable_id sid, sstable_version_types version,
+        seastar::abort_source* as = nullptr, bool log_errors = false);
+
+// A snapshot tag names bucket reference objects (refs/snapshot-<tag>/...), so
+// it must be non-empty and must not contain '/'.
+bool is_valid_object_storage_snapshot_tag(std::string_view tag);
 future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);
