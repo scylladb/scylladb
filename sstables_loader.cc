@@ -288,7 +288,7 @@ private:
             // For now, tablet-aware restore doesn't need to mutate sstable level to 0
             // since we support only restoring to empty tables and so we can keep the sstable levels on backup.
             // Once we support restoring onto live tables we may want to mutate the ingested sstables' level to 0.
-            auto min_info = co_await download_sstable(_db.local(), _table, sstable, llog);
+            auto min_info = co_await download_sstable(_table, sstable, llog);
             downloaded_sstables[min_info.shard].emplace_back(min_info);
         }
         co_return downloaded_sstables;
@@ -1133,7 +1133,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                     auto stream_guard = table.stream_in_progress();
                     auto min_info = table.get_storage_options().is_object_storage_type()
                             ? co_await clone_backup_sstable(table, sst, snapshot_name, llog)
-                            : co_await download_sstable(loader._db.local(), table, sst, llog);
+                            : co_await download_sstable(table, sst, llog);
                     local_min_infos[min_info.shard].emplace_back(std::move(min_info));
                 });
                 co_return local_min_infos;
