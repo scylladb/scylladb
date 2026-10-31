@@ -36,6 +36,7 @@ def make_server(tmp_path: pathlib.Path) -> ScyllaServer:
     server.control_connection = None
     server.control_cluster = None
     server.cmd = None
+    server.stdout_relay = None
     # stop() does not care about the notify socket; keep it out of the way.
     server._cleanup_notify_socket = lambda: None  # type: ignore[method-assign]
     return server

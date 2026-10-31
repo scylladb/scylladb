@@ -363,6 +363,7 @@ class ScyllaServer:
         self._per_server_cmdline_options: List[str] = []
         self.auth_provider: Optional[AuthProvider] = None
         self.cmd: Optional[Process] = None
+        self.stdout_relay: Optional[asyncio.Task[None]] = None
         self.start_stop_lock = asyncio.Lock()
         self.stop_event = asyncio.Event()
         self.log_savepoint = 0
@@ -903,14 +904,19 @@ class ScyllaServer:
         if self.log_file is None or self.log_file.closed:
             self.log_file = self.log_filename.open("ab")  # append mode to preserve previous logs
 
+        cmdline_options = self.cmdline_options if cmdline_options_override is None else cmdline_options_override
+        # The stdout audit sink refuses to write to a regular file.
+        stdout_to_pipe = "stdout" in self._audit_sinks(cmdline_options)
         self.cmd = await asyncio.create_subprocess_exec(
             self.exe,
-            *(self.cmdline_options if cmdline_options_override is None else cmdline_options_override),
+            *cmdline_options,
             cwd=self.workdir,
             stderr=self.log_file,
-            stdout=self.log_file,
+            stdout=asyncio.subprocess.PIPE if stdout_to_pipe else self.log_file,
             env=env,
         )
+        if stdout_to_pipe:
+            self.stdout_relay = asyncio.create_task(self._relay_stdout(self.cmd.stdout))
 
         if expected_server_up_state == ServerUpState.PROCESS_STARTED:
             return
@@ -949,6 +955,7 @@ class ScyllaServer:
         while time.time() < self.start_time + self.TOPOLOGY_TIMEOUT and not self.stop_event.is_set():
             assert self.cmd is not None
             if self.cmd.returncode is not None:
+                await self._wait_for_stdout_relay(self.cmd)
                 self.cmd = None
                 if expected_error is not None:
                     with self.log_filename.open("r", encoding="utf-8") as log_file:
@@ -1051,6 +1058,7 @@ class ScyllaServer:
 
         if cmd.returncode is not None:
             # process has already exited
+            await self._wait_for_stdout_relay(cmd)
             if cmd.returncode != 0:
                 self.logger.error("%s exited with non-zero status code: %d", self, cmd.returncode)
             self.logger.info("stopped %s in %s", self, self.workdir.name)
@@ -1067,6 +1075,7 @@ class ScyllaServer:
         else:
             await cmd.wait()
         finally:
+            await self._wait_for_stdout_relay(cmd)
             self.logger.info("stopped %s in %s", self, self.workdir.name)
             self.cmd = None
 
@@ -1099,8 +1108,48 @@ class ScyllaServer:
                     f"Stopping server {self} gracefully took longer than {timeout}s")
         finally:
             if self.cmd:
+                await self._wait_for_stdout_relay(self.cmd)
                 self.logger.info("gracefully stopped %s", self)
             self.cmd = None
+
+    def _audit_sinks(self, cmdline_options: List[str]) -> set[str]:
+        """Return the audit sinks the server is started with."""
+        audit = str(self.config.get("audit", ""))
+        for i, option in enumerate(cmdline_options):
+            if option == "--audit" and i + 1 < len(cmdline_options):
+                audit = cmdline_options[i + 1]
+            elif option.startswith("--audit="):
+                audit = option.removeprefix("--audit=")
+        return {sink.strip() for sink in audit.split(",")}
+
+    async def _relay_stdout(self, stdout: asyncio.StreamReader) -> None:
+        """Copy the standard output of the server to its log file in whole
+        lines, so that they do not interleave with the standard error. Keep
+        reading after a failed write, so that the server never waits for the pipe."""
+        unterminated = b""
+        relaying = True
+
+        def write(data: bytes) -> None:
+            nonlocal relaying
+            try:
+                self.log_file.write(data)
+                self.log_file.flush()
+            except Exception:
+                self.logger.exception("relaying the standard output of %s failed", self)
+                relaying = False
+
+        while chunk := await stdout.read(64 * 1024):
+            lines, newline, unterminated = (unterminated + chunk).rpartition(b"\n")
+            if newline and relaying:
+                write(lines + newline)
+        if unterminated and relaying:
+            write(unterminated)
+
+    async def _wait_for_stdout_relay(self, cmd: Process) -> None:
+        """Wait until the output of an exited server is in its log file."""
+        if self.stdout_relay and cmd.returncode is not None:
+            await self.stdout_relay
+            self.stdout_relay = None
 
     def process_status(self) -> str:
         """Return the status of the server's process, as reported by psutil.
