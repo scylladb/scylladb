@@ -50,6 +50,7 @@
 #include "query/query-result-writer.hh"
 #include "utils/map_difference.hh"
 #include "utils/error_injection.hh"
+#include "utils/stall_free.hh"
 #include <seastar/coroutine/all.hh>
 #include "utils/log.hh"
 #include "schema/frozen_schema.hh"
@@ -1053,7 +1054,7 @@ void schema_applier::commit_on_shard(replica::database& db, uint64_t commit_gen)
     commit_tables_and_views();
 
     if (_tablet_hint) {
-        _ss.local().commit_token_metadata_change(_token_metadata_change);
+        _ss.local().commit_token_metadata_change(_token_metadata_change, &_tablet_hint);
     }
 
     // commit user functions and aggregates
@@ -1227,6 +1228,8 @@ future<> schema_applier::destroy() {
     co_await _affected_tables_and_views.tables_and_views.stop();
     co_await _pending_token_metadata.destroy();
     co_await _token_metadata_change.destroy();
+    // One token per changed tablet row; freeing it in the destructor could stall.
+    co_await utils::clear_gently(_tablet_hint.tables);
     co_await _functions_batch.stop();
 }
 
