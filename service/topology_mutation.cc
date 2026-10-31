@@ -444,6 +444,19 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     return *this;
 }
 
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_prepare_migration_data(
+        const sstring& ks_name, const std::unordered_map<table_id, size_t>& tables) {
+    apply_atomic("prepare_migration_ks_name", ks_name);
+    map_type_impl::native_type values;
+    values.reserve(tables.size());
+    for (const auto& [tid, target] : tables) {
+        values.emplace_back(data_value(tid.uuid()), data_value(static_cast<int64_t>(target)));
+    }
+    apply_atomic("prepare_migration_tables",
+                 make_map_value(schema().get_column_definition("prepare_migration_tables")->type, std::move(values)));
+    return *this;
+}
+
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_restore_tablets_data(
         const table_id& tid, const sstring& snapshot_name) {
     apply_atomic("restore_table_id", tid.uuid());

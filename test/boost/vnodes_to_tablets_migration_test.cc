@@ -15,6 +15,7 @@
 #include "test/lib/topology_builder.hh"
 #include "locator/tablets.hh"
 #include "service/storage_service.hh"
+#include "service/tablet_allocator.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
 #include "locator/token_metadata.hh"
@@ -23,6 +24,10 @@
 #include "db/view/view_builder.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/error_injection.hh"
+#include "test/lib/error_injection.hh"
+#include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
+#include "test/lib/eventually.hh"
 
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
@@ -261,7 +266,7 @@ static locator::tablet_map build_map(const std::vector<locator::host_id>& hosts,
     std::optional<locator::tablet_map> tmap;
     with_topology(nodes, {{locator::endpoint_dc_rack::default_location.dc, rf}}, shard_count, 0,
             [&] (const auto& erm, const auto*) {
-        tmap = service::storage_service::build_tablet_map_for_migration(erm, 0).get();
+        tmap = service::build_tablet_map_for_migration(erm, 0).get();
     });
     return std::move(*tmap);
 }
@@ -581,8 +586,36 @@ void create_vnode_keyspace_with_table(cql_test_env& e, const sstring& ks_name,
     e.execute_cql(fmt::format("CREATE TABLE {}.t (pk int PRIMARY KEY, v int)", ks_name)).get();
 }
 
+// Takes the topology out of the `lock` transition state topology_builder leaves it in.
+// A locked topology coordinator picks up no request, and the preparation is one.
+void unlock_topology(cql_test_env& e) {
+    abort_source as;
+    auto& client = e.get_raft_group0_client();
+    const auto& topo = e.get_topology_state_machine().local()._topology;
+    while (true) {
+        auto guard = client.start_operation(as).get();
+        if (topo.tstate != service::topology::transition_state::lock) {
+            return;
+        }
+        service::topology_change change({service::topology_mutation_builder(guard.write_timestamp())
+                                             .del_transition_state()
+                                             .build()});
+        auto g0_cmd = client.prepare_command(std::move(change), guard, "unlocking topology");
+        try {
+            client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
+            return;
+        } catch (service::group0_concurrent_modification&) {
+            testlog.info("Concurrent modification detected while unlocking topology, retrying");
+        }
+    }
+}
+
 // Adds a new DC with the given number of nodes in each rack, and returns its name.
+// The nodes don't exist, but nothing the preparation does reaches them: they are only
+// replicas in the maps it writes. Tablet balancing is disabled, so that the coordinator,
+// once unlocked, doesn't plan any tablet work onto them either.
 sstring add_dc(cql_test_env& e, std::vector<size_t> nodes_per_rack) {
+    e.get_storage_service().local().set_tablet_balancing_enabled(false).get();
     topology_builder topo(e);
     for (size_t i = 0; i < nodes_per_rack.size(); ++i) {
         if (i > 0) {
@@ -592,6 +625,7 @@ sstring add_dc(cql_test_env& e, std::vector<size_t> nodes_per_rack) {
             topo.add_node();
         }
     }
+    unlock_topology(e);
     return topo.dc();
 }
 
@@ -927,6 +961,247 @@ SEASTAR_TEST_CASE(test_block_index_schema_changes_during_migration) {
         e.execute_cql(format("ALTER MATERIALIZED VIEW {}.local_idx_index WITH gc_grace_seconds = 3600", ks)).get();
         // Creating an index that already exists doesn't change the set of tables.
         e.execute_cql(format("CREATE INDEX IF NOT EXISTS local_idx ON {}.t ((pk), v)", ks)).get();
+    });
+}
+
+namespace {
+
+using migration_status = service::storage_service::migration_status;
+
+// Creates a vnode keyspace with tables t0, t1, ... and returns their names.
+std::vector<sstring> create_vnode_keyspace(cql_test_env& e, const sstring& ks, size_t num_tables) {
+    e.execute_cql(format("CREATE KEYSPACE {} "
+            "WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+            "AND tablets = {{'enabled': false}}", ks)).get();
+    std::vector<sstring> tables;
+    for (size_t i = 0; i < num_tables; ++i) {
+        tables.push_back(format("t{}", i));
+        e.execute_cql(format("CREATE TABLE {}.{} (pk int PRIMARY KEY, c int)", ks, tables.back())).get();
+    }
+    return tables;
+}
+
+// Requires `expected` of the tables `tables` of `ks` to have a tablet map, and returns the
+// ones which do. This node runs the coordinator, so it has applied every command the
+// coordinator committed.
+std::vector<sstring> require_mapped(cql_test_env& e, const sstring& ks, const std::vector<sstring>& tables, size_t expected) {
+    const auto tmptr = e.local_token_metadata_ptr();
+    auto mapped = tables
+            | std::views::filter([&] (const sstring& table) {
+                return tmptr->tablets().has_tablet_map(e.local_db().find_schema(ks, table)->id());
+            })
+            | std::ranges::to<std::vector<sstring>>();
+    BOOST_REQUIRE_MESSAGE(mapped.size() == expected, fmt::format(
+            "expected {} of the {} tables of {} to have a tablet map, found {}: {}",
+            expected, tables.size(), ks, mapped.size(), mapped));
+    return mapped;
+}
+
+// Requires the migration status of `ks` to be `status`.
+void require_status(cql_test_env& e, const sstring& ks, migration_status status) {
+    auto result = e.get_storage_service().local().get_tablets_migration_status_with_node_details(ks).get();
+    BOOST_REQUIRE_MESSAGE(result.status == status, fmt::format(
+            "expected keyspace {} to be {}, got {}", ks, status, result.status));
+}
+
+// How many commands of preparations of `ks` left the request queued: the coordinator
+// describes each of them as a part of the request, and group0 history keeps that.
+size_t prepare_parts(cql_test_env& e, const sstring& ks) {
+    const auto prefix = format("prepare vnodes-to-tablets migration for keyspace '{}', part: ", ks);
+    auto rows = e.local_qp().execute_internal("SELECT description FROM system.group0_history",
+            db::consistency_level::ONE, cql3::query_processor::cache_internal::no).get();
+    return std::ranges::count_if(*rows, [&] (const cql3::untyped_result_set_row& row) {
+        return row.has("description") && row.get_as<sstring>("description").starts_with(prefix);
+    });
+}
+
+// Runs `f` and requires it to fail with an error which says `what`.
+void require_error(noncopyable_function<void()> f, std::string_view what) {
+    BOOST_REQUIRE_EXCEPTION(f(), std::runtime_error, [what] (const std::runtime_error& ex) {
+        BOOST_TEST_MESSAGE(fmt::format("got error: {}", ex.what()));
+        return std::string_view(ex.what()).find(what) != std::string_view::npos;
+    });
+}
+
+// Prepares `ks`, running `while_paused` once the coordinator has committed the first
+// command of the request and paused with the request still queued.
+void prepare_with_pause(cql_test_env& e, const sstring& ks, noncopyable_function<void()> while_paused) {
+    constexpr std::string_view pause = "prepare_migration_after_part";
+    scoped_error_injection injection(pause, true, {});
+    auto prepare = e.get_storage_service().local().prepare_for_tablets_migration(ks);
+    std::exception_ptr ex;
+    try {
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return utils::get_local_injector().waiters(pause); }, 1);
+        while_paused();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    utils::get_local_injector().receive_message_on_all(pause).get();
+    if (ex) {
+        // Whatever the preparation does then, the failure to report is the one above.
+        prepare.handle_exception([] (std::exception_ptr) {}).get();
+        std::rethrow_exception(ex);
+    }
+    prepare.get();
+}
+
+} // anonymous namespace
+
+// Verify that a keyspace whose tablet maps don't fit into one group0 command is prepared
+// by several, the request staying queued until the last of them, and that every table
+// ends up with a map. The injection sends every table in a command of its own, so that a
+// few tables are enough.
+SEASTAR_TEST_CASE(test_prepare_splits_tablet_maps_across_commands) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection one_table_per_command("prepare_migration_one_table_per_command");
+        const sstring ks = "test_migration_ks";
+        auto tables = create_vnode_keyspace(e, ks, 5);
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks).get();
+
+        // Every table but the last goes out in a command which leaves the request queued.
+        BOOST_REQUIRE_EQUAL(prepare_parts(e, ks), tables.size() - 1);
+        require_mapped(e, ks, tables, tables.size());
+        require_status(e, ks, migration_status::migrating_to_tablets);
+    });
+}
+
+// Verify that a preparation which fails halfway drops the maps it wrote, so that it
+// leaves the keyspace as it found it, and that preparing it again then starts from
+// scratch.
+SEASTAR_TEST_CASE(test_failed_preparation_drops_its_maps) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection one_table_per_command("prepare_migration_one_table_per_command");
+        // Fails the request on its second command, once the first table has its map.
+        scoped_error_injection fail_on_resume("prepare_migration_fail_on_resume", true, {});
+        const sstring ks = "test_migration_ks";
+        auto tables = create_vnode_keyspace(e, ks, 4);
+        auto& ss = e.get_storage_service().local();
+
+        require_error([&] { ss.prepare_for_tablets_migration(ks).get(); }, "injected prepare_migration failure");
+        require_mapped(e, ks, tables, 0);
+        require_status(e, ks, migration_status::vnodes);
+
+        ss.prepare_for_tablets_migration(ks).get();
+        require_mapped(e, ks, tables, tables.size());
+        require_status(e, ks, migration_status::migrating_to_tablets);
+        // The failed request left one part, and the second one, starting from scratch,
+        // left one per table but the last.
+        BOOST_REQUIRE_EQUAL(prepare_parts(e, ks), tables.size());
+    });
+}
+
+// Verify that while a keyspace is being prepared, a node can't be marked for tablets and
+// the keyspace can't be finalized. A node marked for tablets moves every table with a
+// tablet map to tablets when it restarts, while the preparation would then fail and drop
+// the maps; a finalization would be queued behind the preparation and, as a rollback, drop
+// its maps right after it reports success.
+SEASTAR_TEST_CASE(test_no_marking_or_finalizing_mid_preparation) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection one_table_per_command("prepare_migration_one_table_per_command");
+        const sstring ks = "test_migration_ks";
+        auto tables = create_vnode_keyspace(e, ks, 4);
+        auto& ss = e.get_storage_service().local();
+        auto mark_for_tablets = [&] { ss.set_node_intended_storage_mode(service::storage_mode::tablets).get(); };
+
+        prepare_with_pause(e, ks, [&] {
+            require_error(mark_for_tablets, "still being prepared");
+            require_error([&] { ss.set_node_intended_storage_mode(service::storage_mode::vnodes).get(); }, "still being prepared");
+            require_error([&] { ss.finalize_tablets_migration(ks).get(); }, "still being prepared");
+        });
+        require_mapped(e, ks, tables, tables.size());
+
+        mark_for_tablets();
+    });
+}
+
+// Verify that preparation covers the materialized views of a keyspace: it maps a view as
+// well as its base table, and a preparation which fails halfway drops a view's map as
+// well as a base table's. The two are prepared in the order of their ids, so which one
+// gets its map before the failure is up to chance; the test holds either way.
+SEASTAR_TEST_CASE(test_preparation_covers_views) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection one_table_per_command("prepare_migration_one_table_per_command");
+        scoped_error_injection fail_on_resume("prepare_migration_fail_on_resume", true, {});
+        const sstring ks = "test_migration_ks";
+        auto tables = create_vnode_keyspace(e, ks, 1);
+        // Preparation refuses a view which isn't built. Subscribe before creating it:
+        // wait_until_built() only reports builds which finish after the call.
+        auto view_built = e.local_view_builder().wait_until_built(ks, "mv");
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT pk, c FROM {}.{} "
+                "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, pk)", ks, ks, tables[0])).get();
+        view_built.get();
+        tables.push_back("mv");
+        auto& ss = e.get_storage_service().local();
+
+        require_error([&] { ss.prepare_for_tablets_migration(ks).get(); }, "injected prepare_migration failure");
+        require_mapped(e, ks, tables, 0);
+        require_status(e, ks, migration_status::vnodes);
+
+        ss.prepare_for_tablets_migration(ks).get();
+        require_mapped(e, ks, tables, tables.size());
+        require_status(e, ks, migration_status::migrating_to_tablets);
+    });
+}
+
+// Verify that a view co-located with its base table gets its entry in the same command as
+// the base table's map, and that a preparation which fails halfway drops the entry along
+// with the map. Each of two tables has a co-located view and every map goes out in a command
+// of its own, so whichever table goes first, it and its view are prepared together, and the
+// other table and its view not at all.
+SEASTAR_TEST_CASE(test_preparation_covers_colocated_views) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection one_table_per_command("prepare_migration_one_table_per_command");
+        scoped_error_injection fail_on_resume("prepare_migration_fail_on_resume", true, {});
+        const sstring ks = "test_migration_ks";
+        auto tables = create_vnode_keyspace(e, ks, 2);
+        std::vector<sstring> views;
+        for (const auto& table : tables) {
+            auto view = table + "_view";
+            auto view_built = e.local_view_builder().wait_until_built(ks, view);
+            // The base table's partition key, so that the view is co-located with it.
+            e.execute_cql(format("CREATE MATERIALIZED VIEW {}.{} AS SELECT pk, c FROM {}.{} "
+                    "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)", ks, view, ks, table)).get();
+            view_built.get();
+            views.push_back(view);
+        }
+        auto all = tables;
+        all.insert(all.end(), views.begin(), views.end());
+        auto& ss = e.get_storage_service().local();
+        auto id_of = [&] (const sstring& table) { return e.local_db().find_schema(ks, table)->id(); };
+        auto has_map = [&] (const sstring& table) {
+            return e.local_token_metadata_ptr()->tablets().has_tablet_map(id_of(table));
+        };
+
+        require_error([&] { ss.prepare_for_tablets_migration(ks).get(); }, "injected prepare_migration failure");
+        require_mapped(e, ks, all, 0);
+
+        prepare_with_pause(e, ks, [&] {
+            require_mapped(e, ks, tables, 1);
+            for (size_t i = 0; i < tables.size(); ++i) {
+                BOOST_REQUIRE_EQUAL(has_map(views[i]), has_map(tables[i]));
+            }
+        });
+        require_mapped(e, ks, all, all.size());
+        const auto tmptr = e.local_token_metadata_ptr();
+        for (size_t i = 0; i < tables.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(tmptr->tablets().get_base_table(id_of(views[i])), id_of(tables[i]));
+        }
     });
 }
 

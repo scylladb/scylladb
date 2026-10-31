@@ -45,6 +45,11 @@ enum class global_topology_request: uint16_t {
     finalize_migration,
     quiesce,
     restore_tablets,
+
+    // Creates tablet maps for all tables of a keyspace, the first phase of a
+    // vnodes-to-tablets migration. Gated by the
+    // PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION cluster feature.
+    prepare_migration,
 };
 
 // The storage mode of a node during vnodes-to-tablets migration.
