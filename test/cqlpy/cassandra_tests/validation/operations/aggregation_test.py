@@ -1670,7 +1670,7 @@ def testEmptyListAndNullInitcond(cql):
 
 # Reproduces #14404 (empty collection INITCOND) and SCYLLADB-5162
 # (CREATE OR REPLACE AGGREGATE doesn't remove FINALFUNC or INITCOND)
-@pytest.mark.xfail(reason="#14404, SCYLLADB-5162")
+@pytest.mark.xfail(reason="#14404")
 def testOrReplaceOptionals(cql):
     with create_keyspace(cql, REPLICATION) as ks:
         fState = createFunction(cql, ks,
