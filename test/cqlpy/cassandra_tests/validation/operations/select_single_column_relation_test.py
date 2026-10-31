@@ -973,10 +973,6 @@ def testInRestrictionsWithAllowFiltering(cql, test_keyspace):
                    [1, 0, "7", 1, 2],
                    [1, 1, "7", 1, 3])
 
-# Reproduces #15099 (with IN and ORDER BY, Scylla breaks ties between rows of
-# different partitions differently from Cassandra: here Scylla returns
-# (2, "0") before (1, "0"))
-@pytest.mark.xfail(reason="#15099")
 def testInRestrictionsWithAllowFilteringAndOrdering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, c text, v int, primary key(pk, c)) WITH CLUSTERING ORDER BY (c DESC)") as table:
         execute(cql, table, "INSERT INTO %s (pk, c, v) values (?, ?, ?)", 1, "0", 5)
@@ -1004,11 +1000,12 @@ def testInRestrictionsWithAllowFilteringAndOrdering(cql, test_keyspace):
                    [2, "2", 6],
                    [2, "0", 4])
 
-        assert_rows(execute_without_paging(cql, table, "SELECT * FROM %s WHERE pk IN ? AND c IN ? ORDER BY c ASC ALLOW FILTERING", [1, 2], ["2", "8", "0"]),
-                   [1, "0", 5],
-                   [2, "0", 4],
-                   [1, "2", 7],
-                   [2, "2", 6])
+        # The order of the ties (rows with equal c) isn't specified, and is
+        # different in Scylla and Cassandra (see #15099): Scylla returns
+        # (2, "0") before (1, "0").
+        assert_rows_with_ties(execute_without_paging(cql, table, "SELECT * FROM %s WHERE pk IN ? AND c IN ? ORDER BY c ASC ALLOW FILTERING", [1, 2], ["2", "8", "0"]),
+                   ties([1, "0", 5], [2, "0", 4]),
+                   ties([1, "2", 7], [2, "2", 6]))
 
 def testInRestrictionsWithCountersAndAllowFiltering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, v counter, primary key (pk))") as table:
