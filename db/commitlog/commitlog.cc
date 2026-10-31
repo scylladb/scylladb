@@ -362,27 +362,27 @@ public:
     struct byte_flow {
         T bytes_written = 0;
         T bytes_released = 0;
-        T bytes_flush_requested = 0;
+        T bytes_commit_externally_requested = 0;
 
         byte_flow operator+(const byte_flow& rhs) const {
             return byte_flow{
                 .bytes_written = bytes_written + rhs.bytes_written,
                 .bytes_released = bytes_released + rhs.bytes_released,
-                .bytes_flush_requested = bytes_flush_requested + rhs.bytes_flush_requested,
+                .bytes_commit_externally_requested = bytes_commit_externally_requested + rhs.bytes_commit_externally_requested,
             };
         }
         byte_flow operator-(const byte_flow& rhs) const {
             return byte_flow{
                 .bytes_written = bytes_written - rhs.bytes_written,
                 .bytes_released = bytes_released - rhs.bytes_released,
-                .bytes_flush_requested = bytes_flush_requested - rhs.bytes_flush_requested,
+                .bytes_commit_externally_requested = bytes_commit_externally_requested - rhs.bytes_commit_externally_requested,
             };
         }
         byte_flow<double> operator/(double d) const {
             return byte_flow<double>{
                 .bytes_written = bytes_written / d,
                 .bytes_released = bytes_released / d,
-                .bytes_flush_requested = bytes_flush_requested / d,
+                .bytes_commit_externally_requested = bytes_commit_externally_requested / d,
             };
         }
     };
@@ -430,7 +430,7 @@ public:
         return _request_controller.waiters();
     }
 
-    future<> begin_flush() {
+    future<> begin_flush_to_disk() {
         ++totals.pending_flushes;
         if (totals.pending_flushes >= cfg.max_active_flushes) {
             ++totals.flush_limit_exceeded;
@@ -438,7 +438,7 @@ public:
         }
         return _flush_semaphore.wait();
     }
-    void end_flush() noexcept {
+    void end_flush_to_disk() noexcept {
         _flush_semaphore.signal();
         --totals.pending_flushes;
     }
@@ -506,20 +506,20 @@ public:
 
     gc_clock::time_point min_gc_time(const cf_id_type&, const db::replay_position&) const;
 
-    flush_handler_id add_flush_handler(flush_handler h) {
-        auto id = ++_flush_ids;
-        _flush_handlers[id] = std::move(h);
+    commit_externally_handler_id add_commit_externally_handler(commit_externally_handler h) {
+        auto id = ++_commit_externally_ids;
+        _commit_externally_handlers[id] = std::move(h);
         return id;
     }
-    void remove_flush_handler(flush_handler_id id) {
-        _flush_handlers.erase(id);
+    void remove_commit_externally_handler(commit_externally_handler_id id) {
+        _commit_externally_handlers.erase(id);
     }
 
-    void flush_segments(uint64_t size_to_remove);
+    void commit_externally(uint64_t size_to_remove);
     void check_no_data_older_than_allowed();
 
-    replay_position flush_position() const {
-        return _flush_position;
+    replay_position commit_externally_position() const {
+        return _commit_externally_position;
     }
 
     // whitebox testing
@@ -536,9 +536,9 @@ private:
     std::vector<sseg_ptr> _segments;
     queue<sseg_ptr> _reserve_segments;
     queue<named_file> _recycled_segments;
-    std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
-    flush_handler_id _flush_ids = 0;
-    replay_position _flush_position;
+    std::unordered_map<commit_externally_handler_id, commit_externally_handler> _commit_externally_handlers;
+    commit_externally_handler_id _commit_externally_ids = 0;
+    replay_position _commit_externally_position;
     timer<clock_type> _timer;
     future<> replenish_reserve();
     future<> _reserve_replenisher;
@@ -760,7 +760,7 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     named_file _file;
 
     uint64_t _file_pos = 0;
-    uint64_t _flush_pos = 0;
+    uint64_t _flushed_to_disk_pos = 0;
     uint64_t _waste = 0;
 
     size_t _alignment;
@@ -814,15 +814,15 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
         return used + sector_overhead(used);
     }
 
-    future<> begin_flush() {
+    future<> begin_flush_to_disk() {
         // This is maintaining the semantica of only using the write-lock
         // as a gate for flushing, i.e. once we've begun a flush for position X
         // we are ok with writes to positions > X
-        return _segment_manager->begin_flush();
+        return _segment_manager->begin_flush_to_disk();
     }
 
-    void end_flush() {
-        _segment_manager->end_flush();
+    void end_flush_to_disk() {
+        _segment_manager->end_flush_to_disk();
         if (can_delete()) {
             // #25709 - do this early if possible
             _extended_segments.clear();
@@ -994,7 +994,7 @@ public:
         }
     
         co_await _pending_ops.close();
-        co_await _file.truncate(_flush_pos);
+        co_await _file.truncate(_flushed_to_disk_pos);
         co_await _file.close();
 
         if (p) {
@@ -1011,12 +1011,12 @@ public:
         return cycle(true);
     }
     // See class comment for info
-    future<sseg_ptr> flush() {
+    future<sseg_ptr> flush_to_disk() {
         auto me = shared_from_this();
         SCYLLA_ASSERT(me.use_count() > 1);
         uint64_t pos = _file_pos;
 
-        clogger.trace("Syncing {} {} -> {}", *this, _flush_pos, pos);
+        clogger.trace("Syncing {} {} -> {}", *this, _flushed_to_disk_pos, pos);
 
         // Only run the flush when all write ops at lower rp:s
         // have completed.
@@ -1025,7 +1025,7 @@ public:
         // Run like this to ensure flush ordering, and making flushes "waitable"
         co_await _pending_ops.run_with_ordered_post_op(rp, [] {}, [&] {
             SCYLLA_ASSERT(_pending_ops.has_operation(rp));
-            return do_flush(pos);
+            return do_flush_to_disk(pos);
         });
         co_return me;
     }
@@ -1049,7 +1049,7 @@ public:
     future<sseg_ptr> close() {
         auto closing = !std::exchange(_closed, true);
         auto s = co_await sync();
-        co_await flush();
+        co_await flush_to_disk();
         co_await terminate();
         if (closing) {
             // only update this if we are the closers.
@@ -1058,16 +1058,16 @@ public:
         }
         co_return s;
     }
-    future<sseg_ptr> do_flush(uint64_t pos) {
+    future<sseg_ptr> do_flush_to_disk(uint64_t pos) {
         auto me = shared_from_this();
-        co_await begin_flush();
+        co_await begin_flush_to_disk();
 
         auto finally = defer([&] () noexcept {
-            end_flush();
+            end_flush_to_disk();
         });
 
-        if (pos <= _flush_pos) {
-            clogger.trace("{} already synced! ({} < {})", *this, pos, _flush_pos);
+        if (pos <= _flushed_to_disk_pos) {
+            clogger.trace("{} already synced! ({} < {})", *this, pos, _flushed_to_disk_pos);
             co_return me;
         }
 
@@ -1075,9 +1075,9 @@ public:
             co_await _file.flush();
             // TODO: retry/ignore/fail/stop - optional behaviour in origin.
             // we fast-fail the whole commit.
-            _flush_pos = std::max(pos, _flush_pos);
+            _flushed_to_disk_pos = std::max(pos, _flushed_to_disk_pos);
             ++_segment_manager->totals.flush_count;
-            clogger.trace("{} synced to {}", *this, _flush_pos);
+            clogger.trace("{} synced to {}", *this, _flushed_to_disk_pos);
         } catch (...) {
             clogger.error("Failed to flush commits to disk: {:t}", std::current_exception());
             throw;
@@ -1135,12 +1135,12 @@ public:
      * Send any buffer contents to disk and get a new tmp buffer
      */
     // See class comment for info
-    future<sseg_ptr> cycle(bool flush_after = false, bool termination = false) {
+    future<sseg_ptr> cycle(bool flush_to_disk_after = false, bool termination = false) {
         auto me = shared_from_this();
 
         if (_buffer.empty() && !termination) {
-            if (flush_after) {
-                co_await flush();
+            if (flush_to_disk_after) {
+                co_await flush_to_disk();
             }
             co_return me;
         }
@@ -1279,8 +1279,8 @@ public:
             }
         }, [&]() -> future<> {
             SCYLLA_ASSERT(_pending_ops.has_operation(rp));
-            if (flush_after) {
-                co_await do_flush(top);
+            if (flush_to_disk_after) {
+                co_await do_flush_to_disk(top);
             }
         });
         co_return me;
@@ -1308,11 +1308,11 @@ public:
                 replay_position rp(_desc.id, position_type(fp));
                 co_await _pending_ops.wait_for_pending(rp, timeout);
                 
-                SCYLLA_ASSERT(_segment_manager->cfg.mode != sync_mode::BATCH || _flush_pos > fp);
-                if (_flush_pos <= fp) {
+                SCYLLA_ASSERT(_segment_manager->cfg.mode != sync_mode::BATCH || _flushed_to_disk_pos > fp);
+                if (_flushed_to_disk_pos <= fp) {
                     // previous op we were waiting for was not sync one, so it did not flush
                     // force flush here
-                    co_await do_flush(fp);
+                    co_await do_flush_to_disk(fp);
                 }
             } else {
                 // It is ok to leave the sync behind on timeout because there will be at most one
@@ -1504,9 +1504,9 @@ public:
 
     void reset_file_position(size_t file_pos) {
         clogger.trace("{}: set file position to {}", fmt::streamed(*this), file_pos);
-        assert(_flush_pos >= file_pos);
+        assert(_flushed_to_disk_pos >= file_pos);
         _file_pos = file_pos;
-        _flush_pos = file_pos;
+        _flushed_to_disk_pos = file_pos;
         _buffer = {};
         _closed = false;
     }
@@ -1551,11 +1551,11 @@ public:
     bool is_unused() const noexcept {
         return !is_still_allocating() && is_clean();
     }
-    bool is_flushed() const noexcept {
-        return position() <= _flush_pos;
+    bool is_flushed_to_disk() const noexcept {
+        return position() <= _flushed_to_disk_pos;
     }
     bool can_delete() const noexcept {
-        return is_unused() && is_flushed();
+        return is_unused() && is_flushed_to_disk();
     }
     bool contains(const replay_position& pos) const noexcept {
         return pos.id == _desc.id;
@@ -2209,8 +2209,9 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
         sm::make_counter("bytes_released", totals.bytes_released,
                        sm::description("Counts number of bytes released from disk. (Deleted/recycled)")),
 
-        sm::make_counter("bytes_flush_requested", totals.bytes_flush_requested,
-                       sm::description("Counts number of bytes requested to be flushed (persisted).")),
+        // Name kept for dashboard compatibility.
+        sm::make_counter("bytes_flush_requested", totals.bytes_commit_externally_requested,
+                       sm::description("Counts number of bytes requested to be committed externally (e.g. by a memtable flush).")),
 
         sm::make_counter("slack", totals.bytes_slack,
                        sm::description("Counts number of unused bytes written to the disk due to disk segment alignment.")),
@@ -2255,18 +2256,18 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
     });
 }
 
-void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
+void db::commitlog::segment_manager::commit_externally(uint64_t size_to_remove) {
     if (_segments.empty()) {
         return;
     }
     // defensive copy.
-    auto callbacks = _flush_handlers | std::views::values | std::ranges::to<std::vector>();
+    auto callbacks = _commit_externally_handlers | std::views::values | std::ranges::to<std::vector>();
     auto& active = _segments.back();
 
     // RP at "start" of segment we leave untouched.
     replay_position high(active->_desc.id, 0);
 
-    // But if all segments are closed or we force-flush,
+    // But if all segments are closed or we force an external commit,
     // include all.
     if (!active->is_still_allocating()) {
         high = replay_position(high.id + 1, 0);
@@ -2276,10 +2277,10 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
     std::unordered_map<cf_id_type, replay_position> ids;
 
     uint64_t n = size_to_remove;
-    uint64_t flushing = 0;
+    uint64_t requested = 0;
 
     for (auto& s : _segments) {
-        // if a segment is allocating, it should be included in flush request,
+        // if a segment is allocating, it should be included in the external commit request,
         // because we cannot free anything there anyway. If a segment is allocating,
         // it is the last one, so just break.
         if (s->is_still_allocating()) {
@@ -2287,7 +2288,7 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
         }
 
         auto rp = replay_position(s->_desc.id, db::position_type(s->size_on_disk()));
-        if (rp <= _flush_position) {
+        if (rp <= _commit_externally_position) {
             // already requested.
             continue;
         }
@@ -2295,7 +2296,7 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
         auto size = s->size_on_disk();
         auto waste = s->_waste;
 
-        flushing += size - waste;
+        requested += size - waste;
 
         for (auto& id : s->_cf_dirty |  std::views::keys) {
             auto& target_high = ids[id];
@@ -2311,7 +2312,7 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
         }
     }
 
-    clogger.debug("Flushing ({} MB) to {}", flushing/(1024*1024), high);
+    clogger.debug("Requesting external commit ({} MB) to {}", requested/(1024*1024), high);
 
     // For each CF id: for each callback c: call c(id, high)
     for (auto& f : callbacks) {
@@ -2319,13 +2320,13 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
             try {
                 f(id, hp);
             } catch (...) {
-                clogger.error("Exception during flush request {}/{}: {} ({:t})", id, hp, high, std::current_exception());
+                clogger.error("Exception during external commit request {}/{}: {} ({:t})", id, hp, high, std::current_exception());
             }
         }
     }
 
-    _flush_position = high;
-    totals.bytes_flush_requested += flushing;
+    _commit_externally_position = high;
+    totals.bytes_commit_externally_requested += requested;
 }
 
 void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
@@ -2341,7 +2342,7 @@ void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
 
     for (auto& s : _segments) {
         auto rp = replay_position(s->_desc.id, db::position_type(s->size_on_disk()));
-        if (rp <= _flush_position) {
+        if (rp <= _commit_externally_position) {
             // already requested.
             continue;
         }
@@ -2358,7 +2359,7 @@ void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
             if (time_since_first_added >= *max) {
                 // There is data in this segment that has lived longer than allowed (might be flushed actually
                 // but can still affect compaction/resurrect stuff on replay). Collect all dirty 
-                // id:s (stuff keeping this segment alive), and ask for them to be memtable flushed
+                // id:s (stuff keeping this segment alive), and ask for them to be committed externally
                 for (auto& id : s->_cf_dirty | std::views::keys) {
                     ids.insert(id);
                 }
@@ -2384,18 +2385,18 @@ void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
     }
 
     if (!ids.empty()) {
-        auto callbacks = _flush_handlers | std::views::values | std::ranges::to<std::vector>();
+        auto callbacks = _commit_externally_handlers | std::views::values | std::ranges::to<std::vector>();
         // For each CF id: for each callback c: call c(id, high)
         for (auto& f : callbacks) {
             for (auto& id : ids) {
                 try {
                     f(id, *high);
                 } catch (...) {
-                    clogger.error("Exception during flush request {}/{}: {:t}", id, *high, std::current_exception());
+                    clogger.error("Exception during external commit request {}/{}: {:t}", id, *high, std::current_exception());
                 }
             }
         }
-        _flush_position = *high;
+        _commit_externally_position = *high;
     }
 }
 
@@ -2540,8 +2541,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             clogger.debug("Disk usage ({} MB) exceeds maximum ({} MB) - allocation will wait...", totals.total_size_on_disk/(1024*1024), max_disk_size/(1024*1024));
             auto f = _recycled_segments.not_empty();
             if (!f.available()) {
-                _new_counter = 0; // zero this so timer task does not duplicate the below flush
-                flush_segments(0); // force memtable flush already
+                _new_counter = 0; // zero this so timer task does not duplicate the below external commit
+                commit_externally(0); // force external commit already
             }
             try {
                 co_await std::move(f);
@@ -2760,7 +2761,7 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
 future<> db::commitlog::segment_manager::sync_all_segments() {
     clogger.debug("Issuing sync for all segments");
     // #8952 - calls that do sync/cycle can end up altering
-    // _segments (end_flush()->discard_unused())
+    // _segments (end_flush_to_disk()->discard_unused())
     auto def_copy = _segments;
     co_await coroutine::parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
         co_await s->sync();
@@ -2771,7 +2772,7 @@ future<> db::commitlog::segment_manager::sync_all_segments() {
 future<> db::commitlog::segment_manager::shutdown_all_segments() {
     clogger.debug("Issuing shutdown for all segments");
     // #8952 - calls that do sync/cycle can end up altering
-    // _segments (end_flush()->discard_unused())
+    // _segments (end_flush_to_disk()->discard_unused())
     auto def_copy = _segments;
     co_await coroutine::parallel_for_each(def_copy, [] (sseg_ptr s) -> future<> {
         co_await s->shutdown();
@@ -2912,8 +2913,8 @@ template <typename T>
 struct fmt::formatter<db::commitlog::segment_manager::byte_flow<T>> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(db::commitlog::segment_manager::byte_flow<T> f, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "[written={}, released={}, flush_req={}]",
-                              f.bytes_written, f.bytes_released, f.bytes_flush_requested);
+        return fmt::format_to(ctx.out(), "[written={}, released={}, commit_externally_req={}]",
+                              f.bytes_written, f.bytes_released, f.bytes_commit_externally_requested);
     }
 };
 
@@ -3041,7 +3042,7 @@ future<> db::commitlog::segment_manager::clear() {
 void db::commitlog::segment_manager::sync() {
     auto f = std::exchange(_background_sync, make_ready_future<>());
     // #8952 - calls that do sync/cycle can end up altering
-    // _segments (end_flush()->discard_unused())
+    // _segments (end_flush_to_disk()->discard_unused())
     auto def_copy = _segments;
     _background_sync = parallel_for_each(def_copy, [](sseg_ptr s) {
         return s->sync().discard_result();
@@ -3074,15 +3075,15 @@ void db::commitlog::segment_manager::on_timer() {
         clogger.debug("Rate: {} / s ({} s)", rate, seconds);
 
         // IFF a new segment was put in use since last we checked, and we're
-        // above threshold, request flush.
+        // above threshold, request external commit.
         if (_new_counter > 0) {
             auto max = disk_usage_threshold;
             auto cur = totals.active_size_on_disk + totals.wasted_size_on_disk;
             uint64_t extra = 0;
 
             // TODO: better heuristics? Do a semi-pessimistic approach, guess that half
-            // of flush request will manage to finish by next lap, so count it as half.
-            auto returned = diff.bytes_released + diff.bytes_flush_requested/2;
+            // of external commit request will manage to finish by next lap, so count it as half.
+            auto returned = diff.bytes_released + diff.bytes_commit_externally_requested/2;
             if (diff.bytes_written > returned) {
                 // we are guessing we are gonna add at least this.
                 extra = (diff.bytes_written - returned);
@@ -3097,7 +3098,7 @@ void db::commitlog::segment_manager::on_timer() {
                     , max / (1024 * 1024)
                 );
                 _new_counter = 0;
-                flush_segments(cur + extra - max);
+                commit_externally(cur + extra - max);
             }
         }
 
@@ -3315,39 +3316,39 @@ future<db::commitlog> db::commitlog::create_commitlog(config cfg) {
     co_return c;
 }
 
-db::commitlog::flush_handler_anchor::flush_handler_anchor(flush_handler_anchor&& f)
+db::commitlog::commit_externally_handler_anchor::commit_externally_handler_anchor(commit_externally_handler_anchor&& f)
     : _cl(f._cl), _id(f._id)
 {
     f._id = 0;
 }
 
-db::commitlog::flush_handler_anchor::flush_handler_anchor(commitlog& cl, flush_handler_id id)
+db::commitlog::commit_externally_handler_anchor::commit_externally_handler_anchor(commitlog& cl, commit_externally_handler_id id)
     : _cl(cl), _id(id)
 {}
 
-db::commitlog::flush_handler_anchor::~flush_handler_anchor() {
+db::commitlog::commit_externally_handler_anchor::~commit_externally_handler_anchor() {
     unregister();
 }
 
-db::commitlog::flush_handler_id db::commitlog::flush_handler_anchor::release() {
-    flush_handler_id id = 0;
+db::commitlog::commit_externally_handler_id db::commitlog::commit_externally_handler_anchor::release() {
+    commit_externally_handler_id id = 0;
     std::swap(_id, id);
     return id;
 }
 
-void db::commitlog::flush_handler_anchor::unregister() {
+void db::commitlog::commit_externally_handler_anchor::unregister() {
     auto id = release();
     if (id != 0) {
-        _cl.remove_flush_handler(id);
+        _cl.remove_commit_externally_handler(id);
     }
 }
 
-db::commitlog::flush_handler_anchor db::commitlog::add_flush_handler(flush_handler h) {
-    return flush_handler_anchor(*this, _segment_manager->add_flush_handler(std::move(h)));
+db::commitlog::commit_externally_handler_anchor db::commitlog::add_commit_externally_handler(commit_externally_handler h) {
+    return commit_externally_handler_anchor(*this, _segment_manager->add_commit_externally_handler(std::move(h)));
 }
 
-void db::commitlog::remove_flush_handler(flush_handler_id id) {
-    _segment_manager->remove_flush_handler(id);
+void db::commitlog::remove_commit_externally_handler(commit_externally_handler_id id) {
+    _segment_manager->remove_commit_externally_handler(id);
 }
 
 void db::commitlog::discard_completed_segments(const cf_id_type& id, const rp_set& used) {
@@ -4085,8 +4086,8 @@ db::replay_position db::commitlog::current_position() const {
     return _segment_manager->current_position();
 }
 
-db::replay_position db::commitlog::flush_position() const {
-    return _segment_manager->flush_position();
+db::replay_position db::commitlog::commit_externally_position() const {
+    return _segment_manager->commit_externally_position();
 }
 
 size_t db::commitlog::sector_overhead(segment_id_type id, size_t size) const {

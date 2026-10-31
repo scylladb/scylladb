@@ -343,8 +343,8 @@ SEASTAR_TEST_CASE(test_commitlog_delete_when_over_disk_limit) {
             auto sem = make_lw_shared<semaphore>(0);
             auto segments = make_lw_shared<std::set<sstring>>();
 
-            // add a flush handler that simply says we're done with the range.
-            auto r = log.add_flush_handler([&log, sem, segments](cf_id_type id, replay_position pos) {
+            // add a commit-externally handler that simply says we're done with the range.
+            auto r = log.add_commit_externally_handler([&log, sem, segments](cf_id_type id, replay_position pos) {
                 auto active_segments = log.get_active_segment_names();
                 for (auto&& s : active_segments) {
                     segments->insert(s);
@@ -1439,8 +1439,8 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_in_recycle) {
 
     uint64_t num_active_allocations = 0, num_blocked_on_new_segment = 0;
 
-    // add a flush handler that delays releasing things until disk threshold is reached.
-    auto r = log.add_flush_handler([&](cf_id_type, replay_position pos) {
+    // add a commit-externally handler that delays releasing things until disk threshold is reached.
+    auto r = log.add_commit_externally_handler([&](cf_id_type, replay_position pos) {
         auto old = std::exchange(rps, rp_set{});
         queue.emplace_back(std::move(old));
         if (log.disk_footprint() >= log.disk_limit()) {
@@ -1501,8 +1501,8 @@ SEASTAR_TEST_CASE(test_commitlog_shutdown_during_wait) {
     auto uuid = make_table_id();
     auto size = log.max_record_size() / 2;
 
-    // add a flush handler that does not.
-    auto r = log.add_flush_handler([&](cf_id_type, replay_position pos) {
+    // add a commit-externally handler that does not.
+    auto r = log.add_commit_externally_handler([&](cf_id_type, replay_position pos) {
         auto old = std::exchange(rps, rp_set{});
         queue.emplace_back(std::move(old));
     });
@@ -1568,7 +1568,7 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_with_flush_threshold) {
 
     bool done = false;
 
-    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+    auto r = log.add_commit_externally_handler([&](cf_id_type id, replay_position pos) {
         log.discard_completed_segments(id, rps);
         done = true;
     });
@@ -1661,7 +1661,7 @@ static future<> do_test_exception_in_allocate_ex(bool do_file_delete) {
     auto uuid = make_table_id();
     auto size = log.max_record_size();
 
-    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+    auto r = log.add_commit_externally_handler([&](cf_id_type id, replay_position pos) {
         log.discard_completed_segments(id, rps);
         mx.fail = true;
     });
@@ -1882,7 +1882,7 @@ SEASTAR_TEST_CASE(test_wait_for_delete) {
     auto log = co_await commitlog::create_commitlog(cfg);
     ex.log = &log;
 
-    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+    auto r = log.add_commit_externally_handler([&](cf_id_type id, replay_position pos) {
         log.discard_completed_segments(id);
     });
 
@@ -1936,7 +1936,7 @@ SEASTAR_TEST_CASE(test_commitlog_max_data_lifetime) {
 
     condition_variable cond;
 
-    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+    auto r = log.add_commit_externally_handler([&](cf_id_type id, replay_position pos) {
         log.discard_completed_segments(id, rps);
         ids.insert(id);
         cond.signal();
@@ -1990,7 +1990,7 @@ SEASTAR_TEST_CASE(test_commitlog_update_max_data_lifetime) {
 
     condition_variable cond;
 
-    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+    auto r = log.add_commit_externally_handler([&](cf_id_type id, replay_position pos) {
         log.discard_completed_segments(id, rps);
         ids.insert(id);
         cond.signal();

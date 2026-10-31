@@ -149,7 +149,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         // Of the table of this tablet; expires when the table is dropped.
         seastar::weak_ptr<table_metrics> metrics;
         // Owned by the raft::server. Cleared before that server is destroyed,
-        // so the commitlog's flush handler never sees a dangling pointer.
+        // so the commitlog's commit-externally handler never sees a dangling pointer.
         raft_groups_storage* storage = nullptr;
 
         shared_future<> server_control_op = make_ready_future<>();
@@ -186,9 +186,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     tablet_group_leader_cache _leader_cache;
 
-    // Keeps the flush handler registered. The handler forwards each round's
+    // Keeps the commit-externally handler registered. The handler forwards each round's
     // position to every group; see raft_commitlog::closed_up_to().
-    std::optional<db::commitlog::flush_handler_anchor> _flush_handler;
+    std::optional<db::commitlog::commit_externally_handler_anchor> _commit_externally_handler;
 
     // Ask table `id` to flush, in the background. `pos` only decides whether the
     // table skips the request.
