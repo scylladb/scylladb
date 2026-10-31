@@ -749,25 +749,6 @@ rest_reset_cleanup_needed(http_context& ctx, sharded<service::storage_service>& 
 
 static
 future<json::json_return_type>
-rest_logstor_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
-        bool major = get_query_param<bool>(*req, "major");
-        apilog.info("logstor_compaction: major={}", major);
-        auto& db = ctx.db;
-        co_await replica::database::trigger_logstor_compaction_on_all_shards(db, major);
-        co_return json_void();
-}
-
-static
-future<json::json_return_type>
-rest_logstor_flush(http_context& ctx, std::unique_ptr<http::request> req) {
-        apilog.info("logstor_flush");
-        auto& db = ctx.db;
-        co_await replica::database::flush_logstor_separator_on_all_shards(db);
-        co_return json_void();
-}
-
-static
-future<json::json_return_type>
 rest_decommission(sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& ssc, std::unique_ptr<http::request> req) {
         apilog.info("decommission");
         return ss.local().decommission(ssc).then([] {
@@ -1304,136 +1285,6 @@ rest_retrain_dict(http_context& ctx, sharded<service::storage_service>& ss, serv
 
 static
 future<json::json_return_type>
-rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto ks = get_query_param<sstring>(*req, "keyspace");
-        auto cf = get_query_param<sstring>(*req, "cf");
-
-        // The size of this vector is bound by ks::cf. I.e. it is as most Nks + Ncf long
-        // which is not small, but not huge either. 
-        using table_sstables_list = std::vector<ss::table_sstables>;
-
-        return do_with(table_sstables_list{}, [ks, cf, &ctx](table_sstables_list& dst) {
-            return ctx.db.map_reduce([&dst](table_sstables_list&& res) {
-                for (auto&& t : res) {
-                    auto i = std::find_if(dst.begin(), dst.end(), [&t](const ss::table_sstables& t2) {
-                        return t.keyspace() == t2.keyspace() && t.table() == t2.table();
-                    });
-                    if (i == dst.end()) {
-                        dst.emplace_back(std::move(t));
-                        continue;
-                    }
-                    auto& ssd = i->sstables; 
-                    for (auto&& sd : t.sstables._elements) {
-                        auto j = std::find_if(ssd._elements.begin(), ssd._elements.end(), [&sd](const ss::sstable& s) {
-                            return s.generation() == sd.generation();
-                        });
-                        if (j == ssd._elements.end()) {
-                            i->sstables.push(std::move(sd));
-                        }
-                    }
-                }
-            }, [ks, cf](const replica::database& db) {
-                // see above
-                table_sstables_list res;
-
-                auto& ext = db.get_config().extensions();
-
-                db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> t) {
-                    auto& schema = t->schema();
-                    if ((ks.empty() || ks == schema->ks_name()) && (cf.empty() || cf == schema->cf_name())) {
-                        // at most Nsstables long
-                        ss::table_sstables tst;
-                        tst.keyspace = schema->ks_name();
-                        tst.table = schema->cf_name();
-
-                        for (auto sstables = t->get_sstables_including_compacted_undeleted(); auto sstable : *sstables) {
-                            auto ts = db_clock::to_time_t(sstable->data_file_write_time());
-                            ::tm t;
-                            ::gmtime_r(&ts, &t);
-
-                            ss::sstable info;
-
-                            info.timestamp = t;
-                            info.generation = fmt::to_string(sstable->generation());
-                            info.level = sstable->get_sstable_level();
-                            info.size = sstable->bytes_on_disk();
-                            info.data_size = sstable->ondisk_data_size();
-                            info.index_size = sstable->index_size();
-                            info.filter_size = sstable->filter_size();
-                            info.version = sstable->get_version();
-
-                            if (sstable->has_component(sstables::component_type::CompressionInfo)) {
-                                const auto& cp = sstable->get_compression().get_compressor();
-
-                                ss::named_maps nm;
-                                nm.group = "compression_parameters";
-                                for (auto& p : cp.options()) {
-                                    if (compressor::is_hidden_option_name(p.first)) {
-                                        continue;
-                                    }
-                                    ss::mapper e;
-                                    e.key = p.first;
-                                    e.value = p.second;
-                                    nm.attributes.push(std::move(e));
-                                }
-                                if (!cp.options().contains(compression_parameters::SSTABLE_COMPRESSION)) {
-                                    ss::mapper e;
-                                    e.key = compression_parameters::SSTABLE_COMPRESSION;
-                                    e.value = sstring(cp.name());
-                                    nm.attributes.push(std::move(e));
-                                }
-                                info.extended_properties.push(std::move(nm));
-                            }
-
-                            sstables::file_io_extension::attr_value_map map;
-
-                            for (auto* ep : ext.sstable_file_io_extensions()) {
-                                map.merge(ep->get_attributes(*sstable));
-                            }
-
-                            for (auto& p : map) {
-                                struct {
-                                    const sstring& key; 
-                                    ss::sstable& info;
-                                    void operator()(const std::map<sstring, sstring>& map) const {
-                                        ss::named_maps nm;
-                                        nm.group = key;
-                                        for (auto& p : map) {
-                                            ss::mapper e;
-                                            e.key = p.first;
-                                            e.value = p.second;
-                                            nm.attributes.push(std::move(e));
-                                        }
-                                        info.extended_properties.push(std::move(nm));
-                                    }
-                                    void operator()(const sstring& value) const {
-                                        ss::mapper e;
-                                        e.key = key;
-                                        e.value = value;
-                                        info.properties.push(std::move(e));                                        
-                                    }
-                                } v{p.first, info};
-
-                                std::visit(v, p.second);
-                            }
-
-                            tst.sstables.push(std::move(info));
-                        }
-                        res.emplace_back(std::move(tst));
-                    }
-                });
-                std::sort(res.begin(), res.end(), [](const ss::table_sstables& t1, const ss::table_sstables& t2) {
-                    return t1.keyspace() < t2.keyspace() || (t1.keyspace() == t2.keyspace() && t1.table() < t2.table());
-                });
-                return res;
-            }).then([&dst] {
-                return make_ready_future<json::json_return_type>(stream_object(dst));
-            });
-        });
-}
-
-static
-future<json::json_return_type>
 rest_reload_raft_topology_state(sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
         co_await ss.invoke_on(0, [&group0_client] (service::storage_service& ss) -> future<> {
             return ss.reload_raft_topology_state(group0_client);
@@ -1704,46 +1555,6 @@ rest_get_schema_versions(sharded<service::storage_service>& ss, std::unique_ptr<
         });
 }
 
-static
-future<json::json_return_type>
-rest_drop_quarantined_sstables(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-    auto accept_risk = get_query_param<bool>(*req, "accept_data_resurrection_risk");
-    if (!accept_risk) {
-        co_await coroutine::return_exception(bad_request_exception(
-            "Dropping quarantined SSTables can resurrect deleted data. "
-            "This can happen regardless of the consistency level and of the \"repair\" tombstone GC mode. "
-            "Its usage is highly discouraged. "
-            "The only supported way to rid a node of corrupt data is to replace it. Anything else risks data resurrection or data loss. "
-            "This operation should only be used with full understanding of the risks when no viable alternatives remain. "
-            "To accept the risk and carry out the operation, provide the \"accept_data_resurrection_risk\" parameter."));
-    }
-    auto keyspace = req->get_query_param("keyspace");
-    try {
-        if (!keyspace.empty()) {
-            keyspace = validate_keyspace(ctx, keyspace);
-            auto table_infos = parse_table_infos(keyspace, ctx, req->get_query_param("tables"));
-
-            co_await ctx.db.invoke_on_all([&table_infos](replica::database& db) -> future<> {
-                return parallel_for_each(table_infos, [&db](const auto& table) -> future<> {
-                    const auto& [table_name, table_id] = table;
-                    return db.find_column_family(table_id).drop_quarantined_sstables();
-                });
-            });
-        } else {
-            co_await ctx.db.invoke_on_all([](replica::database& db) -> future<> {
-                return db.get_tables_metadata().parallel_for_each_table([](table_id, lw_shared_ptr<replica::table> t) -> future<> {
-                    return t->drop_quarantined_sstables();
-                });
-            });
-        }
-    } catch (...) {
-        apilog.error("drop_quarantined_sstables: failed with exception: {:t}", std::current_exception());
-        throw;
-    }
-
-    co_return json_void();
-}
-
 // Disambiguate between a function that returns a future and a function that returns a plain value, also
 // add std::ref() as a courtesy. Also handles ks_cf_func signatures.
 template <typename FuncType, typename... BindArgs>
@@ -1795,8 +1606,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::cleanup_all.set(r, gated(ss, rest_bind(rest_cleanup_all, ctx, ss)));
     ss::reset_cleanup_needed.set(r, gated(ss, rest_bind(rest_reset_cleanup_needed, ctx, ss)));
     ss::decommission.set(r, gated(ss, rest_bind(rest_decommission, ss, ssc)));
-    ss::logstor_compaction.set(r, gated(ss, rest_bind(rest_logstor_compaction, ctx)));
-    ss::logstor_flush.set(r, gated(ss, rest_bind(rest_logstor_flush, ctx)));
     ss::move.set(r, gated(ss, rest_bind(rest_move, ss)));
     ss::remove_node.set(r, gated(ss, rest_bind(rest_remove_node, ss)));
     ss::exclude_node.set(r, gated(ss, rest_bind(rest_exclude_node, ss)));
@@ -1842,7 +1651,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_effective_ownership.set(r, gated(ss, rest_bind(rest_get_effective_ownership, ctx, ss)));
     ss::retrain_dict.set(r, gated(ss, rest_bind(rest_retrain_dict, ctx, ss, group0_client)));
     ss::estimate_compression_ratios.set(r, gated(ss, rest_bind(rest_estimate_compression_ratios, ctx, ss)));
-    ss::sstable_info.set(r, gated(ss, rest_bind(rest_sstable_info, ctx)));
     ss::reload_raft_topology_state.set(r, gated(ss, rest_bind(rest_reload_raft_topology_state, ss, group0_client)));
     ss::upgrade_to_raft_topology.set(r, gated(ss, rest_bind(rest_upgrade_to_raft_topology, ss)));
     ss::raft_topology_upgrade_status.set(r, gated(ss, rest_bind(rest_raft_topology_upgrade_status, ss)));
@@ -1858,7 +1666,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::finalize_vnode_tablet_migration.set(r, gated(ss, rest_bind(rest_finalize_vnode_tablet_migration, ctx, ss)));
     ss::quiesce_topology.set(r, gated(ss, rest_bind(rest_quiesce_topology, ss)));
     sp::get_schema_versions.set(r, gated(ss, rest_bind(rest_get_schema_versions, ss)));
-    ss::drop_quarantined_sstables.set(r, gated(ss, rest_bind(rest_drop_quarantined_sstables, ctx, ss)));
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {
@@ -1874,8 +1681,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::cdc_streams_check_and_repair.unset(r);
     ss::cleanup_all.unset(r);
     ss::reset_cleanup_needed.unset(r);
-    ss::logstor_compaction.unset(r);
-    ss::logstor_flush.unset(r);
     ss::decommission.unset(r);
     ss::move.unset(r);
     ss::remove_node.unset(r);
@@ -1920,7 +1725,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_total_hints.unset(r);
     ss::get_ownership.unset(r);
     ss::get_effective_ownership.unset(r);
-    ss::sstable_info.unset(r);
     ss::reload_raft_topology_state.unset(r);
     ss::upgrade_to_raft_topology.unset(r);
     ss::raft_topology_upgrade_status.unset(r);
@@ -1936,7 +1740,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::finalize_vnode_tablet_migration.unset(r);
     ss::quiesce_topology.unset(r);
     sp::get_schema_versions.unset(r);
-    ss::drop_quarantined_sstables.unset(r);
 }
 
 void set_load_meter(http_context& ctx, routes& r, service::load_meter& lm) {
