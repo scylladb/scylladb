@@ -436,9 +436,13 @@ async def test_colocated_tables_gc_mode(manager: ScyllaClusterManager):
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
     cql = manager.get_cql()
 
+    # DESC prints the tombstone_gc option of most of the tables checked here,
+    # but not of the paxos table, which doesn't set it and so gets the default
+    # mode, timeout. Look for the option's name, not just the word "mode",
+    # which can also appear in the random keyspace and table names.
     def check_tombstone_gc_mode_timeout(cql, table):
         s = list(cql.execute(f"DESC {table}"))[0].create_statement
-        assert "'mode': 'timeout'" in s or "mode" not in s # default is timeout
+        assert "'mode': 'timeout'" in s or "tombstone_gc" not in s
 
     async with new_test_keyspace(manager, "WITH replication = {'dc1': 3 }") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
