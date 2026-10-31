@@ -24,8 +24,8 @@ namespace aws {
 static logging::logger sts_logger("sts");
 
 sts_assume_role_credentials_provider::sts_assume_role_credentials_provider(const std::string& _host, unsigned _port, bool _is_secured,
-        retry_strategy_factory retry_factory)
-    : sts_host(_host), port(_port), is_secured(_is_secured), _retry_factory(std::move(retry_factory)) {
+        retry_strategy_factory retry_factory, std::string _role_arn)
+    : sts_host(_host), role_arn(std::move(_role_arn)), port(_port), is_secured(_is_secured), _retry_factory(std::move(retry_factory)) {
 }
 
 sts_assume_role_credentials_provider::sts_assume_role_credentials_provider(const std::string& _region, const std::string& _role_arn)
@@ -38,6 +38,10 @@ future<> sts_assume_role_credentials_provider::reload() {
 }
 
 future<> sts_assume_role_credentials_provider::update_credentials() {
+    if (role_arn.empty()) {
+        // unconfigured role: no-op instead of a doomed AssumeRole request
+        co_return;
+    }
     auto req = http::request::make("POST", sts_host, "/");
     // Just set this version
     // https://github.com/aws/aws-sdk-cpp/blob/8d68be52dcad85095753e069a4355e241f1edb1c/generated/src/aws-cpp-sdk-sts/source/model/AssumeRoleRequest.cpp#L143
