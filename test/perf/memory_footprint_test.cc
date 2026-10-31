@@ -7,6 +7,7 @@
  */
 
 #include "utils/assert.hh"
+#include "utils/logalloc.hh"
 
 #include <seastar/util/defer.hh>
 #include <seastar/core/app-template.hh>
@@ -177,6 +178,8 @@ struct sizes {
     size_t frozen;
     size_t canonical;
     size_t query_result;
+    int64_t standalone;
+    size_t standalone_counted;
 };
 
 static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& settings) {
@@ -190,10 +193,22 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
     SCYLLA_ASSERT(mt->occupancy().used_space() == 0);
 
     std::vector<mutation> muts;
+    muts.reserve(settings.partition_count);
+    // Standalone mutations live outside LSA. Measured as non-LSA memory, which LSA's free segments released to
+    // satisfy them do not offset; page-granular and includes freed temporaries, so use many partitions.
+    auto standalone_before = logalloc::shard_tracker().non_lsa_used_space();
     for (size_t i = 0; i < settings.partition_count; ++i) {
         muts.emplace_back(make_mutation(s, settings));
-        mt->apply(muts.back());
-        cache.populate(muts.back());
+    }
+    result.standalone = int64_t(logalloc::shard_tracker().non_lsa_used_space()) - int64_t(standalone_before);
+    // What memory accounting (e.g. the reader concurrency semaphore) charges for the same mutations.
+    result.standalone_counted = 0;
+    for (auto& m : muts) {
+        result.standalone_counted += m.memory_usage(*s);
+    }
+    for (auto& m : muts) {
+        mt->apply(m);
+        cache.populate(m);
     }
 
     mutation& m = muts[0];
@@ -263,6 +278,8 @@ int main(int argc, char** argv) {
             std::cout << " - frozen:       " << sizes.frozen << "\n";
             std::cout << " - canonical:    " << sizes.canonical << "\n";
             std::cout << " - query result: " << sizes.query_result << "\n";
+            std::cout << " - standalone:   " << sizes.standalone << "\n";
+            std::cout << " - standalone counted: " << sizes.standalone_counted << "\n";
 
             std::cout << "\n";
             size_calculator::print_cache_entry_size();
