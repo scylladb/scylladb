@@ -736,3 +736,34 @@ def test_return_consumed_capacity_indexes_with_indexes(dynamodb):
         # either, so no need to update the index, so uses_indexes=False
         response = table.put_item(Item={'p': p, 'c': c, 'animal': 'dog'}, ReturnConsumedCapacity='INDEXES')
         check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=False)
+
+# DynamoDB allows a table's ARN to be used in place of its name in most
+# operations, including the batch operations. These return a ConsumedCapacity
+# entry per table, each with a "TableName", and DynamoDB's documentation of
+# that field says: "If you had specified the Amazon Resource Name (ARN) of a
+# table in the input, you'll see the table ARN in the response.". Each batch
+# below names one table by its ARN and the other by its name, to check that
+# each entry names its table exactly as the request did.
+# Reproduces SCYLLADB-4683.
+def test_return_consumed_capacity_batch_get_items_table_name_arn(test_table_s, test_table):
+    client = test_table_s.meta.client
+    arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    p = random_string()
+    test_table_s.put_item(Item={'p': p})
+    p2 = random_string()
+    c2 = random_string()
+    test_table.put_item(Item={'p': p2, 'c': c2})
+    response = client.batch_get_item(RequestItems = {
+            arn: {'Keys': [{'p': p}]},
+            test_table.name: {'Keys': [{'p': p2, 'c': c2}]}},
+        ReturnConsumedCapacity='TOTAL')
+    assert sorted(cc['TableName'] for cc in response['ConsumedCapacity']) == sorted([arn, test_table.name])
+
+def test_return_consumed_capacity_batch_write_item_table_name_arn(test_table_s, test_table):
+    client = test_table_s.meta.client
+    arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    response = client.batch_write_item(RequestItems = {
+            arn: [{'PutRequest': {'Item': {'p': random_string()}}}],
+            test_table.name: [{'PutRequest': {'Item': {'p': random_string(), 'c': random_string()}}}]},
+        ReturnConsumedCapacity='TOTAL')
+    assert sorted(cc['TableName'] for cc in response['ConsumedCapacity']) == sorted([arn, test_table.name])

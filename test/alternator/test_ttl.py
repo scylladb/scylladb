@@ -128,6 +128,28 @@ def test_ttl_enable(dynamodb):
             client.update_time_to_live(TableName=table.name,
                 TimeToLiveSpecification=new_ttl_spec)
 
+# DynamoDB's "TableName" documentation specifies that besides the obvious
+# possibility of giving the table's name, "You can also provide the Amazon
+# Resource Name (ARN) of the table in this parameter.". Here we check this for
+# UpdateTimeToLive and DescribeTimeToLive.
+# Reproduces SCYLLADB-4683.
+def test_ttl_table_name_arn(dynamodb):
+    with new_test_table(dynamodb,
+        Tags=TAGS,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+        client = table.meta.client
+        arn = client.describe_table(TableName=table.name)['Table']['TableArn']
+        ttl_spec = {'AttributeName': 'expiration', 'Enabled': True}
+        response = client.update_time_to_live(TableName=arn,
+            TimeToLiveSpecification=ttl_spec)
+        assert response['TimeToLiveSpecification'] == ttl_spec
+        # The ARN and the name refer to one and the same table, so the setting
+        # just made through the ARN can be seen through both:
+        expected = {'TimeToLiveStatus': 'ENABLED', 'AttributeName': 'expiration'}
+        assert client.describe_time_to_live(TableName=arn)['TimeToLiveDescription'] == expected
+        assert client.describe_time_to_live(TableName=table.name)['TimeToLiveDescription'] == expected
+
 # Test various *wrong* ways of disabling TTL. Although we test here various
 # error cases of how to disable TTL incorrectly, we don't actually check in
 # this test case the successful disabling case, because DynamoDB refuses to
