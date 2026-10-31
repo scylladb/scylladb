@@ -795,9 +795,12 @@ async def test_hint_to_pending(manager: ScyllaClusterManager):
     await cql.run_async("CREATE TABLE ks.tbl (pk int primary key, v int)")
     replica = (await get_tablet_replicas(manager, servers[0], "ks", "tbl", 0))[0]
     host_ids = await gather_safely(*[manager.get_host_id(server.server_id) for server in servers])
+    # We'll use server 0 as the source of the hint, so the tablet replica needs to be on server 1.
+    # The servers are configured identically, so it's enough to swap their roles.
     if replica[0] != host_ids[1]:
-        # We'll use server 0 as the source of the hint, so the tablet replica needs to be on server 1
-        await manager.api.move_tablet(servers[0].ip_addr, "ks", "tbl", replica[0], replica[1], host_ids[1], 0, 0)
+        servers.reverse()
+        host_ids.reverse()
+        cql = await manager.get_cql_exclusive(servers[0])
 
     await pause_servers(manager, [servers[1]], [servers[0]])
 
@@ -809,7 +812,7 @@ async def test_hint_to_pending(manager: ScyllaClusterManager):
     sync_point = await create_sync_point(manager.api.client, servers[0].ip_addr)
 
     await manager.api.enable_injection(servers[0].ip_addr, "pause_after_streaming_tablet", False)
-    tablet_migration = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, "ks", "tbl", host_ids[1], 0, host_ids[0], 0, 0))
+    tablet_migration = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, "ks", "tbl", host_ids[1], replica[1], host_ids[0], 0, 0))
 
     async def migration_reached_streaming():
         stages = await cql.run_async("SELECT stage FROM system.tablets WHERE keyspace_name='ks' ALLOW FILTERING")
