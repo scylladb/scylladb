@@ -32,18 +32,49 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/fstream.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/all.hh>
 #include <vector>
 #include <cfloat>
 #include <filesystem>
+#include <array>
 #include <fmt/ranges.h>
 #include "replica/exceptions.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "utils/labels.hh"
 
 namespace streaming {
 
 static logging::logger blogger("stream_blob");
+
+namespace {
+
+// Bytes sent and received by tablet file streaming on this shard, indexed by stream_reason.
+// A reason beyond the known range (from a newer peer) is not counted and reads as 0.
+class tablet_streaming_stats {
+    static constexpr size_t nr_reasons = size_t(stream_reason::tablet_rebuild) + 1;
+    std::array<uint64_t, nr_reasons> _outgoing_bytes{};
+    std::array<uint64_t, nr_reasons> _incoming_bytes{};
+
+    static void add(std::array<uint64_t, nr_reasons>& bytes, stream_reason reason, size_t n) {
+        if (size_t(reason) < nr_reasons) {
+            bytes[size_t(reason)] += n;
+        }
+    }
+    static uint64_t get(const std::array<uint64_t, nr_reasons>& bytes, stream_reason reason) {
+        return size_t(reason) < nr_reasons ? bytes[size_t(reason)] : 0;
+    }
+public:
+    void add_outgoing(stream_reason reason, size_t n) { add(_outgoing_bytes, reason, n); }
+    void add_incoming(stream_reason reason, size_t n) { add(_incoming_bytes, reason, n); }
+    uint64_t outgoing(stream_reason reason) const { return get(_outgoing_bytes, reason); }
+    uint64_t incoming(stream_reason reason) const { return get(_incoming_bytes, reason); }
+};
+
+thread_local tablet_streaming_stats tablet_streaming_bytes;
+
+}
 
 constexpr size_t file_stream_buffer_size = 128 * 1024;
 constexpr size_t file_stream_write_behind = 10;
@@ -329,6 +360,7 @@ future<> stream_blob_handler(replica::database& db,
                 std::optional<streaming::stream_blob_data> data = std::move(cmd_data.data);
                 if (data) {
                     total_size += data->size();
+                    tablet_streaming_bytes.add_incoming(meta.reason, data->size());
                     blogger.trace("fstream[{}] Follower received data from peer={} data={}", meta.ops_id, from, data->size());
                     status->check_valid_stream();
                     if (!data->empty()) {
@@ -553,7 +585,7 @@ namespace streaming {
 // Returns number of bytes sent over network
 future<size_t>
 tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sources, std::vector<node_and_shard> targets,
-        table_id table, file_stream_id ops_id, service::frozen_topology_guard topo_guard, bool inject_errors) {
+    table_id table, file_stream_id ops_id, service::frozen_topology_guard topo_guard, stream_reason reason, bool inject_errors) {
     size_t ops_total_size = 0;
     if (targets.empty()) {
         co_return ops_total_size;
@@ -577,6 +609,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
     streaming::stream_blob_meta meta;
     meta.ops_id = ops_id;
     meta.table = table;
+    meta.reason = reason;
     meta.topo_guard = topo_guard;
     std::exception_ptr error;
     std::exception_ptr sender_error;
@@ -642,6 +675,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
                                 ops_id, filename, s.node, data_size);
                             may_inject_error(meta, inject_errors, "tx_data");
                             co_await s.sink(cmd_data);
+                            tablet_streaming_bytes.add_outgoing(meta.reason, data_size);
                         });
                     }
                 } catch (...) {
@@ -913,7 +947,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     }
     auto ops_start_time = std::chrono::steady_clock::now();
     auto files_nr = files.size();
-    size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), req.targets, req.table, req.ops_id, req.topo_guard);
+    size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), req.targets, req.table, req.ops_id, req.topo_guard, req.reason);
     resp.stream_bytes = stream_bytes;
     auto duration = std::chrono::steady_clock::now() - ops_start_time;
     blogger.info("stream_{}[{}] Finished sending files_nr={} range={} stream_bytes={} stream_time={} stream_bw={}",
@@ -985,7 +1019,8 @@ future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id,
         seastar::shard_id dst_shard_id,
         netw::messaging_service& ms,
         abort_source& as,
-        service::frozen_topology_guard topo_guard) {
+        service::frozen_topology_guard topo_guard,
+        stream_reason reason) {
     stream_files_response resp;
     std::exception_ptr error;
     try {
@@ -1002,6 +1037,7 @@ future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id,
             req.table = table.schema()->id();
             req.range = range;
             req.targets = std::vector<node_and_shard>{node_and_shard{dst_host, dst_shard_id}};
+            req.reason = reason;
             req.topo_guard = topo_guard;
             resp = co_await ser::streaming_rpc_verbs::send_tablet_stream_files(&ms, src_host, as, req);
         } catch (...) {
@@ -1013,6 +1049,37 @@ future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id,
         std::rethrow_exception(error);
     }
     co_return resp;
+}
+
+uint64_t get_tablet_streaming_total_outgoing_bytes(stream_reason reason) {
+    return tablet_streaming_bytes.outgoing(reason);
+}
+
+uint64_t get_tablet_streaming_total_incoming_bytes(stream_reason reason) {
+    return tablet_streaming_bytes.incoming(reason);
+}
+
+void register_tablet_streaming_metrics(seastar::metrics::metric_groups& metrics) {
+    namespace sm = seastar::metrics;
+    auto kind = sm::label("kind");
+    auto outgoing = [] (stream_reason reason) { return [reason] { return tablet_streaming_bytes.outgoing(reason); }; };
+    auto incoming = [] (stream_reason reason) { return [reason] { return tablet_streaming_bytes.incoming(reason); }; };
+    // Tablet file streaming only streams for these reasons. Unspecified counts
+    // senders that do not set the reason, e.g. peers that predate the field.
+    metrics.add_group("tablet_streaming", {
+        sm::make_counter("total_outgoing_bytes", outgoing(stream_reason::tablet_migration),
+                sm::description("Total number of bytes sent by tablet file streaming on this shard."), {kind("tablet_migration"), basic_level}),
+        sm::make_counter("total_outgoing_bytes", outgoing(stream_reason::rebuild),
+                sm::description("Total number of bytes sent by tablet file streaming on this shard."), {kind("rebuild"), basic_level}),
+        sm::make_counter("total_outgoing_bytes", outgoing(stream_reason::unspecified),
+                sm::description("Total number of bytes sent by tablet file streaming on this shard."), {kind("unspecified"), basic_level}),
+        sm::make_counter("total_incoming_bytes", incoming(stream_reason::tablet_migration),
+                sm::description("Total number of bytes received by tablet file streaming on this shard."), {kind("tablet_migration"), basic_level}),
+        sm::make_counter("total_incoming_bytes", incoming(stream_reason::rebuild),
+                sm::description("Total number of bytes received by tablet file streaming on this shard."), {kind("rebuild"), basic_level}),
+        sm::make_counter("total_incoming_bytes", incoming(stream_reason::unspecified),
+                sm::description("Total number of bytes received by tablet file streaming on this shard."), {kind("unspecified"), basic_level}),
+    });
 }
 
 }

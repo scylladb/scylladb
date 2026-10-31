@@ -152,7 +152,7 @@ do_test_file_stream(replica::database& db, netw::messaging_service& ms, std::vec
                     co_return make_file_input_stream(std::move(file), foptions);
                 };
             }
-            size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), targets, table, ops_id, service::null_topology_guard, inject_error);
+            size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), targets, table, ops_id, service::null_topology_guard, stream_reason::tablet_migration, inject_error);
             co_await mark_tablet_stream_done(ops_id);
             testlog.info("do_test_file_stream[{}] status=ok files={} stream_bytes={}", ops_id, filelist.size(), stream_bytes);
             ret = true;
@@ -289,7 +289,7 @@ do_test_sstable_stream(cql_test_env& env, compress_sstable compress, std::functi
                 };
             }
 
-            size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), targets, table_id, ops_id, service::null_topology_guard, false);
+            size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), targets, table_id, ops_id, service::null_topology_guard, stream_reason::tablet_migration, false);
             co_await mark_tablet_stream_done(ops_id);
             testlog.info("do_test_sstable_stream[{}] status=ok stream_bytes={}", ops_id, stream_bytes);
         } catch (seastar::rpc::stream_closed&) {
@@ -424,7 +424,13 @@ void do_test_unsupported_file_ops() {
 
 SEASTAR_THREAD_TEST_CASE(test_file_stream) {
     bool inject_error = false;
+    auto outgoing_before = get_tablet_streaming_total_outgoing_bytes(stream_reason::tablet_migration);
+    auto incoming_before = get_tablet_streaming_total_incoming_bytes(stream_reason::tablet_migration);
     do_test_file_stream(inject_error);
+    auto outgoing = get_tablet_streaming_total_outgoing_bytes(stream_reason::tablet_migration) - outgoing_before;
+    auto incoming = get_tablet_streaming_total_incoming_bytes(stream_reason::tablet_migration) - incoming_before;
+    BOOST_REQUIRE_GT(outgoing, 0);
+    BOOST_REQUIRE_EQUAL(outgoing, incoming);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_file_stream_inject_error) {
@@ -987,7 +993,7 @@ do_test_sstable_stream_receiver_corruption(cql_test_env& env, std::optional<comp
 
             files.back().fops = file_ops::load_sstables;
 
-            size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), targets, table_id, ops_id, service::null_topology_guard, false);
+            size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), targets, table_id, ops_id, service::null_topology_guard, stream_reason::tablet_migration, false);
             co_await mark_tablet_stream_done(ops_id);
             testlog.info("do_test_sstable_stream_receiver_corruption[{}] status=ok stream_bytes={}", ops_id, stream_bytes);
         } catch (seastar::rpc::stream_closed&) {
