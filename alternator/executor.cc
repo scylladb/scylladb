@@ -667,10 +667,12 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
                 const std::map<sstring, sstring>* view_tags_ptr = db::get_tags_of_table(vptr);
                 // Add index's KeySchema and collect types for AttributeDefinitions:
                 describe_key_schema(view_entry, *vptr, &key_attribute_types, view_tags_ptr);
-                // Add projection type
+                // Add projection type: KEYS_ONLY if the view has no ":attrs" column,
+                // ALL otherwise.
                 rjson::value projection = rjson::empty_object();
-                rjson::add(projection, "ProjectionType", "ALL");
-                // FIXME: we have to get ProjectionType from the schema when it is added
+                const bool is_keys_only = projection_is_keys_only(*vptr);
+                rjson::add(projection, "ProjectionType",
+                    rjson::from_string(is_keys_only ? std::string_view("KEYS_ONLY") : std::string_view("ALL")));
                 rjson::add(view_entry, "Projection", std::move(projection));
                 // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
                 bool is_lsi = (delim_it > 1 && cf_name[delim_it-1] == '!');
@@ -1087,6 +1089,44 @@ static std::pair<std::vector<std::string>, std::vector<std::string>> parse_gsi_c
         throw api_error::validation("KeySchema must have at least one HASH key");
     }
     return {std::move(hash_keys), std::move(range_keys)};
+}
+
+// Parse the "Projection" parameter of a GSI or LSI definition.
+// Returns true if ProjectionType=KEYS_ONLY, false if ProjectionType=ALL
+// (the default when Projection is absent) or ProjectionType=INCLUDE.
+// FIXME: ProjectionType=INCLUDE is not yet supported (it needs the view to
+// copy only some elements of the ":attrs" map), so we create the index as
+// ProjectionType=ALL, which projects a superset of the requested attributes.
+// We don't reject INCLUDE, because that would break applications and
+// migration tools which create such indexes.
+static bool parse_projection_type(const rjson::value& index_def, std::string_view context) {
+    const rjson::value* projection = rjson::find(index_def, "Projection");
+    if (!projection) {
+        return false; // default is ALL
+    }
+    if (!projection->IsObject()) {
+        throw api_error::validation(fmt::format("{} Projection must be an object", context));
+    }
+    const rjson::value* projection_type = rjson::find(*projection, "ProjectionType");
+    if (!projection_type || !projection_type->IsString()) {
+        throw api_error::validation(fmt::format("{} Projection must have a ProjectionType string", context));
+    }
+    std::string_view type = rjson::to_string_view(*projection_type);
+    if (type == "KEYS_ONLY") {
+        if (rjson::find(*projection, "NonKeyAttributes")) {
+            throw api_error::validation(fmt::format("{} NonKeyAttributes is not allowed when ProjectionType is not INCLUDE", context));
+        }
+        return true;
+    } else if (type == "ALL") {
+        if (rjson::find(*projection, "NonKeyAttributes")) {
+            throw api_error::validation(fmt::format("{} NonKeyAttributes is not allowed when ProjectionType is not INCLUDE", context));
+        }
+        return false;
+    } else if (type == "INCLUDE") {
+        return false;
+    } else {
+        throw api_error::validation(fmt::format("{} Unknown ProjectionType '{}'. Allowed: KEYS_ONLY, ALL, INCLUDE", context, type));
+    }
 }
 
 arn_parts parse_arn(std::string_view arn, std::string_view arn_field_name, std::string_view type_name, std::string_view expected_postfix) {
@@ -2208,8 +2248,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             if (range_key.empty()) {
                 co_return api_error::validation("LocalSecondaryIndex requires that the base table have a range key");
             }
-            // FIXME: read and handle "Projection" parameter. This will
-            // require the MV code to copy just parts of the attrs map.
+            bool keys_only = parse_projection_type(l, "LocalSecondaryIndexes");
             schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(l, "Local Secondary Index");
             if (view_hash_key != hash_key) {
@@ -2231,10 +2270,17 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             if (!range_key.empty() && view_range_key != range_key) {
                 add_column(view_builder, range_key, *attribute_definitions, column_kind::clustering_key);
             }
-            view_builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
-            // Note above we don't need to add virtual columns, as all
-            // base columns were copied to view. TODO: reconsider the need
-            // for virtual columns when we support Projection.
+            // NOTE: If keys_only, the ":attrs" column from the base is not
+            // copied into the view. In CQL, this would mean that we may need
+            // to add a "virtual column" in this case. But in Alternator, we
+            // don't - in Alternator every live item has a live CQL row
+            // marker (every write that creates an item writes one), and you
+            // can't delete an item by deleting its last attribute (see
+            // test_item.py::test_empty_update_delete), so virtual columns
+            // are not needed.
+            if (!keys_only) {
+                view_builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
+            }
             // LSIs have no tags, but Scylla's "synchronous_updates" feature
             // (which an LSIs need), is actually implemented as a tag so we
             // need to add it here:
@@ -2262,8 +2308,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             }
             std::string vname(view_name(table_name, index_name));
             elogger.trace("Adding GSI {}", index_name);
-            // FIXME: read and handle "Projection" parameter. This will
-            // require the MV code to copy just parts of the attrs map.
+            bool keys_only = parse_projection_type(g, "GlobalSecondaryIndexes");
             schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
             const auto [view_hash_keys, view_range_keys] = parse_gsi_composite_key_schema(g, "GlobalSecondaryIndexes",
                     composite_gsi_keys_supported);
@@ -2298,6 +2343,10 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 spurious_base_key_added_as_range_key = true;
             }
 
+            // Unless KEYS_ONLY, the view needs to have the ":attrs" column.
+            if (!keys_only) {
+                view_builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
+            }
             auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
             validate_and_store_gsi_provisioned_throughput(tags, g, index_name, bm.provisioned, gsi_creator::create_table);
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
@@ -2460,15 +2509,25 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
     schema_ptr schema = builder.build();
     for (auto& view_builder : view_builders) {
-        // Note below we don't need to add virtual columns, as all
-        // base columns were copied to view. TODO: reconsider the need
-        // for virtual columns when we support Projection.
-        for (const column_definition& regular_cdef : schema->regular_columns()) {
-            if (!view_builder.has_column(*cql3::to_identifier(regular_cdef))) {
-                view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
+        const bool keys_only = !view_builder.has_column(
+                cql3::column_identifier(sstring(executor::ATTRS_COLUMN_NAME), true));
+        // NOTE: as we explained in an earlier comment, when the projection is
+        // KEYS_ONLY and we don't copy some columns to the view (notably ":attrs"),
+        // we still don't need to add virtual columns to the view.
+        if (!keys_only) {
+            // For ALL projection, copy all regular columns from the base table to the view.
+            for (const column_definition& regular_cdef : schema->regular_columns()) {
+                if (!view_builder.has_column(*cql3::to_identifier(regular_cdef))) {
+                    view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
+                }
             }
         }
-        const bool include_all_columns = true;
+        // The "include_all_columns" flag has no practical effect in
+        // Alternator and we could have really set it to anything. But it
+        // affects CQL's DESCRIBE MATERIALIZED VIEW (true produces "SELECT *",
+        // false produces a SELECT listing the view's explicit columns),
+        // as well as ALTER TABLE ... ADD COLUMN.
+        const bool include_all_columns = !keys_only;
         view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
     }
 
@@ -3161,8 +3220,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         }
 
                         elogger.trace("Adding GSI {}", index_name);
-                        // FIXME: read and handle "Projection" parameter. This will
-                        // require the MV code to copy just parts of the attrs map.
+                        bool keys_only = parse_projection_type(it->value, "GlobalSecondaryIndexUpdates");
                         schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
                         const bool composite_gsi_keys_supported = p.local().features().alternator_composite_gsi_keys;
                         const auto [view_hash_keys, view_range_keys] = parse_gsi_composite_key_schema(it->value, "GlobalSecondaryIndexUpdates",
@@ -3212,15 +3270,24 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
                         validate_and_store_gsi_provisioned_throughput(tags, it->value, index_name, table_provisioned, gsi_creator::update_table);
                         view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
-                        // Note below we don't need to add virtual columns, as all
-                        // base columns were copied to view. TODO: reconsider the need
-                        // for virtual columns when we support Projection.
-                        for (const column_definition& regular_cdef : schema->regular_columns()) {
-                            if (!view_builder.has_column(*cql3::to_identifier(regular_cdef))) {
-                                view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
+                        // NOTE: as we explained in an earlier comment, when
+                        // keys_only and we don't copy some columns to the
+                        // view (notably ":attrs"), we still don't need to add
+                        // virtual columns to the view.
+                        if (!keys_only) {
+                            for (const column_definition& regular_cdef : schema->regular_columns()) {
+                                if (!view_builder.has_column(*cql3::to_identifier(regular_cdef))) {
+                                    view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
+                                }
                             }
                         }
-                        const bool include_all_columns = true;
+                        // The "include_all_columns" flag has no practical
+                        // effect in Alternator and we could have really set
+                        // it to anything. But it affects CQL's DESCRIBE
+                        // MATERIALIZED VIEW (true produces "SELECT *", false
+                        // produces a SELECT listing the view's explicit
+                        // columns), as well as ALTER TABLE ... ADD COLUMN.
+                        const bool include_all_columns = !keys_only;
                         view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
                         new_views.emplace_back(view_builder.build());
                     } else if (op == "Delete") {
