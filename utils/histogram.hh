@@ -9,6 +9,8 @@
 #pragma once
 
 #include <boost/circular_buffer.hpp>
+#include <array>
+#include <cstdint>
 #include "latency.hh"
 #include <cmath>
 #include <seastar/core/timer.hh>
@@ -330,15 +332,25 @@ public:
 class summary_calculator {
     std::vector<double> _quantiles = { 0.5, 0.95, 0.99};
     std::vector<double> _summary = { 0, 0, 0};
-    time_estimated_histogram _previous_histogram;
+    // Snapshot of _current_histogram at the last update(), used to compute the
+    // per-interval per-bucket delta. A full time_estimated_histogram is overkill:
+    // per-bucket deltas are computed mod 2^32 (exact, since no single bucket can
+    // gain 2^32 samples within one tick_interval). _previous_count stays 64-bit
+    // (the cumulative, never-reset total of the monotonic _current_histogram).
+    std::array<uint32_t, time_estimated_histogram::NUM_BUCKETS> _previous_buckets = {};
+    uint64_t _previous_count = 0;
     time_estimated_histogram _current_histogram;
+    static_assert(sizeof(std::array<uint32_t, time_estimated_histogram::NUM_BUCKETS>) + sizeof(uint64_t)
+            < sizeof(time_estimated_histogram),
+            "previous-snapshot footprint must be smaller than a full time_estimated_histogram");
 public:
     /*!
      * \brief update the summary and histograms
      *
      * The update method is called every time tick.
-     * When done, _previous_histogram would equal _current_histogram
-     * and the _summary would contain the current _summary calculation
+     * When done, the previous snapshot (_previous_buckets/_previous_count) would
+     * equal _current_histogram and the _summary would contain the current
+     * _summary calculation
      *
      * The calculation is done in two stages. first, we determine what is
      * the cutoff for each quantile, for example, assume that there are new 1000
@@ -346,7 +358,7 @@ public:
      * The cutoffs will be 500, 950, and 990. We reuse the _summary array
      * to hold these values.
      *
-     * Second, while coping the _current_histogram to the _previous_histogram,
+     * Second, while copying the _current_histogram to the previous snapshot,
      * we collect the diffs. Each time we cross a cutoff value, we update the
      * _summary with the bucket limit (i.e., the latency value).
      *
@@ -356,7 +368,8 @@ public:
      *
      */
     void update() {
-        auto new_entries = _current_histogram.count() - _previous_histogram.count();
+        const uint64_t current_count = _current_histogram.count();
+        auto new_entries = current_count - _previous_count;
         if (new_entries == 0) {
             clear();
             return;
@@ -368,14 +381,17 @@ public:
         size_t total_diff = 0;
 
         for (size_t i = 0; i < _current_histogram.size(); i++) {
-            total_diff += _current_histogram[i] - _previous_histogram[i];
+            const uint32_t current_bucket = static_cast<uint32_t>(_current_histogram[i]);
+            // Per-interval per-bucket delta, computed modulo 2^32 (see _previous_buckets).
+            total_diff += static_cast<uint32_t>(current_bucket - _previous_buckets[i]);
             while (pos < _summary.size() && total_diff >= _summary[pos]) {
                 _summary[pos] = (i + 1 < _current_histogram.size()) ? _current_histogram.get_bucket_upper_limit(i):
                         _current_histogram.get_bucket_lower_limit(i);
                 pos++;
             }
-            _previous_histogram[i] = _current_histogram[i];
+            _previous_buckets[i] = current_bucket;
         }
+        _previous_count = current_count;
     }
 
     const std::vector<double>& quantiles() const noexcept {
