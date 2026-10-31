@@ -156,4 +156,56 @@ SEASTAR_TEST_CASE(test_streaming_reader_checks_integrity_of_single_partition) {
     });
 }
 
+// Verifies that the streaming reader checks the integrity of the sstables
+// it reads also when it reads a single partition of a table with
+// TimeWindowCompactionStrategy - which the table reads with the optimized
+// single-partition reader of the time-series sstable set.
+// The test corrupts the Data component of an uncompressed sstable, whose
+// checksums are verified only by a reader which checks integrity, and
+// expects the read to fail the checksum check.
+SEASTAR_TEST_CASE(test_streaming_reader_checks_integrity_of_single_partition_twcs) {
+    if (this_smp_shard_count() > 1) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() > 1" << std::endl;
+        return make_ready_future<>();
+    }
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE test_ks "
+                "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                "AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE test_ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck)) "
+                "WITH compaction = {'class': 'TimeWindowCompactionStrategy', 'enable_optimized_twcs_queries': 'true'} "
+                "AND compression = {'sstable_compression': ''}").get();
+        e.execute_cql("INSERT INTO test_ks.t (pk, ck, v) VALUES (1, 1, 1)").get();
+
+        auto& db = e.local_db();
+        auto s = db.find_schema("test_ks", "t");
+        auto& table = db.find_column_family(s->id());
+        table.flush().get();
+        auto sstables = table.get_sstables();
+        BOOST_REQUIRE_EQUAL(sstables->size(), 1);
+        auto sst = *sstables->begin();
+
+        // Overwrite the beginning of the Data component.
+        auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
+        auto len = f.disk_write_dma_alignment();
+        auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), len);
+        std::fill(buf.get_write(), buf.get_write() + len, 0xba);
+        f.dma_write(0, buf.get(), len).get();
+        f.close().get();
+
+        auto dk = dht::decorate_key(*s, partition_key::from_single_value(*s, int32_type->decompose(1)));
+        auto range = dht::partition_range::make_singular(dk);
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        const auto clustering_filter_count = table.cf_stats()->clustering_filter_count;
+        auto reader = table.make_streaming_reader(s, semaphore.make_permit(), range, gc_clock::now());
+        auto close_reader = deferred_close(reader);
+        // Only the optimized single-partition reader uses the clustering filter.
+        BOOST_REQUIRE_EQUAL(table.cf_stats()->clustering_filter_count, clustering_filter_count + 1);
+        BOOST_REQUIRE_EXCEPTION(read_mutation_from_mutation_reader(reader).get(), sstables::malformed_sstable_exception,
+                [] (const sstables::malformed_sstable_exception& e) {
+                    return sstring(e.what()).find("failed checksum") != sstring::npos;
+                });
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
