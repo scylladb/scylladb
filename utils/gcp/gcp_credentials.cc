@@ -23,7 +23,6 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/to_string.hh"
 #include "utils/rest/client.hh"
-#include "utils/assert.hh"
 
 static logger gcp_cred_log("gcp_credentials");
 
@@ -70,12 +69,22 @@ bool utils::gcp::access_token::expired() const {
     return timeout_clock::now() >= this->expiry;
 }
 
+// JSON null means absent, as in google-auth.
+static std::string get_opt_string(const rjson::value& v, std::string_view name) {
+    auto* m = rjson::find(v, name);
+    return m && !m->IsNull() ? rjson::get<std::string>(v, name) : std::string{};
+}
+
 utils::gcp::user_credentials::user_credentials(const rjson::value& v) 
     : client_id(rjson::get<std::string>(v, "client_id"))
     , client_secret(rjson::get<std::string>(v, "client_secret"))
     , refresh_token(rjson::get<std::string>(v, "refresh_token"))
-    , quota_project_id(rjson::get_opt<std::string>(v, "refresh_token").value_or(""))
-{}
+    , quota_project_id(get_opt_string(v, "quota_project_id"))
+{
+    if (refresh_token.empty()) {
+        throw bad_configuration("Invalid authorized_user credentials: empty 'refresh_token'");
+    }
+}
 
 utils::gcp::service_account_credentials::service_account_credentials(const rjson::value& v)
     : client_id(rjson::get<std::string>(v, "client_id"))
@@ -91,7 +100,7 @@ utils::gcp::service_account_credentials::service_account_credentials(const rjson
         return std::string{};
     }())
     , project_id(rjson::get_opt<std::string>(v, "project_id").value_or(""))
-    , quota_project_id(rjson::get_opt<std::string>(v, "refresh_token").value_or(""))
+    , quota_project_id(get_opt_string(v, "quota_project_id"))
 {}
 
 utils::gcp::impersonated_service_account_credentials::impersonated_service_account_credentials(std::string principal, google_credentials&& c, std::string iam_endpoint_override_in)
@@ -115,7 +124,7 @@ utils::gcp::impersonated_service_account_credentials::impersonated_service_accou
         }
         return res;
     }())
-    , quota_project_id(rjson::get_opt<std::string>(v, "quota_project_id").value_or(""))
+    , quota_project_id(get_opt_string(v, "quota_project_id"))
     , target_principal([&] {
         auto url = rjson::get<std::string>(v, "service_account_impersonation_url");
 
@@ -329,7 +338,6 @@ get_access_token(google_credentials& creds, const scopes_type& scope, shared_ptr
             co_return co_await get_access_token(creds, scope, certs);
         },
         [&](const user_credentials& c) -> future<access_token> {
-            SCYLLA_ASSERT(!c.refresh_token.empty());
             auto json = co_await send_request(TOKEN_SERVER_URI, certs, body(key_values({
                 { "client_id", c.client_id },
                 { "client_secret", c.client_secret },

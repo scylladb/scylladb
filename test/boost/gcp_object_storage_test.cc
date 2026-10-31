@@ -262,6 +262,29 @@ static uint64_t gs_metric(std::string_view name) {
     return total;
 }
 
+BOOST_AUTO_TEST_CASE(test_gcp_user_credentials_parsing) {
+    auto user_json = [](std::string_view refresh_token) {
+        return fmt::format(R"({{"type": "authorized_user", "client_id": "id", "client_secret": "secret", "refresh_token": "{}", "quota_project_id": "qp"}})",
+                refresh_token);
+    };
+    auto creds = google_credentials::from_data(user_json("rt"));
+    auto& uc = std::get<user_credentials>(creds.credentials);
+    BOOST_REQUIRE_EQUAL(uc.refresh_token, "rt");
+    BOOST_REQUIRE_EQUAL(uc.quota_project_id, "qp");
+    // Used to pass parsing and abort the node on first token fetch.
+    BOOST_REQUIRE_THROW(google_credentials::from_data(user_json("")), bad_configuration);
+    auto uc_null = google_credentials::from_data(
+            R"({"type": "authorized_user", "client_id": "id", "client_secret": "secret", "refresh_token": "rt", "quota_project_id": null})");
+    BOOST_REQUIRE_EQUAL(std::get<user_credentials>(uc_null.credentials).quota_project_id, "");
+
+    auto sa = google_credentials::from_data(
+            R"({"type": "service_account", "client_id": "id", "client_email": "e", "private_key_id": "k", "private_key": "pk", "quota_project_id": "qp"})");
+    BOOST_REQUIRE_EQUAL(std::get<service_account_credentials>(sa.credentials).quota_project_id, "qp");
+    auto sa_null = google_credentials::from_data(
+            R"({"type": "service_account", "client_id": "id", "client_email": "e", "private_key_id": "k", "private_key": "pk", "quota_project_id": null})");
+    BOOST_REQUIRE_EQUAL(std::get<service_account_credentials>(sa_null.credentials).quota_project_id, "");
+}
+
 BOOST_AUTO_TEST_SUITE(gcs_tests, *seastar::testing::async_fixture<gcs_fixture>())
 
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_small_object, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
