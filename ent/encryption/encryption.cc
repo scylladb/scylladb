@@ -927,6 +927,17 @@ public:
             co_return src;
         }
     }
+
+    future<std::optional<data_source>> wrap_ranged_source(const sstables::sstable& sst, sstables::component_type type,
+            uint64_t offset, uint64_t len, uint64_t size, stored_range_reader read_stored) override {
+        auto [id, esx] = get_encryption_schema_extension(sst, type);
+        if (!esx) {
+            // The component is not encrypted, so it is stored as it is read.
+            co_return co_await read_stored(offset, len);
+        }
+        auto key = co_await esx->key_for_read(std::move(id));
+        co_return co_await make_encrypted_range_source(std::move(key), offset, len, size, std::move(read_stored));
+    }
 };
 
 std::string encryption_provider(const sstables::sstable& sst) {

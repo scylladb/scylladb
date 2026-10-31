@@ -93,6 +93,13 @@ public:
     virtual data_sink make_data_upload_sink(object_name, object_storage_attributes, std::optional<unsigned> max_parts_per_piece, abort_source* = nullptr) = 0;
     virtual data_sink make_upload_sink(object_name, object_storage_attributes, abort_source* = nullptr) = 0;
     virtual data_source make_download_source(object_name, abort_source* = nullptr) = 0;
+    // Reads the byte range [offset, offset + length) of the object, with as
+    // few requests as the backend allows: on S3, a single request, whose
+    // response is streamed as it arrives; on GCS, a request per up to 8 MiB,
+    // after a request for the object's metadata.
+    // (Reading the range through make_readable_file() instead would send a
+    // request for every read of the file, and hold its data in memory whole.)
+    virtual data_source make_ranged_download_source(object_name, uint64_t offset, uint64_t length, abort_source* = nullptr) = 0;
     virtual future<bool> object_exists(object_name name, abort_source* as = nullptr) = 0;
     virtual future<object_storage_attributes> get_object_metadata(object_name name, abort_source* as = nullptr) = 0;
 

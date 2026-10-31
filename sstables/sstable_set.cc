@@ -927,7 +927,8 @@ sstable_set_impl::create_single_key_sstable_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         const sstable_predicate& predicate,
-        sstables::integrity_check integrity) const
+        sstables::integrity_check integrity,
+        sstables::populate_disk_cache populate) const
 {
     const auto& pos = pr.start()->value();
     auto hash = utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(*schema, *pos.key())));
@@ -940,7 +941,7 @@ sstable_set_impl::create_single_key_sstable_reader(
         | std::views::transform([&] (const shared_sstable& sstable) {
             tracing::trace(trace_state, "Reading key {} from sstable {}", pos, seastar::value_of([&sstable] { return sstable->get_filename(); }));
             return sstable->make_reader(schema, permit, pr, slice, trace_state, fwd, mutation_reader::forwarding::yes,
-                default_read_monitor(), integrity, &hash);
+                default_read_monitor(), integrity, populate, &hash);
           })
         | std::ranges::to<std::vector<mutation_reader>>();
 
@@ -972,7 +973,8 @@ time_series_sstable_set::create_single_key_sstable_reader(
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr,
         const sstable_predicate& predicate,
-        sstables::integrity_check integrity) const {
+        sstables::integrity_check integrity,
+        sstables::populate_disk_cache populate) const {
     const auto& pos = pr.start()->value();
     // First check if the optimized algorithm for TWCS single partition queries can be applied.
     // Multiple conditions must be satisfied:
@@ -994,7 +996,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
         // Some of the conditions were not satisfied so we use the standard query path.
         return sstable_set_impl::create_single_key_sstable_reader(
                 cf, std::move(schema), std::move(permit), sstable_histogram,
-                pr, slice, std::move(trace_state), fwd_sm, fwd_mr, predicate, integrity);
+                pr, slice, std::move(trace_state), fwd_sm, fwd_mr, predicate, integrity, populate);
     }
 
     auto hash = utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(*schema, *pos.key())));
@@ -1008,9 +1010,9 @@ time_series_sstable_set::create_single_key_sstable_reader(
     auto& stats = *cf->cf_stats();
     stats.clustering_filter_count++;
 
-    auto create_reader = [schema, permit, &pr, &slice, trace_state, fwd_sm, hash] (sstable& sst) {
+    auto create_reader = [schema, permit, &pr, &slice, trace_state, fwd_sm, hash, populate] (sstable& sst) {
         return sst.make_reader(schema, permit, pr, slice, trace_state, fwd_sm, mutation_reader::forwarding::yes,
-                default_read_monitor(), integrity_check::no, &hash);
+                default_read_monitor(), integrity_check::no, populate, &hash);
     };
 
     auto pk_filter = make_pk_filter(pos, hash, *schema);
@@ -1228,7 +1230,8 @@ compound_sstable_set::create_single_key_sstable_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         const sstable_predicate& predicate,
-        sstables::integrity_check integrity) const {
+        sstables::integrity_check integrity,
+        sstables::populate_disk_cache populate) const {
     auto sets = _sets;
     auto it = std::partition(sets.begin(), sets.end(), [] (const auto& set) { return set->size() > 0; });
     auto non_empty_set_count = std::distance(sets.begin(), it);
@@ -1239,12 +1242,12 @@ compound_sstable_set::create_single_key_sstable_reader(
     // optimize for common case where only 1 set is populated, avoiding the expensive combined reader
     if (non_empty_set_count == 1) {
         const auto& non_empty_set = *std::begin(sets);
-        return non_empty_set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate, integrity);
+        return non_empty_set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate, integrity, populate);
     }
 
     auto readers = std::ranges::subrange(sets.begin(), it)
         | std::views::transform([&] (const lw_shared_ptr<sstable_set>& non_empty_set) {
-            return non_empty_set->create_single_key_sstable_reader(cf, schema, permit, sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate, integrity);
+            return non_empty_set->create_single_key_sstable_reader(cf, schema, permit, sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate, integrity, populate);
           })
         | std::ranges::to<std::vector<mutation_reader>>();
     return make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr);
@@ -1262,10 +1265,11 @@ sstable_set::create_single_key_sstable_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         const sstable_predicate& predicate,
-        sstables::integrity_check integrity) const {
+        sstables::integrity_check integrity,
+        sstables::populate_disk_cache populate) const {
     SCYLLA_ASSERT(pr.is_singular() && pr.start()->value().has_key());
     return _impl->create_single_key_sstable_reader(cf, std::move(schema),
-            std::move(permit), sstable_histogram, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
+            std::move(permit), sstable_histogram, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity, populate);
 }
 
 class auto_closed_sstable_reader final : public mutation_reader::impl {
@@ -1366,15 +1370,16 @@ sstable_set::make_local_shard_sstable_reader(
         read_monitor_generator& monitor_generator,
         const sstable_predicate& predicate,
         combined_reader_statistics* statistics,
-        integrity_check integrity) const
+        integrity_check integrity,
+        populate_disk_cache populate) const
 {
-    auto reader_factory_fn = [s, permit, &slice, trace_state, fwd, fwd_mr, &monitor_generator, &predicate, integrity]
+    auto reader_factory_fn = [s, permit, &slice, trace_state, fwd, fwd_mr, &monitor_generator, &predicate, integrity, populate]
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
         SCYLLA_ASSERT(!sst->is_shared());
         if (!predicate(*sst)) {
             return make_empty_mutation_reader(s, permit);
         }
-        auto reader = sst->make_reader(s, permit, pr, slice, trace_state, fwd, fwd_mr, monitor_generator(sst), integrity);
+        auto reader = sst->make_reader(s, permit, pr, slice, trace_state, fwd, fwd_mr, monitor_generator(sst), integrity, populate);
         // Auto-closed sstable reader is only enabled in the context of fast-forward to partition ranges
         if (!fwd && fwd_mr) {
             return make_auto_closed_sstable_reader(sst, std::move(reader), permit);

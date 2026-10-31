@@ -10,14 +10,17 @@
 #include <fcntl.h>
 #include <fmt/format.h>
 #include <seastar/core/align.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/iostream.hh>
+#include <seastar/util/memory-data-source.hh>
 
 #include "symmetric_key.hh"
 #include "encryption.hh"
 #include "utils/serialization.hh"
 #include "encrypted_file_impl.hh"
+#include "utils/io-wrappers.hh"
 
 namespace encryption {
 
@@ -730,9 +733,12 @@ class encrypted_data_source : public data_source_impl, public block_encryption_b
     size_t _skip = 0;
 
 public:
-    encrypted_data_source(data_source source, shared_ptr<symmetric_key> k) 
+    // "source" is the encrypted file from position "start", which must be at
+    // the beginning of a block, to its end.
+    encrypted_data_source(data_source source, shared_ptr<symmetric_key> k, uint64_t start = 0)
         : block_encryption_base(std::move(k))
-        , _input(std::move(source)) 
+        , _input(std::move(source))
+        , _current_position(start)
     {}
 
     future<temporary_buffer<char>> get() override {
@@ -819,6 +825,31 @@ public:
 
 std::unique_ptr<data_source_impl> make_encrypted_source(data_source source, shared_ptr<symmetric_key> k) {
     return std::make_unique<encrypted_data_source>(std::move(source), std::move(k));
+}
+
+future<data_source> make_encrypted_range_source(shared_ptr<symmetric_key> k, uint64_t offset, uint64_t len,
+        uint64_t size, encrypted_range_reader read_encrypted) {
+    if (len == 0) {
+        co_return data_source(std::make_unique<util::memory_data_source>(std::vector<temporary_buffer<char>>()));
+    }
+    constexpr auto block_size = block_encryption_base::block_size;
+    // The size of the encrypted file: if the plaintext's size is not a
+    // multiple of the key's block size, the file has a key block of extra
+    // bytes at its end (see calculate_file_length()).
+    const auto key_block_size = k->block_size();
+    const uint64_t file_size = is_aligned(size, key_block_size) ? size : size + key_block_size;
+    // Each block is encrypted separately, so the range is decrypted from the
+    // beginning of its first block. If the range ends in the last block,
+    // read to the end of the file, where encrypted_data_source finds the size
+    // of the plaintext, as it does when it reads the whole file.
+    const uint64_t start = align_down(offset, uint64_t(block_size));
+    uint64_t end = align_up(offset + len, uint64_t(block_size));
+    if (end >= size) {
+        end = file_size;
+    }
+    auto encrypted = co_await read_encrypted(start, end - start);
+    auto decrypted = data_source(std::make_unique<encrypted_data_source>(std::move(encrypted), std::move(k), start));
+    co_return create_ranged_source(std::move(decrypted), offset - start, len);
 }
 }
 

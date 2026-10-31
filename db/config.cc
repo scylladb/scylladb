@@ -1810,6 +1810,16 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Connections are distributed proportionally across scheduling groups based on their shares.")
     , object_storage_clients_memory_fraction(this, "object_storage_clients_memory_fraction", value_status::Unused, 0.01,
         "Fraction of shard memory used as the buffer budget shared by all object storage clients.")
+    , object_storage_page_cache_size_in_mb(this, "object_storage_page_cache_size_in_mb", liveness::LiveUpdate, value_status::Used, 10240,
+        "The size, in MiB, of the node's object storage page cache - the cache, on the node's local disk, of the pages of sstables "
+        "on object storage, of keyspaces with the 'disk_cache': 'pages' storage option. Each shard's cache is limited to its share "
+        "of this size; when it grows beyond it, the pages which were used least recently are evicted. The size counts the cached "
+        "pages, but the cache takes more disk space than that - about 1.5 times as much, and more for short periods - so choose a "
+        "size well below the free disk space. 0 means no limit. Requires the experimental feature 'object-storage-page-cache'.")
+    , object_storage_page_cache_max_remembered_hits(this, "object_storage_page_cache_max_remembered_hits", liveness::LiveUpdate, value_status::Used, 100000,
+        "The object storage page cache records the hits of its pages, for choosing which pages to evict. "
+        "Each shard remembers in memory up to this many pages whose hits it recorded recently, and doesn't record their "
+        "hits again until it starts a new round of eviction. 0 means to record every hit.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , topology_barrier_stall_detector_threshold_seconds(this, "topology_barrier_stall_detector_threshold_seconds", value_status::Used, 2, "Report sites blocking topology barrier if it takes longer than this.")
     , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces. (deprecated)")
@@ -2139,7 +2149,8 @@ std::map<sstring, db::experimental_features_t::feature> db::experimental_feature
         {"tablets", feature::UNUSED},
         {"views-with-tablets", feature::UNUSED},
         {"strongly-consistent-tables", feature::STRONGLY_CONSISTENT_TABLES},
-        {"logstor", feature::LOGSTOR}
+        {"logstor", feature::LOGSTOR},
+        {"object-storage-page-cache", feature::OBJECT_STORAGE_PAGE_CACHE},
     };
 }
 

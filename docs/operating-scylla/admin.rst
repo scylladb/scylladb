@@ -473,6 +473,173 @@ and ``storage_options`` then holds the bucket and endpoint. There is no
 ``storage_type``, is not stored on object storage. This table is not a list of
 all keyspaces.
 
+.. _admin-object-storage-disk-cache:
+
+Object storage page cache
+=========================
+
+An object-storage keyspace created with the ``'disk_cache': 'pages'`` storage
+option caches, on the node's local disk, the byte ranges ("pages") of its
+SSTables which it reads from the object store - both their data and their
+indexes - so that reading them again doesn't need another request to the object
+store. See :ref:`Object storage page cache <cql-keyspace-disk-cache>` for the
+CQL syntax and for which reads populate the cache.
+
+The object storage page cache is **experimental**, and requires the experimental
+feature ``object-storage-page-cache``:
+
+.. code-block:: yaml
+
+   experimental_features:
+     - object-storage-page-cache
+
+The cache is stored in the node-local ``system_cache`` keyspace, whose writes
+skip the commitlog: it holds only copies of data which the object store holds,
+so a crash may lose recently cached pages, but never data.
+
+Configuration
+-------------
+
+Both options are live-updateable.
+
+* ``object_storage_page_cache_size_in_mb`` (default 10240, i.e., 10 GiB): the size
+  of the node's cache. Each shard's cache is limited to its share of this size,
+  and when it grows beyond it, the shard evicts the pages which were least
+  recently read, approximately. ``0`` means no limit.
+  The cache takes more disk space than this: see
+  :ref:`Disk usage <admin-object-storage-disk-cache-disk-usage>`.
+* ``object_storage_page_cache_max_remembered_hits`` (default 100000): the cache
+  records, for choosing which pages to evict, when its pages are read - but to
+  save writes, each shard records each page's read only once in a round of
+  eviction, and remembers up to this many pages in memory for that. ``0``
+  records every read.
+
+When a read misses the cache, it reads the rest of the range it needs from the
+object store with a single request - for a scan, often a whole SSTable -
+rather than a request for each page which isn't cached, even if some of the
+range is cached. This minimizes the number of requests, and therefore the cost
+of reads, under the assumption that a request costs the same regardless of its
+size. That holds for Amazon S3 and Google Cloud Storage when the bucket is in
+the same region as the nodes, and in the standard storage class. Data transfer
+between regions, and the infrequent-access and archival storage classes, are
+charged per byte read, and then reading more than needed costs more.
+
+A failure of the cache - for example, when its disk is full or broken - never
+fails a read: the read reads from the object store instead.
+
+If the experimental feature is disabled after keyspaces with the disk page
+cache were created, their reads no longer use the cache - they read from the
+object store - but the pages which are already cached stay on disk, still
+using its space, and are used again when the feature is enabled again. The
+pages of SSTables which were deleted meanwhile are evicted when the node
+starts with the feature enabled.
+
+.. _admin-object-storage-disk-cache-disk-usage:
+
+Disk usage
+----------
+
+The cache is stored in two tables of the ``system_cache`` keyspace:
+``pagecache``, which holds the pages, and ``pagecache_hits``, a small table
+which records when each page was last read. The disk space of an evicted page
+is only freed when its table is compacted, so the cache takes more disk space
+than its configured size. The cache shares the node's data directory, so leave
+room for it there.
+
+When the cache is full, each page which it caches is matched by a page which it
+evicts, so its tables are rewritten all the time, while their live data stays
+about the same size. The ``pagecache`` table uses incremental compaction (ICS)
+with a space amplification goal of 1.5: when the two largest tiers of its
+SSTables are together more than 1.5 times the size of the largest one, they are
+compacted together. This keeps the cache's disk usage near 1.5 times its
+configured size - and more for short periods, when many pages are cached
+quickly. The ``pagecache_hits`` table is small, so its space amplification
+costs little disk space, and it is only read by full scans, which the cache
+does to choose which pages to evict; reducing its space amplification would
+cost more compaction than it would save scanning. So it uses ICS without a
+space amplification goal, which compacts the least.
+
+For the ``pagecache`` table, leveled compaction (LCS) would keep the disk usage
+lower, near 1.1 times the configured size, but it would rewrite each cached
+page about three times as often as ICS does - and the cache writes a page
+whenever a read misses it. So ICS is the better choice for most workloads,
+which miss the cache often: it saves CPU, disk bandwidth, and wear of the disk.
+LCS would be the better choice for a cache which is read with a very high hit
+ratio, so it writes little, on a node whose disk space is tight.
+
+The compaction strategy of the cache's tables is not configurable yet: the
+tables of the ``system_cache`` keyspace cannot be altered.
+
+A crash of the node may also leave behind pages which the cache doesn't count,
+and doesn't evict until their SSTable is deleted: the pages cached in about the
+last minute before the crash, whose rows in ``pagecache_hits`` were lost while
+the pages were not. (To limit this, the cache flushes its tables once a minute
+while pages are cached or evicted.)
+
+So choose the cache's size with care. The size counts the pages in the cache,
+but the cache takes about 1.5 times as much disk space, and more for short
+periods. For example, if the data directory has 1 TB of free space, a cache of
+1 TB - or even of 900 GB - would fill the disk; a cache of about 500 GB leaves
+room for the cache's space amplification, and for some growth of the other
+data on the disk. The cache doesn't adapt its size to the free disk space yet:
+it doesn't evict pages, or compact its tables sooner, when the disk is nearly
+full.
+
+Metrics
+-------
+
+The object storage page cache reports these metrics, per shard:
+
+.. list-table::
+   :widths: 40 60
+   :header-rows: 1
+
+   * - Metric
+     - Description
+   * - ``scylla_object_storage_page_cache_hits``
+     - Pages read from the cache. The label ``reads`` separates the reads which
+       may populate the cache (``populating``) from reads with ``BYPASS CACHE``
+       and background reads (``non_populating``).
+   * - ``scylla_object_storage_page_cache_misses``
+     - Pages read from the object store - because they weren't cached, or
+       because they followed a page which wasn't cached, in the same request.
+       Same ``reads`` label.
+   * - ``scylla_object_storage_page_cache_bytes``
+     - Bytes in the cache.
+   * - ``scylla_object_storage_page_cache_capacity_bytes``
+     - The size limit of the cache, or 0 if unlimited.
+   * - ``scylla_object_storage_page_cache_object_reads``,
+       ``scylla_object_storage_page_cache_object_read_bytes``
+     - The requests which reads through the cache sent to the object store, and
+       the bytes they requested. Their ratio is the average size of a request.
+   * - ``scylla_object_storage_page_cache_evictions``
+     - Pages evicted, by ``reason``: because the cache was full (``capacity``),
+       or because their SSTable was deleted (``sstable_deleted``).
+   * - ``scylla_object_storage_page_cache_errors``
+     - Failures of the cache, which didn't fail any read, by ``operation``:
+       ``read``, ``write``, ``record_hits`` and ``evict``.
+   * - ``scylla_object_storage_page_cache_unrecorded_hits``
+     - Hits of pages which weren't recorded, because too many recordings of
+       hits were in progress. Unrecorded hits make the choice of pages to evict
+       less accurate.
+   * - ``scylla_object_storage_page_cache_bypasses``
+     - Reads of SSTables of keyspaces with the object storage page cache which
+       didn't use it, by ``reason``: of a duplicate of an SSTable's index for
+       resharding (``dup``), and of an SSTable transformed by a file I/O
+       extension in a way which prevents it (``transform``). They are expected
+       to be rare.
+
+When per-table metrics are enabled (``enable_keyspace_column_family_metrics``),
+each table also reports its own ``scylla_column_family_page_cache_hits``,
+``scylla_column_family_page_cache_misses``,
+``scylla_column_family_page_cache_object_reads`` and
+``scylla_column_family_page_cache_object_read_bytes``.
+
+The object storage client's own metrics, such as
+``scylla_object_storage_total_read_requests``, count all of the requests which
+the node sends to the object store, including those which don't go through the
+cache.
+
 .. _object-storage-limitations:
 
 Object storage keyspaces: status and limitations
@@ -486,8 +653,10 @@ without an error, and their behavior there is undefined and untested.
 
 Object-storage keyspaces target archival workloads: data that is queried
 infrequently and benefits from object-storage pricing. Read latency is
-substantially higher than on local disks, and there is no local disk cache, so
-the cost of a read scales with the number of SSTables it touches.
+substantially higher than on local disks, and unless the experimental
+:ref:`object storage page cache <admin-object-storage-disk-cache>` is enabled,
+there is no local disk cache, so the cost of a read scales with the number of
+SSTables it touches.
 
 Supported
 =========
