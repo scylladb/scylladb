@@ -124,9 +124,9 @@ const std::vector<batch_statement::single_statement>& batch_statement::get_state
     return _statements;
 }
 
-void batch_statement::verify_batch_size(query_processor& qp, const utils::chunked_vector<mutation>& mutations) const {
+std::optional<sstring> batch_statement::verify_batch_size(query_processor& qp, const utils::chunked_vector<mutation>& mutations) const {
     if (mutations.size() <= 1) {
-        return;     // We only warn for batch spanning multiple mutations
+        return std::nullopt;     // We only warn for batch spanning multiple mutations
     }
 
     size_t warn_threshold = qp.get_cql_config().batch_size_warn_threshold_in_kb() * 1024;
@@ -151,9 +151,12 @@ void batch_statement::verify_batch_size(query_processor& qp, const utils::chunke
             _logger.error("{}", error("FAIL", fail_threshold).c_str());
             throw exceptions::invalid_request_exception("Batch too large");
         } else {
-            _logger.warn("{}", error("WARN", warn_threshold).c_str());
+            auto warning = error("WARN", warn_threshold);
+            _logger.warn("{}", warning.c_str());
+            return warning;
         }
     }
+    return std::nullopt;
 }
 
 struct batch_statement_executor {

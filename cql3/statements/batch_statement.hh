@@ -134,10 +134,12 @@ public:
 
 public:
     /**
-     * Checks batch size to ensure threshold is met. If not, a warning is logged.
+     * Checks batch size to ensure threshold is met. If the batch exceeds the
+     * fail threshold, throws. If it exceeds the warn threshold, logs a warning
+     * and returns it, to be sent to the client.
      * @param cfs ColumnFamilies that will store the batch's mutations.
      */
-    void verify_batch_size(query_processor& qp, const utils::chunked_vector<mutation>& mutations) const;
+    std::optional<sstring> verify_batch_size(query_processor& qp, const utils::chunked_vector<mutation>& mutations) const;
 
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute(
             query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;

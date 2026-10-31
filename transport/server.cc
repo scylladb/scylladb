@@ -2422,13 +2422,33 @@ public:
     }
 };
 
+// A warning is sent to the client as a CQL [string], which is limited to
+// 65535 bytes. A longer warning - e.g., the oversized-batch warning, which
+// lists all the tables the batch writes to - is truncated, and ends with
+// " [truncated]", as in Cassandra.
+static std::vector<sstring> truncate_warnings(std::vector<sstring> warnings) {
+    constexpr size_t max_size = std::numeric_limits<uint16_t>::max();
+    constexpr std::string_view truncated = " [truncated]";
+    for (auto& w : warnings) {
+        if (w.size() > max_size) {
+            size_t len = max_size - truncated.size();
+            // Don't cut a multi-byte UTF-8 character in the middle.
+            while (len > 0 && (static_cast<uint8_t>(w[len]) & 0xc0) == 0x80) {
+                --len;
+            }
+            w = sstring(w.data(), len) + sstring(truncated);
+        }
+    }
+    return warnings;
+}
+
 std::unique_ptr<cql_server::response>
 make_result(int16_t stream, messages::result_message& msg, const tracing::trace_state_ptr& tr_state,
         cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata) {
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state);
     if (!msg.warnings().empty() && version > 3) [[unlikely]] {
         response->set_frame_flag(cql_frame_flags::warning);
-        response->write_string_list(msg.warnings());
+        response->write_string_list(truncate_warnings(msg.warnings()));
     }
     if (msg.custom_payload()) {
         response->set_frame_flag(cql_frame_flags::custom_payload);
