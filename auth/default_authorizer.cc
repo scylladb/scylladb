@@ -151,8 +151,15 @@ future<> default_authorizer::revoke_all(std::string_view role_name, ::service::g
 }
 
 future<> default_authorizer::revoke_all(const resource& resource, ::service::group0_batch& mc) {
-    if (resource.kind() == resource_kind::data &&
-            data_resource_view(resource).is_keyspace()) {
+    // When a keyspace ks is dropped, revoke_all() is called on two resources:
+    // "data/ks" (the keyspace) and "functions/ks" (all functions in the
+    // keyspace). For these, we must revoke not only the permissions granted
+    // on the resource itself, but also those granted on resources inside it,
+    // i.e., on individual tables "data/ks/t" or functions "functions/ks/f...".
+    if ((resource.kind() == resource_kind::data &&
+            data_resource_view(resource).is_keyspace()) ||
+        (resource.kind() == resource_kind::functions &&
+            functions_resource_view(resource).is_keyspace())) {
         revoke_all_keyspace_resources(resource, mc);
         co_return;
     }

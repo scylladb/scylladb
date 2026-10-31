@@ -8,7 +8,7 @@ import time
 import pytest
 from . import rest_api
 
-from .util import new_test_table, unique_name, new_materialized_view, new_secondary_index, new_type, new_function, is_scylla
+from .util import new_test_table, unique_name, new_materialized_view, new_secondary_index, new_type, new_function
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -1945,9 +1945,8 @@ def test_mv_where_udt_case_sensitive_field(cql, test_keyspace):
 # would call the function aren't checked here, because a user-defined function
 # in a view's WHERE clause can't be executed yet (#13746).
 # Reproduces SCYLLADB-5198.
-def test_mv_where_case_sensitive_function_name(cql, test_keyspace):
-    # Scylla supports Lua functions, Cassandra supports Java functions
-    body = "LANGUAGE lua AS 'return 2'" if is_scylla(cql) else "LANGUAGE java AS 'return 2;'"
+def test_mv_where_case_sensitive_function_name(cql, test_keyspace, has_java_udf):
+    body = "LANGUAGE java AS 'return 2;'" if has_java_udf else "LANGUAGE lua AS 'return 2'"
     name = '"' + unique_name().upper() + '"'
     with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v int') as table:
         with new_function(cql, test_keyspace, f'() CALLED ON NULL INPUT RETURNS int {body}', name=name):
