@@ -40,6 +40,7 @@ Examples:
 1. `./test.py --coverage` - will run all tests in all built modes and will produce a coverage lcov traces for all of them.
 2. `./test.py --coverage-mode dev` - will run all tests in all built modes and will produce a coverage lcov traces only for the dev mode runs.
 3. `./test.py --mode dev --mode release --coverage-mode dev` - will run all tests in the dev and release mode but will only produce an lcov traces for the dev mode tests.
+4. `./test.py --mode coverage --coverage-report` - same as `--coverage`, and also generates an html report for every mode coverage is collected for, under `<tmpdir>/<mode>/coverage/tests/`.
 
    ### Where To Find The Lcov Traces After The `test.py` Run?
    `test.py` will produce a hierarchy of of lcov trace, all rooted in the `<tmpdir>` (default:``./testlog``).
@@ -47,6 +48,7 @@ Examples:
    2. `<mode>_coverage.info` - will be produced for ever coverage enabled mode under `<tmpdir>/<mode>/coverage/` and contains the aggregated coverage information from all suites.
    3. `test_coverage.info` - will be created under `<tmpdir>` and contains the aggregated coverage information for all coverage enabled modes.
    4. `test_coverage_report.txt` - will be produced under `<tmpdir>` a textual report of the coverage information in `test_coverage.info`.
+   5. `test_coverage.cobertura.xml` - will be produced under `<tmpdir>`, the line and branch coverage of `test_coverage.info` as a Cobertura report, ready to be imported into SonarQube with `sonar.cxx.cobertura.reportPaths=testlog/test_coverage.cobertura.xml`.
 
 ## Advanced And Manual Workflows
 Once built with code coverage instrumentation, all test executables and scylla executable are going

@@ -116,6 +116,10 @@ class BoostTestFile(CppFile):
 
 pytest_collect_file = BoostTestFile.pytest_collect_file
 
+# Listing the tests is not a test run, so an instrumented executable must not
+# leave its coverage profile (default.profraw) in the current directory.
+LISTING_ENV = os.environ | {"LLVM_PROFILE_FILE": os.devnull}
+
 @cache
 def get_boost_test_list_json_content(executable: pathlib.Path, combined: bool = False)-> dict[str, list[list[str, set[str]]]]:
     """
@@ -130,6 +134,7 @@ def get_boost_test_list_json_content(executable: pathlib.Path, combined: bool = 
         output = subprocess.check_output(
             [executable, "--","--list_json_content"],
             stderr=subprocess.STDOUT,
+            env=LISTING_ENV,
             universal_newlines=True,
         )
     except subprocess.CalledProcessError as e:
@@ -195,6 +200,7 @@ def get_boost_test_list_content(executable: pathlib.Path, combined: bool = False
     output = subprocess.check_output(
         [executable, "--list_content"],
         stderr=subprocess.STDOUT,
+        env=LISTING_ENV,
         universal_newlines=True,
     )
 

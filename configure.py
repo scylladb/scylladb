@@ -2419,10 +2419,10 @@ def configure_fmt(build_dir, mode, mode_config, compiler_cache=None):
     if '-DSANITIZE' in cxx_flags:
         fmt_cflags += ' -fsanitize=address -fsanitize=undefined -fno-sanitize=vptr'
 
-    # We are not interested in the coverage of fmt itself.
-    if args.coverage:
-        for flag in COVERAGE_INST_FLAGS:
-            cxx_flags = cxx_flags.replace(f' {flag}', '')
+    # We are not interested in the coverage of fmt itself. The flags come
+    # either from --coverage or from the coverage mode's own cxxflags.
+    for flag in COVERAGE_INST_FLAGS:
+        cxx_flags = cxx_flags.replace(f' {flag}', '')
 
     cxx_flags += ' ' + fmt_cflags.strip()
 
@@ -2608,12 +2608,11 @@ def configure_abseil(build_dir, mode, mode_config, compiler_cache=None):
     if '-DSANITIZE' in cxx_flags:
         abseil_cflags += ' -fsanitize=address -fsanitize=undefined -fno-sanitize=vptr'
 
-    # We want to "undo" coverage for abseil if we have it enabled, as we are not
-    # interested in the coverage of the abseil library. these flags were previously
-    # added to cxx_ld_flags
-    if args.coverage:
-        for flag in COVERAGE_INST_FLAGS:
-            cxx_flags = cxx_flags.replace(f' {flag}', '')
+    # We want to "undo" coverage for abseil, as we are not interested in the
+    # coverage of the abseil library. The flags come either from --coverage or
+    # from the coverage mode's own cxxflags.
+    for flag in COVERAGE_INST_FLAGS:
+        cxx_flags = cxx_flags.replace(f' {flag}', '')
 
     cxx_flags += ' ' + abseil_cflags.strip()
     cmake_mode = mode_config['cmake_build_type']
