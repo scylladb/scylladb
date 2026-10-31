@@ -884,12 +884,17 @@ future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::g
     });
 
     auto retry = exponential_backoff_retry(10ms, 1s);
+    // Set by a follower's commit barrier, cleared by the backoff: at most one barrier per
+    // backoff step.
+    bool barrier_done = false;
     while (true) {
         const auto config = server.server().get_configuration();
         auto [to_add, to_del] = diff_config(expected_config, config.current);
-        // In a joint configuration the delta against C_new is already empty, but the
-        // change hasn't finished yet.
-        if (to_add.empty() && to_del.empty() && !config.is_joint()) {
+        // In the same continuation as get_configuration(), so both describe the same entry.
+        const bool settled = !config.is_joint() && server.server().is_configuration_committed();
+        // A joint configuration, or one whose entry isn't known committed here yet, is
+        // still in flight, even if the delta against C_new is already empty.
+        if (to_add.empty() && to_del.empty() && settled) {
             break;
         }
 
@@ -911,19 +916,38 @@ future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::g
         // they are retried here. Anything else goes to the coordinator.
         try {
             if (server.server().is_leader()) {
-                // A joint configuration has to resolve before another change is proposed.
-                if (!config.is_joint()) {
+                // A joint configuration has to resolve and be committed here before
+                // another change is proposed. Otherwise modify_config() would return at
+                // once for an empty delta, and the continue below would skip the backoff.
+                if (settled) {
                     if (utils::get_local_injector().enter("sc_config_sync_fail")) {
                         throw std::runtime_error("sc_config_sync_fail injection");
                     }
                     co_await server.server().modify_config(std::move(to_add), std::move(to_del), &as);
                     continue;
                 }
+            } else if (to_add.empty() && to_del.empty() && !config.is_joint() && !barrier_done) {
+                // A follower holds the expected configuration, but doesn't know yet that
+                // it's committed. The commit index arrives with the leader's messages, and
+                // with no traffic in the group the next one is sent on the leader's next
+                // tick. A commit barrier gets it now: it brings this replica's commit index
+                // up to the leader's at the time of the barrier. If the leader hasn't
+                // committed the entry by then either, the backoff below follows. Not a read
+                // barrier: that would also wait for the state machine to apply the log,
+                // however far behind that is.
+                try {
+                    co_await server.server().commit_barrier(&as);
+                } catch (...) {
+                    // Only a shortcut: whatever failed it, the backoff below follows, as
+                    // without it. An abort is reported on the next pass.
+                    logger.debug("sync_raft_group_config({}-{}): commit barrier failed: {}, retrying",
+                            tablet, gid, std::current_exception());
+                }
+                barrier_done = true;
+                continue;
             }
-            // A follower waits for the leader's change to reach it, and checks again after
-            // the backoff below. A configuration takes effect once its entry is appended,
-            // so a read barrier isn't needed, and it would also wait for the state machine
-            // to apply the log, however far behind that is.
+            // Otherwise a follower waits for the leader's change to reach it, and checks
+            // again after the backoff below.
         } catch (const raft::not_a_leader& e) {
             // The leadership moved while the change was in flight.
             logger.debug("sync_raft_group_config({}-{}): {:t}, retrying", tablet, gid, e);
@@ -931,14 +955,11 @@ future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::g
             // The leadership moved, and the change may or may not have landed; the next
             // pass sees which.
             logger.debug("sync_raft_group_config({}-{}): {:t}, retrying", tablet, gid, e);
-        } catch (const raft::conf_change_in_progress& e) {
-            // Another change is still in flight on this server: a duplicate of this sync,
-            // or an earlier change whose final entry isn't committed yet.
-            logger.debug("sync_raft_group_config({}-{}): {:t}, retrying", tablet, gid, e);
         } catch (const raft::request_aborted&) {
             // The deadline passed or the stage moved on; the next pass reports it.
         }
 
+        barrier_done = false;
         try {
             co_await retry.retry(as);
         } catch (...) {

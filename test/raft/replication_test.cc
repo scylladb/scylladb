@@ -426,6 +426,63 @@ RAFT_TEST_CASE(rpc_configuration_truncate_restore_from_snp, (test_case{
             check_rpc_config{node_id{0},
                              rpc_address_set{node_id{0},node_id{1},node_id{2}}}}}));
 
+// 4 node cluster {A, B, C, D}, shrunk to {A, B, C}.
+// Add D back as a learner, then remove it again. Neither change touches
+// the voters, so each is a single non-joint entry; test that each still
+// updates RPC configuration on all nodes.
+RAFT_TEST_CASE(rpc_add_remove_non_voter, (test_case{
+         .nodes = 4, .total_values = 0,
+         .updates = {
+            set_config{0, 1, 2},
+            check_rpc_config{{node_id{0},node_id{1},node_id{2}},
+                             rpc_address_set{node_id{0},node_id{1},node_id{2}}},
+            rpc_reset_counters{{node_id{0},node_id{1},node_id{2}}},
+            // Add D as a learner.
+            set_config{0, 1, 2, set_config_entry(3, raft::is_voter::no)},
+            check_rpc_config{{node_id{0},node_id{1},node_id{2}},
+                             rpc_address_set{node_id{0},node_id{1},node_id{2},node_id{3}}},
+            check_rpc_added{{node_id{0},node_id{1},node_id{2}},1},
+            // Remove it.
+            set_config{0, 1, 2},
+            check_rpc_config{{node_id{0},node_id{1},node_id{2}},
+                             rpc_address_set{node_id{0},node_id{1},node_id{2}}},
+            check_rpc_removed{{node_id{0},node_id{1},node_id{2}},1},
+         }}));
+
+// rpc_configuration_truncate_restore_from_snp for a change that only adds a
+// learner: the uncommitted entry A holds is a simple configuration, with no
+// joint one before it.
+RAFT_TEST_CASE(rpc_configuration_truncate_restore_simple_learner, (test_case{
+         .nodes = 3, .total_values = 0,
+         .updates = {
+            partition{1,2},
+            stop{0},
+            // A's log holds one term-1 entry: the simple configuration
+            // {A, B, C} plus learner D, on top of an {A, B, C} snapshot. The
+            // config{} sugar makes every member a voter, so it is built by hand.
+            reset{.id = 0, .state = {
+                .log = { raft::log_entry{raft::term_t(1), raft::index_t(1), [] {
+                    raft::config_member_set set{to_config_member(0), to_config_member(1), to_config_member(2)};
+                    auto learner = to_config_member(3);
+                    learner.can_vote = raft::is_voter::no;
+                    set.insert(std::move(learner));
+                    return raft::configuration{std::move(set)};
+                }()}},
+                .snapshot = {.config  = raft::configuration{config_set({node_id{0},node_id{1},node_id{2}})}
+                }
+            }},
+            // A learner is in the RPC configuration as soon as the entry is
+            // in the log.
+            check_rpc_config{node_id{0},
+                             rpc_address_set{node_id{0},node_id{1},node_id{2},node_id{3}}},
+            new_leader{1},
+            partition{0,1,2},
+            wait_log{0},
+            // The entry is truncated, and A's RPC configuration is restored
+            // from the snapshot.
+            check_rpc_config{node_id{0},
+                             rpc_address_set{node_id{0},node_id{1},node_id{2}}}}}));
+
 // 4 node cluster {A, B, C, D}.
 // Change configuration to {A, B, C} from A and wait for it to become
 // committed.

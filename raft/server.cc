@@ -50,11 +50,13 @@ struct awaited_index {
 };
 
 struct awaited_conf_change {
-    // Index of the joint configuration entry whose non-joint successor is
-    // being waited for. Every committed configuration above it is either that
-    // joint one or something newer, which is what lets a snapshot's own
-    // configuration say whether the change went through.
-    index_t joint_idx;
+    // Index of the configuration entry this change appended: the joint
+    // C_old,new, whose non-joint successor is being waited for, or, when the
+    // voter set is unchanged, the simple C_new itself. Every committed
+    // configuration at or above it is that entry, its successor or something
+    // newer, which is what lets a snapshot's own configuration say whether
+    // the change went through.
+    index_t conf_idx;
     seastar::promise<> promise;
     optimized_optional<abort_source::subscription> abort;
 };
@@ -257,11 +259,13 @@ public:
     future<> add_entry(command command, wait_type type, seastar::abort_source* as) override;
     future<> set_configuration(config_member_set c_new, seastar::abort_source* as) override;
     raft::configuration get_configuration() const override;
+    bool is_configuration_committed() const override;
     future<> start() override;
     future<> abort(sstring reason) override;
     bool is_alive() const override;
     term_t get_current_term() const override;
     future<> read_barrier(seastar::abort_source* as) override;
+    future<> commit_barrier(seastar::abort_source* as) override;
     void wait_until_candidate() override;
     future<> wait_election_done() override;
     future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) override;
@@ -300,6 +304,8 @@ private:
     index_t _snapshot_desc_idx;
     std::list<active_read> _reads;
     std::multimap<index_t, awaited_index> _awaited_indexes;
+    // Like _awaited_indexes, for the commit index.
+    std::multimap<index_t, awaited_index> _awaited_commit_indexes;
 
     // Set to abort reason when abort() is called
     std::optional<sstring> _aborted;
@@ -413,6 +419,8 @@ private:
     // Wake up all waiter that wait for entries with idx smaller of equal to the one provided
     // to be applied.
     void signal_applied();
+    // The same for waiters on the commit index.
+    void signal_committed();
 
     // Processes FSM output by doing the following steps in order:
     //  - persist the current term and vote
@@ -499,6 +507,14 @@ private:
     // is typically already committed, so we don't worry about the
     // term.
     future<> wait_for_apply(index_t idx, abort_source*);
+    // Wait for the local commit index to reach idx, however far behind the
+    // state machine is.
+    future<> wait_for_commit(index_t idx, abort_source*);
+    // The read index of a read barrier: the leader's commit index, once the
+    // leader confirmed it is still the leader. Waits for the local applier
+    // while the leader isn't ready to answer, or for the local commit index
+    // if commit_only is set.
+    future<index_t> get_read_barrier_idx(seastar::abort_source* as, bool commit_only);
 
     void check_not_aborted();
     // The state machine cannot be used after it's aborted.
@@ -1369,6 +1385,18 @@ void server_impl::signal_applied() {
     }
 }
 
+void server_impl::signal_committed() {
+    auto it = _awaited_commit_indexes.begin();
+
+    while (it != _awaited_commit_indexes.end()) {
+        if (it->first > _fsm->commit_idx()) {
+            break;
+        }
+        it->second.promise.set_value();
+        it = _awaited_commit_indexes.erase(it);
+    }
+}
+
 template <typename Message>
 void server_impl::send_message(server_id id, Message m) {
     std::visit([this, id] (auto&& m) {
@@ -1488,35 +1516,43 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
             // notify_commit_waiters() asserts.
             drop_commit_waiters(&snp);
             if (_non_joint_conf_commit_promise && !snp.config.is_joint() &&
-                    snp.idx > _non_joint_conf_commit_promise->joint_idx) {
+                    snp.idx >= _non_joint_conf_commit_promise->conf_idx) {
                 // A configuration change is in progress here, and the
                 // snapshot says it has gone through. snp.config is the
-                // configuration committed as of snp.idx, and the joint entry
-                // this change appended is below that, so its own fate was
+                // configuration committed as of snp.idx, and the entry this
+                // change appended -- joint, or simple when the voter set is
+                // unchanged -- is at or below that, so its own fate was
                 // decided by the drop above. Either it committed here, and
-                // then a non-joint configuration committed above it can only
-                // be the C_new entry the fsm appends when a joint
-                // configuration commits; or it was replaced, and
-                // set_configuration() is about to throw out of its first wait
-                // and discard the value set here.
+                // then a non-joint configuration committed at or above it is
+                // the change's C_new: the simple entry itself, or the one the
+                // fsm appends when a joint configuration commits; or it was
+                // replaced, and set_configuration() is about to throw out of
+                // its first wait and discard the value set here.
                 //
-                // And this is the only sign of it we will get. That entry is
-                // gone with the log this snapshot replaced, so no committed
+                // And this is the only sign of it we will get. The C_new entry
+                // is gone with the log this snapshot replaced, so no committed
                 // batch will ever carry it (see fsm::get_output(), which
                 // reports from above the snapshot index), and set_configuration()
                 // would wait on its promise until the server was aborted.
                 //
                 // The index has to be compared: the promise is engaged before
-                // the joint entry is known committed, so a snapshot that does
+                // the change's entry is known committed, so a snapshot that does
                 // not reach it can arrive while the change is pending. The
                 // configuration committed at such a snapshot is the one the
                 // change is replacing, and says nothing about the change --
-                // whose joint entry went with the log the snapshot replaced,
+                // whose entry went with the log the snapshot replaced,
                 // leaving its commit waiter to be failed once the index is
-                // committed by whoever took over.
+                // committed by whoever took over. It is `>=`: a single-entry
+                // change's own entry is C_new, so a snapshot at it completes
+                // the change; a snapshot at a joint entry is joint and is
+                // excluded above.
+                //
+                // For how a single-entry change gets here, see
+                // test_non_voter_conf_change_completed_by_a_snapshot_aux() in
+                // test/raft/raft_server_test.cc.
                 logger.trace("[{}] io_fiber: snapshot {} at idx {} carries a non-joint configuration,"
                         " completing the configuration change at idx {}",
-                        _tag, snp.id, snp.idx, _non_joint_conf_commit_promise->joint_idx);
+                        _tag, snp.id, snp.idx, _non_joint_conf_commit_promise->conf_idx);
                 std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_value();
             }
             // Settle here, while the snapshot's term is at hand, which apply
@@ -1570,7 +1606,8 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         // (the messages go out below), so it can never commit on this server,
         // and neither can any successor of it -- which is the only way to reach
         // the window where a snapshot is what carries the change through.
-        if (_non_joint_conf_commit_promise && last_stable > _non_joint_conf_commit_promise->joint_idx) {
+        // Meant for joint changes only; see set_configuration().
+        if (_non_joint_conf_commit_promise && last_stable > _non_joint_conf_commit_promise->conf_idx) {
             co_await utils::get_local_injector().inject("block_raft_io_fiber_at_non_joint_conf",
                     utils::wait_for_message(std::chrono::minutes(5)));
         }
@@ -1609,6 +1646,10 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         }
         _rpc->on_configuration_change({}, rpc_diff.leaving);
     }
+
+    // Before the committed entries are persisted, and also when only a
+    // snapshot moved the commit index.
+    signal_committed();
 
     // Process committed entries.
     if (!batch.committed.ids.empty()) {
@@ -2065,6 +2106,31 @@ future<> server_impl::wait_for_apply(index_t idx, abort_source* as) {
     }
 }
 
+future<> server_impl::wait_for_commit(index_t idx, abort_source* as) {
+    if (as && as->abort_requested()) {
+        throw request_aborted(format(
+                "Aborted before waiting for committing entry: {}, last committed entry: {}, last applied entry: {}",
+                idx, _fsm->commit_idx(), _applied_idx));
+    }
+
+    check_not_aborted();
+
+    if (idx > _fsm->commit_idx()) {
+        auto it = _awaited_commit_indexes.emplace(idx, awaited_index{{}, {}});
+        if (as) {
+            it->second.abort = as->subscribe([this, it] noexcept {
+                it->second.promise.set_exception(
+                    request_aborted(format(
+                            "Aborted while waiting to commit entry: {}, last committed entry: {}, last applied entry: {}",
+                            it->first, _fsm->commit_idx(), _applied_idx)));
+                _awaited_commit_indexes.erase(it);
+            });
+            SCYLLA_ASSERT(it->second.abort);
+        }
+        co_await it->second.promise.get_future();
+    }
+}
+
 future<read_barrier_reply> server_impl::execute_read_barrier(server_id from, seastar::abort_source* as) {
     check_not_aborted();
 
@@ -2107,12 +2173,12 @@ future<read_barrier_reply> server_impl::get_read_idx(server_id leader, seastar::
     }
 }
 
-future<> server_impl::read_barrier(seastar::abort_source* as) {
-    logger.trace("[{}] read_barrier start", _tag);
+future<index_t> server_impl::get_read_barrier_idx(seastar::abort_source* as, bool commit_only) {
     index_t read_idx;
 
     co_await do_on_leader_with_retries(as, [&](const server_id& leader) -> future<do_on_leader_result> {
         auto applied = _applied_idx;
+        auto committed = _fsm->commit_idx();
         read_barrier_reply res;
         try {
             res = co_await get_read_idx(leader, as);
@@ -2125,7 +2191,11 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
             // committed any entries yet, so wait for any entry to be
             // committed (if non were since start of the attempt) and retry.
             logger.trace("[{}] read_barrier leader not ready", _tag);
-            co_await wait_for_apply(++applied, as);
+            if (commit_only) {
+                co_await wait_for_commit(++committed, as);
+            } else {
+                co_await wait_for_apply(++applied, as);
+            }
             co_return retry_now{};
         }
         if (std::holds_alternative<raft::not_a_leader>(res)) {
@@ -2134,9 +2204,21 @@ future<> server_impl::read_barrier(seastar::abort_source* as) {
         read_idx = std::get<index_t>(res);
         co_return done{};
     });
+    co_return read_idx;
+}
 
+future<> server_impl::read_barrier(seastar::abort_source* as) {
+    logger.trace("[{}] read_barrier start", _tag);
+    const auto read_idx = co_await get_read_barrier_idx(as, false);
     logger.trace("[{}] read_barrier read index {}, applied index {}", _tag, read_idx, _applied_idx);
     co_return co_await wait_for_apply(read_idx, as);
+}
+
+future<> server_impl::commit_barrier(seastar::abort_source* as) {
+    logger.trace("[{}] commit_barrier start", _tag);
+    const auto read_idx = co_await get_read_barrier_idx(as, true);
+    logger.trace("[{}] commit_barrier read index {}, commit index {}", _tag, read_idx, _fsm->commit_idx());
+    co_return co_await wait_for_commit(read_idx, as);
 }
 
 void server_impl::abort_snapshot_transfer(server_id id) {
@@ -2278,6 +2360,10 @@ future<> server_impl::abort(sstring reason) {
         i.second.promise.set_exception(stopped_error(*_aborted));
     }
     _awaited_indexes.clear();
+    for (auto& i : _awaited_commit_indexes) {
+        i.second.promise.set_exception(stopped_error(*_aborted));
+    }
+    _awaited_commit_indexes.clear();
 
     co_await maybe_note_error(
         seastar::when_all_succeed(
@@ -2346,15 +2432,17 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
 
     const auto& e = _fsm->add_entry(raft::configuration{std::move(c_new)});
 
-    // We've just submitted a joint configuration to be committed.
+    // We've just submitted a configuration to be committed: joint or,
+    // when the voter set is unchanged, simple (see fsm::add_entry()).
     // Once the FSM discovers a committed joint configuration,
-    // it appends a corresponding non-joint entry.
-    // By waiting for the joint configuration first we ensure
+    // it appends a corresponding non-joint entry; a simple one is
+    // that non-joint entry itself.
+    // By waiting for the submitted entry first we ensure
     // that the next non-joint configuration we get from fsm in io_fiber
-    // would be the one corresponding to our joint configuration,
+    // would be the one corresponding to our change,
     // no matter if the leader changed in the meantime.
 
-    auto f = _non_joint_conf_commit_promise.emplace(awaited_conf_change{.joint_idx = e.idx}).promise.get_future();
+    auto f = _non_joint_conf_commit_promise.emplace(awaited_conf_change{.conf_idx = e.idx}).promise.get_future();
     if (as) {
         _non_joint_conf_commit_promise->abort = as->subscribe([this, idx = e.idx, term = e.term] noexcept {
             // If we're inside this callback, the subscription wasn't destroyed yet.
@@ -2382,7 +2470,10 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
     // Lets a test hold the caller here: the joint configuration is committed
     // and the non-joint one is still pending, which is the window in which a
     // snapshot can be the only thing that carries the change through (see
-    // process_fsm_output()).
+    // process_fsm_output()). The hook is meant for joint changes: a
+    // single-entry change's own entry is C_new, so it is complete once that
+    // entry is committed, yet it reaches this point too, so a test of a
+    // single-entry change must not enable the hook.
     co_await utils::get_local_injector().inject("block_raft_set_configuration_before_non_joint",
             utils::wait_for_message(std::chrono::minutes(5)));
 
@@ -2392,6 +2483,10 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
 raft::configuration
 server_impl::get_configuration() const {
     return _fsm->get_configuration();
+}
+
+bool server_impl::is_configuration_committed() const {
+    return _fsm->log_last_conf_idx() <= _fsm->commit_idx();
 }
 
 server_status server_impl::get_status() const {

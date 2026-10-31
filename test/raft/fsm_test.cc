@@ -2029,6 +2029,285 @@ BOOST_AUTO_TEST_CASE(test_non_voter_confchange_in_snapshot) {
     BOOST_CHECK(C.is_leader());
 }
 
+namespace {
+
+// Config member with given ID, empty `info`, a learner.
+raft::config_member learner_from_id(raft::server_id id) {
+    return raft::config_member{server_addr_from_id(id), is_voter::no};
+}
+
+// Has `follower` accept everything in the leader's log.
+void accept_all(fsm_debug& leader, raft::server_id follower) {
+    auto idx = leader.log_last_idx();
+    leader.step(follower, raft::append_reply{leader.get_current_term(), idx, raft::append_reply::accepted{idx}});
+}
+
+// Elects `leader` with the vote of `voter`, the only other voter in its
+// configuration, and has `voter` accept the dummy entry the new leader
+// appends, so that whatever is appended next is replicated at once.
+void elect_with_vote_of(fsm_debug& leader, raft::server_id voter) {
+    election_timeout(leader);
+    auto output = leader.get_output();
+    BOOST_REQUIRE(output.term_and_vote);
+    leader.step(voter, raft::vote_reply{output.term_and_vote->first, true});
+    BOOST_REQUIRE(leader.is_leader());
+    (void)leader.get_output();
+    accept_all(leader, voter);
+    // The dummy entry's commit.
+    (void)leader.get_output();
+}
+
+bool sends_to(const raft::fsm_output& output, raft::server_id to) {
+    return std::ranges::any_of(output.messages, [to] (const auto& m) { return m.first == to; });
+}
+
+} // anonymous namespace
+
+BOOST_AUTO_TEST_CASE(test_same_voters) {
+    server_id A = id(), B = id(), C = id(), D = id();
+    auto voter = config_member_from_id;
+    auto learner = learner_from_id;
+    auto same = [] (const raft::config_member_set& a, const raft::config_member_set& b) {
+        // The answer must not depend on the order of the arguments.
+        BOOST_CHECK_EQUAL(raft::configuration::same_voters(a, b), raft::configuration::same_voters(b, a));
+        return raft::configuration::same_voters(a, b);
+    };
+    const raft::config_member_set ab{voter(A), voter(B)};
+
+    BOOST_CHECK(same(ab, ab));
+    // Learners do not count, whether added, removed or replaced.
+    BOOST_CHECK(same(ab, {voter(A), voter(B), learner(C)}));
+    BOOST_CHECK(same({voter(A), voter(B), learner(C)}, ab));
+    BOOST_CHECK(same({voter(A), voter(B), learner(C)}, {voter(A), voter(B), learner(D)}));
+    // Neither does server_info.
+    BOOST_CHECK(same(ab, {raft::config_member{raft::server_address{A, raft::server_info(1, int8_t{1})}, is_voter::yes}, voter(B)}));
+
+    // A member that changes its vote changes the voter set, in either
+    // direction (same() checks both).
+    BOOST_CHECK(!same({voter(A), voter(B), voter(C)}, {voter(A), voter(B), learner(C)}));
+    // A voter added or removed.
+    BOOST_CHECK(!same(ab, {voter(A), voter(B), voter(C)}));
+    BOOST_CHECK(!same(ab, {voter(A)}));
+    // Voters swapped, with the voter count unchanged.
+    BOOST_CHECK(!same(ab, {voter(A), voter(C)}));
+    BOOST_CHECK(!same({voter(A), voter(B), learner(C)}, {voter(A), learner(B), voter(C)}));
+}
+
+// A change that only adds a learner leaves the voters, and so every quorum,
+// as they were. It is appended as C_new alone, with no joint C_old,new entry
+// before it, and is over once that one entry commits.
+BOOST_AUTO_TEST_CASE(test_confchange_add_non_voter_no_joint) {
+    server_id A = id(), B = id(), C = id();
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{100}, .config = config_from_ids({A, B})});
+    auto fsm = create_follower(A, std::move(log));
+    elect_with_vote_of(fsm, B);
+
+    raft::configuration newcfg(raft::config_member_set{
+            config_member_from_id(A), config_member_from_id(B), learner_from_id(C)});
+    fsm.add_entry(newcfg);
+    const auto conf_idx = fsm.log_last_idx();
+    // C_new takes effect at once.
+    BOOST_CHECK(!fsm.get_configuration().is_joint());
+    BOOST_CHECK(fsm.get_configuration().current == newcfg.current);
+    BOOST_CHECK_EQUAL(fsm.get_configuration().can_vote(C), is_voter::no);
+    BOOST_CHECK_EQUAL(fsm.log_last_conf_idx(), conf_idx);
+    // Still one change at a time.
+    BOOST_CHECK_THROW(fsm.add_entry(newcfg), raft::conf_change_in_progress);
+
+    auto output = fsm.get_output();
+    BOOST_REQUIRE_EQUAL(output.log_entries.size(), 1);
+    const auto& entry_cfg = std::get<raft::configuration>(output.log_entries[0]->data);
+    BOOST_CHECK(!entry_cfg.is_joint());
+    BOOST_CHECK(entry_cfg.current == newcfg.current);
+    BOOST_CHECK_EQUAL(entry_cfg.can_vote(C), is_voter::no);
+    BOOST_CHECK(sends_to(output, B));
+    BOOST_CHECK(sends_to(output, C));
+
+    accept_all(fsm, B);
+    output = fsm.get_output();
+    BOOST_CHECK(fsm.is_leader());
+    BOOST_REQUIRE(!output.committed.ids.empty());
+    BOOST_CHECK_EQUAL(output.committed.ids.last_idx, conf_idx);
+    BOOST_CHECK(output.committed.non_joint_conf_committed);
+    // No second configuration entry follows it.
+    BOOST_CHECK(output.log_entries.empty());
+    BOOST_CHECK_EQUAL(fsm.log_last_idx(), conf_idx);
+}
+
+// The same for a change that only removes a learner. The learner leaves the
+// leader's tracker as soon as C_new is appended.
+BOOST_AUTO_TEST_CASE(test_confchange_remove_non_voter_no_joint) {
+    server_id A = id(), B = id(), C = id();
+    raft::configuration cfg(raft::config_member_set{
+            config_member_from_id(A), config_member_from_id(B), learner_from_id(C)});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{100}, .config = cfg});
+    auto fsm = create_follower(A, std::move(log));
+    elect_with_vote_of(fsm, B);
+
+    raft::configuration newcfg = config_from_ids({A, B});
+    fsm.add_entry(newcfg);
+    const auto conf_idx = fsm.log_last_idx();
+    BOOST_CHECK(!fsm.get_configuration().is_joint());
+    BOOST_CHECK(!fsm.get_configuration().contains(C));
+    BOOST_CHECK_EQUAL(fsm.log_last_conf_idx(), conf_idx);
+
+    auto output = fsm.get_output();
+    BOOST_REQUIRE_EQUAL(output.log_entries.size(), 1);
+    const auto& entry_cfg = std::get<raft::configuration>(output.log_entries[0]->data);
+    BOOST_CHECK(!entry_cfg.is_joint());
+    BOOST_CHECK(entry_cfg.current == newcfg.current);
+    BOOST_CHECK(sends_to(output, B));
+    BOOST_CHECK(!sends_to(output, C));
+
+    accept_all(fsm, B);
+    output = fsm.get_output();
+    BOOST_REQUIRE(!output.committed.ids.empty());
+    BOOST_CHECK_EQUAL(output.committed.ids.last_idx, conf_idx);
+    BOOST_CHECK(output.committed.non_joint_conf_committed);
+    BOOST_CHECK(output.log_entries.empty());
+    BOOST_CHECK_EQUAL(fsm.log_last_idx(), conf_idx);
+    BOOST_CHECK(!sends_to(output, C));
+
+    // A reply the removed learner sent before it learned it was removed is
+    // ignored.
+    fsm.step(C, raft::append_reply{fsm.get_current_term(), conf_idx, raft::append_reply::accepted{conf_idx}});
+    BOOST_CHECK(fsm.is_leader());
+    output = fsm.get_output();
+    BOOST_CHECK(!sends_to(output, C));
+}
+
+// A member that changes its vote changes the voter set, so it still goes
+// through the joint configuration, in both directions.
+BOOST_AUTO_TEST_CASE(test_confchange_voter_flip_still_joint) {
+    server_id A = id(), B = id(), C = id();
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{100}, .config = config_from_ids({A, B, C})});
+    auto fsm = create_follower(A, std::move(log));
+    elect_with_vote_of(fsm, B);
+
+    auto change = [&] (raft::configuration newcfg) {
+        fsm.add_entry(newcfg);
+        BOOST_CHECK(fsm.get_configuration().is_joint());
+        auto output = fsm.get_output();
+        BOOST_REQUIRE_EQUAL(output.log_entries.size(), 1);
+        BOOST_CHECK(std::get<raft::configuration>(output.log_entries[0]->data).is_joint());
+
+        // The joint entry commits, and the leader appends C_new.
+        accept_all(fsm, B);
+        output = fsm.get_output();
+        BOOST_REQUIRE_EQUAL(output.log_entries.size(), 1);
+        const auto& entry_cfg = std::get<raft::configuration>(output.log_entries[0]->data);
+        BOOST_CHECK(!entry_cfg.is_joint());
+        BOOST_CHECK(entry_cfg.current == newcfg.current);
+        BOOST_CHECK_EQUAL(entry_cfg.can_vote(C), newcfg.can_vote(C));
+
+        accept_all(fsm, B);
+        output = fsm.get_output();
+        BOOST_CHECK(output.committed.non_joint_conf_committed);
+        BOOST_CHECK(output.log_entries.empty());
+    };
+    // Demote C.
+    change(raft::configuration(raft::config_member_set{
+            config_member_from_id(A), config_member_from_id(B), learner_from_id(C)}));
+    // Promote it back.
+    change(config_from_ids({A, B, C}));
+}
+
+// A leader that loses its leadership with a learner change still
+// uncommitted has the entry replaced by the next leader's, and goes back to
+// the configuration it had before.
+BOOST_AUTO_TEST_CASE(test_non_voter_change_leader_crash_uncommitted) {
+    discrete_failure_detector fd;
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id();
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = config_from_ids({A_id, B_id, C_id})});
+    auto A = create_follower(A_id, log, fd);
+    auto B = create_follower(B_id, log, fd);
+    auto C = create_follower(C_id, log, fd);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_REQUIRE(A.is_leader());
+    const auto old_conf_idx = A.log_last_conf_idx();
+
+    // The change is appended, but nothing of it leaves A.
+    A.add_entry(raft::configuration(raft::config_member_set{
+            config_member_from_id(A_id), config_member_from_id(B_id), config_member_from_id(C_id),
+            learner_from_id(D_id)}));
+    BOOST_CHECK(A.get_configuration().contains(D_id));
+    BOOST_CHECK_EQUAL(A.log_last_conf_idx(), A.log_last_idx());
+    (void)A.get_output();
+
+    // B wins a higher term without A, and its dummy entry lands where A's
+    // configuration entry is.
+    fd.mark_dead(A_id);
+    election_threshold(C);
+    election_timeout(B);
+    communicate(B, C);
+    BOOST_REQUIRE(B.is_leader());
+    fd.mark_alive(A_id);
+    // The heartbeat takes B's log to A.
+    B.tick();
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_follower());
+    BOOST_CHECK_EQUAL(A.log_last_idx(), B.log_last_idx());
+
+    BOOST_CHECK(!A.get_configuration().is_joint());
+    BOOST_CHECK(!A.get_configuration().contains(D_id));
+    BOOST_CHECK(A.get_configuration().current == config_from_ids({A_id, B_id, C_id}).current);
+    BOOST_CHECK_EQUAL(A.log_last_conf_idx(), old_conf_idx);
+
+    // A voter change on the new leader still goes joint.
+    B.add_entry(config_from_ids({A_id, B_id, C_id, D_id}));
+    BOOST_CHECK(B.get_configuration().is_joint());
+}
+
+// A learner change and a voter change do not overlap, whichever comes
+// first.
+BOOST_AUTO_TEST_CASE(test_non_voter_change_serialization) {
+    server_id A_id = id(), B_id = id(), C_id = id(), D_id = id(), E_id = id();
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = config_from_ids({A_id, B_id, C_id})});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    auto C = create_follower(C_id, log);
+    auto D = create_follower(D_id, log);
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_REQUIRE(A.is_leader());
+
+    // (a) A learner change is pending: a voter change has to wait for it.
+    A.add_entry(raft::configuration(raft::config_member_set{
+            config_member_from_id(A_id), config_member_from_id(B_id), config_member_from_id(C_id),
+            learner_from_id(D_id)}));
+    BOOST_CHECK_THROW(A.add_entry(config_from_ids({A_id, B_id})), raft::conf_change_in_progress);
+    communicate(A, B, C, D);
+    BOOST_CHECK(!A.get_configuration().is_joint());
+    BOOST_CHECK_EQUAL(A.commit_idx(), A.log_last_idx());
+
+    // Once it is committed, the voter change is accepted, and it is joint.
+    A.add_entry(config_from_ids({A_id, B_id, C_id, D_id}));
+    BOOST_CHECK(A.get_configuration().is_joint());
+
+    // (b) A voter change is pending: a learner change has to wait for it,
+    // both while it is joint and while its C_new is uncommitted.
+    raft::configuration with_learner_E(raft::config_member_set{
+            config_member_from_id(A_id), config_member_from_id(B_id), config_member_from_id(C_id),
+            config_member_from_id(D_id), learner_from_id(E_id)});
+    BOOST_CHECK_THROW(A.add_entry(with_learner_E), raft::conf_change_in_progress);
+    communicate(A, B, C, D);
+    BOOST_CHECK(!A.get_configuration().is_joint());
+    BOOST_CHECK_EQUAL(A.get_configuration().can_vote(D_id), is_voter::yes);
+    BOOST_CHECK_EQUAL(A.commit_idx(), A.log_last_idx());
+
+    // Once both of its entries are committed, the learner change is accepted,
+    // and it is a single non-joint entry.
+    const auto before = A.log_last_idx();
+    A.add_entry(with_learner_E);
+    BOOST_CHECK_EQUAL(A.log_last_idx(), before + index_t{1});
+    BOOST_CHECK(!A.get_configuration().is_joint());
+    communicate(A, B, C, D);
+    BOOST_CHECK_EQUAL(A.log_last_idx(), before + index_t{1});
+    BOOST_CHECK_EQUAL(A.commit_idx(), A.log_last_idx());
+    BOOST_CHECK_EQUAL(A.get_configuration().can_vote(E_id), is_voter::no);
+}
+
 BOOST_AUTO_TEST_CASE(test_non_voter_can_vote) {
     // Test non-voter can vote when it is requested to - it may
     // not be aware of the configuration in which it is a voter
