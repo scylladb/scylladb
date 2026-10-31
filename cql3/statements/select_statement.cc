@@ -2653,9 +2653,13 @@ void select_statement::validate_distinct_selection(const schema& schema,
         throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with SELECT DISTINCT queries");
     }
 
-    if (restrictions.has_non_primary_key_restriction() || restrictions.has_clustering_columns_restriction()) {
+    // SELECT DISTINCT reads only the partition key and static row of each
+    // partition, so it can't filter on clustering or regular columns.
+    if (restrictions.has_clustering_columns_restriction() ||
+            std::ranges::any_of(restrictions.get_non_pk_restriction() | std::views::keys,
+                    [] (const column_definition* def) { return !def->is_static(); })) {
         throw exceptions::invalid_request_exception(
-            "SELECT DISTINCT with WHERE clause only supports restriction by partition key.");
+            "SELECT DISTINCT with WHERE clause only supports restriction by partition key and/or static columns.");
     }
     for (auto&& def : selection.get_columns()) {
         if (!def->is_partition_key() && !def->is_static()) {
