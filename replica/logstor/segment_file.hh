@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -18,11 +19,13 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/bool_class.hh>
 #include <seastar/util/log.hh>
 
 #include <fmt/format.h>
@@ -35,6 +38,8 @@ extern seastar::logger logstor_logger;
 
 using file_id_t = uint64_t;
 
+using wait_for_format = seastar::bool_class<class wait_for_format_tag>;
+
 // The configuration of the segment files of one shard.
 struct file_manager_config {
     std::filesystem::path base_dir;
@@ -46,6 +51,9 @@ struct file_manager_config {
     seastar::scheduling_group format_sg;
     bool format_on_startup;
     bool sparse_files;
+    // After the format of the next file fails, an allocation of the file starts the format again
+    // only when this interval has passed.
+    std::chrono::milliseconds format_retry_interval;
 };
 
 // The segment files of one shard. A file holds a fixed count of segments, and is named
@@ -121,10 +129,11 @@ public:
     // Returns the open file for a new segment. Recovery allocates the files that it finds, and with
     // format_on_startup also the files that it formats. A file that is formatted in the background
     // is allocated here, by the first segment taken from it. Each later segment finds the file
-    // allocated and open. The caller must have finished the recovery. The caller must not call
-    // this again before the call returns, because a second call for a file that is in allocation is
-    // an internal error.
-    future<seastar::file> get_file_for_new_segment(file_id_t);
+    // allocated and open. If the format of the file is not done and `wait` is no, the call fails at
+    // once and does not wait for the format. The caller must have finished the recovery. The caller
+    // must not call this again before the call returns, because a second call for a file that is in
+    // allocation is an internal error.
+    future<seastar::file> get_file_for_new_segment(file_id_t, wait_for_format wait = wait_for_format::yes);
 
     uint64_t allocated_file_count() const noexcept { return _allocated_file_count; }
 
@@ -156,7 +165,10 @@ private:
 
     seastar::gate _async_gate;
 
+    // The background format of the next file. A failed format keeps its error until
+    // allocate_file() starts the format again, when _cfg.format_retry_interval has passed.
     shared_future<> _next_file_format{make_ready_future<>()};
+    lowres_clock::time_point _next_file_format_failed_at{};
 
     // One handle per file, opened read-write, kept open for the life of the shard and shared by
     // the read and the write paths. Both go through it, so it is always opened for writing: a file
@@ -196,10 +208,11 @@ private:
     // temporary file of a format.
     future<> write_zeros(seastar::file file, uint64_t offset, uint64_t size);
 
-    // Allocates the next file: waits for its format, opens it, and starts the format of the file
-    // after it in the background. The caller must give the next file, below the configured
-    // count, and must not call this again before it returns.
-    future<> allocate_file(file_id_t);
+    // Allocates the next file: waits for its format (or fails, if `wait` is no and the format is not
+    // done), opens it, and starts the format of the file after it in the background. The caller
+    // must give the next file, below the configured count, and must not call this again before it
+    // returns.
+    future<> allocate_file(file_id_t, wait_for_format);
 
     // Opens the file and puts it in the cache. An open of a file that is open is an internal error.
     future<seastar::file> open_file(file_id_t);
