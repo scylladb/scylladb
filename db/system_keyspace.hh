@@ -471,6 +471,10 @@ public:
     // Saves a record of a token range affected by cleanup.
     // After reboot, tokens from this range will be replayed only if they are on replay positions
     // strictly greater than the given one.
+    // Does nothing if the replay position is invalid, such a record wouldn't filter anything.
+    // Also drops the records made obsolete by the commitlog: those which apply only to
+    // positions older than its minimum position, i.e. to segments which are already deleted.
+    // The record and the dropping are written as a single mutation.
     future<> save_commitlog_cleanup_record(table_id, dht::token_range, db::replay_position);
     struct commitlog_cleanup_map_hash {
         size_t operator()(const std::pair<table_id, int32_t>& p) const;
@@ -492,9 +496,6 @@ public:
         commitlog_cleanup_map_hash
         >;
     future<commitlog_cleanup_map> get_commitlog_cleanup_records();
-    // Drops all cleanup records which apply to positions older than the given one.
-    // Used to drop records which only apply to segments which have already been deleted.
-    future<> drop_old_commitlog_cleanup_records(replay_position);
     // Cleans all records. Used after a successful replay, since the records only
     // apply to the commitlog of the last boot cycle, and can be wrong in this cycle.
     future<> drop_all_commitlog_cleanup_records();
