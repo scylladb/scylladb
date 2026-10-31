@@ -19,6 +19,7 @@
 #include <utility>
 #include <compare>
 #include <byteswap.h>
+#include "utils/assert.hh"
 
 namespace dht {
 
@@ -257,7 +258,7 @@ raw_token::raw_token(const token& t)
     : value(t.raw())
 {
 #ifdef DEBUG
-    assert(t._kind == token::kind::key);
+    SCYLLA_ASSERT(t._kind == token::kind::key);
 #endif
 }
 

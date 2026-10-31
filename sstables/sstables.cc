@@ -97,6 +97,7 @@
 
 #include <charconv>
 #include "db/system_keyspace.hh"
+#include "utils/assert.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -4814,7 +4815,7 @@ private:
     }
 public:
     future<output_stream<char>> output(const file_open_options& foptions, const file_output_stream_options& stream_options) override {
-        assert(_type != component_type::TOC);
+        SCYLLA_ASSERT(_type != component_type::TOC);
         // TOC and scylla components are guaranteed not to depend on metadata. Ignore these (chicken, egg)
         bool load_save_meta = _type != component_type::TemporaryTOC && _type != component_type::Scylla;
 

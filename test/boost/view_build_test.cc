@@ -40,6 +40,7 @@
 #include "readers/from_mutations.hh"
 #include "readers/evictable.hh"
 #include <seastar/core/with_scheduling_group.hh>
+#include "utils/assert.hh"
 
 BOOST_AUTO_TEST_SUITE(view_build_test)
 
@@ -1082,8 +1083,8 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_empty_mutatio
 SEASTAR_THREAD_TEST_CASE(node_view_update_backlog) {
     // This test was originally written assuming we have (at least) two
     // shards and the test doesn't run on shard 1...
-    BOOST_ASSERT(this_shard_id() != 1);
-    BOOST_ASSERT(this_smp_shard_count() >= 2);
+    SCYLLA_ASSERT(this_shard_id() != 1);
+    SCYLLA_ASSERT(this_smp_shard_count() >= 2);
 
     // First, check that a db::view::node_update_backlog object doesn't
     // recalculate the backlog if the interval hasn't yet passed (we use

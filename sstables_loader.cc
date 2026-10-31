@@ -48,6 +48,7 @@
 #include <cfloat>
 #include <algorithm>
 #include <set>
+#include "utils/assert.hh"
 
 static logging::logger llog("sstables_loader");
 
@@ -438,10 +439,10 @@ public:
     }
     void advance(float num_sstable_streamed) override {
         // we should not move backward
-        assert(num_sstable_streamed >= 0.);
+        SCYLLA_ASSERT(num_sstable_streamed >= 0.);
         // we should call advance() only if the current tablet maps to at least
         // one sstable.
-        assert(_num_sstables_mapped > 0);
+        SCYLLA_ASSERT(_num_sstables_mapped > 0);
         if (_per_table_progress) {
             _per_table_progress->advance(num_sstable_streamed / _num_sstables_mapped);
         }

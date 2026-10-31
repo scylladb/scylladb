@@ -59,6 +59,7 @@
 
 #include <boost/regex.hpp>
 #include <atomic>
+#include "utils/assert.hh"
 
 BOOST_AUTO_TEST_SUITE(tablets_test)
 
@@ -4747,7 +4748,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
         // Sanity check just in case someone modifies the caller of this lambda
         // and starts providing RF > n_hosts. In that case, we wouldn't be able
         // to create an RF-rack-valid keyspace.
-        assert(rf <= n_hosts);
+        SCYLLA_ASSERT(rf <= n_hosts);
 
         std::vector<host_id> hosts;
         std::unordered_map<sstring, std::vector<host_id>> hosts_by_rack;
@@ -7413,7 +7414,7 @@ SEASTAR_TEST_CASE(test_cleanup_of_deallocated_tablet) {
                 co_await cf.cleanup_tablet(db, sys_ks, locator::tablet_id(0));
             }
         }).get();
-        assert(all_tablets);
+        SCYLLA_ASSERT(all_tablets);
     }, cfg);
 }
 

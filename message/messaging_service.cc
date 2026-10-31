@@ -173,7 +173,7 @@ class messaging_service::compressor_factory_wrapper {
             return _tracker.negotiate(std::move(feature), is_server, std::move(send_empty_frame));
         }
         std::unique_ptr<rpc::compressor> negotiate(sstring feature, bool is_server) const override {
-            assert(false && "negotiate() without send_empty_frame shouldn't happen");
+            SCYLLA_ASSERT(false && "negotiate() without send_empty_frame shouldn't happen");
             return nullptr;
         }
     };

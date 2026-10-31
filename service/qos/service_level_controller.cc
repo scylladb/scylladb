@@ -74,7 +74,7 @@ service_level_controller::service_level_controller(sharded<auth::service>& auth_
         , _early_abort_subscription(as.subscribe([this] () noexcept { do_abort(); }))
 {
     // We can't rename the system default scheduling group so we have to reject it.
-    assert(default_scheduling_group != get_default_scheduling_group());
+    SCYLLA_ASSERT(default_scheduling_group != get_default_scheduling_group());
     if (this_shard_id() == global_controller) {
         _global_controller_db = std::make_unique<global_controller_data>();
         _global_controller_db->default_service_level_config = default_service_level_config;
@@ -714,7 +714,7 @@ future<service_levels_info> service_level_controller::get_distributed_service_le
 }
 
 future<bool> service_level_controller::validate_before_service_level_add() {
-    assert(this_shard_id() == global_controller);
+    SCYLLA_ASSERT(this_shard_id() == global_controller);
     if (_global_controller_db->deleted_scheduling_groups.size() > 0) {
         return make_ready_future<bool>(true);
     } else if (_global_controller_db->scheduling_groups_exhausted) {

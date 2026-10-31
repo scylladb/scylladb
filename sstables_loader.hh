@@ -19,6 +19,7 @@
 #include "db/consistency_level_type.hh"
 #include "locator/tablets.hh"
 #include "service/topology_guard.hh"
+#include "utils/assert.hh"
 
 using namespace seastar;
 
@@ -72,12 +73,12 @@ struct stream_progress {
         return *this;
     }
     void start(float amount) {
-        assert(amount >= 0);
+        SCYLLA_ASSERT(amount >= 0);
         total = amount;
     }
     virtual void advance(float amount) {
         // we should not move backward
-        assert(amount >= 0);
+        SCYLLA_ASSERT(amount >= 0);
         completed += amount;
         // Clamp to total to absorb floating point rounding errors from
         // fractional progress contributions (e.g. per-tablet progress

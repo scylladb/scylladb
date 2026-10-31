@@ -23,6 +23,7 @@
 
 #include <atomic>
 #include "replica/database.hh"
+#include "utils/assert.hh"
 
 struct shared_load_stats {
     locator::load_stats stats;
@@ -112,12 +113,12 @@ private:
     std::unordered_map<locator::host_id, gms::inet_address> _host_addresses;
 private:
     inet_address make_node_address(int n) {
-        assert(n > 0);
+        SCYLLA_ASSERT(n > 0);
         int a = n % 256;
         n /= 256;
         int b = n % 256;
         n /= 256;
-        assert(n < 256);
+        SCYLLA_ASSERT(n < 256);
         return inet_address(fmt::format("10.{}.{}.{}", n, b, a));
     }
 

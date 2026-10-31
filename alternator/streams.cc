@@ -38,6 +38,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "utils/rjson.hh"
 #include "db/system_keyspace.hh"
+#include "utils/assert.hh"
 
 static logging::logger slogger("alternator-streams");
 
@@ -793,8 +794,8 @@ stream_id_range find_children_range_from_parent_token(
             // second search will give us [-10, +inf) with lo2 pointing to current_streams[1]
             // which is less then end1 - so we need to merge those two ranges
             if (lo2 < end1) {
-                assert(lo1 <= lo2);
-                assert(end1 <= end2);
+                SCYLLA_ASSERT(lo1 <= lo2);
+                SCYLLA_ASSERT(end1 <= end2);
                 end1 = end2;
                 lo2 = end2 = current_streams.end();
             }

@@ -22,6 +22,7 @@
 #include "locator/token_metadata.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
+#include "utils/assert.hh"
 
 struct sort_by_proximity_topology {
     static constexpr size_t DCS = 1;
@@ -83,7 +84,7 @@ struct sort_by_proximity_topology {
                 node_in_dc[rack] = 0;
             }
         } while (node_in_dc != end_node_in_dc);
-        assert(replica_sets.size() == num_replica_sets);
+        SCYLLA_ASSERT(replica_sets.size() == num_replica_sets);
     }
 };
 

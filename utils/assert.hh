@@ -5,6 +5,11 @@
 
 #include <cassert>
 
+// glibc declares __assert_fail only when NDEBUG is not defined.
+#ifdef NDEBUG
+extern "C" [[noreturn, gnu::cold]] void __assert_fail(const char* assertion, const char* file, unsigned int line, const char* function) noexcept;
+#endif
+
 /// Like assert(), but independent of NDEBUG. Active in all build modes.
 #define SCYLLA_ASSERT(x) do { if (!(x)) { __assert_fail(#x, __FILE__, __LINE__, __PRETTY_FUNCTION__); } } while (0)
 

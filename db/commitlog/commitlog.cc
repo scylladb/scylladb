@@ -1504,7 +1504,7 @@ public:
 
     void reset_file_position(size_t file_pos) {
         clogger.trace("{}: set file position to {}", fmt::streamed(*this), file_pos);
-        assert(_flush_pos >= file_pos);
+        SCYLLA_ASSERT(_flush_pos >= file_pos);
         _file_pos = file_pos;
         _flush_pos = file_pos;
         _buffer = {};
@@ -1874,7 +1874,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                         - segment::entry_overhead_size
                         - segment::fragmented_entry_overhead_size
                         ;
-                    assert(avail < buf_rem);
+                    SCYLLA_ASSERT(avail < buf_rem);
                 } else {
                     co_await s->cycle();
                     auto pos = s->position();
@@ -1918,7 +1918,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                     case write_result::no_space:
                         [[fallthrough]];
                     case write_result::too_large:
-                        assert(0); // should not reach
+                        SCYLLA_ASSERT(0); // should not reach
                         failed = true;
                         break;
                 }
@@ -3830,9 +3830,9 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
 
                 clogger.debug("read_entry (fragmented) size = {}", actual_size);
 
-                assert(end <= next);
+                SCYLLA_ASSERT(end <= next);
 
-                assert(end <= next);
+                SCYLLA_ASSERT(end <= next);
                 // really small read...
                 buf = co_await read_data(segment::fragmented_entry_overhead_size);
                 in = buf.get_istream();

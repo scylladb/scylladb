@@ -4333,7 +4333,7 @@ SEASTAR_TEST_CASE(row_cache_is_populated_using_compacting_sstable_reader) {
         // unnecessary pressure on the cache.
         cache_entry& entry = t.get_row_cache().lookup(pk);
         const utils::immutable_collection<mutation_partition::rows_type>& rt = entry.partition().version()->partition().clustered_rows();
-        BOOST_ASSERT(rt.calculate_size() == 1);
+        SCYLLA_ASSERT(rt.calculate_size() == 1);
     });
 }
 

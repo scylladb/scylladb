@@ -292,7 +292,7 @@ static future<> test_basic_operations(app_template& app) {
         const auto end_partial_reload = clk::now();
         const auto partial_reload_duration = std::chrono::duration<double, std::milli>(end_partial_reload - start_partial_reload);
 
-        assert(tm == tm_full_reload);
+        SCYLLA_ASSERT(tm == tm_full_reload);
 
         testlog.info("Tablet metadata reload:\nfull    {:>8.2f}ms\npartial {:>8.2f}ms", full_reload_duration.count(), partial_reload_duration.count());
     }, tablet_cql_test_config(app.configuration()["schema-commitlog-segment-size-mb"].as<unsigned>()));

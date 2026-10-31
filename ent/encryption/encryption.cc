@@ -64,6 +64,7 @@
 #include "utils/UUID_gen.hh"
 #include "init.hh"
 #include "key_cache.hh"
+#include "utils/assert.hh"
 
 static seastar::logger logg{"encryption"};
 
@@ -1195,7 +1196,7 @@ future<seastar::shared_ptr<encryption_context>> register_extensions(const db::co
      * we don't crash on shared pointer destruction on wrong shard.
      * Doing so will hide the real issue from whomever runs the test.
      */
-    assert(p);
+    SCYLLA_ASSERT(p);
     co_await ctxt->stop();
     std::rethrow_exception(p);
 }

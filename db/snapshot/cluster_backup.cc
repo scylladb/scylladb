@@ -32,6 +32,7 @@
 #include "utils/upload_progress.hh"
 #include "utils/memory_data_sink.hh"
 #include "idl/snapshot_backup.dist.hh"
+#include "utils/assert.hh"
 
 extern logging::logger snap_log;
 
@@ -174,8 +175,8 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             }
             snap_log.info("Calculating sstable set for {} node {}, {}:{}", snapshot_name, node.node, keyspace, table);
 
-            assert(state_filter.count(node.datacenter));
-            assert(dc_locations.count(node.datacenter));
+            SCYLLA_ASSERT(state_filter.count(node.datacenter));
+            SCYLLA_ASSERT(dc_locations.count(node.datacenter));
 
             auto& dst = dc_locations.at(node.datacenter);
             auto& repair_master = repair_masters[dst];
@@ -224,8 +225,8 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 
             snap_log.info("Processing {} node {}, {}:{}", snapshot_name, node.node, keyspace, table);
 
-            assert(state_filter.count(node.datacenter));
-            assert(dc_locations.count(node.datacenter));
+            SCYLLA_ASSERT(state_filter.count(node.datacenter));
+            SCYLLA_ASSERT(dc_locations.count(node.datacenter));
 
             auto [off, n, _]= node_sstables_dc.at(node.node);
             auto filter = state_filter.at(node.datacenter);

@@ -157,7 +157,7 @@ public:
         auto prepared = _e.prepare(format("insert into {} (pk, ck, value) values ('key1', ?, ?)", cf_name)).get();
         for (int i = 0; i < (int)_sorted_values.size(); i++) {
             const auto& value = _sorted_values[i];
-            BOOST_ASSERT(&*value.type() == &*_column_type);
+            SCYLLA_ASSERT(&*value.type() == &*_column_type);
             std::vector<cql3::raw_value> raw_values {
                 cql3::raw_value::make_value(int32_type->decompose(int32_t(i))),
                 cql3::raw_value::make_value(value.serialize())

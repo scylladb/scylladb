@@ -23,6 +23,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/to_string.hh"
 #include "utils/rest/client.hh"
+#include "utils/assert.hh"
 
 static logger gcp_cred_log("gcp_credentials");
 
@@ -328,7 +329,7 @@ get_access_token(google_credentials& creds, const scopes_type& scope, shared_ptr
             co_return co_await get_access_token(creds, scope, certs);
         },
         [&](const user_credentials& c) -> future<access_token> {
-            assert(!c.refresh_token.empty());
+            SCYLLA_ASSERT(!c.refresh_token.empty());
             auto json = co_await send_request(TOKEN_SERVER_URI, certs, body(key_values({
                 { "client_id", c.client_id },
                 { "client_secret", c.client_secret },

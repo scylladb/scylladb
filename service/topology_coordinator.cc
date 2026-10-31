@@ -88,6 +88,7 @@
 #include <ranges>
 #include <seastar/core/metrics_registration.hh>
 #include "utils/labels.hh"
+#include "utils/assert.hh"
 
 using token = dht::token;
 using inet_address = gms::inet_address;
@@ -1408,7 +1409,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             req = *_topo_sm._topology.global_request;
             req_id = _topo_sm._topology.global_request_id.value();
         } else {
-            assert(_feature_service.topology_global_request_queue);
+            SCYLLA_ASSERT(_feature_service.topology_global_request_queue);
             req_id = _topo_sm._topology.global_requests_queue[0];
             req_entry = co_await _sys_ks.get_topology_request_entry(req_id);
             req = std::get<global_topology_request>(req_entry.request_type);
