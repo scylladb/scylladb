@@ -15,6 +15,7 @@
 
 #include "types/map.hh"
 #include "auth/authentication_options.hh"
+#include "auth/passwords.hh"
 #include "auth/service.hh"
 #include "auth/role_manager.hh"
 #include "cql3/column_specification.hh"
@@ -63,6 +64,33 @@ static auth::authentication_options extract_authentication_options(const cql3::r
     return authen_options;
 }
 
+// Checking that a HASHED PASSWORD is valid runs crypt(3) with the cost
+// which the hash itself specifies, and may take long, so the role statements
+// do it before the group0 guard is taken (see cql_statement::before_guard()).
+// Only a superuser may set a hashed password, so access is checked first, to
+// not do this work for other users. A failed access check fails the statement
+// here - also for a prepared statement whose authorization is cached, so the
+// cache can't let a role which is no longer a superuser set a hashed password.
+static future<> validate_hashed_password(query_processor& qp, const cql_statement& statement,
+        service::query_state& state, const role_options& options) {
+    // If both PASSWORD and HASHED PASSWORD are given, the statement will fail
+    // later with an error saying that only one of them is allowed.
+    if (!options.hashed_password || options.password) {
+        co_return;
+    }
+    const auto& cs = state.get_client_state();
+    co_await statement.check_access(qp, cs);
+    // If the authenticator doesn't support hashed passwords, the statement
+    // will fail later with an error saying so.
+    if (!cs.get_auth_service()->underlying_authenticator().supported_options().contains(auth::authentication_option::hashed_password)) {
+        co_return;
+    }
+    if (!co_await auth::passwords::is_valid_salted_hash(*options.hashed_password)) {
+        throw exceptions::invalid_request_exception(
+                "Invalid hashed password value. It must be a password hashed by crypt(3), with a scheme such as bcrypt or SHA-512.");
+    }
+}
+
 //
 // `create_role_statement`
 //
@@ -105,6 +133,10 @@ future<> create_role_statement::check_access(query_processor& qp, const service:
             throw exceptions::unauthorized_exception("Only superusers can create a role with superuser status.");
         }
     });
+}
+
+future<> create_role_statement::before_guard(query_processor& qp, service::query_state& state) const {
+    return validate_hashed_password(qp, *this, state, _options);
 }
 
 future<result_message_ptr>
@@ -153,14 +185,14 @@ static bool is_password_empty(const sstring& password) {
     return password.size() == 1 && password[0] == static_cast<char>(-1);
 }
 
-/// Removes single-quoted plaintext passwords.
+/// Removes single-quoted passwords - plaintext, or hashed (HASHED PASSWORD).
 static void sanitize_audit_info_password(audit::audit_info* ai, const sstring& raw_password) {
     sstring password;
     if (!is_password_empty(raw_password)) {
         // Password needs escaping to be searchable literally:
         password = escape_for_regex(raw_password);
     }
-    const std::regex re(R"(((WITH|AND)\s*PASSWORD\s*=?\s*)')" + std::string(password) + "'",
+    const std::regex re(R"(((WITH|AND)\s*(HASHED\s+)?PASSWORD\s*=?\s*)')" + std::string(password) + "'",
             std::regex_constants::ECMAScript | std::regex_constants::icase);
     const auto replace_result = std::regex_replace(ai->query().c_str(), re, "$1'***'");
     ai->set_query_string(static_cast<std::string_view>(replace_result));
@@ -192,6 +224,9 @@ void create_role_statement::sanitize_audit_info() {
         if (_options.password) {
             sanitize_audit_info_password(ai, *_options.password);
         }
+        if (_options.hashed_password) {
+            sanitize_audit_info_password(ai, *_options.hashed_password);
+        }
         if (_options.options) {
             sanitize_audit_info_options(ai, *_options.options);
         }
@@ -215,6 +250,12 @@ future<> alter_role_statement::check_access(query_processor& qp, const service::
 
         const auto& user = *state.user();
         const bool user_is_superuser = state.has_superuser().get();
+
+        // As in CREATE ROLE, setting a hashed password directly, bypassing
+        // the hashing of the password, is only allowed for superusers.
+        if (_options.hashed_password && !user_is_superuser) {
+            throw exceptions::unauthorized_exception("Only superusers can alter a role's hashed password.");
+        }
 
         if (_options.is_superuser) {
             if (!user_is_superuser) {
@@ -253,6 +294,10 @@ future<> alter_role_statement::check_access(query_processor& qp, const service::
     });
 }
 
+future<> alter_role_statement::before_guard(query_processor& qp, service::query_state& state) const {
+    return validate_hashed_password(qp, *this, state, _options);
+}
+
 future<result_message_ptr>
 alter_role_statement::execute(query_processor&, service::query_state& state, const query_options&, std::optional<service::group0_guard> guard) const {
     auth::role_config_update update;
@@ -277,6 +322,9 @@ void alter_role_statement::sanitize_audit_info() {
     if (audit::audit_info* ai = get_audit_info(); ai != nullptr) {
         if (_options.password) {
             sanitize_audit_info_password(ai, *_options.password);
+        }
+        if (_options.hashed_password) {
+            sanitize_audit_info_password(ai, *_options.hashed_password);
         }
         if (_options.options) {
             sanitize_audit_info_options(ai, *_options.options);

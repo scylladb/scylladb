@@ -216,19 +216,22 @@ future<authenticated_user> password_authenticator::authenticate(
     }
 }
 
+// Returns the salted hash to store for the given credentials: For a
+// `PASSWORD`, the hash of the password. For a `HASHED PASSWORD`, the given hash.
+static sstring salted_hash(const std::variant<password_option, hashed_password_option>& credentials, passwords::scheme scheme) {
+    return std::visit(make_visitor(
+            [&] (const password_option& opt) {
+                return passwords::hash(opt.password, rng_for_salt, scheme);
+            },
+            [] (const hashed_password_option& opt) {
+                return opt.hashed_password;
+            }
+    ), credentials);
+}
+
 future<> password_authenticator::create(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) {
-    // When creating a role with the usual `CREATE ROLE` statement, turns the underlying `PASSWORD`
-    // into the corresponding hash.
-    // When creating a role with `CREATE ROLE WITH HASHED PASSWORD`, simply extracts the `HASHED PASSWORD`.
-    auto maybe_hash = options.credentials.transform([&] (const auto& creds) -> sstring {
-        return std::visit(make_visitor(
-                [&] (const password_option& opt) {
-                    return passwords::hash(opt.password, rng_for_salt, _scheme);
-                },
-                [] (const hashed_password_option& opt) {
-                    return opt.hashed_password;
-                }
-        ), creds);
+    auto maybe_hash = options.credentials.transform([&] (const auto& creds) {
+        return salted_hash(creds, _scheme);
     });
 
     // Neither `PASSWORD`, nor `HASHED PASSWORD` has been specified.
@@ -245,15 +248,13 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
         co_return;
     }
 
-    const auto password = std::get<password_option>(*options.credentials).password;
-
     const sstring query = seastar::format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
             db::system_keyspace::NAME,
             meta::roles_table::name,
             SALTED_HASH,
             meta::roles_table::role_col_name);
     co_await collect_mutations(_qp, mc, query,
-            {passwords::hash(password, rng_for_salt, _scheme), sstring(role_name)});
+            {salted_hash(*options.credentials, _scheme), sstring(role_name)});
 }
 
 future<> password_authenticator::drop(std::string_view name, ::service::group0_batch& mc) {
