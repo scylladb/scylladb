@@ -31,6 +31,33 @@ from typing import Optional, List, Union
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_CMDLINE = [
+        '--logger-log-level', 'sc_groups_manager=debug',
+        '--logger-log-level', 'sc_coordinator=debug'
+    ]
+
+
+async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id: str,
+                          expected_host_id: str | None = None, timeout: float = 60):
+    """Wait until `s` reports a leader for `group_id` - with `expected_host_id`, until it
+    reports that one.
+
+    current_leader() on a follower is the last leader it heard from, so a replica that a
+    migration has just removed keeps being reported until the follower's election timeout
+    fires. A caller that knows which node has to end up leading must wait that window out
+    instead of asserting on the first reading.
+    """
+    async def get_leader_host_id():
+        result = await manager.api.get_raft_leader(s.ip_addr, group_id)
+        return result if expected_host_id is None or result == expected_host_id else None
+    label = f"group {group_id} to be led by {expected_host_id}" if expected_host_id else f"a leader of group {group_id}"
+    return await wait_for(get_leader_host_id, time.time() + timeout, label=label)
+
+async def get_table_raft_group_id(manager: ScyllaClusterManager, ks: str, table: str):
+    table_id = await manager.get_table_id(ks, table)
+    rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
+    return str(rows[0].raft_group_id)
+
 UUID_REGEX = re.compile(r"([0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12})")
 
 # A node that is rolled back out of a join may terminate on the ban notification instead of
