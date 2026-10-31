@@ -407,6 +407,15 @@ wheels = [
 ]
 
 [[package]]
+name = "distro"
+version = "1.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
+]
+
+[[package]]
 name = "enum-compat"
 version = "0.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -711,6 +720,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyfakefs"
+version = "6.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/56/70596e4ad6eee8bba7f80c1017cd68da4d190a6e7a8fc1d52ea671c6baad/pyfakefs-6.0.0.tar.gz", hash = "sha256:059fd0b2174bfeed499ecb0a59bccff557f267cc6d885afc0e5b76e78b6d50da", size = 224391, upload-time = "2025-12-21T19:18:13.79Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/3d/515b79c9da62acc6ed1fc51bec878b61ac9c2475d9300aa7f5b4c94d8387/pyfakefs-6.0.0-py3-none-any.whl", hash = "sha256:44ef5ab0294e7e623b8e56b4f2d8c9468b737d6e8641053063c43033d2c8c180", size = 237909, upload-time = "2025-12-21T19:18:11.999Z" },
+]
+
+[[package]]
 name = "pygments"
 version = "2.21.0"
 source = { registry = "https://pypi.org/simple" }
@@ -820,6 +838,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyudev"
+version = "0.24.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/5c/6cc034da13830e3da123ccf9a30910bc868fa16670362f004e4b788d0df1/pyudev-0.24.3.tar.gz", hash = "sha256:2e945427a21674893bb97632401db62139d91cea1ee96137cc7b07ad22198fc7", size = 55970, upload-time = "2024-05-10T18:24:04.599Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9d/3b/c37870f68ceb067707ca7b04db364a1478fcd40c6194007fb6e492ff9a92/pyudev-0.24.3-py3-none-any.whl", hash = "sha256:e8246f0a014fe370119ba2bc781bfbe62c0298d0d6b39c94e83102a8a3f56960", size = 62677, upload-time = "2024-05-10T18:24:02.743Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -905,21 +932,25 @@ dependencies = [
     { name = "colorama" },
     { name = "cryptography" },
     { name = "deepdiff" },
+    { name = "distro" },
     { name = "humanfriendly" },
     { name = "packaging" },
     { name = "psutil" },
+    { name = "pyfakefs" },
     { name = "pykmip" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-sugar" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "pyudev" },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "scylla-driver" },
     { name = "setuptools-scm" },
     { name = "sqlalchemy" },
     { name = "tabulate" },
+    { name = "traceback-with-variables" },
     { name = "treelib" },
     { name = "unidiff" },
     { name = "universalasync" },
@@ -938,21 +969,25 @@ requires-dist = [
     { name = "colorama", specifier = "==0.4.6" },
     { name = "cryptography", specifier = "==50.0.1" },
     { name = "deepdiff", specifier = "==8.6.1" },
+    { name = "distro", specifier = "==1.9.0" },
     { name = "humanfriendly", specifier = "==10.0" },
     { name = "packaging", specifier = "==26.3" },
     { name = "psutil", specifier = "==7.2.2" },
+    { name = "pyfakefs", specifier = "==6.0.0" },
     { name = "pykmip", specifier = "==0.10.0" },
     { name = "pytest", specifier = "==8.4.2" },
     { name = "pytest-asyncio", specifier = "==1.1.0" },
     { name = "pytest-sugar", specifier = "==1.1.1" },
     { name = "pytest-timeout", specifier = "==2.4.0" },
     { name = "pytest-xdist", specifier = "==3.8.0" },
+    { name = "pyudev", specifier = "==0.24.3" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "requests", specifier = "==2.34.2" },
     { name = "scylla-driver", specifier = "==3.29.12" },
     { name = "setuptools-scm", specifier = "==10.2.3" },
     { name = "sqlalchemy", specifier = "==2.0.52" },
     { name = "tabulate", specifier = "==0.9.0" },
+    { name = "traceback-with-variables", specifier = "==2.2.0" },
     { name = "treelib", specifier = "==1.8.0" },
     { name = "unidiff", specifier = "==1.0.0" },
     { name = "universalasync", specifier = "==0.5.1.0" },
@@ -1030,6 +1065,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/46/79/cf31d7a93a8fdc6aa0fbb665be84426a8c5a557d9240b6239e9e11e35fc5/termcolor-3.3.0.tar.gz", hash = "sha256:348871ca648ec6a9a983a13ab626c0acce02f515b9e1983332b17af7979521c5", size = 14434, upload-time = "2025-12-29T12:55:21.882Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/33/d1/8bb87d21e9aeb323cc03034f5eaf2c8f69841e40e4853c2627edf8111ed3/termcolor-3.3.0-py3-none-any.whl", hash = "sha256:cf642efadaf0a8ebbbf4bc7a31cec2f9b5f21a9f726f4ccbb08192c9c26f43a5", size = 7734, upload-time = "2025-12-29T12:55:20.718Z" },
+]
+
+[[package]]
+name = "traceback-with-variables"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/b8/38154c8186edc7e88daa2fa5a72acf59aba83ed24455e09fd2b47788f257/traceback-with-variables-2.2.0.tar.gz", hash = "sha256:750457dd847f12d444320c9d24a4972912fcc64868c98b44f8a79ca2fd698257", size = 26091, upload-time = "2025-02-19T15:49:46.743Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/49/92/83c90c0ff69975f301be14e1d59c3acc8ac5f23f2e362018a01aa544e2c6/traceback_with_variables-2.2.0-py3-none-any.whl", hash = "sha256:a61fd30f21e231b42d9e3cd32c818fb0340a904cbca669f92784cd81c204bf5d", size = 22262, upload-time = "2025-02-19T15:49:44.658Z" },
 ]
 
 [[package]]
