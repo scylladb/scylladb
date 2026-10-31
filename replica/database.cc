@@ -240,7 +240,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
         writeln("  free:  {}\n\n", utils::to_hr_size(row_cache_occupancy_stats.free_space()));
 
         writeln("Memtables:\n");
-        writeln(" total: {}\n", utils::to_hr_size(lsa_occupancy_stats.total_space() - row_cache_occupancy_stats.total_space()));
+        writeln(" total: {}\n", utils::to_hr_size(lsa_occupancy_stats.used_space() - row_cache_occupancy_stats.total_space()));
 
         writeln(" Regular:\n");
         writeln("  real dirty: {}\n", utils::to_hr_size(_dirty_memory_manager.real_dirty_memory()));

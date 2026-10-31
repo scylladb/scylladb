@@ -142,6 +142,7 @@ public:
 
     void reclaim_all_free_segments();
 
+    // Whole LSA segments, O(1): used is the segments in use, free the free segments.
     occupancy_stats global_occupancy() const noexcept;
 
     // Returns aggregate statistics for all pools.

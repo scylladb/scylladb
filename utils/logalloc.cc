@@ -2525,7 +2525,9 @@ std::unordered_map<std::string, uint64_t> region::collect_stats() const {
 }
 
 occupancy_stats tracker::impl::global_occupancy() const noexcept {
-    return occupancy_stats(_segment_pool->total_free_memory(), _segment_pool->total_memory_in_use());
+    // total_memory_in_use() excludes free segments, which are still LSA-owned.
+    auto free = _segment_pool->total_free_memory();
+    return occupancy_stats(free, _segment_pool->total_memory_in_use() + free);
 }
 
 // Note: allocation is disallowed in this path
