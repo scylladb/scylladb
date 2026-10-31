@@ -3648,8 +3648,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 .build());
         co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet resize finalization"));
 
+        // Lets a test complete a load stats refresh between the commit above and the reconciliation.
+        co_await utils::get_local_injector().inject("tablet_resize_finalization_before_reconcile", utils::wait_for_message(std::chrono::minutes(2)));
+        // Read, reconcile and install the load stats without yielding in between: a refresh which
+        // completes in between would be overwritten by stats reconciled from an older copy. This
+        // needs no group0 guard: the stats and the token metadata are local to this shard, and
+        // update_topology_state() returns only once the resize is applied here.
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
-            guard = co_await start_operation();
             auto new_tm = get_token_metadata_ptr();
             auto reconciled_stats = old_load_stats->reconcile_tablets_resize(plan.resize_plan().finalize_resize, *tm, *new_tm);
             // Simulates reconciliation failing the way it does in production, when a
@@ -3680,9 +3685,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // The background merge fiber will try to stop a compaction group which is locked, and the lock is held
         // by the background merge fiber.
         tm = nullptr;
-        if (!guard) {
-            guard = co_await start_operation();
-        }
+        guard = co_await start_operation();
         co_await global_tablet_token_metadata_barrier(std::move(guard));
     }
 

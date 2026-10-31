@@ -2264,6 +2264,68 @@ async def test_load_stats_refresh_after_failed_resize_reconciliation(manager: Sc
         await wait_for_valid_load_stats(cql, table_id, timeout=60)
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
+async def test_resize_reconciliation_does_not_overwrite_newer_load_stats(manager: ScyllaClusterManager):
+    """
+    Resize finalization reconciles the load stats after it commits the resize. A refresh
+    which completes in between (started by a table creation, say) must not be overwritten
+    by stats reconciled from a copy read before it: that copy has no sizes for the new table.
+    """
+    cmdline = [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'load_balancer=debug',
+    ]
+    # No periodic refresh during the test: the only refreshes are the ones the code asks for.
+    config = { 'tablet_load_stats_refresh_interval_in_seconds': 3600 }
+    server = await manager.server_add(cmdline=cmdline, config=config)
+    cql = manager.get_cql()
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 2}};")
+        table_id = await manager.get_table_or_view_id(ks, 'test')
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k})") for k in range(256)])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        # Reconciliation needs a size for every pre-resize replica.
+        await wait_for_valid_load_stats(cql, table_id)
+        assert await get_tablet_count(manager, server, ks, 'test') == 2
+
+        # As in test_load_stats_refresh_after_failed_resize_reconciliation: let the split-ready
+        # refresh complete while the pre-resize token ranges are still current.
+        await manager.api.enable_injection(server.ip_addr, "tablet_resize_finalization_post_barrier", one_shot=True)
+        await manager.api.enable_injection(server.ip_addr, "tablet_resize_finalization_before_reconcile", one_shot=True)
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 4}}")
+        await manager.enable_tablet_balancing()
+        await manager.api.wait_for_injection_enter(server.ip_addr, "tablet_resize_finalization_post_barrier")
+        await log.wait_for('Refreshed table load stats for all DC', from_mark=mark)
+        await manager.api.message_injection(server.ip_addr, "tablet_resize_finalization_post_barrier")
+
+        # The split is committed, and the coordinator waits before it reconciles the load stats.
+        await manager.api.wait_for_injection_enter(server.ip_addr, "tablet_resize_finalization_before_reconcile")
+        assert await get_tablet_count(manager, server, ks, 'test') == 4
+
+        # A table created now triggers a refresh, which completes while the coordinator waits.
+        mark = await log.mark()
+        await cql.run_async(f"CREATE TABLE {ks}.other (pk int PRIMARY KEY, c int);")
+        other_id = await manager.get_table_or_view_id(ks, 'other')
+        await log.wait_for('Refreshed table load stats for all DC', from_mark=mark)
+        await wait_for_valid_load_stats(cql, other_id, timeout=30)
+        logger.info("The new table has a size for every tablet replica; releasing the reconciliation")
+
+        mark = await log.mark()
+        await manager.api.message_injection(server.ip_addr, "tablet_resize_finalization_before_reconcile")
+        # The barrier which ends the finalization runs after the reconciled stats are installed.
+        await log.wait_for('executing global topology command barrier_and_drain', from_mark=mark)
+
+        # The new table's sizes must survive the reconciliation.
+        await wait_for_valid_load_stats(cql, other_id, timeout=30)
+        # The refresh above already keyed the resized table by its new token ranges, so the
+        # reconciliation fails and the refresh it triggers must give that table valid stats.
+        await wait_for_valid_load_stats(cql, table_id, timeout=30)
+
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_crash_on_missing_table_from_load_stats(manager: ScyllaClusterManager):
     logger.info('Bootstrapping cluster')
     cfg = { 'enable_tablets': True,
