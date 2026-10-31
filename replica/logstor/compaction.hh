@@ -365,6 +365,13 @@ struct separator_buffer {
 
     ~separator_buffer();
 
+    // pop_back() rather than clear(), which frees the chunks every buffer would regrow.
+    void drop_pending_updates() noexcept {
+        while (!pending_updates.empty()) {
+            pending_updates.pop_back();
+        }
+    }
+
     template <log_record_writer_concept Writer>
     void write(segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, Writer writer, separator_index_update after_written) {
         // The separator buffer holds a reference to the source segment until its updates are durable.

@@ -2191,9 +2191,10 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
             _stats.separator_buffers_flushed++;
         }
 
-        auto updates = std::move(buf.pending_updates);
-        buf.pending_updates.clear();
-        co_await when_all_succeed(updates.begin(), updates.end());
+        // when_all_succeed() takes the futures before it suspends, so the vector can be emptied in place.
+        auto updates = when_all_succeed(buf.pending_updates.begin(), buf.pending_updates.end());
+        buf.drop_pending_updates();
+        co_await std::move(updates);
         co_await buf.close();
 
         // wait for read operations that use the old locations before freeing the old segments
@@ -2661,7 +2662,7 @@ future<> separator_buffer::release() {
     for (auto& update : pending_updates) {
         (void)std::move(update).handle_exception([] (std::exception_ptr) {});
     }
-    pending_updates.clear();
+    drop_pending_updates();
     held_segments.clear();
     min_seq_num.reset();
 }
