@@ -38,9 +38,10 @@ unrelated non-fulltext tables unless it also has the `SELECT` permission.
 
 An FTS query is identified at prepare time by the presence of a `BM25(column, term)` call
 in the `ORDER BY` clause. The index is resolved from that column, and all structural
-validations are enforced at prepare time: `LIMIT` is required; `PER PARTITION LIMIT` and
-aggregation are rejected; a matching `WHERE BM25(column, ...) > 0` must be present on the
-**same column** as the `ORDER BY`, unless the `ORDER BY` runs several searches, when no `WHERE`
+validations are enforced at prepare time: `LIMIT` is required; `PER PARTITION LIMIT`,
+aggregation and `SELECT DISTINCT` are rejected; a matching `WHERE BM25(column, ...) > 0`
+must be present on the **same column** as the `ORDER BY`, unless the `ORDER BY` runs several
+searches, when no `WHERE`
 is accepted (see `hybrid_search.md`); any additional `WHERE` restrictions are rejected. The
 search-term expression is captured during prepare so that bind markers are correctly
 evaluated at execute time.
