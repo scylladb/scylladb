@@ -1114,7 +1114,6 @@ public:
     std::optional<locator::tablet_routing_info_v2> tablet_routing_info_v2_for(dht::token token, locator::tablet_version_block block) const;
 private:
     shared_ptr<db::large_data_guardrail_base> make_large_data_guardrail() const;
-    void update_tombstone_gc_rf_one();
 
     future<> clear_inactive_reads_for_tablet(database& db, storage_group& sg);
     future<> stop_compaction_groups(storage_group& sg);

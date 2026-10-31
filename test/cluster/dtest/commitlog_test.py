@@ -744,7 +744,7 @@ class TestCommitLog(Tester):
         * The node has an unclean restart, the pinned segments are replayed and
           data is resurrected, as the tombstone is already purged.
 
-        This test uses gc_grace_seconds=0 to make the test fast.
+        This test uses tombstone_gc mode 'immediate' to make the test fast.
 
         See https://github.com/scylladb/scylladb/issues/14870
         """
@@ -760,7 +760,7 @@ class TestCommitLog(Tester):
 
         logger.debug("Create table")
         session.execute("CREATE TABLE ks1.tbl1 (pk int, ck int, PRIMARY KEY (pk, ck))")
-        session.execute("CREATE TABLE ks2.tbl2 (pk int, ck int, v text, PRIMARY KEY (pk, ck)) WITH gc_grace_seconds = 0")
+        session.execute("CREATE TABLE ks2.tbl2 (pk int, ck int, v text, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {'mode': 'immediate'}")
 
         def get_segments_num():
             metrics_res = get_node_metrics(node_ip=self.cluster.get_node_ip(1), metrics=["scylla_commitlog_segments"])

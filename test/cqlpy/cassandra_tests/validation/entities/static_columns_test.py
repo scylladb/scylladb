@@ -9,6 +9,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
+from ....util import is_scylla
 
 #Migrated from cql_tests.py:TestCQL.static_columns_test()
 def testStaticColumns(cql, test_keyspace):
@@ -211,7 +212,9 @@ def testAlterClusteringAndStatic(cql, test_keyspace):
 # Ensure that deleting and compacting a static row that should be purged doesn't throw.
 # This is a test for CASSANDRA-11988.
 def testStaticColumnPurging(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(pkey text, ckey text, value text, static_value text static, PRIMARY KEY (pkey, ckey)) WITH gc_grace_seconds = 0") as table:
+    # Scylla: RF=1 tables in the default 'repair' tombstone_gc mode purge tombstones only after a repair.
+    tombstone_gc = " AND tombstone_gc = {'mode': 'immediate'}" if is_scylla(cql) else ""
+    with create_table(cql, test_keyspace, "(pkey text, ckey text, value text, static_value text static, PRIMARY KEY (pkey, ckey)) WITH gc_grace_seconds = 0" + tombstone_gc) as table:
         execute(cql, table, "INSERT INTO %s (pkey, ckey, static_value, value) VALUES (?, ?, ?, ?)", "k1", "c1", "s1", "v1")
         flush(cql, table)
         execute(cql, table, "DELETE static_value FROM %s WHERE pkey = ?", "k1")

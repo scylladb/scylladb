@@ -1257,7 +1257,12 @@ public:
             co_return false;
         }
         auto size = info.replicas.size();
-        if (size <= 1) {
+        // A tablet with a single replica has nothing to synchronize, but its
+        // repair still flushes hints and batchlog and records the repair time,
+        // which repair-mode tombstone gc needs. Until every node does that, a
+        // replica running an older version returns no repair time, and the
+        // tablet would be due for repair again at once.
+        if (size == 0 || (size == 1 && !_db.features().tablet_single_replica_repair)) {
             lblogger.debug("Skipped auto repair for tablet={} replicas={}", gid, size);
             co_return false;
         }

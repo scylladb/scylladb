@@ -72,7 +72,7 @@ def test_column_family_tombstone_gc_correctness(cql, this_dc, rest_api):
             test_table = t.split('.')[1]
 
             # 1 Allow tombstones to be purged by compaction right away
-            cql.execute(f"ALTER TABLE {test_keyspace}.{test_table} with gc_grace_seconds=0")
+            cql.execute(f"ALTER TABLE {test_keyspace}.{test_table} with tombstone_gc = {{'mode': 'immediate'}}")
 
             # 2 Disable tombstone purge using API
             resp = rest_api.send("DELETE", f"column_family/tombstone_gc/{test_keyspace}:{test_table}")

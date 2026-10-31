@@ -11,8 +11,8 @@ come from, and a build task may land them any time before the build is done.
 When the base row changes in the meantime, the write path deletes the same view
 row with a shadowable tombstone that carries that same timestamp. If tombstone
 GC purges the tombstone before the builder's row arrives, the row comes back
-to life. Reproduces SCYLLADB-4337 on one node: a tablets keyspace with RF=1
-collects tombstones as soon as the gc_clock second changes.
+to life. Reproduces SCYLLADB-4337 on one node: with tombstone_gc mode
+'immediate', tombstones are collected as soon as the gc_clock second changes.
 """
 
 import asyncio
@@ -77,7 +77,7 @@ async def test_view_build_suspends_tombstone_gc(manager: ScyllaClusterManager):
         await manager.api.enable_injection(ip, PAUSE_COORDINATOR, one_shot=False)
         await manager.api.enable_injection(ip, PAUSE_BUILD_TASK, one_shot=False, parameters={"token": TOKEN_OF_PK_1})
         mark = await log.mark()
-        await cql.run_async(f"CREATE INDEX v_idx ON {table} (v)")
+        await cql.run_async(f"CREATE INDEX v_idx ON {table} (v) WITH tombstone_gc = {{'mode': 'immediate'}}")
         for row in rows_for_rounds(1, 3):
             await cql.run_async(insert, list(row))
         await manager.api.disable_injection(ip, PAUSE_COORDINATOR)
@@ -145,7 +145,7 @@ async def test_view_build_suspends_tombstone_gc_vnodes(manager: ScyllaClusterMan
             await cql.run_async(insert, list(row))
         await manager.api.keyspace_flush(ip, ks, "t")
         await manager.api.enable_injection(ip, PAUSE_LEGACY_BUILDER, one_shot=True)
-        await cql.run_async(f"CREATE INDEX v_idx ON {table} (v)")
+        await cql.run_async(f"CREATE INDEX v_idx ON {table} (v) WITH tombstone_gc = {{'mode': 'immediate'}}")
         await manager.api.wait_for_injection_enter(ip, PAUSE_LEGACY_BUILDER)
 
         # Only the builder can add the v=3 entries of rounds 1 to 3. The write

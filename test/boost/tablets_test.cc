@@ -34,6 +34,7 @@
 #include "cql3/util.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
+#include "tombstone_gc_options.hh"
 
 #include "replica/compaction_group.hh"
 #include "test/boost/sstable_test.hh"
@@ -7945,11 +7946,15 @@ SEASTAR_THREAD_TEST_CASE(test_tablets_describe_ring) {
     }, cfg).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_rf1) {
+// A tablet with a single replica is scheduled for auto repair like any other,
+// whatever the table's tombstone gc mode: the repair records the repair time,
+// which repair-mode tombstone gc needs, and keeps the tablet from being due
+// again at once.
+static void run_tablet_auto_repair_rf1(std::map<sstring, sstring> gc_options, bool expect_repair) {
     cql_test_config cfg_in;
     cfg_in.db_config->auto_repair_enabled_default(true);
     cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
-    do_with_cql_env_thread([] (auto& e) {
+    do_with_cql_env_thread([&] (auto& e) {
         topology_builder topo(e);
 
         unsigned shard_count = 1;
@@ -7960,7 +7965,14 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_rf1) {
         [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
 
         auto ks_name = add_keyspace(e, {{dc1, 1}}, 1);
-        auto table1 = add_table(e, ks_name).get();
+        auto table1 = table_id(utils::UUID_gen::get_time_UUID());
+        e.create_table([&] (std::string_view) {
+            return *schema_builder(this_smp_shard_count(), ks_name, table1.to_sstring(), table1)
+                    .with_column("p1", utf8_type, column_kind::partition_key)
+                    .with_column("r1", int32_type)
+                    .with_tombstone_gc_options(tombstone_gc_options(gc_options))
+                    .build();
+        }).get();
 
         tablet_id tablet{0};
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -7979,8 +7991,21 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_rf1) {
         auto& stm = e.shared_token_metadata().local();
         bool once = false;
         rebalance_tablets(e, nullptr, {}, [&once] (const migration_plan& plan) { return std::exchange(once, true); });
-        BOOST_REQUIRE(stm.get()->tablets().get_tablet_map(table1).get_tablet_transition_info(tablet) == nullptr);
+        auto* trinfo = stm.get()->tablets().get_tablet_map(table1).get_tablet_transition_info(tablet);
+        if (expect_repair) {
+            BOOST_REQUIRE(trinfo && trinfo->transition == tablet_transition_kind::repair);
+        } else {
+            BOOST_REQUIRE(trinfo == nullptr);
+        }
     }, std::move(cfg_in)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_rf1) {
+    run_tablet_auto_repair_rf1({{"mode", "timeout"}}, true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_rf1_repair_mode) {
+    run_tablet_auto_repair_rf1({{"mode", "repair"}}, true);
 }
 
 // Runs the repair scheduler against one tablet replicated on two nodes and reports whether
