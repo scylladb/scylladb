@@ -128,6 +128,7 @@ struct sstable_writer_config {
     sstring origin;
     bool correct_pi_block_width = true;
     uint32_t large_data_records_per_sstable = 10;
+    shard_id shard = this_shard_id();
 
 private:
     explicit sstable_writer_config() {}
@@ -335,8 +336,7 @@ public:
     sstable_writer get_writer(const schema& s,
         uint64_t estimated_partitions,
         const sstable_writer_config&,
-        encoding_stats enc_stats,
-        shard_id shard = this_shard_id());
+        encoding_stats enc_stats);
 
     // Validates the content of the sstable and component digests.
     // Reports all errors via the provided error handler.
