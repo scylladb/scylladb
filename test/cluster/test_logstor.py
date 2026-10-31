@@ -631,6 +631,9 @@ async def test_table_disk_space_metrics(manager: ScyllaClusterManager):
     cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
     cfg = {
         'enable_keyspace_column_family_metrics': True,
+        # Automatic compaction can free the segments that the overwrites kill before the test counts
+        # them, so it is off. The test runs compaction through the API.
+        'logstor_compaction_utilization_threshold': 1,
         'experimental_features': ['logstor']
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
@@ -775,7 +778,8 @@ async def test_compaction(manager: ScyllaClusterManager):
     Test log compaction by creating dead data and verifying space reclamation.
     """
     cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
-    cfg = {'experimental_features': ['logstor']}
+    # Automatic compaction is off, so that the compaction that the test runs takes the dead segments.
+    cfg = {'experimental_features': ['logstor'], 'logstor_compaction_utilization_threshold': 1}
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
 
@@ -811,6 +815,89 @@ async def test_compaction(manager: ScyllaClusterManager):
                 return True
             await manager.api.logstor_compaction(servers[0].ip_addr)
         await wait_for(segments_compacted, time.time() + 60)
+
+async def test_automatic_compaction_follows_the_utilization_threshold(manager: ScyllaClusterManager):
+    """
+    Automatic compaction is driven by a per-segment rule - a segment is compacted once less than
+    logstor_compaction_utilization_threshold of it is live - with CPU shares that follow the space
+    pressure.
+    Overwrite a small disk several times over and check that the loop is closed end to end:
+    compaction runs without being asked, the write path is never left without a segment, and once
+    the writes stop the dead segments are freed and the configured threshold applies again.
+
+    How smoothly the rate is actually held is not something a disk of 64 segments can show.
+    """
+    disk_size_mb = 8
+    file_size_mb = 1
+    total_segments = disk_size_mb * 1024 * 1024 // segment_size
+
+    key_count = 500
+    value_size = 8000
+    # Enough overwrites to turn the disk over several times, so that reclaiming is the only way the
+    # writes can complete at all.
+    overwrites = 4
+
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': disk_size_mb,
+        'logstor_file_size_in_mb': file_size_mb,
+        # A minimum at the default threshold keeps the threshold constant above the anchor: the
+        # default curve falls to its minimum one segment above the anchor, which is the
+        # free-level-holding end of the curve rather than the threshold this test is about. The curve
+        # itself is unit tested and simulated.
+        'logstor_compaction_min_utilization_threshold': 0.5,
+        'experimental_features': ['logstor']
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    server = servers[0]
+    cql = manager.get_cql()
+
+    async def get(name: str) -> float:
+        metrics = await manager.metrics.query(server.ip_addr)
+        value = metrics.get(f"scylla_logstor_sm_{name}")
+        assert value is not None, f"{name} is not exported"
+        return float(value)
+
+    async def reclaimed() -> float:
+        return await get("compaction_segments_in") - await get("compaction_segments_out")
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        assert await reclaimed() == 0
+
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        for round in range(overwrites):
+            value = chr(ord('a') + round) * value_size
+            for i in range(key_count):
+                await cql.run_async(stmt, [i, value])
+            free_segments = await get("free_segments")
+            logger.info(f"round {round}: free_segments={free_segments} of {total_segments} "
+                        f"reclaimed={await reclaimed()} "
+                        f"threshold={await get('compaction_utilization_threshold')}")
+            assert free_segments >= 1, "the write path was left with no segment to write into"
+            assert free_segments <= total_segments
+
+        # Nothing asked for compaction, and the disk was turned over several times, so it ran on its
+        # own and gave segments back.
+        assert await reclaimed() > 0
+
+        # With the writes over, the dead segments are freed, because they do not wait for a minimum
+        # batch, and the free segments are back above the anchor, where the configured threshold
+        # applies.
+        async def drained():
+            dead = await get("dead_segments")
+            threshold = await get("compaction_utilization_threshold")
+            logger.info(f"draining: dead={dead} threshold={threshold}")
+            if dead == 0 and threshold == pytest.approx(0.5):
+                return True
+        await wait_for(drained, time.time() + 180)
+
+        # Everything written last is still there.
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test")
+        assert len(rows) == key_count
+        last = chr(ord('a') + overwrites - 1) * value_size
+        assert all(row.v == last for row in rows)
 
 async def test_drop_table(manager: ScyllaClusterManager):
     """
@@ -892,6 +979,9 @@ async def test_table_removal_during_logstor_compaction(manager: ScyllaClusterMan
         'experimental_features': ['logstor'],
         'logstor_disk_size_in_mb': 8,
         'logstor_file_size_in_mb': 8,
+        # Automatic compaction is off, so that it does not take the dead segments before the
+        # compaction that the test pauses.
+        'logstor_compaction_utilization_threshold': 1,
     }
     server = await manager.server_add(cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
@@ -1188,7 +1278,9 @@ async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
     8. Verifies all data is correct on the destination after migration
     """
     cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'stream_blob=trace', '--smp=2']
-    cfg = {'experimental_features': ['logstor']}
+    # Automatic compaction is off, so that the dead segments are still there for the compaction that
+    # runs while the streaming is paused.
+    cfg = {'experimental_features': ['logstor'], 'logstor_compaction_utilization_threshold': 1}
     s1 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
     servers = [s1]
     cql, _ = await manager.get_ready_cql(servers)

@@ -840,13 +840,12 @@ populators["repair_dataset"] = populate_repair
 #
 # Which of those paths a run exercises, and how much each of them does, is decided by how
 # full the segment pool of a shard is, so the workload is sized against the pool rather
-# than in rows. Compaction does not start until the free segments fall under
-# logstor_compaction_trigger_threshold (5%) of the pool, and what it then pays per segment
-# it takes is the fraction of that segment which is still live - so a pool that is about
-# half live is the regime where compaction has to relocate real data instead of dropping
-# nearly empty segments. The dataset is populated to about that, and the training workload
-# then writes the free half of the pool several times over, so that compaction is running
-# for most of it.
+# than in rows. Compaction holds the free segments near the threshold anchor (about 6% of
+# the pool), and what it pays per segment it takes is the fraction of that segment which
+# is still live - so a pool that is about half live is the regime where compaction has to
+# relocate real data instead of dropping nearly empty segments. The dataset is populated
+# to about that, and the training workload then writes the free half of the pool several
+# times over, so that compaction is running for most of it.
 
 # The segment pool of one shard, and the rest of the logstor configuration of the training
 # cluster. Only the logstor cluster is started with these: every other workload runs
@@ -869,7 +868,7 @@ LOGSTOR_ROWS = 150000
 
 # Operations of the training workload. The dataset leaves ~45% of the pool free, which the
 # workload has to overwrite before compaction starts at all - a tenth of this run - and
-# what is left of it then runs against a pool that compaction is holding at ~92% in use.
+# what is left of it then runs against a pool that compaction is holding at ~94% in use.
 LOGSTOR_TRAIN_OPS = 2600000
 
 # The mix. Writes are weighted above reads because they also drive the compaction, the
