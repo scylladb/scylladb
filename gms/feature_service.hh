@@ -201,6 +201,11 @@ public:
     // RPCs (and their warnings) to nodes that do not register the verb during a
     // rolling upgrade.
     gms::feature small_table_optimization_size_probe { *this, "SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"sv };
+    // Gates the repair_get_combined_row_hash_with_sketch RPC verb.
+    gms::feature repair_row_hash_sketch { *this, "REPAIR_ROW_HASH_SKETCH"sv };
+    // Gates returning the partition estimate from repair_row_level_start and
+    // passing the averaged estimate back in repair_get_sync_boundary.
+    gms::feature repair_start_with_estimate { *this, "REPAIR_START_WITH_ESTIMATE"sv };
     gms::feature alternator_composite_gsi_keys { *this, "ALTERNATOR_COMPOSITE_GSI_KEYS"sv };
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.

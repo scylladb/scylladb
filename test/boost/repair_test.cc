@@ -409,4 +409,113 @@ SEASTAR_TEST_CASE(test_tablet_token_range_count) {
     }
 }
 
+SEASTAR_TEST_CASE(test_decode_peer_row_hashes) {
+    // Fixed seed: decoding at 2x cells fails with small but non-zero probability.
+    std::mt19937_64 rng(1);
+    for (size_t d : {0, 1, 10, 100, 1000}) {
+        for (int trial = 0; trial < 20; ++trial) {
+            std::vector<repair_hash> local_rows;
+            for (int i = 0; i < 5000; ++i) {
+                local_rows.emplace_back(rng());
+            }
+            repair_hash_set local(local_rows.begin(), local_rows.end());
+            repair_hash_set peer = local;
+            for (size_t i = 0; i < d; ++i) {
+                if (i % 2) {
+                    peer.emplace(rng());
+                } else {
+                    peer.erase(local_rows[rng() % local_rows.size()]);
+                }
+            }
+            auto sketch = repair_hash_sketch::with_cells(std::max<size_t>(256, 2 * d));
+            repair_hash combined;
+            for (auto& h : peer) {
+                sketch.add(h.hash);
+                combined.add(h);
+            }
+            auto wrong_combined = combined;
+            wrong_combined.add(repair_hash(1));
+            BOOST_REQUIRE(!co_await decode_peer_row_hashes(local, sketch, wrong_combined));
+            auto decoded = co_await decode_peer_row_hashes(local, std::move(sketch), combined);
+            BOOST_REQUIRE(decoded);
+            BOOST_REQUIRE(decoded->hashes == peer);
+            size_t expected_diff = 0;
+            for (auto& h : local) {
+                expected_diff += !peer.contains(h);
+            }
+            for (auto& h : peer) {
+                expected_diff += !local.contains(h);
+            }
+            BOOST_REQUIRE_EQUAL(decoded->diff_size, expected_diff);
+        }
+    }
+    // Malformed sketches from the wire are rejected.
+    {
+        repair_hash_set local;
+        auto bad = repair_hash_sketch::with_cells(256);
+        bad.key_sums.pop_back();
+        BOOST_REQUIRE(!co_await decode_peer_row_hashes(local, std::move(bad), repair_hash()));
+        auto odd = repair_hash_sketch{utils::chunked_vector<int16_t>(5), utils::chunked_vector<uint64_t>(5), utils::chunked_vector<uint32_t>(5)};
+        BOOST_REQUIRE(!co_await decode_peer_row_hashes(local, std::move(odd), repair_hash()));
+    }
+    // A difference far larger than the sketch must not decode.
+    repair_hash_set local, peer;
+    auto sketch = repair_hash_sketch::with_cells(256);
+    repair_hash combined;
+    for (int i = 0; i < 2000; ++i) {
+        repair_hash h(rng());
+        peer.insert(h);
+        sketch.add(h.hash);
+        combined.add(h);
+    }
+    BOOST_REQUIRE(!co_await decode_peer_row_hashes(local, std::move(sketch), combined));
+}
+
+SEASTAR_TEST_CASE(test_decode_peer_row_hashes_random) {
+    // Fixed seeds with the real sizing rule. Observed decode failures: 0 of 400.
+    constexpr size_t max_failures = 2;
+    size_t failures = 0, trials = 0;
+    for (uint64_t seed = 1; seed <= 50; ++seed) {
+        std::mt19937_64 rng(seed);
+        for (size_t d : {1, 2, 5, 10, 50, 200, 1000, 5000}) {
+            std::vector<repair_hash> local_rows;
+            for (size_t i = 0; i < 2 * d + 100; ++i) {
+                local_rows.emplace_back(rng());
+            }
+            repair_hash_set local(local_rows.begin(), local_rows.end());
+            repair_hash_set peer = local;
+            for (size_t i = 0; i < d; ++i) {
+                if (rng() % 2) {
+                    peer.emplace(rng());
+                } else {
+                    peer.erase(local_rows[rng() % local_rows.size()]);
+                }
+            }
+            auto sketch = repair_hash_sketch::with_cells(std::max<size_t>(256, 2 * d));
+            repair_hash combined;
+            for (auto& h : peer) {
+                sketch.add(h.hash);
+                combined.add(h);
+            }
+            size_t expected_diff = 0;
+            for (auto& h : local) {
+                expected_diff += !peer.contains(h);
+            }
+            for (auto& h : peer) {
+                expected_diff += !local.contains(h);
+            }
+            ++trials;
+            auto decoded = co_await decode_peer_row_hashes(local, std::move(sketch), combined);
+            if (!decoded) {
+                ++failures;
+                continue;
+            }
+            BOOST_REQUIRE(decoded->hashes == peer);
+            BOOST_REQUIRE_EQUAL(decoded->diff_size, expected_diff);
+        }
+    }
+    testlog.info("decode failures: {} of {}", failures, trials);
+    BOOST_REQUIRE_LE(failures, max_failures);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

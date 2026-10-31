@@ -123,12 +123,25 @@ enum class repair_state : uint16_t {
 
 struct repair_node_state {
     locator::host_id node;
+    // Row hash symmetric differences with the master in recent rounds; sizes the next sketch.
+    std::array<uint32_t, 4> recent_diffs{};
     repair_state state = repair_state::unknown;
+    // Wraps at 256, a multiple of recent_diffs.size(), so the slot order stays consistent.
+    uint8_t next_diff = 0;
     // The shard that repair instance runs on
     shard_id shard;
     explicit repair_node_state(locator::host_id n) : node(n) { }
     explicit repair_node_state(locator::host_id n, shard_id s) : node(n), shard(s) { }
+
+    void record_diff(size_t d) {
+        recent_diffs[next_diff++ % recent_diffs.size()] = std::min<size_t>(d, std::numeric_limits<uint32_t>::max() / 2);
+    }
+    uint32_t sketch_cells() const {
+        return std::max<uint32_t>(256, 2 * std::ranges::max(recent_diffs));
+    }
 };
+// Kept small: one per node in all_nodes(), touched every round.
+static_assert(sizeof(repair_node_state) == 40);
 
 // Wraps sink and source objects for repair master or repair follower nodes.
 // For repair master, it stores sink and source pair for each of the followers.
@@ -205,6 +218,9 @@ struct row_level_repair_metrics {
     uint64_t inc_sst_skipped_bytes{0};
     uint64_t inc_sst_read_bytes{0};
     uint64_t tablet_time_ms{0};
+    uint64_t rx_sketch_cells_nr{0};
+    uint64_t sketch_decoded_nr{0};
+    uint64_t sketch_fallback_nr{0};
     row_level_repair_metrics() {
         namespace sm = seastar::metrics;
         _metrics.add_group("repair", {
@@ -230,6 +246,12 @@ struct row_level_repair_metrics {
                             sm::description("Total number of bytes read from sstables for incremental repair on this shard.")),
             sm::make_counter("tablet_time_ms", tablet_time_ms,
                             sm::description("Time spent on tablet repair on this shard in milliseconds.")),
+            sm::make_counter("rx_sketch_cells_nr", rx_sketch_cells_nr,
+                            sm::description("Total number of row hash sketch cells received on this shard.")),
+            sm::make_counter("sketch_decoded_nr", sketch_decoded_nr,
+                            sm::description("Total number of row hash sketches decoded on this shard, replacing a full row hash transfer.")),
+            sm::make_counter("sketch_fallback_nr", sketch_fallback_nr,
+                            sm::description("Total number of row hash sketches that failed to decode on this shard, falling back to a full row hash transfer.")),
         });
     }
 };
@@ -956,6 +978,12 @@ public:
     }
     bool use_rpc_stream() const {
         return is_rpc_stream_supported(_algo);
+    }
+    bool use_sketch() const {
+        return _is_tablet && use_rpc_stream() && _db.local().features().repair_row_hash_sketch;
+    }
+    bool use_start_with_estimate() const {
+        return _is_tablet && _db.local().features().repair_start_with_estimate;
     }
 
 public:
@@ -1940,10 +1968,47 @@ public:
     }
 
     // RPC API
-    future<>
+    future<get_combined_row_hash_with_sketch_response>
+    get_combined_row_hash_with_sketch(std::optional<repair_sync_boundary> common_sync_boundary, locator::host_id remote_node, shard_id dst_cpu_id, uint32_t sketch_cells, repair_hash master_hash) {
+        auto resp = co_await ser::repair_rpc_verbs::send_repair_get_combined_row_hash_with_sketch(&_messaging, remote_node,
+                _repair_meta_id, common_sync_boundary, dst_cpu_id, sketch_cells, master_hash);
+        stats().rpc_call_nr++;
+        stats().rx_hashes_nr++;
+        _metrics.rx_hashes_nr++;
+        if (resp.sketch) {
+            _metrics.rx_sketch_cells_nr += resp.sketch->cells();
+        }
+        co_return resp;
+    }
+
+    // RPC handler
+    future<get_combined_row_hash_with_sketch_response>
+    get_combined_row_hash_with_sketch_handler(std::optional<repair_sync_boundary> common_sync_boundary, uint32_t sketch_cells, repair_hash master_hash) {
+        auto gate_held = _gate.hold();
+        get_combined_row_hash_with_sketch_response resp{co_await get_combined_row_hash_handler(std::move(common_sync_boundary))};
+        // Only send a sketch smaller than the full row hash list it replaces, and
+        // none when in sync with the master, which then knows the rows already.
+        if (sketch_cells && resp.hash != master_hash && size_t(sketch_cells) * repair_hash_sketch::cell_bytes < _working_row_buf.size() * sizeof(uint64_t)) {
+            resp.sketch = co_await working_row_sketch(sketch_cells);
+        }
+        co_return resp;
+    }
+
+    future<repair_hash_sketch> working_row_sketch(size_t cells) {
+        auto sketch = repair_hash_sketch::with_cells(cells);
+        for (auto& r : _working_row_buf) {
+            sketch.add(r.hash().hash);
+            co_await coroutine::maybe_yield();
+        }
+        co_return sketch;
+    }
+
+    // RPC API
+    // Returns the follower's partition estimate, if it sent one.
+    future<std::optional<uint64_t>>
     repair_row_level_start(locator::host_id remote_node, sstring ks_name, sstring cf_name, dht::token_range range, table_schema_version schema_version, streaming::stream_reason reason, gc_clock::time_point compaction_time, shard_id dst_cpu_id) {
         if (remote_node == myhostid()) {
-            co_return;
+            co_return std::nullopt;
         }
         stats().rpc_call_nr++;
         // Even though remote partitioner name is ignored in the current version of
@@ -1959,9 +2024,8 @@ public:
                 remote_partitioner_name, std::move(schema_version), reason, compaction_time, dst_cpu_id, _frozen_topology_guard, _repaired_at, _incremental_mode);
         if (resp && resp->status == repair_row_level_start_status::no_such_column_family) {
             throw replica::no_such_column_family(ks_name, cf_name);
-        } else {
-            co_return;
         }
+        co_return resp ? resp->estimated_partitions : std::nullopt;
     }
 
     // RPC handler
@@ -1984,7 +2048,17 @@ public:
                 co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
             }
             co_await repair.insert_repair_meta(from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as, topo_guard, repaired_at, incremental_mode, explicit_dst_cpu_id);
-            co_return repair_row_level_start_response{repair_row_level_start_status::ok};
+            repair_row_level_start_response resp{repair_row_level_start_status::ok};
+            // Saves the master a repair_get_estimated_partitions round trip; on failure
+            // it falls back to the separate RPC.
+            if (auto rm = repair.get_repair_meta(from_id, repair_meta_id); rm->use_start_with_estimate()) {
+                try {
+                    resp.estimated_partitions = co_await rm->get_estimated_partitions();
+                } catch (...) {
+                    rlogger.debug("repair[{}]: estimate in repair_row_level_start failed: {}", repair_meta_id, std::current_exception());
+                }
+            }
+            co_return resp;
         } catch (replica::no_such_column_family&) {
             co_return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
         }
@@ -2031,6 +2105,7 @@ public:
 
     // RPC handler
     static future<uint64_t> repair_get_estimated_partitions_handler(repair_service& rs, locator::host_id from, uint32_t repair_meta_id) {
+        utils::get_local_injector().inject("repair_estimated_partitions_rpc_fail", [] { throw std::runtime_error("repair_estimated_partitions_rpc_fail"); });
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::get_estimated_partitions_started);
         uint64_t partitions = co_await rm->get_estimated_partitions();
@@ -2050,6 +2125,7 @@ public:
 
     // RPC handler
     static future<> repair_set_estimated_partitions_handler(repair_service& rs, locator::host_id from, uint32_t repair_meta_id, uint64_t estimated_partitions) {
+        utils::get_local_injector().inject("repair_estimated_partitions_rpc_fail", [] { throw std::runtime_error("repair_estimated_partitions_rpc_fail"); });
         auto rm = rs.get_repair_meta(from, repair_meta_id);
         rm->set_repair_state_for_local_node(repair_state::set_estimated_partitions_started);
         co_await rm->set_estimated_partitions(estimated_partitions);
@@ -2059,18 +2135,21 @@ public:
     // RPC API
     // Return the largest sync point contained in the _row_buf , current _row_buf checksum, and the _row_buf size
     future<get_sync_boundary_response>
-    get_sync_boundary(locator::host_id remote_node, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_cpu_id) {
+    get_sync_boundary(locator::host_id remote_node, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_cpu_id, std::optional<uint64_t> estimated_partitions) {
         if (remote_node == myhostid()) {
-            co_return co_await get_sync_boundary_handler(skipped_sync_boundary);
+            co_return co_await get_sync_boundary_handler(skipped_sync_boundary, estimated_partitions);
         }
         stats().rpc_call_nr++;
-        co_return co_await ser::repair_rpc_verbs::send_repair_get_sync_boundary(&_messaging, remote_node, _repair_meta_id, skipped_sync_boundary, dst_cpu_id);
+        co_return co_await ser::repair_rpc_verbs::send_repair_get_sync_boundary(&_messaging, remote_node, _repair_meta_id, skipped_sync_boundary, dst_cpu_id, estimated_partitions);
     }
 
     // RPC handler
     future<get_sync_boundary_response>
-    get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary) {
+    get_sync_boundary_handler(std::optional<repair_sync_boundary> skipped_sync_boundary, std::optional<uint64_t> estimated_partitions) {
         auto gate_held = _gate.hold();
+        if (estimated_partitions) {
+            co_await set_estimated_partitions(*estimated_partitions);
+        }
         auto& cf = _db.local().find_column_family(_schema->id());
         cf.update_off_strategy_trigger();
         co_return co_await get_sync_boundary(std::move(skipped_sync_boundary));
@@ -2488,6 +2567,57 @@ void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_
     }
 }
 
+future<std::optional<decoded_row_hashes>>
+decode_peer_row_hashes(const repair_hash_set& local, repair_hash_sketch peer_sketch, repair_hash peer_combined_hash) {
+    if (!peer_sketch.well_formed()) {
+        co_return std::nullopt;
+    }
+    auto local_sketch = repair_hash_sketch::with_cells(peer_sketch.cells());
+    repair_hash combined;
+    for (auto& h : local) {
+        local_sketch.add(h.hash);
+        combined.add(h);
+        co_await coroutine::maybe_yield();
+    }
+    // subtract() and decode() don't yield; a follower sends cells < 0.57 x rows
+    // (see the size check in get_combined_row_hash_with_sketch_handler).
+    peer_sketch.subtract(local_sketch);
+    auto diff = std::move(peer_sketch).decode();
+    if (!diff) {
+        co_return std::nullopt;
+    }
+    repair_hash_set removed;
+    for (auto h : diff->removed) {
+        if (!local.contains(repair_hash(h)) || !removed.emplace(h).second) {
+            co_return std::nullopt;
+        }
+        combined.add(repair_hash(h));
+        co_await coroutine::maybe_yield();
+    }
+    for (auto h : diff->added) {
+        if (local.contains(repair_hash(h))) {
+            co_return std::nullopt;
+        }
+        combined.add(repair_hash(h));
+        co_await coroutine::maybe_yield();
+    }
+    if (combined != peer_combined_hash) {
+        co_return std::nullopt;
+    }
+    repair_hash_set peer;
+    for (auto& h : local) {
+        if (!removed.contains(h)) {
+            peer.insert(peer.end(), h);
+        }
+        co_await coroutine::maybe_yield();
+    }
+    for (auto h : diff->added) {
+        peer.emplace(h);
+        co_await coroutine::maybe_yield();
+    }
+    co_return decoded_row_hashes{std::move(peer), diff->added.size() + diff->removed.size()};
+}
+
 // Must run inside a seastar thread
 static repair_hash_set
 get_set_diff(const repair_hash_set& x, const repair_hash_set& y) {
@@ -2496,6 +2626,25 @@ get_set_diff(const repair_hash_set& x, const repair_hash_set& y) {
     std::copy_if(x.begin(), x.end(), std::inserter(set_diff, set_diff.end()),
             [&y] (auto& item) { thread::maybe_yield(); return !y.contains(item); });
     return set_diff;
+}
+
+// Size of the symmetric difference of x and y. Must run inside a seastar thread.
+static size_t
+get_set_diff_size(const repair_hash_set& x, const repair_hash_set& y) {
+    size_t common = 0;
+    auto xi = x.begin(), yi = y.begin();
+    while (xi != x.end() && yi != y.end()) {
+        auto c = *xi <=> *yi;
+        common += c == 0;
+        if (c <= 0) {
+            ++xi;
+        }
+        if (c >= 0) {
+            ++yi;
+        }
+        thread::maybe_yield();
+    }
+    return x.size() + y.size() - 2 * common;
 }
 
 static future<> repair_get_row_diff_with_rpc_stream_process_op_slow_path(
@@ -3047,16 +3196,33 @@ future<> repair_service::init_ms_handlers() {
             });
         });
     });
+    ser::repair_rpc_verbs::register_repair_get_combined_row_hash_with_sketch(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+            std::optional<repair_sync_boundary> common_sync_boundary, shard_id dst_cpu_id, uint32_t sketch_cells, repair_hash master_hash) {
+        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id);
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        return container().invoke_on(shard, [from, repair_meta_id, sketch_cells, master_hash,
+                common_sync_boundary = std::move(common_sync_boundary)] (repair_service& local_repair) mutable {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
+            _metrics.tx_hashes_nr++;
+            rm->set_repair_state_for_local_node(repair_state::get_combined_row_hash_started);
+            return rm->get_combined_row_hash_with_sketch_handler(std::move(common_sync_boundary), sketch_cells, master_hash).then([rm] (get_combined_row_hash_with_sketch_response resp) {
+                rm->set_repair_state_for_local_node(repair_state::get_combined_row_hash_finished);
+                return resp;
+            });
+        });
+    });
     ser::repair_rpc_verbs::register_repair_get_sync_boundary(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
-            std::optional<repair_sync_boundary> skipped_sync_boundary, rpc::optional<shard_id> dst_cpu_id_opt) {
+            std::optional<repair_sync_boundary> skipped_sync_boundary, rpc::optional<shard_id> dst_cpu_id_opt,
+            rpc::optional<std::optional<uint64_t>> estimated_partitions) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
-        return container().invoke_on(shard, [from, repair_meta_id,
+        return container().invoke_on(shard, [from, repair_meta_id, estimated_partitions = estimated_partitions.value_or(std::nullopt),
                 skipped_sync_boundary = std::move(skipped_sync_boundary)] (repair_service& local_repair) mutable {
             auto rm = local_repair.get_repair_meta(from, repair_meta_id);
             rm->set_repair_state_for_local_node(repair_state::get_sync_boundary_started);
-            return rm->get_sync_boundary_handler(std::move(skipped_sync_boundary)).then([rm] (get_sync_boundary_response resp) {
+            return rm->get_sync_boundary_handler(std::move(skipped_sync_boundary), estimated_partitions).then([rm] (get_sync_boundary_response resp) {
                 rm->set_repair_state_for_local_node(repair_state::get_sync_boundary_finished);
                 return resp;
             });
@@ -3417,7 +3583,8 @@ private:
             // `_skipped_sync_boundary` if it is not std::nullopt.
             ns.state = repair_state::get_sync_boundary_started;
             try {
-                get_sync_boundary_response res = co_await master.get_sync_boundary(node, _skipped_sync_boundary, dst_cpu_id);
+                get_sync_boundary_response res = co_await master.get_sync_boundary(node, _skipped_sync_boundary, dst_cpu_id,
+                        master.use_start_with_estimate() ? std::make_optional(_estimated_partitions) : std::nullopt);
                 ns.state = repair_state::get_sync_boundary_finished;
                 master.stats().row_from_disk_bytes[node] += res.new_rows_size;
                 master.stats().row_from_disk_nr[node] += res.new_rows_nr;
@@ -3478,7 +3645,9 @@ private:
         // moved from the `_row_buf` to `_working_row_buf`.
         std::vector<repair_hash> combined_hashes;
         combined_hashes.resize(master.all_nodes().size());
-        parallel_for_each(std::views::iota(size_t(0), master.all_nodes().size()), coroutine::lambda([&] (size_t idx) -> future<> {
+        const bool use_sketch = master.use_sketch();
+        std::vector<std::optional<repair_hash_sketch>> sketches(master.all_nodes().size());
+        auto get_combined_hash = [&] (size_t idx) -> future<> {
             // Request combined hashes from all nodes between (_last_sync_boundary, _current_sync_boundary]
             // Each node will
             // - Set `_current_sync_boundary` to `_common_sync_boundary`
@@ -3493,10 +3662,15 @@ private:
             auto& ns = master.all_nodes()[idx];
             ns.state = repair_state::get_combined_row_hash_started;
             try {
-                get_combined_row_hash_response resp = co_await master.get_combined_row_hash(_common_sync_boundary, ns.node, ns.shard);
+                if (use_sketch && idx > 0) {
+                    auto resp = co_await master.get_combined_row_hash_with_sketch(_common_sync_boundary, ns.node, ns.shard, ns.sketch_cells(), combined_hashes[0]);
+                    combined_hashes[idx] = resp.hash;
+                    sketches[idx] = std::move(resp.sketch);
+                } else {
+                    combined_hashes[idx] = co_await master.get_combined_row_hash(_common_sync_boundary, ns.node, ns.shard);
+                }
                 master.all_nodes()[idx].state = repair_state::get_combined_row_hash_finished;
-                rlogger.debug("Calling master.get_combined_row_hash for node {}, got combined_hash={}", master.all_nodes()[idx].node, resp);
-                combined_hashes[idx]= std::move(resp);
+                rlogger.debug("Calling master.get_combined_row_hash for node {}, got combined_hash={}", master.all_nodes()[idx].node, combined_hashes[idx]);
             } catch (...) {
                 auto ep = std::current_exception();
                 auto& node = master.all_nodes()[idx].node;
@@ -3504,7 +3678,12 @@ private:
                         _rstate.global_repair_id.uuid(), node, _rstate.get_keyspace(), _cf_name, _range, ep);
                 std::rethrow_exception(ep);
             }
-        })).get();
+        };
+        // With sketches, the master's own hash goes first: followers in sync with it send none.
+        if (use_sketch) {
+            get_combined_hash(0).get();
+        }
+        parallel_for_each(std::views::iota(size_t(use_sketch), master.all_nodes().size()), get_combined_hash).get();
 
         // If all the peers has the same combined_hashes. This means they contain
         // the identical rows. So there is no need to sync for this sync boundary.
@@ -3514,10 +3693,20 @@ private:
             // `_working_row_buf` on all the nodes are the same
             // This is the second fast path.
             master.stats().round_nr_fast_path_same_combined_hashes++;
+            if (use_sketch) {
+                for (auto& ns : master.all_nodes() | std::views::drop(1)) {
+                    ns.record_diff(0);
+                }
+            }
             return op_status::next_round;
         }
 
         master.reset_peer_row_hash_sets();
+        // Sketches were taken against the master's rows before any are pulled below.
+        std::optional<repair_hash_set> local_at_compare;
+        if (use_sketch) {
+            local_at_compare = master.working_row_hashes().get();
+        }
         // Note: We can not work on _all_live_peer_nodes in parallel,
         // because syncing with _all_live_peer_nodes in serial avoids
         // getting the same rows from more than one peers.
@@ -3541,6 +3730,9 @@ private:
                 master.peer_row_hash_sets(node_idx) = master.working_row_hashes().get();
                 rlogger.debug("Calling optimize master.working_row_hashes for node {}, hash_sets={}",
                     node, master.peer_row_hash_sets(node_idx).size());
+                if (use_sketch) {
+                    ns.record_diff(0);
+                }
                 continue;
             }
 
@@ -3558,13 +3750,32 @@ private:
                     master.get_row_diff_and_update_peer_row_hash_sets(node, node_idx, dst_cpu_id);
                     ns.state = repair_state::get_row_diff_and_update_peer_row_hash_sets_finished;
                 }
+                // The peer's rows are the whole difference; sizes its next sketch out of being sent.
+                if (use_sketch) {
+                    ns.record_diff(master.peer_row_hash_sets(node_idx).size());
+                }
                 continue;
             }
 
             rlogger.debug("Before master.get_full_row_hashes for node {}, hash_sets={}",
                 node, master.peer_row_hash_sets(node_idx).size());
-            // Ask the peer to send the full list hashes in the working row buf.
-            if (master.use_rpc_stream()) {
+            std::optional<decoded_row_hashes> decoded;
+            if (auto& sketch = sketches[node_idx + 1]) {
+                const auto cells = sketch->cells();
+                if (!utils::get_local_injector().enter("repair_row_hash_sketch_decode_fail")) {
+                    decoded = decode_peer_row_hashes(*local_at_compare, std::move(*sketch), combined_hashes[node_idx + 1]).get();
+                }
+                ++(decoded ? _metrics.sketch_decoded_nr : _metrics.sketch_fallback_nr);
+                rlogger.debug("Row hash sketch from {}: cells={} decoded={}", node, cells, bool(decoded));
+            } else if (use_sketch && combined_hashes[node_idx + 1] == combined_hashes[0]) {
+                // In sync with the master's compare-time rows, so it sent no sketch.
+                decoded = decoded_row_hashes{*local_at_compare, 0};
+            }
+            // Use the decoded sketch, else ask the peer to send the full list hashes in the working row buf.
+            if (decoded) {
+                master.peer_row_hash_sets(node_idx) = std::move(decoded->hashes);
+                ns.record_diff(decoded->diff_size);
+            } else if (master.use_rpc_stream()) {
                 ns.state = repair_state::get_full_row_hashes_with_rpc_stream_started;
                 master.peer_row_hash_sets(node_idx) = master.get_full_row_hashes_with_rpc_stream(node, node_idx, dst_cpu_id).get();
                 ns.state = repair_state::get_full_row_hashes_with_rpc_stream_finished;
@@ -3575,6 +3786,9 @@ private:
             }
             rlogger.debug("After master.get_full_row_hashes for node {}, hash_sets={}",
                 node, master.peer_row_hash_sets(node_idx).size());
+            if (use_sketch && !decoded) {
+                ns.record_diff(get_set_diff_size(master.peer_row_hash_sets(node_idx), *local_at_compare));
+            }
 
             // With hashes of rows from peer node, we can figure out
             // what rows repair master is missing. Note we get missing
@@ -3838,12 +4052,17 @@ public:
                 parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
                     const auto& node = ns.node;
                     ns.state = repair_state::row_level_start_started;
-                    co_await master.repair_row_level_start(node, _rstate.get_keyspace(), _cf_name, _range, schema_version, _rstate.reason(), compaction_time, ns.shard);
+                    auto estimate = co_await master.repair_row_level_start(node, _rstate.get_keyspace(), _cf_name, _range, schema_version, _rstate.reason(), compaction_time, ns.shard);
                     ns.state = repair_state::row_level_start_finished;
                     nodes_to_stop.push_back(ns);
-                    ns.state = repair_state::get_estimated_partitions_started;
-                    uint64_t partitions = co_await master.repair_get_estimated_partitions(node, ns.shard);
-                    ns.state = repair_state::get_estimated_partitions_finished;
+                    uint64_t partitions;
+                    if (estimate) {
+                        partitions = *estimate;
+                    } else {
+                        ns.state = repair_state::get_estimated_partitions_started;
+                        partitions = co_await master.repair_get_estimated_partitions(node, ns.shard);
+                        ns.state = repair_state::get_estimated_partitions_finished;
+                    }
                     rlogger.trace("Get repair_get_estimated_partitions for node={}, estimated_partitions={}", node, partitions);
                     _estimated_partitions += partitions;
                 })).get();
@@ -3869,13 +4088,16 @@ public:
                     _estimated_partitions *= _rstate.rs.get_config().repair_partition_count_estimation_ratio();
                 }
 
-                parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
-                    const auto& node = ns.node;
-                    rlogger.trace("Get repair_set_estimated_partitions for node={}, estimated_partitions={}", node, _estimated_partitions);
-                    ns.state = repair_state::set_estimated_partitions_started;
-                    co_await master.repair_set_estimated_partitions(node, _estimated_partitions, ns.shard);
-                    ns.state = repair_state::set_estimated_partitions_finished;
-                })).get();
+                // Otherwise the estimate goes out with every get_sync_boundary.
+                if (!master.use_start_with_estimate()) {
+                    parallel_for_each(master.all_nodes(), coroutine::lambda([&] (repair_node_state& ns) -> future<> {
+                        const auto& node = ns.node;
+                        rlogger.trace("Get repair_set_estimated_partitions for node={}, estimated_partitions={}", node, _estimated_partitions);
+                        ns.state = repair_state::set_estimated_partitions_started;
+                        co_await master.repair_set_estimated_partitions(node, _estimated_partitions, ns.shard);
+                        ns.state = repair_state::set_estimated_partitions_finished;
+                    })).get();
+                }
 
                 while (true) {
                     auto status = negotiate_sync_boundary(master);
