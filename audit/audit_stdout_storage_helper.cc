@@ -29,24 +29,74 @@ namespace audit {
 
 namespace {
 
-// Passes `value` to `put` in pieces, with quotes, backslashes and ASCII control
-// characters escaped, so the record stays on one line.
+// Returns the length of the well-formed UTF-8 sequence that the non-empty `s`
+// starts with, or 0 if it starts with none.
+size_t utf8_sequence_length(std::string_view s) {
+    auto byte = [s] (size_t i) { return static_cast<unsigned char>(s[i]); };
+    auto lead = byte(0);
+    if (lead < 0x80) {
+        return 1;
+    }
+    size_t length;
+    // The bounds of the second byte rule out the overlong forms, surrogates and
+    // code points past U+10FFFF that the lead byte lets through.
+    unsigned char low = 0x80;
+    unsigned char high = 0xbf;
+    if (lead >= 0xc2 && lead <= 0xdf) {
+        length = 2;
+    } else if (lead >= 0xe0 && lead <= 0xef) {
+        length = 3;
+        low = lead == 0xe0 ? 0xa0 : 0x80;
+        high = lead == 0xed ? 0x9f : 0xbf;
+    } else if (lead >= 0xf0 && lead <= 0xf4) {
+        length = 4;
+        low = lead == 0xf0 ? 0x90 : 0x80;
+        high = lead == 0xf4 ? 0x8f : 0xbf;
+    } else {
+        return 0;
+    }
+    if (s.size() < length || byte(1) < low || byte(1) > high) {
+        return 0;
+    }
+    for (size_t i = 2; i < length; ++i) {
+        if (byte(i) < 0x80 || byte(i) > 0xbf) {
+            return 0;
+        }
+    }
+    return length;
+}
+
+// Passes `value` to `put` in pieces, as valid UTF-8 with quotes, backslashes and
+// control characters escaped, so the record stays on one line and inert in a terminal.
 void put_escaped(auto&& put, std::string_view value) {
-    auto put_hex_escape = [&put] (unsigned char byte) {
+    auto put_hex_escape = [&put] (std::string_view prefix, unsigned char byte) {
         constexpr std::string_view digits = "0123456789abcdef";
-        std::array<char, 4> escape = {'\\', 'x', digits[byte >> 4], digits[byte & 0xf]};
-        put(std::string_view(escape.data(), escape.size()));
+        std::array<char, 6> escape;
+        auto end = std::ranges::copy(prefix, escape.begin()).out;
+        *end++ = digits[byte >> 4];
+        *end++ = digits[byte & 0xf];
+        put(std::string_view(escape.data(), end - escape.begin()));
     };
     size_t unwritten = 0;
-    for (size_t i = 0; i < value.size(); ++i) {
+    size_t i = 0;
+    while (i < value.size()) {
         auto c = static_cast<unsigned char>(value[i]);
-        if (c != '"' && c != '\\' && c >= 0x20 && c != 0x7f) {
+        auto length = utf8_sequence_length(value.substr(i));
+        // U+0080 to U+009F, the C1 control characters
+        bool c1 = length == 2 && c == 0xc2 && static_cast<unsigned char>(value[i + 1]) < 0xa0;
+        if (length != 0 && !c1 && c != '"' && c != '\\' && c >= 0x20 && c != 0x7f) {
+            i += length;
             continue;
         }
         if (i > unwritten) {
             put(value.substr(unwritten, i - unwritten));
         }
-        if (c == '\n') {
+        if (length == 0) {
+            put_hex_escape("\\x", c);
+            length = 1;
+        } else if (c1) {
+            put_hex_escape("\\u00", static_cast<unsigned char>(value[i + 1]));
+        } else if (c == '\n') {
             put("\\n");
         } else if (c == '\r') {
             put("\\r");
@@ -57,9 +107,10 @@ void put_escaped(auto&& put, std::string_view value) {
         } else if (c == '\\') {
             put("\\\\");
         } else {
-            put_hex_escape(c);
+            put_hex_escape("\\x", c);
         }
-        unwritten = i + 1;
+        i += length;
+        unwritten = i;
     }
     if (unwritten < value.size()) {
         put(value.substr(unwritten));
