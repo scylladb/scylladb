@@ -8,6 +8,7 @@
 #############################################################################
 
 import json
+import time
 
 import pytest
 from cassandra.protocol import ConfigurationException
@@ -363,20 +364,33 @@ def test_logstor_mutation_fragments_source_restriction(cql, test_keyspace):
         for i in range(8):
             cql.execute(f"INSERT INTO {table} (pk, v) VALUES ({i}, '{i}-{large_value}')")
 
-        # Group the partitions by the log source holding them.
-        pks_by_source = {}
-        for row in cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table})"):
-            assert row.mutation_source.startswith('logstor-log:')
-            pks_by_source.setdefault(row.mutation_source, set()).add(row.pk)
-        assert set().union(*pks_by_source.values()) == set(range(8))
-        assert len(pks_by_source) > 1
+        # The separator asynchronously moves records out of the shared active
+        # segment, and a record's source name changes when it moves. So a
+        # record can move between the unrestricted dump and the restricted
+        # queries below, and a restricted query then misses it. Redo the
+        # grouping and the check until one attempt sees a stable layout.
+        for attempt in range(10):
+            # Group the partitions by the log source holding them.
+            pks_by_source = {}
+            for row in cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table})"):
+                assert row.mutation_source.startswith('logstor-log:')
+                pks_by_source.setdefault(row.mutation_source, set()).add(row.pk)
+            assert set().union(*pks_by_source.values()) == set(range(8))
+            assert len(pks_by_source) > 1
 
-        # Restricting the query to one source returns exactly the partitions
-        # stored in it, with all their fragments.
-        for source, pks in pks_by_source.items():
-            rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE mutation_source = '{source}' ALLOW FILTERING"))
-            assert {r.pk for r in rows} == pks
-            assert len(rows) == 3 * len(pks)
+            # Restricting the query to one source returns exactly the partitions
+            # stored in it, with all their fragments.
+            mismatches = []
+            for source, pks in pks_by_source.items():
+                rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE mutation_source = '{source}' ALLOW FILTERING"))
+                if ({r.pk for r in rows} != pks or len(rows) != 3 * len(pks)
+                        or any(r.mutation_source != source for r in rows)):
+                    mismatches.append((source, sorted(pks), sorted(r.pk for r in rows), len(rows)))
+            if not mismatches:
+                break
+            if attempt < 9:
+                time.sleep(0.1)
+        assert not mismatches, f"restricted queries disagree with the dump in all {attempt + 1} attempts, last: {mismatches}"
 
         # A range over the source kind returns all the log sources.
         rows = list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table})"
