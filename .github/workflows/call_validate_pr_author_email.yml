@@ -12,6 +12,10 @@ permissions:
   pull-requests: write
   statuses: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   validate_pr_author_email:
     uses: scylladb/github-automation/.github/workflows/validate_pr_author_email.yml@main
