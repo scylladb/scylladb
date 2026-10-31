@@ -35,8 +35,16 @@
 #include "test/lib/test_utils.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "replica/database.hh"
+#include "test/lib/eventually.hh"
+#include "utils/error_injection.hh"
 
 BOOST_AUTO_TEST_SUITE(schema_change_test)
+
+// Common setup shared by the prepared-statement table-index tests below.
+static future<> create_tests_table1(cql_test_env& e) {
+    co_await e.execute_cql("create keyspace tests with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };");
+    co_await e.execute_cql("create table tests.table1 (pk int primary key, c1 int);");
+}
 
 SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
     return do_with_cql_env([](cql_test_env& e) {
@@ -618,6 +626,255 @@ SEASTAR_TEST_CASE(test_statement_prepared_before_table_recreation_is_rejected) {
                 insert_stmt->execute(qp, qs, options, std::nullopt).get(),
                 exceptions::invalid_request_exception,
                 exception_predicate::message_contains("unconfigured table tbl"));
+    });
+}
+
+// A schema change on one table must leave other tables' prepared statements valid.
+SEASTAR_TEST_CASE(test_schema_change_does_not_invalidate_unrelated_prepared_statements) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            create_tests_table1(e).get();
+            e.execute_cql("create table tests.table2 (pk int primary key, c1 int);").get();
+
+            auto id1 = e.prepare("select * from tests.table1;").get();
+            auto id2 = e.prepare("select * from tests.table2;").get();
+
+            // Both statements are valid before any schema change.
+            e.execute_prepared(id1, {}).get();
+            e.execute_prepared(id2, {}).get();
+
+            e.execute_cql("alter table tests.table2 add s1 int;").get();
+
+            // table2's statement was invalidated by the ALTER...
+            try {
+                e.execute_prepared(id2, {}).get();
+                BOOST_FAIL("Should have failed");
+            } catch (const not_prepared_exception&) {
+                // expected
+            }
+
+            // ...but table1's statement, which doesn't depend on table2, must
+            // still be usable without re-preparing.
+            e.execute_prepared(id1, {}).get();
+        });
+    });
+}
+
+// TRUNCATE has no dependent tables, so ALTER evicts only the SELECT.
+SEASTAR_TEST_CASE(test_truncate_prepared_statement_vs_schema_change) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            create_tests_table1(e).get();
+
+            auto trunc_id = e.prepare("truncate tests.table1;").get();
+            auto sel_id = e.prepare("select * from tests.table1;").get();
+
+            BOOST_REQUIRE(bool(e.local_qp().get_prepared(trunc_id)));
+            BOOST_REQUIRE(bool(e.local_qp().get_prepared(sel_id)));
+
+            e.execute_cql("alter table tests.table1 add s1 int;").get();
+
+            BOOST_CHECK(!bool(e.local_qp().get_prepared(sel_id)));
+            BOOST_CHECK(bool(e.local_qp().get_prepared(trunc_id)));
+        });
+    });
+}
+
+// DROP TABLE must invalidate cached statements against it, same as ALTER.
+SEASTAR_TEST_CASE(test_drop_table_invalidates_prepared_statement) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            create_tests_table1(e).get();
+
+            auto id = e.prepare("select * from tests.table1;").get();
+            e.execute_prepared(id, {}).get();
+
+            e.execute_cql("drop table tests.table1;").get();
+
+            try {
+                e.execute_prepared(id, {}).get();
+                BOOST_FAIL("Should have failed");
+            } catch (const not_prepared_exception&) {
+                // expected
+            }
+        });
+    });
+}
+
+// DROP KEYSPACE invalidates statements on all its tables, and only those.
+SEASTAR_TEST_CASE(test_drop_keyspace_invalidates_all_its_tables_prepared_statements) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            create_tests_table1(e).get();
+            e.execute_cql("create table tests.table2 (pk int primary key, c1 int);").get();
+            e.execute_cql("create keyspace tests_other with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+            e.execute_cql("create table tests_other.table1 (pk int primary key, c1 int);").get();
+
+            auto id1 = e.prepare("select * from tests.table1;").get();
+            auto id2 = e.prepare("select * from tests.table2;").get();
+            auto other_id = e.prepare("select * from tests_other.table1;").get();
+
+            e.execute_prepared(id1, {}).get();
+            e.execute_prepared(id2, {}).get();
+            e.execute_prepared(other_id, {}).get();
+
+            e.execute_cql("drop keyspace tests;").get();
+
+            for (auto id : {id1, id2}) {
+                try {
+                    e.execute_prepared(id, {}).get();
+                    BOOST_FAIL("Should have failed");
+                } catch (const not_prepared_exception&) {
+                    // expected
+                }
+            }
+
+            // Unrelated keyspace's statement must survive.
+            e.execute_prepared(other_id, {}).get();
+        });
+    });
+}
+
+// A statement prepared against a dropped table must not survive its recreation under the same name.
+SEASTAR_TEST_CASE(test_drop_and_recreate_same_table_name_invalidates_old_statement) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            create_tests_table1(e).get();
+
+            // Distinct query text so the two statements get separate cache entries.
+            auto old_id = e.prepare("select pk, c1 from tests.table1;").get();
+            e.execute_prepared(old_id, {}).get();
+
+            e.execute_cql("drop table tests.table1;").get();
+            e.execute_cql("create table tests.table1 (pk int primary key, c1 int, c2 int);").get();
+
+            auto new_id = e.prepare("select pk, c1, c2 from tests.table1;").get();
+            e.execute_prepared(new_id, {}).get();
+
+            try {
+                e.execute_prepared(old_id, {}).get();
+                BOOST_FAIL("Should have failed");
+            } catch (const not_prepared_exception&) {
+                // expected
+            }
+
+            // The new statement must remain valid.
+            e.execute_prepared(new_id, {}).get();
+        });
+    });
+}
+
+// A batch over two tables is invalidated when either table changes.
+SEASTAR_TEST_CASE(test_schema_change_invalidates_batch_statement_over_either_table) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            create_tests_table1(e).get();
+            e.execute_cql("create table tests.table2 (pk int primary key, c1 int);").get();
+
+            auto id = e.prepare(
+                "begin batch "
+                "insert into tests.table1 (pk, c1) values (1, 1); "
+                "insert into tests.table2 (pk, c1) values (1, 1); "
+                "apply batch;").get();
+            e.execute_prepared(id, {}).get();
+
+            e.execute_cql("alter table tests.table2 add s1 int;").get();
+
+            try {
+                e.execute_prepared(id, {}).get();
+                BOOST_FAIL("Should have failed");
+            } catch (const not_prepared_exception&) {
+                // expected
+            }
+        });
+    });
+}
+
+// A stale pinned entry destroyed after a re-prepare under the same key must not unindex the new entry.
+SEASTAR_TEST_CASE(test_pinned_reprepare_race_does_not_corrupt_table_index) {
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            create_tests_table1(e).get();
+
+            auto& errj = utils::get_local_injector();
+            errj.enable("query_processor_prepare_wait_after_cache_get", true);
+
+            // Hold the first prepare()'s pin on its entry.
+            auto old_prepare_fut = e.prepare("select * from tests.table1;");
+            BOOST_REQUIRE(eventually_true([&] {
+                return errj.waiters("query_processor_prepare_wait_after_cache_get") > 0;
+            }));
+
+            // Evicts the old entry from the cache; the pin keeps it alive.
+            e.execute_cql("alter table tests.table1 add s1 int;").get();
+
+            // Same cache key, new entry.
+            auto new_id = e.prepare("select * from tests.table1;").get();
+
+            // Destroys the old entry.
+            errj.receive_message("query_processor_prepare_wait_after_cache_get");
+            old_prepare_fut.get();
+
+            e.execute_prepared(new_id, {}).get();
+
+            // The new statement must still be found and invalidated.
+            e.execute_cql("alter table tests.table1 add s2 int;").get();
+            try {
+                e.execute_prepared(new_id, {}).get();
+                BOOST_FAIL("Should have failed");
+            } catch (const not_prepared_exception&) {
+                // expected
+            }
+        });
+    });
+#else
+    BOOST_TEST_MESSAGE("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev)");
+    return make_ready_future<>();
+#endif
+}
+
+// An indexed SELECT also depends on the index's view, not just the base table.
+SEASTAR_TEST_CASE(test_schema_change_on_view_invalidates_indexed_select_statement) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            create_tests_table1(e).get();
+            e.execute_cql("create index on tests.table1 (c1);").get();
+
+            auto id = e.prepare("select * from tests.table1 where c1 = 1;").get();
+            e.execute_prepared(id, {}).get();
+
+            // Alter the index's view, not the base table.
+            e.execute_cql("alter materialized view tests.table1_c1_idx_index with compaction = {'class': 'SizeTieredCompactionStrategy'};").get();
+
+            try {
+                e.execute_prepared(id, {}).get();
+                BOOST_FAIL("Should have failed");
+            } catch (const not_prepared_exception&) {
+                // expected
+            }
+        });
+    });
+}
+
+// MUTATION_FRAGMENTS(tbl) has a synthetic schema but depends on the underlying table.
+SEASTAR_TEST_CASE(test_schema_change_invalidates_mutation_fragments_select_statement) {
+    return do_with_cql_env([](cql_test_env& e) {
+        return seastar::async([&] {
+            create_tests_table1(e).get();
+
+            auto id = e.prepare("select * from MUTATION_FRAGMENTS(tests.table1);").get();
+            e.execute_prepared(id, {}).get();
+
+            e.execute_cql("alter table tests.table1 add c2 int;").get();
+
+            try {
+                e.execute_prepared(id, {}).get();
+                BOOST_FAIL("Should have failed");
+            } catch (const not_prepared_exception&) {
+                // expected
+            }
+        });
     });
 }
 

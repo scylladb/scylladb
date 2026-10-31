@@ -28,7 +28,7 @@ public:
 
     virtual uint32_t get_bound_terms() const override;
 
-    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+    std::vector<dependent_table> dependent_tables() const override { return {}; }
 
     // Only selects the active keyspace, it does not touch user data.
     bool should_reclassify_control_connection() const override {

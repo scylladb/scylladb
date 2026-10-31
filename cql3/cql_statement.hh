@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <concepts>
 #include <optional>
 #include <string_view>
 
@@ -18,6 +19,7 @@
 #include "service/raft/group0_fwd.hh"
 #include "audit/audit.hh"
 #include "utils/chunked_string.hh"
+#include "schema/schema_fwd.hh"
 
 namespace service {
 
@@ -48,6 +50,16 @@ class query_options;
 
 // A vector of CQL warnings generated during execution of a statement.
 using cql_warnings_vec = std::vector<sstring>;
+
+// Identified by table_id; names are kept because drop notifications only carry names.
+struct dependent_table {
+    table_id id;
+    sstring ks_name;
+    sstring cf_name;
+
+    template <std::same_as<schema> S>
+    explicit dependent_table(const S& s) : id(s.id()), ks_name(s.ks_name()), cf_name(s.cf_name()) {}
+};
 
 class cql_statement {
     timeout_config_selector _timeout_config_selector;
@@ -118,7 +130,8 @@ public:
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
             execute_without_checking_exception_message(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const;
 
-    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const = 0;
+    // The tables this statement depends on, used to index the prepared-statement cache.
+    virtual std::vector<dependent_table> dependent_tables() const = 0;
 
     // The plan this statement scans, to be checked against the one a paging state
     // pins. Disengaged for statements that are never paged. See #18992.
