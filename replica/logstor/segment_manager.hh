@@ -75,6 +75,10 @@ struct segment_manager_usage {
     // refers to. Less than disk_usage by the free segments and by the room in the files holding
     // them, and the logstor part of the load a node reports.
     uint64_t segment_bytes_in_use{0};
+    // The space the segments take from the filesystem: disk_usage, or segment_bytes_in_use with
+    // sparse files, whose blocks are free until a segment writes them. A freed segment keeps the
+    // blocks it wrote, which this does not count.
+    uint64_t space_on_disk{0};
     // Memory the segment manager holds: the descriptors of every segment and the buffers of the
     // compaction and separator pools. The indexes of the tables are not part of it, nor is the
     // buffered writer of the write path, which logstor holds rather than the segment manager.

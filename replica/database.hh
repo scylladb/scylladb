@@ -2244,6 +2244,8 @@ public:
     // Space the logstor segments holding data take on this shard, which is less than the space of
     // the files logstor has allocated to hold them. Zero when logstor is unused.
     uint64_t get_logstor_disk_space_used() const;
+    // Space the logstor files of this shard take from the filesystem. Zero when logstor is unused.
+    uint64_t logstor_space_on_disk() const;
 
     // Space the storage of this shard takes on disk, which is what a node reports as its load: the
     // sstables of all its tables plus the logstor segments holding their data. Slightly more than
