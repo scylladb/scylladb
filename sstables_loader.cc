@@ -250,10 +250,17 @@ private:
             table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
         sst->set_sstable_level(0);
         auto units = co_await sst_manager.dir_semaphore().get_units(1);
+        // The sstable was downloaded for this shard, which is why it was submitted
+        // here, so there is nothing to work out: declare this shard its owner. Letting
+        // load() recompute it would also drag in an ERM, and _erm belongs to the shard
+        // which created the streamer, not to this one.
         sstables::sstable_open_config cfg {
+            .current_shard_as_sstable_owner = true,
             .unsealed_sstable = true,
         };
-        co_await sst->load(_erm->get_sharder(*table.schema()), cfg);
+        // Unused given current_shard_as_sstable_owner, but load() wants a sharder.
+        dht::auto_refreshing_sharder sharder(table.shared_from_this());
+        co_await sst->load(sharder, cfg);
         co_await table.add_new_sstable_and_update_cache(sst, [&sst_manager, sst] (sstables::shared_sstable loading_sst) -> future<> {
             if (loading_sst == sst) {
                 auto writer_cfg = sst_manager.configure_writer(loading_sst->get_origin());
@@ -956,11 +963,17 @@ future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, c
     auto sst = sst_manager.make_sstable(
         table.schema(), table.get_storage_options(), min_info.generation, min_info.sid, sstables::sstable_state::normal, min_info.version, min_info.format);
     sst->set_sstable_level(0);
-    auto erm = table.get_effective_replication_map();
+    // The sstable was downloaded for this shard, which is why it was submitted here,
+    // so there is nothing to work out: declare this shard its owner. The tablet is
+    // mid-restore, with its tablet count pinned, so the mapping which chose the shard
+    // cannot have moved since.
     sstables::sstable_open_config cfg {
+        .current_shard_as_sstable_owner = true,
         .unsealed_sstable = true,
     };
-    co_await sst->load(erm->get_sharder(*table.schema()), cfg);
+    // Unused given current_shard_as_sstable_owner, but load() wants a sharder.
+    dht::auto_refreshing_sharder sharder(table.shared_from_this());
+    co_await sst->load(sharder, cfg);
     if (!sst->sstable_identifier()) {
         on_internal_error(llog, "sstable identifier is required for tablet restore");
     }
