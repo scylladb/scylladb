@@ -96,8 +96,11 @@ inline void validate_config_values(
         }
         const auto raw_value = property_definitions::value_as_string(name, value);
         if (auto error = db::cluster_config_registry::validate_value(*opt, raw_value)) {
+            // std::string_view, not the sstring itself: fmt renders an sstring argument as
+            // the list of its characters here, so the reason would reach the user as
+            // ['e', 'x', ...] rather than as words.
             throw exceptions::configuration_exception(
-                    seastar::format("Invalid value for property '{}': {}", name, *error));
+                    seastar::format("Invalid value for property '{}': {}", name, std::string_view(*error)));
         }
     }
 }
