@@ -24,6 +24,7 @@
 #include "utils/chain_abort_source.hh"
 #include "utils/histogram_metrics_helper.hh"
 #include "utils/abstract_formatter.hh"
+#include "tracing/trace_state.hh"
 
 #include <fmt/ranges.h>
 #include <fmt/std.h>
@@ -264,9 +265,14 @@ public:
         return _tablet_map.get_tablet_raft_info(_tablet_id).group_id;
     }
 
-    // The tablet's migration stage, for log messages; nullopt when it isn't migrating.
-    std::optional<locator::tablet_transition_stage> transition_stage() const {
-        return _trinfo ? std::make_optional(_trinfo->stage) : std::nullopt;
+    // Formats " at stage X" while the tablet migrates and nothing otherwise, for log
+    // and trace messages.
+    auto stage_suffix() const {
+        return lambda_formatter([this] (fmt::format_context& ctx) {
+            if (_trinfo) {
+                fmt::format_to(ctx.out(), " at stage {}", _trinfo->stage);
+            }
+        });
     }
 
     // Whether the request may be served by this shard.
@@ -316,7 +322,7 @@ public:
         const auto leader_it = std::ranges::find(replicas, leader, &locator::tablet_replica::host);
         if (leader_it == replicas.end()) [[unlikely]] {
             on_internal_error(logger, fmt::format("replica_selector::routing_info: leader {} is not among the serving "
-                    "replicas {} of tablet {} at transition stage {}", leader, replicas, _tablet_id, transition_stage()));
+                    "replicas {} of tablet {}{}", leader, replicas, _tablet_id, stage_suffix()));
         }
         std::ranges::rotate(replicas, leader_it);
 
@@ -351,8 +357,10 @@ static need_redirect redirect_to_leader(locator::tablet_replica target, groups_m
         // executing the statement.
         .on_forwarding_finished = [container = &gm.container(), group_id] (locator::host_id_or_exception leader) {
             if (std::holds_alternative<locator::host_id>(leader)) {
+                logger.trace("Raft group {} has leader {}, caching it.", group_id, std::get<locator::host_id>(leader));
                 container->local().leader_cache().put(group_id, std::get<locator::host_id>(leader));
             } else {
+                logger.trace("Forwarding to the leader of raft group {} failed, forgetting it as the cached leader.", group_id);
                 container->local().leader_cache().erase(group_id);
             }
         },
@@ -364,7 +372,8 @@ static need_redirect redirect_to_replica(locator::tablet_replica target) {
     return { .target = target };
 }
 
-auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as, bool needs_leader)
+auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as, bool needs_leader,
+        const tracing::trace_state_ptr& trace_state)
     -> future<value_or_redirect<operation_ctx>>
 {
     auto erm = schema.table().get_effective_replication_map();
@@ -390,17 +399,31 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
         if (needs_leader) {
             if (const auto cached = _groups_manager.leader_cache().get(group_id)) {
                 if (const auto* target = replicas.find_replica(*cached); target && _gossiper.is_alive(target->host)) {
+                    tracing::trace(trace_state, "This shard isn't a serving replica of tablet {} of raft group {}{}, redirecting to the cached leader {}",
+                            replicas.tablet_id(), group_id, replicas.stage_suffix(), *target);
                     return make_ready_future<value_or_redirect<operation_ctx>>(
                         redirect_to_leader(*target, _groups_manager, group_id));
                 }
                 // Cached leader is no longer a replica/alive, evict it.
+                tracing::trace(trace_state, "The cached leader {} of raft group {} is not a live serving replica, evicting it",
+                        *cached, group_id);
                 _groups_manager.leader_cache().erase(group_id);
             }
-            return make_ready_future<value_or_redirect<operation_ctx>>(
-                redirect_to_leader(replicas.closest_replica(_gossiper), _groups_manager, group_id));
+            auto redirect = redirect_to_leader(replicas.closest_replica(_gossiper), _groups_manager, group_id);
+            tracing::trace(trace_state, "This shard isn't a serving replica of tablet {} of raft group {}{}, "
+                    "redirecting to the closest serving replica {} to find the leader",
+                    replicas.tablet_id(), group_id, replicas.stage_suffix(), redirect.target);
+            return make_ready_future<value_or_redirect<operation_ctx>>(std::move(redirect));
         }
-        return make_ready_future<value_or_redirect<operation_ctx>>(redirect_to_replica(replicas.closest_replica(_gossiper)));
+        auto redirect = redirect_to_replica(replicas.closest_replica(_gossiper));
+        tracing::trace(trace_state, "This shard isn't a serving replica of tablet {} of raft group {}{}, "
+                "redirecting to the closest serving replica {}",
+                replicas.tablet_id(), group_id, replicas.stage_suffix(), redirect.target);
+        return make_ready_future<value_or_redirect<operation_ctx>>(std::move(redirect));
     }
+
+    tracing::trace(trace_state, "This shard serves tablet {} of raft group {}{}",
+            replicas.tablet_id(), replicas.group_id(), replicas.stage_suffix());
 
     return utils::get_local_injector().inject(
         "sc_coordinator_wait_before_acquire_server", utils::wait_for_message(5min)
@@ -425,11 +448,14 @@ coordinator::coordinator(groups_manager& groups_manager, replica::database& db, 
 auto coordinator::mutate(schema_ptr schema,
         const dht::token& token,
         mutation_gen&& mutation_gen,
+        tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
         abort_source& as,
         std::optional<locator::tablet_version_block> tablet_version_block)
     -> future<value_or_redirect<mutate_result>>
 {
+    tracing::trace(trace_state, "Starting a strongly consistent write to {}.{}, token {}", schema->ks_name(), schema->cf_name(), token);
+
     auto aoe = abort_on_expiry<timeout_clock>(timeout);
     [[maybe_unused]] const auto sub = utils::chain_abort_source(aoe.abort_source(), as);
 
@@ -448,14 +474,17 @@ auto coordinator::mutate(schema_ptr schema,
         if (!op) {
             fmt::format_to(ctx.out(), "no operation context yet");
         } else if (!ts_with_term) {
-            fmt::format_to(ctx.out(), "tablet {}, no timestamp yet", op->replicas.tablet_id());
+            fmt::format_to(ctx.out(), "tablet {}, raft group {}{}, no timestamp yet",
+                    op->replicas.tablet_id(), op->replicas.group_id(), op->replicas.stage_suffix());
         } else {
-            fmt::format_to(ctx.out(), "tablet {}, term {}, timestamp {}",
-                    op->replicas.tablet_id(), ts_with_term->term, ts_with_term->timestamp);
+            fmt::format_to(ctx.out(), "tablet {}, raft group {}{}, term {}, timestamp {}",
+                    op->replicas.tablet_id(), op->replicas.group_id(), op->replicas.stage_suffix(),
+                    ts_with_term->term, ts_with_term->timestamp);
         }
     });
 
     auto filter_error = [&] (std::exception_ptr ex) -> std::exception_ptr {
+        tracing::trace(trace_state, "The strongly consistent write failed: {}", ex);
         // Unfortunately, timeouts can materialize in different forms depending
         // on which statement throws the exception.
         //
@@ -473,7 +502,7 @@ auto coordinator::mutate(schema_ptr schema,
             if (!_db.column_family_exists(schema->id())) {
                 return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
             }
-            logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
+            logger.debug("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             ++_stats.write_errors_timeout;
             return std::make_exception_ptr(write_timeout(schema->ks_name(), schema->cf_name()));
@@ -494,7 +523,7 @@ auto coordinator::mutate(schema_ptr schema,
                 "Strongly consistent write of {} bytes exceeds the limit of {} bytes", too_big->command_size, too_big->limit)));
         } else {
             ++_stats.write_errors_other;
-            logger.trace("mutate(): unknown exception {}, table {}.{}, token {}, {}",
+            logger.debug("mutate(): unknown exception {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
             return ex;
@@ -502,7 +531,7 @@ auto coordinator::mutate(schema_ptr schema,
     };
 
     auto op_result_future = co_await coroutine::as_future(
-            create_operation_ctx(*schema, token, aoe.abort_source(), true));
+            create_operation_ctx(*schema, token, aoe.abort_source(), true, trace_state));
 
     if (op_result_future.failed()) {
         co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
@@ -549,10 +578,12 @@ auto coordinator::mutate(schema_ptr schema,
                 // so tell the local server to forget that leader and wait for the next
                 // one. The wait may resolve with the same leader again, as long as it
                 // still leads; the retries end once it hands leadership over.
-                logger.debug("mutate(): table {}.{}, tablet {}, reported leader {} cannot be the leader "
-                    "in transition stage {}, waiting for a new leader",
+                logger.debug("mutate(): table {}.{}, tablet {}, reported leader {} cannot be the leader{}, "
+                    "waiting for a new leader",
                     schema->ks_name(), schema->cf_name(), op->replicas.tablet_id(), leader_host_id,
-                    op->replicas.transition_stage());
+                    op->replicas.stage_suffix());
+                tracing::trace(trace_state, "The reported leader {} can't lead{}, waiting for a new leader",
+                    leader_host_id, op->replicas.stage_suffix());
 
                 auto f = co_await coroutine::as_future(
                         op->raft_server.server().wait_for_leader(&aoe.abort_source(), true));
@@ -561,9 +592,16 @@ auto coordinator::mutate(schema_ptr schema,
                 }
                 continue;
             }
+            tracing::trace(trace_state, "This replica doesn't lead raft group {}, redirecting to the leader {}",
+                    op->replicas.group_id(), *target);
             co_return redirect_to_leader(*target, _groups_manager, op->replicas.group_id());
         }
         if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+            if (trace_state) {
+                tracing::trace(trace_state, "Waiting for a leader of raft group {}: {}, this replica is {} of its configuration",
+                        op->replicas.group_id(), op->raft_server.server().current_leader() ? "its leader state isn't ready yet" : "no leader is known",
+                        op->raft_server.server().get_configuration().contains(op->raft_server.server().id()) ? "a member" : "not a member");
+            }
             auto f = co_await coroutine::as_future(std::move(wait_for_leader->future));
             if (f.failed()) {
                 co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
@@ -587,11 +625,13 @@ auto coordinator::mutate(schema_ptr schema,
         write_mutation write {
             .mutation{mutation_gen(ts_with_term->timestamp)}
         };
-        logger.debug("mutate(): add_entry({}), {}",
+        logger.trace("mutate(): add_entry({}), {}",
             write.mutation.pretty_printer(schema), state_fmt);
 
         raft::command raft_cmd;
         ser::serialize(raft_cmd, raft_command{.change = std::move(write)});
+        tracing::trace(trace_state, "Adding an entry of {} bytes to raft group {} in term {} with timestamp {}",
+            raft_cmd.size(), op->replicas.group_id(), ts_with_term->term, ts_with_term->timestamp);
 
         // CAUTION: If a preemption point gets added between `begin_mutate`
         // and `add_entry`, add an explicit check that the term has not
@@ -602,6 +642,9 @@ auto coordinator::mutate(schema_ptr schema,
                 &aoe.abort_source()));
 
         if (!add_entry_result.failed()) {
+            logger.trace("The raft entry for table {}.{} was committed, {}.",
+                schema->ks_name(), schema->cf_name(), state_fmt);
+            tracing::trace(trace_state, "The raft entry was committed");
             // Names this node as the leader: begin_mutate() found it to be the leader, and
             // it is in the serving set.
             co_return mutate_result{
@@ -615,6 +658,7 @@ auto coordinator::mutate(schema_ptr schema,
         if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
             logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, {}",
                 ex, schema->ks_name(), schema->cf_name(), state_fmt);
+            tracing::trace(trace_state, "Adding the raft entry failed, retrying: {}", ex);
 
             continue;
         }
@@ -643,7 +687,12 @@ auto coordinator::query(schema_ptr schema,
         ? _stats.linearizable_read : _stats.non_linearizable_read;
     auto mark_read_latency = defer([&read_stats, &lc] () mutable noexcept { read_stats.mark(lc.stop().latency()); });
 
+    tracing::trace(trace_state, "Starting a strongly consistent {} read from {}.{}, token {}",
+        rtype == read_type::linearizable ? "linearizable" : "non-linearizable",
+        schema->ks_name(), schema->cf_name(), ranges[0].start()->value().token());
+
     auto filter_error = [&] (std::exception_ptr ex) -> std::exception_ptr {
+        tracing::trace(trace_state, "The strongly consistent read failed: {}", ex);
         // Unfortunately, timeouts can materialize in different forms depending
         // on which statement throws the exception.
         //
@@ -661,12 +710,12 @@ auto coordinator::query(schema_ptr schema,
             if (!_db.column_family_exists(schema->id())) {
                 return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
             }
-            logger.trace("query(): request timed out with error {}, table {}.{}, read cmd {}",
+            logger.debug("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_timeout;
             return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name()));
         } else {
-            logger.trace("query(): unknown exception {}, table {}.{}, read cmd {}",
+            logger.debug("query(): unknown exception {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             ++_stats.read_errors_other;
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
@@ -678,7 +727,8 @@ auto coordinator::query(schema_ptr schema,
         *schema,
         ranges[0].start()->value().token(),
         aoe.abort_source(),
-        rtype == read_type::linearizable));
+        rtype == read_type::linearizable,
+        trace_state));
 
     if (op_result_future.failed()) {
         co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
@@ -707,10 +757,12 @@ auto coordinator::query(schema_ptr schema,
                     // A leader outside the serving set: a replica a migration demoted,
                     // leading for one commit. Forget it and wait for the next one; see
                     // mutate().
-                    logger.debug("query(): table {}.{}, tablet {}, reported leader {} cannot be the leader "
-                        "in transition stage {}, waiting for a new leader",
+                    logger.debug("query(): table {}.{}, tablet {}, reported leader {} cannot be the leader{}, "
+                        "waiting for a new leader",
                         schema->ks_name(), schema->cf_name(), op.replicas.tablet_id(), leader_host_id,
-                        op.replicas.transition_stage());
+                        op.replicas.stage_suffix());
+                    tracing::trace(trace_state, "The reported leader {} can't lead{}, waiting for a new leader",
+                        leader_host_id, op.replicas.stage_suffix());
 
                     future<> f = co_await coroutine::as_future(
                             op.raft_server.server().wait_for_leader(&aoe.abort_source(), true));
@@ -719,9 +771,16 @@ auto coordinator::query(schema_ptr schema,
                     }
                     continue;
                 }
+                tracing::trace(trace_state, "This replica doesn't lead raft group {}, redirecting to the leader {}",
+                        op.replicas.group_id(), *target);
                 co_return redirect_to_leader(*target, _groups_manager, op.replicas.group_id());
             }
             if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+                if (trace_state) {
+                    tracing::trace(trace_state, "Waiting for a leader of raft group {}: no leader is known, this replica is {} of its configuration",
+                            op.replicas.group_id(),
+                            op.raft_server.server().get_configuration().contains(op.raft_server.server().id()) ? "a member" : "not a member");
+                }
                 future<> f = co_await coroutine::as_future(std::move(wait_for_leader->future));
                 if (f.failed()) {
                     co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
@@ -734,10 +793,12 @@ auto coordinator::query(schema_ptr schema,
         co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
             utils::wait_for_message(5min));
 
+        tracing::trace(trace_state, "Running a read barrier on raft group {}", op.replicas.group_id());
         future<> f = co_await coroutine::as_future(op.raft_server.server().read_barrier(&aoe.abort_source()));
         if (f.failed()) {
             co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
         }
+        tracing::trace(trace_state, "The read barrier on raft group {} completed", op.replicas.group_id());
     }
 
     // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.
@@ -749,6 +810,7 @@ auto coordinator::query(schema_ptr schema,
     }
 
     auto [result, cache_temp] = std::move(query_future).get();
+    tracing::trace(trace_state, "The local query completed");
 
     // A linearizable read names this node as the leader: begin_read() found it to be the
     // leader, and it is in the serving set. A non-linearizable read knows only the leader
