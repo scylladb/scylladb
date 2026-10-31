@@ -445,6 +445,86 @@ future<int64_t> incremental_compaction_strategy::estimated_pending_compactions(c
     co_return n;
 }
 
+std::vector<std::vector<sstables::frozen_sstable_run>>
+incremental_compaction_strategy::get_runs_to_splice(std::vector<sstables::frozen_sstable_run> runs) const {
+    std::vector<std::vector<sstables::frozen_sstable_run>> ret;
+    if (runs.size() < 2) {
+        return ret;
+    }
+    auto size_and_id = [] (const sstables::frozen_sstable_run& run) {
+        return std::pair(run->data_size(), run->run_identifier());
+    };
+    // Fragments of a run don't overlap, so the run spans from the start of its first fragment
+    // to the end of its last one.
+    auto first_fragment = [] (const sstables::frozen_sstable_run& run) -> const sstables::shared_sstable& {
+        return *run->all().begin();
+    };
+    auto last_fragment = [] (const sstables::frozen_sstable_run& run) -> const sstables::shared_sstable& {
+        return *run->all().rbegin();
+    };
+    // get_buckets() keeps runs of equal size in the order of the input, and that order can
+    // decide which bucket they fall into. So the input is put in an order of its own first.
+    std::ranges::sort(runs, std::less{}, size_and_id);
+    for (auto& bucket : get_buckets(runs)) {
+        if (bucket.size() < 2) {
+            continue;
+        }
+        // Runs are taken in the order of their start. Of runs which start at the same point, the
+        // largest goes first. Ties are broken by run identifier, so the outcome doesn't depend on
+        // the order of the input.
+        std::ranges::sort(bucket, [&] (const sstables::frozen_sstable_run& a, const sstables::frozen_sstable_run& b) {
+            sstables::sstable_first_key_less_comparator less;
+            if (less(first_fragment(a), first_fragment(b))) {
+                return true;
+            }
+            if (less(first_fragment(b), first_fragment(a))) {
+                return false;
+            }
+            return size_and_id(a) > size_and_id(b);
+        });
+        struct spliced_run {
+            std::vector<sstables::frozen_sstable_run> runs;
+            uint64_t data_size;
+        };
+        std::vector<spliced_run> spliced_runs;
+        // The heap holds indexes into spliced_runs. The spliced run that ends first is on top.
+        // Each run is added to that spliced run if it ends before the run starts. If it doesn't,
+        // no spliced run does, so the run starts a new spliced run. This gives the fewest spliced
+        // runs possible.
+        // If several spliced runs end at the same point, the largest one is picked first, so that
+        // large runs are spliced with large runs. If they are also the same size, the one created
+        // first is picked first.
+        auto picked_later = [&] (size_t i, size_t j) {
+            auto r = sstables::sstable_last_position_tri_compare(last_fragment(spliced_runs[i].runs.back()), last_fragment(spliced_runs[j].runs.back()));
+            if (r != 0) {
+                return r > 0;
+            }
+            return std::pair(spliced_runs[i].data_size, j) < std::pair(spliced_runs[j].data_size, i);
+        };
+        std::vector<size_t> heap;
+        for (auto& run : bucket) {
+            if (!heap.empty() && sstables::completely_ordered_before(last_fragment(spliced_runs[heap.front()].runs.back()), first_fragment(run))) {
+                std::ranges::pop_heap(heap, picked_later);
+                auto& s = spliced_runs[heap.back()];
+                s.runs.push_back(run);
+                s.data_size += run->data_size();
+            } else {
+                spliced_runs.push_back(spliced_run{{run}, run->data_size()});
+                heap.push_back(spliced_runs.size() - 1);
+            }
+            std::ranges::push_heap(heap, picked_later);
+        }
+        for (auto& s : spliced_runs) {
+            if (s.runs.size() > 1) {
+                // Largest runs go first, so that each spliced run is named after its largest member.
+                std::ranges::sort(s.runs, std::greater{}, size_and_id);
+                ret.push_back(std::move(s.runs));
+            }
+        }
+    }
+    return ret;
+}
+
 std::vector<sstables::shared_sstable>
 incremental_compaction_strategy::runs_to_sstables(std::vector<sstables::frozen_sstable_run> runs) {
     return runs
