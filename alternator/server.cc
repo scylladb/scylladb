@@ -1203,13 +1203,11 @@ future<> server::init(std::vector<listener> listeners, std::vector<tls::credenti
 }
 
 future<> server::stop() {
-    return parallel_for_each(_enabled_servers, [] (http_server& server) {
+    co_await parallel_for_each(_enabled_servers, [] (http_server& server) {
         return server.stop();
-    }).then([this] {
-        return _pending_requests.close();
-    }).then([this] {
-        return _json_parser.stop();
     });
+    co_await _pending_requests.close();
+    co_await _json_parser.stop();
 }
 
 server::json_parser::json_parser() : _run_parse_json_thread(async([this] {
