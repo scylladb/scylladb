@@ -438,7 +438,7 @@ async def test_colocated_tables_gc_mode(manager: ScyllaClusterManager):
 
     def check_tombstone_gc_mode_timeout(cql, table):
         s = list(cql.execute(f"DESC {table}"))[0].create_statement
-        assert "'mode': 'timeout'" in s or "mode" not in s # default is timeout
+        assert "'mode': 'timeout'" in s or "'mode':" not in s # default is timeout
 
     async with new_test_keyspace(manager, "WITH replication = {'dc1': 3 }") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
