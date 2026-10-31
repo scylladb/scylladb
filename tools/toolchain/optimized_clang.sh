@@ -100,6 +100,20 @@ if [[ -n "${RUNTIMES_FLAGS}" ]]; then
         RUNTIMES_CMAKE_ARGS+="${RUNTIMES_CMAKE_ARGS:+;}-DCMAKE_${flag_type}_FLAGS=${RUNTIMES_FLAGS}"
     done
 fi
+# Scylla links libunwind dynamically (-l:libunwind.so.1): Seastar
+# interposes _Unwind_RaiseException and forwards to the next definition with
+# dlsym(RTLD_NEXT), which only works if the unwinder is a separate shared
+# object. So only the shared library is needed. Its headers are not needed
+# either (clang's resource dir has unwind.h), and in /usr/local/include they
+# would shadow the system's libunwind.h, which belongs to the unrelated nongnu
+# libunwind.
+RUNTIMES_CMAKE_ARGS+="${RUNTIMES_CMAKE_ARGS:+;}-DLIBUNWIND_ENABLE_STATIC=OFF"
+RUNTIMES_CMAKE_ARGS+=";-DLIBUNWIND_INSTALL_HEADERS=OFF"
+# libunwind installs into lib${LLVM_LIBDIR_SUFFIX}/<triple>, but clang searches
+# lib/<triple> (ToolChain::getStdlibPath() ignores the suffix). Install it
+# where clang looks, otherwise -l:libunwind.so.1 falls through to the system
+# library directories and links the distribution's copy instead.
+RUNTIMES_CMAKE_ARGS+=";-DLIBUNWIND_INSTALL_LIBRARY_DIR=lib/${ARCH}-unknown-linux-gnu"
 
 CLANG_OPTS=(
     -G Ninja
@@ -119,7 +133,7 @@ CLANG_OPTS=(
     # dozen other tools as well; _get_distribution_components below picks which
     # of them are installed.
     -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra"
-    -DLLVM_ENABLE_RUNTIMES="compiler-rt"
+    -DLLVM_ENABLE_RUNTIMES="compiler-rt;libunwind"
     -DLLVM_ENABLE_LTO=Thin
     -DCLANG_DEFAULT_PIE_ON_LINUX=OFF
     -DLLVM_BUILD_TOOLS=OFF
@@ -148,6 +162,10 @@ SCYLLA_OPTS=(
     --build-dir="${SCYLLA_BUILD_DIR}"
     --out="${SCYLLA_NINJA_FILE}"
     --use-profile=""
+    # LIBUNWIND_INSTALL_LIBRARY_DIR (above) only moves the installed library;
+    # in the build tree libunwind stays in lib${LLVM_LIBDIR_SUFFIX}/<triple>,
+    # where the build-tree clang doesn't look.
+    --ldflags="-L${CLANG_BUILD_DIR}/build/lib${LLVM_LIBDIR_SUFFIX}/${ARCH}-unknown-linux-gnu"
 )
 
 # Utilizing LLVM_DISTRIBUTION_COMPONENTS to avoid
@@ -288,5 +306,17 @@ tar -C / -xpzf "${CLANG_ARCHIVE}"
 CLANG_RT_BUILTINS="$(/usr/local/bin/clang --rtlib=compiler-rt -print-libgcc-file-name)"
 if [[ ! -f "${CLANG_RT_BUILTINS}" ]]; then
     echo "Installed clang is missing ${CLANG_RT_BUILTINS}, aborted."
+    exit 1
+fi
+
+# Likewise for libunwind (-l:libunwind.so.1); it has to be the one built here,
+# not the distribution's llvm-libunwind in /usr/lib64. configure.py adds an
+# rpath to its directory, so binaries also run against it.
+CLANG_LIBUNWIND_DIR="/usr/local/lib/${ARCH}-unknown-linux-gnu"
+CLANG_LIBUNWIND="$(/usr/local/bin/clang -print-file-name=libunwind.so.1)"
+# -print-file-name returns an unnormalized path (/usr/local/bin/../lib/...), or
+# the bare name if the file is not found.
+if [[ "$(realpath "$(dirname "${CLANG_LIBUNWIND}")")" != "${CLANG_LIBUNWIND_DIR}" ]]; then
+    echo "Installed clang does not find its own libunwind.so.1 (got ${CLANG_LIBUNWIND}), aborted."
     exit 1
 fi

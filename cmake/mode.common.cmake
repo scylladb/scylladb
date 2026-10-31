@@ -121,6 +121,67 @@ add_compile_options("-ffile-prefix-map=${CMAKE_BINARY_DIR}/=${build_dir_name}")
 # https://github.com/llvm/llvm-project/issues/163007
 add_compile_options("-fextend-variable-liveness=none")
 
+# Use LLVM's compiler runtime (compiler-rt) instead of libgcc.
+add_link_options("--rtlib=compiler-rt")
+# compiler-rt has no unwinder, and with it clang defaults to --unwindlib=none,
+# leaving binaries that don't link libgcc_s by other means (e.g. patchelf)
+# without _Unwind_*. Use LLVM's libunwind, not libgcc's unwinder: compiler-rt's
+# crtbegin registers the executable's .eh_frame with __register_frame_info,
+# and libgcc then sorts the registered FDEs on the first unwind, calling malloc
+# under its object_mutex; Seastar's allocator can take a backtrace there
+# (large-allocation warning, heap profiling) and deadlock. libunwind looks
+# frames up lock-free via _dl_find_object, and its exported _Unwind_Find_FDE
+# also takes over libgcc_s's lookups (glibc's backtrace() still walks the stack
+# with libgcc_s), so libgcc's registry is never searched.
+# It is linked dynamically: Seastar interposes _Unwind_RaiseException and
+# forwards to the next definition with dlsym(RTLD_NEXT).
+# It is linked by soname rather than with --unwindlib=libunwind, which links
+# -lunwind: the unversioned libunwind.so may belong to the unrelated nongnu
+# libunwind (whose soname is libunwind.so.8), and Fedora installs LLVM's
+# libunwind.so outside the default search path to avoid that clash, while
+# libunwind.so.1 is LLVM's everywhere and ships in the runtime package.
+add_link_options("--unwindlib=none" "-l:libunwind.so.1")
+# A compiler that carries its own libunwind (the frozen toolchain's clang
+# installs it in /usr/local/lib/<triple>) links against that copy, but the
+# dynamic loader only knows the distribution's. Point the binaries at the one
+# they were linked against, unless the loader finds it anyway.
+execute_process(
+  COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libunwind.so.1
+  OUTPUT_VARIABLE libunwind_path
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+# Not found if not absolute; the link reports it.
+if(IS_ABSOLUTE "${libunwind_path}")
+  cmake_path(GET libunwind_path PARENT_PATH libunwind_dir)
+  file(REAL_PATH "${libunwind_dir}" libunwind_dir)
+  set(libunwind_known_to_loader FALSE)
+  find_program(LDCONFIG_EXECUTABLE ldconfig PATHS /sbin /usr/sbin)
+  if(LDCONFIG_EXECUTABLE)
+    execute_process(
+      COMMAND ${LDCONFIG_EXECUTABLE} -p
+      OUTPUT_VARIABLE ldconfig_cache)
+    string(REGEX MATCHALL "libunwind\\.so\\.1 [^\n]* => [^\n]*" ldconfig_entries "${ldconfig_cache}")
+    foreach(entry IN LISTS ldconfig_entries)
+      string(REGEX REPLACE ".* => " "" cached_path "${entry}")
+      cmake_path(GET cached_path PARENT_PATH cached_dir)
+      file(REAL_PATH "${cached_dir}" cached_dir)
+      if(cached_dir STREQUAL libunwind_dir)
+        set(libunwind_known_to_loader TRUE)
+      endif()
+    endforeach()
+  endif()
+  if(NOT libunwind_known_to_loader)
+    add_link_options("-Wl,-rpath,${libunwind_dir}")
+  endif()
+endif()
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+  # On aarch64 the runtime library choice also gates code generation: clang
+  # emits ifunc-based function multi-versioning (target_clones/target_version)
+  # only with compiler-rt, and silently emits just the default version with
+  # libgcc. So the flag is needed while compiling too. Elsewhere it is unused
+  # during compilation, which -Werror turns into an error.
+  add_compile_options("--rtlib=compiler-rt")
+endif()
+
 default_target_arch(target_arch)
 if(target_arch)
   add_compile_options("-march=${target_arch}")

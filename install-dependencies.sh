@@ -32,6 +32,7 @@ fi
 debian_base_packages=(
     clang
     clang-tools
+    libclang-rt-dev
     gdb
     cargo
     wabt
@@ -69,6 +70,7 @@ fedora_packages=(
     clang
     clang-tools-extra
     compiler-rt
+    llvm-libunwind
     libasan
     libubsan
     gdb
@@ -308,6 +310,9 @@ umask 0022
 
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     apt-get -y install "${debian_base_packages[@]}"
+    # LLVM's libunwind is only packaged per LLVM version (the unversioned
+    # libunwind-dev is the unrelated nongnu libunwind), so match the default clang.
+    apt-get -y install "libunwind-$(clang -dumpversion | cut -d. -f1)-dev"
     if [ "$VERSION_ID" = "8" ]; then
         apt-get -y install libsystemd-dev scylla-antlr35 libyaml-cpp-dev
     elif [ "$VERSION_ID" = "14.04" ]; then

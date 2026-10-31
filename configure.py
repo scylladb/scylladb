@@ -15,6 +15,7 @@ import pathlib
 import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -2070,6 +2071,57 @@ user_cflags += ' -DSEASTAR_NO_EXCEPTION_HACK'
 
 # https://github.com/llvm/llvm-project/issues/163007
 user_cflags += ' -fextend-variable-liveness=none'
+
+# Use LLVM's compiler runtime (compiler-rt) instead of libgcc.
+rtlib_flag = '--rtlib=compiler-rt'
+user_ldflags += ' ' + rtlib_flag
+# compiler-rt has no unwinder, and with it clang defaults to --unwindlib=none,
+# leaving binaries that don't link libgcc_s by other means (e.g. patchelf)
+# without _Unwind_*. Use LLVM's libunwind, not libgcc's unwinder: compiler-rt's
+# crtbegin registers the executable's .eh_frame with __register_frame_info,
+# and libgcc then sorts the registered FDEs on the first unwind, calling malloc
+# under its object_mutex; Seastar's allocator can take a backtrace there
+# (large-allocation warning, heap profiling) and deadlock. libunwind looks
+# frames up lock-free via _dl_find_object, and its exported _Unwind_Find_FDE
+# also takes over libgcc_s's lookups (glibc's backtrace() still walks the stack
+# with libgcc_s), so libgcc's registry is never searched.
+# It is linked dynamically: Seastar interposes _Unwind_RaiseException and
+# forwards to the next definition with dlsym(RTLD_NEXT).
+# It is linked by soname rather than with --unwindlib=libunwind, which links
+# -lunwind: the unversioned libunwind.so may belong to the unrelated nongnu
+# libunwind (whose soname is libunwind.so.8), and Fedora installs LLVM's
+# libunwind.so outside the default search path to avoid that clash, while
+# libunwind.so.1 is LLVM's everywhere and ships in the runtime package.
+user_ldflags += ' --unwindlib=none -l:libunwind.so.1'
+
+
+def libunwind_rpath_flags(compiler):
+    # A compiler that carries its own libunwind (the frozen toolchain's clang
+    # installs it in /usr/local/lib/<triple>) links against that copy, but the
+    # dynamic loader only knows the distribution's. Point the binaries at the
+    # one they were linked against, unless the loader finds it anyway.
+    path = subprocess.check_output([compiler, '-print-file-name=libunwind.so.1'], text=True).strip()
+    if not os.path.isabs(path):
+        # Not found; the link reports it.
+        return ''
+    libdir = os.path.realpath(os.path.dirname(path))
+    ldconfig = shutil.which('ldconfig') or shutil.which('ldconfig', path='/sbin:/usr/sbin')
+    if ldconfig:
+        for line in subprocess.check_output([ldconfig, '-p'], text=True).splitlines():
+            soname, _, cached = line.strip().partition(' => ')
+            if soname.split(' ')[0] == 'libunwind.so.1' and os.path.realpath(os.path.dirname(cached)) == libdir:
+                return ''
+    return f' -Wl,-rpath,{libdir}'
+
+
+user_ldflags += libunwind_rpath_flags(args.cxx)
+if platform.machine() == 'aarch64':
+    # On aarch64 the runtime library choice also gates code generation: clang
+    # emits ifunc-based function multi-versioning (target_clones/target_version)
+    # only with compiler-rt, and silently emits just the default version with
+    # libgcc. So the flag is needed while compiling too. Elsewhere it is unused
+    # during compilation, which -Werror turns into an error.
+    user_cflags += ' ' + rtlib_flag
 
 if args.target != '':
     user_cflags += ' -march=' + args.target
