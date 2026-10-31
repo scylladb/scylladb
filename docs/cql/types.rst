@@ -262,6 +262,9 @@ and their values can be input using collection literals:
 
 Note that neither :token:`bind_marker` nor ``NULL`` are supported inside collection literals.
 
+In the ``UPDATE`` examples below, ``c += value`` and ``c -= value`` are shorthands for
+``c = c + value`` and ``c = c - value`` (see :ref:`UPDATE <update-statement>`).
+
 Noteworthy characteristics
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -326,11 +329,13 @@ Further, maps support:
 
     UPDATE users SET favs['author'] = 'Ed Poe' WHERE id = 'jsmith';
     UPDATE users SET favs = favs + { 'movie' : 'Cassablanca', 'band' : 'ZZ Top' } WHERE id = 'jsmith';
+    UPDATE users SET favs += { 'movie' : 'Cassablanca', 'band' : 'ZZ Top' } WHERE id = 'jsmith';
 
 - Removing one or more element (if an element doesn't exist, removing it is a no-op but no error is thrown)::
 
     DELETE favs['author'] FROM users WHERE id = 'jsmith';
     UPDATE users SET favs = favs - { 'movie', 'band'} WHERE id = 'jsmith';
+    UPDATE users SET favs -= { 'movie', 'band'} WHERE id = 'jsmith';
 
   Note that for removing multiple elements in a ``map``, you remove from it a ``set`` of keys.
 
@@ -375,10 +380,12 @@ Further, sets support:
 - Adding one or multiple elements (as this is a set, inserting an already existing element is a no-op)::
 
     UPDATE images SET tags = tags + { 'gray', 'cuddly' } WHERE name = 'cat.jpg';
+    UPDATE images SET tags += { 'gray', 'cuddly' } WHERE name = 'cat.jpg';
 
 - Removing one or multiple elements (if an element doesn't exist, removing it is a no-op but no error is thrown)::
 
     UPDATE images SET tags = tags - { 'cat' } WHERE name = 'cat.jpg';
+    UPDATE images SET tags -= { 'cat' } WHERE name = 'cat.jpg';
 
 - Selecting an element (if the element doesn't exist, returns null)::
 
@@ -422,6 +429,7 @@ Further, lists support:
 - Appending and prepending values to a list::
 
     UPDATE plays SET players = 5, scores = scores + [ 14, 21 ] WHERE id = '123-afde';
+    UPDATE plays SET players = 5, scores += [ 14, 21 ] WHERE id = '123-afde';
     UPDATE plays SET players = 6, scores = [ 3 ] + scores WHERE id = '123-afde';
 
 - Setting the value at a particular position in the list. This implies that the list has a pre-existing element for that
@@ -439,6 +447,7 @@ Further, lists support:
   list, it is simply ignored, and no error is thrown)::
 
     UPDATE plays SET scores = scores - [ 12, 21 ] WHERE id = '123-afde';
+    UPDATE plays SET scores -= [ 12, 21 ] WHERE id = '123-afde';
 
 - Selecting an element by its position in the list::
 

@@ -1165,6 +1165,14 @@ static raw_value arithmetic_add(const expression& lhs_expr, const expression& rh
     bytes result = lhs_val.view().with_linearized([&](bytes_view lhs_bv) -> bytes {
         return rhs_val.view().with_linearized([&](bytes_view rhs_bv) -> bytes {
             return visit(t, make_visitor(
+                [&] (const string_type_impl&) -> bytes {
+                    // String concatenation. A serialized ascii or text value
+                    // is just the string's bytes, so we can concatenate the
+                    // serialized values.
+                    bytes res(lhs_bv);
+                    res.append(rhs_bv.data(), rhs_bv.size());
+                    return res;
+                },
                 [&] <typename T> (const integer_type_impl<T>& itype) -> bytes {
                     T l = value_cast<T>(itype.deserialize(lhs_bv));
                     T r = value_cast<T>(itype.deserialize(rhs_bv));
