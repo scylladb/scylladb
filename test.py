@@ -182,7 +182,7 @@ def parse_cmd_line() -> argparse.Namespace:
                         help='Verbose reporting')
     parser.add_argument('--quiet', '-q', action='store_true', default=False,
                         help='Quiet reporting')
-    parser.add_argument('--dynamic-scheduler', action=argparse.BooleanOptionalAction, default=False,
+    parser.add_argument('--dynamic-scheduler', action=argparse.BooleanOptionalAction, default=True,
                         help="Start a test only when its CPU and memory fit the machine. Test costs come "
                              "from <tmpdir>/profile.json, learned from earlier runs; without a profile the "
                              "scheduler starts from built-in estimates and learns during the run. The pool "
