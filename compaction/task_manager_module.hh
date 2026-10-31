@@ -75,13 +75,17 @@ public:
     future<tasks::task_manager::task_ptr> start_global_cleanup_compaction(sharded<replica::database>& db);
 
     // Starts a cleanup compaction of the given tables of a keyspace on all the shards.
-    future<tasks::task_manager::task_ptr> start_cleanup_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, const std::vector<table_info>& table_infos, flush_mode fm, tasks::is_user_task is_user_task);
+    future<tasks::task_manager::task_ptr> start_cleanup_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, const std::vector<table_info>& table_infos, flush_mode fm, tasks::is_user_task is_user_task, compaction::is_topology_cleanup topology_cleanup);
 
     // Starts a cleanup compaction of the given tables of a keyspace on this shard.
-    future<tasks::task_manager::task_ptr> start_shard_cleanup_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, tasks::task_info parent_info);
+    // is_topology_cleanup is carried down explicitly from the task which started the cleanup,
+    // since the value inherited by a child task defaults to no.
+    future<tasks::task_manager::task_ptr> start_shard_cleanup_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, compaction::is_topology_cleanup topology_cleanup, tasks::task_info parent_info);
 
     // Starts a cleanup compaction of a single table on this shard, once the turn is taken by the created task.
-    future<tasks::task_manager::task_ptr> start_table_cleanup_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, tasks::task_info parent_info);
+    // is_topology_cleanup is carried down explicitly from the task which started the cleanup,
+    // since the value inherited by a child task defaults to no.
+    future<tasks::task_manager::task_ptr> start_table_cleanup_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, compaction::is_topology_cleanup topology_cleanup, tasks::task_info parent_info);
 
     // Starts an offstrategy compaction of the given tables of a keyspace on all the shards.
     // If needed is set, it receives whether any table had sstables to compact.

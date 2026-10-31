@@ -130,6 +130,7 @@ public:
     // parallel compaction. Because of that, a running automatic scrub does not
     // delay a regular compaction more than the time needed to finish scrubbing
     // the current sstable.
+    static constexpr const char* automatic_compaction_sem_name = "automatic compaction exclusion";
     seastar::semaphore automatic_compaction_sem{1};
 private:
     std::unique_ptr<cleanup_state> _cleanup_state;
