@@ -176,7 +176,22 @@ def test_ttl_frozen_udt(cql, test_keyspace):
 # It replaces dtest's udtencoding_test.py::test_udt_change_in_partition_key
 # (see SCYLLADB-1929).
 def test_alter_type_rename_used_in_partition_key(cql, test_keyspace, scylla_only):
-    with new_type(cql, test_keyspace, '(v1 int)') as typ:
-        with new_test_table(cql, test_keyspace, f'pk frozen<{typ}>, val int, PRIMARY KEY(pk)') as table:
+    with new_type(cql, test_keyspace, '(v1 int)') as typ, new_type(cql, test_keyspace, '(city text)') as other:
+        with new_test_table(cql, test_keyspace, f'pk frozen<{typ}>, ck int, val {other}, PRIMARY KEY(pk, ck)') as table:
             with pytest.raises(InvalidRequest, match=table.split('.')[1]):
                 cql.execute(f'ALTER TYPE {typ} RENAME v1 TO v1_renamed')
+            # Only the partition key's UDT is protected, not other UDTs of the table.
+            cql.execute(f'ALTER TYPE {other} ADD zip int')
+
+# A UDT literal nested in a map, with an unknown (or misspelled) field or a field
+# of the wrong type, is rejected. Replaces dtest's udtencoding_test.py::test_udt (see SCYLLADB-1929).
+def test_udt_literal_invalid_field_in_map(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(city text, zip int)') as typ:
+        with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, m map<text, frozen<{typ}>>') as table:
+            cql.execute(f"INSERT INTO {table} (p, m) VALUES (1, {{'home': {{city: 'SF', zip: 94110}}}})")
+            with pytest.raises(InvalidRequest, match="Unknown field 'street' in value of user defined type"):
+                cql.execute(f"INSERT INTO {table} (p, m) VALUES (2, {{'home': {{street: 'x', city: 'SF', zip: 94110}}}})")
+            with pytest.raises(InvalidRequest, match="Unknown field 'cityname' in value of user defined type"):
+                cql.execute(f"INSERT INTO {table} (p, m) VALUES (2, {{'home': {{cityname: 'SF', zip: 94110}}}})")
+            with pytest.raises(InvalidRequest, match='Invalid map literal for m: value'):
+                cql.execute(f"INSERT INTO {table} (p, m) VALUES (2, {{'home': {{city: 'SF', zip: '94110'}}}})")
