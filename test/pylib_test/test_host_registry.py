@@ -8,6 +8,7 @@ import random
 import socket
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -16,10 +17,12 @@ from test.pylib.host_registry import HostRegistry
 
 
 @pytest.fixture
-def lock_prefix(monkeypatch, tmp_path) -> str:
+def lock_prefix(monkeypatch) -> str:
     """Locks of this test only: the real prefix is shared with every test.py run on the host.
+    The name is random because abstract socket names are shared by every run on the host, even
+    runs in different containers, while tmp_path is the same path in each fresh container /tmp.
     Every registry tries 127.1 (the gw0 worker's octet) first, then 127.2, 127.3, ..."""
-    prefix = f"\0{tmp_path}/subnet-"
+    prefix = f"\0scylla-test-{uuid.uuid4().hex}/subnet-"
     monkeypatch.setattr(HostRegistry, "LOCK_PREFIX", prefix)
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
     monkeypatch.setattr(random, "shuffle", lambda _: None)
