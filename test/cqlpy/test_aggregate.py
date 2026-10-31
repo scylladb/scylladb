@@ -301,3 +301,34 @@ def test_sum_star(cql, table1):
     p = unique_key_int()
     with pytest.raises(SyntaxException):
         cql.execute(f"select sum(*) from {table1} where p = {p}")
+
+# An aggregate's argument may use a bind variable, e.g. max(intasblob(?)).
+# The argument is evaluated for each row aggregated, and Scylla used to crash
+# (null pointer dereference) doing it, with any value bound - so an
+# unprivileged user could crash a node with one prepared statement.
+# Reproduces SCYLLADB-5622.
+def test_aggregate_of_bind_variable(cql, table1):
+    p = unique_key_int()
+    cql.execute(f"insert into {table1} (p, c, v) values ({p}, 1, 1)")
+    cql.execute(f"insert into {table1} (p, c, v) values ({p}, 2, 2)")
+    stmt = cql.prepare(f"select max(intasblob(?)), count(intasblob(?)) from {table1} where p = ?")
+    assert [(b'\x00\x00\x00\x07', 2)] == list(cql.execute(stmt, [7, 7, p]))
+    # With GROUP BY, each group's result is computed when the group ends,
+    # not when the query ends.
+    stmt = cql.prepare(f"select c, max(intasblob(?)) from {table1} where p = ? group by c")
+    assert [(1, b'\x00\x00\x00\x07'), (2, b'\x00\x00\x00\x07')] == list(cql.execute(stmt, [7, p]))
+
+# The result of an aggregate may also be used with a bind variable, e.g.
+# max(m)[?], which is evaluated once for each result row, after aggregating
+# its rows. Scylla used to crash doing it too.
+# Reproduces SCYLLADB-5622.
+def test_bind_variable_on_aggregate(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, m frozen<map<int, int>>, PRIMARY KEY (p, c)") as table:
+        p = unique_key_int()
+        cql.execute(f"insert into {table} (p, c, m) values ({p}, 1, {{1: 10, 2: 20}})")
+        cql.execute(f"insert into {table} (p, c, m) values ({p}, 2, {{1: 11}})")
+        stmt = cql.prepare(f"select max(m)[?] from {table} where p = ?")
+        assert [(11,)] == list(cql.execute(stmt, [1, p]))
+        # With GROUP BY, there is a result row for each group.
+        stmt = cql.prepare(f"select c, max(m)[?] from {table} where p = ? group by c")
+        assert [(1, 10), (2, 11)] == list(cql.execute(stmt, [1, p]))
