@@ -10,7 +10,7 @@ import time
 import pytest
 
 from test.cluster.tasks.task_manager_client import TaskManagerClient
-from test.cluster.util import get_coordinator_host, new_test_keyspace, ensure_group0_leader_on
+from test.cluster.util import get_coordinator_host, new_test_keyspace, create_new_test_keyspace, ensure_group0_leader_on
 from test.pylib.internal_types import ServerInfo, IPAddress
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_replica_count_by_host
@@ -303,31 +303,32 @@ async def test_remove_is_canceled_if_there_is_node_down(manager: ScyllaClusterMa
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
-                        " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
+    # Cluster is left with dead nodes and discarded; skip the DROP KEYSPACE, which would wait
+    # out max_schema_agreement_wait on a stopped node the driver still considers up.
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy',"
+                                        " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};")
+    await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
 
-        # Submit the removenode while servers[3] is still alive to avoid
-        # the initiator-side liveness check. Pause the coordinator so that
-        # it doesn't process the removenode before we stop servers[3].
-        await manager.server_stop_gracefully(servers[2].server_id)
+    # Pause the coordinator first so the servers[2] DOWN event wakes it into the pause.
+    # Stop servers[3] only after the removenode is queued (avoids the liveness check).
+    coord_log = await manager.server_open_log(coord_serv.server_id)
+    inj = 'topology_coordinator_pause_before_processing_backlog'
+    mark = await coord_log.mark()
+    await manager.api.enable_injection(coord_serv.ip_addr, inj, one_shot=True)
+    await manager.server_stop_gracefully(servers[2].server_id)
+    await coord_log.wait_for(f"{inj}: waiting", from_mark=mark)
 
-        coord_log = await manager.server_open_log(coord_serv.server_id)
-        inj = 'topology_coordinator_pause_before_processing_backlog'
-        await manager.api.enable_injection(coord_serv.ip_addr, inj, one_shot=True)
-        await coord_log.wait_for(f"{inj}: waiting")
+    remove_task = asyncio.create_task(
+        manager.remove_node(coord_serv.server_id, servers[2].server_id))
 
-        remove_task = asyncio.create_task(
-            manager.remove_node(coord_serv.server_id, servers[2].server_id))
+    # Ensure the removenode is queued before stopping servers[3].
+    await coord_log.wait_for("raft_topology - removenode: waiting for completion")
 
-        # Ensure the removenode is queued before stopping servers[3].
-        await coord_log.wait_for("raft_topology - removenode: waiting for completion")
+    await manager.server_stop_gracefully(servers[3].server_id)
+    await manager.api.message_injection(coord_serv.ip_addr, inj)
 
-        await manager.server_stop_gracefully(servers[3].server_id)
-        await manager.api.message_injection(coord_serv.ip_addr, inj)
-
-        with pytest.raises(Exception, match="Canceled. Dead nodes: "):
-            await remove_task
+    with pytest.raises(Exception, match="Canceled. Dead nodes: "):
+        await remove_task
 
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
