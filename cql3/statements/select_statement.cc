@@ -2475,7 +2475,7 @@ select_statement::prepare_limit(data_dictionary::database db, prepare_context& c
     }
 
     expr::expression prep_limit = prepare_expression(*limit, db, keyspace(), nullptr, limit_receiver());
-    expr::verify_no_aggregate_functions(prep_limit, "LIMIT clause");
+    expr::verify_no_aggregate_or_search_functions(prep_limit, "LIMIT clause");
     expr::fill_prepare_context(prep_limit, ctx);
     return prep_limit;
 }

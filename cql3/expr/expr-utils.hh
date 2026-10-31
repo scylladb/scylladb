@@ -214,6 +214,10 @@ extern expression prepare_expression_allowing_relations(const expression& expr, 
 // Check that a prepared expression has no aggregate functions. Throws on error.
 void verify_no_aggregate_functions(const expression& expr, std::string_view context_for_errors);
 
+// Check that a prepared expression has no aggregate functions and no search functions, like
+// BM25_SCORE(), whose value comes from the search in a SELECT's ORDER BY. Throws on error.
+void verify_no_aggregate_or_search_functions(const expression& expr, std::string_view context_for_errors);
+
 // Prepares a binary operator received from the parser.
 // Does some basic type checks but no advanced validation.
 extern binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema, const dialect& d);
