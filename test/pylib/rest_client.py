@@ -244,12 +244,21 @@ class ScyllaRESTAPIClient:
         assert isinstance(data, list)
         return data
 
-    async def get_tokens(self, node_ip: str, endpoint: str | None = None) -> list:
-        """Get a list of the tokens for the specified node."""
+    async def get_tokens(self, node_ip: str, endpoint: str | None = None,
+                         keyspace: str | None = None, table: str | None = None) -> list:
+        """Get a list of the tokens for the specified node, or its tablet last tokens for keyspace.table."""
 
+        # The ring-wide /storage_service/tokens ignores these filters.
+        assert endpoint is not None or not (keyspace or table), "keyspace/table require an endpoint"
+        params = {}
+        if keyspace:
+            params['keyspace'] = keyspace
+        if table:
+            params['cf'] = table
         data = await self.client.get_json(
             resource_uri="/storage_service/tokens" if endpoint is None else f"/storage_service/tokens/{endpoint}",
             host=node_ip,
+            params=params,
         )
         assert isinstance(data, list)
         return data

@@ -47,7 +47,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Returns a list of the tokens for or a specified node",
+               "summary":"Returns a list of the tokens for a specified node. With keyspace and cf of a tablet table, returns the last tokens of the tablets that have the node as a replica (primary or not)",
                "type":"array",
                "items":{
                   "type":"string"
@@ -64,6 +64,22 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"path"
+                  },
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace name; a tablet keyspace also requires cf",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"The table name; requires keyspace",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             }
