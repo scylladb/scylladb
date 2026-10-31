@@ -25,13 +25,6 @@ using namespace tests::logstor;
 
 namespace {
 
-struct noop_space_accounting_subscriber final : space_accounting_subscriber {
-    void on_add_record(record_location) noexcept override {}
-    void on_free_record(record_location) noexcept override {}
-};
-
-inline noop_space_accounting_subscriber noop_space_accounting{};
-
 schema_ptr make_logstor_schema() {
     return schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", utf8_type, column_kind::partition_key)
