@@ -1047,19 +1047,30 @@ void view_updates::update_entry_for_computed_column(
         const std::optional<clustering_or_static_row>& existing,
         gc_clock::time_point now) {
     auto view_rows = get_view_rows(base_key, update, existing, {});
+    // Like the "same_row" case in generate_update(), we don't delete a row
+    // which gets a new marker, because the tombstone could win against it.
+    std::unordered_set<const deletable_row*> marked_rows;
+    for (const auto& [r, action] : view_rows) {
+        if (std::holds_alternative<row_marker>(action)) {
+            marked_rows.insert(r);
+        }
+    }
     for (const auto& [r, action] : view_rows) {
         struct visitor {
             deletable_row* row;
+            const std::unordered_set<const deletable_row*>& marked_rows;
             gc_clock::time_point now;
             void operator()(view_key_and_action::no_action) {}
             void operator()(view_key_and_action::shadowable_tombstone_tag t) {
-                row->apply(t.into_shadowable_tombstone(now));
+                if (!marked_rows.contains(row)) {
+                    row->apply(t.into_shadowable_tombstone(now));
+                }
             }
             void operator()(row_marker rm) {
                 row->apply(rm);
             }
         };
-        std::visit(visitor{r, now}, action);
+        std::visit(visitor{r, marked_rows, now}, action);
     }
 }
 

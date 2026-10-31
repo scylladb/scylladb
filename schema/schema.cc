@@ -2449,21 +2449,17 @@ std::vector<db::view::view_key_and_action> collection_column_computation::comput
         return cell.is_live_and_has_ttl() ? row_marker(cell.timestamp(), cell.ttl(), cell.expiry()) : row_marker(cell.timestamp());
     };
 
-    auto fn = [&ret, &compute_row_marker, &serialize_cell] (collection_kv* existing, collection_kv* update, tombstone tomb) {
-        api::timestamp_type operation_ts = tomb.timestamp;
+    auto fn = [&ret, &compute_row_marker, &serialize_cell] (collection_kv* existing, collection_kv* update, tombstone) {
         if (existing && update && compare_atomic_cell_for_merge(existing->second, update->second) == 0) {
             return;
         }
-        if (update) {
-            operation_ts = update->second.timestamp();
-            if (update->second.is_live()) {
-                row_marker rm = compute_row_marker(update->second);
-                ret.push_back({serialize_cell(*update), {rm}});
-            }
+        if (update && update->second.is_live()) {
+            row_marker rm = compute_row_marker(update->second);
+            ret.push_back({serialize_cell(*update), {rm}});
         }
-        operation_ts -= 1;
         if (existing && existing->second.is_live()) {
-            db::view::view_key_and_action::shadowable_tombstone_tag tag{operation_ts};
+            // Like generate_update() does for an ordinary view.
+            db::view::view_key_and_action::shadowable_tombstone_tag tag{existing->second.timestamp()};
             ret.push_back({serialize_cell(*existing), {tag}});
         }
     };
