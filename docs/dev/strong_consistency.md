@@ -384,6 +384,31 @@ segments can be reclaimed (SCYLLADB-3827).
 
 # Metrics
 
+The coordinator exports its metrics per scheduling group, under the
+`scylla_strong_consistency_coordinator_` prefix with the `scheduling_group_name` label:
+
+- `write_latency` and `read_latency` histograms, and `write_latency_summary` and
+  `read_latency_summary` summaries. Reads have a `read_type` label: `linearizable` or
+  `non_linearizable`. A request is timed on the node that executes it, not on a node
+  that redirects it there.
+- `foreground_writes` and `foreground_reads`, the requests being executed.
+- `write_errors` and `read_errors` by `reason`: `timeout`, `status_unknown` (writes only),
+  `unavailable`, `table_dropped`, `other`.
+- `write_retries` and `read_retries` by `reason`:
+  - `wait_for_leader`: waiting for a leader to be elected, or for this node's state as
+    the leader to be ready;
+  - `stale_leader`: the local raft server names a leader that can't lead at the
+    tablet's stage;
+  - `not_a_leader` and `dropped_entry`, writes only: `add_entry()` was refused.
+- `write_node_bounces`, `write_shard_bounces`, `read_node_bounces` and
+  `read_shard_bounces`, the requests redirected to another node or shard.
+
+The latency histograms are summed over the shards of a node. The summaries, counters and
+gauges are per shard.
+
+Each raft log entry that a state machine applies counts in `scylla_database_total_writes`,
+or in `scylla_database_total_writes_failed` if its apply fails.
+
 The raft servers and RPC modules of a table's tablets on a shard share one set of
 counters, exported under the `scylla_strong_consistency_raft_` prefix with the `ks` and
 `cf` labels. They follow the flags of the other per-table metrics: summed over the shards
