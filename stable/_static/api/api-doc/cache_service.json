@@ -1,0 +1,701 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/cache_service",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/cache_service/row_cache_save_period",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get row cache save period in seconds",
+               "type": "long",
+               "nickname":"get_row_cache_save_period_in_seconds",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"set row cache save period in seconds",
+               "type":"void",
+               "nickname":"set_row_cache_save_period_in_seconds",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"period",
+                     "description":"row cache save period in seconds",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/cache_service/key_cache_save_period",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get key cache save period in seconds",
+               "type": "long",
+               "nickname":"get_key_cache_save_period_in_seconds",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"set key cache save period in seconds",
+               "type":"void",
+               "nickname":"set_key_cache_save_period_in_seconds",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"period",
+                     "description":"key cache save period in seconds",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/cache_service/counter_cache_save_period",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get counter cache save period in seconds",
+               "type": "long",
+               "nickname":"get_counter_cache_save_period_in_seconds",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"set counter cache save period in seconds",
+               "type":"void",
+               "nickname":"set_counter_cache_save_period_in_seconds",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"ccspis",
+                     "description":"counter cache save period in seconds",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/cache_service/row_cache_keys_to_save",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get row cache keys to save",
+               "type": "long",
+               "nickname":"get_row_cache_keys_to_save",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"set row cache keys to save",
+               "type":"void",
+               "nickname":"set_row_cache_keys_to_save",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"rckts",
+                     "description":"row cache keys to save",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/cache_service/key_cache_keys_to_save",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get key cache keys to save",
+               "type": "long",
+               "nickname":"get_key_cache_keys_to_save",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"set key cache keys to save",
+               "type":"void",
+               "nickname":"set_key_cache_keys_to_save",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"kckts",
+                     "description":"key cache keys to save",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/cache_service/counter_cache_keys_to_save",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get counter cache keys to save",
+               "type": "long",
+               "nickname":"get_counter_cache_keys_to_save",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"set counter cache keys to save",
+               "type":"void",
+               "nickname":"set_counter_cache_keys_to_save",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"cckts",
+                     "description":"counter cache keys to save",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type": "long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/cache_service/invalidate_key_cache",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"invalidate the key cache; for use after invalidating row cache",
+               "type":"void",
+               "nickname":"invalidate_key_cache",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/cache_service/invalidate_counter_cache",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"invalidate counter cache",
+               "type":"void",
+               "nickname":"invalidate_counter_cache",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/cache_service/row_cache_capacity",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"set row cache capacity in mb",
+               "type":"void",
+               "nickname":"set_row_cache_capacity_in_mb",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"capacity",
+                     "description":"row cache capacity in mb",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/cache_service/key_cache_capacity",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"set key cache capacity in mb",
+               "type":"void",
+               "nickname":"set_key_cache_capacity_in_mb",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"capacity",
+                     "description":"key cache capacity in mb",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/cache_service/counter_cache_capacity",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"set counter cache capacity in mb",
+               "type":"void",
+               "nickname":"set_counter_cache_capacity_in_mb",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"capacity",
+                     "description":"counter cache capacity in mb",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/cache_service/save_caches",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"save row and key caches",
+               "type":"void",
+               "nickname":"save_caches",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+      "path": "/cache_service/metrics/key/capacity",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get key capacity",
+          "type": "long",
+          "nickname": "get_key_capacity",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/key/hits",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get key hits",
+          "type": "long",
+          "nickname": "get_key_hits",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/key/requests",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get key requests",
+          "type": "long",
+          "nickname": "get_key_requests",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/key/hit_rate",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get key hit rate",
+          "type": "double",
+          "nickname": "get_key_hit_rate",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/key/hits_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get key hits moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_key_hits_moving_avrage",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/key/requests_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get key requests moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_key_requests_moving_avrage",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/key/size",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get key cache waited size",
+          "type": "long",
+          "nickname": "get_key_size",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/key/entries",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get key entries",
+          "type": "long",
+          "nickname": "get_key_entries",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/row/capacity",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get row capacity",
+          "type": "long",
+          "nickname": "get_row_capacity",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/row/hits",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get row hits",
+          "type": "long",
+          "nickname": "get_row_hits",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/row/requests",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get row requests",
+          "type": "long",
+          "nickname": "get_row_requests",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/row/hit_rate",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get row hit rate",
+          "type": "double",
+          "nickname": "get_row_hit_rate",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/row/hits_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get row hits moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_row_hits_moving_avrage",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/row/requests_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get row requests moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_row_requests_moving_avrage",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/row/size",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get row cache waited size",
+          "type": "long",
+          "nickname": "get_row_size",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/row/entries",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get row entries",
+          "type": "long",
+          "nickname": "get_row_entries",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/counter/capacity",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get counter capacity",
+          "type": "long",
+          "nickname": "get_counter_capacity",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/counter/hits",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get counter hits",
+          "type": "long",
+          "nickname": "get_counter_hits",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/counter/requests",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get counter requests",
+          "type": "long",
+          "nickname": "get_counter_requests",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/counter/hit_rate",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get counter hit rate",
+          "type": "double",
+          "nickname": "get_counter_hit_rate",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/counter/hits_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get counter hits moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_counter_hits_moving_avrage",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/counter/requests_moving_avrage",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get counter requests moving avrage",
+          "type": "#/utils/rate_moving_average",
+          "nickname": "get_counter_requests_moving_avrage",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/counter/size",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get counter cache waited size",
+          "type": "long",
+          "nickname": "get_counter_size",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/cache_service/metrics/counter/entries",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get counter entries",
+          "type": "long",
+          "nickname": "get_counter_entries",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    }
+   ]
+}
