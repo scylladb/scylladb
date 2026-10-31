@@ -428,3 +428,18 @@ applied by commitlog replay rather than by `state_machine::apply()`, so nothing 
 the markers. The state is created when the replica learns of the resize, from the tablet
 metadata or from the markers after a restart, and dropped by the teardown of the parent's Raft
 server.
+
+## Co-locating the leaders of the children
+
+A request handed off to a child is timestamped from the clock which led the parent, so the
+leaders of the parent and of its children have to sit on the same node. They are elected together
+to begin with - a child derives its fast bootstrap seed from the current leader of its parent,
+which every replica knows, so they all pick the same node - and a fiber per resize
+(`groups_manager::leader_colocator()`) transfers a child's leadership back to the parent's leader
+whenever the two drift apart, using the targeted `raft::server::stepdown()`.
+
+The co-location fiber is detached when the parent group is deleted, which is the only ending a
+resize recorded on a replica has - the tablet map replacement takes the parent's tablet away, and
+nothing can undo a resize whose replacement ids are already recorded. It then drains in the
+background, joined only by `groups_manager::stop()`; the gates of the raft servers guard any
+access the aborted fiber still makes on its way out.
