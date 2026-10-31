@@ -701,11 +701,16 @@ future<> snapshot_table_helper::insert_snapshot_sstable(sstring snapshot_name, s
 }
 
 future<snapshot_sstables_progress> snapshot_table_helper::get_snapshot_sstables_progress(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl) const {
+    using namespace std::chrono_literals;
     static const sstring query = format("SELECT downloaded FROM {}.{}"
         " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?",
         system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES);
     snapshot_sstables_progress progress = {};
-    co_await _qp.query_internal(query, cl, { snapshot_name, ks, table, dc, rack }, 1000, [&] (const cql3::untyped_result_set_row& row) {
+    // The progress of a restore is polled periodically, so give up on a read
+    // which takes too long instead of waiting for it forever: the next poll
+    // will try again.
+    auto deadline = db::timeout_clock::now() + 10s;
+    co_await _qp.query_internal(query, cl, { snapshot_name, ks, table, dc, rack }, 1000, deadline, [&] (const cql3::untyped_result_set_row& row) {
         progress.nr_sstables++;
         if (row.get_or<bool>("downloaded", false)) {
             progress.nr_downloaded_sstables++;
