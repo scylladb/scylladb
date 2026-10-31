@@ -24,10 +24,14 @@
 
 import json
 import string
+import botocore
 import pytest
+from botocore.exceptions import ClientError
+from packaging.version import Version
 
 from .util import full_query, global_random, new_test_table
 from .test_scylla import this_dc
+from test.pylib.skip_types import skip_env
 
 # All tests in this file are scylla-only
 @pytest.fixture(scope="function", autouse=True)
@@ -210,3 +214,30 @@ def test_alternator_tables_respect_speculative_retry_config(dynamodb, cql):
             assert scylla_get_schema(dynamodb, cql_table_for_cdclog(table))['speculative_retry'] == '200.00ms'
     finally:
         cql.execute(f"UPDATE system.config SET value = '{original}' WHERE name = '{option}'")
+
+# A logstor table can only be created through CQL, but if it's in an
+# alternator_ keyspace, UpdateTable must still refuse to add an index to it.
+@pytest.mark.parametrize('updates', [
+    {'GlobalSecondaryIndexUpdates': [{ 'Create': {
+        'IndexName': 'gsi',
+        'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+        'Projection': { 'ProjectionType': 'ALL' }}}]},
+    {'VectorIndexUpdates': [{ 'Create': {
+        'IndexName': 'vec',
+        'VectorAttribute': { 'AttributeName': 'v' },
+        'Dimensions': 3}}]},
+], ids=['gsi', 'vector'])
+def test_logstor_table_update_table_index_rejected(dynamodb, cql, this_dc, updates):
+    if 'VectorIndexUpdates' in updates and Version(botocore.__version__) < Version('1.43.64'):
+        skip_env("Botocore version 1.43.64 or above required to run this test")
+    name = unique_name()
+    ks = 'alternator_' + name
+    cql.execute(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}")
+    try:
+        cql.execute(f'CREATE TABLE {ks}.{name} (p text PRIMARY KEY, ":attrs" map<text, blob>) WITH storage_engine = \'logstor\'')
+        with pytest.raises(ClientError, match='ValidationException.*logstor'):
+            dynamodb.meta.client.update_table(TableName=name,
+                AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' }],
+                **updates)
+    finally:
+        cql.execute(f'DROP KEYSPACE {ks}')
