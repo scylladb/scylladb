@@ -1554,7 +1554,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     - Check that waiting for a point works when the waiting node is being decommissioned
     """
 
-    async def start_node(server: ServerInfo, smp: int = 3) -> None:
+    async def start_node(server: ServerInfo, smp: int = 2) -> None:
         await manager.server_update_cmdline(server.server_id,
                                             ["--smp", str(smp), "--logger-log-level", "hints_manager=trace"])
         await manager.server_start(server.server_id)
@@ -1589,7 +1589,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
               # The load balancer doesn't know the capacity of a restarted node until the next refresh
               # of the load stats. Until then, it can't drain the node being decommissioned (60s by default).
               "tablet_load_stats_refresh_interval_in_seconds": 1}
-    s1, s2 = await manager.servers_add(2, cmdline=["--smp", "3", "--logger-log-level", "hints_manager=trace"],
+    s1, s2 = await manager.servers_add(2, cmdline=["--smp", "2", "--logger-log-level", "hints_manager=trace"],
                                        config=config, property_file={"dc": "dc1", "rack": "r1"})
 
     # We are using RF=1, so roughly half of the writes will be written as hints
@@ -1705,17 +1705,9 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     logger.info("Stopping s1...")
     await manager.server_stop_gracefully(s1.server_id)
 
-    # manager.get_cql() (used internally by keyspace_has_tablets) is a shared driver session
-    # that may still be pinned to s1's now-dead control connection; reconnect it onto s2, the
-    # only server left standing, before using it.
-    await manager.driver_connect(server=s2)
-
-    if await keyspace_has_tablets(manager, "ks"):
-        # reducing shard count with tablet-enabled tables is not yet supported (#16739).
-        await start_node(s1)
-    else:
-        logger.info("Starting s1 with SMP=2...")
-        await start_node(s1, smp=2)
+    # Reducing the shard count with tablets isn't supported yet (#16739), so increase it.
+    logger.info("Starting s1 with SMP=3...")
+    await start_node(s1, smp=3)
     cql = await manager.get_cql_exclusive(s1)
     # We need to re-prepare the statement after restarting the node.
     stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
