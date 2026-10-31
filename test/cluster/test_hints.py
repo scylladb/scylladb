@@ -1585,7 +1585,10 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
             else:
                 pytest.fail(f"Got unexpected failure: {e}")
 
-    config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
+    config = {"error_injections_at_startup": ["decrease_hints_flush_period"],
+              # The load balancer doesn't know the capacity of a restarted node until the next refresh
+              # of the load stats. Until then, it can't drain the node being decommissioned (60s by default).
+              "tablet_load_stats_refresh_interval_in_seconds": 1}
     s1, s2 = await manager.servers_add(2, cmdline=["--smp", "3", "--logger-log-level", "hints_manager=trace"],
                                        config=config, property_file={"dc": "dc1", "rack": "r1"})
 
