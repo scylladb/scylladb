@@ -1036,7 +1036,6 @@ def testJavaAggregateEmpty(cql):
 
 # Reproduces #14404 (an aggregate with an empty collection as INITCOND returns
 # null instead of the empty collection).
-@pytest.mark.xfail(reason="#14404")
 def testJavaAggregateStateEmpty(cql):
     with create_keyspace(cql, REPLICATION) as ks, create_table(cql, ks, "(a int primary key, b uuid)") as table:
         fState = createFunction(cql, ks,
@@ -1639,7 +1638,6 @@ APPEND_JAVA = "if (i != null) s.add(String.valueOf(i)); return s;"
 APPEND_LUA = "if i ~= nil then s[#s+1] = tostring(i) end return s"
 
 # Reproduces #14404 (empty collection INITCOND)
-@pytest.mark.xfail(reason="#14404")
 def testEmptyListAndNullInitcond(cql):
     with create_keyspace(cql, REPLICATION) as ks:
         f = createFunction(cql, ks,
@@ -1670,7 +1668,6 @@ def testEmptyListAndNullInitcond(cql):
 
 # Reproduces #14404 (empty collection INITCOND) and SCYLLADB-5162
 # (CREATE OR REPLACE AGGREGATE doesn't remove FINALFUNC or INITCOND)
-@pytest.mark.xfail(reason="#14404, SCYLLADB-5162")
 def testOrReplaceOptionals(cql):
     with create_keyspace(cql, REPLICATION) as ks:
         fState = createFunction(cql, ks,

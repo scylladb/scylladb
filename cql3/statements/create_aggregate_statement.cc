@@ -69,7 +69,10 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
     managed_bytes_opt initcond = std::nullopt;
     if (_ival) {
         auto dummy_ident = ::make_shared<column_identifier>("", true);
-        auto column_spec = make_lw_shared<column_specification>("", "", dummy_ident, state_type);
+        // Prepare INITCOND as a frozen value, so an empty collection literal
+        // is an empty collection rather than null (as it would be for a
+        // non-frozen collection column).
+        auto column_spec = make_lw_shared<column_specification>("", "", dummy_ident, state_type->freeze());
         auto initcond_expr = prepare_expression(_ival.value(), db, _name.keyspace, nullptr, {column_spec});
         expr::verify_no_aggregate_functions(initcond_expr, "INITCOND clause");
         auto initcond_term = expr::evaluate(initcond_expr, query_options::DEFAULT);

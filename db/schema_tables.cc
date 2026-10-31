@@ -1186,7 +1186,7 @@ shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& 
         // not the user, so any dialect should work.
         auto expr = cql3::util::do_with_parser(*initcond_str, cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::term));
         auto dummy_ident = ::make_shared<cql3::column_identifier>("", true);
-        auto column_spec = make_lw_shared<cql3::column_specification>("", "", dummy_ident, state_type);
+        auto column_spec = make_lw_shared<cql3::column_specification>("", "", dummy_ident, state_type->freeze());
         auto raw = cql3::expr::evaluate(prepare_expression(expr, db.as_data_dictionary(), "", nullptr, {column_spec}), cql3::query_options::DEFAULT);
         initcond = std::move(raw).to_managed_bytes_opt();
     }
@@ -1655,25 +1655,37 @@ utils::chunked_vector<mutation> make_create_aggregate_mutations(schema_features 
     utils::chunked_vector<mutation> muts;
 
     data_type state_type = aggregate->sfunc()->arg_types()[0];
+    // If CREATE OR REPLACE AGGREGATE replaces an aggregate, the replaced
+    // aggregate's optional final function and initial condition must be
+    // deleted if the new aggregate doesn't have them.
     if (aggregate->has_finalfunc()) {
         m.set_clustered_cell(ckey, "final_func", aggregate->finalfunc()->name().name, timestamp);
+    } else {
+        m.set_clustered_cell(ckey, *s->get_column_definition("final_func"), atomic_cell::make_dead(timestamp, gc_clock::now()));
     }
     if (aggregate->initcond()) {
         m.set_clustered_cell(ckey, "initcond", state_type->deserialize(managed_bytes_view(*aggregate->initcond())).to_parsable_string(), timestamp);
+    } else {
+        m.set_clustered_cell(ckey, *s->get_column_definition("initcond"), atomic_cell::make_dead(timestamp, gc_clock::now()));
     }
     m.set_clustered_cell(ckey, "return_type", aggregate->return_type()->as_cql3_type().to_string(), timestamp);
     m.set_clustered_cell(ckey, "state_func", aggregate->sfunc()->name().name, timestamp);
     m.set_clustered_cell(ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
     muts.emplace_back(std::move(m));
 
-    if (features.contains<schema_feature::SCYLLA_AGGREGATES>() && aggregate->is_reducible()) {
+    if (features.contains<schema_feature::SCYLLA_AGGREGATES>()) {
         schema_ptr sa_schema = scylla_aggregates();
         auto sa_p = get_mutation(sa_schema, *aggregate);
         mutation& sa_mut = sa_p.first;
         clustering_key& sa_ckey = sa_p.second;
-        sa_mut.set_clustered_cell(sa_ckey, "reduce_func", aggregate->reducefunc()->name().name, timestamp);
-        sa_mut.set_clustered_cell(sa_ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
-
+        if (aggregate->is_reducible()) {
+            sa_mut.set_clustered_cell(sa_ckey, "reduce_func", aggregate->reducefunc()->name().name, timestamp);
+            sa_mut.set_clustered_cell(sa_ckey, "state_type", state_type->as_cql3_type().to_string(), timestamp);
+        } else {
+            // If CREATE OR REPLACE AGGREGATE replaces a reducible aggregate,
+            // the replaced aggregate's reduce function must be deleted.
+            sa_mut.partition().apply_delete(*sa_schema, sa_ckey, tombstone(timestamp, gc_clock::now()));
+        }
         muts.emplace_back(std::move(sa_mut));
     }
 
