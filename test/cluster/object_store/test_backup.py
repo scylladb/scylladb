@@ -3040,3 +3040,62 @@ async def test_restore_tablets_fails_when_the_snapshot_does_not_hold_the_compone
             refs = sstable_refs(object_storage, sid)
             assert not any(r.startswith('nodes/') for r in refs), f'The failed restore left node references of sstable {sid}: {sorted(refs)}'
         assert_objects_intact(crafted, bucket_objects(object_storage), 'the failed restore')
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_snapshot_ttl_via_nodetool(manager: ScyllaClusterManager):
+    '''Take snapshots with `scylla nodetool snapshot --ttl` and check that the ttl
+    reaches the node: it is recorded as expires_at in the snapshot manifest, an invalid
+    value is rejected, and the snapshot is deleted when it expires.'''
+
+    server = await manager.server_add(cmdline=['--logger-log-level', 'snapshots=debug'])
+    cql = manager.get_cql()
+    cf = 'test_cf'
+    workdir = await manager.server_get_workdir(server.server_id)
+
+    def manifest(ks, tag):
+        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        with open(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{tag}/manifest.json') as f:
+            return json.load(f)['snapshot']
+
+    def snapshot_exists(ks, tag):
+        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        return os.path.isdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{tag}')
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        await cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('0', 'zero');")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        # The ttls are long enough for these snapshots to outlive the test, so
+        # that their manifests can be read and compared to the ttl passed to
+        # nodetool.
+        for tag, ttl, expected in [('seconds', '600s', 600), ('hours', '1h', 3600), ('no_ttl', None, None)]:
+            nodetool.take_snapshot(cql, f'{ks}.{cf}', tag, ttl=ttl, use_nodetool=True)
+            m = manifest(ks, tag)
+            if expected is None:
+                assert 'expires_at' not in m, f'Snapshot {tag} without a ttl has an expiration: {m}'
+            else:
+                assert m['expires_at'] - m['created_at'] == expected, f'Snapshot {tag} with ttl {ttl} has the wrong expiration: {m}'
+
+        with pytest.raises(subprocess.CalledProcessError) as e:
+            nodetool.take_snapshot(cql, f'{ks}.{cf}', 'invalid', ttl='5x', use_nodetool=True)
+        assert "TTL value '5x' is not valid" in e.value.stderr, f'Unexpected error for an invalid ttl: {e.value.stderr}'
+        assert not snapshot_exists(ks, 'invalid')
+
+        # Rather than waiting for a ttl to elapse, have the node expire the
+        # 'expiring' snapshot as soon as it is taken, and check that it is
+        # deleted while the others are kept. Its manifest is not read, since
+        # the deletion races with taking it.
+        await manager.api.enable_injection(server.ip_addr, 'snapshot_expire_now', one_shot=False, parameters={'tag': 'expiring'})
+        nodetool.take_snapshot(cql, f'{ks}.{cf}', 'expiring', ttl='1h', use_nodetool=True)
+
+        async def expiring_deleted():
+            return not snapshot_exists(ks, 'expiring') or None
+        await wait_for(expiring_deleted, time.time() + 60)
+
+        log = await manager.server_open_log(server.server_id)
+        res = await log.grep(f'Deleting expired snapshot expiring of table {ks}.{cf}')
+        assert len(res) == 1, f'Expected one expiration of snapshot expiring, found {res}'
+        for tag in ['seconds', 'hours', 'no_ttl']:
+            assert snapshot_exists(ks, tag), f'Snapshot {tag} was deleted'

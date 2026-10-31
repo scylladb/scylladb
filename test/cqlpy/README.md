@@ -25,7 +25,8 @@ e.g., `export CASSANDRA=$HOME/apache-cassandra-3.11.10/bin/cassandra`.
 A few of the tests also require the `nodetool` when running on Cassandra -
 this tool is again expected to be in the user's path, or be overridden with
 the `NODETOOL` environment variable. Nodetool is **not** needed to test
-Scylla.
+Scylla: the few tests that run nodetool against Scylla use the running
+Scylla's own `scylla nodetool`.
 
 Modern Linux distributions usually do not carry a Cassandra package, so if
 you want to install Cassandra to run tests against it, please refer to the

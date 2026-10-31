@@ -24,6 +24,8 @@ import re
 from collections import defaultdict
 from datetime import datetime
 
+from .util import local_process_id
+
 
 # For a "cql" object connected to one node, find the REST API URL
 # with the same node and port 10000.
@@ -51,13 +53,22 @@ def has_rest_api(cql):
     return checked_rest_api[url]
 
 
-# Find the external "nodetool" executable (can be overridden by the NODETOOL
-# environment variable). Only call this if the REST API doesn't work.
-def nodetool_cmd():
+# Find the "nodetool" command to run. Only call this if the REST API doesn't
+# work, or when a test wants to run nodetool itself. The command is:
+# 1. The NODETOOL environment variable, if set.
+# 2. The running local Scylla's own executable, as "scylla nodetool", when
+#    the server is found on this machine.
+# 3. "nodetool" in the user's path.
+# The lookup is done once and cached.
+def nodetool_cmd(cql):
     if nodetool_cmd.cmd:
         return nodetool_cmd.cmd
     if not nodetool_cmd.failed:
         nodetool_cmd.conf = (os.getenv('NODETOOL') or 'nodetool').split()
+        if not os.getenv('NODETOOL'):
+            scylla = local_scylla_path(cql)
+            if scylla:
+                nodetool_cmd.conf = [scylla, 'nodetool']
         nodetool_cmd.cmd = shutil.which(nodetool_cmd.conf[0])
         if nodetool_cmd.cmd is None:
             nodetool_cmd.failed = True
@@ -71,13 +82,26 @@ nodetool_cmd.args = []
 nodetool_cmd.failed = False
 nodetool_cmd.conf = False
 
-# Run the external "nodetool" executable (can be overridden by the NODETOOL
-# environment variable). Only call this if the REST API doesn't work.
+# Find the executable of the Scylla process serving the "cql" connection,
+# if it runs on this machine and provides the "nodetool" tool. Returns
+# None otherwise (e.g. the server is remote, or is Cassandra).
+def local_scylla_path(cql):
+    try:
+        pid = local_process_id(cql)
+        if not pid:
+            return None
+        path = os.readlink(f'/proc/{pid}/exe')
+        tools = subprocess.check_output([path, '--list-tools'], text=True)
+    except Exception:
+        return None
+    return path if 'nodetool' in tools.split() else None
+
+# Run the "nodetool" command found by nodetool_cmd().
 def run_nodetool(cql, *args, **subprocess_kwargs):
     # TODO: We may need to change this function or its callers to add proper
     # support for testing on multi-node clusters.
     host = cql.cluster.contact_points[0]
-    cmd = [nodetool_cmd()]
+    cmd = [nodetool_cmd(cql)]
     cmd.extend(nodetool_cmd.args)
     cmd.extend(['-h', host, *args])
     return subprocess.run(cmd, **subprocess_kwargs)
@@ -130,9 +154,14 @@ def compact_keyspace(cql, ks, flush_memtables=True):
             run_nodetool(cql, "flush", check=True)
         run_nodetool(cql, "compact", ks, check=True)
 
-def take_snapshot(cql, table, tag, skip_flush = None, ttl = None):
+# Take a snapshot of the given table. By default, the REST API is used when
+# it is available. With use_nodetool=True, the snapshot is taken with the
+# nodetool command found by nodetool_cmd() even if the REST API is available,
+# to test the nodetool path itself. A failing nodetool command then raises
+# subprocess.CalledProcessError, with its output captured.
+def take_snapshot(cql, table, tag, skip_flush = None, ttl = None, use_nodetool = False):
     ks, cf = table.split('.')
-    if has_rest_api(cql):
+    if has_rest_api(cql) and not use_nodetool:
         params = {'kn': ks, 'cf' : cf, 'tag': tag, 'sf': skip_flush}
         if ttl is not None:
             params['ttl'] = str(ttl)
@@ -144,7 +173,7 @@ def take_snapshot(cql, table, tag, skip_flush = None, ttl = None):
         if ttl is not None:
             args.extend(['--ttl', str(ttl)])
         args.append(ks)
-        run_nodetool(cql, "snapshot", *args)
+        run_nodetool(cql, "snapshot", *args, check=True, capture_output=True, text=True)
 
 def del_snapshot(cql, tag:str, keyspaces:list[str] = []):
     if has_rest_api(cql):
