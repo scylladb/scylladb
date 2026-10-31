@@ -287,10 +287,19 @@ public:
     };
 
 private:
+    // Resolved with the full result, so a write needs no continuation that could fail to allocate
+    // after its record is already in the buffer.
+    struct pending_write {
+        promise<record_location_with_holder> done;
+        seastar::gate::holder op;
+        size_t frame_offset = 0;
+        size_t frame_size = 0;
+    };
+
     raw_write_buffer _raw;
     // One per record rather than a shared_promise, whose waiter queue allocates a 32 KB block per
     // chunk. Cleared, not freed, by reset() so a reused buffer allocates nothing for its waiters.
-    std::vector<promise<segment_position>> _waiters;
+    std::vector<pending_write> _waiters;
     seastar::gate _write_gate;
 
     std::vector<record_in_buffer> _records_copy;
