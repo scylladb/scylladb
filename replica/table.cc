@@ -1996,20 +1996,35 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
         }
         ms_opt = make_combined_mutation_source(std::move(sources));
     }
-    auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), new_ssts_ms = std::move(*ms_opt), &cg] () mutable {
-        // FIXME: the following isn't exception safe.
-        for (auto& sst : ssts) {
-            add_sstable(cg, sst);
-            update_stats_for_new_sstable(sst);
-        }
-        m->mark_flushed(std::move(new_ssts_ms));
-        try_trigger_compaction(cg);
-    });
+    // The adder captures its state by reference from this coroutine frame
+    // so that a fresh one can be made for the invalidate() fallback below
+    // if update() fails; the one passed to update() is consumed by it.
+    auto make_adder = [&] {
+        return row_cache::external_updater([this, m, &ssts, &ms_opt, &cg] () mutable {
+            // FIXME: the following isn't exception safe.
+            for (auto& sst : ssts) {
+                add_sstable(cg, sst);
+                update_stats_for_new_sstable(sst);
+            }
+            m->mark_flushed(std::move(*ms_opt));
+            try_trigger_compaction(cg);
+        });
+    };
     if (cache_enabled()) {
-        co_return co_await _cache.update(std::move(adder), *m);
-    } else {
-        co_return co_await _cache.invalidate(std::move(adder)).then([m] { return m->clear_gently(); });
+        try {
+            co_return co_await _cache.update(make_adder(), *m);
+        } catch (...) {
+            // update() fails only before the adder is executed, so the
+            // sstable set and the memtable are intact. Invalidating the
+            // cache is a valid, if less efficient, way to bring it in sync
+            // with the flushed memtable, and it never fails, while the
+            // alternative is to retry the whole flush.
+            tlogger.warn("Failed to update the row cache of {}.{} from the flushed memtable: {}. Invalidating it instead",
+                    _schema->ks_name(), _schema->cf_name(), std::current_exception());
+        }
     }
+    co_await _cache.invalidate(make_adder());
+    co_await m->clear_gently();
 }
 
 logstor::logstor_group& table::get_logstor_group(dht::token token) {
