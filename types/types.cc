@@ -390,6 +390,18 @@ static int64_t parse_time_component(std::string_view s, std::string_view compone
 }
 
 int64_t time_type_impl::from_string_view(std::string_view s) {
+    // A time may also be given as an integer: the number of nanoseconds
+    // since midnight.
+    auto digits = s.starts_with('-') ? s.substr(1) : s;
+    if (!digits.empty() && std::ranges::all_of(digits, [] (char c) { return c >= '0' && c <= '9'; })) {
+        int64_t nanoseconds;
+        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), nanoseconds);
+        constexpr int64_t nanoseconds_per_day = int64_t(24) * 60 * 60 * 1000 * 1000 * 1000;
+        if (ec != std::errc() || ptr != s.data() + s.size() || nanoseconds < 0 || nanoseconds >= nanoseconds_per_day) {
+            throw marshal_exception(seastar::format("Unable to make long (for time) from: '{}'", s));
+        }
+        return nanoseconds;
+    }
     static auto format_error = "Timestamp format must be hh:mm:ss[.fffffffff]";
     auto hours_end = s.find(':');
     if (hours_end == std::string::npos) {
