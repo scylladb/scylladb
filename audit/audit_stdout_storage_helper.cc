@@ -119,7 +119,8 @@ void put_escaped(auto&& put, std::string_view value) {
 
 }
 
-// Records in the order they are written, copied into chunks the batch owns.
+// Records in the order they are written. The batch copies the records of its
+// own shard into chunks it owns, and only refers to the records of other shards.
 class record_batch {
     static constexpr size_t min_chunk_size = 1024;
     static constexpr size_t max_chunk_size = 64 * 1024;
@@ -176,6 +177,13 @@ public:
         }
     }
 
+    // `other` must stay alive as long as this batch refers to it.
+    void append(const record_batch& other) {
+        for (std::string_view data : other._data) {
+            _data.push_back(data);
+        }
+    }
+
     bool empty() const noexcept {
         return _data.empty();
     }
@@ -211,7 +219,8 @@ struct stdout_stream {
 };
 
 // Collects records into batches: while one batch is being flushed, new
-// records wait for the next one.
+// records wait for the next one. On shard 0 it also collects the batches of
+// the other shards.
 class stdout_record_batcher : public enable_shared_from_this<stdout_record_batcher> {
 public:
     using flush_func = noncopyable_function<future<>(const record_batch&)>;
@@ -257,7 +266,7 @@ private:
                 _flush_loop = flush_loop();
             }
         } catch (...) {
-            // drop a partly copied record
+            // drop a partly copied record, or the views of a batch the caller frees on failure
             _pending.truncate(pending_mark);
             throw;
         }
@@ -288,6 +297,15 @@ public:
         });
     }
 
+    // Resolves once the records of `batch` are flushed. Waits without a
+    // timeout, since the batch must stay alive until then.
+    future<> write_batch(const record_batch& batch) {
+        auto add = [&batch] (record_batch& pending) {
+            pending.append(batch);
+        };
+        return append(add, lowres_clock::time_point::max());
+    }
+
     // Resolves once every record written so far is flushed. Fails with
     // timed_out_error at the timeout after the batch in flight started.
     future<> close() {
@@ -304,13 +322,12 @@ namespace {
 // The batcher of shard 0, which writes to the stream. Set only on shard 0.
 thread_local stdout_record_batcher* shard0_batcher = nullptr;
 
-// `build` runs on shard 0, possibly after the caller has returned.
-future<> write_on_shard0(auto build) {
-    return smp::submit_to(0, [build = std::move(build)] {
+future<> forward_to_shard0(const record_batch& batch) {
+    return smp::submit_to(0, [&batch] {
         if (!shard0_batcher) {
             throw audit_exception("Stdout audit backend is not started");
         }
-        return shard0_batcher->write_record(build);
+        return shard0_batcher->write_batch(batch);
     });
 }
 
@@ -413,7 +430,7 @@ void put_record(auto&& put,
 audit_stdout_storage_helper::audit_stdout_storage_helper(sstring path, std::chrono::milliseconds write_timeout)
     : _stream(seastar::make_shared<stdout_stream>(std::move(path)))
     , _batcher(seastar::make_shared<stdout_record_batcher>(write_timeout, [stream = _stream] (const record_batch& batch) {
-        return stream->write(batch);
+        return this_shard_id() == 0 ? stream->write(batch) : forward_to_shard0(batch);
     }))
 {}
 
@@ -464,7 +481,7 @@ future<> audit_stdout_storage_helper::write(audit_sink_set sinks,
     if (!sinks.contains(audit_sink::standard_output)) {
         return make_ready_future<>();
     }
-    return write_on_shard0([=, &username] (auto&& put) {
+    return _batcher->write_record([&] (auto&& put) {
         put_record(put, node_ip, audit_info->category_string(), cl, error, audit_info->keyspace(),
                    audit_info->query(), client_ip, audit_info->table(), username);
     });
@@ -478,7 +495,7 @@ future<> audit_stdout_storage_helper::write_login(audit_sink_set sinks,
     if (!sinks.contains(audit_sink::standard_output)) {
         return make_ready_future<>();
     }
-    return write_on_shard0([=, &username] (auto&& put) {
+    return _batcher->write_record([&] (auto&& put) {
         put_record(put, node_ip, "AUTH", std::nullopt, error, "", "", client_ip, "", username);
     });
 }
