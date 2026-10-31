@@ -59,7 +59,7 @@ future<> ensure_superuser(const service::client_state& state) {
 }
 
 // Returns the resolved registry option so callers can canonicalize the value before persisting it.
-const db::cluster_config_registry::option& validate_cluster_option(query_processor& qp, alter_cluster_config_statement::scope scope, std::string_view config_name, const std::optional<sstring>& value) {
+const db::cluster_config_registry::option& validate_cluster_option(query_processor& qp, alter_cluster_config_statement::scope scope, std::string_view config_name, const std::optional<alter_cluster_config_statement::config_value>& value) {
     const auto* option = db::cluster_config_registry::find(config_name);
     if (!option) {
         throw exceptions::invalid_request_exception(format("Unknown cluster config option '{}'", config_name));
@@ -74,7 +74,11 @@ const db::cluster_config_registry::option& validate_cluster_option(query_process
         throw exceptions::invalid_request_exception(format("Cluster config '{}' does not support this scope", config_name));
     }
     if (value) {
-        if (auto error = db::cluster_config_registry::validate_value(*option, *value)) {
+        if (value->written_as_literal && option->type() != db::cluster_config_registry::value_type::structured) {
+            throw exceptions::invalid_request_exception(format(
+                    "Cluster config '{}' takes a single value, not a map or a list", config_name));
+        }
+        if (auto error = db::cluster_config_registry::validate_value(*option, value->text)) {
             throw exceptions::invalid_request_exception(fmt::format("Invalid value for cluster config '{}': {}", config_name, *error));
         }
     }
@@ -114,7 +118,7 @@ void validate_scope_target_exists(query_processor& qp,
 
 }
 
-alter_cluster_config_statement::alter_cluster_config_statement(scope statement_scope, std::optional<sstring> dc_name, std::optional<sstring> rack_name, std::optional<utils::UUID> node_uuid, sstring config_name, std::optional<sstring> value)
+alter_cluster_config_statement::alter_cluster_config_statement(scope statement_scope, std::optional<sstring> dc_name, std::optional<sstring> rack_name, std::optional<utils::UUID> node_uuid, sstring config_name, std::optional<config_value> value)
     : schema_altering_statement()
     , _scope(statement_scope)
     , _dc_name(std::move(dc_name))
@@ -124,19 +128,19 @@ alter_cluster_config_statement::alter_cluster_config_statement(scope statement_s
     , _value(std::move(value)) {
 }
 
-std::unique_ptr<alter_cluster_config_statement> alter_cluster_config_statement::for_cluster(sstring config_name, std::optional<sstring> value) {
+std::unique_ptr<alter_cluster_config_statement> alter_cluster_config_statement::for_cluster(sstring config_name, std::optional<config_value> value) {
     return std::make_unique<alter_cluster_config_statement>(scope::cluster, std::nullopt, std::nullopt, std::nullopt, std::move(config_name), std::move(value));
 }
 
-std::unique_ptr<alter_cluster_config_statement> alter_cluster_config_statement::for_datacenter(sstring dc_name, sstring config_name, std::optional<sstring> value) {
+std::unique_ptr<alter_cluster_config_statement> alter_cluster_config_statement::for_datacenter(sstring dc_name, sstring config_name, std::optional<config_value> value) {
     return std::make_unique<alter_cluster_config_statement>(scope::datacenter, std::move(dc_name), std::nullopt, std::nullopt, std::move(config_name), std::move(value));
 }
 
-std::unique_ptr<alter_cluster_config_statement> alter_cluster_config_statement::for_rack(sstring dc_name, sstring rack_name, sstring config_name, std::optional<sstring> value) {
+std::unique_ptr<alter_cluster_config_statement> alter_cluster_config_statement::for_rack(sstring dc_name, sstring rack_name, sstring config_name, std::optional<config_value> value) {
     return std::make_unique<alter_cluster_config_statement>(scope::rack, std::move(dc_name), std::move(rack_name), std::nullopt, std::move(config_name), std::move(value));
 }
 
-std::unique_ptr<alter_cluster_config_statement> alter_cluster_config_statement::for_node(const sstring& node_uuid, sstring config_name, std::optional<sstring> value) {
+std::unique_ptr<alter_cluster_config_statement> alter_cluster_config_statement::for_node(const sstring& node_uuid, sstring config_name, std::optional<config_value> value) {
     return std::make_unique<alter_cluster_config_statement>(scope::node, std::nullopt, std::nullopt, utils::UUID(node_uuid), std::move(config_name), std::move(value));
 }
 
@@ -164,7 +168,7 @@ alter_cluster_config_statement::prepare_schema_mutations(query_processor& qp, se
     // The config option name is the map key and is always the first bind marker.
     values.emplace_back(_config_name);
     if (_value) {
-        values.emplace_back(db::cluster_config_registry::canonicalize_value(option, *_value));
+        values.emplace_back(db::cluster_config_registry::canonicalize_value(option, _value->text));
     }
 
     switch (_scope) {
