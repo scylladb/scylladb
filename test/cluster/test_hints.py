@@ -1546,19 +1546,13 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     Hint sync points allow to wait until all current hints are sent
     between two specified sets of nodes: sources and destinations.
 
-    There are five subtests:
+    There are four subtests:
     - Check that waiting for a point finishes after all waited on hints are replayed
-    - Check that waiting for a point aborts when the waiting node shuts down
-    - Check that waiting for a point works after the node is restarted with a different number of shards
+    - Check that waiting for a point aborts when the waiting node shuts down, and that the point
+      still works after the node is restarted with a different number of shards
     - Check that waiting for a point created on another node is forbidden
     - Check that waiting for a point works when the waiting node is being decommissioned
     """
-
-    async def start_node(server: ServerInfo, smp: int = 2) -> None:
-        await manager.server_update_cmdline(server.server_id,
-                                            ["--smp", str(smp), "--logger-log-level", "hints_manager=trace"])
-        await manager.server_start(server.server_id)
-        await manager.servers_see_each_other([s1, s2])
 
     async def get_sync_point() -> str:
         await settle_and_flush_hints(manager, [s1])
@@ -1595,10 +1589,8 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     # We are using RF=1, so roughly half of the writes will be written as hints
     keys1 = list(range(50))
     keys2 = list(range(50, 100))
-    keys3 = list(range(100, 150))
-
-    # Nothing is written for subtest 4
-    keys5 = list(range(200, 250))
+    # Nothing is written for subtest 3
+    keys4 = list(range(100, 150))
 
     cql = await manager.get_cql_exclusive(s1)
     logger.info("Creating a keyspace...")
@@ -1649,7 +1641,8 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     logger.info("Verifying that hints replayed all of the data...")
     await assert_rows_present(manager, [s1, s2], "ks.t", "pk", keys1, present=True)
 
-    logger.info("SUBTEST 2: Create a hint sync point, shutdown the waiting node and observe the failure")
+    logger.info("SUBTEST 2: Create a hint sync point, shutdown the waiting node and observe the failure, "
+                "then restart the node with a different shard count and wait until hints are replayed")
 
     logger.info("Pausing s2...")
     await pause_servers(manager, [s2], [s1])
@@ -1676,52 +1669,25 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     logger.info("Join with the future waiting for the point")
     await asyncio.wait_for(fut, timeout=60)
 
-    logger.info("Starting s1...")
-    await start_node(s1)
-    cql = await manager.get_cql_exclusive(s1)
-    # We need to re-prepare the statement after restarting the node.
-    stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
-    stmt.consistency_level = ConsistencyLevel.ANY
-
-    # Error injections are reset on restart, so hint replay will be unpaused at this point
-
-    logger.info("SUBTEST 3: Create a hint sync point, restart with different shard count and wait until hints are replayed")
-
-    logger.info("Pausing s2...")
-    await pause_servers(manager, [s2], [s1])
-
-    logger.info("Pause hint replay on s1")
-    await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
-
-    logger.info(f"Inserting {len(keys3)} keys...")
-    await insert(keys3)
-
-    logger.info("Unpausing s2...")
-    await unpause_servers(manager, [s2], [s1])
-
-    logger.info("Create hint sync point")
-    sync_point_id = await get_sync_point()
-
-    logger.info("Stopping s1...")
-    await manager.server_stop_gracefully(s1.server_id)
-
     # Reducing the shard count with tablets isn't supported yet (#16739), so increase it.
     logger.info("Starting s1 with SMP=3...")
-    await start_node(s1, smp=3)
+    await manager.server_update_cmdline(s1.server_id, ["--smp", "3", "--logger-log-level", "hints_manager=trace"])
+    await manager.server_start(s1.server_id)
+    await manager.servers_see_each_other([s1, s2])
     cql = await manager.get_cql_exclusive(s1)
     # We need to re-prepare the statement after restarting the node.
     stmt = cql.prepare("INSERT INTO ks.t (pk, v) VALUES (?, ?)")
     stmt.consistency_level = ConsistencyLevel.ANY
 
-    # Hint replay is unpaused because of the restart
+    # Error injections are reset on restart, so hint replay is unpaused at this point.
 
     logger.info("Wait until all hints are successfully replayed...")
     await wait_for_sync_point(s1, sync_point_id, 60, expect="DONE")
 
     logger.info("Verifying that hints replayed all of the data...")
-    await assert_rows_present(manager, [s1, s2], "ks.t", "pk", keys3, present=True)
+    await assert_rows_present(manager, [s1, s2], "ks.t", "pk", keys2, present=True)
 
-    logger.info("SUBTEST 4: Create a hint sync point and try to use it on another node - should fail")
+    logger.info("SUBTEST 3: Create a hint sync point and try to use it on another node - should fail")
 
     logger.info("Create hint sync point on s1")
     sync_point_id = await get_sync_point()
@@ -1729,7 +1695,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     logger.info("Try waiting for the point on s2 - should fail")
     await wait_for_sync_point(s2, sync_point_id, 0, expect="FAILED")
 
-    logger.info("SUBTEST 5: Create a hint sync point and decommission the target node - waiting should succeed")
+    logger.info("SUBTEST 4: Create a hint sync point and decommission the target node - waiting should succeed")
 
     logger.info("Pausing s2...")
     await pause_servers(manager, [s2], [s1])
@@ -1737,8 +1703,8 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     logger.info("Pause hint replay on s1")
     await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
 
-    logger.info(f"Inserting {len(keys5)} keys...")
-    await insert(keys5)
+    logger.info(f"Inserting {len(keys4)} keys...")
+    await insert(keys4)
 
     logger.info("Unpausing s2...")
     await unpause_servers(manager, [s2], [s1])
@@ -1764,7 +1730,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
 
     logger.info("Verifying that hints replayed all of the data...")
     # s2 is gone, so all of the rows must have ended up on s1.
-    await assert_rows_present(manager, [s1], "ks.t", "pk", keys5, present=True)
+    await assert_rows_present(manager, [s1], "ks.t", "pk", keys4, present=True)
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections and the hinted handoff test API aren't available in release mode")
