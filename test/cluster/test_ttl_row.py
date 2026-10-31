@@ -457,3 +457,103 @@ async def test_row_ttl_multi_dc_with_down_dc(manager: ManagerClient):
                 SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.LOCAL_QUORUM))))
             assert 0 == len(list(await cql_dc2.run_async(
                 SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.LOCAL_QUORUM))))
+
+
+@pytest.mark.parametrize("ksdef", [
+    # SimpleStrategy ignores the DC layout and places each range on two
+    # consecutive nodes in the ring. Tablets don't support SimpleStrategy,
+    # so this keyspace must be vnode-based.
+    "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 2 } AND TABLETS = { 'enabled': false }",
+    # RF=4 in dc1, which has two nodes - fewer than the three a local quorum
+    # needs. Tablets don't allow an RF higher than the number of token-owning
+    # nodes in the DC, so this keyspace must be vnode-based.
+    "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'dc1': 4, 'dc2': 1 } AND TABLETS = { 'enabled': false }",
+], ids=["simple_strategy", "rf_above_dc_node_count"])
+async def test_row_ttl_multi_dc_quorum_unreachable(manager: ScyllaClusterManager, ksdef):
+    """Check that per-row TTL expires all rows also when the node scanning a
+       range cannot reach a local quorum for it. With two nodes in dc1 and one
+       in dc2, each keyspace above leaves some ranges without a local quorum
+       in the DC of their primary replica, so with LOCAL_QUORUM the rows in
+       those ranges would never expire. Reproduces SCYLLADB-5125.
+    """
+    config = {
+        'alternator_ttl_period_in_seconds': '0.5',
+    }
+    for dc, rack in [('dc1', 'rack1'), ('dc1', 'rack2'), ('dc2', 'rack1')]:
+        await manager.servers_add(1, config=config, property_file={'dc': dc, 'rack': rack})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, ksdef) as keyspace:
+        async with new_test_table(manager, keyspace, 'p int primary key, e bigint ttl') as table:
+            # Insert 50 expired rows in different partitions, so that each node
+            # is the primary replica of some. QUORUM is all replicas of a row in
+            # both keyspaces, so the loop ends with each row on all its replicas.
+            e = int(time.time()) - 10
+            for p in range(50):
+                await cql.run_async(SimpleStatement(f'INSERT INTO {table} (p, e) VALUES ({p}, {e})', consistency_level=ConsistencyLevel.QUORUM))
+            # Expect that after a short delay, all the rows will have expired
+            # - including those whose primary replica has no local quorum.
+            timeout = time.time() + 120
+            while time.time() < timeout:
+                if 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM)))):
+                    break
+                await asyncio.sleep(0.1)
+            assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM))))
+
+
+async def test_row_ttl_quorum_without_local_quorum(manager: ScyllaClusterManager):
+    """When the local DC has fewer nodes than a local quorum needs, the
+       expiration scanner uses QUORUM - which counts the replicas in all the
+       DCs - and not a single-replica consistency level. Check that it really
+       keeps that quorum guarantee: with RF=4 in dc1, which has two nodes, and
+       RF=1 in dc2, the scanners of the two dc1 nodes use QUORUM, and a quorum
+       of the RF of 5 is three - all the replicas a range has. Stopping the
+       dc2 node therefore leaves those scanners unable to expire anything, and
+       all the rows should expire once it comes back. The dc2 node is the one
+       to stop: dc2 does form a local quorum - of its single node - so that
+       node's scanner uses LOCAL_QUORUM and would keep expiring rows even with
+       a dc1 node down.
+    """
+    config = {
+        'alternator_ttl_period_in_seconds': '0.5',
+    }
+    servers = []
+    for dc, rack in [('dc1', 'rack1'), ('dc1', 'rack2'), ('dc2', 'rack1')]:
+        servers.extend(await manager.servers_add(1, config=config, property_file={'dc': dc, 'rack': rack}))
+    # Tablets don't allow an RF higher than the number of token-owning nodes
+    # in the DC, so this keyspace must be vnode-based.
+    ksdef = "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'dc1': 4, 'dc2': 1 } AND TABLETS = { 'enabled': false }"
+    async with new_test_keyspace(manager, ksdef) as keyspace:
+        async with new_test_table(manager, keyspace, 'p int primary key, e bigint ttl') as table:
+            # Bring down the single node of dc2. Each range is left with two
+            # of its three replicas - one short of a quorum - so the scanners
+            # of the dc1 nodes, whose DC cannot form a local quorum, can no
+            # longer read or delete anything.
+            await manager.server_stop_gracefully(servers[2].server_id)
+            # Both dc1 nodes replicate every range, so one of them can serve
+            # all the reads and writes below with CL=ONE.
+            cql = await manager.get_cql_exclusive(servers[0])
+            e = int(time.time()) - 10
+            for p in range(20):
+                await cql.run_async(SimpleStatement(f'INSERT INTO {table} (p, e) VALUES ({p}, {e})', consistency_level=ConsistencyLevel.ONE))
+            # Wait for a few more table scans on each of the dc1 nodes, so the
+            # check below isn't just racing the first scan, and then verify
+            # that none of those scans expired anything. The metric sums over
+            # a node's shards, so three more scans can also be three shards
+            # scanning once each.
+            async def scan_counts():
+                return [(await manager.metrics.query(server.ip_addr)).get('scylla_expiration_scan_table') or 0
+                        for server in servers[0:2]]
+            counts_before = await scan_counts()
+            async def scanned_again():
+                return True if all(after >= before + 3 for before, after in zip(counts_before, await scan_counts())) else None
+            await wait_for(scanned_again, time.time() + 120)
+            assert 20 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.ONE))))
+            # With the third replica back, a quorum is achievable again and
+            # all the rows should expire.
+            await manager.server_start(servers[2].server_id)
+            timeout = time.time() + 120
+            while time.time() < timeout:
+                if 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM)))):
+                    break
+                await asyncio.sleep(0.1)
+            assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM))))
