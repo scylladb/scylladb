@@ -161,7 +161,7 @@ private:
 
     std::function<void()> compaction_submission_callback();
 
-    // Register all tables as candidates and initiate reevaluation.
+    // Register all non-blocked tables as candidates and initiate reevaluation.
     std::function<void()> automatic_scrub_submission_callback();
     void schedule_table_for_automatic_scrub(compaction::compaction_group_view* t);
     void reevaluate_automatic_scrub() noexcept;
