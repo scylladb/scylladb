@@ -192,6 +192,7 @@ single_row_partition decode_record_value(const record_value& v, const schema& s,
         auto partition_view = mutation_partition_view::from_view(reader.read_partition());
         partition_builder b(s, p);
         partition_view.accept(s, b);
+        b.finish();
     } else {
         column_mapping cm = reader.read_mapping();
         converting_mutation_partition_applier applier(cm, s, p);

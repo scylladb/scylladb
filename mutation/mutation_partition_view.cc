@@ -86,6 +86,54 @@ atomic_cell read_atomic_cell(const abstract_type& type, atomic_cell_variant cv, 
     return boost::apply_visitor(atomic_cell_visitor(type, cm), cv);
 }
 
+// Visitors which can write a cell's serialized form in place: they provide
+// accept_serialized_atomic_cell(column_id, size_t size, Writer write), which
+// calls write(managed_bytes_mutable_view) with `size` bytes to fill.
+template <typename Visitor>
+concept SerializedAtomicCellVisitor = requires (Visitor& v) {
+    v.accept_serialized_atomic_cell(column_id(), size_t(), [] (managed_bytes_mutable_view) {});
+};
+
+// Writes live, expiring and dead cells through accept_serialized_atomic_cell(),
+// without materializing an atomic_cell. Returns false for other cells.
+template <SerializedAtomicCellVisitor Visitor>
+bool visit_serialized_atomic_cell(Visitor& visitor, column_id id, atomic_cell_variant& cv) {
+    struct serializing_visitor : public boost::static_visitor<bool> {
+        Visitor& _visitor;
+        column_id _id;
+        serializing_visitor(Visitor& v, column_id id) : _visitor(v), _id(id) {}
+        bool operator()(ser::live_cell_view& lcv) const {
+            auto value = lcv.value().view();
+            _visitor.accept_serialized_atomic_cell(_id, atomic_cell_type::live_serialized_size(value.size_bytes()), [&] (managed_bytes_mutable_view out) {
+                atomic_cell_type::write_live(out, lcv.created_at(), value);
+            });
+            return true;
+        }
+        bool operator()(ser::expiring_cell_view& ecv) const {
+            auto c = ecv.c();
+            auto value = c.value().view();
+            _visitor.accept_serialized_atomic_cell(_id, atomic_cell_type::live_expiring_serialized_size(value.size_bytes()), [&] (managed_bytes_mutable_view out) {
+                atomic_cell_type::write_live(out, c.created_at(), value, ecv.expiry(), ecv.ttl());
+            });
+            return true;
+        }
+        bool operator()(ser::dead_cell_view& dcv) const {
+            auto tomb = dcv.tomb();
+            _visitor.accept_serialized_atomic_cell(_id, atomic_cell_type::dead_serialized_size(), [&] (managed_bytes_mutable_view out) {
+                atomic_cell_type::write_dead(out, tomb.timestamp(), tomb.deletion_time());
+            });
+            return true;
+        }
+        bool operator()(ser::counter_cell_view&) const {
+            return false;
+        }
+        bool operator()(ser::unknown_variant_type&) const {
+            return false;
+        }
+    };
+    return boost::apply_visitor(serializing_visitor(visitor, id), cv);
+}
+
 template<typename Visitor>
 void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind kind, Visitor&& visitor)
 {
@@ -104,6 +152,11 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
             void operator()(atomic_cell_variant& acv) const {
                 if (!_col.is_atomic()) {
                     throw std::runtime_error("A collection expected, got an atomic cell");
+                }
+                if constexpr (SerializedAtomicCellVisitor<Visitor>) {
+                    if (visit_serialized_atomic_cell(_visitor, _id, acv)) {
+                        return;
+                    }
                 }
                 _visitor.accept_atomic_cell(_id, read_atomic_cell(*_col.type(), acv));
             }
@@ -146,6 +199,66 @@ row_marker read_row_marker(boost::variant<ser::live_marker_view, ser::expiring_m
 
 }
 
+namespace {
+
+// Forward the cells of rows to a MutationViewVisitor, including serialized
+// cells if the visitor accepts them.
+template <typename Visitor>
+struct static_row_cell_forwarder {
+    Visitor& _visitor;
+
+    void accept_atomic_cell(column_id id, atomic_cell ac) const {
+       _visitor.accept_static_cell(id, std::move(ac));
+    }
+    void accept_collection(column_id id, collection_mutation cm) const {
+       _visitor.accept_static_cell(id, std::move(cm));
+    }
+    template <typename Writer>
+    requires requires (Visitor& v, Writer& w) { v.accept_serialized_static_cell(column_id(), size_t(), w); }
+    void accept_serialized_atomic_cell(column_id id, size_t size, Writer&& write) const {
+       _visitor.accept_serialized_static_cell(id, size, write);
+    }
+};
+
+template <typename Visitor>
+struct clustering_row_cell_forwarder {
+    Visitor& _visitor;
+
+    void accept_atomic_cell(column_id id, atomic_cell ac) const {
+       _visitor.accept_row_cell(id, std::move(ac));
+    }
+    void accept_collection(column_id id, collection_mutation cm) const {
+       _visitor.accept_row_cell(id, std::move(cm));
+    }
+    template <typename Writer>
+    requires requires (Visitor& v, Writer& w) { v.accept_serialized_row_cell(column_id(), size_t(), w); }
+    void accept_serialized_atomic_cell(column_id id, size_t size, Writer&& write) const {
+       _visitor.accept_serialized_row_cell(id, size, write);
+    }
+};
+
+// Builds the cells of a row from a ser::row_view.
+class row_cells_builder {
+    row::cell_appender _cells;
+public:
+    explicit row_cells_builder(row& r) noexcept : _cells(r) {}
+    void accept_atomic_cell(column_id id, atomic_cell ac) {
+        _cells.append(id, std::move(ac));
+    }
+    void accept_collection(column_id id, collection_mutation cm) {
+        _cells.append(id, std::move(cm));
+    }
+    template <typename Writer>
+    void accept_serialized_atomic_cell(column_id id, size_t size, Writer&& write) {
+        _cells.append_serialized(id, size, write);
+    }
+    void finish() {
+        _cells.finish();
+    }
+};
+
+}
+
 template<typename Visitor>
 requires MutationViewVisitor<Visitor>
 void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visitor) const {
@@ -154,17 +267,7 @@ void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visit
 
     visitor.accept_partition_tombstone(mpv.tomb());
 
-    struct static_row_cell_visitor {
-        Visitor& _visitor;
-
-        void accept_atomic_cell(column_id id, atomic_cell ac) const {
-           _visitor.accept_static_cell(id, std::move(ac));
-        }
-        void accept_collection(column_id id, collection_mutation cm) const {
-           _visitor.accept_static_cell(id, std::move(cm));
-        }
-    };
-    read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
+    read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_forwarder<Visitor>{visitor});
 
     for (auto&& rt : mpv.range_tombstones()) {
         visitor.accept_row_tombstone(rt);
@@ -174,17 +277,7 @@ void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visit
         auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
         visitor.accept_row(position_in_partition_view::for_key(cr.key()), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
 
-        struct cell_visitor {
-            Visitor& _visitor;
-
-            void accept_atomic_cell(column_id id, atomic_cell ac) const {
-               _visitor.accept_row_cell(id, std::move(ac));
-            }
-            void accept_collection(column_id id, collection_mutation cm) const {
-               _visitor.accept_row_cell(id, std::move(cm));
-            }
-        };
-        read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
+        read_and_visit_row(cr.cells(), cm, column_kind::regular_column, clustering_row_cell_forwarder<Visitor>{visitor});
     }
 }
 
@@ -462,43 +555,21 @@ mutation_partition_view mutation_partition_view::from_view(ser::mutation_partiti
 }
 
 clustering_row read_clustered_row(const schema& s, ser::clustering_row_view crv) {
-    class clustering_row_builder {
-        clustering_row _row;
-    public:
-        clustering_row_builder(clustering_key key, row_tombstone t, row_marker m)
-            : _row(std::move(key), std::move(t), std::move(m), row()) { }
-        void accept_atomic_cell(column_id id, atomic_cell ac) {
-            _row.cells().append_cell(id, std::move(ac));
-        }
-        void accept_collection(column_id id, collection_mutation cm) {
-            _row.cells().append_cell(id, std::move(cm));
-        }
-        clustering_row get() && { return std::move(_row); }
-    };
-
     auto cr = crv.row();
     auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
-    clustering_row_builder builder(cr.key(), std::move(t), read_row_marker(cr.marker()));
+    clustering_row result(cr.key(), std::move(t), read_row_marker(cr.marker()), row());
+    row_cells_builder builder(result.cells());
     read_and_visit_row(cr.cells(), s.get_column_mapping(), column_kind::regular_column, builder);
-    return std::move(builder).get();
+    builder.finish();
+    return result;
 }
 
 static_row read_static_row(const schema& s, ser::static_row_view sr) {
-    class static_row_builder {
-        static_row _row;
-    public:
-        void accept_atomic_cell(column_id id, atomic_cell ac) {
-            _row.cells().append_cell(id, std::move(ac));
-        }
-        void accept_collection(column_id id, collection_mutation cm) {
-            _row.cells().append_cell(id, std::move(cm));
-        }
-        static_row get() && { return std::move(_row); }
-    };
-
-    static_row_builder builder;
+    static_row result;
+    row_cells_builder builder(result.cells());
     read_and_visit_row(sr.cells(), s.get_column_mapping(), column_kind::static_column, builder);
-    return std::move(builder).get();
+    builder.finish();
+    return result;
 }
 
 mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s, reader_permit permit)

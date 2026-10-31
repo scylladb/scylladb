@@ -32,6 +32,7 @@ target_sources(cql3
     cf_name.cc
     cql3_type.cc
     description.cc
+    mutation_cell_collector.cc
     operation.cc
     index_name.cc
     keyspace_element_name.cc

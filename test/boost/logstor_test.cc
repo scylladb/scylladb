@@ -773,8 +773,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_decodes_under_another_schema_
     assert_that(decoded).is_equal_to(oracle.to_mutation(with_dropped));
     // Of the three cells written, the one of the dropped column is gone.
     const auto& cells = decoded.partition().clustered_row(*with_dropped, clustering_key::make_empty()).cells();
-    BOOST_REQUIRE(cells.find_cell(with_dropped->get_column_definition("v")->id) != nullptr);
-    BOOST_REQUIRE(cells.find_cell(with_dropped->get_column_definition("x")->id) != nullptr);
+    BOOST_REQUIRE(cells.find_cell(with_dropped->get_column_definition("v")->id).has_value());
+    BOOST_REQUIRE(cells.find_cell(with_dropped->get_column_definition("x")->id).has_value());
     BOOST_REQUIRE_EQUAL(cells.size(), 2u);
 }
 
