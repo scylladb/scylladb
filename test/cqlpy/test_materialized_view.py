@@ -147,6 +147,34 @@ def test_mv_quoted_column_names_build(cql, test_keyspace):
                 wait_for_view_built(cql, mv)
                 assert list(cql.execute(f'SELECT * from {mv}')) == [(2, 1)]
 
+# A view's WHERE clause is stored as text, and parsed again to update and
+# build the view. A type hint to a user type in it must keep the quotes that
+# the type name "int" needs, otherwise writes to the base table fail.
+# Reproduces SCYLLADB-5202.
+def test_mv_where_type_hint_udt_named_int(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int)', name='"int"') as typ, \
+            new_test_table(cql, test_keyspace, f'p int, b frozen<{typ}>, PRIMARY KEY (p, b)') as table, \
+            new_materialized_view(cql, table, '*', 'b, p', f'p IS NOT NULL AND b = (frozen<{typ}>){{a: 1}}') as mv:
+        cql.execute(f'INSERT INTO {table} (p, b) VALUES (1, {{a: 1}})')
+        rows = cql.execute(f'SELECT p FROM {mv}')
+        assert [row.p for row in rows] == [1]
+
+# Same as above, with a user type in a keyspace whose mixed case name needs
+# the quotes.
+# Reproduces SCYLLADB-5202.
+def test_mv_where_type_hint_udt_in_mixed_case_keyspace(cql):
+    keyspace = f'"{unique_name().capitalize()}"'
+    cql.execute(f"CREATE KEYSPACE {keyspace} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }}")
+    try:
+        with new_type(cql, keyspace, '(a int)') as typ, \
+                new_test_table(cql, keyspace, f'p int, b frozen<{typ}>, PRIMARY KEY (p, b)') as table, \
+                new_materialized_view(cql, table, '*', 'b, p', f'p IS NOT NULL AND b = (frozen<{typ}>){{a: 1}}') as mv:
+            cql.execute(f'INSERT INTO {table} (p, b) VALUES (1, {{a: 1}})')
+            rows = cql.execute(f'SELECT p FROM {mv}')
+            assert [row.p for row in rows] == [1]
+    finally:
+        cql.execute(f"DROP KEYSPACE {keyspace}")
+
 # The previous test (test_mv_empty_string_partition_key) verifies that a
 # row with an empty-string partition key can appear in the view. This was
 # checked with a full-table scan. This test is about reading this one
