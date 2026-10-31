@@ -20,6 +20,7 @@
 #include "storage_helper.hh"
 #include "audit_cf_storage_helper.hh"
 #include "audit_syslog_storage_helper.hh"
+#include "audit_stdout_storage_helper.hh"
 #include "audit_composite_storage_helper.hh"
 #include "audit.hh"
 #include "../db/config.hh"
@@ -80,6 +81,8 @@ static audit_sink_set parse_audit_sinks(const sstring& data) {
                 result.set(audit_sink::table);
             } else if (audit_mode == "syslog") {
                 result.set(audit_sink::syslog);
+            } else if (audit_mode == "stdout") {
+                result.set(audit_sink::standard_output);
             } else {
                 throw audit_exception(fmt::format("Bad configuration: invalid 'audit': {}", audit_mode));
             }
@@ -96,7 +99,8 @@ static void warn_on_sink_mismatch(const std::vector<audit_rule>& rules, audit_si
     for (size_t i = 0; i < rules.size(); ++i) {
         for (const auto& sink_name : rules[i].sinks) {
             bool supported = (sink_name == "table" && enabled_sinks.contains(audit_sink::table))
-                          || (sink_name == "syslog" && enabled_sinks.contains(audit_sink::syslog));
+                          || (sink_name == "syslog" && enabled_sinks.contains(audit_sink::syslog))
+                          || (sink_name == "stdout" && enabled_sinks.contains(audit_sink::standard_output));
             if (!supported) {
                 logger.error("Audit rule {} references sink '{}' but the global 'audit' config does not enable it. "
                              "Events matching this rule will not be written to '{}'.",
@@ -115,6 +119,9 @@ static std::unique_ptr<storage_helper> create_storage_helper(audit_sink_set audi
     }
     if (audit_sinks.contains(audit_sink::syslog)) {
         helpers.emplace_back(std::make_unique<audit_syslog_storage_helper>(qp, mm));
+    }
+    if (audit_sinks.contains(audit_sink::standard_output)) {
+        helpers.emplace_back(std::make_unique<audit_stdout_storage_helper>());
     }
 
     SCYLLA_ASSERT(!helpers.empty());
@@ -239,7 +246,7 @@ future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token
     if (!audit_sinks) {
         if (!audit_rules.empty()) {
             logger.warn("Audit rules are configured but audit is disabled (audit='none'). "
-                        "Set 'audit' to 'table' or 'syslog' to enable audit rules.");
+                        "Set 'audit' to 'table', 'syslog' or 'stdout' to enable audit rules.");
         }
         logger.info("Audit is disabled");
         return make_ready_future<>();
