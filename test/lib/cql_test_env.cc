@@ -871,12 +871,11 @@ private:
                 _sys_ks.local().save_local_info(std::move(linfo), my_address, my_address).get();
             }
             locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id] (locator::token_metadata& tm) {
-                auto& topo = tm.get_topology();
-                topo.set_host_id_cfg(hostid);
-                topo.add_or_update_endpoint(hostid,
-                                            std::nullopt,
-                                            locator::node::state::normal,
-                                            this_smp_shard_count());
+                tm.set_host_id_cfg(hostid);
+                tm.update_topology(hostid,
+                                   std::nullopt,
+                                   locator::node::state::normal,
+                                   this_smp_shard_count());
                 return make_ready_future<>();
             }).get();
 

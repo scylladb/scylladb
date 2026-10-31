@@ -54,6 +54,14 @@ private:
     // Track the unique set of nodes in _token_to_endpoint_map
     std::unordered_set<host_id> _normal_token_owners;
 
+    // Lazily computed views of _normal_token_owners grouped by datacenter
+    // and by datacenter/rack, as returned by get_datacenter_token_owners() and
+    // get_datacenter_racks_token_owners(). Dropped by the mutators that
+    // change their inputs (see invalidate_datacenter_token_owners()).
+    // Not copied by clone_only_token_map(), the clone recomputes on demand.
+    mutable std::optional<std::unordered_map<sstring, std::unordered_set<host_id>>> _datacenter_token_owners;
+    mutable std::optional<std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>> _datacenter_racks_token_owners;
+
     std::unordered_map<token, host_id> _bootstrap_tokens;
     std::unordered_set<host_id> _leaving_endpoints;
     // The map between the existing node to be replaced and the replacing node
@@ -119,7 +127,18 @@ public:
     }
 
     void update_topology(host_id id, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st, std::optional<shard_id> shard_count = std::nullopt) {
+        invalidate_datacenter_token_owners();
         _topology.add_or_update_endpoint(id, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
+    }
+
+    void set_node_flag(host_id id, node::flag f, bool value) {
+        if (auto* n = _topology.find_node(id)) {
+            n->set_flag(f, value);
+        }
+    }
+
+    void set_host_id_cfg(host_id this_host_id) {
+        _topology.set_host_id_cfg(this_host_id);
     }
 
     /**
@@ -133,10 +152,6 @@ public:
     std::ranges::subrange<token_metadata::tokens_iterator> ring_range(const token& start) const;
 
     std::ranges::subrange<token_metadata::tokens_iterator> ring_range(dht::ring_position_view pos) const;
-
-    topology& get_topology() {
-        return _topology;
-    }
 
     const topology& get_topology() const {
         return _topology;
@@ -242,9 +257,9 @@ public:
      * Bootstrapping tokens are not taken into account. */
     size_t count_normal_token_owners() const;
 
-    std::unordered_map<sstring, std::unordered_set<host_id>> get_datacenter_token_owners() const;
+    const std::unordered_map<sstring, std::unordered_set<host_id>>& get_datacenter_token_owners() const;
 
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>&
     get_datacenter_racks_token_owners() const;
 
     std::unordered_map<sstring, std::unordered_set<std::reference_wrapper<const node>>> get_datacenter_token_owners_nodes() const;
@@ -253,6 +268,10 @@ public:
     get_datacenter_racks_token_owners_nodes() const;
 private:
     future<> update_normal_token_owners();
+    void invalidate_datacenter_token_owners() noexcept {
+        _datacenter_token_owners.reset();
+        _datacenter_racks_token_owners.reset();
+    }
 public:
     void set_read_new(token_metadata::read_new_t read_new) {
         _read_new = read_new;
@@ -363,6 +382,8 @@ future<> token_metadata_impl::clear_gently() noexcept {
     _version_tracker = {};
     co_await utils::clear_gently(_token_to_endpoint_map);
     co_await utils::clear_gently(_normal_token_owners);
+    co_await utils::clear_gently(_datacenter_token_owners);
+    co_await utils::clear_gently(_datacenter_racks_token_owners);
     co_await utils::clear_gently(_bootstrap_tokens);
     co_await utils::clear_gently(_leaving_endpoints);
     co_await utils::clear_gently(_replacing_endpoints);
@@ -583,6 +604,7 @@ void token_metadata_impl::remove_endpoint(host_id endpoint) {
     remove_by_value(_token_to_endpoint_map, endpoint);
     _normal_token_owners.erase(endpoint);
     _topology.remove_endpoint(endpoint);
+    invalidate_datacenter_token_owners();
     _leaving_endpoints.erase(endpoint);
     del_replacing_endpoint(endpoint);
     invalidate_cached_rings();
@@ -739,19 +761,25 @@ void token_metadata_impl::for_each_token_owner(std::function<void(const node&)> 
     });
 }
 
-std::unordered_map<sstring, std::unordered_set<host_id>>
+const std::unordered_map<sstring, std::unordered_set<host_id>>&
 token_metadata_impl::get_datacenter_token_owners() const {
+    if (_datacenter_token_owners) {
+        return *_datacenter_token_owners;
+    }
     std::unordered_map<sstring, std::unordered_set<host_id>> datacenter_token_owners;
     _topology.for_each_node([&] (const node& n) {
         if (is_normal_token_owner(n.host_id())) {
             datacenter_token_owners[n.dc_rack().dc].insert(n.host_id());
         }
     });
-    return datacenter_token_owners;
+    return _datacenter_token_owners.emplace(std::move(datacenter_token_owners));
 }
 
-std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>
+const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>&
 token_metadata_impl::get_datacenter_racks_token_owners() const {
+    if (_datacenter_racks_token_owners) {
+        return *_datacenter_racks_token_owners;
+    }
     std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>> dc_racks_token_owners;
     _topology.for_each_node([&] (const node& n) {
         const auto& dc_rack = n.dc_rack();
@@ -759,7 +787,7 @@ token_metadata_impl::get_datacenter_racks_token_owners() const {
             dc_racks_token_owners[dc_rack.dc][dc_rack.rack].insert(n.host_id());
         }
     });
-    return dc_racks_token_owners;
+    return _datacenter_racks_token_owners.emplace(std::move(dc_racks_token_owners));
 }
 
 std::unordered_map<sstring, std::unordered_set<std::reference_wrapper<const node>>>
@@ -792,6 +820,7 @@ future<> token_metadata_impl::update_normal_token_owners() {
         co_await coroutine::maybe_yield();
     }
     _normal_token_owners = std::move(eps);
+    invalidate_datacenter_token_owners();
 }
 
 void token_metadata_impl::add_leaving_endpoint(host_id endpoint) {
@@ -917,6 +946,16 @@ token_metadata::update_topology(host_id ep, std::optional<endpoint_dc_rack> opt_
     _impl->update_topology(ep, std::move(opt_dr), std::move(opt_st), std::move(shard_count));
 }
 
+void
+token_metadata::set_node_flag(host_id id, node::flag f, bool value) {
+    _impl->set_node_flag(id, f, value);
+}
+
+void
+token_metadata::set_host_id_cfg(host_id this_host_id) {
+    _impl->set_host_id_cfg(this_host_id);
+}
+
 std::ranges::subrange<token_metadata::tokens_iterator>
 token_metadata::ring_range(const token& start) const {
     return _impl->ring_range(start);
@@ -972,11 +1011,6 @@ public:
         return std::nullopt;
     }
 };
-
-topology&
-token_metadata::get_topology() {
-    return _impl->get_topology();
-}
 
 const topology&
 token_metadata::get_topology() const {
@@ -1128,11 +1162,11 @@ token_metadata::count_normal_token_owners() const {
     return _impl->count_normal_token_owners();
 }
 
-std::unordered_map<sstring, std::unordered_set<host_id>> token_metadata::get_datacenter_token_owners() const {
+const std::unordered_map<sstring, std::unordered_set<host_id>>& token_metadata::get_datacenter_token_owners() const {
     return _impl->get_datacenter_token_owners();
 }
 
-std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>
+const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>&
 token_metadata::get_datacenter_racks_token_owners() const {
     return _impl->get_datacenter_racks_token_owners();
 }
