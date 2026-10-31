@@ -89,8 +89,7 @@ inline auto listen_on_port(std::unique_ptr<seastar::httpd::http_server> server, 
     seastar::listen_options opts;
     opts.set_fixed_cpu(seastar::this_shard_id());
     co_await server->listen(addr, opts, credentials);
-    auto const& listeners = seastar::httpd::http_server_tester::listeners(*server);
-    co_return std::make_tuple(std::move(server), listeners.at(0).local_address().port());
+    co_return std::make_tuple(std::move(server), server->listening_addresses().front().port());
 }
 
 inline auto make_http_server(std::function<void(seastar::httpd::routes& r)> set_routes) {
@@ -110,10 +109,9 @@ inline auto new_http_server(std::function<void(seastar::httpd::routes& r)> set_r
 inline auto new_http_server(std::function<void(seastar::httpd::routes& r)> set_routes, seastar::server_socket socket)
         -> seastar::future<std::tuple<std::unique_ptr<seastar::httpd::http_server>, seastar::socket_address>> {
     auto server = make_http_server(set_routes);
-    auto& listeners = seastar::httpd::http_server_tester::listeners(*server);
-    listeners.push_back(std::move(socket));
-    co_await server->do_accepts(listeners.size() - 1);
-    co_return std::make_tuple(std::move(server), listeners.back().local_address().port());
+    // A plain TCP socket the caller bound itself; nothing here serves TLS that way.
+    co_await server->listen(std::move(socket));
+    co_return std::make_tuple(std::move(server), server->listening_addresses().front().port());
 }
 
 // A sample correct ANN response for the test table created in create_test_table().
