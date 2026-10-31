@@ -1,7 +1,7 @@
 Nodetool setlogginglevel
 ========================
 
-**setlogginglevel** sets the level log threshold for a given component or class during runtime. If this command is called with no parameters, the log level is reset to the initial configuration. 
+**setlogginglevel** sets the level log threshold for a given component or class during runtime. Both ``<class>`` and ``<level>`` are required; resetting log levels is not supported.
 
 .. note:: Using trace or debug logging levels will create very large log files where the readers may not find what they are looking for. It is best to use these levels for a very short period of time or with the help of ScyllaDB Support. 
 

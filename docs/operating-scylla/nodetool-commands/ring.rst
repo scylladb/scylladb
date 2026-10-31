@@ -1,11 +1,13 @@
 Nodetool ring
 =============
-**ring** ``[<keyspace>] [<table>]`` - The nodetool ring command displays the token
+**ring** ``[(-r | --resolve-ip)] [<keyspace>] [<table>]`` - The nodetool ring command displays the token
 ring information. The token ring is responsible for managing the
 partitioning of data within the ScyllaDB cluster. This command is
 critical if a cluster is facing data consistency issues.
 
 By default, ``ring`` command shows all keyspaces.
+
+Use ``-r`` or ``--resolve-ip`` to show node host names instead of IP addresses.
 
 For example:
 
@@ -20,11 +22,11 @@ status of each of the nodes.
 +------------+-----+-----------+-------+--------------+-----------+---------------------------+
 |Address     |Rack |  Status   |State  |      Load    |  Owns     |  Token                    |
 +============+=====+===========+=======+==============+===========+===========================+
-|172.30.0.64 | 1b  |    Up     | Normal|551.31 MiB    | Mykespace | 1006916943685901788       |
+|172.30.0.64 | 1b  |    Up     | Normal|551.31 MiB    |     ?     | 1006916943685901788       |
 +------------+-----+-----------+-------+--------------+-----------+---------------------------+
-|172.30.0.62 | 1b  |    Up     | Normal|541.59 MiB    | Mykespace | 1024434117767101090       |
+|172.30.0.62 | 1b  |    Up     | Normal|541.59 MiB    |     ?     | 1024434117767101090       |
 +------------+-----+-----------+-------+--------------+-----------+---------------------------+
-|172.30.0.61 | 1b  |    Up     | Normal|541.59 MiB    | Mykespace | 1043327858966261499       |
+|172.30.0.61 | 1b  |    Up     | Normal|541.59 MiB    |     ?     | 1043327858966261499       |
 +------------+-----+-----------+-------+--------------+-----------+---------------------------+
 
 You can specify a ``<keyspace>`` name to filter the output and focus on

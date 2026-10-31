@@ -8,7 +8,7 @@ Syntax
 -------
 .. code-block:: console
 
-   nodetool tasks list <module> [--internal] [(--keyspace <keyspace> | -ks <keyspace>)]
+   nodetool tasks list <module> [--internal] [--keyspace <keyspace>]
    [(--table <table> | -t <table>)] [--interval <time_in_seconds>] [(--iterations <number> | -i <number>)]
 
 Options
@@ -16,10 +16,10 @@ Options
 
 * ``--internal`` - if set, internal tasks are listed. Internal tasks are the ones that
   have a parent or cover an operation that is invoked internally.
-* ``--keyspace`` or ``-ks`` - shows only tasks on the specified keyspace.
+* ``--keyspace`` - shows only tasks on the specified keyspace.
 * ``--table`` or ``-t`` - shows only tasks on the specified table.
-* ``--interval`` - repeats the operation periodically at specified time intervals.
-* ``--iterations`` or ``-i`` - repeats the operation specified number of times.
+* ``--interval`` - interval in seconds between repetitions (default 10); only takes effect with ``--iterations``.
+* ``--iterations`` or ``-i`` - number of times to re-print the list (default 0).
 
 For example:
 
@@ -27,13 +27,13 @@ Shows all repair tasks on keyspace `myks` and table `mytable`:
 
 .. code-block:: shell
 
-   > nodetool tasks list repair --internal -ks myks --table mytable
+   > nodetool tasks list repair --internal --keyspace myks --table mytable
 
 Shows all non-internal compaction tasks and repeats the operation 3 times every 5 seconds:
 
 .. code-block:: shell
 
-   > nodetool tasks list compaction --interval 5 --i 3
+   > nodetool tasks list compaction --interval 5 -i 3
 
 Example output
 --------------

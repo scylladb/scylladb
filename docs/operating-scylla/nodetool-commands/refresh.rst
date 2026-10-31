@@ -12,7 +12,7 @@ If the table has any :doc:`Materialized Views (MV)</cql/mv/>` or :doc:`Secondary
 Local refresh
 -------------
 
-.. note:: This mode is not supported for :doc:`tablets</architecture/tablets/>`.
+.. note:: This mode is not supported for :doc:`tablets</architecture/tablets/>`. For tablet keyspaces, ``nodetool refresh`` automatically uses :ref:`load-and-stream <nodetool-refresh-load-and-stream>` instead.
 
 SSTables are copied from the upload directory to the table's data directory and added to the table's SSTable registry.
 
@@ -52,7 +52,7 @@ Syntax:
 
 .. code::
 
-   nodetool refresh <my_keyspace> <my_table> [(--load-and-stream | -las) [[(--primary-replica-only | -pro)] | [--scope <scope>]]]
+   nodetool refresh <my_keyspace> <my_table> [(--load-and-stream | -las) [(--primary-replica-only | -pro)] [--scope <scope>]]
 
 Filter target replicas
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -62,7 +62,7 @@ This can be inefficient in a large cluster, especially if there are multiple Dat
 Constraining the subset of replicas where data will be streamed to allows orchestrating concurrent upload to multiple nodes without duplicate work -- the same partition being streamed to a replica from multiple source nodes.
 
 There are two options available to manipulate the replica(s) to stream data to: ``--primary-replica-only`` and ``--scope``.
-The two are mutually exclusive.
+The two can be combined, in which case each partition is streamed to its primary replica within the given scope. ``--primary-replica-only`` cannot be combined with ``--scope node``.
 
 The ``--primary-replica-only`` (or ``-pro``) option makes ScyllaDB only stream each partition to its primary replica.
 After all SSTables are uploaded to the cluster, a repair is required to replicate data to all replicas.
