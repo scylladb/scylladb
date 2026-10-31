@@ -2586,6 +2586,95 @@ async def test_cluster_snapshot_backup_and_restore_several_nodes_per_rack(manage
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_clear_and_restore, object_storage, topology)
                                         , object_storage, True, True, topology)
 
+async def run_and_list_cluster_backup(object_storage, prefix: str, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    manifest = await run_cluster_backup(object_storage, prefix, manager, snapshot_name, ks, cf, servers)
+
+    s = servers[0]
+    # specify ks, cf and snapshot
+    json1 = await manager.api.list_cluster_backup(s.ip_addr, ks,
+                                                  object_storage.address, object_storage.bucket_name,
+                                                  prefix, tables = [cf], snapshot=snapshot_name)
+    # specify only ks and cf
+    json2 = await manager.api.list_cluster_backup(s.ip_addr, ks,
+                                                  object_storage.address, object_storage.bucket_name,
+                                                  prefix, tables = [cf])
+    # specify only ks
+    json3 = await manager.api.list_cluster_backup(s.ip_addr, ks,
+                                                  object_storage.address, object_storage.bucket_name,
+                                                  prefix)
+    # specify only prefix
+    json4 = await manager.api.list_cluster_backup(s.ip_addr, None,
+                                                  object_storage.address, object_storage.bucket_name,
+                                                  prefix)
+
+    # should get same result
+    assert json1 == json2
+    assert json1 == json3
+    assert json1 == json4
+
+    assert len(json1) == 1
+
+    # specify another ks, cf
+    json5 = await manager.api.list_cluster_backup(s.ip_addr, ks + '_apa',
+                                                  object_storage.address, object_storage.bucket_name,
+                                                  prefix, tables = [cf + '_ola'], snapshot=snapshot_name)
+
+    assert len(json5) == 1
+    assert len(json5[0]['manifests']) == 0
+
+    # specify another snap
+    json6 = await manager.api.list_cluster_backup(s.ip_addr, ks,
+                                                  object_storage.address, object_storage.bucket_name,
+                                                  prefix, tables = [cf], snapshot=snapshot_name + '_olko')
+
+    assert len(json6) == 1
+    assert len(json6[0]['manifests']) == 0
+
+    back = json1[0]
+
+    assert back['location']['bucket'] == object_storage.bucket_name
+    assert back['dcs'] == [ s.datacenter ]
+    assert len(back['manifests']) == 1
+    mf = back['manifests'][0]
+    assert mf['name'] == snapshot_name
+    table = mf['table']
+    assert table['name'] == cf
+    assert table['keyspace'] == ks
+    assert mf['num_sstables'] == len(manifest['sstables'])
+    assert mf['size'] > 0
+
+@pytest.mark.asyncio
+async def test_list_cluster_snapshot_backup(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests a cluster snapshot backup can be listed via API
+    """
+    await do_test_snapshot_on_all_nodes(manager, partial(run_and_list_cluster_backup, object_storage, 'lechefre'), object_storage)
+
+async def run_and_list_cluster_backup_multi(object_storage, prefix: str, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    await run_and_list_cluster_backup(object_storage, prefix, manager, snapshot_name, ks, cf, servers)
+    # now create a new cluster and backup to same place
+    async def run_second_backup(object_storage, prefix2: str, manager: ScyllaClusterManager, snapshot_name2: str, ks2: str, cf2:str, servers: list[ServerInfo]):
+        manifest = await run_cluster_backup(object_storage, prefix, manager, snapshot_name2, ks2, cf2, servers)
+        # specify only prefix
+        assert prefix == prefix2
+        s = servers[0]
+        json1 = await manager.api.list_cluster_backup(s.ip_addr, None,
+                                                      object_storage.address, object_storage.bucket_name,
+                                                      prefix2)
+        assert len(json1) == 1
+        names = { manifest['name'] for manifest in json1[0]['manifests']}
+        assert names == { snapshot_name, snapshot_name2 }
+ 
+    await do_test_snapshot_on_all_nodes(manager, partial(run_second_backup, object_storage, prefix), object_storage)
+
+
+@pytest.mark.asyncio
+async def test_list_cluster_snapshot_backup_multi_snapshots(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests several cluster snapshot backups can be listed via API
+    """
+    await do_test_snapshot_on_all_nodes(manager, partial(run_and_list_cluster_backup_multi, object_storage, 'washandgo'), object_storage)
+
 
 def bucket_objects(object_storage, prefix=''):
     '''The objects of the test bucket, or of one prefix of it, mapped to their sizes.
