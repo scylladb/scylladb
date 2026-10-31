@@ -60,6 +60,9 @@ the toolchain explicitly, pull that image:
 
 If you add dependencies (to `install-dependencies.sh` or
 `seastar/install-dependencies.sh`) you should update the toolchain.
+On Fedora, Seastar's dependencies are listed in `install-dependencies.sh`
+rather than taken from `seastar/install-dependencies.sh`, so a new Seastar
+dependency must be added there too.
 
 Run the command
 
