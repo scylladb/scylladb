@@ -846,6 +846,7 @@ arg_parser.add_argument('--perf-tests-debuginfo', action='store', dest='perf_tes
 arg_parser.add_argument('--line-tables', dest='line_tables', action='store_true', default=False,
                         help='Add line-number debug information (-gline-tables-only, compressed with zstd) '
                              'to modes that would otherwise have no debug information: dev mode, and all modes with --debuginfo 0. '
+                             'Test executables in these modes, normally stripped, keep the line tables too. '
                              'It does not change the generated code, and is needed by scripts/bpcov/bpcov.py.')
 arg_parser.add_argument('--split-dwarf', dest='split_dwarf', action='store_true', default=False,
                         help='use of split dwarf (https://gcc.gnu.org/wiki/DebugFission) to speed up linking')
@@ -3005,6 +3006,10 @@ def write_build_file(f,
               command = $cxx  $ld_flags_{mode} -s $ldflags -o $out $in $libs $libs_{mode}
               description = LINK (stripped) $out
               pool = link_pool
+            rule link_line_tables.{mode}
+              command = $cxx  $ld_flags_{mode} $ldflags -o $out $in $libs $libs_{mode} && llvm-objcopy --strip-all --keep-section='.debug_*' $out
+              description = LINK (stripped, keeping line tables) $out
+              pool = link_pool
             rule link_build.{mode}
               command = $cxx  $ld_flags_{mode} $ldflags_build -o $out $in $libs $libs_{mode}
               description = LINK (build) $out
@@ -3141,6 +3146,10 @@ def write_build_file(f,
                 # quickly re-link the test unstripped by adding a "_g"
                 # to the test name, e.g., "ninja build/release/testname_g"
                 link_rule = perf_tests_link_rule if binary.startswith('test/perf/') else tests_link_rule
+                # Except for the line tables requested with --line-tables:
+                # bpcov needs them in every executable it measures.
+                if link_rule == 'link_stripped' and '-gline-tables-only' in modes[mode]['cxxflags'].split():
+                    link_rule = 'link_line_tables'
                 f.write('build $builddir/{}/{}: {}.{} {} | {} {} {} {}\n'.format(mode, binary, link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep, fmt_dep))
                 f.write('   libs = {}\n'.format(local_libs))
                 f.write('build $builddir/{}/{}_g: {}.{} {} | {} {} {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep, fmt_dep))
@@ -3212,6 +3221,21 @@ def write_build_file(f,
                 artifacts=str.join(' ', compiler_training_artifacts)
             )
         )
+        # With --line-tables, "ninja {mode}-bpcov-prepare" prepares the data that
+        # scripts/bpcov needs for each executable, in parallel. Optional: without
+        # it, the first run of each executable under bpcov prepares it.
+        if '-gline-tables-only' in modeval['cxxflags'].split() and not modeval['is_profile']:
+            f.write(textwrap.dedent(f'''\
+                rule bpcov_prepare.{mode}
+                  command = scripts/bpcov/bpcov.py prepare --quiet --dir $builddir/{mode} --binary $in && touch $out
+                  description = BPCOV_PREPARE $in
+                '''))
+            bpcov_infos = []
+            for binary in sorted(b for b in build_artifacts if b == 'scylla' or b in tests):
+                info = f'$builddir/{mode}/bpcov/{binary}/info'
+                f.write(f'build {info}: bpcov_prepare.{mode} $builddir/{mode}/{binary} | scripts/bpcov/bpcov.py scripts/bpcov/prepare.c\n')
+                bpcov_infos.append(info)
+            f.write(f'build {mode}-bpcov-prepare: phony {" ".join(bpcov_infos)}\n')
 
         gen_dir = '$builddir/{}/gen'.format(mode)
         gen_headers = []

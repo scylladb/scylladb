@@ -17,19 +17,23 @@
  * BREAKPOINTS is a file of sorted, unique, little-endian uint32 addresses
  * (link-time addresses in PROGRAM), as written by bpcov-prepare. The tracer
  * runs PROGRAM under ptrace, and before it starts running, writes an int3
- * instruction at each of these addresses. When a thread hits one, the tracer
- * records the hit in the HITS file, restores the original byte, and lets the
- * thread continue from that address. So each breakpoint costs one trap the
- * first time it is reached, and nothing after that - the program then runs at
- * full speed.
+ * instruction at each of these addresses that no run has hit yet. When a
+ * thread hits one, the tracer records the hit in the HITS file, restores the
+ * original byte, and lets the thread continue from that address. So each
+ * breakpoint costs one trap the first time it is reached, and nothing after
+ * that - the program then runs at full speed.
  *
  * The HITS file has one byte for each breakpoint, in the order of BREAKPOINTS:
- * 0 if it was not hit, 1 if it was hit, 3 if it was hit only in a process the
- * program forked, and 2 if it could not be used (the original instruction was
- * already an int3). The tracer maps the file into its memory, so recording a
- * hit is just a write to memory. As the mapping is shared with the file, the
- * hits get to the file even if the tracer and the program are killed with
- * SIGKILL.
+ * 0 if it was not hit, 1 if it was hit, and 2 if it could not be used (the
+ * original instruction was already an int3). All the runs of PROGRAM share
+ * this file, also at the same time (with bpcov-preload.so too): a run skips
+ * the breakpoints that earlier runs hit, so it traps only on code that no run
+ * reached before, and runs at the same time can only change bytes from 0 to
+ * the same 1 or 2. So what the tracer itself inserted and restored, it keeps
+ * in its own memory, not in the file. The tracer maps the file into its
+ * memory, so recording a hit is just a write to memory. As the mapping is
+ * shared with the file, the hits get to the file even if the tracer and the
+ * program are killed with SIGKILL.
  *
  * Every trap is a round trip from the program to the tracer and back, so we
  * keep the work of the tracer for each trap to a minimum: a waitpid() that
@@ -37,7 +41,8 @@
  * of one byte to /proc/PID/mem to restore the original instruction,
  * PTRACE_SETREGS to move the thread back to it, and PTRACE_CONT.
  *
- * The tracer's own messages go to the file HITS.log, not to its standard
+ * The tracer's own messages, one line per run, are appended to the file
+ * HITS.log, not written to its standard
  * error: the program shares that, and tests may check the program's output
  * (e.g., that a log file starts with Scylla's first log line).
  *
@@ -65,14 +70,20 @@
 
 static uint32_t* bp_addr;
 static uint8_t* bp_orig;
+// What this tracer did with each breakpoint (not what the HITS file says,
+// which other runs change too).
+static uint8_t* bp_state;
 static uint8_t* bp_hit;  // the HITS file, mapped into memory
 static size_t n_bp;
 static uint64_t bias;
 static int mem_fd;  // the program's /proc/PID/mem
 static FILE* log_file;
-static size_t n_hits, n_traps, n_skipped;
+static size_t n_hits, n_traps, n_inserted, n_already_hit;
 
-enum { NOT_HIT = 0, HIT = 1, UNUSABLE = 2, HIT_IN_FORK = 3 };
+// The values in the HITS file.
+enum { NOT_HIT = 0, HIT = 1, UNUSABLE = 2 };
+// The values in bp_state.
+enum { NOT_INSERTED = 0, INSERTED = 1, RESTORED = 2 };
 
 // Threads we have already seen, so we can swallow the SIGSTOP that every
 // new traced thread starts with, and threads of processes which the program
@@ -119,7 +130,8 @@ static void read_breakpoints(const char* path) {
     n_bp = st.st_size / sizeof(uint32_t);
     bp_addr = malloc(n_bp * sizeof(uint32_t));
     bp_orig = malloc(n_bp);
-    if (!bp_addr || !bp_orig) {
+    bp_state = calloc(n_bp, 1);
+    if (!bp_addr || !bp_orig || !bp_state) {
         die("malloc");
     }
     size_t done = 0;
@@ -160,9 +172,9 @@ static uint64_t load_bias(pid_t pid) {
     return 0;
 }
 
-// Write an int3 at every breakpoint address, remembering the original byte.
-// Works chunk by chunk through /proc/pid/mem, which can write the program's
-// read-only text because we are its tracer.
+// Write an int3 at every breakpoint address that no run has hit yet,
+// remembering the original byte. Works chunk by chunk through /proc/pid/mem,
+// which can write the program's read-only text because we are its tracer.
 static void insert_breakpoints(pid_t pid) {
     char path[64];
     snprintf(path, sizeof(path), "/proc/%d/mem", pid);
@@ -183,20 +195,27 @@ static void insert_breakpoints(pid_t pid) {
         if (pread(fd, buf, len, start) != (ssize_t)len) {
             die("reading program text");
         }
+        size_t n = 0;
         for (size_t k = i; k < j; k++) {
+            if (bp_hit[k] != NOT_HIT) {
+                n_already_hit += bp_hit[k] == HIT;
+                continue;
+            }
             uint8_t* p = &buf[bp_addr[k] + bias - start];
             bp_orig[k] = *p;
             if (*p == 0xcc) {
                 // Already an int3, we could not tell our trap from the original.
                 bp_hit[k] = UNUSABLE;
-                n_skipped++;
             } else {
                 *p = 0xcc;
+                bp_state[k] = INSERTED;
+                n++;
             }
         }
-        if (pwrite(fd, buf, len, start) != (ssize_t)len) {
+        if (n && pwrite(fd, buf, len, start) != (ssize_t)len) {
             die("writing program text");
         }
+        n_inserted += n;
         i = j;
     }
     // Kept open, to restore the original instructions as they are hit.
@@ -226,15 +245,15 @@ static int handle_trap(pid_t tid) {
     // The int3 instruction is one byte, and the trap leaves rip after it.
     uint64_t addr = regs.rip - 1;
     ssize_t i = find_breakpoint(addr - bias);
-    if (i < 0 || bp_hit[i] == UNUSABLE) {
+    if (i < 0 || bp_state[i] == NOT_INSERTED) {
         return 0;
     }
     n_traps++;
     if (get_bit(forked_tid, tid)) {
         // A process the program forked has its own copy of the program's
-        // memory, including the breakpoints, and the HITS file doesn't say
-        // which of them we restored there. So check whether this one still
-        // is an int3 (another thread could have hit it first).
+        // memory, including the breakpoints, and bp_state doesn't say which
+        // of them we restored there. So check whether this one still is an
+        // int3 (another thread could have hit it first).
         errno = 0;
         long word = ptrace(PTRACE_PEEKTEXT, tid, addr, 0);
         if (errno) {
@@ -246,21 +265,16 @@ static int handle_trap(pid_t tid) {
                 die("PTRACE_POKETEXT");
             }
         }
-        if (bp_hit[i] == NOT_HIT) {
-            bp_hit[i] = HIT_IN_FORK;
-            n_hits++;
-        }
-    } else if (bp_hit[i] != HIT) {
-        // If this breakpoint was already hit, another thread got here first,
-        // and we already restored the original instruction; then we only need
-        // to move this thread back to it.
+        bp_hit[i] = HIT;
+    } else if (bp_state[i] == INSERTED) {
+        // If we already restored it, another thread got here first, and we
+        // only need to move this thread back to the original instruction.
         if (pwrite(mem_fd, &bp_orig[i], 1, addr) != 1) {
             die("restoring an instruction");
         }
-        if (bp_hit[i] == NOT_HIT) {
-            n_hits++;
-        }
+        bp_state[i] = RESTORED;
         bp_hit[i] = HIT;
+        n_hits++;
     }
     regs.rip = addr;
     if (ptrace(PTRACE_SETREGS, tid, 0, &regs) < 0) {
@@ -276,8 +290,10 @@ int main(int argc, char** argv) {
         return 127;
     }
     read_breakpoints(argv[1]);
-    int hits_fd = open(argv[2], O_RDWR | O_CREAT | O_TRUNC, 0644);
-    if (hits_fd < 0 || ftruncate(hits_fd, n_bp) < 0) {
+    // Other runs may be using the HITS file, so only extend it if it is new.
+    int hits_fd = open(argv[2], O_RDWR | O_CREAT, 0644);
+    struct stat st;
+    if (hits_fd < 0 || fstat(hits_fd, &st) < 0 || (st.st_size < (off_t)n_bp && ftruncate(hits_fd, n_bp) < 0)) {
         die(argv[2]);
     }
     bp_hit = mmap(NULL, n_bp, PROT_READ | PROT_WRITE, MAP_SHARED, hits_fd, 0);
@@ -324,7 +340,8 @@ int main(int argc, char** argv) {
     bias = load_bias(child);
     double t0 = now();
     insert_breakpoints(child);
-    fprintf(log_file, "inserted %zu breakpoints in %.2f seconds\n", n_bp - n_skipped, now() - t0);
+    fprintf(log_file, "%d: inserted %zu breakpoints in %.2f seconds (%zu were already hit)\n", (int)child, n_inserted,
+            now() - t0, n_already_hit);
     ptrace(PTRACE_CONT, child, 0, 0);
 
     int child_status = 0;
@@ -382,7 +399,7 @@ int main(int argc, char** argv) {
         }
         ptrace(PTRACE_CONT, tid, 0, sig);
     }
-    fprintf(log_file, "%zu of %zu breakpoints hit, in %zu traps\n", n_hits, n_bp - n_skipped, n_traps);
+    fprintf(log_file, "%d: %zu of %zu breakpoints hit, in %zu traps\n", (int)child, n_hits, n_inserted, n_traps);
     if (WIFSIGNALED(child_status)) {
         signal(WTERMSIG(child_status), SIG_DFL);
         raise(WTERMSIG(child_status));

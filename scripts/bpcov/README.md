@@ -110,66 +110,113 @@ This adds `-gline-tables-only` to dev mode, with the debug sections
 compressed with zstd (`-gz=zstd`, and `--compress-debug-sections=zstd` when
 linking). The option does the same for the other modes when they are
 configured with `--debuginfo 0`; it has no effect on modes that already have
-full debug information. See "The cost of `--line-tables`" below for what it
-costs, and "Which build mode to measure" for why dev mode is the
-recommended one.
+full debug information. Test executables, which are normally stripped of
+all debug information, keep the line tables in these modes too, so that
+bpcov can measure them (in modes with full debug information, they remain
+stripped). See "The cost of `--line-tables`" below for what it costs, and
+"Which build mode to measure" for why dev mode is the recommended one.
 
 ## Usage
+
+To measure a test runner that runs Scylla, give it the wrapper
+`scripts/bpcov/scylla` as the Scylla executable:
 
 ```
 SCYLLA=scripts/bpcov/scylla test/alternator/run
 scripts/bpcov/bpcov.py less alternator/executor.cc
 ```
 
-The `bpcov.py` commands work on `build/dev/scylla` unless given another
-binary with `--binary`.
+To measure test runners that run many executables, such as `test.py` with
+the C++ unit tests, run the whole command under `bpcov.py exec`:
 
-**Preparation** of a build happens by itself, the first time the build is run
-under bpcov: bpcov reads the binary's line table and inlined calls, picks the
-breakpoint addresses, and stores them in `build/dev/bpcov/`. This takes about
-one second, which the first boot of each new build waits for; later boots use
-the stored data. The file `build/dev/bpcov/info` says which binary, which
-build of it (its build-id) and which version of bpcov the data is for. When
-it doesn't match - Scylla was rebuilt, or bpcov changed how it computes the
-data - the data is prepared again, replacing the old data and the runs of the
-old build: like `build/dev` itself, `build/dev/bpcov` only has the latest
-build. If several runs start at the same time, one prepares and the others
-wait for it. Preparation prints nothing unless it fails, because under the
-wrapper its output would be Scylla's output. `bpcov.py prepare` does the same
-preparation right away, for those who prefer to wait for it before running
-tests.
+```
+scripts/bpcov/bpcov.py exec ./test.py --mode=dev test/boost
+scripts/bpcov/bpcov.py report
+```
+
+The commands that show coverage (`cat`, `less` and `report`) combine all
+the executables of `build/dev` that were measured, and all their runs so far.
+`--binary` limits them to one executable, and `--dir` looks in another
+directory instead of `build/dev` (for example, `--dir build/debug`).
+
+**`bpcov.py exec COMMAND [ARGS...]`** runs the command with the `LD_PRELOAD`
+tracer (see "The two tracers" below) in its environment, which every program
+it runs inherits, directly or not. The tracer does nothing in programs
+outside `build/dev` (Python, the shell, and so on), and measures every
+executable under it: for `test.py`, the test executables, many times each,
+and also any Scylla that it runs. `--dir DIR`, before the command, measures
+the executables under DIR instead of `build/dev`.
 
 **`scripts/bpcov/scylla`** stands in for the Scylla executable. It runs
 `build/dev/scylla` (or `$BPCOV_SCYLLA`) under bpcov's tracer (see "The two
 tracers" below), with the same arguments. Anything that takes the path of
 the Scylla executable in `$SCYLLA` can use it, including `test/cqlpy/run`,
-`test/alternator/run` and `test/rest_api/run`. Each run records the
-breakpoints it hit in a new file in the `hits/` subdirectory, with one byte
-per breakpoint. This file is mapped into memory, so a hit is recorded as it
-happens, without a system call, and nothing is lost when Scylla is killed
-(see "Killing Scylla loses nothing" below). The tracer's own messages (how
-many breakpoints were inserted, and with the ptrace tracer, how many were
-hit) go to a `.log` file next to it, never to Scylla's output: some tests
-read Scylla's log, and expect it to start with Scylla's first log line.
+`test/alternator/run` and `test/rest_api/run`. With the `LD_PRELOAD` tracer,
+other executables of `build/dev` that Scylla runs are measured too.
+
+**Preparation** of an executable happens by itself, the first time it runs
+under bpcov: bpcov reads its line table and inlined calls, picks the
+breakpoint addresses, and stores them in a directory for the executable in
+`build/dev/bpcov/` - for example, `build/dev/bpcov/scylla/` for
+`build/dev/scylla`, and `build/dev/bpcov/test/boost/combined_tests/` for
+`build/dev/test/boost/combined_tests`. This takes about one second for
+Scylla, which the first run of each new build waits for; later runs use the
+stored data. The `info` file in this directory says which executable, which
+build of it (its build-id) and which version of bpcov the data is for. When
+it doesn't match - the executable was rebuilt, or bpcov changed how it
+computes the data - the data is prepared again, replacing the old data and
+the hits of the old build: like `build/dev` itself, `build/dev/bpcov` only
+has the latest build. If several runs of an executable start at the same
+time, one prepares and the others wait for it. An executable that can't be
+measured - it has no line tables, or no code from Scylla's source files -
+is noted as such in its `info`, and its later runs run unmeasured without
+trying again. Preparation prints nothing unless it fails, because under the
+wrapper its output would be Scylla's output. `bpcov.py prepare` does the same
+preparation right away, for those who prefer to wait for it before running
+tests.
+
+**`ninja dev-bpcov-prepare`** (which exists with `--line-tables`) prepares
+all the executables of `build/dev` - Scylla and all the tests - in
+parallel, and when run again after a build, only those that were rebuilt.
+It is optional, and only saves time: `test.py` starts by listing the test
+cases of every executable it will run, and all its parallel workers list
+them in the same order, so the workers wait for one preparation after
+another. In `test/boost`, these 155 preparations take about two minutes,
+while `ninja dev-bpcov-prepare` prepares all 213 executables in 36 seconds
+on an 8-core laptop. Like any ninja target, it first builds the executables
+that are not built yet.
+
+**The hits** of an executable are in the file `hits` in its directory, with
+one byte per breakpoint. All the runs of the executable share this file, one
+after the other or at the same time: each run inserts only the breakpoints
+that no run hit yet, so it traps only on code that no earlier run reached,
+and runs at the same time can only change a byte from "not hit" to "hit",
+never overwrite each other's hits. So the cost of the traps is paid about
+once per build, not once per run: in a run of `test.py` with thousands of
+runs of the same test executable, only the first runs trap much. The file is
+mapped into memory, so a hit is recorded as it happens, without a system
+call, and nothing is lost when Scylla is killed (see "Killing Scylla loses
+nothing" below). Each run appends a line to `hits.log` next to it (how many
+breakpoints it inserted, and with the ptrace tracer, how many were hit),
+never to Scylla's output: some tests read Scylla's log, and expect it to
+start with Scylla's first log line.
 
 **`cat FILE`** prints a source or header file, putting `* ` before every
 line that has compiled code that never ran, and two spaces before the other
-lines. All the commands that show coverage combine all the runs of this build
-so far.
+lines.
 
 **`less FILE`** shows the same in `less`, starting at the first line marked
 with `*`. Press `n` to go to the next one.
 
-**`report`** prints the
-fraction of lines executed per top-level directory. It also writes an lcov
-`coverage.info` file to the data directory. Options:
+**`report`** prints the fraction of lines executed per top-level directory.
+It also writes an lcov `coverage.info` file to `build/dev/bpcov/`. Options:
 
 - `--html DIR`: also write an HTML report (with `genhtml`) showing each
   source file with its executed and not executed lines.
 - `--prefix alternator/`: only report files whose path starts with this
   prefix. Can be given several times.
-- `--reset`: forget the runs after reporting, so the next report starts from
-  zero.
+- `--reset`: forget the hits after reporting (delete the `hits` files), so
+  the next report starts from zero.
 
 The HTML pages are produced by `genhtml`, from the lcov package, which reads
 the `coverage.info` file. Editors can show the same file too; for example,
@@ -180,9 +227,9 @@ lines in the editor.
 instead: `#####` marks a line whose code was never executed, `1` a line that
 was executed, and `-` a line without code of its own.
 
-To see the effect of a single test, use `--reset` (or delete the `hits/`
-files) before running it. Runs of different tests add up, so you can run
-several test suites and then report their combined coverage.
+To see the effect of a single test, use `--reset` before running it. Runs of
+different tests add up, so you can run several test suites and then report
+their combined coverage.
 
 ## How to read the results
 
@@ -298,24 +345,28 @@ accurate of the three modes. Debug mode is a reasonable alternative, and
 needs no special configuration. Release mode is not recommended.
 
 To measure a build other than `build/dev/scylla`, set `BPCOV_SCYLLA` when
-running the tests, and pass the same executable to the commands that show
-the coverage with `--binary`:
+running the tests, and pass the same directory to the commands that show
+the coverage with `--dir`:
 
 ```
 SCYLLA=scripts/bpcov/scylla BPCOV_SCYLLA=build/debug/scylla test/alternator/run
-scripts/bpcov/bpcov.py report --binary build/debug/scylla
+scripts/bpcov/bpcov.py report --dir build/debug
 ```
 
-The coverage data of each build is kept next to its executable (here, in
-`build/debug/bpcov/`).
+The coverage data of each build mode is kept in its directory (here, in
+`build/debug/bpcov/`). The test executables of debug and release modes are
+stripped, so only dev mode can measure them (with `bpcov.py exec`).
 
 These conclusions come from running `test/alternator/run` under bpcov with
 dev, debug and release builds of the same source (2026-10-30), and comparing
 which lines each run executed. Coverage outside `alternator/` changes a bit
 from run to run even with the same build - up to about 700 lines, mostly the
 sstable index reading code, which runs or not depending on when memtables
-happen to be flushed - but in `alternator/`, repeated runs agreed exactly. So
-the comparisons below are of `alternator/`:
+happen to be flushed - but in `alternator/`, repeated runs agreed exactly, or
+differed in only 3 lines (in `pos_from_json()` in
+`alternator/serialization.cc`, which one test reaches or not depending on
+the random ids of the tables it creates). So the comparisons below are of
+`alternator/`:
 
 - **Debug** runs exactly the same tests as dev, and already has line tables
   (as part of its full debug information), so it doesn't need
@@ -378,10 +429,11 @@ The `LD_PRELOAD` tracer is the default because it is faster: a trap costs a
 signal in the same process, instead of a round trip to another process, so
 Scylla boots in about 0.9 seconds instead of 2.1 (0.45 without bpcov). It
 also leaves ptrace free, so LeakSanitizer works (see "Limitations" below).
-Programs that Scylla runs inherit `LD_PRELOAD`, but the library does nothing
-in a program other than the one that `bpcov.py` started. A process that
-Scylla forks records its hits in the same file as Scylla, as hits (1, not 3
-as with the ptrace tracer).
+And it can measure many executables: `LD_PRELOAD` is inherited by every
+program that the measured command runs, so the library can measure all the
+executables under `build/dev` among them, as `bpcov.py exec` does. The
+ptrace tracer only measures the one executable that it runs, so `bpcov.py
+exec` needs the `LD_PRELOAD` tracer.
 
 Use `BPCOV_TRACER=ptrace` if the `LD_PRELOAD` tracer doesn't work:
 
@@ -401,7 +453,7 @@ Use `BPCOV_TRACER=ptrace` if the `LD_PRELOAD` tracer doesn't work:
   `pthread_sigmask()` returned, so they never block SIGTRAP - but a new
   library or a change in Seastar could. The ptrace tracer doesn't depend on
   the program's signal handling at all.
-- **Nothing is recorded** (no new file in `hits/` for the run): the dynamic
+- **Nothing is recorded** (no new line in `hits.log` for the run): the dynamic
   linker ignores `LD_PRELOAD` for executables that are statically linked,
   setuid, or have file capabilities. Scylla's executable is none of these.
 
@@ -471,6 +523,12 @@ MB, so zstd is both smaller and faster. Tools that read the debug information
 must decompress it: `llvm-dwarfdump --debug-line` took 2.70 s instead of 2.31
 s, and `bpcov-prepare` 0.91 s instead of 0.58 s.
 
+**Size of the test executables**: they are normally linked stripped of all
+debug information, so with `--line-tables` they keep the line tables, but
+their symbol tables are still removed (by `llvm-objcopy` after the link,
+about 0.2 s each). The 156 executables in `build/dev/test/boost` take 20.9
+GB, instead of 10.6 GB stripped (27.4 GB with their symbol tables too).
+
 **Column numbers are needed**: leaving them out (`-gno-column-info`) would
 save about 30% of `.debug_line` and 6% of `.debug_info`, about 29 MB of the
 uncompressed executable, with no change in compile time. But clang then marks
@@ -529,6 +587,30 @@ back, not the system calls. With the `LD_PRELOAD` tracer, which needs no
 other process, a trap costs about 2 microseconds. Inserting the breakpoints
 took 0.02-0.03 seconds with either tracer.
 
+**`test/boost`** (`./test.py --mode=dev test/boost -j8`, 2026-10-31, on an
+8-core laptop) runs 156 executables in 5,305 processes, as `test.py` runs
+each test case in a process of its own - plus the processes in which each of
+its 8 workers lists the test cases of each executable:
+
+| | elapsed |
+|---|---|
+| without bpcov | 254 s |
+| `bpcov.py exec`, nothing prepared yet | 414-416 s |
+| `bpcov.py exec`, after `ninja dev-bpcov-prepare` | 298 s |
+| `bpcov.py exec`, also with the hits of an earlier run | 288 s |
+
+All the runs had the same results: 3936 passed, 1 skipped, and 129 failed -
+tests of Google Cloud Storage and KMS, which need services that were not
+available. Each executable was prepared once. When nothing is prepared, the
+workers wait for one preparation after another (see `ninja
+dev-bpcov-prepare` above). What remains is mostly the insertion of the
+breakpoints in each process: a median of 40 ms (each test executable has
+about 1.4 million breakpoints), 210-216 s of CPU time in all. `ninja
+dev-bpcov-prepare` took 36 seconds for all 213 executables of `build/dev`
+(174 s of user and 39 s of system CPU time), and their data 2.7 GB. A
+`report` of the 156 executables took 2.2 seconds (7.0 seconds without
+`numpy`): the tests executed 202,988 of the 272,474 lines with code (74.5%).
+
 **`test/alternator/run`** (the whole suite, 2026-10-30), without bpcov and
 with each of the tracers, alternating: 10 runs of each measuring the elapsed
 time, and then 3 more of each measuring also the CPU time of all the
@@ -575,21 +657,29 @@ lines with code in `alternator/` (84.0%).
 - `tracer.c`: the ptrace tracer, used with `BPCOV_TRACER=ptrace`. A small
   program that runs a command under ptrace, inserts the breakpoints, and
   records the hits.
-- `bpcov.py`: the `prepare`, `run`, `cat`, `less` and `report` commands. It
-  compiles the C code into `build/bpcov-prepare`, `build/bpcov-tracer` and
-  `build/bpcov-preload.so` when needed, and needs the Python module `numpy`.
+- `bpcov.py`: the `prepare`, `run`, `exec`, `cat`, `less` and `report`
+  commands. It compiles the C code into `build/bpcov-prepare`,
+  `build/bpcov-tracer` and `build/bpcov-preload.so` when needed. If the
+  Python module `numpy` is installed, the commands that show coverage
+  (`cat`, `less` and `report`) use it, which makes them several times faster
+  for many executables (2 seconds instead of 7 for all of `test/boost`).
 - `scylla`: the wrapper script for `$SCYLLA`.
 
 ### The data in `build/dev/bpcov/`
 
-The coverage is kept per breakpoint, not per line, so the data has two
-parts: the mapping between breakpoints and source lines, which
-`bpcov-prepare` writes once per build, and the hits of each run.
+`build/dev/bpcov/` has a directory for each executable of `build/dev` that
+ran under bpcov, at the same path as the executable: `build/dev/bpcov/X/`
+for `build/dev/X`. The coverage is kept per breakpoint, not per line, so its
+data has two parts: the mapping between breakpoints and source lines, which
+is prepared once per build, and the hits of the runs.
 
 - `info`: the path and build-id of the executable that was prepared, and
-  the version of the data format. If either changes, the next command
-  prepares the data again, and deletes the hits of the old build.
+  the version of the data format. If either changes, the next run prepares
+  the data again, and deletes the hits of the old build. If the executable
+  can't be measured, an `error` line says why.
 - `lock`: held while preparing, so that only one process prepares.
+- `prepare.log`: a line for each time the data was prepared, kept across
+  builds.
 - `files.txt`: the Scylla source files that have code, one path (relative
   to the source tree) per line. A file's number is its position in this
   list, starting at 0.
@@ -611,22 +701,21 @@ parts: the mapping between breakpoints and source lines, which
   copy of an inlined function. A breakpoint can also belong to several
   lines, for example, when it is the beginning of both the callee's line and
   the calling line of an inlined call.
-- `hits/PID.bin`: the hits of one run (PID is the process id of the run),
-  with one byte for each breakpoint: byte *i* is the state of the *i*-th
-  address in `breakpoints.bin`. The byte is:
+- `hits`: the hits of all the runs, with one byte for each breakpoint: byte
+  *i* is the state of the *i*-th address in `breakpoints.bin`. The byte is:
   - 0: not hit.
-  - 1: hit.
+  - 1: hit, in any run (or in a process that a run forked).
   - 2: unusable - the original byte at this address was already an `int3`,
-    so a trap there would not tell whether the line ran. The tracer does
+    so a trap there would not tell whether the line ran. The tracers do
     not insert this breakpoint.
-  - 3: hit only in a process that the program forked. The forked process
-    has its own copy of the program's memory, so the program itself still
-    has this breakpoint, and the tracer must still restore it there if the
-    program reaches it; then the byte becomes 1.
-- `hits/PID.bin.log`: the tracer's messages for that run.
+- `hits.log`: a line from each run: its process id, and how many
+  breakpoints it inserted.
 
-A line counts as executed if any of its breakpoints is 1 or 3 in any of the
-hit files.
+A line counts as executed if any of its breakpoints is 1 in `hits`.
+`build/dev/bpcov/coverage.info` is the lcov file that `report` writes, and
+`build/dev/bpcov/errors.log` has the output of preparations that the
+`LD_PRELOAD` tracer started, if they failed unexpectedly (an executable that
+can't be measured is not such a failure: its `info` says why).
 
 ## Limitations
 
@@ -639,9 +728,9 @@ hit files.
   breakpoint's SIGTRAP. If told to pass them on to Scylla (`handle SIGTRAP
   nostop noprint pass`), a gdb breakpoint on a line that hasn't run yet
   kills Scylla when it continues from there (gdb saves bpcov's `int3` as
-  the original instruction, and executes it), and starting Scylla from gdb kills it even
-  before the library has installed its handler. To debug, run Scylla
-  without bpcov.
+  the original instruction, and executes it), and starting Scylla from gdb
+  kills it even before the library has installed its handler. To debug, run
+  Scylla without bpcov.
 - With the ptrace tracer, in builds with AddressSanitizer (debug and
   sanitize modes), LeakSanitizer cannot check for leaks when the program
   exits: it needs ptrace itself, so it reports "LeakSanitizer has
@@ -650,8 +739,12 @@ hit files.
   skips LeakSanitizer's check. But a program that exits normally, such as
   Scylla's tools (`scylla sstable` and the like), would fail this way if
   run under the ptrace tracer.
-- Only the Scylla process started by the test runner through
-  `scripts/bpcov/scylla` is measured. Tests that run Scylla's tools (for
+- With `scripts/bpcov/scylla`, only the Scylla process that the test runner
+  starts through it, and the executables of `build/dev` that this process
+  runs, are measured. Tests that run Scylla's tools themselves (for
   example, `test/cqlpy/test_tools.py`) find the executable through the
   running server's `/proc/PID/exe`, which is the real executable, not the
-  wrapper, so the code these tools run is not measured.
+  wrapper, so the code these tools run is not measured. To measure them
+  too, run the whole test runner under `bpcov.py exec` (for example,
+  `scripts/bpcov/bpcov.py exec test/cqlpy/run`, without `SCYLLA`), which
+  measures every executable under `build/dev` that runs.

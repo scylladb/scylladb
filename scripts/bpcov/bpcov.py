@@ -17,31 +17,38 @@ configured with --debuginfo 0).
 The program runs at full speed, except for one trap the first time each line
 is reached; see preload.c (and tracer.c for the alternative ptrace tracer).
 
-Typical use with test/alternator/run:
+Typical use with test/alternator/run, which runs one Scylla executable:
 
     SCYLLA=scripts/bpcov/scylla test/alternator/run
     scripts/bpcov/bpcov.py less alternator/executor.cc
 
-All commands work on build/dev/scylla, unless given another binary with --binary.
-See README.md in this directory for more.
+and with test.py, which runs many test executables, many times each:
 
-"prepare" reads the line table of the binary, and picks a breakpoint address
+    scripts/bpcov/bpcov.py exec ./test.py --mode=dev test/boost
+    scripts/bpcov/bpcov.py report
+
+The commands that show coverage combine all the executables of build/dev that
+were measured, unless given another directory with --dir, or one executable
+with --binary. See README.md in this directory for more.
+
+"prepare" reads the line table of an executable, and picks a breakpoint address
 for every place where the code of a line of a Scylla source file (not of
 Seastar, abseil, fmt, generated code or system headers) begins, and also at the
 start of the code of every function inlined into such a line (see prepare.c). Its
-results are kept in the bpcov/ directory next to the binary (e.g.,
-build/dev/bpcov/), whose "info" file says which binary and build they are for,
-so it only does the work once per build. Like the build directory, bpcov/ only
-keeps the latest build: preparing a new build replaces the data of the old one.
-The scripts/bpcov/scylla wrapper prepares when needed, so running "prepare"
-yourself is optional - it only moves the work, a few seconds, out of the first
-boot of a new build.
+results are kept in build/dev/bpcov/, in a directory for each executable (e.g.,
+build/dev/bpcov/scylla/ for build/dev/scylla), whose "info" file says which
+build they are for, so it only does the work once per build. Like the build
+directory, bpcov/ only keeps the latest build: preparing a new build replaces
+the data of the old one. Executables are prepared when they first run under
+bpcov, so running "prepare" yourself is optional.
 
-The scripts/bpcov/scylla wrapper runs the binary under the tracer, which records
-the breakpoints hit in the hits/ subdirectory. Several runs add up, until
-"report --reset" or a rebuild. "cat FILE" prints a source file with "* " before
-each line whose code never ran, and "less FILE" shows the same in less. "report"
-prints a summary and writes an lcov .info file and, with --html, an HTML report.
+The scripts/bpcov/scylla wrapper, and "exec", run executables under the tracer,
+which records the breakpoints hit in the executable's "hits" file. All the runs
+of an executable share this file, and add up, until "report --reset" or a
+rebuild; a run traps only on code that no earlier run reached. "cat FILE"
+prints a source file with "* " before each line whose code never ran, and "less
+FILE" shows the same in less. "report" prints a summary and writes an lcov .info
+file and, with --html, an HTML report.
 
 The results are approximate in the ways the optimizer makes line tables
 approximate: a line counts as executed if any copy of its code (it may be
@@ -51,26 +58,27 @@ line's - does not appear in the report at all.
 """
 
 import argparse
+import array
+import bisect
 import collections
 import fcntl
+import itertools
 import os
 import shutil
 import signal
 import struct
 import subprocess
 import sys
-
-import numpy as np
+import time
 
 SOURCE_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), '..', '..'))
 # Increase when "prepare" changes what it computes, or the format of the data
 # files, so that data prepared by an older version is prepared again.
-DATA_VERSION = 6
+DATA_VERSION = 7
 
-# The records of lines.bin (see prepare.c).
-LINE_DTYPE = np.dtype([('file', '<u4'), ('line', '<u4'), ('start', '<u4')])
 # The values in a hits file (see tracer.c).
-HIT, HIT_IN_FORK = 1, 3
+HIT = 1
+DEFAULT_DIR = os.path.join(SOURCE_DIR, 'build', 'dev')
 
 
 def build_id(binary: str) -> str:
@@ -81,7 +89,7 @@ def build_id(binary: str) -> str:
     with open(binary, 'rb') as f:
         elf = f.read(64)
         if elf[:4] != b'\x7fELF' or elf[4] != 2 or elf[5] != 1:
-            sys.exit(f'{binary} is not a 64-bit little-endian ELF file')
+            raise ValueError(f'{binary} is not a 64-bit little-endian ELF file')
         phoff, = struct.unpack_from('<Q', elf, 32)
         phentsize, phnum = struct.unpack_from('<HH', elf, 54)
         f.seek(phoff)
@@ -100,17 +108,36 @@ def build_id(binary: str) -> str:
                 if n_type == 3 and notes[name_start:name_start + namesz] == b'GNU\0':  # NT_GNU_BUILD_ID
                     return notes[desc_start:desc_start + descsz].hex()
                 pos = desc_start + (descsz + 3) // 4 * 4
-    sys.exit(f'{binary} has no build-id')
+    raise ValueError(f'{binary} has no build-id')
 
 
-def data_dir(binary: str) -> str:
-    """Where the data of the binary is kept: the bpcov/ directory next to it."""
-    return os.path.join(os.path.dirname(os.path.realpath(binary)), 'bpcov')
+def default_dir(binary: str) -> str:
+    """
+    The directory whose executables are measured together, and which keeps their
+    data in its bpcov/ subdirectory: build/MODE for an executable under it (e.g.,
+    build/dev/scylla or build/dev/test/boost/combined_tests), otherwise the
+    executable's own directory.
+    """
+    binary = os.path.realpath(binary)
+    rel = os.path.relpath(binary, os.path.realpath(os.path.join(SOURCE_DIR, 'build')))
+    if not rel.startswith('..') and os.sep in rel:
+        return os.path.realpath(os.path.join(SOURCE_DIR, 'build', rel.split(os.sep)[0]))
+    return os.path.dirname(binary)
+
+
+def data_dir(binary: str, directory: str) -> str:
+    """Where the data of the binary is kept: DIRECTORY/bpcov/PATH, for the binary DIRECTORY/PATH."""
+    return os.path.join(directory, 'bpcov', os.path.relpath(os.path.realpath(binary), directory))
 
 
 def expected_info(binary: str) -> dict[str, str]:
     """What the "info" file in the data directory says when the data is of this binary."""
     return {'binary': os.path.realpath(binary), 'build-id': build_id(binary), 'version': str(DATA_VERSION)}
+
+
+def info_matches(info: dict[str, str], expected: dict[str, str]) -> bool:
+    """Whether the data is of this binary - prepared, or found to be impossible to prepare (an "error")."""
+    return all(info.get(k) == v for k, v in expected.items())
 
 
 def read_info(d: str) -> dict[str, str]:
@@ -121,38 +148,66 @@ def read_info(d: str) -> dict[str, str]:
         return {}
 
 
-def prepare(binary: str) -> tuple[str, bool]:
+def prepare(binary: str, directory: str, quiet: bool = False) -> tuple[str, bool]:
     """
     Compute the breakpoints for the binary, unless the data directory already
     has them. Returns the data directory, and whether it prepared anything.
     Prints nothing, unless something fails: when run by the wrapper, our output
     is the binary's output, which tests may read (e.g., expecting it to start
     with Scylla's first log line).
+
+    If the binary can't be measured - e.g., it has no line tables - the "info"
+    file says so in an "error" line, so that its runs don't try again. Then we
+    exit with the error, unless quiet: bpcov-preload.so runs us for every
+    executable under the measured directory, and those that can't be measured
+    should just run unmeasured; and "ninja dev-bpcov-prepare" prepares all the
+    executables, and shouldn't fail because of one.
     """
-    d = data_dir(binary)
+    d = data_dir(binary, directory)
     expected = expected_info(binary)
-    if read_info(d) == expected:
-        return d, False
-    os.makedirs(d, exist_ok=True)
-    # Several runs of a new build may start at the same time, but only one
-    # should prepare. The others wait for it, and then use its data.
-    with open(os.path.join(d, 'lock'), 'w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if read_info(d) == expected:
-            return d, False
-        # Whatever is here is of another build (or binary), or of an older
-        # version of bpcov - including its runs, which are useless now.
-        for name in os.listdir(d):
-            if name != 'lock':
-                path = os.path.join(d, name)
-                shutil.rmtree(path) if os.path.isdir(path) and not os.path.islink(path) else os.unlink(path)
-        os.makedirs(os.path.join(d, 'hits'))
-        subprocess.check_call([tool_path('prepare'), binary, SOURCE_DIR, d])
-        # Written last, as it says that the preparation is complete.
-        with open(os.path.join(d, 'info.tmp'), 'w') as f:
-            f.writelines(f'{k} {v}\n' for k, v in expected.items())
-        os.rename(os.path.join(d, 'info.tmp'), os.path.join(d, 'info'))
-    return d, True
+    if not info_matches(read_info(d), expected):
+        os.makedirs(d, exist_ok=True)
+        # Several runs of a new build may start at the same time, but only one
+        # should prepare. The others wait for it, and then use its data.
+        with open(os.path.join(d, 'lock'), 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not info_matches(read_info(d), expected):
+                prepare_locked(binary, d, expected)
+                prepared = True
+            else:
+                prepared = False
+    else:
+        prepared = False
+    error = read_info(d).get('error')
+    if error and not quiet:
+        sys.exit(f'bpcov cannot measure {binary}: {error}')
+    return d, prepared
+
+
+def prepare_locked(binary: str, d: str, expected: dict[str, str]):
+    start = time.monotonic()
+    # Whatever is here is of another build (or binary), or of an older
+    # version of bpcov - including its hits, which are useless now.
+    for name in os.listdir(d):
+        if name not in ('lock', 'prepare.log'):
+            path = os.path.join(d, name)
+            shutil.rmtree(path) if os.path.isdir(path) and not os.path.islink(path) else os.unlink(path)
+    info = dict(expected)
+    r = subprocess.run([tool_path('prepare'), binary, SOURCE_DIR, d], stderr=subprocess.PIPE, text=True)
+    if r.returncode != 0:
+        info['error'] = ' '.join(r.stderr.split()) or f'bpcov-prepare failed with status {r.returncode}'
+    else:
+        # The runs' hits file, which they extend if it is missing, but then
+        # several runs starting together would race to create it.
+        with open(os.path.join(d, 'hits'), 'wb') as f:
+            f.truncate(os.path.getsize(os.path.join(d, 'breakpoints.bin')) // 4)
+    # Written last, as it says that the preparation is complete.
+    with open(os.path.join(d, 'info.tmp'), 'w') as f:
+        f.writelines(f'{k} {v}\n' for k, v in info.items())
+    os.rename(os.path.join(d, 'info.tmp'), os.path.join(d, 'info'))
+    with open(os.path.join(d, 'prepare.log'), 'a') as f:
+        f.write(f'{time.strftime("%Y-%m-%d %H:%M:%S")}: prepared build-id {info["build-id"]} '
+                f'in {time.monotonic() - start:.2f} seconds' + (' (cannot be measured)' if 'error' in info else '') + '\n')
 
 
 def tool_path(name: str) -> str:
@@ -161,17 +216,48 @@ def tool_path(name: str) -> str:
     # preload.c is a library for LD_PRELOAD, the others are programs.
     library = name == 'preload'
     exe = os.path.join(SOURCE_DIR, 'build', f'bpcov-{name}' + ('.so' if library else ''))
-    if not os.path.exists(exe) or os.path.getmtime(exe) < os.path.getmtime(src):
+
+    def outdated():
+        return not os.path.exists(exe) or os.path.getmtime(exe) < os.path.getmtime(src)
+
+    if outdated():
         os.makedirs(os.path.dirname(exe), exist_ok=True)
-        # Build under a temporary name, as other runs may be using or building it.
-        tmp = f'{exe}.{os.getpid()}'
-        # prepare.c decompresses compressed debug sections (-gz), with the
-        # zstd and zlib libraries which Scylla's build needs anyway.
-        libs = ['-lzstd', '-lz'] if name == 'prepare' else []
-        shared = ['-shared', '-fPIC'] if library else []
-        subprocess.check_call(['cc', '-O2', '-Wall'] + shared + ['-o', tmp, src] + libs)
-        os.rename(tmp, exe)
+        # Many runs may start at the same time (e.g., the preparations of
+        # "ninja dev-bpcov-prepare"): one builds, the others wait for it.
+        with open(f'{exe}.lock', 'w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if outdated():
+                # Build under a temporary name, as other runs may be using it.
+                tmp = f'{exe}.{os.getpid()}'
+                # prepare.c decompresses compressed debug sections (-gz), with the
+                # zstd and zlib libraries which Scylla's build needs anyway.
+                libs = ['-lzstd', '-lz'] if name == 'prepare' else []
+                shared = ['-shared', '-fPIC'] if library else []
+                subprocess.check_call(['cc', '-O2', '-Wall'] + shared + ['-o', tmp, src] + libs)
+                os.rename(tmp, exe)
     return exe
+
+
+def preload_env(directory: str) -> dict[str, str]:
+    """The environment that makes bpcov-preload.so measure the executables under the directory."""
+    env = dict(os.environ)
+    preload = tool_path('preload')
+    others = [p for p in env.get('LD_PRELOAD', '').split() if p != preload]
+    env['LD_PRELOAD'] = ' '.join([preload] + others)
+    env['BPCOV_DIR'] = os.path.realpath(directory)
+    # The library runs "prepare" with this interpreter, which is known to work -
+    # the command may have another python3 first in its PATH (test.py does).
+    env['BPCOV_PYTHON'] = sys.executable
+    env['BPCOV_PY'] = os.path.realpath(__file__)
+    env['BPCOV_VERSION'] = str(DATA_VERSION)
+    return env
+
+
+def tracer_name() -> str:
+    tracer = os.environ.get('BPCOV_TRACER') or 'preload'
+    if tracer not in ('preload', 'ptrace'):
+        sys.exit(f'BPCOV_TRACER should be "preload" (the default) or "ptrace", not "{tracer}"')
+    return tracer
 
 
 def run(binary: str, args: list[str]):
@@ -180,82 +266,166 @@ def run(binary: str, args: list[str]):
     The tracer is the library bpcov-preload.so, which handles the breakpoints
     inside the program, or with BPCOV_TRACER=ptrace, bpcov-tracer, a separate
     process that handles them with ptrace (see README.md for when to use it).
+    With bpcov-preload.so, the other executables of the same build directory
+    that the binary runs are measured too.
     """
-    tracer = os.environ.get('BPCOV_TRACER') or 'preload'
-    if tracer not in ('preload', 'ptrace'):
-        sys.exit(f'BPCOV_TRACER should be "preload" (the default) or "ptrace", not "{tracer}"')
+    tracer = tracer_name()
     binary = os.path.realpath(binary)
-    d, _ = prepare(binary)
+    directory = default_dir(binary)
+    d, _ = prepare(binary, directory)
     if tracer == 'preload':
-        env = dict(os.environ)
-        env['LD_PRELOAD'] = ' '.join(filter(None, [tool_path('preload'), env.get('LD_PRELOAD')]))
-        env['BPCOV_PROGRAM'] = binary
-        env['BPCOV_BREAKPOINTS'] = os.path.join(d, 'breakpoints.bin')
-        env['BPCOV_HITS_DIR'] = os.path.join(d, 'hits')
-        os.execve(binary, [binary] + args, env)
+        os.execve(binary, [binary] + args, preload_env(directory))
     exe = tool_path('tracer')
-    hits = os.path.join(d, 'hits', f'{os.getpid()}.bin')
-    os.execv(exe, [exe, os.path.join(d, 'breakpoints.bin'), hits, binary] + args)
+    os.execv(exe, [exe, os.path.join(d, 'breakpoints.bin'), os.path.join(d, 'hits'), binary] + args)
 
 
-def load_coverage(binary: str):
+def exec_command(directory: str, command: list[str]):
+    """Replace this process with the command, with every executable under the directory that it runs measured."""
+    if tracer_name() != 'preload':
+        sys.exit('"exec" needs the LD_PRELOAD tracer: the ptrace tracer only measures one executable')
+    if not os.path.isdir(directory):
+        sys.exit(f'{directory} is not a directory')
+    try:
+        os.execvpe(command[0], command, preload_env(directory))
+    except OSError as e:
+        sys.exit(f'{command[0]}: {e}')
+
+
+def measured(directory: str, binary: str | None) -> tuple[list[tuple[str, str]], list[str]]:
     """
-    Combine the hits of all runs of this build so far. Returns the data directory,
-    the list of hit files, the list of source files, and three arrays with one
-    element per source line that has code: its file number (index into the list
-    of source files), its line number, and whether it was executed. The arrays are
-    sorted by file and line.
+    The executables to report on: binary, or all those under the directory that
+    were prepared. Returns a list of (executable, data directory) pairs, and a
+    list of messages about the executables that are left out.
     """
-    d = data_dir(binary)
-    if read_info(d) != expected_info(binary):
-        sys.exit(f'No coverage data for this build of {binary}: run it with scripts/bpcov/scylla first')
-    lines = np.fromfile(os.path.join(d, 'lines.bin'), dtype=LINE_DTYPE)
-    line_breakpoints = np.fromfile(os.path.join(d, 'line_breakpoints.bin'), dtype='<u4')
+    if binary:
+        return [(os.path.realpath(binary), data_dir(binary, directory))], []
+    result, left_out = [], []
+    root = os.path.join(directory, 'bpcov')
+    for d, _, names in os.walk(root):
+        if 'info' not in names:
+            continue
+        info = read_info(d)
+        exe = info.get('binary', '')
+        rel = os.path.relpath(exe, directory)
+        if info.get('version') != str(DATA_VERSION) or os.path.join(root, rel) != d:
+            continue  # data of an older version of bpcov
+        try:
+            current = build_id(exe) == info.get('build-id')
+        except (OSError, ValueError):
+            current = False
+        if not current:
+            left_out.append(f'{rel}: its data is of an older build')
+        elif 'error' in info:
+            left_out.append(f'{rel}: {info["error"]}')
+        else:
+            result.append((exe, d))
+    return sorted(result), sorted(left_out)
+
+
+def lines_run(d: str) -> tuple[array.array, array.array, list[bool]]:
+    """
+    For the data directory of one executable: the file number and line number of
+    each source line with code, sorted by file and line (see prepare.c), and
+    whether the line ran - whether any of its breakpoints was hit.
+    """
+    lines = array.array('I')
+    with open(os.path.join(d, 'lines.bin'), 'rb') as f:
+        lines.frombytes(f.read())
+    line_breakpoints = array.array('I')
+    with open(os.path.join(d, 'line_breakpoints.bin'), 'rb') as f:
+        line_breakpoints.frombytes(f.read())
     n_bp = os.path.getsize(os.path.join(d, 'breakpoints.bin')) // 4
-    with open(os.path.join(d, 'files.txt')) as f:
-        files = f.read().splitlines()
-    hit_files = [os.path.join(d, 'hits', name) for name in os.listdir(os.path.join(d, 'hits')) if name.endswith('.bin')]
-    # Which breakpoints any of the runs hit.
-    hit = np.zeros(n_bp, dtype=bool)
-    for h in hit_files:
-        status = np.fromfile(h, dtype=np.uint8)[:n_bp]
-        hit[:len(status)] |= (status == HIT) | (status == HIT_IN_FORK)
+    try:
+        with open(os.path.join(d, 'hits'), 'rb') as f:
+            hits = f.read(n_bp).ljust(n_bp, b'\0')
+    except FileNotFoundError:
+        hits = bytes(n_bp)
+    starts = lines[2::3]
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+    if np:
+        hit = np.frombuffer(hits, dtype=np.uint8) == HIT
+        covered = np.logical_or.reduceat(hit[np.frombuffer(line_breakpoints, dtype=np.uint32)], starts).tolist()
+    else:
+        # The same, about 4 times slower: the hits of all the lines'
+        # breakpoints, in the order of line_breakpoints, then any() of each
+        # line's part.
+        flags = bytes(map(hits.__getitem__, line_breakpoints))
+        ends = itertools.chain(starts[1:], [len(flags)])
+        covered = [HIT in flags[start:end] for start, end in zip(starts, ends)]
+    return lines[0::3], lines[1::3], covered
 
-    # A line was executed if any of its breakpoints was hit.
-    line_covered = np.logical_or.reduceat(hit[line_breakpoints], lines['start'])
-    key_files = lines['file'].astype(np.int64)
-    key_lines = lines['line'].astype(np.int64)
-    return d, hit_files, files, key_files, key_lines, line_covered
+
+def load_coverage(directory: str, binary: str | None):
+    """
+    Combine the hits of all the runs of the measured executables (see measured()).
+    Returns the list of data directories, the number of runs, and a dict from each
+    source file with code (its path relative to SOURCE_DIR) to two sets: its lines
+    with code, and those of them that ran.
+    """
+    executables, left_out = measured(directory, binary)
+    for message in left_out:
+        print(f'Not measured: {message}', file=sys.stderr)
+    errors = os.path.join(directory, 'bpcov', 'errors.log')
+    if not binary and os.path.exists(errors) and os.path.getsize(errors):
+        print(f'Some executables could not be prepared while they ran, see {errors}', file=sys.stderr)
+    data_dirs, runs, coverage = [], 0, {}
+    for exe, d in executables:
+        if not info_matches(read_info(d), expected_info(exe)) or 'error' in read_info(d):
+            sys.exit(f'No coverage data for this build of {exe}: run it under bpcov first')
+        data_dirs.append(d)
+        try:
+            with open(os.path.join(d, 'hits.log')) as f:
+                runs += sum(' inserted ' in line for line in f)
+        except FileNotFoundError:
+            pass
+        with open(os.path.join(d, 'files.txt')) as f:
+            exe_files = f.read().splitlines()
+        files, lines, covered = lines_run(d)
+        # A line ran if it ran in any of the executables.
+        for i, path in enumerate(exe_files):
+            # The lines of each file are together, as they are sorted by file.
+            start = bisect.bisect_left(files, i)
+            end = bisect.bisect_left(files, i + 1, start)
+            if start == end:
+                continue
+            has_code, ran = coverage.setdefault(path, (set(), set()))
+            has_code.update(lines[start:end])
+            ran.update(itertools.compress(lines[start:end], covered[start:end]))
+    if not data_dirs:
+        sys.exit(f'No coverage data in {os.path.join(directory, "bpcov")}: run something under bpcov first')
+    return data_dirs, runs, coverage
 
 
-def cat(binary: str, path: str, gcov: bool):
+def cat(directory: str, binary: str | None, path: str, gcov: bool):
     """
     Print a source file, with '* ' before each line whose code never ran. With gcov=True,
     use gcov's format instead: '#####' marks lines whose code never ran, '1' lines that
     ran, and '-' lines without code.
     """
-    d, hit_files, files, key_files, key_lines, line_covered = load_coverage(binary)
+    _, runs, coverage = load_coverage(directory, binary)
     rel = os.path.relpath(os.path.realpath(path), SOURCE_DIR) if os.path.exists(path) else os.path.normpath(path)
-    matches = [i for i, f in enumerate(files) if f == rel] or [i for i, f in enumerate(files) if f.endswith('/' + rel)]
+    matches = [f for f in coverage if f == rel] or [f for f in coverage if f.endswith('/' + rel)]
     if len(matches) != 1:
         sys.exit(f'{path} matches {len(matches)} measured source files' +
-                 (': ' + ' '.join(files[i] for i in matches[:10]) if matches else ''))
-    f = matches[0]
-    sel = key_files == f
-    status = dict(zip(key_lines[sel].tolist(), line_covered[sel].tolist()))
+                 (': ' + ' '.join(sorted(matches)[:10]) if matches else ''))
+    source = matches[0]
+    has_code, ran = coverage[source]
     color = sys.stdout.isatty()
-    with open(os.path.join(SOURCE_DIR, files[f]), errors='replace') as src:
+    with open(os.path.join(SOURCE_DIR, source), errors='replace') as src:
         if not gcov:
             for n, text in enumerate(src, 1):
-                print(('* ' if status.get(n) is False else '  ') + text, end='')
+                print(('* ' if n in has_code and n not in ran else '  ') + text, end='')
             return
-        print(f'{"-":>9}:{0:>5}:Source:{files[f]}')
-        print(f'{"-":>9}:{0:>5}:Runs:{len(hit_files)}')
+        print(f'{"-":>9}:{0:>5}:Source:{source}')
+        print(f'{"-":>9}:{0:>5}:Runs:{runs}')
         for n, text in enumerate(src, 1):
             text = text.rstrip('\n')
-            if n not in status:
+            if n not in has_code:
                 print(f'{"-":>9}:{n:>5}:{text}')
-            elif status[n]:
+            elif n in ran:
                 print(f'{"1":>9}:{n:>5}:{text}')
             elif color:
                 print(f'\033[31m{"#####":>9}:{n:>5}:{text}\033[0m')
@@ -263,7 +433,7 @@ def cat(binary: str, path: str, gcov: bool):
                 print(f'{"#####":>9}:{n:>5}:{text}')
 
 
-def less(binary: str, path: str):
+def less(directory: str, binary: str | None, path: str):
     """Show cat()'s output in less, starting at the first line whose code never ran."""
     r, w = os.pipe()
     pager = subprocess.Popen(['less', '+/^\\* '], stdin=r)
@@ -271,7 +441,7 @@ def less(binary: str, path: str):
     with os.fdopen(w, 'w') as out:
         sys.stdout = out
         try:
-            cat(binary, path, False)
+            cat(directory, binary, path, False)
         except BrokenPipeError:
             pass
         finally:
@@ -279,35 +449,27 @@ def less(binary: str, path: str):
     pager.wait()
 
 
-def report(binary: str, prefixes: list[str], html: str | None, reset: bool):
-    d, hit_files, files, key_files, key_lines, line_covered = load_coverage(binary)
-    print(f'{len(hit_files)} runs')
-
-    if prefixes:
-        keep = np.array([any(files[f].startswith(p) for p in prefixes) for f in range(len(files))])
-        sel = keep[key_files]
-        key_files, key_lines, line_covered = key_files[sel], key_lines[sel], line_covered[sel]
+def report(directory: str, binary: str | None, prefixes: list[str], html: str | None, reset: bool):
+    data_dirs, runs, coverage = load_coverage(directory, binary)
+    print(f'{runs} runs of {len(data_dirs)} executables')
 
     by_dir = collections.defaultdict(lambda: [0, 0])
     total = [0, 0]
-    info = os.path.join(d, 'coverage.info')
+    info = os.path.join(directory, 'bpcov', 'coverage.info')
     with open(info, 'w') as out:
-        # keys were sorted by file then line, so each file's lines are contiguous.
-        boundaries = np.flatnonzero(np.diff(key_files)) + 1
-        for start, end in zip(np.r_[0, boundaries], np.r_[boundaries, len(key_files)]):
-            if start == end:
+        for path, (has_code, ran) in sorted(coverage.items()):
+            if prefixes and not any(path.startswith(p) for p in prefixes):
                 continue
-            path = files[key_files[start]]
-            n_hit = int(line_covered[start:end].sum())
-            n = int(end - start)
+            n_hit = len(ran)
+            n = len(has_code)
             top = path.split('/')[0] if '/' in path else '.'
             by_dir[top][0] += n_hit
             by_dir[top][1] += n
             total[0] += n_hit
             total[1] += n
             out.write(f'SF:{os.path.join(SOURCE_DIR, path)}\n')
-            for line, c in zip(key_lines[start:end], line_covered[start:end]):
-                out.write(f'DA:{line},{int(c)}\n')
+            for line in sorted(has_code):
+                out.write(f'DA:{line},{int(line in ran)}\n')
             out.write(f'LH:{n_hit}\nLF:{n}\nend_of_record\n')
 
     width = max(len(k) for k in by_dir)
@@ -321,10 +483,11 @@ def report(binary: str, prefixes: list[str], html: str | None, reset: bool):
                                '--output-directory', html, info])
         print(f'HTML report: {os.path.join(html, "index.html")}')
     if reset:
-        for h in hit_files:
-            os.unlink(h)
-            if os.path.exists(h + '.log'):
-                os.unlink(h + '.log')
+        # Runs that are still running keep recording into the deleted files.
+        for d in data_dirs:
+            for name in ('hits', 'hits.log'):
+                if os.path.exists(os.path.join(d, name)):
+                    os.unlink(os.path.join(d, name))
 
 
 def main():
@@ -332,39 +495,59 @@ def main():
     # with a BrokenPipeError, and the binary run under the tracer inherit the
     # ignored SIGPIPE. Restore the default.
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-    # Not through argparse, which could mistake the binary's options for ours.
+    # Not through argparse, which could mistake the binary's or command's options for ours.
     if len(sys.argv) >= 3 and sys.argv[1] == 'run':
         run(sys.argv[2], sys.argv[3:])
-    parser = argparse.ArgumentParser(description='Breakpoint coverage of a Scylla binary')
+    if len(sys.argv) >= 2 and sys.argv[1] == 'exec':
+        args = sys.argv[2:]
+        directory = DEFAULT_DIR
+        if len(args) >= 2 and args[0] == '--dir':
+            directory, args = args[1], args[2:]
+        if not args:
+            sys.exit('Usage: bpcov.py exec [--dir DIR] COMMAND [ARGS...]')
+        exec_command(directory, args)
+    parser = argparse.ArgumentParser(description='Breakpoint coverage of Scylla executables')
     sub = parser.add_subparsers(dest='command', required=True)
     default_binary = os.path.join(SOURCE_DIR, 'build', 'dev', 'scylla')
-    p = sub.add_parser('prepare', help='compute the breakpoints for a binary (done once per build)')
+    p = sub.add_parser('prepare', help='compute the breakpoints for an executable (done once per build)')
     p.add_argument('--binary', default=default_binary, help='default: build/dev/scylla')
-    p = sub.add_parser('run', help='run the binary under the tracer: run BINARY [ARGS...]')
-    p = sub.add_parser('cat', help="print a source file, marking with '* ' the lines whose code never ran")
-    p.add_argument('--binary', default=default_binary, help='default: build/dev/scylla')
-    p.add_argument('--gcov', action='store_true', help="gcov's format: '#####' never ran, '1' ran, '-' no code")
-    p.add_argument('file', help='source file, e.g. alternator/executor.cc')
-    p = sub.add_parser('less', help="like cat, but in less, starting at the first line whose code never ran ('n' for the next)")
-    p.add_argument('--binary', default=default_binary, help='default: build/dev/scylla')
-    p.add_argument('file', help='source file, e.g. alternator/executor.cc')
-    p = sub.add_parser('report', help='summarize the coverage of all runs so far')
-    p.add_argument('--binary', default=default_binary, help='default: build/dev/scylla')
-    p.add_argument('--prefix', action='append', default=[],
-                   help='only report source files starting with this prefix, e.g. alternator/ (can be repeated)')
-    p.add_argument('--html', metavar='DIR', help='also write an HTML report to this directory')
-    p.add_argument('--reset', action='store_true', help='forget the runs afterwards')
+    p.add_argument('--dir', help='the measured directory, whose bpcov/ keeps the data (default: build/MODE)')
+    p.add_argument('--quiet', action='store_true',
+                   help="print nothing, and don't fail if the executable can't be measured (its data says why)")
+    p = sub.add_parser('run', help='run an executable under the tracer: run BINARY [ARGS...]')
+    p = sub.add_parser('exec', help='run a command, measuring every executable under build/dev that it runs: '
+                                    'exec [--dir DIR] COMMAND [ARGS...]')
+    for name, text in (('cat', "print a source file, marking with '* ' the lines whose code never ran"),
+                       ('less', "like cat, but in less, starting at the first line whose code never ran ('n' for the next)"),
+                       ('report', 'summarize the coverage of all runs so far')):
+        p = sub.add_parser(name, help=text)
+        p.add_argument('--dir', default=DEFAULT_DIR,
+                       help='combine the executables measured under this directory (default: build/dev)')
+        p.add_argument('--binary', help='only this executable')
+        if name == 'cat':
+            p.add_argument('--gcov', action='store_true', help="gcov's format: '#####' never ran, '1' ran, '-' no code")
+        if name in ('cat', 'less'):
+            p.add_argument('file', help='source file, e.g. alternator/executor.cc')
+        if name == 'report':
+            p.add_argument('--prefix', action='append', default=[],
+                           help='only report source files starting with this prefix, e.g. alternator/ (can be repeated)')
+            p.add_argument('--html', metavar='DIR', help='also write an HTML report to this directory')
+            p.add_argument('--reset', action='store_true', help='forget the runs afterwards')
     args = parser.parse_args()
     if args.command == 'prepare':
-        d, prepared = prepare(args.binary)
-        print(f'Prepared {d}' if prepared else f'{d} was already prepared for this build')
-    elif args.command == 'cat':
-        cat(args.binary, args.file, args.gcov)
+        directory = args.dir or default_dir(args.binary)
+        d, prepared = prepare(args.binary, directory, args.quiet)
+        if not args.quiet:
+            print(f'Prepared {d}' if prepared else f'{d} was already prepared for this build')
+        return
+    # Unless told otherwise, look for an executable's data where its runs put it.
+    directory = default_dir(args.binary) if args.binary and args.dir == DEFAULT_DIR else os.path.realpath(args.dir)
+    if args.command == 'cat':
+        cat(directory, args.binary, args.file, args.gcov)
     elif args.command == 'less':
-        less(args.binary, args.file)
+        less(directory, args.binary, args.file)
     elif args.command == 'report':
-        report(args.binary, args.prefix, args.html, args.reset)
-
+        report(directory, args.binary, args.prefix, args.html, args.reset)
 
 if __name__ == '__main__':
     main()

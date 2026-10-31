@@ -7,21 +7,33 @@
  */
 
 /*
- * bpcov-preload.so: measure which code a program runs, using one-shot
- * breakpoints handled inside the program itself. bpcov.py uses it by
+ * bpcov-preload.so: measure which code programs run, using one-shot
+ * breakpoints handled inside each program itself. bpcov.py uses it by
  * default; the alternative, bpcov-tracer, handles them from another process
  * with ptrace.
  *
- * Usage: LD_PRELOAD=bpcov-preload.so BPCOV_PROGRAM=PATH \
- *        BPCOV_BREAKPOINTS=FILE BPCOV_HITS_DIR=DIR PROGRAM [ARGS...]
+ * Usage: LD_PRELOAD=bpcov-preload.so BPCOV_DIR=DIR BPCOV_PYTHON=PYTHON \
+ *        BPCOV_PY=PATH BPCOV_VERSION=N COMMAND [ARGS...]
  *
  * The dynamic linker loads this library into every program that inherits
  * LD_PRELOAD, and runs its constructor before the program's own code
- * (including the program's static constructors). In the program whose
- * executable is BPCOV_PROGRAM, the constructor writes an int3 instruction
- * at each address of BPCOV_BREAKPOINTS (as written by bpcov-prepare), and
- * installs a handler for the SIGTRAP signal that an int3 causes. In any other
- * program, it does nothing.
+ * (including the program's static constructors). In a program whose
+ * executable is under DIR (e.g., build/dev), the constructor writes an int3
+ * instruction at each address of the program's breakpoints, and installs a
+ * handler for the SIGTRAP signal that an int3 causes. In any other program,
+ * it does nothing. So COMMAND can be a test runner, and every executable
+ * under DIR that it runs, directly or not, is measured.
+ *
+ * The data of the executable DIR/X is in DIR/bpcov/X/ (see README.md): it is
+ * ready if its "info" file has the executable's build-id and data version N.
+ * If it isn't, the constructor first runs "PYTHON PATH prepare" (bpcov.py) to
+ * prepare it, and waits; bpcov.py makes sure only one process prepares, also
+ * when many runs of a new executable start at once. If the executable can't
+ * be measured (e.g., it has no line tables), bpcov.py says so in "info", and
+ * the constructor does nothing. PYTHON is the interpreter that ran bpcov.py,
+ * not whatever "python3" the program's PATH has: test.py, for example, puts a
+ * venv without numpy first. The output of the preparation, and our messages
+ * if it fails, go to DIR/bpcov/errors.log, never to the program's output.
  *
  * When a thread reaches a breakpoint, the handler records the hit, restores
  * the original instruction, and moves the thread back to it. So each
@@ -30,14 +42,17 @@
  * switches, and fewer system calls. It also leaves ptrace free, for a
  * debugger or for LeakSanitizer.
  *
- * The hits of each process are in DIR/PID.bin, which has the same format as
- * bpcov-tracer's HITS file: one byte for each breakpoint, 1 if it was hit,
- * 2 if it could not be used (the original instruction was already an int3),
- * and 0 otherwise. The file is mapped into memory, so recording a hit is just
- * a write to memory, and the hits get to the file even if the program is
- * killed. A process that the program forks shares this mapping, so its hits
- * are recorded too (as 1, like the program's own). Messages go to
- * DIR/PID.bin.log.
+ * The hits are in the file "hits", in the format of bpcov-tracer's HITS
+ * file: one byte for each breakpoint, 1 if it was hit, 2 if it could not be
+ * used (the original instruction was already an int3), and 0 otherwise. All
+ * the runs of the executable share this file, also at the same time: a run
+ * inserts only the breakpoints that no run hit yet, so it traps only on code
+ * that no run reached before, and runs at the same time can only change
+ * bytes from 0 to the same 1 or 2. The file is mapped into memory, so
+ * recording a hit is just a write to memory, and the hits get to the file
+ * even if the program is killed. A process that the program forks shares
+ * this mapping, so its hits are recorded too. Each run appends a line to
+ * "hits.log".
  *
  * A SIGTRAP caused by an int3 can't be blocked: if the thread blocks SIGTRAP,
  * the kernel kills the process instead of running the handler. Seastar blocks
@@ -51,6 +66,7 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <elf.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <link.h>
 #include <limits.h>
@@ -61,17 +77,25 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <ucontext.h>
 #include <unistd.h>
 
+// The values in the hits file.
 enum { NOT_HIT = 0, HIT = 1, UNUSABLE = 2 };
 
-static const uint32_t* bp_addr;  // the BREAKPOINTS file, mapped into memory
-static uint8_t* bp_orig;
+static const uint32_t* bp_addr;  // the breakpoints file, mapped into memory
+// The original byte of each breakpoint that this process inserted, with
+// INSERTED added; 0 for those it didn't insert (the hits file can't tell,
+// as other runs change it).
+static uint16_t* bp_orig;
+enum { INSERTED = 0x100 };
 static uint8_t* bp_hit;  // the hits file, mapped into memory
 static size_t n_bp;
 static uint64_t bias;  // where the program was loaded, relative to its link-time addresses
+static const ElfW(Phdr)* phdr;  // the program's program headers, in memory
+static size_t phnum;
 static int active;
 
 // The original instructions are restored by writing to /proc/self/mem, which
@@ -113,10 +137,10 @@ static void on_sigtrap(int sig, siginfo_t* info, void* context) {
     // An int3 causes a SIGTRAP with si_code SI_KERNEL; any other SIGTRAP (e.g.,
     // one sent by kill()) is not ours.
     ssize_t i = active && info->si_code == SI_KERNEL ? find_breakpoint(addr - bias) : -1;
-    if (i < 0 || bp_hit[i] == UNUSABLE || *(volatile uint8_t*)addr != 0xcc) {
+    if (i < 0 || !(bp_orig[i] & INSERTED) || *(volatile uint8_t*)addr != 0xcc) {
         // Not one of our breakpoints - unless another thread has just
         // restored it, in which case the thread should run it again.
-        if (i >= 0 && bp_hit[i] != UNUSABLE) {
+        if (i >= 0 && (bp_orig[i] & INSERTED)) {
             uc->uc_mcontext.gregs[REG_RIP] = addr;
             return;
         }
@@ -141,33 +165,121 @@ static void on_sigtrap(int sig, siginfo_t* info, void* context) {
     }
     // Another thread may be restoring the same breakpoint at the same time;
     // writing the same byte twice is harmless.
-    if (pwrite(mem_fd, &bp_orig[i], 1, addr) != 1) {
+    uint8_t orig = bp_orig[i];
+    if (pwrite(mem_fd, &orig, 1, addr) != 1) {
         die("restoring an instruction");
     }
     bp_hit[i] = HIT;
     uc->uc_mcontext.gregs[REG_RIP] = addr;
 }
 
-// Find where the program was loaded: the first object dl_iterate_phdr()
-// reports is the program itself.
-static int find_bias(struct dl_phdr_info* info, size_t size, void* data) {
+// Find where the program was loaded, and its program headers: the first
+// object dl_iterate_phdr() reports is the program itself.
+static int find_program(struct dl_phdr_info* info, size_t size, void* data) {
     (void)size;
     (void)data;
     bias = info->dlpi_addr;
+    phdr = info->dlpi_phdr;
+    phnum = info->dlpi_phnum;
     return 1;
 }
 
-static void* map_file(const char* path, size_t* size, int writable, size_t new_size) {
+// The program's GNU build-id, in hex, from its PT_NOTE segments in memory.
+static int get_build_id(char* out, size_t size) {
+    for (size_t i = 0; i < phnum; i++) {
+        if (phdr[i].p_type != PT_NOTE) {
+            continue;
+        }
+        const uint8_t* p = (const uint8_t*)(bias + phdr[i].p_vaddr);
+        const uint8_t* end = p + phdr[i].p_memsz;
+        while (p + sizeof(ElfW(Nhdr)) <= end) {
+            const ElfW(Nhdr)* n = (const ElfW(Nhdr)*)p;
+            const uint8_t* name = p + sizeof(*n);
+            const uint8_t* desc = name + ((n->n_namesz + 3) & ~3u);
+            if (n->n_type == NT_GNU_BUILD_ID && n->n_namesz == 4 && !memcmp(name, "GNU", 4) &&
+                2 * n->n_descsz < size) {
+                for (size_t k = 0; k < n->n_descsz; k++) {
+                    sprintf(out + 2 * k, "%02x", desc[k]);
+                }
+                return 1;
+            }
+            p = desc + ((n->n_descsz + 3) & ~3u);
+        }
+    }
+    return 0;
+}
+
+// Whether the data directory's "info" file says its data is of this build
+// (the build-id) and of this version of bpcov: 1 if it is and the program can
+// be measured, -1 if it is but it can't (an "error" line), 0 if it isn't.
+static int check_info(const char* data, const char* build_id, const char* version) {
+    char path[PATH_MAX + 32], line[4096];
+    snprintf(path, sizeof(path), "%s/info", data);
+    FILE* f = fopen(path, "re");
+    if (!f) {
+        return 0;
+    }
+    int id_ok = 0, version_ok = 0, error = 0;
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\n")] = '\0';
+        if (!strncmp(line, "build-id ", 9)) {
+            id_ok = !strcmp(line + 9, build_id);
+        } else if (!strncmp(line, "version ", 8)) {
+            version_ok = !strcmp(line + 8, version);
+        } else if (!strncmp(line, "error ", 6)) {
+            error = 1;
+        }
+    }
+    fclose(f);
+    return id_ok && version_ok ? (error ? -1 : 1) : 0;
+}
+
+// Open DIR/bpcov/errors.log for appending.
+static int open_errors_log(const char* dir) {
+    char path[PATH_MAX + 32];
+    snprintf(path, sizeof(path), "%s/bpcov", dir);
+    mkdir(path, 0755);
+    snprintf(path, sizeof(path), "%s/bpcov/errors.log", dir);
+    return open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+}
+
+// Run "bpcov.py prepare" for this program, and wait for it. Returns its exit
+// status, as waitpid() reports it, or -1.
+static int prepare(const char* python, const char* py, const char* dir, const char* self) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        return -1;
+    }
+    if (pid == 0) {
+        int log = open_errors_log(dir);
+        int null = open("/dev/null", O_RDONLY);
+        if (log < 0 || null < 0 || dup2(null, 0) < 0 || dup2(log, 1) < 0 || dup2(log, 2) < 0) {
+            _exit(127);
+        }
+        execl(python, python, py, "prepare", "--quiet", "--dir", dir, "--binary", self, (char*)NULL);
+        _exit(127);
+    }
+    int status;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            return -1;
+        }
+    }
+    return status;
+}
+
+static void* map_file(const char* path, size_t* size, int writable, size_t min_size) {
     int fd = open(path, writable ? O_RDWR | O_CREAT | O_CLOEXEC : O_RDONLY | O_CLOEXEC, 0644);
     struct stat st;
     if (fd < 0 || fstat(fd, &st) < 0) {
         return NULL;
     }
-    if (writable && ftruncate(fd, new_size) < 0) {
+    // Other runs may be using the hits file, so only extend it if it is new.
+    if (writable && (size_t)st.st_size < min_size && ftruncate(fd, min_size) < 0) {
         close(fd);
         return NULL;
     }
-    *size = writable ? new_size : (size_t)st.st_size;
+    *size = writable ? min_size : (size_t)st.st_size;
     void* p = mmap(NULL, *size ? *size : 1, writable ? PROT_READ | PROT_WRITE : PROT_READ, MAP_SHARED, fd, 0);
     close(fd);
     return p == MAP_FAILED ? NULL : p;
@@ -183,42 +295,73 @@ __attribute__((constructor)) static void init(void) {
     real_sigaction = dlsym(RTLD_NEXT, "sigaction");
     real_pthread_sigmask = dlsym(RTLD_NEXT, "pthread_sigmask");
     real_sigprocmask = dlsym(RTLD_NEXT, "sigprocmask");
-    const char* program = getenv("BPCOV_PROGRAM");
-    const char* breakpoints = getenv("BPCOV_BREAKPOINTS");
-    const char* hits_dir = getenv("BPCOV_HITS_DIR");
-    if (!program || !breakpoints || !hits_dir) {
+    const char* dir = getenv("BPCOV_DIR");
+    const char* python = getenv("BPCOV_PYTHON");
+    const char* py = getenv("BPCOV_PY");
+    const char* version = getenv("BPCOV_VERSION");
+    if (!dir || !python || !py || !version) {
         return;
     }
-    // Only measure the program we were asked to: other programs it runs
-    // inherit LD_PRELOAD too.
-    char self[PATH_MAX], target[PATH_MAX];
+    // Only measure the executables under DIR: all the programs that the
+    // command runs inherit LD_PRELOAD.
+    char self[PATH_MAX];
     ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
-    if (n < 0 || !realpath(program, target)) {
+    size_t dir_len = strlen(dir);
+    if (n < 0) {
         return;
     }
     self[n] = '\0';
-    if (strcmp(self, target) != 0) {
+    if (strncmp(self, dir, dir_len) != 0 || self[dir_len] != '/') {
+        return;
+    }
+    char data[PATH_MAX];
+    snprintf(data, sizeof(data), "%s/bpcov/%s", dir, self + dir_len + 1);
+
+    double start = now();
+    dl_iterate_phdr(find_program, NULL);
+    char build_id[256];
+    if (!get_build_id(build_id, sizeof(build_id))) {
+        return;
+    }
+    int ready = check_info(data, build_id, version);
+    if (ready == 0) {
+        int status = prepare(python, py, dir, self);
+        ready = check_info(data, build_id, version);
+        if (ready == 0) {
+            // The program will run unmeasured; say why where the report will find it.
+            int log = open_errors_log(dir);
+            if (log >= 0) {
+                char line[PATH_MAX + 128];
+                int len = snprintf(line, sizeof(line), "%d: preparing %s failed (wait status %d)\n", (int)getpid(),
+                                   self, status);
+                if (write(log, line, len) < 0) {
+                    // Nothing to do about it.
+                }
+                close(log);
+            }
+        }
+    }
+    if (ready != 1) {
         return;
     }
 
-    double start = now();
     size_t size;
-    bp_addr = map_file(breakpoints, &size, 0, 0);
+    char path[PATH_MAX + 32];
+    snprintf(path, sizeof(path), "%s/breakpoints.bin", data);
+    bp_addr = map_file(path, &size, 0, 0);
     if (!bp_addr) {
         die("cannot read the breakpoints file");
     }
     n_bp = size / sizeof(uint32_t);
-    char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/%d.bin", hits_dir, (int)getpid());
+    snprintf(path, sizeof(path), "%s/hits", data);
     bp_hit = map_file(path, &size, 1, n_bp);
     if (!bp_hit) {
-        die("cannot create the hits file");
+        die("cannot open the hits file");
     }
-    bp_orig = malloc(n_bp ? n_bp : 1);
+    bp_orig = calloc(n_bp ? n_bp : 1, sizeof(uint16_t));
     if (!bp_orig) {
         die("out of memory");
     }
-    dl_iterate_phdr(find_bias, NULL);
     mem_fd = open("/proc/self/mem", O_RDWR | O_CLOEXEC);
     mem_pid = getpid();
     if (mem_fd < 0) {
@@ -236,49 +379,67 @@ __attribute__((constructor)) static void init(void) {
 
     // Write the int3s, a chunk of up to 1 MB of code at a time: copy the
     // chunk, replace the first byte of each breakpoint's instruction in the
-    // copy, and write the copy back with one system call.
+    // copy, and write the copy back with one system call - unless all of
+    // the chunk's breakpoints were already hit.
     enum { CHUNK = 1 << 20 };
     uint8_t* buf = malloc(CHUNK);
     if (!buf) {
         die("out of memory");
     }
-    size_t n_skipped = 0;
+    size_t n_inserted = 0, n_already_hit = 0;
     for (size_t i = 0; i < n_bp;) {
         uint64_t start_addr = bp_addr[i] + bias;
         size_t j = i;
         while (j < n_bp && bp_addr[j] + bias < start_addr + CHUNK) {
             j++;
         }
+        size_t not_hit = 0;
+        for (size_t k = i; k < j; k++) {
+            not_hit += bp_hit[k] == NOT_HIT;
+            n_already_hit += bp_hit[k] == HIT;
+        }
+        if (!not_hit) {
+            i = j;
+            continue;
+        }
         size_t len = bp_addr[j - 1] + bias + 1 - start_addr;
         memcpy(buf, (const void*)start_addr, len);
+        size_t n = 0;
         for (size_t k = i; k < j; k++) {
+            if (bp_hit[k] != NOT_HIT) {
+                continue;
+            }
             uint8_t* p = &buf[bp_addr[k] + bias - start_addr];
-            bp_orig[k] = *p;
             if (*p == 0xcc) {
                 // Already an int3, we could not tell our trap from the original.
                 bp_hit[k] = UNUSABLE;
-                n_skipped++;
             } else {
+                bp_orig[k] = INSERTED | *p;
                 *p = 0xcc;
+                n++;
             }
         }
-        if (pwrite(mem_fd, buf, len, start_addr) != (ssize_t)len) {
+        if (n && pwrite(mem_fd, buf, len, start_addr) != (ssize_t)len) {
             die("writing program text");
         }
+        n_inserted += n;
         i = j;
     }
     free(buf);
     active = 1;
 
-    snprintf(path, sizeof(path), "%s/%d.bin.log", hits_dir, (int)getpid());
-    FILE* log = fopen(path, "w");
-    if (log) {
-        fprintf(log, "inserted %zu breakpoints in %.2f seconds", n_bp - n_skipped, now() - start);
-        if (n_skipped) {
-            fprintf(log, " (%zu skipped: already int3)", n_skipped);
+    // One line, appended with one write(), so lines of runs at the same time
+    // don't mix.
+    snprintf(path, sizeof(path), "%s/hits.log", data);
+    int log = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+    if (log >= 0) {
+        char line[256];
+        int len = snprintf(line, sizeof(line), "%d: inserted %zu breakpoints in %.2f seconds (%zu were already hit)\n",
+                           (int)getpid(), n_inserted, now() - start, n_already_hit);
+        if (write(log, line, len) < 0) {
+            // Nothing to do about it.
         }
-        fprintf(log, "\n");
-        fclose(log);
+        close(log);
     }
 }
 
