@@ -4314,6 +4314,64 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
   }).get();
 }
 
+// Reproduces SCYLLADB-3937.
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_counts_restore_as_streaming_load) {
+  do_with_cql_env_thread([] (auto& e) {
+    topology_builder topo(e);
+    auto host1 = topo.add_node(node_state::normal, 1);
+    topo.start_new_rack();
+    auto host2 = topo.add_node(node_state::normal, 1);
+    auto host3 = topo.add_node(node_state::normal, 1);
+
+    // host2 holds 4 tablets of the migrated table and host3 holds 2 of the restored one,
+    // so balancing the second rack moves migrated tablets to host3.
+    auto migrated = add_table(e, add_keyspace(e, {{topo.dc(), 2}}, 4)).get();
+    auto restored = add_table(e, add_keyspace(e, {{topo.dc(), 2}}, 2)).get();
+
+    auto set_tablets = [&] (bool restoring) {
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map migrated_map(4);
+            for (auto tid : migrated_map.tablet_ids()) {
+                migrated_map.set_tablet(tid, tablet_info {tablet_replica_set {tablet_replica {host1, 0}, tablet_replica {host2, 0}}});
+            }
+            tmeta.set_tablet_map(migrated, std::move(migrated_map));
+
+            tablet_map restored_map(2);
+            for (auto tid : restored_map.tablet_ids()) {
+                tablet_replica_set replicas {tablet_replica {host1, 0}, tablet_replica {host3, 0}};
+                restored_map.set_tablet(tid, tablet_info {replicas});
+                if (restoring) {
+                    restored_map.set_tablet_transition_info(tid, tablet_transition_info {
+                            tablet_transition_stage::restore,
+                            tablet_transition_kind::restore,
+                            replicas,
+                            std::nullopt
+                    });
+                }
+            }
+            tmeta.set_tablet_map(restored, std::move(restored_map));
+            co_return;
+        });
+    };
+
+    auto& stm = e.shared_token_metadata().local();
+    auto migrations_to_host3 = [&] {
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
+        return std::ranges::count_if(plan.migrations(), [&] (const tablet_migration_info& mig) {
+            return mig.dst && mig.dst->host == host3;
+        });
+    };
+
+    set_tablets(false);
+    BOOST_REQUIRE_GT(migrations_to_host3(), 0);
+
+    // Two restoring tablets fill host3's write budget (tablet_streaming_write_concurrency_per_shard = 2).
+    set_tablets(true);
+    BOOST_REQUIRE_EQUAL(migrations_to_host3(), 0);
+  }).get();
+}
+
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
 SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
   do_with_cql_env_thread([] (auto& e) {
