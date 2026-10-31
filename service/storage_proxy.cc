@@ -6764,8 +6764,11 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         result->ensure_counts();
         remaining_row_count -= result->row_count().value();
         remaining_partition_count -= result->partition_count().value();
+        // Stop on a short read too: result_merger discards everything after
+        // the first short result, so reading further ranges is wasted work.
+        const bool is_short_read = bool(result->is_short_read());
         results.emplace_back(std::move(result));
-        if (ranges_to_vnodes.empty() || !remaining_row_count || !remaining_partition_count) {
+        if (ranges_to_vnodes.empty() || !remaining_row_count || !remaining_partition_count || is_short_read) {
             auto used_replicas = replicas_per_token_range();
             for (auto& e : exec) {
                 // We add used replicas in separate per-vnode entries even if
