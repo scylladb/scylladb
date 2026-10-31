@@ -1796,16 +1796,6 @@ static cql3::raw_value evaluate_set(const collection_constructor& collection, co
             throw exceptions::invalid_request_exception("null is not supported inside collections");
         }
 
-        if (evaluated_element.view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
-            // TODO: Behaviour copied from sets::delayed_value::bind(), but this seems incorrect
-            // The original reasoning is:
-            // "We don't support values > 64K because the serialization format encode the length as an unsigned short."
-            // but CQL uses int32_t to encode length of a set value length
-            throw exceptions::invalid_request_exception(format("Set value is too long. Set values are limited to {:d} bytes but {:d} bytes value provided",
-                                                std::numeric_limits<uint16_t>::max(),
-                                                evaluated_element.view().size_bytes()));
-        }
-
         evaluated_elements.emplace(std::move(evaluated_element).to_managed_bytes());
     }
 
@@ -1824,16 +1814,6 @@ static cql3::raw_value evaluate_map(const collection_constructor& collection, co
 
             if (key.is_null() || value.is_null()) {
                 throw exceptions::invalid_request_exception("null is not supported inside collections");
-            }
-
-            if (key.view().size_bytes() > std::numeric_limits<uint16_t>::max()) {
-                // TODO: Behaviour copied from maps::delayed_value::bind(), but this seems incorrect
-                // The original reasoning is:
-                // "We don't support values > 64K because the serialization format encode the length as an unsigned short."
-                // but CQL uses int32_t to encode length of a map key
-                throw exceptions::invalid_request_exception(format("Map key is too long. Map keys are limited to {:d} bytes but {:d} bytes keys provided",
-                                                   std::numeric_limits<uint16_t>::max(),
-                                                   key.view().size_bytes()));
             }
 
             evaluated_elements.emplace(std::move(key).to_managed_bytes(),
