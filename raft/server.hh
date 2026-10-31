@@ -259,6 +259,24 @@ public:
     //     Thrown if abort() was called on the server instance.
     virtual future<> read_barrier(seastar::abort_source* as) = 0;
 
+    // Waits until all entries that this server knows to be committed at the time
+    // of the call are applied to the local state machine. Returns the index of the
+    // last such entry.
+    //
+    // Unlike read_barrier, it does not communicate with other servers, so it works
+    // without a quorum. However, it gives no linearizability guarantees: other
+    // servers may know about more committed entries.
+    //
+    // The caller may pass a pointer to an abort_source to make the operation abortable.
+    // If it passes nullptr, the operation is unabortable.
+    //
+    // Exceptions:
+    // raft::request_aborted
+    //     Thrown if abort is requested before the operation finishes.
+    // raft::stopped_error
+    //     Thrown if abort() was called on the server instance.
+    virtual future<index_t> wait_for_apply_committed(seastar::abort_source* as) = 0;
+
     // Initiate leader stepdown process.
     // If target is specified, the leadership transfer will be attempted to that target only.
     // The target must be a voting member of the current configuration other than the leader

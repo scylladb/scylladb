@@ -1267,6 +1267,16 @@ new group 0, node B would receive a snapshot that regresses its schema version. 
 B could end up in an inconsistent state with data in a column that doesn't exist
 according to group 0. Hence, node B must be the recovery leader.
 
+The example compares commit indexes, but the group 0 state persisted on a node is
+the state it has applied, which can lag behind its commit index. Therefore, before
+restarting with the recovery leader, all live nodes apply all entries they know to be
+committed through the `/raft/wait_for_apply` REST API endpoint, which doesn't need
+a quorum. Technically, only the recovery leader must apply all committed entries, as
+other nodes receive its state in a snapshot when joining the new group 0. However,
+calling `/raft/wait_for_apply` on all live nodes simplifies finding the recovery
+leader (it returns the commit index) and serves as a check that the node is
+functional.
+
 ## Loss of committed entries
 
 It can happen that a group 0 entry has been committed by a majority consisting of

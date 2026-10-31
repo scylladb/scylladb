@@ -126,6 +126,36 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
 
         co_return json_void{};
     });
+    r::wait_for_apply.set(r, [&raft_gr] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+        auto timeout = get_request_timeout(*req);
+
+        const auto gid_param = try_get_query_param<raft::group_id>(*req, "group_id");
+        if (!gid_param) {
+            // Wait on group 0 by default
+            const auto idx = co_await raft_gr.invoke_on(0, [timeout] (service::raft_group_registry& raft_gr) -> future<raft::index_t> {
+                co_return co_await raft_gr.group0_with_timeouts().wait_for_apply_committed(nullptr, timeout);
+            });
+            co_return json_return_type(idx.value());
+        }
+
+        const raft::group_id gid = *gid_param;
+
+        std::atomic<bool> found_srv{false};
+        std::atomic<uint64_t> idx{0};
+        co_await raft_gr.invoke_on_all([gid, timeout, &found_srv, &idx] (service::raft_group_registry& raft_gr) -> future<> {
+            if (!raft_gr.find_server(gid)) {
+                co_return;
+            }
+            found_srv = true;
+            idx = (co_await raft_gr.get_server_with_timeouts(gid).wait_for_apply_committed(nullptr, timeout)).value();
+        });
+
+        if (!found_srv) {
+            throw bad_param_exception{fmt::format("Server for group ID {} not found", gid)};
+        }
+
+        co_return json_return_type(idx.load());
+    });
     r::trigger_stepdown.set(r, [&raft_gr] (std::unique_ptr<http::request> req) -> future<json_return_type> {
         auto timeout = get_request_timeout(*req);
         auto dur = timeout.value ? *timeout.value - lowres_clock::now() : std::chrono::seconds(60);
@@ -170,6 +200,7 @@ void unset_raft(http_context&, httpd::routes& r) {
     r::trigger_snapshot.unset(r);
     r::get_leader_host.unset(r);
     r::read_barrier.unset(r);
+    r::wait_for_apply.unset(r);
     r::trigger_stepdown.unset(r);
 }
 

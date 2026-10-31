@@ -917,6 +917,27 @@ async def read_barrier(api: ScyllaRESTAPIClient, node_ip: IPAddress, group_id: O
     await api.client.post("/raft/read_barrier", host=node_ip, params=params)
 
 
+async def wait_for_apply(api: ScyllaRESTAPIClient, node_ip: IPAddress, group_id: Optional[str] = None,
+                         timeout: Optional[int] = None) -> int:
+    """ Wait until the specific host applies all entries of group_id it knows to be committed.
+
+        Unlike read_barrier, it doesn't require a quorum.
+
+        :param api: the REST API client
+        :param node_ip: the node IP address on which to wait
+        :param group_id: the optional group id (default=group0)
+        :param timeout: the optional timeout in seconds (for the Raft operation on the node)
+        :return: the index of the last entry the host waited for
+    """
+    params = {}
+    if group_id is not None:
+        params["group_id"] = group_id
+    if timeout is not None:
+        params["timeout"] = str(timeout)
+
+    return await api.client.post_json("/raft/wait_for_apply", host=node_ip, params=params)
+
+
 def get_host_api_address(host: Host) -> IPAddress:
     """ Returns the API address of the host.
 
