@@ -76,6 +76,32 @@ static constexpr auto KMS_KEY_PROVIDER_FACTORY = "KmsKeyProviderFactory";
 static constexpr auto GCP_KEY_PROVIDER_FACTORY = "GcpKeyProviderFactory";
 static constexpr auto AZURE_KEY_PROVIDER_FACTORY = "AzureKeyProviderFactory";
 
+template <typename F>
+static std::unique_ptr<key_provider_factory> make_factory() {
+    return std::make_unique<F>();
+}
+
+// Single source of truth for the factory names get_provider() accepts.
+static const std::pair<const char*, std::unique_ptr<key_provider_factory> (*)()> key_provider_factories[] = {
+    {REPLICATED_KEY_PROVIDER_FACTORY, make_factory<replicated_key_provider_factory>},
+    {LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY, make_factory<local_file_provider_factory>},
+    {KMIP_KEY_PROVIDER_FACTORY, make_factory<kmip_key_provider_factory>},
+    {KMS_KEY_PROVIDER_FACTORY, make_factory<kms_key_provider_factory>},
+    {GCP_KEY_PROVIDER_FACTORY, make_factory<gcp_key_provider_factory>},
+    {AZURE_KEY_PROVIDER_FACTORY, make_factory<azure_key_provider_factory>},
+};
+
+std::vector<sstring> available_key_providers() {
+    std::vector<sstring> res;
+    for (const auto& [name, make] : key_provider_factories) {
+        // The kmip factory is registered always, but a build without KMIP cannot use it.
+        if (std::string_view(name) != KMIP_KEY_PROVIDER_FACTORY || kmip_host_enabled()) {
+            res.emplace_back(name);
+        }
+    }
+    return res;
+}
+
 bytes base64_decode(const sstring& s, size_t off, size_t len) {
     if (off >= s.size()) {
         throw std::out_of_range("Invalid offset");
@@ -335,12 +361,9 @@ public:
         static const std::unordered_map<sstring, std::unique_ptr<key_provider_factory>> providers = [] {
             std::unordered_map<sstring, std::unique_ptr<key_provider_factory>> map;
 
-            map[REPLICATED_KEY_PROVIDER_FACTORY] = std::make_unique<replicated_key_provider_factory>();
-            map[LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY] = std::make_unique<local_file_provider_factory>();
-            map[KMIP_KEY_PROVIDER_FACTORY] = std::make_unique<kmip_key_provider_factory>();
-            map[KMS_KEY_PROVIDER_FACTORY] = std::make_unique<kms_key_provider_factory>();
-            map[GCP_KEY_PROVIDER_FACTORY] = std::make_unique<gcp_key_provider_factory>();
-            map[AZURE_KEY_PROVIDER_FACTORY] = std::make_unique<azure_key_provider_factory>();
+            for (const auto& [name, make] : key_provider_factories) {
+                map[name] = make();
+            }
 
             return map;
         }();

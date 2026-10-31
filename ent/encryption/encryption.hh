@@ -10,6 +10,7 @@
 #pragma once
 
 #include <map>
+#include <vector>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
@@ -68,6 +69,10 @@ future<> write_text_file_fully(const std::string&, temporary_buffer<char>);
 future<> write_text_file_fully(const std::string&, const std::string&);
 
 std::optional<std::chrono::milliseconds> parse_expiry(std::optional<std::string>);
+
+// Factory names (the `key_provider` option values) usable in this binary,
+// e.g. KmipKeyProviderFactory. Does not need a running reactor.
+std::vector<sstring> available_key_providers();
 
 class symmetric_key;
 struct key_info;
