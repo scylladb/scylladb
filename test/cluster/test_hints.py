@@ -384,8 +384,8 @@ async def test_sync_point(manager: ScyllaClusterManager):
     await pause_servers(manager, [node2, node3], [node1])
 
     mutation_count = 5
-    for primary_key in range(mutation_count):
-        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({primary_key}, {primary_key})", consistency_level=ConsistencyLevel.ONE))
+    await gather_safely(*[cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({primary_key}, {primary_key})", consistency_level=ConsistencyLevel.ONE))
+                          for primary_key in range(mutation_count)])
     await settle_and_flush_hints(manager, [node1])
     # Every write generates two hints: towards node 2 and node 3.
     assert await get_hint_metrics(manager.metrics, node1.ip_addr, "written") == 2 * mutation_count
@@ -616,8 +616,8 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
 
     # Write 50 rows with CL=ANY. Some of the rows will only be stored as hints because of RF=1
     logger.info("Writing 50 rows with CL=ANY")
-    for i in range(50):
-        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+    await gather_safely(*[cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+                          for i in range(50)])
     await settle_and_flush_hints(manager, [server1])
 
     # Temporarily pause hints replay, we will unpause it after decommission starts and streaming is done,
@@ -668,8 +668,8 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
     # Verify that no data has been lost - if the hints replay only sent the hints to the original destination (server3),
     # then they will be only present on server3 which already left the cluster
     logger.info("Verify that no data stored in hints have been lost")
-    for i in range(50):
-        assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
+    rows = await cql.run_async(f"SELECT pk, v FROM {table}")
+    assert {(row.pk, row.v) for row in rows} == {(i, i + 1) for i in range(50)}
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -693,8 +693,8 @@ async def test_hints_consistency_during_replace(manager: ScyllaClusterManager):
     await manager.others_not_see_server(servers[2].ip_addr)
 
     # Write 50 rows with CL=ANY. Some of the rows will only be stored as hints because of RF=1
-    for i in range(50):
-        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+    await gather_safely(*[cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+                          for i in range(50)])
     await settle_and_flush_hints(manager, [servers[0]])
 
     sync_point = await create_sync_point(manager.api.client, servers[0].ip_addr)
@@ -703,8 +703,8 @@ async def test_hints_consistency_during_replace(manager: ScyllaClusterManager):
 
     assert await await_sync_point(manager.api.client, servers[0].ip_addr, sync_point, 30)
     # Verify that all rows were recovered by the hint replay
-    for i in range(50):
-        assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
+    rows = await cql.run_async(f"SELECT pk, v FROM {table}")
+    assert {(row.pk, row.v) for row in rows} == {(i, i + 1) for i in range(50)}
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -788,8 +788,8 @@ async def test_canceling_hint_draining(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(s2.server_id)
 
     # Generate hints towards s2 on s1 with probability 1 - ((#nodes - 1) / #nodes)^100 ~= 1.
-    for i in range(100):
-        await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+    await gather_safely(*[cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+                          for i in range(100)])
     await settle_and_flush_hints(manager, [s1])
 
     sync_point = await create_sync_point(manager.api.client, s1.ip_addr)
@@ -840,7 +840,7 @@ async def test_hint_to_pending(manager: ScyllaClusterManager):
     table = f"{ks}.tbl"
     await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
     replica = (await get_tablet_replicas(manager, servers[0], ks, "tbl", 0))[0]
-    host_ids = [await manager.get_host_id(server.server_id) for server in servers]
+    host_ids = await gather_safely(*[manager.get_host_id(server.server_id) for server in servers])
     if replica[0] != host_ids[1]:
         # We'll use server 0 as the source of the hint, so the tablet replica needs to be on server 1
         await manager.api.move_tablet(servers[0].ip_addr, ks, "tbl", replica[0], replica[1], host_ids[1], 0, 0)
@@ -902,7 +902,7 @@ async def test_hint_to_leaving_when_reducing_rf(manager: ScyllaClusterManager):
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r2', 'r3']}")
     table = f"{ks}.tbl"
     await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int) WITH tablets = {{'min_tablet_count': 1}}")
-    host_ids = [await manager.get_host_id(server.server_id) for server in servers]
+    host_ids = await gather_safely(*[manager.get_host_id(server.server_id) for server in servers])
 
     # Pause the servers with replicas
     await pause_servers(manager, servers[1:], [servers[0]])
@@ -1383,8 +1383,8 @@ async def test_hints_decom(manager: ScyllaClusterManager):
     # Make sure all rows are present.
     await assert_rows_present(cql, "ks.tbl", "pk", list(range(row_count)), present=True)
 
-    await wait_for_hint_dir_removed(s1_hints_dir, s3_host_id)
-    await wait_for_hint_dir_removed(s2_hints_dir, s3_host_id)
+    await gather_safely(wait_for_hint_dir_removed(s1_hints_dir, s3_host_id),
+                        wait_for_hint_dir_removed(s2_hints_dir, s3_host_id))
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections and the hinted handoff test API aren't available in release mode")
@@ -2434,10 +2434,9 @@ async def test_hints_older_than_gc_grace_are_not_replayed(manager: ScyllaCluster
 
     await pause_servers(manager, [s2], [s1])
 
-    for table_name, _, _ in table_specs:
-        await cql.run_async(SimpleStatement(
-            f"INSERT INTO ks.{table_name} (pk, v) VALUES (0, 1)",
-            consistency_level=ConsistencyLevel.ONE))
+    await gather_safely(*[cql.run_async(SimpleStatement(
+        f"INSERT INTO ks.{table_name} (pk, v) VALUES (0, 1)",
+        consistency_level=ConsistencyLevel.ONE)) for table_name, _, _ in table_specs])
 
     await settle_and_flush_hints(manager, [s1])
     written = await get_hint_metrics(manager.metrics, s1.ip_addr, "written")
