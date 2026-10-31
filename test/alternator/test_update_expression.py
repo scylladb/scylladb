@@ -7,7 +7,7 @@
 import pytest
 from botocore.exceptions import ClientError
 
-from test.alternator.util import random_string
+from test.alternator.util import random_string, multiset, client_no_transform
 
 
 # The simplest test of using UpdateExpression to set a top-level attribute,
@@ -789,15 +789,15 @@ def test_update_expression_add_sets(test_table_s):
         ExpressionAttributeValues={':val1': set(['pig'])})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == set(['dog', 'cat', 'mouse', 'pig'])
 
-    # TODO: right now this test won't detect duplicated values in the returned result,
-    # because boto3 parses a set out of the returned JSON anyway. This check should leverage
-    # lower level API (if exists) to ensure that the JSON contains no duplicates
-    # in the set representation. It has been verified manually.
     test_table_s.put_item(Item={'p': p, 'a': set(['beaver', 'lynx', 'coati']), 'b': 'hi'})
     test_table_s.update_item(Key={'p': p},
         UpdateExpression='ADD a :val1',
         ExpressionAttributeValues={':val1': set(['coati', 'beaver', 'badger'])})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == set(['beaver', 'badger', 'lynx', 'coati'])
+    # The resource API returns a Python set, which would hide a duplicate.
+    with client_no_transform(test_table_s.meta.client) as client:
+        raw = client.get_item(TableName=test_table_s.name, Key={'p': {'S': p}}, ConsistentRead=True)['Item']['a']['SS']
+    assert multiset(raw) == multiset(['beaver', 'badger', 'lynx', 'coati'])
 
     # The value to be added needs to be a set of the same type - it can't
     # be a single element or anything else. If the value has the wrong type,

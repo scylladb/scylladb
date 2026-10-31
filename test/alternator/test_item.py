@@ -7,7 +7,7 @@
 import pytest
 from botocore.exceptions import ClientError
 from decimal import Decimal
-from test.alternator.util import random_string, random_bytes
+from test.alternator.util import random_string, random_bytes, client_no_transform
 
 # Basic test for creating a new item with a random name, and reading it back
 # with strong consistency.
@@ -705,6 +705,82 @@ def test_put_item_empty_attribute(test_table_s):
     test_table_s.put_item(Item={'p': p, 'a': [], 'b': {}, 'c': '', 'd': bytearray('', 'utf-8')})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': [], 'b': {}, 'c': '', 'd': bytearray('', 'utf-8')}
 
+# DynamoDB rejects a set value that contains an element two times, in every
+# request that takes a value. Reproduces SCYLLADB-3888.
+@pytest.mark.parametrize('typ,vals', [('SS', ['c', 'c']), ('NS', ['1', '1']), ('BS', [b'c', b'c'])])
+def test_set_value_with_duplicates_rejected(test_table_s, typ, vals):
+    table = test_table_s.name
+    key = {'p': {'S': random_string()}}
+    v = {typ: vals}
+    match = 'ValidationException.*contains duplicates'
+    with client_no_transform(test_table_s.meta.client) as client:
+        with pytest.raises(ClientError, match=match):
+            client.put_item(TableName=table, Item={**key, 'a': v})
+        with pytest.raises(ClientError, match=match):
+            client.batch_write_item(RequestItems={table: [{'PutRequest': {'Item': {**key, 'a': v}}}]})
+        for expr in ['ADD a :v', 'DELETE a :v', 'SET a = :v']:
+            with pytest.raises(ClientError, match=match):
+                client.update_item(TableName=table, Key=key, UpdateExpression=expr,
+                    ExpressionAttributeValues={':v': v})
+        for action in ['PUT', 'ADD', 'DELETE']:
+            with pytest.raises(ClientError, match=match):
+                client.update_item(TableName=table, Key=key,
+                    AttributeUpdates={'a': {'Value': v, 'Action': action}})
+        with pytest.raises(ClientError, match=match):
+            client.update_item(TableName=table, Key=key, UpdateExpression='SET b = :one',
+                ConditionExpression='a = :v', ExpressionAttributeValues={':one': {'N': '1'}, ':v': v})
+        assert 'Item' not in client.get_item(TableName=table, Key=key, ConsistentRead=True)
+
+# Test that empty strings are not accepted for keys
+def test_update_item_empty_key(test_table_s, test_table_b, test_table_ss, test_table_sb):
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_s.update_item(Key={'p': ''}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_b.update_item(Key={'p': bytearray('', 'utf-8')}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_ss.update_item(Key={'p': 'abc', 'c': ''}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_sb.update_item(Key={'p': 'abc', 'c': bytearray('', 'utf-8')}, AttributeUpdates={'v': {'Action': 'PUT', 'Value': 'abc'}})
+
+# Same as the above test (that we cannot create empty sets), but using PutItem
+def test_put_item_empty_attribute(test_table_s):
+    p = random_string()
+    # Empty sets are *not* allowed
+    with pytest.raises(ClientError, match='ValidationException.*empty'):
+        test_table_s.put_item(Item={'p': p, 'a': set([])})
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    # But empty lists, maps, strings and binary blobs *are* allowed:
+    test_table_s.put_item(Item={'p': p, 'a': [], 'b': {}, 'c': '', 'd': bytearray('', 'utf-8')})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': [], 'b': {}, 'c': '', 'd': bytearray('', 'utf-8')}
+
+# DynamoDB rejects a set value that contains an element two times, in every
+# request that takes a value. Reproduces SCYLLADB-3888.
+@pytest.mark.parametrize('typ,vals', [('SS', ['c', 'c']), ('NS', ['1', '1']), ('BS', [b'c', b'c'])])
+def test_set_value_with_duplicates_rejected(test_table_s, typ, vals):
+    with client_no_transform(test_table_s.meta.client) as client:
+        check_set_value_with_duplicates_rejected(client, test_table_s.name, typ, vals)
+
+def check_set_value_with_duplicates_rejected(client, table, typ, vals):
+    key = {'p': {'S': random_string()}}
+    v = {typ: vals}
+    match = 'ValidationException.*contains duplicates'
+    with pytest.raises(ClientError, match=match):
+        client.put_item(TableName=table, Item={**key, 'a': v})
+    with pytest.raises(ClientError, match=match):
+        client.batch_write_item(RequestItems={table: [{'PutRequest': {'Item': {**key, 'a': v}}}]})
+    for expr in ['ADD a :v', 'DELETE a :v', 'SET a = :v']:
+        with pytest.raises(ClientError, match=match):
+            client.update_item(TableName=table, Key=key, UpdateExpression=expr,
+                ExpressionAttributeValues={':v': v})
+    for action in ['PUT', 'ADD', 'DELETE']:
+        with pytest.raises(ClientError, match=match):
+            client.update_item(TableName=table, Key=key,
+                AttributeUpdates={'a': {'Value': v, 'Action': action}})
+    with pytest.raises(ClientError, match=match):
+        client.update_item(TableName=table, Key=key, UpdateExpression='SET b = :one',
+            ConditionExpression='a = :v', ExpressionAttributeValues={':one': {'N': '1'}, ':v': v})
+    assert 'Item' not in client.get_item(TableName=table, Key=key, ConsistentRead=True)
+
 # Test that empty strings are not accepted for keys
 def test_put_item_empty_key(test_table_s, test_table_b, test_table_ss, test_table_sb):
     with pytest.raises(ClientError, match='ValidationException.*empty'):
@@ -762,6 +838,38 @@ def test_null_in_string(test_table_s):
     assert 0 in val.encode('utf-8')
     test_table_s.put_item(Item={'p': p, 'val': val})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'val': val}
+
+# Set operations compare elements by all their bytes, so two strings that
+# differ only after a null character are two different elements.
+def test_null_in_string_set_add(test_table_s):
+    p = random_string()
+    ab, ac = 'a\x00b', 'a\x00c'
+    test_table_s.put_item(Item={'p': p, 'a': {ab}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='ADD a :v',
+        ExpressionAttributeValues={':v': {ac}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == {ab, ac}
+
+def test_null_in_string_set_delete(test_table_s):
+    p = random_string()
+    ab, ac = 'a\x00b', 'a\x00c'
+    test_table_s.put_item(Item={'p': p, 'a': {ab, ac, 'z'}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='DELETE a :v',
+        ExpressionAttributeValues={':v': {'z'}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == {ab, ac}
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='DELETE a :v',
+        ExpressionAttributeValues={':v': {ac}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == {ab}
+
+def test_null_in_string_set_condition_eq(test_table_s):
+    p = random_string()
+    ab, ac = 'a\x00b', 'a\x00c'
+    test_table_s.put_item(Item={'p': p, 'a': {ab}})
+    with pytest.raises(ClientError, match='ConditionalCheckFailedException'):
+        test_table_s.update_item(Key={'p': p}, UpdateExpression='SET b = :one',
+            ConditionExpression='a = :v', ExpressionAttributeValues={':one': 1, ':v': {ac}})
+    test_table_s.update_item(Key={'p': p}, UpdateExpression='SET b = :one',
+        ConditionExpression='a = :v', ExpressionAttributeValues={':one': 1, ':v': {ab}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['b'] == 1
 
 def test_null_in_bytes(test_table_b):
     p = random_bytes() + bytes([0]) + random_bytes()

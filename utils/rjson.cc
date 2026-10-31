@@ -501,13 +501,8 @@ bool single_value_comp::operator()(const rjson::value& r1, const rjson::value& r
        throw rjson::error("Object type comparison is not supported");
    case rjson::type::kArrayType:
        throw rjson::error("Array type comparison is not supported");
-   case rjson::type::kStringType: {
-       const size_t r1_len = r1.GetStringLength();
-       const size_t r2_len = r2.GetStringLength();
-       size_t len = std::min(r1_len, r2_len);
-       int result = std::strncmp(r1.GetString(), r2.GetString(), len);
-       return result < 0 || (result == 0 && r1_len < r2_len);
-   }
+   case rjson::type::kStringType:
+       return rjson::to_string_view(r1) < rjson::to_string_view(r2);
    case rjson::type::kNumberType: {
        if (r1.IsInt() && r2.IsInt()) {
            return r1.GetInt() < r2.GetInt();
