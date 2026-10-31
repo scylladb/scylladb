@@ -15,6 +15,7 @@
 #include "utils/scoped_item_list.hh"
 
 #include <cstdint>
+#include <unordered_map>
 
 #include <seastar/core/file-types.hh>
 #include <seastar/core/future.hh>
@@ -23,6 +24,7 @@
 #include <seastar/net/api.hh>
 #include <seastar/net/tls.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/scheduling.hh>
 
 namespace generic_server {
@@ -64,6 +66,14 @@ protected:
     bool _ssl_enabled = false;
     std::optional<sstring> _ssl_cipher_suite = std::nullopt;
     std::optional<sstring> _ssl_protocol = std::nullopt;
+
+    // The address this connection was accepted on, which identifies the listener it
+    // belongs to, and a hold on that listener's gate. Both are set by the server right
+    // after it built the connection. Removing a listener selects its connections by the
+    // address and then waits for them by closing the gate, so that a listener is gone
+    // only once the requests it accepted have been answered.
+    socket_address _server_addr;
+    seastar::gate::holder _hold_listener;
 
 private:
     future<> process_until_tenant_switch();
@@ -117,10 +127,51 @@ protected:
     uint64_t _total_connections = 0;
     uint64_t _shed_connections = 0;
     uint64_t _blocked_connections = 0;
-    future<> _listeners_stopped = make_ready_future<>();
     utils::scoped_item_list<std::reference_wrapper<connection>> _connections_list;
-    std::vector<server_socket> _listeners;
-    shared_ptr<seastar::tls::server_credentials> _credentials;
+    // The listening sockets, by the name the caller knows each of them by, so that one
+    // can be taken away without disturbing the others. Each holds the accept loop that
+    // serves it, and a gate the connections it accepted hold, which is what draining
+    // those connections waits on.
+    //
+    // std::unordered_map, because the accept loop holds a reference to its own entry
+    // across every suspension point, and only an unordered_map promises that inserting
+    // another listener leaves that reference valid.
+    struct listener_entry {
+        server_socket socket;
+        socket_address addr;
+        future<> accept_loop = make_ready_future<>();
+        seastar::named_gate connections_gate;
+        // Set by unlisten() before it aborts the socket. The accept loop runs until the
+        // server's gate closes, which is how shutdown() stops it, but taking one listener
+        // away leaves that gate open, so the loop needs a reason of its own to stop.
+        bool stopping = false;
+
+        listener_entry(server_socket socket_, socket_address addr_, const sstring& name)
+            : socket(std::move(socket_)), addr(addr_)
+            , connections_gate(format("listener {}", name)) {}
+    };
+    std::unordered_map<sstring, listener_entry> _listeners;
+    // Server credentials, one per credentials_builder listen() was given.
+    // Listeners sharing a builder share the credentials built out of it.
+    //
+    // The entry is inserted before the credentials are built, and holds a
+    // promise rather than the credentials themselves, because building them
+    // suspends: listeners sharing a builder are started concurrently, so a
+    // listener that finds an entry has to wait for whoever inserted it to
+    // finish building, instead of building a second set of credentials. That
+    // second set would not be the one the certificate reload callback rebuilds,
+    // so its certificate would silently stop reloading.
+    //
+    // The key is the builder's address, so that the reload callback can look
+    // the entry up on the other shards without copying a shared_ptr across
+    // shards. The entry holds the builder as well, since nothing else keeps it
+    // alive once listen() returned - without that the keys would dangle, and a
+    // later builder allocated at the same address would alias this one.
+    struct credentials_entry {
+        std::shared_ptr<seastar::tls::credentials_builder> builder;
+        shared_promise<shared_ptr<seastar::tls::server_credentials>> credentials;
+    };
+    std::unordered_map<const seastar::tls::credentials_builder*, credentials_entry> _credentials;
     seastar::abort_source _abort_source;
 private:
     utils::updateable_value<uint32_t> _conns_cpu_concurrency;
@@ -142,7 +193,9 @@ public:
     future<> shutdown();
     future<> stop();
 
-    future<> listen(socket_address addr,
+    // Start serving `addr` under `name`. The name is how unlisten() refers back to this
+    // listener, and must not name one that is already being served.
+    future<> listen(const sstring& name, socket_address addr,
         std::shared_ptr<seastar::tls::credentials_builder> creds,
         bool is_shard_aware, bool keepalive,
         std::optional<file_permissions> unix_domain_socket_permissions,
@@ -150,13 +203,30 @@ public:
         std::function<server&()> get_shard_instance = {}
         );
 
-    future<> do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls);
+    // Stop serving the listener called `name`, and drain the connections it accepted:
+    // they are told to stop reading, so no new request arrives on them, and then waited
+    // for, so the requests already in flight are answered rather than cut off. Returns
+    // once the socket is closed and those connections are gone. A name that is not being
+    // served is not an error, so that applying a set of listeners need not first work out
+    // which of them are already absent.
+    future<> unlisten(const sstring& name);
+
+    // The address the listener called `name` is being served on, or nullopt when no
+    // listener goes by that name.
+    std::optional<socket_address> listener_address(const sstring& name) const;
+
+    future<> do_accepts(listener_entry& listener, bool keepalive, bool is_tls);
 
 protected:
     virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) = 0;
     virtual scheduling_group get_scheduling_group_for_new_connection() const = 0;
 
     future<> for_each_gently(noncopyable_function<void(connection&)>);
+
+private:
+    // Shut down the read side of every connection accepted on `addr`, then wait for them
+    // to finish what they were doing. Bounded by the server's shutdown timeout.
+    future<> drain_connections_of(socket_address addr, seastar::named_gate& connections_gate);
 };
 
 }

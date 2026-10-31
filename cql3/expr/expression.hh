@@ -442,6 +442,13 @@ std::map<sstring, sstring> convert_property_map(const collection_constructor&, e
 std::map<sstring, std::variant<sstring, std::vector<sstring>>>
 convert_extended_property_map(const collection_constructor&, error_sink_fn);
 
+// The text of a structured cluster config value written as a CQL literal: a map, a set or
+// list, the {name: value} form whose names need no quotes, or a constant, nested as deep as
+// they like. The text is flow-style YAML, which is also JSON, and is what the option's codec
+// reads. Anything that is not a literal - a bind variable, a function call - is reported
+// through the error sink.
+sstring structured_literal_to_text(const expression&, error_sink_fn);
+
 // Constructs an object of a user-defined type
 // For example: "{field1: 23343, field2: ?}"
 // During preparation usertype constructors with constant values are converted to expr::constant.

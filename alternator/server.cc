@@ -1092,9 +1092,8 @@ static std::optional<sstring> sanitize_header_value(const sstring& v, std::strin
     return trimmed.empty() ? std::nullopt : std::optional<sstring>(trimmed);
 }
 
-future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port,
-        std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
-        std::optional<tls::credentials_builder> creds,
+future<> server::init(std::vector<listener> listeners, std::vector<tls::credentials_builder> credentials,
+        std::vector<std::unordered_map<sstring, sstring>> credentials_options,
         utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
         semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
     _memory_limiter = memory_limiter;
@@ -1102,11 +1101,12 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
     _warn_authorization = std::move(warn_authorization);
     _max_concurrent_requests = std::move(max_concurrent_requests);
     _max_users_query_size_in_trace_output = std::move(max_users_query_size_in_trace_output);
-    if (!port && !https_port && !port_proxy_protocol && !https_port_proxy_protocol) {
-        return make_exception_future<>(std::runtime_error("Either regular port or TLS port"
+    if (listeners.empty()) {
+        return make_exception_future<>(std::runtime_error("At least one listener"
                 " must be specified in order to init an alternator HTTP server instance"));
     }
-    return seastar::async([this, addr, port, https_port, port_proxy_protocol, https_port_proxy_protocol, creds] {
+    return seastar::async([this, listeners = std::move(listeners), credentials = std::move(credentials),
+            credentials_options = std::move(credentials_options)] () mutable {
         _executor.start().get();
 
         // Bound the request line and headers which Seastar's HTTP server
@@ -1132,85 +1132,166 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
         _server_header_observer = cfg.alternator_http_response_server_header.observe(std::move(apply_server_header));
         _date_header_observer = cfg.alternator_http_response_disable_date_header.observe(std::move(apply_date_header));
 
-        if (port || port_proxy_protocol) {
+        auto has_listener = [&listeners] (bool encrypted) {
+            return std::ranges::any_of(listeners, [encrypted] (const listener& l) {
+                return l.credentials_idx.has_value() == encrypted;
+            });
+        };
+
+        if (has_listener(false)) {
             set_routes(_http_server._routes);
             _http_server.set_content_streaming(true);
-            if (port) {
-                _http_server.listen(socket_address{addr, *port}).get();
-            }
-            if (port_proxy_protocol) {
-                listen_options lo;
-                lo.reuse_address = true;
-                lo.proxy_protocol = true;
-                _http_server.listen(socket_address{addr, *port_proxy_protocol}, lo).get();
-            }
             _enabled_servers.push_back(std::ref(_http_server));
         }
-        if (https_port || https_port_proxy_protocol) {
+        if (has_listener(true)) {
             set_routes(_https_server._routes);
             _https_server.set_content_streaming(true);
-            auto https_accept_sg = _sl_controller.get_driver_scheduling_group().value_or(default_scheduling_group());
             // Run the HTTPS accept loop in sl:driver. This covers connection setup,
             // including TLS handshakes, but not HTTP request processing.
             // Request processing starts in the default scheduling group; Alternator
             // applies the authenticated user's service level after signature verification.
             _https_server.set_request_scheduling_group(default_scheduling_group());
 
-            if (this_shard_id() == 0) {
-                _credentials = creds->build_reloadable_server_credentials([this](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
-                    // A reload can fire while the server is being shut down, and
-                    // there is nothing left to reload into then. Holding the gate
-                    // keeps this server and its peers on the other shards alive
-                    // for the duration of the reload - sharded<> destroys the
-                    // instances only once stop() completed on all of them, and
-                    // stop() waits for the gate.
-                    if (_pending_requests.is_closed()) {
-                        co_return;
-                    }
-                    seastar::gate::holder holder(_pending_requests);
-                    if (ep) {
-                        slogger.warn("Exception loading {}: {}", files, ep);
-                    } else {
-                        co_await container().invoke_on_others([&b](server& s) {
-                            if (s._credentials) {
-                                b.rebuild(*s._credentials);
-                            }
-                        });
-                        slogger.info("Reloaded {}", files);
-                    }
-                }).get();
-            } else {
-                _credentials = creds->build_server_credentials();
+            _credentials.resize(credentials.size());
+            _credentials_options = std::move(credentials_options);
+            for (size_t i = 0; i != credentials.size(); ++i) {
+                if (this_shard_id() == 0) {
+                    _credentials[i] = credentials[i].build_reloadable_server_credentials([this, i](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
+                        // A reload can fire while the server is being shut down, and
+                        // there is nothing left to reload into then. Holding the gate
+                        // keeps this server and its peers on the other shards alive
+                        // for the duration of the reload - sharded<> destroys the
+                        // instances only once stop() completed on all of them, and
+                        // stop() waits for the gate.
+                        if (_pending_requests.is_closed()) {
+                            co_return;
+                        }
+                        seastar::gate::holder holder(_pending_requests);
+                        if (ep) {
+                            slogger.warn("Exception loading {}: {}", files, ep);
+                        } else {
+                            co_await container().invoke_on_others([&b, i](server& s) {
+                                if (i < s._credentials.size() && s._credentials[i]) {
+                                    b.rebuild(*s._credentials[i]);
+                                }
+                            });
+                            slogger.info("Reloaded {}", files);
+                        }
+                    }).get();
+                } else {
+                    _credentials[i] = credentials[i].build_server_credentials();
+                }
             }
-            // listen() may return a future that is not resolved yet, so wait for
-            // it in a seastar thread. The thread runs in https_accept_sg, so the
-            // accept loop that listen() starts runs there too.
-            seastar::thread_attributes attr;
-            attr.sched_group = https_accept_sg;
-            seastar::async(std::move(attr), [this, addr, https_port, https_port_proxy_protocol] {
-                if (https_port) {
-                    _https_server.listen(socket_address{addr, *https_port}, _credentials).get();
-                }
-                if (https_port_proxy_protocol) {
-                    listen_options lo;
-                    lo.reuse_address = true;
-                    lo.proxy_protocol = true;
-                    _https_server.listen(socket_address{addr, *https_port_proxy_protocol}, lo, _credentials).get();
-                }
-            }).get();
             _enabled_servers.push_back(std::ref(_https_server));
+        }
+
+        for (auto& l : listeners) {
+            serve(l).get();
         }
     });
 }
 
-future<> server::stop() {
-    return parallel_for_each(_enabled_servers, [] (http_server& server) {
-        return server.stop();
-    }).then([this] {
-        return _pending_requests.close();
-    }).then([this] {
-        return _json_parser.stop();
+future<> server::serve(const listener& l) {
+    listen_options lo;
+    lo.reuse_address = true;
+    lo.proxy_protocol = l.proxy_protocol;
+
+    // The abort_source is what ends this listener, so it has to outlive the call and
+    // keep its address: the future below holds a reference to it.
+    auto stop = std::make_unique<abort_source>();
+    future<> served = make_ready_future<>();
+    if (l.credentials_idx) {
+        // Bound before serving, so that a failure to bind reaches the caller here rather
+        // than in the future of the listener's whole life.
+        auto bound = co_await _https_server.bind(l.addr, lo, _credentials[*l.credentials_idx]);
+        // The HTTPS accept loop runs in sl:driver, which covers the TLS handshake.
+        auto https_accept_sg = _sl_controller.get_driver_scheduling_group().value_or(default_scheduling_group());
+        co_await with_scheduling_group(https_accept_sg, [&] {
+            // Assigned rather than returned: what serve() hands back is this listener's
+            // whole life, which with_scheduling_group() would otherwise wait out.
+            served = bound.serve(*stop);
+            return make_ready_future<>();
+        });
+    } else {
+        auto bound = co_await _http_server.bind(l.addr, lo);
+        served = bound.serve(*stop);
+    }
+    _listeners.emplace(l.addr, serving_listener{l, std::move(stop), std::move(served)});
+}
+
+future<> server::stop_serving(serving_listener& listener) {
+    listener.stop->request_abort();
+    co_await std::move(listener.served);
+}
+
+future<> server::apply_listeners(std::vector<listener> listeners,
+        std::vector<tls::credentials_builder> credentials,
+        std::vector<std::unordered_map<sstring, sstring>> credentials_options) {
+    // Translate the caller's credentials indexes into this server's. A set of options it
+    // is already serving with keeps the credentials it has, so a listener that did not
+    // change is not disturbed and the file-reload watch set up for those credentials
+    // stays the one in use; anything new is appended, never reindexed.
+    std::unordered_map<size_t, size_t> translated;
+    for (size_t i = 0; i != credentials_options.size(); ++i) {
+        auto existing = std::ranges::find(_credentials_options, credentials_options[i]);
+        if (existing != _credentials_options.end()) {
+            translated[i] = existing - _credentials_options.begin();
+            continue;
+        }
+        _credentials.push_back(credentials[i].build_server_credentials());
+        _credentials_options.push_back(credentials_options[i]);
+        translated[i] = _credentials.size() - 1;
+    }
+
+    std::unordered_map<socket_address, listener> wanted;
+    for (auto& l : listeners) {
+        if (l.credentials_idx) {
+            l.credentials_idx = translated.at(*l.credentials_idx);
+        }
+        wanted.emplace(l.addr, l);
+    }
+
+    auto same = [] (const listener& a, const listener& b) {
+        return a.proxy_protocol == b.proxy_protocol && a.credentials_idx == b.credentials_idx;
+    };
+
+    // Stop the listeners that are gone or have changed. Stopping one drains it, which is
+    // why the ones that did not change are left alone: their clients should not pay for a
+    // change to a different listener.
+    for (auto& [addr, l] : _listeners) {
+        auto it = wanted.find(addr);
+        if (it != wanted.end() && same(it->second, l.config)) {
+            continue;
+        }
+        co_await stop_serving(l);
+    }
+
+    // Whatever was stopped above is gone from _listeners; what is left is what stays.
+    std::erase_if(_listeners, [&] (const auto& e) {
+        auto it = wanted.find(e.first);
+        return it == wanted.end() || !same(it->second, e.second.config);
     });
+
+    for (const auto& [addr, l] : wanted) {
+        if (_listeners.contains(addr)) {
+            continue;
+        }
+        co_await serve(l);
+    }
+}
+
+future<> server::stop() {
+    co_await parallel_for_each(_enabled_servers, [] (http_server& server) {
+        return server.stop();
+    });
+    // Stopping the servers ends every listener they hold, so these are resolved by now;
+    // take them rather than leave a future unwaited.
+    for (auto& [addr, listener] : _listeners) {
+        co_await std::move(listener.served);
+    }
+    _listeners.clear();
+    co_await _pending_requests.close();
+    co_await _json_parser.stop();
 }
 
 server::json_parser::json_parser() : _run_parse_json_thread(async([this] {

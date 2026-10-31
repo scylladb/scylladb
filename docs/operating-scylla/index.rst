@@ -6,6 +6,7 @@ ScyllaDB for Administrators
    :hidden:
    
    admin
+   listeners
    Procedures <procedures/index>
    security/index
    admin-tools/index
@@ -25,6 +26,7 @@ ScyllaDB for Administrators
   * :doc:`ScyllaDB Administrator Guide </operating-scylla/admin/>` - Guide for ScyllaDB Administration
   * :doc:`Upgrade ScyllaDB </upgrade/index>` - Upgrade Procedures for all ScyllaDB Products and Versions
   * :doc:`System Configuration </operating-scylla/system-configuration/index>` - Information on the ScyllaDB configuration files
+  * :doc:`Protocol Listeners </operating-scylla/listeners/>` - Configuring the client-facing sockets a node listens on
   * :doc:`Procedures </operating-scylla/procedures/index>` - Procedures to create, out-scale, down-scale, and backup ScyllaDB clusters
   * :doc:`ScyllaDB Security </operating-scylla/security/index>` - Procedures to secure, authenticate, and encrypt ScyllaDB users and data
   
