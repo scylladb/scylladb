@@ -24,6 +24,7 @@
 #include "schema/schema_builder.hh"
 #include "types/map.hh"
 #include "service/storage_proxy.hh"
+#include "cql3/query_options.hh"
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
@@ -34,9 +35,12 @@
 #include "keys/keys.hh"
 #include "dht/i_partitioner.hh"
 #include "replica/database.hh"
+#include "tracing/tracing.hh"
+#include "tracing/trace_state.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/loop.hh>
+#include <cmath>
 #include <ranges>
 
 static const sstring table_name = "cf";
@@ -97,9 +101,37 @@ struct cache_result_mixin {
     double cache_misses = 0;
 };
 
-// What every measurement iteration reports, on top of the throughput and the CPU counters: the IO
-// and the cache lookups one operation cost.
-struct query_perf_result : public perf_result, public io_result_mixin, public cache_result_mixin {};
+// The tracing sessions this shard opened. The tracing service counts the sessions it refused, but
+// not the ones it opened.
+static thread_local uint64_t opened_trace_sessions = 0;
+
+// How many tracing sessions the tracing service opened, how many it refused for want of room, and
+// how many trace records it took, summed over all the shards. The service refuses a session rather
+// than let records pile up, so these say how many of the operations of a traced run were really
+// traced, and how much they recorded.
+struct tracing_counters {
+    uint64_t sessions = 0;
+    uint64_t dropped_sessions = 0;
+    uint64_t records = 0;
+
+    static tracing_counters sample() {
+        return tracing::tracing::tracing_instance().map_reduce0([] (const tracing::tracing& t) {
+            return tracing_counters{.sessions = opened_trace_sessions, .dropped_sessions = t.stats.dropped_sessions, .records = t.stats.trace_records_count};
+        }, tracing_counters{}, [] (tracing_counters a, tracing_counters b) {
+            return tracing_counters{.sessions = a.sessions + b.sessions, .dropped_sessions = a.dropped_sessions + b.dropped_sessions, .records = a.records + b.records};
+        }).get();
+    }
+};
+
+struct tracing_result_mixin {
+    double traces = 0;
+    double dropped_traces = 0;
+    double trace_records = 0;
+};
+
+// What every measurement iteration reports, on top of the throughput and the CPU counters: the IO,
+// the cache lookups and the tracing one operation cost.
+struct query_perf_result : public perf_result, public io_result_mixin, public cache_result_mixin, public tracing_result_mixin {};
 
 // The update function of the measurement loop. Like io_counters_updater, it holds the sample the
 // previous iteration ended with, and is constructed right before the run it measures.
@@ -107,10 +139,12 @@ class query_stats_updater {
     sharded<replica::database>& _db;
     io_counters_updater _io;
     cache_counters _last_cache;
+    tracing_counters _last_tracing;
 public:
     explicit query_stats_updater(sharded<replica::database>& db)
         : _db(db)
-        , _last_cache(cache_counters::sample(db)) {
+        , _last_cache(cache_counters::sample(db))
+        , _last_tracing(tracing_counters::sample()) {
     }
 
     void operator()(query_perf_result& result, const executor_shard_stats& stats) {
@@ -119,15 +153,21 @@ public:
         result.cache_hits = double(sample.hits - _last_cache.hits) / stats.invocations;
         result.cache_misses = double(sample.misses - _last_cache.misses) / stats.invocations;
         _last_cache = sample;
+        auto tracing_sample = tracing_counters::sample();
+        result.traces = double(tracing_sample.sessions - _last_tracing.sessions) / stats.invocations;
+        result.dropped_traces = double(tracing_sample.dropped_sessions - _last_tracing.dropped_sessions) / stats.invocations;
+        result.trace_records = double(tracing_sample.records - _last_tracing.records) / stats.invocations;
+        _last_tracing = tracing_sample;
     }
 };
 
 template <> struct fmt::formatter<query_perf_result> : fmt::formatter<string_view> {
     auto format(const query_perf_result& r, fmt::format_context& ctx) const -> decltype(ctx.out()) {
         return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:5.1f} polls/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors,"
-                " {:5.2f} reads/op, {:8.0f} read bytes/op, {:5.2f} writes/op, {:8.0f} write bytes/op, {:5.2f} cache hits/op, {:5.2f} cache misses/op)",
+                " {:5.2f} reads/op, {:8.0f} read bytes/op, {:5.2f} writes/op, {:8.0f} write bytes/op, {:5.2f} cache hits/op, {:5.2f} cache misses/op,"
+                " {:7.4f} traces/op, {:7.4f} dropped traces/op, {:6.2f} trace records/op)",
                 r.throughput, r.mallocs_per_op, r.logallocs_per_op, r.tasks_per_op, r.polls_per_op, r.instructions_per_op, r.cpu_cycles_per_op, r.errors,
-                r.reads, r.read_bytes, r.writes, r.write_bytes, r.cache_hits, r.cache_misses);
+                r.reads, r.read_bytes, r.writes, r.write_bytes, r.cache_hits, r.cache_misses, r.traces, r.dropped_traces, r.trace_records);
     }
 };
 
@@ -156,6 +196,9 @@ struct test_config {
     // own. A logstor run leaves it on, since compaction is what gives free segments back and
     // without it a write test stalls once the segment pool is full of dead records.
     bool auto_compaction;
+    // The fraction of the operations that are traced, the way the trace probability of a node picks
+    // the requests it traces: 0 traces nothing, 1 traces every operation.
+    double trace_probability;
 };
 
 // Partition sequence numbers grouped by the shard that services reads for them,
@@ -184,6 +227,7 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
            << ", shard_aware=" << (cfg.shard_aware ? "yes" : "no")
            << ", logstor=" << (cfg.logstor ? "yes" : "no")
            << ", auto_compaction=" << (cfg.auto_compaction ? "yes" : "no")
+           << ", trace_probability=" << cfg.trace_probability
            << "}";
 }
 
@@ -323,6 +367,45 @@ static void warm_logstor_cache(cql_test_env& env, const test_config& cfg, cql3::
     max_concurrent_for_each(sequences.begin(), sequences.end(), populate_concurrency, std::move(read)).get();
 }
 
+// Opens the tracing session of one operation the way the CQL server does for an EXECUTE request that
+// the trace probability picked: a full tracing session, whose records the tracing service writes out
+// in batches rather than when the session closes, with the parameters the server records. Returns a
+// null session when the tracing service refused one for want of room; the operation then runs
+// untraced and the refusal counts as a dropped trace.
+static tracing::trace_state_ptr make_trace_state(cql_test_env& env, const test_config& cfg, cql3::prepared_cache_key_type id, const sstring& query) {
+    tracing::trace_state_props_set props;
+    props.set(tracing::trace_state_props::full_tracing);
+    auto trace_state = tracing::tracing::get_local_tracing_instance().create_session(tracing::trace_type::QUERY, props);
+    if (!trace_state) {
+        return trace_state;
+    }
+    ++opened_trace_sessions;
+    const auto& client_state = env.local_client_state();
+    const auto& so = cql3::query_options::specific_options::DEFAULT;
+    tracing::set_username(trace_state, client_state.user());
+    tracing::set_page_size(trace_state, so.page_size);
+    tracing::add_query(trace_state, query);
+    tracing::set_common_query_parameters(trace_state, cfg.consistency_level, db::consistency_level::SERIAL, so.timestamp);
+    tracing::begin(trace_state, seastar::format("Execute CQL3 prepared query [{}]", id), client_state.get_client_address());
+    return trace_state;
+}
+
+// One operation of the measurement: the prepared statement, executed on the next key of this shard,
+// traced when the trace probability picks it. Idles for one measurement window instead when this
+// shard owns no partitions in shard-aware mode, rather than issue a cross-shard query.
+static future<> run_operation(cql_test_env& env, test_config& cfg, const std::vector<uint64_t>& shard_seqs, cql3::prepared_cache_key_type id, const sstring& query) {
+    auto key = next_key(cfg, shard_seqs);
+    if (!key) {
+        return seastar::sleep(std::chrono::seconds(1));
+    }
+    cql3::raw_value_vector_with_unset values({cql3::raw_value::make_value(std::move(*key))});
+    if (!tracing::tracing::get_local_tracing_instance().trace_next_query()) {
+        return env.execute_prepared(id, std::move(values), cfg.consistency_level).discard_result();
+    }
+    auto trace_state = make_trace_state(env, cfg, id, query);
+    return env.execute_prepared(id, std::move(values), cfg.consistency_level, std::move(trace_state)).discard_result();
+}
+
 static std::vector<query_perf_result> test_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     create_partitions(env, cfg);
     sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"";
@@ -340,54 +423,33 @@ static std::vector<query_perf_result> test_read(cql_test_env& env, test_config& 
     if (cfg.logstor && !cfg.bypass_cache) {
         warm_logstor_cache(env, cfg, id);
     }
-    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
-            auto key = next_key(cfg, shard_seqs.local());
-            if (!key) {
-                // This shard owns no partitions in shard-aware mode; idle for
-                // one measurement window instead of issuing a cross-shard query.
-                return seastar::sleep(std::chrono::seconds(1));
-            }
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id, query] {
+            return run_operation(env, cfg, shard_seqs.local(), id, query);
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
 static std::vector<query_perf_result> test_write(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
-    auto id = env.prepare(make_write_query(cfg, make_timeout_using(cfg))).get();
-    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
-            auto key = next_key(cfg, shard_seqs.local());
-            if (!key) {
-                // This shard owns no partitions in shard-aware mode; idle for
-                // one measurement window instead of issuing a cross-shard query.
-                return seastar::sleep(std::chrono::seconds(1));
-            }
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
+    auto query = make_write_query(cfg, make_timeout_using(cfg));
+    auto id = env.prepare(query).get();
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id, query] {
+            return run_operation(env, cfg, shard_seqs.local(), id, query);
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
 static std::vector<query_perf_result> test_delete(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     create_partitions(env, cfg);
-    auto id = env.prepare(make_delete_query(cfg, make_timeout_using(cfg))).get();
-    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
-            auto key = next_key(cfg, shard_seqs.local());
-            if (!key) {
-                // This shard owns no partitions in shard-aware mode; idle for
-                // one measurement window instead of issuing a cross-shard query.
-                return seastar::sleep(std::chrono::seconds(1));
-            }
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
+    auto query = make_delete_query(cfg, make_timeout_using(cfg));
+    auto id = env.prepare(query).get();
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id, query] {
+            return run_operation(env, cfg, shard_seqs.local(), id, query);
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
 static std::vector<query_perf_result> test_counter_update(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
-    auto id = env.prepare(make_counter_update_query(make_timeout_using(cfg))).get();
-    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
-            auto key = next_key(cfg, shard_seqs.local());
-            if (!key) {
-                // This shard owns no partitions in shard-aware mode; idle for
-                // one measurement window instead of issuing a cross-shard query.
-                return seastar::sleep(std::chrono::seconds(1));
-            }
-            return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
+    auto query = make_counter_update_query(make_timeout_using(cfg));
+    auto id = env.prepare(query).get();
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id, query] {
+            return run_operation(env, cfg, shard_seqs.local(), id, query);
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
@@ -474,6 +536,9 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     }
     params["logstor"] = cfg.logstor;
     params["auto_compaction"] = cfg.auto_compaction;
+    if (cfg.trace_probability > 0) {
+        params["trace_probability"] = cfg.trace_probability;
+    }
 
     std::string test_type;
     switch (cfg.mode) {
@@ -487,6 +552,9 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     if (cfg.logstor) {
         test_type += "_logstor";
     }
+    if (cfg.trace_probability > 0) {
+        test_type += "_traced";
+    }
 
     Json::Value extra_stats;
     extra_stats["reads_per_op"] = median.reads;
@@ -495,6 +563,9 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     extra_stats["write_bytes_per_op"] = median.write_bytes;
     extra_stats["cache_hits_per_op"] = median.cache_hits;
     extra_stats["cache_misses_per_op"] = median.cache_misses;
+    extra_stats["traces_per_op"] = median.traces;
+    extra_stats["dropped_traces_per_op"] = median.dropped_traces;
+    extra_stats["trace_records_per_op"] = median.trace_records;
 
     perf::write_json_result(result_file, agg, params, test_type, extra_stats);
 }
@@ -545,6 +616,7 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("timeout", bpo::value<std::string>()->default_value(""), "use timeout")
         ("bypass-cache", "use bypass cache when querying")
         ("shard-aware", bpo::value<bool>()->default_value(true), "generate keys owned by the shard issuing the query (use --shard-aware 0 to disable)")
+        ("trace-probability", bpo::value<double>()->default_value(0), "trace this fraction of the operations, the way the trace probability of a node does (1 traces every operation)")
         ("audit", bpo::value<std::string>(), "value for audit config entry")
         ("audit-keyspaces", bpo::value<std::string>(), "value for audit_keyspaces config entry")
         ("audit-tables", bpo::value<std::string>(), "value for audit_tables config entry")
@@ -652,6 +724,22 @@ int scylla_simple_query_main(int argc, char** argv) {
                     ? app.configuration()["auto-compaction"].as<bool>()
                     : cfg.logstor;
             cfg.consistency_level = db::consistency_level_from_string(app.configuration()["consistency-level"].as<std::string>());
+            cfg.trace_probability = app.configuration()["trace-probability"].as<double>();
+            // The tracing service checks the range, but a NaN passes its comparisons
+            if (!std::isfinite(cfg.trace_probability)) {
+                throw std::invalid_argument(fmt::format("--trace-probability must be a number in the [0,1] range, got {}", cfg.trace_probability));
+            }
+            // A node runs the tracing service whether or not it traces anything, so the test runs
+            // it too, with the trace probability of the run.
+            sharded<tracing::tracing>& tracing_service = tracing::tracing::tracing_instance();
+            tracing_service.start(sstring("trace_keyspace_helper")).get();
+            auto tracing_stop = defer([&tracing_service] noexcept {
+                tracing_service.stop().get();
+            });
+            tracing_service.invoke_on_all(&tracing::tracing::start, std::ref(env.qp()), std::ref(env.migration_manager())).get();
+            tracing_service.invoke_on_all([trace_probability = cfg.trace_probability] (tracing::tracing& t) {
+                t.set_trace_probability(trace_probability);
+            }).get();
             audit::audit::start_audit(env.local_db().get_config(), env.shared_token_metadata(), env.qp(), env.migration_manager()).handle_exception([&] (auto&& e) {
                 fmt::print("audit start failed: {}", e);
             }).get();
