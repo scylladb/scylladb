@@ -873,17 +873,24 @@ SEASTAR_THREAD_TEST_CASE(token) {
         require_rows(e, stmt, {}, {I(11)}, {{I(1)}});
         require_rows(e, stmt, {}, {I(10)}, {});
 
+        // Token restrictions can be combined with restrictions on the partition
+        // key columns. If not all of these columns are restricted by EQ or IN,
+        // their restrictions need filtering.
         const auto q = [&] (const char* stmt) { return e.execute_cql(stmt).get(); };
         using ire = exceptions::invalid_request_exception;
         using exception_predicate::message_contains;
-        const char* expect = "cannot be restricted by both a normal relation and a token relation";
+        const char* expect = "ALLOW FILTERING";
 
         BOOST_REQUIRE_EXCEPTION(q("select p from t where p = 0 and token(p, q) <= token(1,11)"), ire, message_contains(expect));
         BOOST_REQUIRE_EXCEPTION(q("select p from t where token(p, q) <= token(1,11) and p = 0"), ire, message_contains(expect));
         BOOST_REQUIRE_EXCEPTION(q("select p from t where p in (0,1) and token(p, q) <= token(1,11)"), ire, message_contains(expect));
         BOOST_REQUIRE_EXCEPTION(q("select p from t where token(p, q) <= token(1,11) and p in (0,1)"), ire, message_contains(expect));
-        BOOST_REQUIRE_EXCEPTION(q("select p from t where p = 0 and q = 0 and token(p, q) <= token(1,11)"), ire, message_contains(expect));
-        BOOST_REQUIRE_EXCEPTION(q("select p from t where token(p, q) <= token(1,11) and p = 0 and q = 0"), ire, message_contains(expect));
+        // With filtering, the result also has the filtered column q.
+        require_rows(e, "select p from t where p = 1 and token(p, q) <= token(1,11) allow filtering", {{I(1), I(11)}});
+        require_rows(e, "select p from t where p = 1 and q = 11 and token(p, q) <= token(1,11)", {{I(1)}});
+        require_rows(e, "select p from t where token(p, q) <= token(1,11) and p = 1 and q = 11", {{I(1)}});
+        require_rows(e, "select p from t where p = 1 and q = 11 and token(p, q) < token(1,11)", {});
+        require_rows(e, "select p from t where p in (1, 2) and q in (11, 12) and token(p, q) = token(2,12)", {{I(2)}});
     }).get();
 }
 
