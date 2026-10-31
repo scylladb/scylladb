@@ -26,7 +26,7 @@ async def wait_for_config(manager, server, config_name, value):
 async def test_non_liveupdatable_config(manager):
 
     server = await manager.server_add()
-    not_liveupdatable_param = "auto_bootstrap"
+    not_liveupdatable_param = "rpc_keepalive"
     liveupdatable_param = "compaction_enforce_min_threshold"
 
     logging.info("Verify initial (default) config values")
