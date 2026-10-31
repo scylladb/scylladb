@@ -13,6 +13,7 @@ import pytest
 from cassandra.protocol import ConfigurationException
 from cassandra.query import SimpleStatement
 from .util import new_test_table
+from . import rest_api
 
 # All tests in this file are Scylla-only (logstor is not available on Cassandra).
 @pytest.fixture(scope="module", autouse=True)
@@ -362,6 +363,12 @@ def test_logstor_mutation_fragments_source_restriction(cql, test_keyspace):
         large_value = 'x' * (50 * 1024)
         for i in range(8):
             cql.execute(f"INSERT INTO {table} (pk, v) VALUES ({i}, '{i}-{large_value}')")
+
+        # A write returns before the separator moves its record out of the
+        # shared active segment, and the record's source name changes when it
+        # moves. Flush the separator, so that no record moves between the dump
+        # and the restricted queries below.
+        rest_api.post_request(cql, 'storage_service/logstor_flush')
 
         # Group the partitions by the log source holding them.
         pks_by_source = {}
