@@ -456,6 +456,30 @@ def fulltext_table(cql, test_keyspace):
     cql.execute(f"DROP TABLE {table}")
 
 
+# Reproduces SCYLLADB-5157: an equality restriction on a column with a fulltext
+# index picked the index, which has no view to read from, and the query failed
+# on an assertion. The index serves only BM25 queries, so without
+# ALLOW FILTERING the query is rejected naming the index,
+# and with it the restriction is filtered.
+@pytest.mark.parametrize("custom_class", ["fulltext_index", "FULLTEXT_INDEX"])
+def test_non_bm25_restriction_on_fulltext_index(cql, test_keyspace, custom_class):
+    with new_test_table(cql, test_keyspace, 'p int primary key, content text, other int') as table:
+        index = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index} ON {table}(content) USING '{custom_class}'")
+        cql.execute(f"INSERT INTO {table} (p, content, other) VALUES (1, 'hello world', 1)")
+        cql.execute(f"INSERT INTO {table} (p, content, other) VALUES (2, 'goodbye', 2)")
+        message = f"The fulltext index {index} on column content cannot serve this restriction"
+        for restriction in [
+            "content = 'hello world'",
+            "content IN ('hello world')",
+            "content IN ('hello world', 'nothing')",
+            "content = 'hello world' AND other = 1",
+        ]:
+            with pytest.raises(InvalidRequest, match=message):
+                cql.execute(f"SELECT p FROM {table} WHERE {restriction}")
+            assert list(cql.execute(f"SELECT p FROM {table} WHERE {restriction} ALLOW FILTERING")) == [(1,)]
+
+
 def test_bm25_basic_parsing_and_validation(cql, fulltext_table):
     """BM25 should be accepted when WHERE and ORDER BY are both present with a fulltext_index, a text column, and a LIMIT."""
     cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 1")

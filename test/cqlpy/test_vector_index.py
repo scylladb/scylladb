@@ -290,6 +290,25 @@ def test_create_vector_search_index_on_nonfloat_vector_column(cql, test_keyspace
         with pytest.raises(InvalidRequest, match="Vector indexes are only supported on columns of vectors of floats"):
             cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
 
+# Reproduces SCYLLADB-5157: an equality restriction on a column with a vector
+# index picked the index, which has no view to read from, and the query failed
+# on an assertion, which aborted the node on 2026.1. With the class name
+# in another letter case, the check meant to reject the query was skipped.
+# The index serves only ANN queries, so without ALLOW FILTERING the query
+# is rejected naming the index, and with it the restriction is filtered.
+@pytest.mark.parametrize("custom_class", ["vector_index", "VECTOR_INDEX"])
+def test_non_ann_restriction_on_vector_index(cql, test_keyspace, scylla_only, skip_without_tablets, custom_class):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v vector<float, 3>') as table:
+        index = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index} ON {table}(v) USING '{custom_class}'")
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (1, [1, 2, 3])")
+        cql.execute(f"INSERT INTO {table} (p, v) VALUES (2, [4, 5, 6])")
+        message = f"The vector index {index} on column v cannot serve this restriction"
+        for restriction in ["v = [1, 2, 3]", "v IN ([1, 2, 3])", "v IN ([1, 2, 3], [7, 8, 9])"]:
+            with pytest.raises(InvalidRequest, match=message):
+                cql.execute(f"SELECT p FROM {table} WHERE {restriction}")
+            assert list(cql.execute(f"SELECT p FROM {table} WHERE {restriction} ALLOW FILTERING")) == [(1,)]
+
 def test_no_view_for_vector_search_index(cql, test_keyspace, scylla_only, skip_without_tablets):
     schema = 'p int primary key, v vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:

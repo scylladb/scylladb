@@ -835,6 +835,33 @@ static do_find_idx_result do_find_idx(
             "used to continue the query that produced it.");
 }
 
+void throw_needs_filtering() {
+    throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
+        "thus may have unpredictable performance. If you want to execute "
+        "this query despite the performance unpredictability, use ALLOW FILTERING");
+}
+
+[[noreturn]] static void throw_needs_filtering(
+        const secondary_index::secondary_index_manager* sim, const expression& restrictions) {
+    if (sim) {
+        for_each_expression<column_value>(restrictions, [&] (const column_value& cv) {
+            const auto& column = cv.col->name_as_text();
+            for (const auto& idx : sim->list_indexes()) {
+                if (idx.target_column() != column) {
+                    continue;
+                }
+                auto custom_class = secondary_index::secondary_index_manager::get_custom_class(idx.metadata());
+                if (custom_class && !(*custom_class)->view_should_exist()) {
+                    throw exceptions::invalid_request_exception(seastar::format(
+                            "The {} index {} on column {} cannot serve this restriction. Use ALLOW FILTERING to filter on {}.",
+                            (*custom_class)->index_type_name(), idx.metadata().name(), column, column));
+                }
+            }
+        });
+    }
+    throw_needs_filtering();
+}
+
 // Id of the view backing an index - what identifies it across DROP/CREATE.
 // std::nullopt for indexes with no view, which are never pinned this way.
 static std::optional<table_id> index_view_id(
@@ -1547,9 +1574,8 @@ void select_restrictions::plan_query(
         if (_has_queriable_regular_index && _analysis.partition_range_is_simple) {
             _uses_secondary_indexing = true;
         } else if (!_allow_filtering) {
-            throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
-                "thus may have unpredictable performance. If you want to execute "
-                "this query despite the performance unpredictability, use ALLOW FILTERING");
+            const auto* sim = _check_indexes ? &db.find_column_family(_analysis.schema).get_index_manager() : nullptr;
+            throw_needs_filtering(sim, _analysis.nonprimary_key_restrictions);
         }
         search_groups.push_back({preds.other, _analysis.nonprimary_key_restrictions});
     }
@@ -1888,9 +1914,7 @@ void select_restrictions::process_partition_key_restrictions() {
 
     if (_analysis.pk_restrictions_need_filtering()) {
         if (!_allow_filtering && !_has_queriable_pk_index) {
-            throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
-                "thus may have unpredictable performance. If you want to execute "
-                "this query despite the performance unpredictability, use ALLOW FILTERING");
+            throw_needs_filtering();
         }
         _is_key_range = true;
         _uses_secondary_indexing = _has_queriable_pk_index;

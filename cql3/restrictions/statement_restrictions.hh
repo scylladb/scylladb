@@ -542,6 +542,8 @@ shared_ptr<const select_restrictions> make_empty_select_restrictions(schema_ptr 
 // Checks whether this expression is empty - doesn't restrict anything
 bool is_empty_restriction(const expr::expression&);
 
+[[noreturn]] void throw_needs_filtering();
+
 }
 
 }
