@@ -1059,8 +1059,17 @@ future<group0_guard> migration_manager::start_group0_operation(std::optional<raf
 
 static thread_local std::default_random_engine random_engine{std::random_device{}()};
 
+// Lets later boots skip the scan below; once set, nothing writes committed_by_group0 = false
+// anymore (add_committed_by_group0_flag() always stamps true).
+static constexpr auto ENSURE_COMMITTED_BY_GROUP0_DONE_KEY = "ensure_committed_by_group0_done";
+
 future<> migration_manager::ensure_committed_by_group0() {
     SCYLLA_ASSERT(this_shard_id() == 0);
+
+    if (co_await _sys_ks.local().get_scylla_local_param(ENSURE_COMMITTED_BY_GROUP0_DONE_KEY) == "true") {
+        mlogger.info("Skipping committed_by_group0 check ({} is set)", ENSURE_COMMITTED_BY_GROUP0_DONE_KEY);
+        co_return;
+    }
 
     // Find non-system tables where committed_by_group0 is not true in scylla_tables.
     // This includes tables that have no row in scylla_tables at all (very old tables).
@@ -1097,9 +1106,19 @@ future<> migration_manager::ensure_committed_by_group0() {
         co_return result;
     };
 
+    // Best-effort: a failed marker write must not fail the boot; the next boot just rescans.
+    auto set_done_marker = [this]() -> future<> {
+        try {
+            co_await _sys_ks.local().set_scylla_local_param(ENSURE_COMMITTED_BY_GROUP0_DONE_KEY, "true", false);
+        } catch (...) {
+            mlogger.warn("Failed to set {}: {}", ENSURE_COMMITTED_BY_GROUP0_DONE_KEY, std::current_exception());
+        }
+    };
+
     auto tables = co_await find_tables_missing_flag();
     if (tables.empty()) {
         mlogger.info("All non-system tables have committed_by_group0 set");
+        co_await set_done_marker();
         co_return;
     }
 
@@ -1112,6 +1131,7 @@ future<> migration_manager::ensure_committed_by_group0() {
         tables = co_await find_tables_missing_flag();
         if (tables.empty()) {
             mlogger.info("All tables now have committed_by_group0 set (fixed by another node)");
+            co_await set_done_marker();
             co_return;
         }
 
@@ -1134,6 +1154,7 @@ future<> migration_manager::ensure_committed_by_group0() {
             }
         }
 
+        // All listed tables were dropped; leave the marker unset so the next boot rescans.
         if (mutations.empty()) {
             co_return;
         }
@@ -1141,6 +1162,7 @@ future<> migration_manager::ensure_committed_by_group0() {
         mlogger.info("Setting committed_by_group0 for {} table(s)", mutations.size());
         try {
             co_await announce<schema_change>(std::move(mutations), std::move(guard), "ensure committed_by_group0");
+            co_await set_done_marker();
             co_return;
         } catch (const group0_concurrent_modification&) {
             mlogger.info("Concurrent schema change detected while setting committed_by_group0, retrying");
