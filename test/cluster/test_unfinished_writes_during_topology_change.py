@@ -41,7 +41,9 @@ async def test_unfinished_audit_write_during_topology_change(manager: ScyllaClus
      5. Check that the statement really was audited.
     """
     cmdline = ['--logger-log-level', 'debug_error_injection=debug']
-    await manager.servers_add(2, auto_rack_dc="dc1", cmdline=cmdline)
+    # test.py's default write timeout would raise the audit write timeout above its 5s floor
+    config = {"write_request_timeout_in_ms": 5000}
+    await manager.servers_add(2, auto_rack_dc="dc1", cmdline=cmdline, config=config)
 
     running = await manager.running_servers()
     cql, hosts = await manager.get_ready_cql(running)
