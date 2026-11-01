@@ -4928,12 +4928,15 @@ db::commitlog* table::commitlog() const {
     return _commitlog;
 }
 
+static bool large_data_guardrail_enabled(const schema& s) {
+    return s.large_data_guardrails_enabled()
+        && !is_internal_keyspace(s.ks_name())
+        && !s.is_view()
+        && !cdc::is_log_name(s.cf_name());
+}
+
 shared_ptr<db::large_data_guardrail_base> table::make_large_data_guardrail() const {
-    bool enabled = _schema->large_data_guardrails_enabled()
-        && !is_internal_keyspace(_schema->ks_name())
-        && !_schema->is_view()
-        && !cdc::is_log_name(_schema->cf_name());
-    if (enabled) {
+    if (large_data_guardrail_enabled(*_schema)) {
         return make_shared<db::large_data_guardrail>(_config.guardrail_config);
     }
     return db::noop_large_data_guardrail::instance();
@@ -4956,8 +4959,12 @@ void table::set_schema(schema_ptr s) {
     if (_counter_cell_locks) {
         _counter_cell_locks->set_schema(s);
     }
+    const bool large_data_guardrail_toggled = large_data_guardrail_enabled(*s) != large_data_guardrail_enabled(*_schema);
     _schema = std::move(s);
-    _large_data_guardrail = make_large_data_guardrail();
+    if (large_data_guardrail_toggled) {
+        _large_data_guardrail->rebuild({});
+        _large_data_guardrail = make_large_data_guardrail();
+    }
     _large_data_guardrail->rebuild(*get_sstables());
 
     for (auto&& v : _views) {
