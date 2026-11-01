@@ -311,3 +311,50 @@ def test_unset_value_support(cql, test_keyspace):
         # the columns bound to UNSET_VALUE are left unchanged
         cql.execute(stmt, [2] + [UNSET_VALUE] * 5 + [0])
         assert list(cql.execute(f'SELECT key, i, l, s, m, t, u FROM {table}')) == [(0, 2, [1, 2, 3], {1, 2, 3}, {1: 2}, (1, 2), (1,))]
+
+# Test ORDER BY in a single-partition SELECT: with one clustering column,
+# ORDER BY c DESC reverses the rows; with two clustering columns, ORDER BY
+# on just the first one is allowed, in both directions. Also check that
+# ORDER BY is rejected on a column which does not exist, on the second
+# clustering column without the first, and on the partition key.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_order_by, which originally came
+# from Cassandra's old Python cql_tests.py (order_by_test).
+def test_order_by(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int, c int, v int, PRIMARY KEY (k, c)') as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (k, c, v) VALUES (0, ?, ?)')
+        for i in range(10):
+            cql.execute(stmt, [i, i])
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 ORDER BY c DESC')) == [(i,) for i in range(9, -1, -1)]
+    with new_test_table(cql, test_keyspace, 'k int, c1 int, c2 int, v int, PRIMARY KEY (k, c1, c2)') as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (k, c1, c2, v) VALUES (0, ?, ?, ?)')
+        for i in range(4):
+            for j in range(2):
+                cql.execute(stmt, [i, j, i * 2 + j])
+        # Check that ORDER BY is rejected on a column that doesn't exist, on
+        # the second clustering column alone, and on the partition key
+        for order in ['c DESC', 'c2 DESC', 'k DESC']:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f'SELECT v FROM {table} WHERE k = 0 ORDER BY {order}')
+        # Check ORDER BY on just the first clustering column
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 ORDER BY c1 DESC')) == [(i,) for i in range(7, -1, -1)]
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 ORDER BY c1')) == [(i,) for i in range(8)]
+
+# Test slices on the clustering key (with "<", "<=", ">" or ">=") together
+# with ORDER BY ASC or DESC, and check that the right rows are returned in
+# the right order. Reproduces CASSANDRA-4160.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_more_order_by, which originally
+# came from Cassandra's old Python cql_tests.py (more_order_by_test).
+def test_more_order_by(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'row text, number int, string text, PRIMARY KEY (row, number)') as table:
+        for number, string in [(1, 'one'), (2, 'two'), (3, 'three'), (4, 'four')]:
+            cql.execute(f"INSERT INTO {table} (row, number, string) VALUES ('row', {number}, '{string}')")
+        def numbers(where_and_order):
+            return [r.number for r in cql.execute(f"SELECT number FROM {table} WHERE row = 'row' AND {where_and_order}")]
+        assert numbers('number < 3 ORDER BY number ASC') == [1, 2]
+        assert numbers('number >= 3 ORDER BY number ASC') == [3, 4]
+        assert numbers('number < 3 ORDER BY number DESC') == [2, 1]
+        assert numbers('number >= 3 ORDER BY number DESC') == [4, 3]
+        assert numbers('number > 3 ORDER BY number DESC') == [4]
+        assert numbers('number <= 3 ORDER BY number DESC') == [3, 2, 1]
