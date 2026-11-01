@@ -10,6 +10,7 @@
 
 #include "cql3/ut_name.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/util.hh"
 
 namespace cql3 {
 
@@ -40,7 +41,7 @@ sstring ut_name::get_string_type_name() const
 }
 
 sstring ut_name::to_cql_string() const {
-    return (has_keyspace() ? (_ks_name.value() + ".") : "") + _ut_name->to_cql_string();
+    return (has_keyspace() ? (util::maybe_quote(_ks_name.value()) + ".") : "") + util::maybe_quote_user_type_name(_ut_name->to_string());
 }
 
 }

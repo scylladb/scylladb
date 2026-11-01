@@ -3617,7 +3617,7 @@ user_type_impl::get_name_as_string() const {
 }
 
 sstring user_type_impl::get_name_as_cql_string() const {
-    return cql3::util::maybe_quote(get_name_as_string());
+    return cql3::util::maybe_quote_user_type_name(get_name_as_string());
 }
 
 cql3::description user_type_impl::describe(cql3::with_create_statement with_create_statement) const {

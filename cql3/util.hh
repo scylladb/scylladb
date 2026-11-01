@@ -76,6 +76,11 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
 /// lowercase and not (yet) a keyword.
 sstring maybe_quote(const std::string_view s);
 
+/// maybe_quote_user_type_name() is maybe_quote() for the name of a user type.
+/// It also quotes names that maybe_quote() keeps unquoted, but that the type
+/// parser rejects or reads as a native type, like byte or int.
+sstring maybe_quote_user_type_name(const std::string_view name);
+
 /// quote() takes an identifier - the name of a column, table or keyspace -
 /// and transforms it to a string which can be safely used in CQL commands.
 /// Quoting involves wrapping the name in double-quotes ("). A double-quote
