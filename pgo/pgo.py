@@ -680,6 +680,18 @@ async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
             ["write_rmw", 250_000,  32],   # LWT/Paxos: keep in-flight LSA state bounded
         ]
         for workload in workloads:
+            # The per-node processes below share one table, so drop it once here
+            # (each workload creates its own table) and run them with
+            # --recreate-table=0, so that they don't drop each other's table.
+            out = await query(["curl", "--silent", "--retry", "300", "--retry-delay", "1", "--retry-connrefused", "-X", "POST",
+                "-H", "X-Amz-Target: DynamoDB_20120810.DeleteTable",
+                "-H", "Content-Type: application/x-amz-json-1.0",
+                "-d", '{"TableName": "workloads_test"}',
+                f"http://{addrs[0]}:8000/"])
+            # curl doesn't fail on HTTP errors; a missing table is fine (first workload),
+            # but any other failure would leave a stale table with a possibly wrong schema.
+            if b"TableDescription" not in out and b"ResourceNotFoundException" not in out:
+                raise RuntimeError(f"Failed to delete alternator table before workload {workload[0]}: {out!r}")
             # the tool doesn't yet support load balancing so we
             # run one process per node
             await clean_gather(*[run_checked([executable,
@@ -689,6 +701,7 @@ async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
                 "--partitions", "100000",
                 # we reuse cluster data so don't need to pre-populate
                 "--prepopulate-partitions", "0",
+                "--recreate-table", "0",
                 "--operations-per-shard", f"{workload[1]}",
                 "--concurrency", f"{workload[2]}",
                 "--cpuset", f'{CS_CPUSET.get()}',

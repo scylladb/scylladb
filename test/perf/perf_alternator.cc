@@ -47,6 +47,7 @@ struct test_config {
     bool flush;
     std::string remote_host;
     bool continue_after_error;
+    bool recreate_table;
     std::string json_result_file;
 };
 
@@ -58,6 +59,7 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
            << ", operations-per-shard=" << cfg.operations_per_shard
            << ", batch_size=" << cfg.batch_size
            << ", flush=" << cfg.flush
+           << ", recreate_table=" << cfg.recreate_table
            << "}";
 }
 
@@ -112,9 +114,23 @@ static void delete_alternator_table(http::client& cli) {
     }
 }
 
-static void create_alternator_table(http::client& cli) {
-    delete_alternator_table(cli); // cleanup in case of leftovers
-    make_request(cli, "CreateTable", R"(
+// Several perf-alternator processes may share one cluster (e.g. pgo/pgo.py
+// runs one per node), so with allow_existing the table may already have been
+// created by another one. Without it (i.e. when we deleted the table ourselves
+// just before), an existing table means the cleanup failed and the table may
+// have the wrong schema, so it's an error.
+static void create_table(http::client& cli, sstring body, bool allow_existing) {
+    try {
+        make_request(cli, "CreateTable", std::move(body)).get();
+    } catch (const std::runtime_error& e) {
+        if (!allow_existing || std::string_view(e.what()).find("ResourceInUseException") == std::string_view::npos) {
+            throw;
+        }
+    }
+}
+
+static void create_alternator_table(http::client& cli, bool allow_existing) {
+    create_table(cli, R"(
         {
             "AttributeDefinitions": [{
                     "AttributeName": "p",
@@ -137,12 +153,11 @@ static void create_alternator_table(http::client& cli) {
                 }
             ]
         }
-    )").get();
+    )", allow_existing);
 }
 
-static void create_alternator_table_with_gsi(http::client& cli) {
-    delete_alternator_table(cli); // cleanup in case of leftovers
-    make_request(cli, "CreateTable", R"(
+static void create_alternator_table_with_gsi(http::client& cli, bool allow_existing) {
+    create_table(cli, R"(
         {
             "AttributeDefinitions": [{
                     "AttributeName": "p",
@@ -217,7 +232,7 @@ static void create_alternator_table_with_gsi(http::client& cli) {
                 }
             ]
         }
-    )").get();
+    )", allow_existing);
 }
 
 // Exercise various types documented here: https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_AttributeValue.html
@@ -465,13 +480,18 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
     auto cli = get_client(c);
     auto finally = defer([&] noexcept {
         // Might throw, will terminate test
-        delete_alternator_table(cli);
+        if (c.recreate_table) {
+            delete_alternator_table(cli);
+        }
         cli.close().get();
     });
+    if (c.recreate_table) {
+        delete_alternator_table(cli); // cleanup in case of leftovers
+    }
     if (c.workload == "write_gsi" || c.workload == "batch_write_gsi") {
-        create_alternator_table_with_gsi(cli);
+        create_alternator_table_with_gsi(cli, !c.recreate_table);
     } else {
-        create_alternator_table(cli);
+        create_alternator_table(cli, !c.recreate_table);
     }
 
     using fun_t = std::function<future<>(const test_config&, http::client&, uint64_t)>;
@@ -533,6 +553,7 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         params["flush"] = c.flush;
         params["scan_total_segments"] = c.scan_total_segments;
         params["batch_size"] = c.batch_size;
+        params["recreate_table"] = c.recreate_table;
         params["cpus"] = this_smp_shard_count();
 
         perf::write_json_result(c.json_result_file, agg, params, c.workload);
@@ -560,6 +581,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             ("scan-total-segments", bpo::value<unsigned>()->default_value(10), "single scan operation will retrieve 1/scan-total-segments portion of a table")
             ("batch-size", bpo::value<unsigned>()->default_value(32), "number of items in a single request in the batch_read and batch_write_gsi workloads")
             ("continue-after-error", bpo::value<bool>()->default_value(false), "continue test after failed request")
+            ("recreate-table", bpo::value<bool>()->default_value(true), "delete the test table before and after the test; disable when several perf-alternator processes share one cluster (an already existing table is then reused as-is, without checking its schema)")
             ("json-result", bpo::value<std::string>()->default_value(""), "file to write json results to")
         ;
         bpo::variables_map opts;
@@ -576,6 +598,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
         c.scan_total_segments = opts["scan-total-segments"].as<unsigned>();
         c.batch_size = opts["batch-size"].as<unsigned>();
         c.continue_after_error = opts["continue-after-error"].as<bool>();
+        c.recreate_table = opts["recreate-table"].as<bool>();
         c.json_result_file = opts["json-result"].as<std::string>();
 
         if (c.scan_total_segments < 1 || c.scan_total_segments > 1'000'000) {
