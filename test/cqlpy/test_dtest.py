@@ -12,12 +12,14 @@
 # Cassandra to check their assumptions.
 #############################################################################
 
+import re
+
 import pytest
 from cassandra.concurrent import execute_concurrent_with_args
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import AlreadyExists, InvalidRequest
 from cassandra.query import UNSET_VALUE
 
-from .util import new_test_table, new_type
+from .util import new_test_table, new_type, unique_name
 
 
 # Test that a SELECT can list the same column more than once, and returns
@@ -358,3 +360,39 @@ def test_more_order_by(cql, test_keyspace):
         assert numbers('number >= 3 ORDER BY number DESC') == [4, 3]
         assert numbers('number > 3 ORDER BY number DESC') == [4]
         assert numbers('number <= 3 ORDER BY number DESC') == [3, 2, 1]
+
+# Test basic CREATE TABLE, DROP TABLE and TRUNCATE operations: creating
+# tables (including a COMPACT STORAGE table, and a column list with a
+# trailing comma), that creating a table which already exists fails with
+# AlreadyExists, that a repeated column or a COMPACT STORAGE table with
+# more than one regular column is rejected, truncating the COMPACT STORAGE
+# table, and dropping a table and creating it again with a new schema.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_table,
+# which originally came from Cassandra's old Python cql_tests.py
+# (table_test). That test had a typo in its COMPACT STORAGE check - "name,
+# int" instead of "name int" - which turned it into a check of a syntax
+# error, so here it is fixed.
+def test_table(cql, test_keyspace, compact_storage):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, c int') as table1, \
+         new_test_table(cql, test_keyspace, 'k int, name int, value int, PRIMARY KEY (k, name)', 'WITH COMPACT STORAGE') as table2, \
+         new_test_table(cql, test_keyspace, 'k int, c int, PRIMARY KEY (k),') as table3:
+        # Check that creating a table which already exists fails
+        with pytest.raises(AlreadyExists, match=re.escape(table3)):
+            cql.execute(f'CREATE TABLE {table3} (k int PRIMARY KEY, c int)')
+        table4 = f'{test_keyspace}.{unique_name()}'
+        # Check that a repeated column is rejected
+        with pytest.raises(InvalidRequest):
+            cql.execute(f'CREATE TABLE {table4} (k int PRIMARY KEY, c int, k text)')
+        # Check that a COMPACT STORAGE table with a clustering key may not
+        # have more than one regular column
+        with pytest.raises(InvalidRequest, match='COMPACT STORAGE'):
+            cql.execute(f'CREATE TABLE {table4} (k int, name int, c1 int, c2 int, PRIMARY KEY (k, name)) WITH COMPACT STORAGE')
+        # Check TRUNCATE of the COMPACT STORAGE table
+        cql.execute(f'INSERT INTO {table2} (k, name, value) VALUES (1, 2, 3)')
+        cql.execute(f'TRUNCATE {table2}')
+        assert list(cql.execute(f'SELECT * FROM {table2}')) == []
+        # Check that a dropped table can be created again with a new schema
+        cql.execute(f'DROP TABLE {table1}')
+        cql.execute(f'CREATE TABLE {table1} (k int PRIMARY KEY, c1 int, c2 int,)')
+        cql.execute(f'INSERT INTO {table1} (k, c1, c2) VALUES (1, 2, 3)')
+        assert list(cql.execute(f'SELECT * FROM {table1}')) == [(1, 2, 3)]
