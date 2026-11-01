@@ -17,6 +17,7 @@ import random
 from typing import Callable, Awaitable
 from dataclasses import dataclass
 from functools import partial
+from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, new_test_table, reconnect_driver
@@ -812,9 +813,9 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
     num_keys = 10
     original_min_tablet_count=5
 
-    scopes = ['rack', 'dc'] if build_mode == 'debug' else ['all', 'dc', 'rack', 'node']
+    scopes = ['rack', 'dc'] if build_mode in DEBUG_MODES else ['all', 'dc', 'rack', 'node']
     pros = [ True, False ] # Primary Replica Only
-    restored_min_tablet_counts = [original_min_tablet_count] if (build_mode == 'debug' or sstables_storage.object_storage is None) else [2, original_min_tablet_count, 10]
+    restored_min_tablet_counts = [original_min_tablet_count] if (build_mode in DEBUG_MODES or sstables_storage.object_storage is None) else [2, original_min_tablet_count, 10]
     
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {original_min_tablet_count}}};")

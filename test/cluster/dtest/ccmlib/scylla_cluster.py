@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from cassandra.auth import PlainTextAuthProvider
 
+from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.dtest.ccmlib.common import logger
 from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
@@ -33,7 +34,7 @@ class ScyllaCluster:
         self._nodes: list[ScyllaNode] = []
         self._next_node_num: int = 1
 
-        if self.scylla_mode == "debug":
+        if self.scylla_mode in DEBUG_MODES:
             self.default_wait_other_notice_timeout = 600
             self.default_wait_for_binary_proto = 900
         else:

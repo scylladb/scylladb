@@ -13,6 +13,7 @@ import pytest
 
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
+from test import DEBUG_MODES
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
@@ -262,7 +263,7 @@ async def test_group0_tombstone_gc(manager: ScyllaClusterManager):
 
 
 @pytest.mark.skip_mode(mode='release', reason="test only needs to run once - allowing only the 'dev' mode")
-@pytest.mark.skip_mode(mode='debug', reason="test only needs to run once - allowing only the 'dev' mode")
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason="test only needs to run once - allowing only the 'dev' mode")
 async def test_group0_state_id_failure(manager: ScyllaClusterManager):
     """
     Issue #21117 regression test.

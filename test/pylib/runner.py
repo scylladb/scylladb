@@ -869,15 +869,16 @@ class TestSuiteConfig:
 
     @cached_property
     def _run_in_specific_mode(self) -> set[str]:
-        return set(chain.from_iterable(self.cfg.get(f"run_in_{build_mode}", []) for build_mode in ALL_MODES))
+        return set(chain.from_iterable(self.cfg.get(f"run_in_{mode}", []) for mode in [*ALL_MODES, "debug_modes"]))
 
     @cache
     def disabled_tests(self, build_mode: str) -> set[str]:
         result = set(self.cfg.get("disable", []))
         result.update(self.cfg.get(f"skip_in_{build_mode}", []))
+        run_in_this_mode = set(self.cfg.get(f"run_in_{build_mode}", []))
         if build_mode in DEBUG_MODES:
             result.update(self.cfg.get("skip_in_debug_modes", []))
-        run_in_this_mode = set(self.cfg.get(f"run_in_{build_mode}", []))
+            run_in_this_mode.update(self.cfg.get("run_in_debug_modes", []))
         result.update(self._run_in_specific_mode - run_in_this_mode)
         return result
 

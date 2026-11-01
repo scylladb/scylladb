@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
+from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace, get_topology_version
 from cassandra import WriteFailure
@@ -71,7 +72,7 @@ async def test_no_cleanup_when_unnecessary(manager: ScyllaClusterManager):
     assert sum(len(x) for x in matches) == 0
 
 
-@pytest.mark.skip_mode(mode='debug', reason='dev is enough')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='dev is enough')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cleanup_waits_for_stale_writes(manager: ScyllaClusterManager):
     """Scenario:

@@ -6,17 +6,8 @@ Tests for commands, that need a some task to work on.
 Each only checks that the command does not fail - but not what it does or returns.
 """
 
-import pytest
-
 from test.pylib.skip_types import skip_bug
 from test.scylla_gdb.conftest import execute_gdb_command
-
-pytestmark = [
-    pytest.mark.skip_mode(
-        mode=["dev", "debug", "coverage"],
-        reason="Scylla was built without debug symbols; use release mode",
-    ),
-]
 
 
 def test_coroutine_frame(gdb_cmd):

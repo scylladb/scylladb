@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+from test import DEBUG_MODES
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
@@ -393,7 +394,7 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Scy
     ks = await create_new_test_keyspace(cql, storage_config.get_keyspace_opts(
         f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': 1}}"))
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{'sstable_compression': ''}};")
-    num_tables = 200 if build_mode != 'debug' else 5
+    num_tables = 200 if build_mode not in DEBUG_MODES else 5
     await asyncio.gather(*[cql.run_async(f"CREATE TABLE {ks}.test{i} (pk int PRIMARY KEY, c blob);") for i in range(1, num_tables)])
 
     async def check_logs(when):

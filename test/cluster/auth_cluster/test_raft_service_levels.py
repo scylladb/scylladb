@@ -7,6 +7,7 @@ import pytest
 import time
 import asyncio
 import logging
+from test import DEBUG_MODES
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for, wait_for_view
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -126,7 +127,7 @@ async def test_connections_parameters_auto_update(manager: ScyllaClusterManager,
     cluster_connections, sessions = await get_roles_connections(manager, servers)
 
     logging.info("Asserting all connections have default parameters")
-    str_to = lambda build_mode : "1m" if build_mode=="dev" else ("1m30s" if build_mode=="debug" else f"Faild bad mode {build_mode}")
+    str_to = lambda build_mode : "1m" if build_mode=="dev" else ("1m30s" if build_mode in DEBUG_MODES else f"Faild bad mode {build_mode}")
     await assert_connections_params(manager, hosts, {
         "r1": {
             "workload_type": "unspecified",

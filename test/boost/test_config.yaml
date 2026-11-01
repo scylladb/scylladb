@@ -63,7 +63,7 @@ custom_args:
         - '-c2 -m2G'
     table_streaming_reader_test:
         - '-c1 -m2G'
-run_in_debug:
+run_in_debug_modes:
     - logalloc_standard_allocator_segment_pool_backend_test
 # Tests skipped in debug/sanitize modes because they use many iterations
 # for statistical accuracy and are prohibitively slow under those modes.

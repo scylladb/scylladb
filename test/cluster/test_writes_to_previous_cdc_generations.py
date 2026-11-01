@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
+from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
@@ -90,7 +91,7 @@ async def test_writes_to_recent_previous_cdc_generations(request, manager: Scyll
             await do_write(ts - 1)
 
 
-@pytest.mark.skip_mode(mode='debug', reason='test requires nodes to be started quickly')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='test requires nodes to be started quickly')
 async def test_writes_to_old_previous_cdc_generation(request, manager: ScyllaClusterManager):
     """
     Test that writes to a previous CDC generation succeed if the write's timestamp is greater than

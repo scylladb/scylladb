@@ -19,6 +19,7 @@ from cassandra.cluster import EXEC_PROFILE_DEFAULT, NoHostAvailable, default_lbp
 from cassandra.cluster import Cluster as PyCluster
 from cassandra.policies import ExponentialReconnectionPolicy, WhiteListRoundRobinPolicy
 
+from test import DEBUG_MODES
 from test.pylib.driver_utils import safe_driver_shutdown
 
 from test.cluster.dtest.dtest_class import (
@@ -573,7 +574,7 @@ class DTestSetup:
             seconds = self.base_cql_timeout
         factor = 1
         if isinstance(self.cluster, ScyllaCluster):
-            if self.cluster.scylla_mode == "debug":
+            if self.cluster.scylla_mode in DEBUG_MODES:
                 factor = 3
             elif self.cluster.scylla_mode != "release":
                 factor = 2

@@ -20,6 +20,7 @@ from ccmlib.scylla_cluster import ScyllaCluster
 from ccmlib.scylla_node import ScyllaNode
 
 from dtest_class import Tester, create_cf, create_ks
+from test import DEBUG_MODES
 from test.pylib.skip_types import skip_env
 from tools.assertions import (
     assert_all,
@@ -349,7 +350,7 @@ class TestCommitLog(Tester):
         jvm_args = jvm_args or []
         if not "--commitlog-sync-period-in-ms" in jvm_args:
             commit_log_sync_period = 10000
-            if isinstance(self.cluster, ScyllaCluster) and self.cluster.scylla_mode == "debug":
+            if isinstance(self.cluster, ScyllaCluster) and self.cluster.scylla_mode in DEBUG_MODES:
                 commit_log_sync_period *= 3
             jvm_args.extend(["--commitlog-sync-period-in-ms", str(commit_log_sync_period)])
         self.cluster.start(jvm_args=jvm_args)
@@ -443,7 +444,7 @@ class TestCommitLog(Tester):
         # By default periodic commitlog_sync mode will be used, so we have chance
         # to accumulate more commitlogs.
         commit_log_sync_period = 10000
-        if isinstance(self.cluster, ScyllaCluster) and self.cluster.scylla_mode == "debug":
+        if isinstance(self.cluster, ScyllaCluster) and self.cluster.scylla_mode in DEBUG_MODES:
             commit_log_sync_period *= 3
         node1.set_configuration_options(values=opts)
 
@@ -1289,7 +1290,7 @@ class TestCommitLog(Tester):
             # Verified that ENOSPC occurred and not all the data is wrote into db
             assert_row_count_in_select_less(session=session, query="SELECT * FROM ks.cf", max_rows_expected=total_size)
             timeout = 10
-            if isinstance(self.cluster, ScyllaCluster) and self.cluster.scylla_mode == "debug":
+            if isinstance(self.cluster, ScyllaCluster) and self.cluster.scylla_mode in DEBUG_MODES:
                 timeout *= 3
             node1.watch_log_for("No space left on device", timeout=timeout)
 

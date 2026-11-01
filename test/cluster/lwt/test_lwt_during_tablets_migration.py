@@ -9,6 +9,7 @@ import logging
 import random
 
 import pytest
+from test import DEBUG_MODES
 from test.cluster.lwt.lwt_common import (
     BaseLWTTester,
     get_token_for_pk,
@@ -97,7 +98,7 @@ async def tablet_migration_ops(stop_event: asyncio.Event,
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.skip_mode(mode='debug', reason='debug mode is too slow for this test')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='debug mode is too slow for this test')
 async def test_multi_column_lwt_during_migration(manager: ScyllaClusterManager, scale_timeout,
                                                  storage_config: FeatureConfig):
     """

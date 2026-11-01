@@ -13,6 +13,7 @@ import requests
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
 from cassandra.query import ConsistencyLevel, SimpleStatement
 
+from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas, pin_the_only_tablet
 from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
@@ -175,7 +176,7 @@ async def test_mv_update_on_pending_replica(manager: ScyllaClusterManager, intra
 # If the MV write handler is not completed after storing the hint, as in
 # issue #19529, it remains active until it timeouts, preventing topology changes
 # during this time.
-@pytest.mark.skip_mode(mode='debug', reason='the test requires a short timeout for remove_node, but it is unpredictably slow in debug')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='the test requires a short timeout for remove_node, but it is unpredictably slow in debug')
 async def test_mv_write_to_dead_node(manager: ScyllaClusterManager):
     servers = await manager.servers_add(4, property_file=[
         {"dc": "dc1", "rack": "r1"},
