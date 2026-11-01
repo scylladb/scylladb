@@ -399,8 +399,13 @@ def testMultiOrderingValidation(cql, test_keyspace):
     tableName = test_keyspace + "." + unique_name()
     assertInvalid(cql, tableName, "CREATE TABLE %s (k int, c1 int, c2 int, PRIMARY KEY (k, c1, c2)) WITH CLUSTERING ORDER BY (c2 ASC, c1 DESC)")
 
+    # The original Java test had "CREATE TABLE test" here (and in the two
+    # checks above), without a keyspace, so the statement failed because no
+    # keyspace was specified, and not because of the unknown column c3 in
+    # the CLUSTERING ORDER BY. So we use %s, and also check the error message.
     tableName = test_keyspace + "." + unique_name()
-    assertInvalid(cql, tableName, "CREATE TABLE test (k int, c1 int, c2 int, PRIMARY KEY (k, c1, c2)) WITH CLUSTERING ORDER BY (c1 DESC, c2 DESC, c3 DESC)")
+    assertInvalidMessage(cql, tableName, "Only clustering key columns can be defined in CLUSTERING ORDER directive",
+        "CREATE TABLE %s (k int, c1 int, c2 int, PRIMARY KEY (k, c1, c2)) WITH CLUSTERING ORDER BY (c1 DESC, c2 DESC, c3 DESC)")
 
     execute(cql, tableName, "CREATE TABLE %s (k int, c1 int, c2 int, PRIMARY KEY (k, c1, c2)) WITH CLUSTERING ORDER BY (c1 DESC, c2 DESC)")
     execute(cql, tableName, "DROP TABLE %s")
