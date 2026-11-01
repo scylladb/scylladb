@@ -1888,6 +1888,7 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
         for (auto& sst : ssts) {
             add_sstable(cg, sst);
             update_stats_for_new_sstable(sst);
+            _large_data_guardrail->register_sstable(sst);
         }
         m->mark_flushed(std::move(new_ssts_ms));
         try_trigger_compaction(cg);
@@ -2204,9 +2205,6 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             return update_cache(cg, old, newtabs);
         });
 
-        for (const auto& sst : newtabs) {
-            _large_data_guardrail->register_sstable(sst);
-        }
         _large_data_guardrail->on_flush();
 
         co_await utils::get_local_injector().inject("replica_post_flush_after_update_cache", [this] (auto& handler) -> future<> {
@@ -2700,6 +2698,15 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
             for (auto& [cg, d] : _cg_desc) {
                 cg->backlog_tracker_adjust_charges(d.main_sstable_set_builder_result.removed_sstables, d.desc.new_sstables);
             }
+            // _desc.new_gc_sstables are deliberately left out. They hold only data this
+            // compaction is dropping, they exist just long enough to keep a crash from
+            // resurrecting it, and they are released by the same compaction that
+            // created them. Their large-partition, large-row and large-collection
+            // records describe garbage, so feeding them to the guardrail would report
+            // limit violations for data that is on its way out.
+            for (auto& sst : _desc.new_sstables) {
+                _t._large_data_guardrail->register_sstable(sst);
+            }
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder& builder, compaction::compaction_completion_desc& d) {
             return std::make_unique<sstable_list_updater>(cg, builder, d);
@@ -2716,15 +2723,6 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
     cache.refresh_snapshot();
 
     _t.rebuild_statistics();
-    // desc.new_gc_sstables are deliberately left out. They hold only data this
-    // compaction is dropping, they exist just long enough to keep a crash from
-    // resurrecting it, and they are released by the same compaction that
-    // created them. Their large-partition, large-row and large-collection
-    // records describe garbage, so feeding them to the guardrail would report
-    // limit violations for data that is on its way out.
-    for (auto& sst : desc.new_sstables) {
-        _t._large_data_guardrail->register_sstable(sst);
-    }
 
     co_await builder.delete_sstables_atomically(unused_sstables_for_deletion(std::move(desc)));
 }
