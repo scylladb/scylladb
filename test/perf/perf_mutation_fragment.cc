@@ -12,6 +12,10 @@
 #include "test/perf/perf.hh"
 
 #include "mutation/mutation_fragment.hh"
+#include "mutation/collection_mutation.hh"
+#include "schema/schema_builder.hh"
+#include "types/map.hh"
+#include "utils/xx_hasher.hh"
 
 namespace tests {
 
@@ -133,4 +137,102 @@ PERF_TEST_F(clustering_row, hash_1M)
     });
 }
 
+// appending_hash<row> over one map<int, blob> cell, the path query digests take (via query::digester,
+// which adds variant dispatch) when the cell carries no cached hash (merged or sstable-sourced rows).
+class collection_hash {
+    schema_ptr _s;
+    const column_definition* _def;
+    query::column_id_vector _columns;
+    row _row_10;
+    row _row_500;
+    row _row_50k;
+
+    static row make_row(const column_definition& def, unsigned elements) {
+        const bytes blob(32, 'v');
+        collection_mutation_writer w({});
+        for (unsigned e = 0; e < elements; ++e) {
+            w.push_back(managed_bytes_view(int32_type->decompose(int32_t(e))),
+                    atomic_cell::make_live(*bytes_type, api::new_timestamp(), blob, atomic_cell::collection_member::yes));
+        }
+        row r;
+        r.apply(def, atomic_cell_or_collection(std::move(w).finish()));
+        return r;
+    }
+
+public:
+    collection_hash()
+        : _s(schema_builder(this_smp_shard_count(), "ks", "cf")
+                          .with_column("pk", int32_type, column_kind::partition_key)
+                          .with_column("m", map_type_impl::get_instance(int32_type, bytes_type, true))
+                          .build())
+        , _def(_s->get_column_definition(to_bytes("m")))
+        , _columns({_def->id})
+        , _row_10(make_row(*_def, 10))
+        , _row_500(make_row(*_def, 500))
+        , _row_50k(make_row(*_def, 50000)) {
+        for (auto* r : {&_row_10, &_row_500, &_row_50k}) {
+            if (hash<xx_hasher>(*r) != hash<buffered_xx_hasher>(*r)) {
+                throw std::runtime_error("buffered_xx_hasher digest differs from xx_hasher");
+            }
+        }
+    }
+
+    const row& row_10() const {
+        return _row_10;
+    }
+    const row& row_500() const {
+        return _row_500;
+    }
+    const row& row_50k() const {
+        return _row_50k;
+    }
+
+    template <typename Hasher>
+    uint64_t hash(const row& r) const {
+        Hasher h;
+        max_timestamp ts;
+        appending_hash<row>()(h, r, *_s, column_kind::regular_column, _columns, ts);
+        return h.finalize_uint64();
+    }
+
+    // Reference, not a bound: one XXH64 pass over the serialized cell, the cost
+    // of a bulk hash of the cell bytes.
+    uint64_t hash_raw(const row& r) const {
+        xx_hasher h;
+        for (bytes_view frag : fragment_range(r.find_cell(_def->id)->as_collection_mutation().data)) {
+            h.update(reinterpret_cast<const char*>(frag.data()), frag.size());
+        }
+        return h.finalize_uint64();
+    }
+};
+
+PERF_TEST_F(collection_hash, xx_10) {
+    perf_tests::do_not_optimize(hash<xx_hasher>(row_10()));
+}
+PERF_TEST_F(collection_hash, buffered_10) {
+    perf_tests::do_not_optimize(hash<buffered_xx_hasher>(row_10()));
+}
+PERF_TEST_F(collection_hash, raw_10) {
+    perf_tests::do_not_optimize(hash_raw(row_10()));
+}
+
+PERF_TEST_F(collection_hash, xx_500) {
+    perf_tests::do_not_optimize(hash<xx_hasher>(row_500()));
+}
+PERF_TEST_F(collection_hash, buffered_500) {
+    perf_tests::do_not_optimize(hash<buffered_xx_hasher>(row_500()));
+}
+PERF_TEST_F(collection_hash, raw_500) {
+    perf_tests::do_not_optimize(hash_raw(row_500()));
+}
+
+PERF_TEST_F(collection_hash, xx_50k) {
+    perf_tests::do_not_optimize(hash<xx_hasher>(row_50k()));
+}
+PERF_TEST_F(collection_hash, buffered_50k) {
+    perf_tests::do_not_optimize(hash<buffered_xx_hasher>(row_50k()));
+}
+PERF_TEST_F(collection_hash, raw_50k) {
+    perf_tests::do_not_optimize(hash_raw(row_50k()));
+}
 }
