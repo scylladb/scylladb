@@ -58,15 +58,26 @@ static logging::logger slogger("group0_raft_sm");
 
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
         gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately,
-        noncopyable_function<void(std::exception_ptr)> on_fatal_error)
+        noncopyable_function<void(std::exception_ptr)> on_fatal_error, abort_source& stop_signal_as)
     : _client(client), _mm(mm), _sp(sp), _ss(ss)
     , _gate("group0_state_machine")
     , _state_id_handler(ss._topology_state_machine, sp.local_db(), gossiper)
     , _feature_service(feat)
     , _in_memory_state_machine_enabled(enable_immediately || utils::get_local_injector().is_enabled("group0_enable_sm_immediately"))
     , _schema_dependent_state_enabled(enable_immediately)
-    , _on_fatal_error(std::move(on_fatal_error)) {
+    , _on_fatal_error(std::move(on_fatal_error))
+    , _stop_signal_as(stop_signal_as) {
     _state_id_handler.run();
+}
+
+void group0_state_machine::fail() {
+    // Called while the caller holds the read_apply mutex. Once the semaphore is broken
+    // nobody can take the mutex, so no operation can observe the partially applied
+    // state until the node is restarted. If the node is shutting down, the waiters get
+    // abort_requested_exception and handle the failure as part of the shutdown.
+    _client.read_apply_mutex().broken(_stop_signal_as.abort_requested()
+            ? std::make_exception_ptr(abort_requested_exception())
+            : std::make_exception_ptr(std::runtime_error("group 0 state machine failed to apply a change, the node must be restarted")));
 }
 
 static mutation extract_history_mutation(utils::chunked_vector<canonical_mutation>& muts, const data_dictionary::database db) {
@@ -423,6 +434,8 @@ future<> group0_state_machine::apply(raft::log_entry_ptr_list commands) {
     group0_state_machine_merger m(co_await _client.get_last_group0_state_id(), std::move(read_apply_mutex_holder),
                                   max_command_size, _sp.data_dictionary());
 
+    // `m` holds the read_apply mutex until apply() returns, so it is still held in the catch below.
+    try {
     for (const auto& entry : commands) {
         const auto& c = std::get<raft::command>(entry->data);
         auto is = ser::as_input_stream(c);
@@ -468,6 +481,11 @@ future<> group0_state_machine::apply(raft::log_entry_ptr_list commands) {
     }
 
     co_await _state_id_handler.advertise_state_id(m.last_id());
+    } catch (...) {
+        // The change may be partially applied, also when the failure is caused by shutdown.
+        fail();
+        throw;
+    }
 }
 
 future<raft::snapshot_id> group0_state_machine::take_snapshot() {
@@ -609,6 +627,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
             // Raft retries a failed snapshot transfer, but the retry finds the schema
             // already persisted and does not update the in-memory schema. Stop the
             // group 0 server, as raft does when apply() fails.
+            fail();
             _on_fatal_error(std::current_exception());
             throw;
         }

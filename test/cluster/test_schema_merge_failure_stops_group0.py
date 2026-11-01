@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+import asyncio
 import logging
 import time
 
@@ -17,7 +18,7 @@ from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import get_topology_coordinator, new_test_keyspace
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,23 @@ async def get_system_distributed_state(cql: Session, host: Host) -> tuple:
     return replication, versions
 
 
+async def start_cluster_with_nts_system_distributed(manager: ScyllaClusterManager) -> tuple[list[ServerInfo], list[Host], list[tuple]]:
+    """Start two nodes, switch system_distributed to NetworkTopologyStrategy and
+    return the servers, their hosts and the system_distributed state on each host."""
+    servers = await manager.servers_add(2)
+    cql = manager.get_cql()
+
+    dc = (await cql.run_async("SELECT data_center FROM system.local"))[0].data_center
+    await cql.run_async("ALTER KEYSPACE system_distributed WITH replication = "
+                        f"{{'class': 'NetworkTopologyStrategy', '{dc}': 2}}")
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    for s in servers:
+        await read_barrier(manager.api, s.ip_addr)
+    states = [await get_system_distributed_state(cql, host) for host in hosts]
+    logger.info("system_distributed state before join: %s", states)
+    return servers, hosts, states
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_joining_node_stops_group0_on_schema_merge_failure(manager: ScyllaClusterManager) -> None:
     """Verify that a failure in schema_applier::update() after the schema
@@ -63,17 +81,8 @@ async def test_joining_node_stops_group0_on_schema_merge_failure(manager: Scylla
     failure and fails to start, and the replication and table schema versions
     of system_distributed on the existing nodes are left intact.
     """
-    servers = await manager.servers_add(2)
+    servers, hosts, states = await start_cluster_with_nts_system_distributed(manager)
     cql = manager.get_cql()
-
-    dc = (await cql.run_async("SELECT data_center FROM system.local"))[0].data_center
-    await cql.run_async("ALTER KEYSPACE system_distributed WITH replication = "
-                        f"{{'class': 'NetworkTopologyStrategy', '{dc}': 2}}")
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    for s in servers:
-        await read_barrier(manager.api, s.ip_addr)
-    states = [await get_system_distributed_state(cql, host) for host in hosts]
-    logger.info("system_distributed state before join: %s", states)
 
     await manager.server_add(config={'error_injections_at_startup': [{'name': 'schema_applier_update_fail', 'one_shot': True}]},
                              expected_error="schema mutations were persisted, but the in-memory schema was not updated")
@@ -125,3 +134,56 @@ async def test_node_with_stopped_group0_fails_new_schema_requests_fast(manager: 
         await manager.server_start(failed.server_id)
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
         await cql.run_async(insert(3, ConsistencyLevel.ALL), host=hosts[0])
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_failed_state_machine_rejects_snapshot_transfer(manager: ScyllaClusterManager) -> None:
+    """Verify that after a snapshot transfer fails to update the in-memory schema,
+    no other snapshot transfer is applied on the node, even before its group 0
+    server is stopped.
+
+    The group 0 server is stopped in the background. Before that, the leader
+    retries the failed transfer. If the retry could take the read_apply mutex,
+    its merge would find the schema already persisted and succeed, and the
+    node would continue joining with an in-memory schema that lacks
+    system_distributed, re-creating it with default replication.
+
+    The test delays stopping the group 0 server on the joining node until the
+    leader reports that a retried transfer failed, and checks that the
+    system_distributed keyspace on the existing nodes is not changed.
+    """
+    servers, hosts, states = await start_cluster_with_nts_system_distributed(manager)
+    cql = manager.get_cql()
+
+    leader_id = await get_topology_coordinator(manager)
+    leader = None
+    for s in servers:
+        if await manager.get_host_id(s.server_id) == leader_id:
+            leader = s
+    assert leader is not None
+    leader_log = await manager.server_open_log(leader.server_id)
+    mark = await leader_log.mark()
+
+    joiner = await manager.server_add(start=False, config={'error_injections_at_startup': [
+        {'name': 'schema_applier_update_fail', 'one_shot': True},
+        'delay_group0_abort_on_error',
+    ]})
+    start_task = asyncio.create_task(manager.server_start(
+        joiner.server_id, expected_error="schema mutations were persisted, but the in-memory schema was not updated"))
+
+    # Wait until the leader's retry is rejected, or until system_distributed is changed.
+    async def retry_rejected_or_state_changed():
+        if await leader_log.grep("Transferring snapshot to .* failed with: .*group 0 state machine failed to apply a change",
+                                 from_mark=mark):
+            return True
+        for host, state in zip(hosts, states):
+            if await get_system_distributed_state(cql, host) != state:
+                return True
+        return None
+    await wait_for(retry_rejected_or_state_changed, time.time() + 60)
+
+    for host, state in zip(hosts, states):
+        assert await get_system_distributed_state(cql, host) == state
+
+    await manager.api.message_injection(joiner.ip_addr, "delay_group0_abort_on_error")
+    await start_task

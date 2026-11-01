@@ -241,7 +241,11 @@ class group0_state_machine : public raft_state_machine {
 
     // Stops the group 0 raft server on this node, the same way an error from apply() does.
     noncopyable_function<void(std::exception_ptr)> _on_fatal_error;
+    // Requested when the node starts shutting down.
+    abort_source& _stop_signal_as;
 
+    // Makes the read_apply mutex unavailable to everyone after a change was only partially applied.
+    void fail();
     modules_to_reload get_modules_to_reload(const utils::chunked_vector<canonical_mutation>& mutations);
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
@@ -251,7 +255,7 @@ class group0_state_machine : public raft_state_machine {
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
             gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately,
-            noncopyable_function<void(std::exception_ptr)> on_fatal_error);
+            noncopyable_function<void(std::exception_ptr)> on_fatal_error, abort_source& stop_signal_as);
     future<> apply(raft::log_entry_ptr_list commands) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;
