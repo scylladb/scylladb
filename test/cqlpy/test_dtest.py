@@ -396,3 +396,61 @@ def test_table(cql, test_keyspace, compact_storage):
         cql.execute(f'CREATE TABLE {table1} (k int PRIMARY KEY, c1 int, c2 int,)')
         cql.execute(f'INSERT INTO {table1} (k, c1, c2) VALUES (1, 2, 3)')
         assert list(cql.execute(f'SELECT * FROM {table1}')) == [(1, 2, 3)]
+
+# Read the given table's row from system_schema.tables.
+def table_schema(cql, table):
+    ks, cf = table.split('.')
+    return cql.execute(f"SELECT * FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one()
+
+# Test setting table options in CREATE TABLE and then changing them with
+# ALTER TABLE: comment, gc_grace_seconds, bloom_filter_fp_chance, and
+# compaction strategy with its options, and that the new values appear in
+# system_schema.tables.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_table_options,
+# which originally came from Cassandra's old Python cql_tests.py
+# (table_options_test). That test also set some options using old syntax
+# which Cassandra no longer accepts - this part is tested separately below,
+# in test_table_options_old_syntax.
+def test_table_options(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, c int',
+                        "WITH comment = 'My comment' AND gc_grace_seconds = 4 AND bloom_filter_fp_chance = 0.01 "
+                        "AND compaction = { 'class' : 'LeveledCompactionStrategy', 'sstable_size_in_mb' : 10 }") as table:
+        schema = table_schema(cql, table)
+        assert schema.comment == 'My comment'
+        assert schema.gc_grace_seconds == 4
+        assert schema.bloom_filter_fp_chance == 0.01
+        # Cassandra writes the full Java class name and also adds default
+        # options, so we check only the class name's end and our option.
+        assert schema.compaction['class'].endswith('LeveledCompactionStrategy')
+        assert schema.compaction['sstable_size_in_mb'] == '10'
+        cql.execute(f"ALTER TABLE {table} WITH comment = 'other comment' AND gc_grace_seconds = 100 "
+                    "AND bloom_filter_fp_chance = 0.1 "
+                    "AND compaction = { 'class' : 'SizeTieredCompactionStrategy', 'min_sstable_size' : 42 }")
+        schema = table_schema(cql, table)
+        assert schema.comment == 'other comment'
+        assert schema.gc_grace_seconds == 100
+        assert schema.bloom_filter_fp_chance == 0.1
+        assert schema.compaction['class'].endswith('SizeTieredCompactionStrategy')
+        assert schema.compaction['min_sstable_size'] == '42'
+
+# Test that Scylla still accepts some table options in old syntax which
+# Cassandra no longer accepts: the read_repair_chance and
+# dclocal_read_repair_chance options (removed in Cassandra 4.0, and ignored
+# by Scylla), compression options given as "sstable_compression" instead
+# of "class", and caching options given as a JSON string instead of a map.
+# Accepting these old forms is a deliberate Scylla decision, for backward
+# compatibility, so this is a scylla_only test.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_table_options.
+def test_table_options_old_syntax(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, c int',
+                        "WITH read_repair_chance = 0.5 AND dclocal_read_repair_chance = 0.5 "
+                        "AND compression = { 'sstable_compression' : '' } "
+                        """AND caching = '{"keys":"ALL","rows_per_partition":"ALL"}'""") as table:
+        schema = table_schema(cql, table)
+        assert dict(schema.caching) == {'keys': 'ALL', 'rows_per_partition': 'ALL'}
+        cql.execute(f"ALTER TABLE {table} WITH read_repair_chance = 0.3 AND dclocal_read_repair_chance = 0.3 "
+                    "AND compression = { 'sstable_compression' : 'SnappyCompressor' } "
+                    """AND caching = '{"keys":"NONE","rows_per_partition":"ALL"}'""")
+        schema = table_schema(cql, table)
+        assert dict(schema.caching) == {'keys': 'NONE', 'rows_per_partition': 'ALL'}
+        assert schema.compression['sstable_compression'].endswith('SnappyCompressor')
