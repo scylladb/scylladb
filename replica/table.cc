@@ -2309,8 +2309,6 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
 
         co_await update_cache(cg, old, newtabs);
 
-        _large_data_guardrail->on_flush();
-
         co_await utils::get_local_injector().inject("replica_post_flush_after_update_cache", [this] (auto& handler) -> future<> {
             const auto this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
             if (this_table_name == handler.get("table_name")) {
@@ -2320,6 +2318,8 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
                 tlogger.info("error injection handler replica_post_flush_after_update_cache: resuming flush for table {}", this_table_name);
             }
         });
+
+        _large_data_guardrail->on_flush();
 
         cg.memtables()->erase(old);
         tlogger.debug("Memtable for {}.{} replaced, into {} sstables", old->schema()->ks_name(), old->schema()->cf_name(), newtabs.size());
