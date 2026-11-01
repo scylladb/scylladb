@@ -15,8 +15,9 @@
 import pytest
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.protocol import InvalidRequest
+from cassandra.query import UNSET_VALUE
 
-from .util import new_test_table
+from .util import new_test_table, new_type
 
 
 # Test that a SELECT can list the same column more than once, and returns
@@ -289,3 +290,24 @@ def test_repeated_eq_on_partition_key(cql, test_keyspace, scylla_only):
         assert list(cql.execute(f'SELECT * FROM {table} WHERE k = 0 AND k = 0')) == [(0, 0, 0), (0, 1, 1)]
         assert list(cql.execute(f'SELECT * FROM {table} WHERE k = 0 AND k = 0 AND c = 1')) == [(0, 1, 1)]
         assert list(cql.execute(f'SELECT * FROM {table} WHERE k = 0 AND k = 1')) == []
+
+# Test that binding UNSET_VALUE to an assignment in a prepared UPDATE skips
+# that assignment, leaving the column's old value - for columns of every
+# kind: int, list, set, map, tuple and frozen user-defined type. Also check
+# that in the same UPDATE, assignments with real values are still done.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_unset_value_support.
+def test_unset_value_support(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(number int)') as simple_type, \
+         new_test_table(cql, test_keyspace, f'key int PRIMARY KEY, i int, l list<int>, s set<int>, m map<int, int>, '
+                                            f't tuple<int, int>, u frozen<{simple_type}>') as table:
+        cql.execute(f'INSERT INTO {table} (key, i, l, s, m, t, u) VALUES (0, 1, [1, 2, 3], {{1, 2, 3}}, {{1: 2}}, (1, 2), {{number: 1}})')
+        assert list(cql.execute(f'SELECT key, i, l, s, m, t, u FROM {table}')) == [(0, 1, [1, 2, 3], {1, 2, 3}, {1: 2}, (1, 2), (1,))]
+        stmt = cql.prepare(f'UPDATE {table} SET i = ?, l = ?, s = ?, m = ?, t = ?, u = ? WHERE key = ?')
+        # Check that UNSET_VALUE in all assignments leaves all columns unchanged
+        cql.execute(stmt, [UNSET_VALUE] * 6 + [0])
+        assert list(cql.execute(f'SELECT key, i, l, s, m, t, u FROM {table}')) == [(0, 1, [1, 2, 3], {1, 2, 3}, {1: 2}, (1, 2), (1,))]
+        # Check that a real value in one assignment is still written, while
+        # the columns bound to UNSET_VALUE are left unchanged
+        cql.execute(stmt, [2] + [UNSET_VALUE] * 5 + [0])
+        assert list(cql.execute(f'SELECT key, i, l, s, m, t, u FROM {table}')) == [(0, 2, [1, 2, 3], {1, 2, 3}, {1: 2}, (1, 2), (1,))]
