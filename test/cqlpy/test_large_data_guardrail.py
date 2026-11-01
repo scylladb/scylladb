@@ -11,12 +11,14 @@ import pytest
 import re
 import time
 import io
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from cassandra import WriteFailure
 
-from .util import new_test_table, config_value_context
+from .util import new_test_table, config_value_context, new_materialized_view, new_secondary_index, index_table_name
 from . import nodetool
 from .test_logs import logfile, logfile_path, wait_for_log
+from .test_materialized_view import wait_for_view_built
+from .test_secondary_index import wait_for_index
 
 # All tests are Scylla-only (guardrails don't exist in Cassandra).
 @pytest.fixture(scope="function", autouse=True)
@@ -786,3 +788,99 @@ def test_collection_warns_from_memtable(cql, test_keyspace, logfile):
             cql.execute(update, [{998}, 1, 0])
 
             wait_for_log(logfile, WARN_RE, timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Materialized views and secondary indexes
+#
+# A write the replica guardrail rejects must not change the table's views
+# and indexes. The replica used to check the guardrail only after it had
+# applied and sent the write's view updates, so a rejected write still left
+# phantom view rows, or deleted view rows and index entries whose base rows
+# still exist.
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def oversized_partition_with_view_and_index(cql, test_keyspace):
+    """Yield (table, view, index) for a guardrail-enabled table whose partition pk=1
+    is over rows_count_fail_threshold on disk, so the replica rejects every
+    write to it.  The view is keyed by (ck, pk), the table has a secondary
+    index on v2, and the base row (1, 5) has v2 = 7."""
+    with ExitStack() as stack:
+        stack.enter_context(config_value_context(cql,
+            'compaction_rows_count_warning_threshold', '50'))
+        stack.enter_context(config_value_context(cql,
+            'compaction_large_partition_warning_threshold_mb', '1'))
+        stack.enter_context(config_value_context(cql,
+            'rows_count_fail_threshold', '50'))
+
+        schema = "pk int, ck int, v1 blob, v2 int, PRIMARY KEY (pk, ck)"
+        tbl = stack.enter_context(new_test_table(cql, test_keyspace, schema,
+                extra=" WITH large_data_guardrails_enabled = true"))
+        # Created on the empty table, so every row below reaches the view and
+        # the index as a view update, which a single node applies before the
+        # base write returns. Wait for them to be built anyway: building
+        # flushes the base table, and a flush in the middle of the inserts
+        # would split the partition between two sstables, possibly neither
+        # with enough rows to record it as large.
+        mv = stack.enter_context(new_materialized_view(cql, tbl, '*', 'ck, pk',
+                'ck IS NOT NULL AND pk IS NOT NULL'))
+        index = stack.enter_context(new_secondary_index(cql, tbl, 'v2'))
+        wait_for_view_built(cql, mv)
+        wait_for_index(cql, *index.split('.'))
+
+        make_oversized_partition(cql, tbl, pk=1, num_rows=60, value_size_bytes=8)
+        cql.execute(f"UPDATE {tbl} SET v2 = 7 WHERE pk = 1 AND ck = 5")
+        nodetool.flush(cql, tbl)
+
+        # The view and the index match the base before any rejection.
+        assert len(list(cql.execute(f"SELECT pk FROM {mv}"))) == 60
+        assert [r.ck for r in cql.execute(f"SELECT ck FROM {tbl} WHERE v2 = 7")] == [5]
+        yield tbl, mv, index
+
+
+def test_rejected_insert_does_not_create_view_row(cql, test_keyspace):
+    """An INSERT the replica guardrail rejects must not create a view row
+    whose base row does not exist."""
+    with oversized_partition_with_view_and_index(cql, test_keyspace) as (tbl, mv, index):
+        with pytest.raises(WriteFailure, match=REJECT_PARTITION_RE):
+            cql.execute(f"INSERT INTO {tbl} (pk, ck, v1) VALUES (1, 999, 0x01)")
+        assert list(cql.execute(f"SELECT * FROM {tbl} WHERE pk = 1 AND ck = 999")) == []
+        assert list(cql.execute(f"SELECT * FROM {mv} WHERE ck = 999")) == []
+
+        # A write over 128 KiB is unfrozen differently on the replica.
+        insert = cql.prepare(f"INSERT INTO {tbl} (pk, ck, v1) VALUES (?, ?, ?)")
+        with pytest.raises(WriteFailure, match=REJECT_PARTITION_RE):
+            cql.execute(insert, [1, 998, bytes(200 * 1024)])
+        assert list(cql.execute(f"SELECT * FROM {tbl} WHERE pk = 1 AND ck = 998")) == []
+        assert list(cql.execute(f"SELECT * FROM {mv} WHERE ck = 998")) == []
+
+
+def test_rejected_update_does_not_change_index(cql, test_keyspace):
+    """An UPDATE of an indexed column that the replica guardrail rejects must
+    leave the view row and the index entry of the old value in place, and
+    add no index entry for the new value."""
+    with oversized_partition_with_view_and_index(cql, test_keyspace) as (tbl, mv, index):
+        with pytest.raises(WriteFailure, match=REJECT_PARTITION_RE):
+            cql.execute(f"UPDATE {tbl} SET v2 = 8 WHERE pk = 1 AND ck = 5")
+        assert [r.v2 for r in cql.execute(f"SELECT v2 FROM {tbl} WHERE pk = 1 AND ck = 5")] == [7]
+        assert [r.v2 for r in cql.execute(f"SELECT v2 FROM {mv} WHERE ck = 5 AND pk = 1")] == [7]
+        assert [r.ck for r in cql.execute(f"SELECT ck FROM {tbl} WHERE v2 = 7")] == [5]
+        assert list(cql.execute(f"SELECT ck FROM {index_table_name(index)} WHERE v2 = 8")) == []
+
+
+def test_rejected_partition_delete_does_not_empty_view(cql, test_keyspace):
+    """A partition DELETE without BYPASS that the replica guardrail rejects
+    must leave the partition's view rows and index entries in place."""
+    with oversized_partition_with_view_and_index(cql, test_keyspace) as (tbl, mv, index):
+        with pytest.raises(WriteFailure, match=REJECT_PARTITION_RE):
+            cql.execute(f"DELETE FROM {tbl} WHERE pk = 1")
+        assert len(list(cql.execute(f"SELECT ck FROM {tbl} WHERE pk = 1"))) == 60
+        assert len(list(cql.execute(f"SELECT pk FROM {mv}"))) == 60
+        assert [r.ck for r in cql.execute(f"SELECT ck FROM {tbl} WHERE v2 = 7")] == [5]
+
+        # With BYPASS the delete goes through, and the view follows it.
+        cql.execute(f"DELETE FROM {tbl} WHERE pk = 1 BYPASS LARGE_DATA_GUARDRAILS")
+        assert list(cql.execute(f"SELECT ck FROM {tbl} WHERE pk = 1")) == []
+        assert list(cql.execute(f"SELECT pk FROM {mv}")) == []
