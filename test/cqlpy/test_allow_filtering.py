@@ -122,10 +122,11 @@ def test_allow_filtering_single_row(cql, table1, cassandra_bug):
     check_af_optional(cql, table1, 'k=1 AND c=2 AND v=2', lambda row: row.k==1 and row.c==2 and row.v==2)
 
 # A scan of the whole table or of a whole partition looking for one particular
-# regular column value requires filtering.
+# regular column value, or a range of values, requires filtering.
 def test_allow_filtering_regular_column(cql, table1):
     check_af_mandatory(cql, table1, 'v=2', lambda row: row.v==2)
     check_af_mandatory(cql, table1, 'k=1 AND v=2', lambda row: row.k==1 and row.v==2)
+    check_af_mandatory(cql, table1, 'v>1 AND v<=4', lambda row: row.v>1 and row.v<=4)
 
 # A scan of the whole table looking for one particular *clustering* column
 # value requires filtering: Such a query may return just a few or even no
