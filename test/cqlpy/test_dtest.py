@@ -59,3 +59,23 @@ def test_limit_ranges(cql, test_keyspace):
         # the next partition
         assert list(cql.execute(f'SELECT * FROM {table} WHERE token(p) >= token(2) LIMIT 4')) == [
             (2, 'http://foo.com', 42), (2, 'http://foo.net', 42), (2, 'http://foo.org', 42), (45, 'http://foo.com', 42)]
+
+# Test LIMIT on a SELECT that reads several partitions with an IN
+# restriction on the partition key, when partitions have more than one row.
+# LIMIT counts rows, not partitions, so "LIMIT 1" returns just one row.
+# The partitions are returned in a fixed order, not in the order in which
+# the IN lists them, so partition 2 comes first although the IN lists 48
+# first. Cassandra before version 2.2 did return them in the IN's order.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_limit_multiget.
+def test_limit_multiget(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c text, v bigint, PRIMARY KEY (p, c)') as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (p, c, v) VALUES (?, ?, 42)')
+        args = [(p, f'http://foo.{tld}') for p in range(100) for tld in ['com', 'org', 'net']]
+        execute_concurrent_with_args(cql, stmt, args, concurrency=100, raise_on_first_error=True)
+        # Check that LIMIT 1 returns only the first row of partition 2
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE p IN (48, 2) LIMIT 1')) == [(2, 'http://foo.com', 42)]
+        # Check that a LIMIT larger than a partition stops in the middle of
+        # the second partition
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE p IN (48, 2) LIMIT 4')) == [
+            (2, 'http://foo.com', 42), (2, 'http://foo.net', 42), (2, 'http://foo.org', 42), (48, 'http://foo.com', 42)]
