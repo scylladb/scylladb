@@ -242,6 +242,8 @@ class group0_state_machine : public raft_state_machine {
     // Stops the group 0 raft server on this node, the same way an error from apply() does.
     noncopyable_function<void(std::exception_ptr)> _on_fatal_error;
 
+    // Makes the read_apply mutex unavailable to everyone after a change was only partially applied.
+    void fail();
     modules_to_reload get_modules_to_reload(const utils::chunked_vector<canonical_mutation>& mutations);
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);

@@ -962,9 +962,26 @@ struct sleep_with_exponential_backoff {
 };
 
 void raft_group0::abort_server_on_error(raft::group_id gid, sstring reason) {
+    _status_for_monitoring = status_for_monitoring::aborted;
+    if (utils::get_local_injector().is_enabled("delay_group0_abort_on_error") && !_shutdown_gate.is_closed()) {
+        // Lets a test act before the group 0 server is aborted. The gate makes
+        // abort_and_drain() wait for the delayed abort.
+        (void)with_gate(_shutdown_gate, [this, gid, reason = std::move(reason)] () mutable {
+            return delay_abort_server(gid, std::move(reason));
+        });
+        return;
+    }
     // The future will be waited indirectly in raft_group0::abort_and_drain.
     (void)_raft_gr.abort_server(gid, std::move(reason));
-    _status_for_monitoring = status_for_monitoring::aborted;
+}
+
+future<> raft_group0::delay_abort_server(raft::group_id gid, sstring reason) {
+    try {
+        co_await utils::get_local_injector().inject("delay_group0_abort_on_error", utils::wait_for_message(std::chrono::minutes(5)));
+    } catch (...) {
+        group0_log.warn("delay_group0_abort_on_error: {}", std::current_exception());
+    }
+    co_await _raft_gr.abort_server(gid, std::move(reason));
 }
 
 void raft_group0::register_metrics() {

@@ -43,6 +43,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/to_string.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include <optional>
 #include "db/config.hh"
 #include "replica/database.hh"
@@ -67,6 +68,14 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
     , _schema_dependent_state_enabled(enable_immediately)
     , _on_fatal_error(std::move(on_fatal_error)) {
     _state_id_handler.run();
+}
+
+void group0_state_machine::fail() {
+    // Called while the caller holds the read_apply mutex. Once the semaphore is broken
+    // nobody can take the mutex, so no operation can observe the partially applied
+    // state until the node is restarted.
+    _client.read_apply_mutex().broken(std::make_exception_ptr(
+            std::runtime_error("group 0 state machine failed to apply a change, the node must be restarted")));
 }
 
 static mutation extract_history_mutation(utils::chunked_vector<canonical_mutation>& muts, const data_dictionary::database db) {
@@ -421,6 +430,8 @@ future<> group0_state_machine::apply(raft::log_entry_ptr_list commands) {
     group0_state_machine_merger m(co_await _client.get_last_group0_state_id(), std::move(read_apply_mutex_holder),
                                   max_command_size, _sp.data_dictionary());
 
+    // `m` holds the read_apply mutex until apply() returns, so it is still held in the catch below.
+    try {
     for (const auto& entry : commands) {
         const auto& c = std::get<raft::command>(entry->data);
         auto is = ser::as_input_stream(c);
@@ -466,6 +477,14 @@ future<> group0_state_machine::apply(raft::log_entry_ptr_list commands) {
     }
 
     co_await _state_id_handler.advertise_state_id(m.last_id());
+    } catch (...) {
+        // A failure caused by shutdown is not fatal: the node is stopping, and the
+        // command is applied again after the restart.
+        if (!_abort_source.abort_requested()) {
+            fail();
+        }
+        throw;
+    }
 }
 
 future<raft::snapshot_id> group0_state_machine::take_snapshot() {
@@ -607,6 +626,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
             // Raft retries a failed snapshot transfer, but the retry finds the schema
             // already persisted and does not update the in-memory schema. Stop the
             // group 0 server, as raft does when apply() fails.
+            fail();
             _on_fatal_error(std::current_exception());
             throw;
         }
