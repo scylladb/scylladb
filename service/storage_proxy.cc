@@ -6855,6 +6855,10 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, cas_requ
         co_await utils::get_local_injector().inject("cas_timeout_after_lock", write_timeout + std::chrono::milliseconds(100));
 
         while (true) {
+            // An unmet condition lowers the level of the learn to ANY for the dummy decision of
+            // its round; the rounds that follow, a retry or the repair of another coordinator's
+            // round, learn at the client's level again.
+            handler->set_cl_for_learn(cl_for_learn);
             // Finish the previous PAXOS round, if any, and, as a side effect, compute
             // a ballot (round identifier) which is a) unique b) has good chances of being
             // recent enough.
