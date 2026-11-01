@@ -36,6 +36,15 @@ The available modes are:
 *   ``full``: Forces the repair to process **all** SSTables, including those that have been previously repaired. This is useful when a complete data validation is required. The repair status is updated upon completion.
 *   ``disabled``: Completely disables the incremental repair logic for the current operation. The repair behaves like a classic, non-incremental repair, and it does not read or update any incremental repair status markers.
 
+.. note::
+
+   Because ``disabled`` does not update the incremental repair status markers, every SSTable the
+   tablet holds still counts as unrepaired once the repair completes. A table that relies on the
+   size-based trigger of :doc:`Automatic Repair </features/automatic-repair>` is therefore selected
+   again on the next planning round, even though the data was just repaired. Use ``full`` instead
+   when you want a repair that processes every SSTable *and* records the result, so that both the
+   size-based and the time-based trigger are reset.
+
 
 The incremental_mode parameter can be specified using nodetool cluster repair, e.g., nodetool cluster repair --incremental-mode incremental.
 It can also be specified with the REST API, e.g.:
