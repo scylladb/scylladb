@@ -2183,6 +2183,9 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
         utils::get_local_injector().inject("fail_flush_separator_buffer", []() {
             throw std::runtime_error("flush_separator_buffer failed by injection");
         });
+        // Each message releases one waiting flush.
+        co_await utils::get_local_injector().inject("logstor_flush_separator_buffer_wait",
+                utils::wait_for_message(std::chrono::seconds{60}), false);
 
         if (!buf.empty()) {
             co_await with_scheduling_group(_cfg.separator_sg, [&] {
@@ -2732,6 +2735,14 @@ template future<> logstor_group::write_to_separator(log_record_writer, segment_r
 template future<> logstor_group::write_to_separator(log_record_bytes_writer, segment_ref, std::optional<segment_sequence>, separator_index_update);
 
 future<> logstor_group::flush_separator(std::optional<segment_sequence> seq_num) {
+    // Once close_separator() has started, wait for it. It discards what is still buffered rather than
+    // flushing it, so this does not mean the group's records were written. A failed close propagates.
+    auto holder = _separator_flush_gate.try_hold();
+    if (!holder) {
+        co_await _separator_closed->get_future();
+        co_return;
+    }
+
     auto should_flush = [seq_num] (separator_buffer& buf) {
         return !buf.empty() && (!seq_num || (buf.min_seq_num && buf.min_seq_num < *seq_num));
     };
@@ -2761,10 +2772,23 @@ future<> logstor_group::flush_separator(std::optional<segment_sequence> seq_num)
 }
 
 future<> logstor_group::close_separator() {
+    // The gate is closed and _separator_closed set without suspending, so a closed gate implies it is set.
+    if (!_separator_closed) {
+        auto gate_closed = _separator_flush_gate.close();
+        _separator_closed.emplace(do_close_separator(std::move(gate_closed)));
+    }
+    return _separator_closed->get_future();
+}
+
+future<> logstor_group::do_close_separator(future<> gate_closed) {
     // Before anything that can wait: a separator write that is parked on the pool or on the flush
     // below resumes into write_to_separator()'s check and fails there, rather than buffering a record
     // into a group whose buffers are on their way back to the pool.
     _separator_enabled = false;
+
+    // Wait for the flush calls on the group, e.g. the background ones of switch_active_segment(): one may
+    // still switch the buffers and flush what it found, which leaves nothing of it to discard below.
+    co_await std::move(gate_closed);
 
     // A flush in progress owns the buffer it is writing out, and releases it when it is done, so let
     // it finish rather than pulling the buffer out from under it.

@@ -48,6 +48,7 @@
 #include "init.hh"
 #include <seastar/core/simple-stream.hh>
 #include "partition_slice_builder.hh"
+#include "test/lib/eventually.hh"
 #include "test/lib/logstor_test_utils.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
@@ -2676,6 +2677,96 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_write_io_error_signals_disk_error)
     // does not signal again.
     write_and_flush_segment(ls, cg, make_kv_mutation(schema, "pk1", "value-after-io-error"));
     BOOST_REQUIRE_EQUAL(signalled, 1u);
+}
+
+// A background flush from switch_active_segment() can be running on a group that is being removed:
+// remove() must wait for it, and for the flush it starts, so the record it found is written, not discarded.
+SEASTAR_THREAD_TEST_CASE(test_logstor_remove_waits_for_a_flush_of_the_group) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_logstor_group cg(schema, ls);
+
+    constexpr auto wait_injection = "logstor_flush_separator_buffer_wait";
+    auto& injector = utils::get_local_injector();
+    injector.enable(wait_injection);
+
+    // These run against cg, so every exit path must release the injection and wait for them before cg goes.
+    future<> first = make_ready_future<>(), second = make_ready_future<>(), late = make_ready_future<>(), removed = make_ready_future<>();
+    auto wait_all = [&] {
+        return when_all(std::move(first), std::move(second), std::move(late), std::move(removed)).get();
+    };
+    auto settle = seastar::defer([&] noexcept {
+        injector.disable(wait_injection);
+        try {
+            std::apply([] (auto&&... f) { (f.ignore_ready_future(), ...); }, wait_all());
+        } catch (...) {
+        }
+    });
+
+    // A flush of the first record, held before it writes.
+    ls.write(make_kv_mutation(schema, "pk0", "v0"), write_target(&cg, {}), db::no_timeout).get();
+    ls.flush_to_separator().get();
+    first = cg.flush_separator();
+    const auto first_waiting = injector.waiters(wait_injection);
+
+    // The second record is in the other buffer, so a flush finds it and waits for the first flush.
+    ls.write(make_kv_mutation(schema, "pk1", "v1"), write_target(&cg, {}), db::no_timeout).get();
+    ls.flush_to_separator().get();
+    second = cg.flush_separator();
+
+    // Closing the separator waits for the first flush too.
+    removed = ls.get_compaction_manager().remove(cg);
+    const bool remove_waited = !removed.available();
+
+    // Releasing the first flush lets the second one switch the buffers and start flushing the record.
+    injector.receive_message(wait_injection);
+    BOOST_REQUIRE(eventually_true([&] { return removed.available() || (first.available() && injector.waiters(wait_injection) == 1); }));
+    const bool second_parked = first.available() && injector.waiters(wait_injection) == 1;
+    // With the second flush held, nothing can finish remove().
+    seastar::thread::yield();
+    const bool remove_waited_for_second = !removed.available();
+
+    // A flush that comes while the close is pending waits for the close.
+    late = cg.flush_separator();
+    const bool late_waited = !late.available();
+
+    injector.receive_message(wait_injection);
+    settle.cancel();
+    injector.disable(wait_injection);
+    // Consume every future, then rethrow the first failure.
+    std::exception_ptr failure;
+    std::apply([&] (auto&&... f) {
+        auto consume = [&] (auto&& fut) {
+            if (fut.failed()) {
+                auto ex = fut.get_exception();
+                failure = failure ? failure : ex;
+            }
+        };
+        (consume(f), ...);
+    }, wait_all());
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    BOOST_REQUIRE_EQUAL(first_waiting, 1u);
+    BOOST_REQUIRE(remove_waited);
+    BOOST_REQUIRE(second_parked);
+    BOOST_REQUIRE(remove_waited_for_second);
+    BOOST_REQUIRE(late_waited);
+    // Both records were written to full segments of the group, none was discarded.
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 2u);
+    // A flush that comes after the close does nothing, rather than failing.
+    cg.flush_separator().get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
