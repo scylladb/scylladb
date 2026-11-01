@@ -2580,8 +2580,7 @@ utils::file_size_stats table::total_disk_space_used() const {
 }
 
 void table::rebuild_large_data_index() {
-    auto& sstables = *get_sstables();
-    _large_data_guardrail->rebuild(sstables);
+    _large_data_guardrail->rebuild(*get_sstables());
 }
 
 future<table::sstable_list_permit>
