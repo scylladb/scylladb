@@ -694,7 +694,8 @@ async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
                     "--prepopulate-partitions", "0",
                     "--operations-per-shard", f"{workload[1]}",
                     "--concurrency", f"{workload[2]}",
-                    "--cpuset", f'{CS_CPUSET.get()}',
+                    # Without a cpuset, overprovision like the nodes do.
+                    *(["--cpuset", CS_CPUSET.get()] if CS_CPUSET.get() else ["--overprovisioned"]),
                     "--remote-host", addr,
                 ])
 
