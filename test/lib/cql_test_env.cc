@@ -841,6 +841,11 @@ private:
                 _cluster_config_db_config_bridge.stop().get();
             });
 
+            db::plug_min_compression_saving_percent(_db, _cluster_config_manager).get();
+            auto unplug_min_compression_saving_percent = defer_verbose_shutdown("min_compression_saving_percent", [this] {
+                db::unplug_min_compression_saving_percent(_db).get();
+            });
+
             _elc_notif.start().get();
             auto stop_elc_notif = defer_verbose_shutdown("lifecycle notifier", [this] { _elc_notif.stop().get(); });
 
