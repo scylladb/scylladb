@@ -2549,13 +2549,18 @@ future<db::large_data_violation_type> database::do_apply(schema_ptr s, const fro
     // so it knows when new writes start being sent to a new view.
     auto op = cf.write_in_progress();
 
+    db::large_data_violation_type violations = db::large_data_violation_type::none;
     row_locker::lock_holder lock;
     if (!cf.views().empty()) {
         if (!_view_update_generator) {
             co_await coroutine::return_exception(std::runtime_error("view update generator not plugged to push updates"));
         }
 
-        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), view_update_read_concurrency_sem()));
+        auto unfrozen = m.unfreeze(s);
+        guardrails->check(*s, unfrozen.partition(), unfrozen.key(), &violations);
+        guardrails = db::noop_large_data_guardrail::instance();
+
+        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, std::move(unfrozen), timeout, std::move(tr_state), view_update_read_concurrency_sem()));
         if (lock_f.failed()) {
             auto ex = lock_f.get_exception();
             if (is_timeout_exception(ex)) {
@@ -2591,7 +2596,6 @@ future<db::large_data_violation_type> database::do_apply(schema_ptr s, const fro
             co_await coroutine::exception(std::move(ex));
         }
     }
-    db::large_data_violation_type violations = db::large_data_violation_type::none;
     auto f = co_await coroutine::as_future(
         this->apply_in_memory(m, s, std::move(h), timeout, std::move(guardrails), &violations));
     if (f.failed()) {
