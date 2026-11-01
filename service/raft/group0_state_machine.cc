@@ -235,6 +235,7 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     bool update_service_levels_cache = false;
     bool update_service_levels_effective_cache = false;
     bool make_view_building_state_transition = false;
+    bool update_built_views = false;
     std::unordered_set<table_id> update_cdc_streams;
     std::unordered_set<auth::cache::role_name_t> update_auth_cache_roles;
 
@@ -250,6 +251,9 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
             make_view_building_state_transition = true;
         } else if (m.table == db::system_keyspace::scylla_local()->id()) {
             make_view_building_state_transition = true;
+        } else if (m.table == db::system_keyspace::topology()->id()) {
+            // The built views depend on the topology nodes.
+            update_built_views = true;
         } else if (m.table == db::system_keyspace::cdc_streams_state()->id()) {
             const auto elements = m.pk.explode(*db::system_keyspace::cdc_streams_state());
             auto cdc_log_table_id = table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
@@ -304,7 +308,10 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
         co_await _ss.update_service_levels_cache(qos::update_both_cache_levels(update_service_levels_cache), qos::query_context::group0);
     }
     if (make_view_building_state_transition) {
+        // Also recomputes the built views.
         co_await _ss.view_building_transition();
+    } else if (update_built_views) {
+        co_await _ss.update_built_views();
     }
     if (update_cdc_streams.size()) {
         co_await _ss.load_cdc_streams(std::move(update_cdc_streams));
