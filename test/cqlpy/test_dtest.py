@@ -244,3 +244,48 @@ def test_in_clause_wide_rows(cql, test_keyspace):
         assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND c1 IN (5, 2, 8) AND c2 = 3')) == []
         # Check IN on the second clustering column, with "=" on the first
         assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND c1 = 0 AND c2 IN (5, 2, 8)')) == [(2,), (5,), (8,)]
+
+# Test that "= null" restrictions in SELECT match nothing - like in SQL,
+# where nothing is equal to null, not even null: Neither "k = null" on the
+# partition key, nor "v1 = null" on a regular column, even when v1 is null
+# (unset) in every row. The "v1 = null" restriction is tested both with
+# ALLOW FILTERING, and with a secondary index on v1 instead.
+# Cassandra refuses "= null" restrictions, so allowing them is a deliberate
+# Scylla extension and this is a scylla_only test - see more in
+# test_null.py::test_filtering_eq_null.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_null_support and
+# test_null_support_index. The rest of those dtests, writing nulls and
+# reading them back, is the same as Cassandra's null_support_test, which
+# is already translated in cassandra_tests as testNullSupport.
+@pytest.mark.parametrize('use_index', [False, True], ids=['filtering', 'index'])
+def test_eq_null_matches_nothing(cql, test_keyspace, use_index, scylla_only):
+    with new_test_table(cql, test_keyspace, 'k int, c int, v1 int, PRIMARY KEY (k, c)') as table:
+        if use_index:
+            cql.execute(f'CREATE INDEX ON {table}(v1)')
+            allow_filtering = ''
+        else:
+            allow_filtering = 'ALLOW FILTERING'
+        cql.execute(f'INSERT INTO {table} (k, c) VALUES (0, 0)')
+        cql.execute(f'INSERT INTO {table} (k, c) VALUES (0, 1)')
+        # Check that "k = null" matches nothing
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE k = null')) == []
+        # Check that "v1 = null" matches nothing, with or without a
+        # partition-key restriction
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE k = 0 AND v1 = null {allow_filtering}')) == []
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE v1 = null {allow_filtering}')) == []
+
+# Test repeated equality restrictions on the same column in SELECT:
+# "k = 0 AND k = 0" is the same as "k = 0", also together with a
+# clustering-key restriction, and "k = 0 AND k = 1" matches nothing.
+# Cassandra does not allow restricting a column with an equality more than
+# once, so this is a scylla_only test - see more in test_restrictions.py.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_null_support.
+def test_repeated_eq_on_partition_key(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'k int, c int, v int, PRIMARY KEY (k, c)') as table:
+        cql.execute(f'INSERT INTO {table} (k, c, v) VALUES (0, 0, 0)')
+        cql.execute(f'INSERT INTO {table} (k, c, v) VALUES (0, 1, 1)')
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE k = 0 AND k = 0')) == [(0, 0, 0), (0, 1, 1)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE k = 0 AND k = 0 AND c = 1')) == [(0, 1, 1)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE k = 0 AND k = 1')) == []
