@@ -432,51 +432,51 @@ future<> group0_state_machine::apply(raft::log_entry_ptr_list commands) {
 
     // `m` holds the read_apply mutex until apply() returns, so it is still held in the catch below.
     try {
-    for (const auto& entry : commands) {
-        const auto& c = std::get<raft::command>(entry->data);
-        auto is = ser::as_input_stream(c);
-        auto cmd = ser::deserialize(is, std::type_identity<group0_command>{});
+        for (const auto& entry : commands) {
+            const auto& c = std::get<raft::command>(entry->data);
+            auto is = ser::as_input_stream(c);
+            auto cmd = ser::deserialize(is, std::type_identity<group0_command>{});
 
-#ifndef SCYLLA_BUILD_MODE_RELEASE
-        // Ensure that the schema of the mutations is a group0 schema.
-        // This validation is supposed to be only performed in tests, so it is skipped in the release mode.
-        ensure_group0_schema(cmd, _sp.data_dictionary());
-#endif
+    #ifndef SCYLLA_BUILD_MODE_RELEASE
+            // Ensure that the schema of the mutations is a group0 schema.
+            // This validation is supposed to be only performed in tests, so it is skipped in the release mode.
+            ensure_group0_schema(cmd, _sp.data_dictionary());
+    #endif
 
-        slogger.trace("cmd: prev_state_id: {}, new_state_id: {}, creator_addr: {}, creator_id: {}",
-                cmd.prev_state_id, cmd.new_state_id, cmd.creator_addr, cmd.creator_id);
-        slogger.trace("cmd.history_append: {}", cmd.history_append);
+            slogger.trace("cmd: prev_state_id: {}, new_state_id: {}, creator_addr: {}, creator_id: {}",
+                    cmd.prev_state_id, cmd.new_state_id, cmd.creator_addr, cmd.creator_id);
+            slogger.trace("cmd.history_append: {}", cmd.history_append);
 
-        if (cmd.prev_state_id) {
-            if (*cmd.prev_state_id != m.last_id()) {
-                // This command used obsolete state. Make it a no-op.
-                // BTW. on restart, all commands after last snapshot descriptor become no-ops even when they originally weren't no-ops.
-                // This is because we don't restart from snapshot descriptor, but using current state of the tables so the last state ID
-                // is the one given by the last command.
-                // Similar thing may happen when we pull group0 state in transfer_snapshot - we pull the latest state of remote tables,
-                // not state at the snapshot descriptor.
-                slogger.trace("cmd.prev_state_id ({}) different than last group 0 state ID in history table ({})",
-                        cmd.prev_state_id, m.last_id());
-                continue;
+            if (cmd.prev_state_id) {
+                if (*cmd.prev_state_id != m.last_id()) {
+                    // This command used obsolete state. Make it a no-op.
+                    // BTW. on restart, all commands after last snapshot descriptor become no-ops even when they originally weren't no-ops.
+                    // This is because we don't restart from snapshot descriptor, but using current state of the tables so the last state ID
+                    // is the one given by the last command.
+                    // Similar thing may happen when we pull group0 state in transfer_snapshot - we pull the latest state of remote tables,
+                    // not state at the snapshot descriptor.
+                    slogger.trace("cmd.prev_state_id ({}) different than last group 0 state ID in history table ({})",
+                            cmd.prev_state_id, m.last_id());
+                    continue;
+                }
+            } else {
+                slogger.trace("unconditional modification, cmd.new_state_id: {}", cmd.new_state_id);
             }
-        } else {
-            slogger.trace("unconditional modification, cmd.new_state_id: {}", cmd.new_state_id);
+
+            auto size = m.cmd_size(cmd);
+            if (!m.can_merge(cmd, size)) {
+                co_await merge_and_apply(m);
+            }
+
+            m.add(std::move(cmd), size);
         }
 
-        auto size = m.cmd_size(cmd);
-        if (!m.can_merge(cmd, size)) {
+        if (!m.empty()) {
+            // apply remainder
             co_await merge_and_apply(m);
         }
 
-        m.add(std::move(cmd), size);
-    }
-
-    if (!m.empty()) {
-        // apply remainder
-        co_await merge_and_apply(m);
-    }
-
-    co_await _state_id_handler.advertise_state_id(m.last_id());
+        co_await _state_id_handler.advertise_state_id(m.last_id());
     } catch (...) {
         // A failure caused by shutdown is not fatal: the node is stopping, and the
         // command is applied again after the restart.
