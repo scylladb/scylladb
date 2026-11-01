@@ -2428,8 +2428,7 @@ void table::rebuild_statistics() {
 }
 
 void table::rebuild_large_data_index() {
-    auto& sstables = *get_sstables();
-    _large_data_guardrail->rebuild(sstables);
+    _large_data_guardrail->rebuild(*get_sstables());
 }
 
 future<table::sstable_list_permit>
