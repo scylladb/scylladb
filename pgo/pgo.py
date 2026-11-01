@@ -680,20 +680,23 @@ async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
             ["write_rmw", 250_000,  32],   # LWT/Paxos: keep in-flight LSA state bounded
         ]
         for workload in workloads:
-            # the tool doesn't yet support load balancing so we
-            # run one process per node
-            await clean_gather(*[run_checked([executable,
-                "perf-alternator",
-                "--smp", "1",
-                "--workload", f"{workload[0]}",
-                "--partitions", "100000",
-                # we reuse cluster data so don't need to pre-populate
-                "--prepopulate-partitions", "0",
-                "--operations-per-shard", f"{workload[1]}",
-                "--concurrency", f"{workload[2]}",
-                "--cpuset", f'{CS_CPUSET.get()}',
-                "--remote-host", addr,
-            ]) for addr in addrs])
+            # The tool doesn't yet support load balancing, so we run one
+            # process per node. We run them one after another, because each
+            # process deletes and recreates the same table, so concurrent
+            # processes would delete each other's table.
+            for addr in addrs:
+                await run_checked([executable,
+                    "perf-alternator",
+                    "--smp", "1",
+                    "--workload", f"{workload[0]}",
+                    "--partitions", "100000",
+                    # we reuse cluster data so don't need to pre-populate
+                    "--prepopulate-partitions", "0",
+                    "--operations-per-shard", f"{workload[1]}",
+                    "--concurrency", f"{workload[2]}",
+                    "--cpuset", f'{CS_CPUSET.get()}',
+                    "--remote-host", addr,
+                ])
 
     await merge_profraw(workdir)
 
