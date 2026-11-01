@@ -28,6 +28,7 @@
 #include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
 #include "replica/database.hh"
+#include "sstables/sstables_manager.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
 
@@ -236,6 +237,42 @@ SEASTAR_TEST_CASE(test_cluster_config_registry_rejects_integer_value_out_of_rang
         BOOST_REQUIRE_THROW(
             e.execute_cql("ALTER CLUSTER WITH test_ranged_option = 101").get(),
             exceptions::invalid_request_exception);
+    });
+}
+
+// An integer option's bounds are enforced on write; reading doesn't substitute the default.
+SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_integer_bounds) {
+    namespace reg = db::cluster_config_registry;
+    const auto* opt = reg::find(reg::option_name::min_compression_saving_percent);
+    BOOST_REQUIRE(opt != nullptr);
+    BOOST_REQUIRE(!reg::validate_value(*opt, "0"));
+    BOOST_REQUIRE(!reg::validate_value(*opt, "99"));
+    BOOST_REQUIRE(reg::validate_value(*opt, "100"));
+    BOOST_REQUIRE(reg::validate_value(*opt, "-1"));
+    BOOST_REQUIRE_EQUAL(reg::to_integer(*opt, sstring("99")), 99);
+    BOOST_REQUIRE_EQUAL(reg::to_integer(*opt, sstring("100")), 100);
+}
+
+// Views, index tables and CDC logs write sstables with their base table's setting.
+SEASTAR_TEST_CASE(test_min_compression_saving_percent_follows_base_table) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_cfg WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_cfg.tbl (pk int PRIMARY KEY, v int) WITH cdc = {'enabled': true} AND min_compression_saving_percent = 10").get();
+        e.execute_cql("CREATE TABLE ks_cfg.other (pk int PRIMARY KEY, v int)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW ks_cfg.mv AS SELECT * FROM ks_cfg.tbl "
+                      "WHERE v IS NOT NULL PRIMARY KEY (v, pk)").get();
+        e.execute_cql("CREATE INDEX idx ON ks_cfg.tbl (v)").get();
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>&) {
+            auto& db = e.local_db();
+            auto percent = [&] (std::string_view table) {
+                return db.get_user_sstables_manager().min_compression_saving_percent(*db.find_schema("ks_cfg", sstring(table)));
+            };
+            for (auto table : {"tbl", "mv", "idx_index", "tbl_scylla_cdc_log"}) {
+                BOOST_TEST_INFO(table);
+                BOOST_REQUIRE_EQUAL(percent(table), 10);
+            }
+            BOOST_REQUIRE_EQUAL(percent("other"), 0);
+        });
     });
 }
 

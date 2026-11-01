@@ -118,6 +118,13 @@ constexpr std::array registry_options = {
         // overflow.
         .valid_range = integer_range{.min = 1, .max = 10 * 365 * 24 * 3600},
     },
+    option{
+        .name = option_name::min_compression_saving_percent,
+        .description = "Store an sstable chunk uncompressed unless compression saves at least this percentage (0-99) of its size, saving compressor CPU for data that doesn't compress, such as encrypted values. Applies to sstables written afterwards. 0 disables it",
+        .scopes = table_oriented_scopes,
+        .default_value = int64_t(0),
+        .valid_range = integer_range{.min = 0, .max = 99},
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
