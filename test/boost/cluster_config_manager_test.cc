@@ -239,6 +239,42 @@ SEASTAR_TEST_CASE(test_cluster_config_registry_rejects_integer_value_out_of_rang
     });
 }
 
+// The size-based auto repair trigger compares auto_repair_threshold_size_fraction against an
+// unrepaired-to-total ratio that cannot exceed 1, so a larger threshold could never fire;
+// rejecting it at the door beats storing a value that silently does nothing. NaN needs the
+// explicit check in the option's parser: it compares false against both ends of the range.
+SEASTAR_TEST_CASE(test_cluster_config_registry_bounds_auto_repair_size_thresholds) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto* fraction = db::cluster_config_registry::find(
+                db::cluster_config_registry::option_name::auto_repair_threshold_size_fraction);
+        BOOST_REQUIRE(fraction != nullptr);
+        for (const auto& ok : {"0", "0.5", "1"}) {
+            BOOST_REQUIRE(!db::cluster_config_registry::validate_value(*fraction, ok));
+        }
+        for (const auto& bad : {"-0.1", "1.5", "2", "NaN", "Infinity", "-Infinity"}) {
+            BOOST_REQUIRE(db::cluster_config_registry::validate_value(*fraction, bad));
+        }
+
+        const auto* min_size = db::cluster_config_registry::find(
+                db::cluster_config_registry::option_name::auto_repair_threshold_min_size_in_bytes);
+        BOOST_REQUIRE(min_size != nullptr);
+        BOOST_REQUIRE(!db::cluster_config_registry::validate_value(*min_size, "0"));
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(*min_size, "-1"));
+
+        // An out-of-range value is refused on the write path, with the expectation in the message.
+        for (const auto& bad : {"1.5", "NaN"}) {
+            BOOST_REQUIRE_EXCEPTION(
+                e.execute_cql(seastar::format("ALTER CLUSTER WITH auto_repair_threshold_size_fraction = {}", bad)).get(),
+                exceptions::invalid_request_exception, [] (const exceptions::invalid_request_exception& ex) {
+                return std::string_view(ex.what()).find(
+                        "Invalid value for cluster config 'auto_repair_threshold_size_fraction': "
+                        "expected a number between 0 and 1") != std::string_view::npos;
+            });
+        }
+        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_size_fraction = 0.3").get());
+    });
+}
+
 // DESCRIBE echoes every effective value back both as a property right-hand side and inside
 // a "-- from <scope> (...)" provenance comment, and it wraps a described CDC log or paxos
 // table in a /* ... */ block. A CQL string literal has no escape for a line break or for
