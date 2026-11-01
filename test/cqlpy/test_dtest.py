@@ -12,6 +12,7 @@
 # Cassandra to check their assumptions.
 #############################################################################
 
+import pytest
 from cassandra.concurrent import execute_concurrent_with_args
 
 from .util import new_test_table
@@ -79,3 +80,45 @@ def test_limit_multiget(cql, test_keyspace):
         # the second partition
         assert list(cql.execute(f'SELECT * FROM {table} WHERE p IN (48, 2) LIMIT 4')) == [
             (2, 'http://foo.com', 42), (2, 'http://foo.net', 42), (2, 'http://foo.org', 42), (48, 'http://foo.com', 42)]
+
+# Test a multi-column restriction on clustering columns, like
+# "(b, c, d, e) > (0, 1, 1, 0)", on tables whose clustering columns have
+# different mixes of ASC and DESC clustering order. Such a restriction
+# compares the tuples of values, regardless of the clustering order of each
+# column, while the matching rows are returned in the table's clustering
+# order. Reproduces CASSANDRA-7281, where a mix of ASC and DESC columns
+# made such SELECTs return wrong results.
+# The expected results are computed in Python: filter the rows by comparing
+# tuples, and sort them by the clustering order.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_tuple_query_mixed_order_columns
+# and the eight similar tuple_query_mixed_order_columns_test2 through 9,
+# which never ran because their names do not begin with "test". Those
+# nine tests used the seven clustering orders below, each with ">", "<=",
+# or both, and this test checks both for every one of them.
+@pytest.mark.parametrize('order', [
+    ('DESC', 'ASC', 'DESC', 'ASC'),
+    ('DESC', 'DESC', 'DESC', 'ASC'),
+    ('ASC', 'DESC', 'DESC', 'ASC'),
+    ('DESC', 'ASC', 'ASC', 'DESC'),
+    ('DESC', 'ASC', 'DESC', 'DESC'),
+    ('DESC', 'DESC', 'DESC', 'DESC'),
+    ('ASC', 'ASC', 'ASC', 'ASC')], ids='-'.join)
+def test_tuple_query_mixed_order_columns(cql, test_keyspace, order):
+    clustering_order = ', '.join(f'{col} {o}' for col, o in zip('bcde', order))
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, e int, PRIMARY KEY (a, b, c, d, e)',
+                        f'WITH CLUSTERING ORDER BY ({clustering_order})') as table:
+        rows = [(2, 0, 0, 0), (1, 0, 0, 0), (0, 0, 0, 0), (0, 1, 2, -1), (0, 1, 1, -1), (0, 1, 1, 0),
+                (0, 1, 1, 1), (0, 1, 0, 2), (0, 2, 1, -3), (0, 2, 0, 3), (-1, 2, 2, 2)]
+        stmt = cql.prepare(f'INSERT INTO {table} (a, b, c, d, e) VALUES (0, ?, ?, ?, ?)')
+        for row in rows:
+            cql.execute(stmt, row)
+        def clustering_key(row):
+            return tuple(v if o == 'ASC' else -v for v, o in zip(row, order))
+        # Check that ">" returns the rows whose (b, c, d, e) is greater than
+        # (0, 1, 1, 0), in clustering order
+        expected = [(0, *row) for row in sorted(rows, key=clustering_key) if row > (0, 1, 1, 0)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d, e) > (0, 1, 1, 0)')) == expected
+        # Check that "<=" returns the rest of the rows, in clustering order
+        expected = [(0, *row) for row in sorted(rows, key=clustering_key) if row <= (0, 1, 1, 0)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d, e) <= (0, 1, 1, 0)')) == expected
