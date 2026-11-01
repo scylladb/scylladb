@@ -14,6 +14,7 @@
 #include <flat_set>
 #include <memory>
 #include <ranges>
+#include "utils/assert.hh"
 
 namespace {
 
@@ -255,7 +256,7 @@ public:
         // The suite is the master test suite, so let's ignore it
         // because it doesn't represent any actual test suite.
         if (ts.p_parent_id == boost::unit_test::INV_TEST_UNIT_ID) {
-            assert(active_suites.empty());
+            SCYLLA_ASSERT(active_suites.empty());
             return true;
         }
 
@@ -269,7 +270,7 @@ public:
         // The suite is the master test suite, so let's ignore it
         // because it doesn't represent any actual test suite.
         if (ts.p_parent_id == boost::unit_test::INV_TEST_UNIT_ID) {
-            assert(active_suites.empty());
+            SCYLLA_ASSERT(active_suites.empty());
             return;
         }
 
@@ -310,12 +311,12 @@ private:
     }
 
     void drop_active_suite() {
-        assert(!active_suites.empty());
+        SCYLLA_ASSERT(!active_suites.empty());
         active_suites.pop_back();
     }
 
     test_suite_info& get_active_suite(std::string_view filename) {
-        assert(!active_suites.empty());
+        SCYLLA_ASSERT(!active_suites.empty());
 
         test_file_info& file_info = get_file_info(filename);
         test_suite_info* last = &get_root_suite(file_info, active_suites[0]);
@@ -396,7 +397,7 @@ auto fmt::formatter<internal::test_case_info>::format(
         fmt::format_context& ctx) const -> decltype(ctx.out())
 {
     // Sanity check. The names of tests are expected to comprise only of alphanumeric characters.
-    assert(std::ranges::count(test_info.name, '"') == 0);
+    SCYLLA_ASSERT(std::ranges::count(test_info.name, '"') == 0);
     auto label_range = test_info.labels | std::views::transform(escape_quotation_marks);
 
     return fmt::format_to(ctx.out(), R"({{"name":"{}","labels":"{}"}})",

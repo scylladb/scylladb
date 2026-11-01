@@ -5692,7 +5692,7 @@ operation_func get_operation_function(const operation& op) noexcept {
     auto it = std::find_if(operations_with_func.begin(), operations_with_func.end(), [&op_name = name.back()] (const auto& el) {
         return el.first.name() == op_name;
     });
-    assert(it != operations_with_func.end());
+    SCYLLA_ASSERT(it != operations_with_func.end());
     auto& action = it->second;
     name.pop_back();
 

@@ -1132,7 +1132,7 @@ public:
         : multipart_upload(std::move(cln), std::move(target_object), std::move(metadata), std::move(tag), as)
         , _max_copy_part_size(part_size)
         , _source_object(std::move(source_object)) {
-        assert(_max_copy_part_size > 0 && _max_copy_part_size <= _default_copy_part_size);
+        SCYLLA_ASSERT(_max_copy_part_size > 0 && _max_copy_part_size <= _default_copy_part_size);
     }
 
     copy_s3_object(shared_ptr<client> cln, sstring source_object, sstring target_object, object_metadata metadata, std::optional<tag> tag, abort_source* as)
@@ -1866,7 +1866,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             }
                             if (_buffers.empty() || units) {
                                 buf = co_await in.read();
-                                assert(buf.size() <= _socket_buff_size);
+                                SCYLLA_ASSERT(buf.size() <= _socket_buff_size);
                             } else {
                                 break;
                             }

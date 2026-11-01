@@ -12,6 +12,7 @@
 #include "incremental_compaction_strategy.hh"
 #include "incremental_backlog_tracker.hh"
 #include <ranges>
+#include "utils/assert.hh"
 
 namespace compaction {
 
@@ -180,7 +181,7 @@ incremental_compaction_strategy::create_run_and_length_pairs(const std::vector<s
 
     for(auto& r_ptr : runs) {
         auto& r = *r_ptr;
-        assert(r.data_size() != 0);
+        SCYLLA_ASSERT(r.data_size() != 0);
         run_length_pairs.emplace_back(r_ptr, r.data_size());
     }
 

@@ -2074,7 +2074,7 @@ public:
             };
 
             auto first_non_matching_replicas = [&] (tablet_replica_set r1, tablet_replica_set r2) -> std::optional<std::pair<tablet_replica, tablet_replica>> {
-                assert(r1.size() == r2.size());
+                SCYLLA_ASSERT(r1.size() == r2.size());
                 // Subtract intersecting (co-located) elements from the replicas set of sibling tablets.
                 // Think for example that tablet 0 and 1 have replicas [n2, n4] and [n1, n2] respectively.
                 // After subtraction, replica of tablet 1 in n1 will be a candidate for co-location with

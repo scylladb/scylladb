@@ -28,6 +28,7 @@
 #include "utils/gcp/gcp_credentials.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/http.hh"
+#include "utils/assert.hh"
 
 namespace fs = std::filesystem;
 namespace tp = tests::proc;
@@ -429,7 +430,7 @@ seastar::future<> local_gcs_wrapper::setup() {
 
 seastar::future<> local_gcs_wrapper::teardown() {
     auto f = gcs_fixture::active();
-    assert(f);
+    SCYLLA_ASSERT(f);
 
     co_await f->reset_upload_faults();
 

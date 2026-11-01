@@ -18,6 +18,7 @@
 #include "test/lib/key_utils.hh"
 #include "utils/bit_cast.hh"
 #include "sstables/trie/trie_writer.hh"
+#include "utils/assert.hh"
 
 using namespace sstables::trie;
 
@@ -71,7 +72,7 @@ void test_one_set_of_strings(
     uint64_t seed
 ) {
     testlog.debug("test_one_set_of_strings: inputs={}, page_size={}, max_chain_len={}", inputs, page_size, max_chain_len);
-    assert(std::ranges::is_sorted(inputs));
+    SCYLLA_ASSERT(std::ranges::is_sorted(inputs));
     struct trie_output_stream {
         sink_pos _pos{0};
         size_t _page_size = 0;
@@ -177,7 +178,7 @@ void test_one_set_of_strings(
         return;
     }
 
-    assert(root_pos.valid());
+    SCYLLA_ASSERT(root_pos.valid());
 
     std::vector<std::string> outputs;
     std::vector<trie_payload> output_payloads;

@@ -11,6 +11,7 @@
 #include <seastar/util/internal/iovec_utils.hh>
 #include <seastar/util/memory-data-sink.hh>
 #include <seastar/util/memory-data-source.hh>
+#include "utils/assert.hh"
 
 using namespace seastar;
 
@@ -75,7 +76,7 @@ file create_file_for_sink(data_sink sink) {
         data_sink_file_impl(data_sink sink)
             : _sink(std::move(sink))
         {
-            assert(this->_disk_write_dma_alignment == sizeof(_buffer));
+            SCYLLA_ASSERT(this->_disk_write_dma_alignment == sizeof(_buffer));
         }
         future<> put(const char* data, size_t len) {
             temporary_buffer<char> buf(data, len);
@@ -120,8 +121,8 @@ file create_file_for_sink(data_sink sink) {
                 len -= size;
             }
 
-            assert(len <= sizeof(_buffer));
-            assert(_bufpos == 0 || len == 0);
+            SCYLLA_ASSERT(len <= sizeof(_buffer));
+            SCYLLA_ASSERT(_bufpos == 0 || len == 0);
             std::copy(buf, buf+len, _buffer);
             _pos += len;
             _bufpos += len;
@@ -196,7 +197,7 @@ seastar::file create_file_for_seekable_source(seekable_data_source src, seekable
             auto dst = reinterpret_cast<char*>(buffer);
             while (len) {
                 auto buf = co_await _source.get_at(pos + res, len);
-                assert(buf.size() <= len);
+                SCYLLA_ASSERT(buf.size() <= len);
                 if (buf.empty()) {
                     break;
                 }

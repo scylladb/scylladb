@@ -14,6 +14,7 @@
 #define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
 #include <cryptopp/md5.h>
 #include <cryptopp/sha.h>
+#include "utils/assert.hh"
 
 static_assert(Hasher<hasher>);
 
@@ -109,7 +110,7 @@ std::array<std::byte, 32> get_sha256(std::span<const std::byte> in) {
     hasher.update(reinterpret_cast<const char*>(in.data()), in.size());
     auto b = hasher.finalize_array();
     auto out = std::array<std::byte, 32>();
-    assert(b.size() == out.size());
+    SCYLLA_ASSERT(b.size() == out.size());
     std::memcpy(&out, b.data(), b.size());
     return out;
 }

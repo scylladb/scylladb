@@ -16,6 +16,7 @@
 #include "utils/hashers.hh"
 #include "raft/raft.hh"
 #include <zdict.h>
+#include "utils/assert.hh"
 
 using namespace seastar;
 
@@ -30,8 +31,8 @@ future<std::vector<dict_sampler::page_type>> dict_sampler::sample(request req, a
         reset();
     });
 
-    assert(!_sampling);
-    assert(req.page_size);
+    SCYLLA_ASSERT(!_sampling);
+    SCYLLA_ASSERT(req.page_size);
 
     _storage.reserve(req.sample_size / req.page_size);
     _page_sampler = utils::page_sampler(req.page_size, req.sample_size / req.page_size, /* hardcoded random seed */ 0);

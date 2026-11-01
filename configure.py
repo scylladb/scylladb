@@ -470,7 +470,7 @@ modes = {
         'advanced_optimizations': False,
     },
     'release': {
-        'cxxflags': '-ffunction-sections -fdata-sections ',
+        'cxxflags': '-ffunction-sections -fdata-sections -DNDEBUG',
         'cxx_ld_flags': '-Wl,--gc-sections -Wl,--no-lto-pgo-warn-mismatch',
         'stack-usage-threshold': 1024*13,
         'optimization-level': '3',

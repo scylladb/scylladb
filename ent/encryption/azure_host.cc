@@ -27,6 +27,7 @@
 #include "encryption.hh"
 #include "encryption_exceptions.hh"
 #include "key_cache.hh"
+#include "utils/assert.hh"
 
 using namespace std::chrono_literals;
 
@@ -457,7 +458,7 @@ future<azure_host::key_and_id_type> azure_host::impl::create_key(const attr_cach
         .id = id,
     };
     co_await _id_cache.insert(key2, [&](const id_cache_key& kin) -> future<bytes>{
-        assert(kin.id == key2.id);
+        SCYLLA_ASSERT(kin.id == key2.id);
         co_return key->key();
     });
 

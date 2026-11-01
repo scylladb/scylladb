@@ -20,6 +20,7 @@
 #include "utils/log.hh"
 #include <chrono>
 #include <seastar/core/when_all.hh>
+#include "utils/assert.hh"
 
 BOOST_AUTO_TEST_SUITE(error_injection_test)
 
@@ -40,8 +41,8 @@ SEASTAR_TEST_CASE(test_inject_noop) {
             [] () { throw std::runtime_error("shouldn't happen"); }));
 
     errinj.enable("error");
-    BOOST_ASSERT(errinj.enabled_injections().empty());
-    BOOST_ASSERT(errinj.enter("error") == false);
+    SCYLLA_ASSERT(errinj.enabled_injections().empty());
+    SCYLLA_ASSERT(errinj.enter("error") == false);
 
     auto f = errinj.inject("noop2", sleep_msec);
     BOOST_REQUIRE(f.available() && !f.failed());
@@ -62,13 +63,13 @@ SEASTAR_TEST_CASE(test_is_enabled) {
     // Test enable and disable
     errinj.enable("is_enabled_test", false);
     errinj.disable("is_enabled_test");
-    BOOST_ASSERT(errinj.enabled_injections().size() == 0);
+    SCYLLA_ASSERT(errinj.enabled_injections().size() == 0);
 
     // Test enable with one_shot=true and enter
     errinj.enable("is_enabled_test", true);
-    BOOST_ASSERT(errinj.enabled_injections().size() == 1);
-    BOOST_ASSERT(errinj.enter("is_enabled_test"));
-    BOOST_ASSERT(errinj.enabled_injections().size() == 0);
+    SCYLLA_ASSERT(errinj.enabled_injections().size() == 1);
+    SCYLLA_ASSERT(errinj.enter("is_enabled_test"));
+    SCYLLA_ASSERT(errinj.enabled_injections().size() == 0);
 
     return make_ready_future<>();
 }

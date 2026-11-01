@@ -18,6 +18,7 @@
 #include "encryption.hh"
 #include "utils/serialization.hh"
 #include "encrypted_file_impl.hh"
+#include "utils/assert.hh"
 
 namespace encryption {
 
@@ -189,7 +190,7 @@ void encrypted_file_impl::clear_length() {
 }
 
 bytes block_encryption_base::iv_for(uint64_t pos) const {
-    assert(!(pos & (block_size - 1)));
+    SCYLLA_ASSERT(!(pos & (block_size - 1)));
 
     // #658. ECB block mode has no IV. Bad for security,
     // but must handle.
@@ -198,8 +199,8 @@ bytes block_encryption_base::iv_for(uint64_t pos) const {
         return bytes{};
     }
 
-    assert(iv_len >= _key->block_size());
-    assert(iv_len >= sizeof(uint64_t));
+    SCYLLA_ASSERT(iv_len >= _key->block_size());
+    SCYLLA_ASSERT(iv_len >= sizeof(uint64_t));
 
     bytes b(bytes::initialized_later(), std::max(iv_len, _block_key->block_size()));
     std::fill(b.begin(), b.end() - sizeof(uint64_t), 0);
@@ -217,8 +218,8 @@ bytes block_encryption_base::iv_for(uint64_t pos) const {
 }
 
 size_t encrypted_file_impl::transform(uint64_t pos, const void* buffer, size_t len, void* dst, mode m) {
-    assert(!(pos & (block_size - 1)));
-    assert(_file_length || m == mode::encrypt);
+    SCYLLA_ASSERT(!(pos & (block_size - 1)));
+    SCYLLA_ASSERT(_file_length || m == mode::encrypt);
 
     auto o = reinterpret_cast<char*>(dst);
     auto i = reinterpret_cast<const char*>(buffer);
@@ -265,7 +266,7 @@ size_t encrypted_file_impl::transform(uint64_t pos, const void* buffer, size_t l
 }
 
 temporary_buffer<uint8_t> encrypted_file_impl::transform(uint64_t pos, const void* buffer, size_t len, mode m) {
-    assert(!(len & (block_size - 1)));
+    SCYLLA_ASSERT(!(len & (block_size - 1)));
     auto tmp = temporary_buffer<uint8_t>::aligned(_file.memory_dma_alignment(), len);
     auto s = transform(pos, buffer, len, tmp.get_write(), m);
     tmp.trim(s);
@@ -273,9 +274,9 @@ temporary_buffer<uint8_t> encrypted_file_impl::transform(uint64_t pos, const voi
 }
 
 future<size_t> encrypted_file_impl::write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) {
-    assert(!(len & (block_size - 1)));
+    SCYLLA_ASSERT(!(len & (block_size - 1)));
     auto tmp = transform(pos, buffer, len, mode::encrypt);
-    assert(tmp.size() == len); // writing
+    SCYLLA_ASSERT(tmp.size() == len); // writing
     auto p = tmp.get();
     return _file.dma_write(pos, p, len, intent).then([this, tmp = std::move(tmp), pos](size_t s) {
         maybe_set_length(pos + s);
@@ -288,10 +289,10 @@ future<size_t> encrypted_file_impl::write_dma(uint64_t pos, std::vector<iovec> i
     tmp.reserve(iov.size());
     size_t n = 0;
     for (auto& i : iov) {
-        assert(!(i.iov_len & (block_size - 1)));
+        SCYLLA_ASSERT(!(i.iov_len & (block_size - 1)));
 
         tmp.emplace_back(transform(pos + n, i.iov_base, i.iov_len, mode::encrypt));
-        assert(tmp.back().size() == i.iov_len); // writing
+        SCYLLA_ASSERT(tmp.back().size() == i.iov_len); // writing
         n += i.iov_len;
         i = iovec{ tmp.back().get_write(), tmp.back().size() };
     }
@@ -302,7 +303,7 @@ future<size_t> encrypted_file_impl::write_dma(uint64_t pos, std::vector<iovec> i
 }
 
 future<size_t> encrypted_file_impl::read_dma(uint64_t pos, void* buffer, size_t len, io_intent* intent) {
-    assert(!(len & (block_size - 1)));
+    SCYLLA_ASSERT(!(len & (block_size - 1)));
     return verify_file_length().then([this, pos, buffer, len, intent] {
         if (pos >= *_file_length) {
             return make_ready_future<size_t>(0);
@@ -409,7 +410,7 @@ future<> encrypted_file_impl::truncate(uint64_t length) {
                     return read_dma(t.aligned_size, t.buf.get_write(), n, nullptr).then([&, n](size_t r) mutable {
                         auto rem = size_t(t.size - t.aligned_size);
                         auto ar = align_up(r, block_size);
-                        assert(ar <= t.buf.size());
+                        SCYLLA_ASSERT(ar <= t.buf.size());
                         if (rem < ar) {
                             std::fill(t.buf.get_write() + rem, t.buf.get_write() + ar, 0);
                         }
@@ -615,7 +616,7 @@ class encrypted_data_sink : public data_sink_impl, public block_encryption_base 
     using mode = block_encryption_base::mode;
 
     void transform(uint64_t pos, char* data, size_t len) {
-        assert(!(pos & (block_size - 1)));
+        SCYLLA_ASSERT(!(pos & (block_size - 1)));
         auto b = _key->block_size();
 
         size_t off = 0;
@@ -659,7 +660,7 @@ private:
             }
         }
 
-        assert(!(_pos & (block_size - 1)));
+        SCYLLA_ASSERT(!(_pos & (block_size - 1)));
 
         while (buf.size() >= block_size) {
             auto size = align_down(buf.size(), block_size);
@@ -669,8 +670,8 @@ private:
         }
 
         if (!buf.empty()) {
-            assert(_bufpos == 0);
-            assert(buf.size() < sizeof(_buffer));
+            SCYLLA_ASSERT(_bufpos == 0);
+            SCYLLA_ASSERT(buf.size() < sizeof(_buffer));
             std::copy(buf.begin(), buf.end(), _buffer);
             _bufpos = buf.size();
         }
@@ -789,7 +790,7 @@ public:
             output.trim(output.size() - std::min(output.size(), key_block_size));
         }
 
-        assert(is_aligned(_current_position, block_size));
+        SCYLLA_ASSERT(is_aligned(_current_position, block_size));
         // finally trim front to handle any skip remainders
         output.trim_front(std::min(std::exchange(_skip, 0), output.size()));
 
@@ -801,7 +802,7 @@ public:
             // since we only give back data aligned to block_size chunks,
             // a client would only ever skip from a block boundary.
             auto to_skip = align_down(n, block_size);
-            assert(is_aligned(_next.size(), block_size));
+            SCYLLA_ASSERT(is_aligned(_next.size(), block_size));
             co_await _input.skip(to_skip - _next.size());
             n -= to_skip;
             _current_position += to_skip;

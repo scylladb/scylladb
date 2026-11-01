@@ -956,7 +956,7 @@ future<> storage_service::compression_dictionary_updated_callback_all() {
 }
 
 future<> storage_service::compression_dictionary_updated_callback(std::string_view name) {
-    assert(this_shard_id() == 0);
+    SCYLLA_ASSERT(this_shard_id() == 0);
     return _compression_dictionary_updated_callback(name);
 }
 
