@@ -340,7 +340,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     // the state ID was not yet appended so the above check will pass.
 
     bool state_change = false;
-    std::optional<storage_service::state_change_hint> topology_state_change_hint;
+    bool topology_changed = false;
     modules_to_reload modules_to_reload;
     utils::chunked_vector<canonical_mutation>* mutations = nullptr;
 
@@ -356,13 +356,13 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     [&] (topology_change& chng) {
         modules_to_reload = get_modules_to_reload(chng.mutations);
         state_change = true;
-        topology_state_change_hint = {.tablets_hint = replica::get_tablet_metadata_change_hint(chng.mutations)};
+        topology_changed = true;
         mutations = &chng.mutations;
     },
     [&] (mixed_change& chng) {
         modules_to_reload = get_modules_to_reload(chng.mutations);
         state_change = true;
-        topology_state_change_hint.emplace();
+        topology_changed = true;
         mutations = &chng.mutations;
     },
     [&] (write_mutations& muts) {
@@ -377,7 +377,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     // are only persisted.
     std::unique_ptr<db::schema_tables::schema_applier> applier;
     if (state_change && _in_memory_state_machine_enabled) {
-        applier = std::make_unique<db::schema_tables::schema_applier>(_sp.container(), _ss.container(), _ss._sys_ks, topology_state_change_hint);
+        applier = std::make_unique<db::schema_tables::schema_applier>(_sp.container(), _ss.container(), _ss._sys_ks, topology_changed);
     }
     std::exception_ptr ex;
     try {
@@ -399,7 +399,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
             co_await applier->apply_persisted();
         }
         if (_in_memory_state_machine_enabled) {
-            if (topology_state_change_hint) {
+            if (topology_changed) {
                 _ss._topology_state_machine.event.broadcast();
             }
             co_await utils::get_local_injector().inject("group0_state_machine_pause_before_reload_modules", utils::wait_for_message(60s));
@@ -664,7 +664,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     // in it, once both are persisted.
     std::unique_ptr<db::schema_tables::schema_applier> applier;
     if (_in_memory_state_machine_enabled) {
-        applier = std::make_unique<db::schema_tables::schema_applier>(_sp.container(), _ss.container(), _ss._sys_ks, storage_service::state_change_hint{});
+        applier = std::make_unique<db::schema_tables::schema_applier>(_sp.container(), _ss.container(), _ss._sys_ks, true);
     }
     std::exception_ptr ex;
     bool persisted = false;
