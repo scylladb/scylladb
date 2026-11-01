@@ -192,3 +192,55 @@ def test_counters(cql, test_keyspace):
         assert list(cql.execute(f'SELECT total FROM {table} {where}')) == [(-2,)]
         cql.execute(f'UPDATE {table} SET total = total -2 {where}')
         assert list(cql.execute(f'SELECT total FROM {table} {where}')) == [(-4,)]
+
+# Test that SELECT respects inclusive and exclusive bounds of a slice on
+# the clustering key: each of the four combinations of ">" or ">=" with "<"
+# or "<=", and also with LIMIT, and with ORDER BY DESC and LIMIT.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_exclusive_slice, which originally
+# came from Cassandra's old Python cql_tests.py (exclusive_slice_test).
+# Cassandra's Java version of that test, translated in cassandra_tests as
+# testSelectBounds, uses a COMPACT STORAGE table; this one uses a regular
+# table.
+def test_exclusive_slice(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int, c int, v int, PRIMARY KEY (k, c)') as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (k, c, v) VALUES (0, ?, ?)')
+        for i in range(10):
+            cql.execute(stmt, [i, i])
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0')) == [(i,) for i in range(10)]
+        # Check the four combinations of inclusive and exclusive bounds
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND c >= 2 AND c <= 6')) == [(i,) for i in range(2, 7)]
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND c > 2 AND c <= 6')) == [(i,) for i in range(3, 7)]
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND c >= 2 AND c < 6')) == [(i,) for i in range(2, 6)]
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND c > 2 AND c < 6')) == [(i,) for i in range(3, 6)]
+        # Check bounds with LIMIT, and with ORDER BY DESC and LIMIT
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND c > 2 AND c <= 6 LIMIT 2')) == [(3,), (4,)]
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND c >= 2 AND c < 6 ORDER BY c DESC LIMIT 2')) == [(5,), (4,)]
+
+# Test IN restrictions on clustering columns. With a single clustering
+# column, "c IN (5, 2, 8)" returns the rows in clustering order, not in the
+# order of the IN list. With two clustering columns, IN is allowed on the
+# second one when the first is restricted by "=", and also on the first one
+# when the second is restricted by "=".
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_in_clause_wide_rows, which
+# originally came from Cassandra's old Python cql_tests.py
+# (in_clause_wide_rows_test). Cassandra's Java version of that test,
+# translated in cassandra_tests as testSelectKeyInForWideRows, uses COMPACT
+# STORAGE tables; this one uses regular tables.
+def test_in_clause_wide_rows(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int, c int, v int, PRIMARY KEY (k, c)') as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (k, c, v) VALUES (0, ?, ?)')
+        for i in range(10):
+            cql.execute(stmt, [i, i])
+        # Check that the rows are returned in clustering order
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND c IN (5, 2, 8)')) == [(2,), (5,), (8,)]
+    with new_test_table(cql, test_keyspace, 'k int, c1 int, c2 int, v int, PRIMARY KEY (k, c1, c2)') as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (k, c1, c2, v) VALUES (0, 0, ?, ?)')
+        for i in range(10):
+            cql.execute(stmt, [i, i])
+        # Check IN on the first clustering column, with "=" on the second.
+        # All rows have c1 = 0, so nothing matches.
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND c1 IN (5, 2, 8) AND c2 = 3')) == []
+        # Check IN on the second clustering column, with "=" on the first
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND c1 = 0 AND c2 IN (5, 2, 8)')) == [(2,), (5,), (8,)]
