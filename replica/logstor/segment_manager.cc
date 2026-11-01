@@ -37,6 +37,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/exception.hh>
+#include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/circular_buffer.hh>
 #include <seastar/core/future.hh>
@@ -2347,7 +2348,12 @@ public:
     segment_data_sink_impl(seg_ptr segment)
         : _segment(std::move(segment))
         , _rewriter(_segment->id(), _segment->seq_num(), [segment = _segment] (bytes_view data) {
-            return segment->append(data).discard_result();
+            // A direct write needs memory that is aligned to the block size, and nothing makes the
+            // streamed buffers aligned, so copy them.
+            auto buf = seastar::allocate_aligned_buffer<char>(data.size(), ondisk::block_alignment);
+            std::copy_n(data.data(), data.size(), buf.get());
+            auto aligned = bytes_view(reinterpret_cast<const int8_t*>(buf.get()), data.size());
+            return segment->append(aligned).then([buf = std::move(buf)] (segment_position) {});
         })
     {}
 
