@@ -540,3 +540,46 @@ def test_limit_bugs(cql, test_keyspace, schema, columns):
         assert list(cql.execute(f'SELECT * FROM {table}')) == all_rows
         for limit in range(1, 6):
             assert list(cql.execute(f'SELECT * FROM {table} LIMIT {limit}')) == all_rows[:limit]
+
+# Test that WRITETIME() and TTL() cannot be selected on an entire unfrozen
+# set column. Like an unfrozen map, an unfrozen set is stored as multiple
+# cells which may each have a different timestamp and TTL, so there is no
+# single value to return. Cassandra allows this, and returns a list of
+# timestamps, which we consider a Cassandra bug - see the explanation in
+# test_select_collection_element.py::test_writetime_ttl_whole_collection_forbidden,
+# which checks the same for a map column.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_collection_function, which
+# originally came from Cassandra's old Python cql_tests.py
+# (collection_function_test).
+def test_collection_function(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, l set<int>') as table:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f'SELECT ttl(l) FROM {table} WHERE k = 0')
+        with pytest.raises(InvalidRequest):
+            cql.execute(f'SELECT writetime(l) FROM {table} WHERE k = 0')
+
+# Test a SELECT with an IN restriction on the clustering key with many
+# values, most of which match no row. Reproduces CASSANDRA-8410.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_large_clustering_in, which
+# originally came from Cassandra's old Python cql_tests.py
+# (large_clustering_in_test). That test inserted 1000 random rows; here we
+# insert every 7th row, so the test is deterministic. Cassandra's Java
+# version of this test, translated in cassandra_tests as
+# testLargeClusteringINValues, uses 10,000 IN values, which is more than
+# Scylla's max_clustering_key_restrictions_per_query allows, so it is
+# marked xfail (issue #10577); this test uses only 100 values.
+def test_large_clustering_in(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int, c int, v int, PRIMARY KEY (k, c)') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (k, c, v) VALUES (?, ?, ?)')
+        select = cql.prepare(f'SELECT * FROM {table} WHERE k = ? AND c IN ?')
+        in_values = list(range(100))
+        # Check fetching one existing row and 99 nonexistent ones
+        cql.execute(insert, [0, 0, 0])
+        assert list(cql.execute(select, [0, in_values])) == [(0, 0, 0)]
+        # Insert more rows, some inside the range of the IN values and many
+        # outside it, and check that exactly the ones inside it are returned
+        clustering_values = list(range(0, 1000, 7))
+        execute_concurrent_with_args(cql, insert, [(0, c, c) for c in clustering_values], concurrency=100, raise_on_first_error=True)
+        assert list(cql.execute(select, [0, in_values])) == [(0, c, c) for c in clustering_values if c in in_values]
