@@ -515,3 +515,28 @@ def test_update_type(cql, test_keyspace, scylla_only):
         # Check changing the type of a set's elements
         cql.execute(f'ALTER TABLE {table} ALTER s TYPE set<blob>')
         assert list(cql.execute(f'SELECT * FROM {table}')) == [(phi_utf8, phi_utf8, {phi_utf8}, phi_utf8)]
+
+# Test LIMIT on a full-table scan, with one row in each partition: for every
+# LIMIT, the result must be the first rows of the full scan, which returns
+# partitions in token order. This is checked both for a table with a
+# clustering key and for one without. With the Murmur3 partitioner, the
+# default in both Scylla and Cassandra, the token order of partitions 1 to 4
+# is 1, 2, 4, 3. Reproduces CASSANDRA-4579, where LIMIT returned fewer rows
+# than it should have.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_limit_bugs, which originally came
+# from Cassandra's old Python cql_tests.py (limit_bugs_test). Cassandra's
+# Java version of that test was not translated in cassandra_tests, because
+# it used the ByteOrderedPartitioner.
+@pytest.mark.parametrize('schema,columns', [
+    ('a int, b int, c int, d int, e int, PRIMARY KEY (a, b)', 'a, b, c, d, e'),
+    ('a int PRIMARY KEY, b int, c int', 'a, b, c')], ids=['clustering', 'no_clustering'])
+def test_limit_bugs(cql, test_keyspace, schema, columns):
+    with new_test_table(cql, test_keyspace, schema) as table:
+        n = len(columns.split(', '))
+        for i in [1, 2, 3, 4]:
+            cql.execute(f'INSERT INTO {table} ({columns}) VALUES ({", ".join([str(i)] * n)})')
+        all_rows = [tuple([i] * n) for i in [1, 2, 4, 3]]
+        assert list(cql.execute(f'SELECT * FROM {table}')) == all_rows
+        for limit in range(1, 6):
+            assert list(cql.execute(f'SELECT * FROM {table} LIMIT {limit}')) == all_rows[:limit]
