@@ -154,6 +154,29 @@ BOOST_AUTO_TEST_CASE(test_segment_geometry_refuses_an_invalid_configuration) {
     BOOST_REQUIRE_EQUAL(largest.segment_count(), 1);
 }
 
+// Checks the file names that file_name makes, and that a name parses only in that form.
+SEASTAR_THREAD_TEST_CASE(test_file_name) {
+    BOOST_REQUIRE_EQUAL(file_name::data(3, 17).str(), "logstor-3-Data-17.db");
+    BOOST_REQUIRE_EQUAL(file_name::data(3, 17).tmp().str(), "logstor-3-Data-17.db.tmp");
+
+    for (const auto& name : {file_name::data(0, 0), file_name::data(3, 17), file_name::data(3, 17).tmp()}) {
+        BOOST_REQUIRE(file_name::parse(name.str()) == name);
+    }
+    const auto data = file_name::parse("logstor-3-Data-17.db.tmp");
+    BOOST_REQUIRE(data);
+    BOOST_REQUIRE_EQUAL(data->shard(), 3u);
+    BOOST_REQUIRE(data->kind() == file_name::component::data);
+    BOOST_REQUIRE_EQUAL(data->file_id().value_or(0), 17u);
+    BOOST_REQUIRE(data->is_tmp());
+
+    for (std::string_view name : {"", "logstor-3-Data-17", "logstor-3-Data-17.db.tmp.tmp", "logstor-3-Data.db",
+            "logstor-3-Data-.db", "logstor-3-Data-1x.db", "logstor-3-Data-017.db", "logstor-03-Data-17.db",
+            "logstor--1-Data-17.db", "logstor-3-17-Data.db", "logstor_3-Data-17.db", "ls-3-Data-17.db",
+            "logstor-3-Other-17.db", "logstor-3-Data-18446744073709551616.db", "me-1-big-Data.db"}) {
+        BOOST_REQUIRE_MESSAGE(!file_name::parse(name), name);
+    }
+}
+
 // Checks that a file is allocated by its first segment, and not when its background format ends. A
 // file manager that takes a formatted file as allocated starts no format of the next file, and the
 // first segment of the next file then fails.
@@ -197,14 +220,14 @@ SEASTAR_THREAD_TEST_CASE(test_file_manager_allocates_a_file_at_its_first_segment
 SEASTAR_THREAD_TEST_CASE(test_file_manager_recovers_a_prepared_directory) {
     tmpdir dir;
     auto path = [&] (std::string_view name) { return dir.path() / name; };
-    auto name = [] (unsigned shard, file_id_t file_id) { return fmt::format("ls_{}-{}-Data.db", shard, file_id); };
+    auto name = [] (unsigned shard, file_id_t file_id) { return file_name::data(shard, file_id).str(); };
 
     for (file_id_t file_id = 0; file_id < 4; ++file_id) {
         make_file(path(name(this_shard_id(), file_id)));
     }
-    const auto temporary_file = path(name(this_shard_id(), 4) + ".tmp");
+    const auto temporary_file = path(file_name::data(this_shard_id(), 4).tmp().str());
     const auto file_of_other_shard = path(name(this_shard_id() + 1, 0));
-    const auto file_with_bad_id = path(fmt::format("ls_{}-1x-Data.db", this_shard_id()));
+    const auto file_with_bad_id = path(fmt::format("logstor-{}-Data-1x.db", this_shard_id()));
     make_file(temporary_file);
     make_file(file_of_other_shard);
     make_file(file_with_bad_id);
@@ -262,8 +285,8 @@ SEASTAR_THREAD_TEST_CASE(test_file_manager_touches_only_the_files_of_its_shard) 
         cfg.shard = shard;
         return cfg;
     };
-    auto data_file = [&] (unsigned shard, file_id_t file_id) { return dir.path() / fmt::format("ls_{}-{}-Data.db", shard, file_id); };
-    auto temporary_file = [&] (unsigned shard, file_id_t file_id) { return dir.path() / fmt::format("ls_{}-{}-Data.db.tmp", shard, file_id); };
+    auto data_file = [&] (unsigned shard, file_id_t file_id) { return file_name::data(shard, file_id).in(dir.path()); };
+    auto temporary_file = [&] (unsigned shard, file_id_t file_id) { return file_name::data(shard, file_id).tmp().in(dir.path()); };
 
     // Shard 0 formats three files on startup. Shard 1 starts after it, so a recovery of shard 1 that
     // found the files of shard 0 would find three files instead of none, and retire file 2 of shard 0.
@@ -400,7 +423,7 @@ SEASTAR_THREAD_TEST_CASE(test_file_manager_stop_waits_for_the_background_format)
         files.stop().get();
         BOOST_REQUIRE_EQUAL(files.allocated_file_count(), 0);
         BOOST_REQUIRE(on_disk(files.file_path(0)));
-        BOOST_REQUIRE(!on_disk(files.file_path(0).string() + ".tmp"));
+        BOOST_REQUIRE(!on_disk(file_name::data(this_shard_id(), 0).tmp().in(dir.path())));
         BOOST_REQUIRE_EQUAL(seastar::file_size(files.file_path(0).string()).get(), file_size);
     }
 

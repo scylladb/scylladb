@@ -286,6 +286,7 @@
 #include <seastar/core/memory.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/shard_id.hh>
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -302,6 +303,7 @@
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/record_value.hh"
+#include "replica/logstor/segment_file.hh"
 #include "replica/logstor/segment_io.hh"
 #include "replica/logstor/segment_manager.hh"
 #include "replica/logstor/single_row_partition.hh"
@@ -974,10 +976,10 @@ private:
         return m;
     }
 
-    // The data files of a shard are named ls_{shard}-{file}-Data.db, and the first one is as good
-    // as any for a read that is only about what the read costs.
+    // The benchmark reads the first data file of the shard, because the read measures only its own
+    // cost, and each data file gives the same cost.
     future<> open_data_file() {
-        auto path = _dir / fmt::format("ls_{}-0-Data.db", this_shard_id());
+        auto path = file_name::data(this_shard_id(), 0).in(_dir);
         _data_file = co_await seastar::open_file_dma(path.string(), seastar::open_flags::ro);
         _data_file_size = co_await _data_file.size();
     }
