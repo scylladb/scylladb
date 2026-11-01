@@ -12,6 +12,8 @@
 # Cassandra to check their assumptions.
 #############################################################################
 
+from cassandra.concurrent import execute_concurrent_with_args
+
 from .util import new_test_table
 
 
@@ -31,3 +33,29 @@ def test_select_duplicate_column(cql, test_keyspace):
         # Check that a regular column can be selected three times, mixed
         # with other columns
         assert list(cql.execute(f'SELECT v, c, v, v FROM {table}')) == [(42, 'a', 42, 42), (24, 'b', 24, 24)]
+
+# Test LIMIT on a range scan - a SELECT whose WHERE restricts only the
+# token of the partition key - when partitions have more than one row.
+# LIMIT counts rows, not partitions, so "LIMIT 1" returns just the first row
+# of the first partition in the range, and a larger LIMIT can stop in the
+# middle of a partition. The test also checks that "token(p) >= token(2)"
+# includes partition 2, while "token(p) > token(2)" starts at the next
+# partition in token order. That next partition is 45, because both Scylla
+# and Cassandra use the Murmur3 partitioner by default.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_limit_ranges.
+def test_limit_ranges(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c text, v bigint, PRIMARY KEY (p, c)') as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (p, c, v) VALUES (?, ?, 42)')
+        args = [(p, f'http://foo.{tld}') for p in range(100) for tld in ['com', 'org', 'net']]
+        execute_concurrent_with_args(cql, stmt, args, concurrency=100, raise_on_first_error=True)
+        # Check that the range starting at partition 2 (inclusive) returns
+        # only partition 2's first row
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE token(p) >= token(2) LIMIT 1')) == [(2, 'http://foo.com', 42)]
+        # Check that the range after partition 2 (exclusive) returns only
+        # the first row of the next partition in token order, 45
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE token(p) > token(2) LIMIT 1')) == [(45, 'http://foo.com', 42)]
+        # Check that a LIMIT larger than a partition stops in the middle of
+        # the next partition
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE token(p) >= token(2) LIMIT 4')) == [
+            (2, 'http://foo.com', 42), (2, 'http://foo.net', 42), (2, 'http://foo.org', 42), (45, 'http://foo.com', 42)]
