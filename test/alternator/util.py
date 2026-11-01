@@ -163,6 +163,13 @@ def create_test_table(dynamodb, name=None, **kwargs):
     waiter.config.delay = 1
     waiter.config.max_attempts = 200
     waiter.wait(TableName=name)
+    # boto3 fills the returned Table's meta.data with the TableDescription
+    # returned by CreateTable, so tests can check CreateTable's response in
+    # table.meta.data. The waiter above calls DescribeTable through the client
+    # and does not replace it. But a test must read table.meta.data before any
+    # request made through the Table object (e.g., put_item() or update()):
+    # boto3 clears it after each one, and the next access to an attribute of
+    # the table (or table.load()) refills it from DescribeTable.
     return table
 
 # A variant of create_test_table() that can be used in a "with" to

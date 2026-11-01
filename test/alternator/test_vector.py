@@ -26,7 +26,7 @@ import boto3.dynamodb.types
 import botocore
 
 from test.pylib.skip_types import skip_env
-from .util import random_string, new_test_table, unique_table_name, scylla_config_read, scylla_config_write, scylla_config_temporary, client_no_transform, is_aws, manual_request, metrics, check_increases_operation, check_table_increases_operation, get_metrics, get_metric, check_increases_metric_exact
+from .util import random_string, new_test_table, scylla_config_read, scylla_config_write, scylla_config_temporary, client_no_transform, is_aws, manual_request, metrics, check_increases_operation, check_table_increases_operation, get_metrics, get_metric, check_increases_metric_exact
 from .test_streams import wait_for_status_active, wait_for_active_stream, list_shards, fetch_more
 
 
@@ -788,29 +788,21 @@ def test_describetable_vectorindexes_describe_fields(table_vs):
     assert 'ItemCount' in vec
 
 # Test that like DescribeTable, CreateTable also returns the VectorIndexes
-# definition its response
+# definition in its response
 def test_createtable_vectorindexes_returned(dynamodb):
-    # To look at the response of CreateTable, we need to use the "client"
-    # interface, not the usual higher-level "resource" interface that we
-    # usually use in tests - because that doesn't return the actual response.
-    client = dynamodb.meta.client
-    table_name = unique_table_name()
-    resp = client.create_table(
-        TableName=table_name,
-        BillingMode='PAY_PER_REQUEST',
-        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
-        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
-        VectorIndexes=[{
-            'IndexName': 'ind',
-            'VectorAttribute': {'AttributeName': 'x'},
-            'Dimensions': 42,
-            'DistanceFunction': 'COSINE',
-            'Projection': {'ProjectionType': 'KEYS_ONLY'}
-        }])
-    try:
-        assert 'TableDescription' in resp
-        assert 'VectorIndexes' in resp['TableDescription']
-        vector_indexes = resp['TableDescription']['VectorIndexes']
+    with new_test_table(dynamodb,
+            KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+            AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+            VectorIndexes=[{
+                'IndexName': 'ind',
+                'VectorAttribute': {'AttributeName': 'x'},
+                'Dimensions': 42,
+                'DistanceFunction': 'COSINE',
+                'Projection': {'ProjectionType': 'KEYS_ONLY'}
+            }]) as table:
+        # boto3 fills table.meta.data with the TableDescription returned by
+        # CreateTable (see create_test_table()).
+        vector_indexes = table.meta.data['VectorIndexes']
         assert len(vector_indexes) == 1
         vec = vector_indexes[0]
         assert vec['IndexName'] == 'ind'
@@ -818,12 +810,6 @@ def test_createtable_vectorindexes_returned(dynamodb):
         assert vec['Dimensions'] == 42
         assert vec['DistanceFunction'] == 'COSINE'
         assert vec['Projection'] == {'ProjectionType': 'KEYS_ONLY'}
-    finally:
-        # We must wait for the table to become ACTIVE before deleting it -
-        # In DynamoDB CreateTable is asynchronous, the table is initially in
-        # CREATING state, and we can't delete it until it's ACTIVE.
-        wait_for_status_active(dynamodb.Table(table_name))
-        client.delete_table(TableName=table_name)
 
 # Basic test for UpdateTable successfully adding a vector index
 def test_updatetable_vectorindex_create(dynamodb):

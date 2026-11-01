@@ -8,7 +8,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from test.alternator.util import new_test_table, wait_for_gsi, unique_table_name
+from test.alternator.util import new_test_table, wait_for_gsi
 
 # When creating a table with PROVISIONED billing mode, ProvisionedThroughput must be explicitly set,
 # and the same values should be reflected when the table is described.
@@ -289,26 +289,22 @@ def test_gsi_nonpositive_throughput_rejected_by_update_table(dynamodb, gsi_throu
 # carries no WarmThroughput for a table which configured none. Verified against
 # DynamoDB.
 def test_gsi_create_table_response(dynamodb):
-    name = unique_table_name()
-    got = dynamodb.meta.client.create_table(TableName=name,
-        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-        AttributeDefinitions=[
-            {'AttributeName': 'p', 'AttributeType': 'S'},
-            {'AttributeName': 'x', 'AttributeType': 'S'}],
-        BillingMode='PAY_PER_REQUEST',
-        GlobalSecondaryIndexes=[{
-            'IndexName': 'gsi',
-            'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
-            'Projection': {'ProjectionType': 'ALL'}}])['TableDescription']
-    try:
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'}],
+            BillingMode='PAY_PER_REQUEST',
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'}}]) as table:
+        # boto3 fills table.meta.data with the TableDescription returned by
+        # CreateTable (see create_test_table()).
+        got = table.meta.data
         gsi = got['GlobalSecondaryIndexes'][0]
         assert gsi['ProvisionedThroughput']['ReadCapacityUnits'] == 0
         assert gsi['ProvisionedThroughput']['WriteCapacityUnits'] == 0
         assert gsi['ProvisionedThroughput']['NumberOfDecreasesToday'] == 0
         assert not 'WarmThroughput' in got
         assert not 'WarmThroughput' in gsi
-    finally:
-        # Unlike Alternator's, DynamoDB's CreateTable is asynchronous, and a
-        # table cannot be deleted until it and its GSI finish being created.
-        wait_for_gsi(dynamodb.Table(name), 'gsi')
-        dynamodb.meta.client.delete_table(TableName=name)
