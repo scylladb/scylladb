@@ -7188,6 +7188,10 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
         auto ld_guardrail = bypass_large_data_guardrails ? db::noop_large_data_guardrail::instance() : table.get_large_data_guardrail();
 
         while (true) {
+            // An unmet condition lowers the level of the learn to ANY for the dummy decision of
+            // its round; the rounds that follow, a retry or the repair of another coordinator's
+            // round, learn at the client's level again.
+            handler->set_cl_for_learn(cl_for_learn);
             // Finish the previous PAXOS round, if any, and, as a side effect, compute
             // a ballot (round identifier) which is a) unique b) has good chances of being
             // recent enough.
