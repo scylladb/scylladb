@@ -1117,6 +1117,8 @@ private:
     future<> view_building_state_load();
     // Stores the views whose build is finished on every node in the tombstone GC state of every shard
     future<> update_built_views(const db::system_keyspace::view_build_status_map& statuses);
+    // Same, reading the view build statuses from system.view_build_status_v2
+    future<> update_built_views();
 
     utils::chunked_vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp,
         utils::UUID old_request_id = utils::UUID{});
