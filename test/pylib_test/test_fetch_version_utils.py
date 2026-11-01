@@ -121,6 +121,26 @@ def test_get_version_url_selects_latest_matching_arch(monkeypatch):
         "scylla-2026.1.1-0.20260301.f94296e0ae43.x86_64.tar.gz")
 
 
+def test_get_version_url_skips_release_missing_arch(monkeypatch):
+    # While a new release (here 2025.1.16) is being uploaded, its archive for
+    # one architecture may already be visible while the one we want isn't yet.
+    # We should pick the previous release instead of failing (SCYLLADB-4881).
+    def fake_list_scylla_release_entries(bucket, prefix, pack=""):
+        assert prefix == "downloads/scylla/relocatable/scylladb-2025.1/"
+        return ["scylla-2025.1.15-0.20260901.aaaaaaaaaaaa.aarch64.tar.gz",
+                "scylla-2025.1.15-0.20260901.aaaaaaaaaaaa.x86_64.tar.gz",
+                "scylla-2025.1.16-0.20260924.4f24ebf84be6.aarch64.tar.gz"]
+
+    monkeypatch.setattr(vfu, "_list_scylla_release_entries", fake_list_scylla_release_entries)
+
+    assert vfu._get_version_url(major=2025, minor=1, arch="x86_64") == (
+        "https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/"
+        "scylla-2025.1.15-0.20260901.aaaaaaaaaaaa.x86_64.tar.gz")
+    assert vfu._get_version_url(major=2025, minor=1, arch="aarch64") == (
+        "https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/"
+        "scylla-2025.1.16-0.20260924.4f24ebf84be6.aarch64.tar.gz")
+
+
 def test_get_version_url_supports_rc_zero(monkeypatch):
     def fake_list_scylla_release_entries(bucket, prefix, pack=""):
         assert bucket == "downloads.scylladb.com"

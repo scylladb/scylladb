@@ -121,7 +121,11 @@ def _get_version_url(major: Optional[int] = None, minor: Optional[int] = None,
         return None
 
     prefix_url = f"{prefix_url}/scylladb-{ver}/"
-    objs = _list_scylla_release_entries(bucket_url, prefix_url, pack)
+    # Drop archives of other architectures *before* picking the latest version:
+    # while a new release is being uploaded, its archive for one architecture
+    # may already be visible while the one for `arch` isn't yet, and then we
+    # want the previous release rather than fail.
+    objs = [o for o in _list_scylla_release_entries(bucket_url, prefix_url, pack) if f".{arch}." in o]
     if patch is None:
         ver = _get_latest_ver(objs, ver, pack)
     elif rc is None:
@@ -132,7 +136,7 @@ def _get_version_url(major: Optional[int] = None, minor: Optional[int] = None,
     if ver is None:
         return None
 
-    filtered = [o for o in objs if _version_key(o, pack) == ver and f".{arch}." in o]
+    filtered = [o for o in objs if _version_key(o, pack) == ver]
 
     return f"https://{bucket_url}/{prefix_url}{filtered[0]}" if filtered else None
 
