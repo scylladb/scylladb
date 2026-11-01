@@ -2632,10 +2632,17 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
             std::optional<lw_shared_ptr<sstables::sstable_set>> new_maintenance_sstables;
         };
         std::unordered_map<compaction_group*, replacement_desc> _cg_desc;
+        std::vector<sstables::shared_sstable> _sstables_to_register;
     public:
         explicit sstable_list_updater(compaction_group& cg, table::sstable_list_builder& builder, compaction::compaction_completion_desc& d)
             : _t(cg._t), _cg(cg), _builder(builder), _desc(d) {}
         virtual future<> prepare() override {
+            std::unordered_set<sstables::shared_sstable> inputs(_desc.old_sstables.begin(), _desc.old_sstables.end());
+            for (auto& sst : _desc.new_sstables) {
+                if (!inputs.contains(sst)) {
+                    _sstables_to_register.push_back(sst);
+                }
+            }
             // Segregate output sstables according to their owner compaction group.
             // If not in splitting mode, then all output sstables will belong to the same group.
             for (auto& sst : _desc.new_sstables) {
@@ -2704,7 +2711,7 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
             // created them. Their large-partition, large-row and large-collection
             // records describe garbage, so feeding them to the guardrail would report
             // limit violations for data that is on its way out.
-            for (auto& sst : _desc.new_sstables) {
+            for (auto& sst : _sstables_to_register) {
                 _t._large_data_guardrail->register_sstable(sst);
             }
         }
