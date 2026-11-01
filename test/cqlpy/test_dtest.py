@@ -14,6 +14,7 @@
 
 import pytest
 from cassandra.concurrent import execute_concurrent_with_args
+from cassandra.protocol import InvalidRequest
 
 from .util import new_test_table
 
@@ -122,3 +123,50 @@ def test_tuple_query_mixed_order_columns(cql, test_keyspace, order):
         # Check that "<=" returns the rest of the rows, in clustering order
         expected = [(0, *row) for row in sorted(rows, key=clustering_key) if row <= (0, 1, 1, 0)]
         assert list(cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d, e) <= (0, 1, 1, 0)')) == expected
+
+# Test filtering (with ALLOW FILTERING) on counter columns: with "=", ">",
+# ">=", "<" and "IN" restrictions, restrictions on two counter columns
+# together, and counter restrictions combined with restrictions on the
+# entire primary key. Also check that such a query is rejected without
+# ALLOW FILTERING, and that filtering works correctly on a counter column
+# added with ALTER TABLE, and on a counter cell that was deleted - in both
+# cases the counter is missing (null), and a missing counter does not match
+# any restriction, not even "= 0".
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_filter_by_counter.
+def test_filter_by_counter(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, c1 counter, c2 counter, PRIMARY KEY (pk, ck)') as table:
+        for i in range(5):
+            cql.execute(f'UPDATE {table} SET c1 = c1 + {i} WHERE pk = 0 AND ck = {i}')
+            cql.execute(f'UPDATE {table} SET c1 = c1 + {i}, c2 = c2 + {i} WHERE pk = 1 AND ck = {i}')
+        # Partition 1 comes before partition 0 in token order. Partition 0
+        # has no c2 counter, so its c2 is null.
+        # Check filtering by one counter column with "="
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE c1 = 2 ALLOW FILTERING')) == [(1, 2, 2, 2), (0, 2, 2, None)]
+        # Check filtering by one counter column with ">"
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE c1 > 2 ALLOW FILTERING')) == [
+            (1, 3, 3, 3), (1, 4, 4, 4), (0, 3, 3, None), (0, 4, 4, None)]
+        # Check filtering by two counter columns, with ">" and "="
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE c1 > 3 AND c2 = 4 ALLOW FILTERING')) == [(1, 4, 4, 4)]
+        # Check filtering by two counter columns, with "IN" and ">="
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE c1 IN (0, 2) AND c2 >= 2 ALLOW FILTERING')) == [(1, 2, 2, 2)]
+        # Check filtering by counter columns combined with the entire primary key
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE pk = 1 AND ck = 4 AND c1 < 3 AND c2 = 0 ALLOW FILTERING')) == []
+        # Check that filtering by counter columns requires ALLOW FILTERING,
+        # even when the entire primary key is also restricted
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f'SELECT * FROM {table} WHERE pk = 1 AND ck = 4 AND c1 > 3 AND c2 = 0')
+        # Check filtering by a counter column added with ALTER TABLE. All its
+        # values are null, so nothing matches "c3 = 0". After one row's c3
+        # is decremented, that row matches "c3 = -1".
+        cql.execute(f'ALTER TABLE {table} ADD c3 counter')
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE pk = 1 AND ck = 1')) == [(1, 1, 1, 1, None)]
+        assert list(cql.execute(f'SELECT count(*) FROM {table} WHERE c3 = 0 ALLOW FILTERING')) == [(0,)]
+        cql.execute(f'UPDATE {table} SET c3 = c3 - 1 WHERE pk = 0 AND ck = 1')
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE c3 = -1 ALLOW FILTERING')) == [(0, 1, 1, None, -1)]
+        # Check that after a counter cell is deleted, filtering no longer
+        # matches its old value
+        cql.execute(f'DELETE c1 FROM {table} WHERE pk = 1 AND ck = 1')
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE c1 = 1 ALLOW FILTERING')) == [(0, 1, 1, None, -1)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE c1 = 0 ALLOW FILTERING')) == [
+            (1, 0, 0, 0, None), (0, 0, 0, None, None)]
