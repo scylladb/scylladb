@@ -454,3 +454,64 @@ def test_table_options_old_syntax(cql, test_keyspace, scylla_only):
         schema = table_schema(cql, table)
         assert dict(schema.caching) == {'keys': 'NONE', 'rows_per_partition': 'ALL'}
         assert schema.compression['sstable_compression'].endswith('SnappyCompressor')
+
+# Test removing elements from a static list column and from a regular list
+# column in the same table, and setting an element of the static list.
+# Removing elements from a list ("l = l - [...]") and setting an element by
+# its position need to read the list first, and with both a static list and
+# a regular list in the table, Scylla needs to read the right one.
+# Reproduces issue #903.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_list_prefetch_with_static_column.
+def test_list_prefetch_with_static_column(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'fn text, ln text, static_tags list<text> static, tags list<text>, PRIMARY KEY (fn, ln)') as table:
+        where_row = "WHERE fn = 'Tom' AND ln = 'Bombadil'"
+        where_partition = "WHERE fn = 'Tom'"
+        cql.execute(f"UPDATE {table} SET tags = tags + ['a', 'b', 'c', 'b'] {where_row}")
+        cql.execute(f"UPDATE {table} SET static_tags = static_tags + ['a', 'b', 'c', 'b'] {where_partition}")
+        # Check removing elements from the regular list doesn't touch the
+        # static list
+        cql.execute(f"UPDATE {table} SET tags = tags - ['b'] {where_row}")
+        assert list(cql.execute(f'SELECT tags FROM {table} {where_row}')) == [(['a', 'c'],)]
+        assert list(cql.execute(f'SELECT static_tags FROM {table} {where_partition}')) == [(['a', 'b', 'c', 'b'],)]
+        # Check removing elements from the static list
+        cql.execute(f"UPDATE {table} SET static_tags = static_tags - ['b'] {where_partition}")
+        assert list(cql.execute(f'SELECT static_tags FROM {table} {where_partition}')) == [(['a', 'c'],)]
+        # Check setting an element of the static list by its position
+        cql.execute(f"UPDATE {table} SET static_tags[1] = 'b' {where_partition}")
+        assert list(cql.execute(f'SELECT static_tags FROM {table} {where_partition}')) == [(['a', 'b'],)]
+
+# Test changing the type of a column with ALTER TABLE ALTER ... TYPE, from
+# text to blob, which is a compatible type (every text value is a valid
+# blob), for a regular column, a partition-key column, a clustering-key
+# column, and a set's elements. The existing data is not rewritten, but is
+# now read as the new type: the text's UTF-8 bytes. The test uses a non-ASCII
+# character, so the UTF-8 encoding is visibly different from the string.
+# Cassandra dropped support for changing a column's type in versions 3.0.11
+# and 3.10 (CASSANDRA-12443) - this test passes on Cassandra 3.0.10 and 3.9,
+# but later versions fail with "Altering of types is not allowed" or, since
+# 4.0, "Altering column types is no longer supported". Scylla still supports
+# changing a column to a compatible type, as documented in docs/cql/ddl.rst,
+# so this is a scylla_only test.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_update_type, which originally came
+# from Cassandra's old Python cql_tests.py (update_type_test, for
+# CASSANDRA-4041).
+def test_update_type(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'k text, c text, s set<text>, v text, PRIMARY KEY (k, c)') as table:
+        phi = '\u0278'
+        phi_utf8 = phi.encode()
+        cql.execute(f"INSERT INTO {table} (k, c, v, s) VALUES ('{phi}', '{phi}', '{phi}', {{'{phi}'}})")
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(phi, phi, {phi}, phi)]
+        # Check changing the type of a regular column
+        cql.execute(f'ALTER TABLE {table} ALTER v TYPE blob')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(phi, phi, {phi}, phi_utf8)]
+        # Check changing the type of the partition key
+        cql.execute(f'ALTER TABLE {table} ALTER k TYPE blob')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(phi_utf8, phi, {phi}, phi_utf8)]
+        # Check changing the type of the clustering key
+        cql.execute(f'ALTER TABLE {table} ALTER c TYPE blob')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(phi_utf8, phi_utf8, {phi}, phi_utf8)]
+        # Check changing the type of a set's elements
+        cql.execute(f'ALTER TABLE {table} ALTER s TYPE set<blob>')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(phi_utf8, phi_utf8, {phi_utf8}, phi_utf8)]
