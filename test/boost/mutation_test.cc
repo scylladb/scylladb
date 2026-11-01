@@ -3235,6 +3235,64 @@ SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_4567) {
     BOOST_CHECK_NE(compute_hash(r2, { 0, 1, 2 }), compute_hash(r3, { 0, 1, 2 }));
 }
 
+// Collection cells are hashed through buffered_xx_hasher; the digest, fresh or
+// cached by prepare_hash(), must stay what per-cell xx_hasher produces.
+SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_collection_digest) {
+    auto map_type = map_type_impl::get_instance(int32_type, bytes_type, true);
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                     .with_column("pk", int32_type, column_kind::partition_key)
+                     .with_column("v", int32_type)
+                     .with_column("m", map_type)
+                     .with_column("e", map_type)
+                     .build();
+    auto& v_def = *s->get_column_definition(to_bytes("v"));
+    auto& m_def = *s->get_column_definition(to_bytes("m"));
+    auto& e_def = *s->get_column_definition(to_bytes("e"));
+
+    collection_mutation_writer w(tombstone(1, gc_clock::now()));
+    // Large enough to overflow the hasher's 4 KB buffer several times.
+    for (int32_t i = 0; i < 2000; ++i) {
+        w.push_back(managed_bytes_view(int32_type->decompose(i)),
+                atomic_cell::make_live(*bytes_type, i + 2, bytes(i % 50, 'x'), atomic_cell::collection_member::yes));
+    }
+    // A value of bypass_size (256 B) or more skips the buffer.
+    w.push_back(managed_bytes_view(int32_type->decompose(int32_t(2000))),
+            atomic_cell::make_live(*bytes_type, 2, bytes(10000, 'y'), atomic_cell::collection_member::yes));
+    row r;
+    r.apply(v_def, atomic_cell_or_collection(atomic_cell::make_live(*int32_type, 1, int32_type->decompose(7))));
+    r.apply(m_def, atomic_cell_or_collection(std::move(w).finish()));
+    // Tombstone only: finalized with nothing buffered.
+    r.apply(e_def, atomic_cell_or_collection(collection_mutation_writer(tombstone(5, gc_clock::now())).finish()));
+
+    const query::column_id_vector columns{v_def.id, m_def.id, e_def.id};
+    xx_hasher expected_h;
+    std::map<column_id, uint64_t> cell_digest;
+    for (auto* def : {&v_def, &m_def, &e_def}) {
+        xx_hasher cellh;
+        feed_hash(cellh, *r.find_cell(def->id), *def);
+        cell_digest[def->id] = cellh.finalize_uint64();
+        feed_hash(expected_h, cell_digest[def->id]);
+    }
+    const auto expected = expected_h.finalize_uint64();
+
+    // The cell digests must not depend on the outer hasher.
+    auto digest = [&](auto h) {
+        max_timestamp ts;
+        appending_hash<row>{}(h, r, *s, column_kind::regular_column, columns, ts);
+        return h.finalize_uint64();
+    };
+    BOOST_REQUIRE_EQUAL(digest(xx_hasher()), expected);
+    BOOST_REQUIRE_EQUAL(digest(buffered_xx_hasher()), expected);
+    r.prepare_hash(*s, column_kind::regular_column);
+    for (auto* def : {&v_def, &m_def, &e_def}) {
+        auto cached = r.cell_hash_for(def->id);
+        BOOST_REQUIRE(cached);
+        BOOST_REQUIRE_EQUAL(cached->hash, cell_digest[def->id]);
+    }
+    BOOST_REQUIRE_EQUAL(digest(xx_hasher()), expected);
+    BOOST_REQUIRE_EQUAL(digest(buffered_xx_hasher()), expected);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {
     std::mt19937 engine(tests::random::get_int<uint32_t>());
 
