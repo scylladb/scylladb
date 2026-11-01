@@ -6,6 +6,7 @@
 
 import asyncio
 import time
+from test import DEBUG_MODES
 from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql
 import pytest
@@ -13,7 +14,7 @@ from cassandra.protocol import WriteTimeout
 from test.cluster.util import new_test_keyspace
 
 
-@pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cas_semaphore(manager):
     """ This is a regression test for scylladb/scylladb#19698 """

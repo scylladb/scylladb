@@ -27,6 +27,7 @@ from cassandra import (
 )
 from cassandra.cluster import NoHostAvailable
 
+from test import DEBUG_MODES
 from dtest_class import Tester
 from dtest_setup import DTestSetup
 from tools.assertions import assert_invalid
@@ -1097,7 +1098,7 @@ class TestAuth(Tester):
         config = {"authenticator": "com.scylladb.auth.TransitionalAuthenticator", "authorizer": "com.scylladb.auth.TransitionalAuthorizer"}
         nodes[0].set_configuration_options(values=config)
         nodes[0].start(wait_for_binary_proto=True)
-        timeout = 30 if self.cluster.scylla_mode != "debug" else 180
+        timeout = 30 if self.cluster.scylla_mode not in DEBUG_MODES else 180
         wait_for_any_log(self.cluster.nodelist(), "Created default superuser authentication record", timeout)
 
         session = self.get_session(node_idx=0, user="cassandra", password="cassandra")

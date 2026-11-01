@@ -10,6 +10,7 @@ from collections import defaultdict
 from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.protocol import ConfigurationException
 
+from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerUpState
 from test.cluster.util import create_new_test_keyspace, get_replication, get_replica_count
@@ -53,7 +54,7 @@ async def test_create_keyspace_with_default_replication_factor(manager: ScyllaCl
 
     expected_rf["dc2"] = {"r1", "r2"}
 
-    if build_mode != "debug":
+    if build_mode not in DEBUG_MODES:
         logging.info("Adding dc2/r3 rack server")
         await manager.server_add(config=normal_cfg, property_file=get_pf("dc2", "r3"))
 

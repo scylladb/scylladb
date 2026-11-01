@@ -9,6 +9,7 @@ import random
 from typing import Optional
 import pytest
 
+from test import DEBUG_MODES
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.repair import create_table_insert_data_for_repair, get_tablet_task_id
@@ -567,7 +568,7 @@ async def test_tablet_resize_list(manager: ScyllaClusterManager):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.skip_mode(mode='debug', reason='debug mode is too time-sensitive')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='debug mode is too time-sensitive')
 async def test_tablet_resize_revoked(manager: ScyllaClusterManager):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
