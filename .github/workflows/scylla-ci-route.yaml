@@ -749,11 +749,12 @@ jobs:
             fi
           done <<< "$ALL_FILES"
 
-          # unittest: required if any file does NOT match dist/docker/*, dist/common/scripts*, NON_CODE
+          # unittest: required if any file does NOT match dist/docker/*, NON_CODE
+          # (dist/common/scripts is tested by test/dist_test)
           UNITTEST_REQUIRED=false
           while IFS= read -r FILE; do
             [ -z "$FILE" ] && continue
-            if ! echo "$FILE" | grep -qE "^(dist/docker/|dist/common/scripts|$NON_CODE)"; then
+            if ! echo "$FILE" | grep -qE "^(dist/docker/|$NON_CODE)"; then
               UNITTEST_REQUIRED=true
               break
             fi
