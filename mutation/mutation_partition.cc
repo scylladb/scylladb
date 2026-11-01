@@ -760,8 +760,10 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
         }
     }
 }
-// Instantiation for mutation_test.cc
+// Instantiations for mutation_test.cc and perf_mutation_fragment.cc (xx_hasher), and perf_mutation_fragment.cc (buffered_xx_hasher)
 template void appending_hash<row>::operator()<xx_hasher>(xx_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
+template void appending_hash<row>::operator()<buffered_xx_hasher>(
+        buffered_xx_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
 
 cell_hash_opt row::cell_hash_for(column_id id) const {
     const cell_and_hash* cah = _cells.get(id);
