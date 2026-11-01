@@ -21,6 +21,7 @@ from cassandra.concurrent import execute_concurrent
 from cassandra.policies import RetryPolicy
 from cassandra.query import SimpleStatement
 
+from test import DEBUG_MODES
 from dtest_class import Tester, create_cf, create_ks
 from dtest_setup_overrides import DTestSetupOverrides
 from tools.assertions import assert_invalid, assert_one
@@ -393,12 +394,12 @@ class TestCounters(Tester):
 
         sessions = [self.patient_cql_connection(node, "ks", retry_policy=NoCounterMutationRetryPolicy()) for node in nodes]
         nb_increment = 500
-        if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
+        if hasattr(cluster, "scylla_mode") and cluster.scylla_mode in DEBUG_MODES:
             nb_increment //= 10
         nb_counter = 2
 
         num_threads = 200
-        if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
+        if hasattr(cluster, "scylla_mode") and cluster.scylla_mode in DEBUG_MODES:
             num_threads //= 10
 
         # Counters are order-independent sums, so instead of num_threads blocking
@@ -454,12 +455,12 @@ class TestCounters(Tester):
 
         sessions = [self.patient_cql_connection(node, "ks", retry_policy=NoCounterMutationRetryPolicy()) for node in nodes]
         nb_increment = 250
-        if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
+        if hasattr(cluster, "scylla_mode") and cluster.scylla_mode in DEBUG_MODES:
             nb_increment //= 10
         nb_counter = 2
 
         num_threads = 600
-        if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
+        if hasattr(cluster, "scylla_mode") and cluster.scylla_mode in DEBUG_MODES:
             num_threads //= 10
 
         def stmts_for(decrement):

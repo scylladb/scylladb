@@ -12,6 +12,7 @@ import pytest
 
 from cassandra.policies import WhiteListRoundRobinPolicy
 
+from test import DEBUG_MODES
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
@@ -34,7 +35,7 @@ async def get_number_of_voters(manager: ScyllaClusterManager, srv: ServerInfo):
 @pytest.mark.parametrize('dc1_nodes,dc2_nodes,dc3_nodes', [
     pytest.param(3, 1, 1),
     pytest.param(6, 3, 3,
-                 marks=pytest.mark.skip_mode(mode='debug', reason='larger topology case is too slow in debug on minipcs')),
+                 marks=pytest.mark.skip_mode(mode=DEBUG_MODES, reason='larger topology case is too slow in debug on minipcs')),
 ])
 @pytest.mark.parametrize('stop_gracefully', [True, False])
 async def test_raft_voters_multidc_kill_dc(

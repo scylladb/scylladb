@@ -1,0 +1,8 @@
+# scylla-gdb.py needs full debug info (types, variables). Release is built
+# as RelWithDebInfo; other modes have none (dev) or only line tables (sanitize).
+run_in_release:
+  - test_basic_commands
+  - test_schema_commands
+  - test_sstable_commands
+  - test_tablet_metadata
+  - test_task_commands

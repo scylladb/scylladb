@@ -11,6 +11,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.protocol import InvalidRequest, WriteTimeout
 from cassandra import Unauthorized
 
+from test import DEBUG_MODES
 from test.cluster.lwt.lwt_common import wait_for_tablet_count
 from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver, FeatureConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -465,11 +466,11 @@ async def test_lwt_concurrent_base_table_recreation(manager: ScyllaClusterManage
             await lwt_task
 
 
-@pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_lwt_timeout_while_creating_paxos_state_table(manager: ScyllaClusterManager, build_mode,
                                                             storage_config: FeatureConfig):
-    timeout = 10000 if build_mode == 'debug' else 1000
+    timeout = 10000 if build_mode in DEBUG_MODES else 1000
     config = {
         'write_request_timeout_in_ms': timeout,
         'error_injections_at_startup': [
@@ -656,7 +657,7 @@ async def test_lwt_coordinator_shard(manager: ScyllaClusterManager, storage_conf
         assert "shard 1" in matches[0][0]
 
 
-@pytest.mark.skip_mode(mode='debug', reason='dev is enought: the test checks non-critical functionality')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='dev is enought: the test checks non-critical functionality')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_error_message_for_timeout_due_to_write_uncertainty(manager: ScyllaClusterManager,
                                                                   storage_config: FeatureConfig):
@@ -720,7 +721,7 @@ async def test_error_message_for_timeout_due_to_write_uncertainty(manager: Scyll
             await lwt_task
 
 
-@pytest.mark.skip_mode(mode='debug', reason='dev is enought')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='dev is enought')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_no_uncertainty_for_reads(manager: ScyllaClusterManager, storage_config: FeatureConfig):
     # This test verifies that LWT reads do not produce 'uncertainty' timeouts.
@@ -949,7 +950,7 @@ async def test_lwt_shutdown_during_replica_learn(manager: ScyllaClusterManager, 
     await stop_during_held_paxos_write(manager, storage_config, 'paxos_state_learn_after_mutate', coordinator_idx=1)
 
 
-@pytest.mark.skip_mode(mode='debug', reason='dev is enough')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='dev is enough')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablets_merge_waits_for_lwt(manager: ScyllaClusterManager, scale_timeout, storage_config: FeatureConfig):
     """

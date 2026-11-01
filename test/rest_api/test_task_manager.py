@@ -394,8 +394,8 @@ def test_task_folding(rest_api):
             task_folding6(rest_api)
 
 # Checks that aborting a task does not touch its impl once the task is unregistered.
-# The test relies on ASAN to catch the use-after-free, so it's run in debug mode only.
-@pytest.mark.skip_mode(mode=['release', 'dev', 'sanitize', 'coverage'], reason='the test needs ASAN to detect the use-after-free it checks for')
+# The test relies on ASAN to catch the use-after-free, so it's run only in modes built with ASAN (debug and sanitize).
+@pytest.mark.skip_mode(mode=['release', 'dev', 'coverage'], reason='the test needs ASAN to detect the use-after-free it checks for')
 def test_abort_on_unregistered_task(cql, this_dc, rest_api):
     module_name = "compaction"
     drain_module_tasks(rest_api, module_name)

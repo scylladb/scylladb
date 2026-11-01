@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 from ccmlib.scylla_node import NodetoolError, ScyllaNode
 from deepdiff import DeepDiff
 
+from test import DEBUG_MODES
 from alternator.utils import schemas
 from alternator_utils import (
     ALTERNATOR_SECURE_PORT,
@@ -689,7 +690,7 @@ class TesterAlternator(BaseAlternator):
         4. Verify all data is eventually deleted on cluster nodes.
         """
         ttl_polling_interval = 4
-        if self.cluster.scylla_mode != "debug":
+        if self.cluster.scylla_mode not in DEBUG_MODES:
             nodes = 4
             topo = {"dc1": {"rack1": 1, "rack2": 1, "rack3": 2}}
         else:
@@ -710,7 +711,7 @@ class TesterAlternator(BaseAlternator):
         decommission_thread = self.run_decommission_add_node_thread()
 
         logger.info("Run flush and compaction on cluster nodes")
-        iterations = 3 if self.cluster.scylla_mode != "debug" else 1
+        iterations = 3 if self.cluster.scylla_mode not in DEBUG_MODES else 1
 
         def get_live_nodes():
             return [node for node in self.cluster.nodelist()

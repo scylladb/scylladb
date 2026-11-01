@@ -7,6 +7,7 @@ import logging
 
 import pytest
 import asyncio
+from test import DEBUG_MODES
 from test.pylib.internal_types import ServerNum
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot, InjectionHandler, read_barrier
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.fixture(name="raft_op_timeout")  # avoid the W0621:redefined-outer-name pylint warning
 def fixture_raft_op_timeout(build_mode):
-    return 10000 if build_mode == 'debug' else 1000
+    return 10000 if build_mode in DEBUG_MODES else 1000
 
 
 async def update_group0_raft_op_timeout(server_id: ServerNum, manager: ScyllaClusterManager, timeout: int) -> None:
@@ -35,7 +36,7 @@ async def update_group0_raft_op_timeout(server_id: ServerNum, manager: ScyllaClu
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_cannot_add_new_node(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
     # This test makes sure that trying to add a new node fails with timeout
     # if the majority of the cluster is not available.
@@ -92,7 +93,7 @@ async def test_cannot_add_new_node(manager: ScyllaClusterManager, raft_op_timeou
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_quorum_lost_during_node_join(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
     config = {
         'error_injections_at_startup': [
@@ -135,7 +136,7 @@ async def test_quorum_lost_during_node_join(manager: ScyllaClusterManager, raft_
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_quorum_lost_during_node_join_response_handler(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
     logger.info("starting a first node (the leader)")
     servers = [await manager.server_add()]
@@ -208,7 +209,7 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ScyllaClus
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_cannot_run_operations(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
     logger.info("starting a first node (the leader)")
     servers = [await manager.server_add(config={
@@ -261,7 +262,7 @@ async def test_cannot_run_operations(manager: ScyllaClusterManager, raft_op_time
 
 
 @pytest.mark.skip_mode(mode='release', reason='dev mode is sufficient for this test')
-@pytest.mark.skip_mode(mode='debug', reason='dev mode is sufficient for this test')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='dev mode is sufficient for this test')
 async def test_can_restart(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
     """
     Test that restarts work without group 0 quorum. Stop all five nodes and restart them one by one.

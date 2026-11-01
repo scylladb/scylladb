@@ -20,6 +20,7 @@ from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from test import DEBUG_MODES
 from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for, BIN_DIR
 from test.pylib.internal_types import ServerUpState
 
@@ -327,7 +328,7 @@ class ScyllaNode:
                            marks: list[tuple[ScyllaNode, int]] | None = None,
                            dump_core: bool = True) -> None:  # not implemented
         if wait_seconds is None:
-            wait_seconds = 127 if self.scylla_mode() != "debug" else 600
+            wait_seconds = 127 if self.scylla_mode() not in DEBUG_MODES else 600
         if not wait_for(func=lambda: not self.is_running(), timeout=wait_seconds):
             raise NodeError(f"Problem stopping node {self.name}")
 
@@ -373,7 +374,7 @@ class ScyllaNode:
             "--num-tokens": ["16"],
         }
 
-        if self.scylla_mode() == "debug":
+        if self.scylla_mode() in DEBUG_MODES:
             default_scylla_args["--blocked-reactor-notify-ms"] = ["5000"]
 
         scylla_args = default_scylla_args | scylla_args
