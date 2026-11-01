@@ -564,14 +564,22 @@ static const cluster_config_registry::option& find_registered_option(std::string
     return *opt;
 }
 
-std::optional<bool> cluster_config_manager::resolve_boolean_config_no_default(std::string_view config_name, table_id table) const {
-    const auto& opt = find_registered_option(config_name);
-    check_not_db_config(opt);
+// The stored value for a table, or nullopt when the table is no longer in the local schema or
+// no scope in the chain stores one. The *_no_default() accessors return that absence as it
+// is; the per-table resolve_*_config() accessors hand it to the registry's converter, which
+// substitutes the option's registered default.
+std::optional<sstring> cluster_config_manager::stored_table_config(std::string_view config_name, table_id table) const {
     auto ctx = table_lookup_context(table);
     if (!ctx) {
         return std::nullopt;
     }
-    auto value = resolve_config(config_name, *ctx);
+    return resolve_config(config_name, *ctx);
+}
+
+std::optional<bool> cluster_config_manager::resolve_boolean_config_no_default(std::string_view config_name, table_id table) const {
+    const auto& opt = find_registered_option(config_name);
+    check_not_db_config(opt);
+    auto value = stored_table_config(config_name, table);
     if (!value) {
         return std::nullopt;
     }
@@ -581,11 +589,7 @@ std::optional<bool> cluster_config_manager::resolve_boolean_config_no_default(st
 std::optional<int64_t> cluster_config_manager::resolve_integer_config_no_default(std::string_view config_name, table_id table) const {
     const auto& opt = find_registered_option(config_name);
     check_not_db_config(opt);
-    auto ctx = table_lookup_context(table);
-    if (!ctx) {
-        return std::nullopt;
-    }
-    auto value = resolve_config(config_name, *ctx);
+    auto value = stored_table_config(config_name, table);
     if (!value) {
         return std::nullopt;
     }
@@ -614,6 +618,18 @@ double cluster_config_manager::resolve_floating_point_config(const cluster_confi
 sstring cluster_config_manager::resolve_text_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
     check_not_db_config(opt);
     return cluster_config_registry::to_text(opt, resolve_config(opt.name, ctx));
+}
+
+int64_t cluster_config_manager::resolve_integer_config(std::string_view config_name, table_id table) const {
+    const auto& opt = find_registered_option(config_name);
+    check_not_db_config(opt);
+    return cluster_config_registry::to_integer(opt, stored_table_config(config_name, table));
+}
+
+double cluster_config_manager::resolve_floating_point_config(std::string_view config_name, table_id table) const {
+    const auto& opt = find_registered_option(config_name);
+    check_not_db_config(opt);
+    return cluster_config_registry::to_floating_point(opt, stored_table_config(config_name, table));
 }
 
 }
