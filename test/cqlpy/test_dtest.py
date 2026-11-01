@@ -170,3 +170,25 @@ def test_filter_by_counter(cql, test_keyspace):
         assert list(cql.execute(f'SELECT * FROM {table} WHERE c1 = 1 ALLOW FILTERING')) == [(0, 1, 1, None, -1)]
         assert list(cql.execute(f'SELECT * FROM {table} WHERE c1 = 0 ALLOW FILTERING')) == [
             (1, 0, 0, 0, None), (0, 0, 0, None, None)]
+
+# Test basic increments and decrements of a counter column, written with
+# different spacing: "total + 1", "total - 4", "total+1" and "total -2".
+# The last one is interesting, because "-2" is parsed as a single negative
+# integer literal, so the CQL grammar needs a special case to understand
+# "total -2" as "total - 2".
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_counters, which originally came
+# from Cassandra's old Python cql_tests.py (counters_test). Cassandra's Java
+# version of that test, translated in cassandra_tests as testCounters, uses
+# a COMPACT STORAGE table and also checks the "+=" syntax.
+def test_counters(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'userid int, url text, total counter, PRIMARY KEY (userid, url)') as table:
+        where = "WHERE userid = 1 AND url = 'http://foo.com'"
+        cql.execute(f'UPDATE {table} SET total = total + 1 {where}')
+        assert list(cql.execute(f'SELECT total FROM {table} {where}')) == [(1,)]
+        cql.execute(f'UPDATE {table} SET total = total - 4 {where}')
+        assert list(cql.execute(f'SELECT total FROM {table} {where}')) == [(-3,)]
+        cql.execute(f'UPDATE {table} SET total = total+1 {where}')
+        assert list(cql.execute(f'SELECT total FROM {table} {where}')) == [(-2,)]
+        cql.execute(f'UPDATE {table} SET total = total -2 {where}')
+        assert list(cql.execute(f'SELECT total FROM {table} {where}')) == [(-4,)]
