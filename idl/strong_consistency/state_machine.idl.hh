@@ -27,8 +27,13 @@ struct resize_marker {
     api::timestamp_type timestamp;
 };
 
+struct truncate_command {
+    api::timestamp_type truncated_at;
+    utils::UUID request_id;
+};
+
 struct raft_command {
-    std::variant<service::strong_consistency::resize_marker, service::strong_consistency::write_mutation> change;
+    std::variant<service::strong_consistency::resize_marker, service::strong_consistency::write_mutation, service::strong_consistency::truncate_command> change;
 };
 
 } // namespace strong_consistency
