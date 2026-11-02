@@ -134,3 +134,41 @@ async def test_topology_cleanup_not_blocked_by_user_major(manager: ScyllaCluster
 
             await manager.api.message_injection(server_a.ip_addr, "major_compaction_wait")
             await asyncio.wait_for(major, timeout=120)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_maintenance_semaphore_wait_is_logged(manager: ScyllaClusterManager):
+    """A contended acquisition of the maintenance operation semaphore is logged, with the
+       time waited once it succeeds, and an uncontended one is not.
+    """
+    server_a = await manager.server_add(cmdline=CMDLINE)
+    await manager.disable_tablet_balancing()
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, TABLETS_KS_OPTS) as tablets_ks, new_test_keyspace(manager, VNODES_KS_OPTS) as vnodes_ks:
+        await create_and_fill(cql, manager, server_a, tablets_ks)
+        await create_and_fill(cql, manager, server_a, vnodes_ks)
+
+        log_a = await manager.server_open_log(server_a.server_id)
+        mark = await log_a.mark()
+
+        major = await park_major(manager, server_a, tablets_ks)
+
+        # Nothing else held the semaphore, so the major took it without waiting and said nothing.
+        assert len(await log_a.grep("waiting for maintenance operation", from_mark=mark)) == 0
+        assert len(await log_a.grep("acquired maintenance operation after waiting for", from_mark=mark)) == 0
+
+        # SKIP rewrites the sstables, so the scrub queues on the maintenance operation
+        # semaphore. VALIDATE would take no semaphore at all.
+        scrub = asyncio.create_task(manager.api.keyspace_scrub_sstables(server_a.ip_addr, vnodes_ks, "SKIP"))
+        await log_a.wait_for(r"Scrub task .*: waiting for maintenance operation \(0 waiters ahead\)", from_mark=mark, timeout=60)
+        assert not scrub.done()
+
+        await manager.api.message_injection(server_a.ip_addr, "major_compaction_wait")
+        await asyncio.wait_for(major, timeout=120)
+        await asyncio.wait_for(scrub, timeout=120)
+
+        # smp 1 and a single static compaction group per vnode table, so the scrub executor
+        # acquires the semaphore exactly once.
+        assert len(await log_a.grep(r"Scrub task .*: acquired maintenance operation after waiting for", from_mark=mark)) == 1
