@@ -5427,7 +5427,7 @@ class scylla_small_objects(gdb.Command):
         nr = int(small_pools['nr_small_pools'])
         small_pools_a: list[dict] = []
         try:
-            small_pools_a = small_pools['_pools']
+            small_pools_a = std_array(small_pools['_pools'])
         except gdb.error:
             small_pools_a = small_pools['_u']['a']
         return nr, small_pools_a
