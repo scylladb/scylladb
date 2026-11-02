@@ -2128,3 +2128,27 @@ def test_index_query_times_out(cql, test_keyspace, scylla_only):
         statement = cql.prepare(f'SELECT * FROM {table} WHERE col < ? ALLOW FILTERING')
         statement.consistency_level = ConsistencyLevel.ONE
         check_query_times_out(cql, statement, [50])
+
+# Test that a range deletion with two clustering columns can't restrict the
+# second clustering column unless the first one is restricted by equality.
+# Translated from scylla-dtest's deletion_test.py::TestRangeDeletion::test_delete_by_2ck_range_failure.
+def test_delete_range_second_clustering_column(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk1 int, ck1 int, ck2 varchar, v1 int, PRIMARY KEY (pk1, ck1, ck2)') as table:
+        for where in ["ck1 > 3 AND ck2 = 'ck3'", "ck1 > 3 AND ck2 > 'ck3'", "ck1 > 3 AND ck2 IN ('ck3')"]:
+            with pytest.raises(InvalidRequest, match='preceding column "ck1" is restricted by a non-EQ relation'):
+                cql.execute(f'DELETE FROM {table} WHERE pk1 = 0 AND {where}')
+        with pytest.raises(InvalidRequest, match='cannot be restricted as preceding column "ck1" is not restricted'):
+            cql.execute(f"DELETE FROM {table} WHERE pk1 = 0 AND ck2 > 'ck3'")
+
+# Test that a range deletion can't have an IF condition - neither IF EXISTS,
+# nor a condition on a column, with equality or with a range.
+# Translated from scylla-dtest's deletion_test.py::TestRangeDeletion tests
+# test_delete_by_1ck_range_condition_if_exists_failed,
+# test_delete_by_1ck_range_condition_if_equality_failed and
+# test_delete_by_1ck_range_if_range_failed. The dtests also wrote some rows
+# first, which doesn't matter for these errors.
+def test_delete_range_with_condition(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int, ck date, v1 int, PRIMARY KEY (pk, ck)') as table:
+        for condition in ['IF EXISTS', 'IF v1 = 1', 'IF v1 >= 1 AND v1 < 3']:
+            with pytest.raises(InvalidRequest, match='DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns'):
+                cql.execute(f"DELETE FROM {table} WHERE pk = 1 AND ck < '2019-11-21' AND ck >= '2019-11-19' {condition}")
