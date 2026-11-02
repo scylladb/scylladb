@@ -243,4 +243,8 @@ future<> inspect_login(const sstring& username, socket_address client_ip, bool e
 // one that creates the "audit" keyspace.
 bool table_sink_configured(const db::config& cfg);
 
+// Fails if audit runs with the stdout sink and the standard output cannot take
+// its records.
+future<> check_storage(const db::config& cfg);
+
 }

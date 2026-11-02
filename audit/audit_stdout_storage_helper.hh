@@ -27,6 +27,8 @@ public:
     // or at once if other records of its shard wait and leave too little of `max_unwritten_memory` for it.
     explicit audit_stdout_storage_helper(sstring path = "/dev/stdout", std::chrono::milliseconds write_timeout = std::chrono::seconds(5),
                                          size_t max_unwritten_memory = 4 * 1024 * 1024);
+    // Fails if `path` cannot take the records, without writing to it.
+    static future<> check(sstring path = "/dev/stdout");
     virtual ~audit_stdout_storage_helper();
     virtual future<> start(const db::config& cfg) override;
     virtual future<> stop() override;

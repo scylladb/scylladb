@@ -95,6 +95,12 @@ bool table_sink_configured(const db::config& cfg) {
     return parse_audit_sinks(cfg.audit()).contains(audit_sink::table);
 }
 
+future<> check_storage(const db::config& cfg) {
+    if (audit::audit_instance().local_is_initialized() && parse_audit_sinks(cfg.audit()).contains(audit_sink::standard_output)) {
+        co_await audit_stdout_storage_helper::check();
+    }
+}
+
 static void warn_on_sink_mismatch(const std::vector<audit_rule>& rules, audit_sink_set enabled_sinks) {
     for (size_t i = 0; i < rules.size(); ++i) {
         for (const auto& sink_name : rules[i].sinks) {

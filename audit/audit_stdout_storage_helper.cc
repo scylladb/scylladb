@@ -484,6 +484,11 @@ audit_stdout_storage_helper::~audit_stdout_storage_helper() {
     }
 }
 
+future<> audit_stdout_storage_helper::check(sstring path) {
+    auto sink = co_await open_stream(path);
+    co_await sink.close();
+}
+
 future<> audit_stdout_storage_helper::start(const db::config&) {
     if (this_shard_id() != 0) {
         co_return;
