@@ -23,7 +23,7 @@
 #include "utils/error_injection.hh"
 #include "db/config.hh"
 
-BOOST_AUTO_TEST_SUITE(test_audit)
+BOOST_AUTO_TEST_SUITE(audit_test)
 
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
 
