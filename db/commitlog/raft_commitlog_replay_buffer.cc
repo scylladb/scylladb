@@ -217,9 +217,15 @@ future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db
     if (!_schemas) {
         _schemas.emplace(db, sys_ks);
     }
-    auto& mut = std::get<sc::write_mutation>(cmd.change).mutation;
-    auto schema = co_await _schemas->resolve_and_upgrade(mut);
-    co_await db.apply_in_memory(mut, std::move(schema), db::rp_handle(), db::no_timeout,
+    auto* write = std::get_if<sc::write_mutation>(&cmd.change);
+    if (!write) {
+        // TODO: replaying a truncate_command is not implemented yet. The entry is skipped,
+        // so the entries below it are applied again and the truncate is not repeated.
+        logger.warn("skipping the truncate_command at idx {}, replaying one is not implemented yet", entry->idx);
+        co_return;
+    }
+    auto schema = co_await _schemas->resolve_and_upgrade(write->mutation);
+    co_await db.apply_in_memory(write->mutation, std::move(schema), db::rp_handle(), db::no_timeout,
             db::noop_large_data_guardrail::instance());
 }
 
