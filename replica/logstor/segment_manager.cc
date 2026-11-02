@@ -340,6 +340,7 @@ private:
         uint64_t separator_buffers_flushed{0};
         uint64_t separator_segments_freed{0};
         uint64_t separator_flush_failures{0};
+        uint64_t auto_compaction_wait_timeouts{0};
     } _stats;
 
     compaction_shares_controller _shares_controller;
@@ -369,6 +370,15 @@ private:
     // Sized for the static maximum; a run holds back the difference between it and the current
     // limit for its duration, see run_auto_compaction().
     seastar::semaphore _auto_compaction_sem{max_auto_compaction_parallelism};
+    // Bumped and signalled when a compaction succeeds or is re-enabled. A group is not a candidate
+    // while it compacts or is disabled, so this lets run_auto_compaction() pick it again without polling.
+    uint64_t _compaction_events{0};
+    seastar::condition_variable _compaction_event;
+
+    void notify_compaction_event() noexcept {
+        ++_compaction_events;
+        _compaction_event.signal();
+    }
 
     bool auto_compaction_active() const noexcept {
         return !_auto_compaction_completion.available();
@@ -411,6 +421,10 @@ public:
     void submit(logstor_group&) override;
     future<> stop_ongoing_compactions(logstor_group&) override;
     future<> remove(logstor_group&) override;
+    uint64_t auto_compaction_wait_timeouts() const noexcept override {
+        return _stats.auto_compaction_wait_timeouts;
+    }
+
     future<compaction_reenabler> disable_compaction(logstor_group&) override;
     compaction_reenabler disable_compaction_no_wait(logstor_group&) override;
     future<> submit_normal_compaction(logstor_group&, compaction_batch_limits limits);
@@ -477,6 +491,7 @@ future<> compaction_manager_impl::stop() {
         co_return;
     }
     _admission_closed = true;
+    notify_compaction_event();
 
     for (auto& [cg, state] : _groups) {
         state->as.request_abort();
@@ -1121,6 +1136,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of segments freed by the separator.")),
         sm::make_counter("separator_flush_failures", _compaction_mgr.get_stats().separator_flush_failures,
                        sm::description("Counts number of logstor separator flush failures.")),
+        sm::make_counter("auto_compaction_wait_timeouts", _compaction_mgr.get_stats().auto_compaction_wait_timeouts,
+                       sm::description("Counts number of times automatic compaction found nothing to compact and waited for the poll interval to expire.")),
         sm::make_counter("separator_task_failures", _stats.separator_task_failures,
                        sm::description("Counts number of logstor separator task failures.")),
         sm::make_gauge("separator_buffers_in_use", [this] { return _separator_buffer_pool.used_buffer_count(); },
@@ -1619,7 +1636,12 @@ future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std
             logstor_logger.warn("logstor compaction failed: {}", ep);
             return make_exception_future<>(std::move(ep));
         }));
-        co_return co_await state->completion.get_future();
+        // Signal once the group is no longer running, or the woken scan would skip it.
+        auto f = co_await coroutine::as_future(state->completion.get_future());
+        if (!f.failed()) {
+            notify_compaction_event();
+        }
+        co_return co_await std::move(f);
     }
 
     co_await coroutine::return_exception(std::runtime_error("logstor compaction submission is closed"));
@@ -1685,8 +1707,8 @@ future<compaction_reenabler> compaction_manager_impl::disable_compaction(logstor
 
     co_return compaction_reenabler([this, &cg] {
         auto it = _groups.find(&cg);
-        if (it != _groups.end()) {
-            --it->second->compaction_disabled_counter;
+        if (it != _groups.end() && --it->second->compaction_disabled_counter == 0) {
+            notify_compaction_event();
         }
     });
 }
@@ -1698,8 +1720,8 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
 
     return compaction_reenabler([this, &cg] {
         auto it = _groups.find(&cg);
-        if (it != _groups.end()) {
-            --it->second->compaction_disabled_counter;
+        if (it != _groups.end() && --it->second->compaction_disabled_counter == 0) {
+            notify_compaction_event();
         }
     });
 }
@@ -1814,11 +1836,25 @@ future<> compaction_manager_impl::run_auto_compaction() {
         }
 
         if (pending.empty()) {
+            const auto events = _compaction_events;
             pending = co_await find_top_compaction_candidates(parallelism);
             if (pending.empty()) {
-                co_await seastar::sleep(std::chrono::milliseconds(100));
+                // The timeout covers groups that become candidates by other means, and backs off
+                // after failures, which do not signal.
+                auto f = co_await coroutine::as_future(_compaction_event.wait(std::chrono::milliseconds(100), [&] {
+                    return _compaction_events != events || _admission_closed;
+                }));
+                if (f.failed()) {
+                    ++_stats.auto_compaction_wait_timeouts;
+                }
+                f.ignore_ready_future();
                 continue;
             }
+        }
+
+        // The scan yields, so the admission may have closed meanwhile.
+        if (!can_submit_compaction()) {
+            break;
         }
 
         auto candidate = std::move(pending.back());
@@ -2002,6 +2038,7 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_ba
 
     // wait for read operations that use the old locations
     co_await index.await_pending_reads();
+    co_await utils::get_local_injector().inject("logstor_compaction_delay", std::chrono::milliseconds(5));
     co_await utils::get_local_injector().inject("logstor_compaction_wait_before_remove_segments", utils::wait_for_message(std::chrono::seconds{60}));
 
     // Free the compacted segments

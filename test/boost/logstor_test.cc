@@ -3458,6 +3458,54 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit)
     assert_that(*actual_pk2).is_equal_to(pk2_v0);
 }
 
+// Automatic compaction runs one job per group at a time, so a group that needs many batches gets
+// the next one only once the loop notices the previous one finished. It has to notice right away:
+// with a single group, any idle time between batches caps how fast space is reclaimed.
+SEASTAR_THREAD_TEST_CASE(test_logstor_auto_compaction_starts_the_next_batch_when_one_finishes) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    // Disabled while the segments are set up, so that nothing compacts them early.
+    utils::updateable_value_source<double> threshold(0.0);
+    auto cfg = make_test_logstor_config(dir.path());
+    cfg.segment_manager_cfg.trigger_compaction_threshold = utils::updateable_value<double>(threshold);
+
+    shared_logstor_cache cache;
+    logstor ls(std::move(cfg), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_logstor_group cg(schema, ls);
+
+    // Every overwrite leaves the segment of the previous version empty.
+    constexpr size_t segment_count = 100;
+    for (size_t i = 0; i < segment_count; ++i) {
+        write_and_flush_segment(ls, cg, make_kv_mutation(schema, "pk0", format("v{}", i), api::timestamp_type(i + 1)));
+    }
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), segment_count);
+
+    // A job that is still running when the loop scans for the next batch, as one that does I/O is.
+    utils::get_local_injector().enable("logstor_compaction_delay");
+    auto disable_delay = seastar::defer([] noexcept { utils::get_local_injector().disable("logstor_compaction_delay"); });
+
+    // A target the disk cannot reach, so that compaction runs until nothing is left to reclaim.
+    // Every wait that ends by the poll timeout is a batch that did not start right away.
+    const auto timeouts_before = ls.get_compaction_manager().auto_compaction_wait_timeouts();
+    threshold.set(0.9);
+    // Only a guard against a hang.
+    const auto deadline = seastar::lowres_clock::now() + std::chrono::seconds(60);
+    while (cg.logstor_segments().segment_count() > 1 && seastar::lowres_clock::now() < deadline) {
+        seastar::sleep(std::chrono::milliseconds(1)).get();
+    }
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 1u);
+    BOOST_REQUIRE_EQUAL(ls.get_compaction_manager().auto_compaction_wait_timeouts(), timeouts_before);
+}
+
 // Split compaction hands every segment of a group to the group its records belong to after the
 // split: a segment whose records are all on one side is moved as it is, and one that straddles the
 // split is rewritten into a segment per side, skipping the records that are no longer live.

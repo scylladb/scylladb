@@ -447,6 +447,9 @@ public:
 
     virtual future<compaction_reenabler> disable_compaction(logstor_group&) = 0;
     virtual compaction_reenabler disable_compaction_no_wait(logstor_group&) = 0;
+
+    // How many times automatic compaction found nothing to do and waited out its poll interval.
+    virtual uint64_t auto_compaction_wait_timeouts() const noexcept = 0;
 };
 
 // A compaction group in logstor.
