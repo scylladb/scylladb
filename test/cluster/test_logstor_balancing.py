@@ -89,7 +89,7 @@ async def flush_and_refresh(manager: ScyllaClusterManager, servers):
     """Moves the records of all the nodes into the segments of their groups, which is where a tablet
     size counts them, and waits for the coordinator to read the load stats after that"""
     for s in servers:
-        await manager.api.logstor_flush(s.ip_addr)
+        await manager.api.flush_all_keyspaces(s.ip_addr)
     coordinator = await manager.find_server_by_host_id(servers, await get_topology_coordinator(manager))
     log = await manager.server_open_log(coordinator.server_id)
     mark = await log.mark()
@@ -151,7 +151,7 @@ async def test_tablet_split_trigger_by_size(manager: ScyllaClusterManager):
 
         # Flush to assign segments to compaction groups so their size is
         # visible to tablet load stats.
-        await manager.api.logstor_flush(servers[0].ip_addr)
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
 
         await s0_log.wait_for('Detected tablet split for table', from_mark=s0_mark, timeout=60)
 
@@ -166,7 +166,7 @@ async def test_tablet_split_trigger_by_size(manager: ScyllaClusterManager):
         s0_mark = await s0_log.mark()
         for i in range(1, key_count):
             await cql.run_async(f"DELETE FROM {ks}.test WHERE pk = {i}")
-        await manager.api.logstor_flush(servers[0].ip_addr)
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
         await s0_log.wait_for('Detected tablet merge for table', from_mark=s0_mark, timeout=60)
         assert await get_tablet_count(manager, servers[0], ks, 'test') == 1
 
