@@ -16,6 +16,7 @@
 #include "locator/token_metadata_fwd.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/util/bool_class.hh>
 
 namespace db {
 class system_keyspace;
@@ -24,6 +25,7 @@ class cluster_config_manager;
 
 namespace locator {
 class tablet_aware_replication_strategy;
+class network_topology_strategy;
 }
 
 namespace service {
@@ -424,6 +426,41 @@ public:
     /// Should be called when the node is no longer a leader.
     void on_leadership_lost();
 };
+
+/// Checks that the keyspace can be migrated from vnodes to tablets and returns its
+/// replication strategy. Throws a message meant for the operator otherwise. Both the API
+/// path and the topology coordinator ask this: the first so that a mistake is reported to
+/// the caller directly, the second because the state can change before it picks the
+/// request up.
+const locator::network_topology_strategy* validate_keyspace_for_migration(
+        replica::database& db, const sstring& ks_name, const topology& topo);
+
+using rf_rack_valid = bool_class<class rf_rack_valid_tag>;
+
+/// Checks that the replication factors of the keyspace remain valid once it uses
+/// tablets. Returns rf_rack_valid::no if the keyspace will not be RF-rack-valid but is
+/// allowed not to be, which the caller may warn about. Throws like
+/// validate_keyspace_for_migration().
+rf_rack_valid validate_rf_for_tablets_migration(const replica::database& db,
+        const locator::token_metadata_ptr& tmptr,
+        const locator::network_topology_strategy& nts,
+        const sstring& ks_name);
+
+/// Checks that every materialized view of the keyspace is built on every normal node.
+/// Throws like validate_keyspace_for_migration().
+future<> validate_keyspace_views_for_tablets_migration(
+        replica::database& db,
+        db::system_keyspace& sys_ks,
+        const topology& topology,
+        const sstring& ks_name);
+
+/// Builds the initial tablet map of a table being migrated from vnodes to tablets: one
+/// tablet per vnode range, replicated like that vnode, additionally split at the
+/// boundaries of `target_pow2` evenly spaced tablets when `target_pow2` is not 0.
+/// Depends on nothing but its arguments, so it can be driven with a synthetic topology.
+future<locator::tablet_map> build_tablet_map_for_migration(
+        const locator::static_effective_replication_map_ptr& erm,
+        size_t target_pow2 = 0);
 
 future<bool> requires_rack_list_colocation(
         replica::database& db,
