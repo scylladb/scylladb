@@ -1571,6 +1571,41 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_stops_with_waiting_writes_a_compaction_and
             "no write that waited for a segment failed with abort_requested_exception");
 }
 
+// Checks that a logstor starts when no more segments are free than the reserve for compaction, as on
+// a restart with a disk full of live data. The first active segment may only be taken above the
+// reserve, so the start must not wait for it, or the node would never serve a read.
+SEASTAR_THREAD_TEST_CASE(test_logstor_starts_with_no_more_free_segments_than_the_compaction_reserve) {
+    tmpdir dir;
+    auto cache = std::make_unique<shared_logstor_cache>();
+    const size_t size = max_compaction_parallelism * logstor_params{}.segment_size;
+    auto ls = std::make_unique<logstor>(make_test_logstor_config(dir.path(), logstor_params{.file_size = size, .disk_size = size}), cache->shared_tracker);
+    ls->do_recovery_for_test().get();
+
+    seastar::shared_future<> starting(ls->start());
+    if (!full_disk_logstor::completes_within(starting, std::chrono::seconds(10))) {
+        // Leak what the start still uses.
+        (void)ls.release();
+        (void)cache.release();
+        BOOST_FAIL("start did not complete with no more free segments than the compaction reserve");
+    }
+
+    // The start's own switch to the first active segment is parked at the reserve, which is what a
+    // write waits for: it joins that switch, so it does not count a wait of its own.
+    BOOST_REQUIRE_GT(full_disk_logstor::metric_value("logstor_sm_segment_pool_normal_segments_wait"), 0);
+
+    // The write has to wait for a segment, and fails when the logstor stops.
+    auto schema = make_kv_schema();
+    test_logstor_group group(schema, *ls);
+    auto write = ls->write(make_kv_mutation_of_record_size(schema, "pk", ls->get_segment_manager().get_segment_size() / 2),
+            write_target(&group, {}), db::no_timeout);
+    // Stop on a failed check too; the stop below is then a no-op.
+    auto stop_store = seastar::defer([&ls] noexcept { ls->stop().get(); });
+    seastar::sleep(std::chrono::milliseconds(100)).get();
+    BOOST_REQUIRE(!write.available());
+    ls->stop().get();
+    BOOST_REQUIRE_THROW(std::move(write).get(), seastar::abort_requested_exception);
+}
+
 // Checks that removing a group does not wait for its compaction that waits for a segment of an empty
 // pool, as dropping a table or cleaning up a tablet does, and leaves the other groups alone.
 SEASTAR_THREAD_TEST_CASE(test_logstor_removing_a_group_while_its_compaction_waits_for_a_segment) {

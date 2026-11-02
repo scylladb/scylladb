@@ -9,7 +9,7 @@ import random
 import time
 from pathlib import Path
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import create_new_test_keyspace, new_test_keyspace
 from cassandra import WriteFailure, WriteTimeout
 from cassandra.protocol import ConfigurationException, ServerError
 import pytest
@@ -237,7 +237,7 @@ async def test_recovery_basic(manager: ScyllaClusterManager, fail_separator_flus
             assert rows[0].pk == pk, f"Key {pk} has wrong pk value"
             assert rows[0].v == expected_v, f"Key {pk} has wrong value after additional writes"
 
-async def check_recovery_separates_mixed_data(manager: ScyllaClusterManager, write, min_flushed: int, extra_cfg=None):
+async def check_recovery_separates_mixed_data(manager: ScyllaClusterManager, write, min_flushed: int, extra_cfg=None, drop_keyspace=True):
     """
     Recovery separates the live records of mixed segments: restart with `write`'s data left in
     them, expect more than `min_flushed` separator flushes and no lost key.
@@ -249,7 +249,8 @@ async def check_recovery_separates_mixed_data(manager: ScyllaClusterManager, wri
 
     await manager.api.enable_injection(servers[0].ip_addr, "fail_flush_separator_buffer", one_shot=False)
 
-    async with new_test_keyspace(manager, "WITH tablets = {'initial': 1}") as ks:
+    async def check(ks):
+        nonlocal cql
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
         expected = await write(cql, ks, servers[0].ip_addr)
 
@@ -264,6 +265,12 @@ async def check_recovery_separates_mixed_data(manager: ScyllaClusterManager, wri
         for pk, v in expected.items():
             rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
             assert len(rows) == 1 and rows[0].v == v, f"Key {pk} wrong after recovery"
+
+    if drop_keyspace:
+        async with new_test_keyspace(manager, "WITH tablets = {'initial': 1}") as ks:
+            await check(ks)
+    else:
+        await check(await create_new_test_keyspace(cql, "WITH tablets = {'initial': 1}"))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_recovery_separates_more_than_two_buffers(manager: ScyllaClusterManager):
@@ -281,7 +288,7 @@ async def test_recovery_separates_more_than_two_buffers(manager: ScyllaClusterMa
 
     await check_recovery_separates_mixed_data(manager, write, min_flushed=2)
 
-async def write_until_only_the_reserve_is_free(manager: ScyllaClusterManager, cql, ks, ip_addr, writes_per_key: int):
+async def write_until_only_the_reserve_is_free(manager: ScyllaClusterManager, cql, ks, ip_addr, writes_per_key: int, value_size: int = 40 * 1024):
     """
     Writes until as many segments are free as the compaction reserve. A normal write takes a segment
     only while more than the reserve is free, so no write needs a segment after that.
@@ -292,8 +299,6 @@ async def write_until_only_the_reserve_is_free(manager: ScyllaClusterManager, cq
     async def free_segments() -> int:
         metrics = await manager.metrics.query(ip_addr)
         return int(metrics.get("scylla_logstor_sm_free_segments") or 0)
-
-    value_size = 40 * 1024
 
     async def settled_free_segments() -> int:
         # The replenisher leaves the segment it prepares out of the gauge until it is in the pool.
@@ -328,6 +333,21 @@ async def test_recovery_with_no_more_free_segments_than_the_reserve(manager: Scy
     # Auto compaction could take a reserve segment, and the test counts on the reserve being free.
     cfg = {'logstor_disk_size_in_mb': 4, 'logstor_file_size_in_mb': 1, 'logstor_compaction_trigger_threshold': 0}
     await check_recovery_separates_mixed_data(manager, write, min_flushed=1, extra_cfg=cfg)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_start_with_live_data_and_no_more_free_segments_than_the_reserve(manager: ScyllaClusterManager):
+    """
+    Restart on a disk full of live data: recovery leaves no more free segments than the compaction
+    reserve, so the node has to start without the first active segment. The keyspace is left in
+    place, as dropping its table would wait for a separator flush that needs a segment.
+    """
+    async def write(cql, ks, ip_addr):
+        # One record per segment, mixed or separated, so that recovery frees as many segments as it takes.
+        return await write_until_only_the_reserve_is_free(manager, cql, ks, ip_addr, writes_per_key=1, value_size=100 * 1024)
+
+    # Auto compaction could take a reserve segment, and the test counts on the reserve being free.
+    cfg = {'logstor_disk_size_in_mb': 4, 'logstor_file_size_in_mb': 1, 'logstor_compaction_trigger_threshold': 0}
+    await check_recovery_separates_mixed_data(manager, write, min_flushed=1, extra_cfg=cfg, drop_keyspace=False)
 
 async def test_recovery_with_segment_reuse(manager: ScyllaClusterManager):
     """

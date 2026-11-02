@@ -846,6 +846,7 @@ private:
     void start_reserve_replenisher();
     future<seg_ptr> allocate_segment();
 
+    void start_segment_switch();
     future<> request_segment_switch();
     future<> switch_active_segment();
     segment_sequence allocate_segment_seq() noexcept {
@@ -1183,7 +1184,9 @@ future<> segment_manager_impl::start() {
         return run_separator_fiber();
     });
 
-    co_await switch_active_segment();
+    // Not awaited: with no more free segments than the reserve, as on a disk full of live data, the
+    // first segment may wait for ever, and the node must still start to serve reads. A write waits for it.
+    start_segment_switch();
 
     logstor_logger.info("Segment manager started with base directory {}", _cfg.base_dir.string());
 }
@@ -1213,13 +1216,14 @@ future<> segment_manager_impl::stop() {
 
     co_await _compaction_mgr.flush_all_separator_buffers(std::nullopt);
 
-    if (_active_segment) {
-        co_await _active_segment->stop();
-    }
-
+    // A pending switch may still replace the active segment.
     if (_switch_segment_fut) {
         auto f = co_await coroutine::as_future(_switch_segment_fut->get_future());
         f.ignore_ready_future();
+    }
+
+    if (_active_segment) {
+        co_await _active_segment->stop();
     }
 
     logstor_logger.debug("Stopping compaction manager and buffer pools");
@@ -1436,18 +1440,34 @@ future<log_record> segment_manager_impl::read(record_location location) {
     co_return ondisk::read_record_frame(frame);
 }
 
-future<> segment_manager_impl::request_segment_switch() {
-    if (!_switch_segment_fut) {
-        auto f = switch_active_segment();
-        if (f.available()) {
-            f.get();
-            co_return;
-        }
-        _switch_segment_fut.emplace(f.discard_result().finally([this] {
-            _switch_segment_fut.reset();
-        }));
+void segment_manager_impl::start_segment_switch() {
+    if (_switch_segment_fut) {
+        return;
     }
-    co_await _switch_segment_fut->get_future();
+    auto f = switch_active_segment();
+    if (f.available()) {
+        f.get();
+        return;
+    }
+    _switch_segment_fut.emplace(f.discard_result().handle_exception([] (std::exception_ptr ep) {
+        // No write may be joined to it, so log here; a stop aborts it, which is no failure.
+        if (!try_catch<abort_requested_exception>(ep)) {
+            logstor_logger.warn("Switching the active segment failed: {}", ep);
+        }
+        return make_exception_future<>(ep);
+    }).finally([this] {
+        _switch_segment_fut.reset();
+    }));
+    // A waiter keeps the shared state alive until the chain resolves; otherwise the reset above
+    // drops it, and the chain's failure is reported as ignored.
+    (void)_switch_segment_fut->get_future().handle_exception([] (std::exception_ptr) {});
+}
+
+future<> segment_manager_impl::request_segment_switch() {
+    start_segment_switch();
+    if (_switch_segment_fut) {
+        co_await _switch_segment_fut->get_future();
+    }
 }
 
 future<> segment_manager_impl::switch_active_segment() {
