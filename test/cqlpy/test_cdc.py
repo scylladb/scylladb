@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 import re
+import uuid
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
@@ -466,3 +467,137 @@ def test_cdc_write_with_old_timestamp(scylla_only, cql, test_keyspace):
             match = 'from the past.*The oldest timestamp CDC accepts' if keyspace_has_tablets(cql, test_keyspace) else 'from the past'
             with pytest.raises(InvalidRequest, match=match):
                 cql.execute(stmt)
+
+# The following test checks the CDC messages in the tracing session of
+# writes to a table with CDC enabled: for each partition written, whether
+# CDC selected a preimage (needed for preimages and postimages), whether
+# it split the write into several log mutations (needed, for example, when
+# a write both deletes a collection and sets it, as an INSERT of a
+# collection does), and that it generated at least one log mutation (the
+# dtest accepted any number, even zero). The test covers INSERT, UPDATE,
+# partition, row and row-range DELETE, alone and in batches, of a text
+# column and of a list column, with and without preimages and postimages.
+# Translated from scylla-dtest's cdc_tracing_info_test.py::TestCDCTraceInfo,
+# where each case was a separate test. That test ran the writes in cqlsh
+# with "TRACING ON" and read the tracing events from cqlsh's output; here
+# the writes run through the driver, and the test reads the tracing
+# events from system_traces.events.
+
+# Each case: the name of the dtest it was translated from (without the
+# "test_" prefix), the write, the column type, preimage, postimage, whether
+# the writes are in a batch, and whether CDC is expected to split them.
+CDC_TRACING_CASES = [
+    ('tracing_insert_native_type', 'insert', 'text', False, False, False, False),
+    ('tracing_insert_native_type_preimage', 'insert', 'text', True, False, False, False),
+    ('tracing_insert_native_type_postimage', 'insert', 'text', False, True, False, False),
+    ('tracing_insert_native_type_preimage_postimage', 'insert', 'text', True, True, False, False),
+    ('tracing_update_native_type', 'update', 'text', False, False, False, False),
+    ('tracing_update_native_type_preimage_postimage', 'update', 'text', True, True, False, False),
+    ('tracing_delete_partition_native_type', 'delete_partition', 'text', False, False, False, True),
+    ('tracing_delete_partition_native_type_preimage_postimage', 'delete_partition', 'text', True, True, False, True),
+    ('tracing_delete_row_native_type', 'delete_row', 'text', False, False, False, False),
+    ('tracing_insert_collection', 'insert', 'list<text>', False, False, False, True),
+    ('tracing_insert_collection_preimage_postimage', 'insert', 'list<text>', True, True, False, True),
+    ('tracing_update_collection', 'update', 'list<text>', False, False, False, False),
+    ('tracing_update_collection_preimage_postimage', 'update', 'list<text>', True, True, False, False),
+    ('tracing_delete_partition_collection', 'delete_partition', 'list<text>', False, False, False, True),
+    ('tracing_delete_partition_collection_preimage_postimage', 'delete_partition', 'list<text>', True, True, False, True),
+    ('tracing_delete_row_collection', 'delete_row', 'list<text>', False, False, False, False),
+    ('tracing_delete_row_collection_preimage_postimage', 'delete_row', 'list<text>', True, True, False, False),
+    ('tracing_delete_row_range_collection', 'delete_range_exclusive', 'list<text>', False, False, False, False),
+    ('tracing_delete_row_range_collection_preimage_postimage', 'delete_range_exclusive', 'list<text>', True, True, False, False),
+    ('tracing_info_for_batch_insert_native_type', 'insert', 'text', False, False, True, False),
+    ('tracing_info_for_batch_insert_native_type_preimage_postimage', 'insert', 'text', True, True, True, False),
+    ('tracing_info_for_batch_insert_collection', 'insert', 'list<text>', False, False, True, True),
+    ('tracing_info_for_batch_insert_collection_preimage_postimage', 'insert', 'list<text>', True, True, True, True),
+    ('tracing_info_for_native_type_batch_update_preimage_postimage', 'update', 'text', True, True, True, False),
+    ('tracing_info_for_batch_update_collection_preimage_postimage', 'update', 'list<text>', True, True, True, False),
+    ('tracing_info_for_native_type_batch_delete_partition_preimage_postimage', 'delete_partition', 'text', True, True, True, True),
+    ('tracing_info_for_batch_delete_partition_collection_preimage_postimage', 'delete_partition', 'list<text>', True, True, True, True),
+    ('tracing_info_for_batch_delete_row_native_type_preimage_postimage', 'delete_row', 'text', True, True, True, False),
+    ('tracing_info_for_batch_delete_row_collection_preimage_postimage', 'delete_row', 'list<text>', True, True, True, False),
+    ('tracing_info_for_native_type_batch_delete_row_range_bound_exclusive_preimage_postimage', 'delete_range_exclusive', 'text', True, True, True, False),
+    ('tracing_info_for_native_type_batch_delete_row_range_bound_exclusive_collection_preimage_postimage', 'delete_range_exclusive', 'list<text>', True, True, True, False),
+    ('tracing_info_for_native_type_batch_delete_row_range_bound_inclusive_preimage_postimage', 'delete_range_inclusive', 'text', True, True, True, False),
+    ('tracing_info_for_native_type_batch_delete_row_range_bound_inclusive_collection_preimage_postimage', 'delete_range_inclusive', 'list<text>', True, True, True, False),
+]
+
+def cdc_tracing_value(value_type):
+    if value_type == 'text':
+        return f"'{uuid.uuid4()}'"
+    return str([str(uuid.uuid4()), str(uuid.uuid4())])
+
+# The write to run with tracing, for each kind of write. The deletes
+# delete from partitions 0 and (in a batch) 1, which the test fills first
+# with five rows each.
+def cdc_tracing_write(table, operation, value, batch):
+    if operation == 'insert':
+        ops = [f'INSERT INTO {table} (pkey, ckey, value) VALUES ({i}, 1, {value})' for i in (range(5) if batch else [1])]
+    elif operation == 'update':
+        ops = [f'UPDATE {table} SET value = {value} WHERE pkey = {i} AND ckey = 1' for i in (range(5) if batch else [1])]
+    elif operation == 'delete_partition':
+        ops = [f'DELETE FROM {table} WHERE pkey = {i}' for i in (range(2) if batch else [0])]
+    elif operation == 'delete_row':
+        ops = [f'DELETE FROM {table} WHERE pkey = {i % 2} AND ckey = {i % 5}' for i in range(10)] if batch else \
+              [f'DELETE FROM {table} WHERE pkey = 0 AND ckey = 1']
+    elif operation == 'delete_range_exclusive':
+        ops = [f'DELETE FROM {table} WHERE pkey = {i} AND ckey > 1 AND ckey < 4' for i in ([1, 0] if batch else [0])]
+    elif operation == 'delete_range_inclusive':
+        ops = [f'DELETE FROM {table} WHERE pkey = {i} AND ckey >= 1 AND ckey <= 4' for i in ([1, 0] if batch else [0])]
+    if batch:
+        return 'BEGIN BATCH ' + '; '.join(ops) + '; APPLY BATCH'
+    return ops[0]
+
+# Check the CDC messages in a tracing session: they begin with a "Started"
+# message and end with a "Finished" message, and between them, for each of
+# the given tokens of partitions written, there are exactly these messages
+# in this order, and there are no other CDC messages.
+def check_cdc_trace_messages(messages, tokens, preimage, postimage, splitting):
+    assert re.match('CDC: Started generating mutations for log rows.*$', messages.pop(0))
+    assert re.match('CDC: Finished generating all log mutations.*$', messages.pop(-1))
+    for token in tokens:
+        key = rf'{{key:\s*pk{{.*?}},\s*token:\s*{token}}}'
+        patterns = [
+            f'CDC: Selecting preimage for {key}.*$' if preimage or postimage else
+            f'CDC: Preimage not enabled for the table, not querying current value of {key}.*$',
+            f'CDC: Generating log mutations for {key}.*$',
+            f'CDC: Splitting {key}.*$' if splitting else f'CDC: No need to split {key}.*$',
+            rf'CDC: Generated [1-9]\d* log mutations from {key}.*$',
+        ]
+        token_messages = [m for m in messages if str(token) in m]
+        assert len(token_messages) == len(patterns), token_messages
+        for pattern, message in zip(patterns, token_messages):
+            assert re.match(pattern, message), message
+        for message in token_messages:
+            messages.remove(message)
+    assert messages == []
+
+@pytest.mark.parametrize('name,operation,value_type,preimage,postimage,batch,splitting', CDC_TRACING_CASES,
+                         ids=[case[0] for case in CDC_TRACING_CASES])
+def test_cdc_tracing(scylla_only, cql, test_keyspace, name, operation, value_type, preimage, postimage, batch, splitting):
+    options = "{'enabled': true" + (", 'preimage': true" if preimage else '') + (", 'postimage': true" if postimage else '') + '}'
+    with new_test_table(cql, test_keyspace, f'pkey int, ckey int, value {value_type}, PRIMARY KEY (pkey, ckey)', f'WITH cdc = {options}') as table:
+        value = cdc_tracing_value(value_type)
+        if operation.startswith('delete'):
+            for i in range(10 if batch else 5):
+                cql.execute(f'INSERT INTO {table} (pkey, ckey, value) VALUES ({i % 2 if batch else 0}, {i % 5}, {value})')
+        # The partitions written are those deleted from, or for inserts and
+        # updates, those inserted into the empty table.
+        def tokens():
+            return {row.tkn for row in cql.execute(f'SELECT token(pkey) AS tkn FROM {table}')}
+        tokens_before = tokens()
+        result = cql.execute(cdc_tracing_write(table, operation, value, batch), trace=True)
+        written_tokens = tokens_before or tokens()
+        [trace_id] = result.response_future.get_query_trace_ids()
+        # Tracing events are written asynchronously, so wait until the last
+        # CDC message appears. system_traces has replication factor 2, so
+        # read it with consistency level ONE.
+        query = SimpleStatement(f'SELECT activity FROM system_traces.events WHERE session_id = {trace_id}',
+                                consistency_level=ConsistencyLevel.ONE)
+        deadline = time.time() + 30
+        while True:
+            messages = [row.activity for row in cql.execute(query) if 'CDC:' in row.activity]
+            if any('CDC: Finished generating all log mutations' in m for m in messages) or time.time() > deadline:
+                break
+            time.sleep(0.01)
+        check_cdc_trace_messages(messages, written_tokens, preimage, postimage, splitting)
