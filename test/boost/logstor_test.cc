@@ -503,7 +503,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_layout) {
         .body_crc = 0x0badf00d,
         .reserved2 = 0x5eed1e55,
         .crc = 0xfeedface,
-    }, "4253474c" "01" "01" "3412" "0807060504030201" "efbeadde" "0df0ad0b" "551eed5e" "cefaedfe");
+    }, "4253474c" "02" "01" "3412" "0807060504030201" "efbeadde" "0df0ad0b" "551eed5e" "cefaedfe");
 
     check_ondisk_layout("segment_header", ondisk::segment_header {
         .table = table,
@@ -542,13 +542,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_layout) {
         .reserved2 = 0x5eed1e55,
         .crc = 0xfeedface,
     };
-    BOOST_REQUIRE_EQUAL(ch.calculate_crc(std::nullopt), 0xb1229275u);
+    BOOST_REQUIRE_EQUAL(ch.calculate_crc(std::nullopt), 0x0b6d50fbu);
     ch.kind = segment_kind::full;
     BOOST_REQUIRE_EQUAL(ch.calculate_crc(ondisk::segment_header {
         .table = table,
         .first_token = dht::token::from_int64(-0x0123456789abcdef),
         .last_token = dht::token::from_int64(0x7fffffffffffffff),
-    }), 0x2c81ed9fu);
+    }), 0x8bb2fd66u);
 }
 
 // Serializes a record frame and returns its bytes, checking that the frame took exactly the size
