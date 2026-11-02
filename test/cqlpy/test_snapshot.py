@@ -462,19 +462,28 @@ def test_snapshot_restore_native_types(cql, scylla_data_dir, temp_workdir, scyll
         assert read_rows() == rows
 
 # Test that a snapshot request which doesn't list keyspaces takes a snapshot
-# of every keyspace which has tables, including the system keyspaces.
-# Translated from scylla-dtest's snapshot_test.py::TestSnapshotOptions::test_snapshot_defaults_to_all_keyspaces.
-def test_snapshot_all_keyspaces(cql, test_keyspace, scylla_only):
+# of every keyspace which has tables, including the system keyspaces, and
+# that each table's snapshot has a manifest file. The test then deletes the
+# snapshot, and checks that a second snapshot of all keyspaces works too.
+# Translated from scylla-dtest's snapshot_test.py::TestSnapshotOptions::test_snapshot_defaults_to_all_keyspaces,
+# and from scylla-dtest's nodetool_additional_test.py::TestNodetool tests
+# test_global_snapshot, test_snapshot_tag and test_global_create_after_clean.
+def test_snapshot_all_keyspaces(cql, test_keyspace, scylla_data_dir, scylla_only):
     with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val text') as table:
-        tag = unique_name()
-        rest_request(cql, 'POST', 'storage_service/snapshots', tag=tag)
-        try:
-            entries = has_snapshot(nodetool.list_snapshots(cql), tag)
-        finally:
-            nodetool.del_snapshot(cql, tag)
         keyspaces = {row.keyspace_name for row in cql.execute('SELECT keyspace_name FROM system_schema.tables')}
-        assert {e['ks'] for e in entries} == keyspaces
-        assert split_table(table) in {(e['ks'], e['cf']) for e in entries}
+        for _ in range(2):
+            tag = unique_name()
+            rest_request(cql, 'POST', 'storage_service/snapshots', tag=tag)
+            try:
+                entries = has_snapshot(nodetool.list_snapshots(cql), tag)
+                assert {e['ks'] for e in entries} == keyspaces
+                assert split_table(table) in {(e['ks'], e['cf']) for e in entries}
+                for e in entries:
+                    [snapshot_dir] = glob.glob(os.path.join(scylla_data_dir, e['ks'], f"{e['cf']}-*", 'snapshots', tag))
+                    assert os.path.isfile(os.path.join(snapshot_dir, 'manifest.json'))
+            finally:
+                nodetool.del_snapshot(cql, tag)
+            assert has_snapshot(nodetool.list_snapshots(cql), tag) is None
 
 # Test that a snapshot request which lists keyspaces takes a snapshot of
 # only these keyspaces.

@@ -315,6 +315,14 @@ def test_versions_executable(scylla_only, cql, scylla_path):
     assert row.build_id == executable_output('--build-id')
     assert row.build_mode == executable_output('--build-mode')
 
+# Test that the REST API's release version, which "nodetool version" prints,
+# is the Cassandra-compatible version which system.local reports, 3.x.y.
+# Translated from scylla-dtest's nodetool_additional_test.py::TestNodetool::test_version.
+def test_rest_release_version(scylla_only, cql):
+    version = rest_api.get_request(cql, 'storage_service/release_version')
+    assert re.fullmatch(r'3\.\d+\.\d+', version)
+    assert version == cql.execute('SELECT release_version FROM system.local').one().release_version
+
 # Test the content of system.protocol_servers: the CQL server's row lists
 # its two ports - the regular and the shard-aware one - and the CQL version.
 # Other protocol servers, which may or may not be enabled, are not checked.
