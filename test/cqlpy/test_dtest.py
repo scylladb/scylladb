@@ -12,11 +12,13 @@
 # Cassandra to check their assumptions.
 #############################################################################
 
+import glob
 import math
 import os
 import re
 import sys
 import time
+import uuid
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
 
@@ -30,7 +32,7 @@ from cassandra.query import SimpleStatement, UNSET_VALUE
 from . import nodetool
 from .test_logs import logfile, logfile_path, wait_for_log
 from .test_secondary_index import wait_for_index
-from .util import ScyllaMetrics, config_value_context, is_scylla, new_cql, new_materialized_view, new_test_keyspace, new_test_table, new_type, new_user, unique_name
+from .util import ScyllaMetrics, config_value_context, is_scylla, new_cql, new_materialized_view, new_secondary_index, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
 # Test that a SELECT can list the same column more than once, and returns
@@ -2379,3 +2381,194 @@ def test_incompressible_data_deflate(cql, test_keyspace):
             cql.execute(f"UPDATE {table} SET v = '{v}' WHERE key = '0' AND c = '{c}'")
         nodetool.flush(cql, table)
         assert list(cql.execute(f"SELECT c, v FROM {table} WHERE key = '0' AND c < '8'")) == [(c, values[c]) for c in sorted(values) if c < '8']
+
+#############################################################################
+# The following tests were translated from scylla-dtest's
+# cql_tracing_addition_test.py::TestTracingReadAccess. They check that the
+# tracing of a read from sstables says which sstables it read: a "Reading
+# partition range ... from sstable <file>" or "Reading key ... from sstable
+# <file>" event for each sstable, and events for the bulk DMA reads of its
+# data file. The dtests ran queries with "TRACING ON" in cqlsh and matched
+# its output with regular expressions which (because they ended with an
+# unescaped "|") matched any output, so they never checked anything. The
+# dtests ran Scylla with the row cache disabled; these tests read with
+# BYPASS CACHE, so they are scylla_only. With real checks, three of the
+# tests helped us discover a new bug, SCYLLADB-5934: a scan of a shard with
+# a single sstable doesn't trace which sstable it read.
+#############################################################################
+
+# The data files of a table's sstables
+def sstable_data_files(scylla_data_dir, table):
+    ks, cf = table.split('.')
+    data_files = glob.glob(os.path.join(scylla_data_dir, ks, f'{cf}-*', '*-Data.db'))
+    # The callers flushed the table, so there must be sstables. Without
+    # this check, a test checking each sstable would check nothing.
+    assert data_files, f'no sstables found for {table}'
+    return data_files
+
+# The activities of the trace of the given query's result. Tracing events
+# are written asynchronously, so wait until the coordinator's last event
+# appears, and also until expected(activities) - the events which the test
+# checks are there - but for those, only up to `grace` seconds more: each
+# shard starts writing its events when its part of the query ends, before
+# the coordinator writes its last event, but the writes may complete in a
+# different order. A test which passes stops waiting as soon as its events
+# are there, so the long default grace only matters on a slow (e.g., debug)
+# build; xfail tests, whose events never all appear, pass a short grace so
+# they don't always wait that long. system_traces has replication factor 2,
+# so read it with consistency level ONE.
+def trace_activities(cql, result, expected, grace=5):
+    [trace_id] = result.response_future.get_query_trace_ids()
+    query = SimpleStatement(f'SELECT activity FROM system_traces.events WHERE session_id = {trace_id}',
+                            consistency_level=ConsistencyLevel.ONE)
+    deadline = time.time() + 30
+    done_time = None
+    while True:
+        activities = [row.activity for row in cql.execute(query)]
+        if done_time is None and 'Done processing - preparing a result' in activities:
+            done_time = time.time()
+        if done_time is not None and (expected(activities) or time.time() > done_time + grace):
+            return activities
+        if time.time() > deadline:
+            return activities
+        time.sleep(0.1 if done_time is None else 0.01)
+
+# Whether the trace says it read the given sstable: what ("partition range"
+# or "key") it read from it, and the bulk DMA reads of its data file.
+def sstable_read_traced(activities, data_file, what):
+    return (any(a.startswith(f'Reading {what} ') and a.endswith(f'from sstable {data_file}') for a in activities) and
+            any(a.startswith(f'{data_file}: scheduling bulk DMA read of size ') for a in activities) and
+            any(a.startswith(f'{data_file}: finished bulk DMA read of size ') for a in activities))
+
+# Whether the trace says it read each of the given sstables
+def sstables_read_traced(data_files, what):
+    return lambda activities: all(sstable_read_traced(activities, data_file, what) for data_file in data_files)
+
+# Whether the trace says it read keys from some sstables, and all of these
+# reads were traced
+def key_reads_traced(activities):
+    read = sstables_read_by_key(activities)
+    return read and all(sstable_read_traced(activities, data_file, 'key') for data_file in read)
+
+# Check that the trace says it read the given sstable: what ("partition
+# range" or "key") it read from it, and the bulk DMA reads of its data file.
+def check_sstable_read_traced(activities, data_file, what):
+    assert any(a.startswith(f'Reading {what} ') and a.endswith(f'from sstable {data_file}') for a in activities), data_file
+    assert any(a.startswith(f'{data_file}: scheduling bulk DMA read of size ') for a in activities), data_file
+    assert any(a.startswith(f'{data_file}: finished bulk DMA read of size ') for a in activities), data_file
+
+# The sstables which the trace says it read keys from
+def sstables_read_by_key(activities):
+    return {m.group(1) for a in activities if (m := re.fullmatch(r'Reading key .* from sstable (.*)', a))}
+
+def insert_tracing_rows(cql, table, n):
+    insert = cql.prepare(f'INSERT INTO {table} (key, name, rate) VALUES (?, ?, ?)')
+    for i in range(n):
+        cql.execute(insert, [str(uuid.uuid4()), f'lastname_{i}', i + 1])
+
+TRACING_SCHEMA = 'key text PRIMARY KEY, name text, rate int'
+
+# Test the tracing of a scan of a table with one sstable.
+# Translated from scylla-dtest's cql_tracing_addition_test.py::TestTracingReadAccess::test_tracing_info_for_all_partitions.
+# Reproduces SCYLLADB-5934 (a scan of a shard with a single sstable doesn't
+# trace which sstable it read).
+@pytest.mark.xfail(reason='SCYLLADB-5934')
+def test_tracing_read_all_partitions(cql, test_keyspace, scylla_data_dir, scylla_only):
+    with new_test_table(cql, test_keyspace, TRACING_SCHEMA) as table:
+        insert_tracing_rows(cql, table, 1)
+        nodetool.flush(cql, table)
+        data_files = sstable_data_files(scylla_data_dir, table)
+        activities = trace_activities(cql, cql.execute(f'SELECT * FROM {table} BYPASS CACHE', trace=True),
+                                      sstables_read_traced(data_files, 'partition range'), grace=0.1)
+        for data_file in data_files:
+            check_sstable_read_traced(activities, data_file, 'partition range')
+
+# Test the tracing of a scan of a materialized view with one sstable.
+# Translated from scylla-dtest's cql_tracing_addition_test.py::TestTracingReadAccess::test_tracing_info_for_mv.
+# Reproduces SCYLLADB-5934 (a scan of a shard with a single sstable doesn't
+# trace which sstable it read).
+@pytest.mark.xfail(reason='SCYLLADB-5934')
+def test_tracing_read_materialized_view(cql, test_keyspace, scylla_data_dir, scylla_only):
+    with new_test_table(cql, test_keyspace, TRACING_SCHEMA) as table:
+        with new_materialized_view(cql, table, '*', 'rate, key', 'rate IS NOT NULL AND key IS NOT NULL') as view:
+            insert_tracing_rows(cql, table, 1)
+            nodetool.flush(cql, view)
+            data_files = sstable_data_files(scylla_data_dir, view)
+            activities = trace_activities(cql, cql.execute(f'SELECT * FROM {view} BYPASS CACHE', trace=True),
+                                          sstables_read_traced(data_files, 'partition range'), grace=0.1)
+            for data_file in data_files:
+                check_sstable_read_traced(activities, data_file, 'partition range')
+
+# Test the tracing of a read of one partition: the trace says which
+# sstables it read the key from - one of the table's sstables - and their
+# bulk DMA reads.
+# Translated from scylla-dtest's cql_tracing_addition_test.py::TestTracingReadAccess::test_tracing_info_selecting_by_one_key.
+def test_tracing_read_one_key(cql, test_keyspace, scylla_data_dir, scylla_only):
+    with new_test_table(cql, test_keyspace, TRACING_SCHEMA) as table:
+        insert_tracing_rows(cql, table, 5)
+        nodetool.flush(cql, table)
+        key = cql.execute(f'SELECT key FROM {table} LIMIT 1').one().key
+        activities = trace_activities(cql, cql.execute(f"SELECT * FROM {table} WHERE key = '{key}' BYPASS CACHE", trace=True),
+                                      key_reads_traced)
+        read = sstables_read_by_key(activities)
+        assert read and read <= set(sstable_data_files(scylla_data_dir, table))
+        for data_file in read:
+            check_sstable_read_traced(activities, data_file, 'key')
+
+# Test the tracing of a scan filtering on a column which has an index (but
+# with a range restriction, so the index isn't used).
+# Translated from scylla-dtest's cql_tracing_addition_test.py::TestTracingReadAccess::test_tracing_info_for_index_read_range.
+# Reproduces SCYLLADB-5934 (a scan of a shard with a single sstable doesn't
+# trace which sstable it read).
+@pytest.mark.xfail(reason='SCYLLADB-5934')
+def test_tracing_read_index_range(cql, test_keyspace, scylla_data_dir, scylla_only):
+    with new_test_table(cql, test_keyspace, TRACING_SCHEMA) as table:
+        with new_secondary_index(cql, table, 'rate'):
+            insert_tracing_rows(cql, table, 5)
+            nodetool.flush(cql, table)
+            data_files = sstable_data_files(scylla_data_dir, table)
+            activities = trace_activities(cql, cql.execute(f'SELECT * FROM {table} WHERE rate > 0 ALLOW FILTERING BYPASS CACHE', trace=True),
+                                          sstables_read_traced(data_files, 'partition range'), grace=0.1)
+            for data_file in data_files:
+                check_sstable_read_traced(activities, data_file, 'partition range')
+
+# Test the tracing of a query using an index to find one row: the trace
+# says which of the table's sstables it read the key from.
+# Translated from scylla-dtest's cql_tracing_addition_test.py::TestTracingReadAccess::test_tracing_info_for_index_read_one.
+def test_tracing_read_index_one(cql, test_keyspace, scylla_data_dir, scylla_only):
+    with new_test_table(cql, test_keyspace, TRACING_SCHEMA) as table:
+        with new_secondary_index(cql, table, 'rate'):
+            insert_tracing_rows(cql, table, 5)
+            nodetool.flush(cql, table)
+            activities = trace_activities(cql, cql.execute(f'SELECT * FROM {table} WHERE rate = 3 BYPASS CACHE', trace=True),
+                                          key_reads_traced)
+            read = sstables_read_by_key(activities)
+            assert read and read <= set(sstable_data_files(scylla_data_dir, table))
+            for data_file in read:
+                check_sstable_read_traced(activities, data_file, 'key')
+
+# Test the tracing of a scan of a table with several sstables (with
+# LeveledCompactionStrategy and autocompaction disabled, so they aren't
+# compacted): the trace says it read each of them.
+# Translated from scylla-dtest's cql_tracing_addition_test.py::TestTracingReadAccess::test_tracing_info_read_from_several_sstables.
+# The dtest wrote 4 rows before each of its flushes; this test writes 20,
+# so each shard surely gets rows in each flush.
+def test_tracing_read_several_sstables(cql, test_keyspace, scylla_data_dir, scylla_only):
+    with new_test_table(cql, test_keyspace, TRACING_SCHEMA, "WITH compaction = {'class': 'LeveledCompactionStrategy'}") as table:
+        with nodetool.no_autocompaction_context(cql, table):
+            insert_tracing_rows(cql, table, 20)
+            nodetool.flush(cql, table)
+            insert_tracing_rows(cql, table, 20)
+            nodetool.flush(cql, table)
+            keys = [row.key for row in cql.execute(f'SELECT key FROM {table}')][:20]
+            update = cql.prepare(f"UPDATE {table} SET name = 'updated' WHERE key = ?")
+            for key in keys:
+                cql.execute(update, [key])
+            nodetool.flush(cql, table)
+            data_files = sstable_data_files(scylla_data_dir, table)
+            # Each of the three flushes wrote at least one sstable
+            assert len(data_files) >= 3
+            activities = trace_activities(cql, cql.execute(f'SELECT * FROM {table} BYPASS CACHE', trace=True),
+                                          sstables_read_traced(data_files, 'partition range'))
+            for data_file in data_files:
+                check_sstable_read_traced(activities, data_file, 'partition range')
