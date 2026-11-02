@@ -926,3 +926,56 @@ def test_limit_compact_table(cql, test_keyspace, compact_storage):
         all_rows = list(cql.execute(f'SELECT * FROM {table} WHERE v > 1 AND v <= 3 ALLOW FILTERING'))
         assert sorted(all_rows) == [(i, j) for i in range(4) for j in [2, 3]]
         assert list(cql.execute(f'SELECT * FROM {table} WHERE v > 1 AND v <= 3 LIMIT 6 ALLOW FILTERING')) == all_rows[:6]
+
+# Test that ALTER TABLE ADD can add several columns at once, given as a
+# parenthesized list, and that the new columns can then be written and read.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_alter_with_multiple_columns. The
+# dtest only wrote to the new columns, and this test also reads them back.
+def test_alter_table_add_multiple_columns(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
+        cql.execute(f'ALTER TABLE {table} ADD (c text, d int)')
+        cql.execute(f"INSERT INTO {table} (k, c, d) VALUES (1, 'hello', 100)")
+        assert list(cql.execute(f'SELECT k, c, d FROM {table}')) == [(1, 'hello', 100)]
+
+# Test that INSERT statements containing non-ASCII string literals fail with
+# an ordinary InvalidRequest error when they are invalid: when the table
+# doesn't exist, when a column doesn't exist, and when the non-ASCII string is
+# inserted into an "ascii" column.
+# CASSANDRA-8101 was about such errors being reported as protocol errors.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_invalid_string_literals, which
+# originally came from Cassandra's old Python cql_tests.py
+# (invalid_string_literals_test).
+def test_invalid_string_literals(cql, test_keyspace):
+    s = '\u038e\u0394\u03b4\u03e0'
+    # Check that inserting into a nonexistent table fails with InvalidRequest
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"INSERT INTO {test_keyspace}.{unique_name()} (k, a) VALUES (0, '{s}')")
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, a ascii, b text') as table:
+        # Check that inserting into a nonexistent column fails with
+        # InvalidRequest
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table} (k, c) VALUES (0, '{s}')")
+        # Check that inserting a non-ASCII string into an ascii column fails
+        # with InvalidRequest
+        with pytest.raises(InvalidRequest, match='Invalid ASCII character|Value not compatible'):
+            cql.execute(f"INSERT INTO {table} (k, a) VALUES (0, '\xe0\x80\x80')")
+
+# Test that a full-table scan returns the partitions in the token order of
+# their keys. With the Murmur3 partitioner, the default in both Scylla and
+# Cassandra, this order of text keys is not their alphabetical order. The
+# test checks the exact order of the rows, and that their tokens increase.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_bop_order.
+# Despite its name, which refers to the byte-ordered partitioner ("BOP"), that
+# test used the default Murmur3 partitioner, and checked the Murmur3 order.
+# This test also checks that the tokens increase.
+def test_scan_text_keys_in_token_order(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k text PRIMARY KEY, v int') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (k, v) VALUES (?, ?)')
+        for v, k in enumerate(['c1', 'a1', 'b1', 'z', 'g1', '1', '1000', '2']):
+            cql.execute(insert, [k, v])
+        rows = list(cql.execute(f'SELECT token(k), v FROM {table}'))
+        assert [row[1] for row in rows] == [3, 0, 2, 6, 4, 7, 1, 5]
+        tokens = [row[0] for row in rows]
+        assert tokens == sorted(tokens)
