@@ -583,3 +583,99 @@ def test_large_clustering_in(cql, test_keyspace):
         clustering_values = list(range(0, 1000, 7))
         execute_concurrent_with_args(cql, insert, [(0, c, c) for c in clustering_values], concurrency=100, raise_on_first_error=True)
         assert list(cql.execute(select, [0, in_values])) == [(0, c, c) for c in clustering_values if c in in_values]
+
+# Test the range of the tinyint type: the smallest and largest values,
+# -128 and 127, can be written and read back, and one beyond each end is
+# rejected.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_cql_tinyint_type.
+def test_cql_tinyint_type(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 't tinyint PRIMARY KEY') as table:
+        for v in [-129, 128]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f'INSERT INTO {table} (t) VALUES ({v})')
+        for v in [-128, 127]:
+            cql.execute(f'INSERT INTO {table} (t) VALUES ({v})')
+        assert {r.t for r in cql.execute(f'SELECT * FROM {table}')} == {-128, 127}
+
+# Test the range of the smallint type: the smallest and largest values,
+# -32768 and 32767, can be written and read back, and one beyond each end
+# is rejected.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_cql_smallint_type.
+def test_cql_smallint_type(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 't smallint PRIMARY KEY') as table:
+        for v in [-32769, 32768]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f'INSERT INTO {table} (t) VALUES ({v})')
+        for v in [-32768, 32767]:
+            cql.execute(f'INSERT INTO {table} (t) VALUES ({v})')
+        assert {r.t for r in cql.execute(f'SELECT * FROM {table}')} == {-32768, 32767}
+
+# Test the range of the date type at its low end, and the epoch: a date is
+# stored as a 32-bit number of days, so the earliest date is -5877641-06-23,
+# and the day before it is rejected. The Python driver can't represent dates
+# outside Python's datetime.date range, so it returns such a date as the
+# number of days since the epoch - for the earliest date, -2^31.
+# The latest date, 5881580-07-11 (2^31-1 days after the epoch), is checked
+# in the following tests, because Scylla and Cassandra disagree on how to
+# write it.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_cql_date_type.
+def test_cql_date_type(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 't date PRIMARY KEY') as table:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table} (t) VALUES ('-5877641-06-22')")
+        for v in ['-5877641-06-23', '1970-01-01']:
+            cql.execute(f"INSERT INTO {table} (t) VALUES ('{v}')")
+        assert {str(r.t) for r in cql.execute(f'SELECT * FROM {table}')} == {'-2147483648', '1970-01-01'}
+
+# Test that a date literal with a year beyond 9999 may be written with a "+"
+# sign, as ISO 8601 requires, up to the latest date, +5881580-07-11. This
+# is how Cassandra 4.0 and above require such dates to be written, and also
+# how they print them. Cassandra 3.x accepted both this form and the form
+# without a sign.
+# Reproduces SCYLLADB-5919, which this test helped discover.
+@pytest.mark.xfail(reason='SCYLLADB-5919')
+def test_date_literal_plus_sign(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 't date PRIMARY KEY') as table:
+        for v in ['+10000-01-01', '+5881580-07-11']:
+            cql.execute(f"INSERT INTO {table} (t) VALUES ('{v}')")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table} (t) VALUES ('+5881580-07-12')")
+        # The Python driver returns dates beyond the year 9999 as the number
+        # of days since the epoch
+        assert {str(r.t) for r in cql.execute(f'SELECT * FROM {table}')} == {'2932897', '2147483647'}
+
+# Test that a date literal with a year beyond 9999 may also be written
+# without a sign, up to the latest date, 5881580-07-11, and that one day
+# beyond it is rejected. Cassandra 3.x accepted this form, and Scylla
+# implemented it in 2016, but Cassandra 4.0 stopped accepting it when it
+# replaced its date parser in CASSANDRA-15257 - Cassandra 4.0 and above
+# require a "+" sign for such years (see test_date_literal_plus_sign above).
+# Scylla keeps accepting this form, for backward compatibility, so this
+# test is scylla_only.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_cql_date_type.
+def test_date_literal_large_year_no_sign(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 't date PRIMARY KEY') as table:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table} (t) VALUES ('5881580-07-12')")
+        for v in ['10000-01-01', '5881580-07-11']:
+            cql.execute(f"INSERT INTO {table} (t) VALUES ('{v}')")
+        # The Python driver returns dates beyond the year 9999 as the number
+        # of days since the epoch
+        assert {str(r.t) for r in cql.execute(f'SELECT * FROM {table}')} == {'2932897', '2147483647'}
+
+# Test parsing of time literals: seconds are required, and up to nine
+# digits of fractions of a second (nanoseconds) are allowed, but not ten.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_cql_time_type.
+def test_cql_time_type(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 't time PRIMARY KEY') as table:
+        for v in ['14:53', '14:53:12.1234567890']:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"INSERT INTO {table} (t) VALUES ('{v}')")
+        for v in ['14:53:12', '14:53:12.1234', '14:53:12.123456789']:
+            cql.execute(f"INSERT INTO {table} (t) VALUES ('{v}')")
+        assert {str(r.t) for r in cql.execute(f'SELECT * FROM {table}')} == {'14:53:12.000000000', '14:53:12.123400000', '14:53:12.123456789'}
