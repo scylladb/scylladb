@@ -59,7 +59,7 @@
 #include "service/strong_consistency/coordinator.hh"
 #include "service/strong_consistency/groups_manager.hh"
 #include "gms/gossiper.hh"
-#include "db/schema_applier.hh"
+#include "db/schema_and_topology_applier.hh"
 
 #include <boost/regex.hpp>
 #include <atomic>
@@ -70,8 +70,8 @@
 // topology command which changes neither system.topology nor system.tablets. Only
 // the tablet-dependent part of the topology state is reloaded.
 static void reload_tablets_only(cql_test_env& e) {
-    db::schema_tables::schema_applier ap(e.get_storage_proxy(), e.get_storage_service(), e.get_system_keyspace(),
-            db::schema_tables::schema_applier::topology_reload::incremental);
+    db::schema_tables::schema_and_topology_applier ap(e.get_storage_proxy(), e.get_storage_service(), e.get_system_keyspace(),
+            db::schema_tables::schema_and_topology_applier::topology_reload::incremental);
     utils::chunked_vector<mutation> muts;
     ap.prepare(muts).get();
     ap.apply_persisted().finally([&ap] {
@@ -1590,7 +1590,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint_split_with_tombstone) {
         );
         auto mut2 = builder.build();
 
-        // Build hint incrementally, as schema_applier::prepare() does
+        // Build hint incrementally, as schema_and_topology_applier::prepare() does
         locator::tablet_metadata_change_hint hint;
         replica::update_tablet_metadata_change_hint(hint, mut1);
         replica::update_tablet_metadata_change_hint(hint, mut2);

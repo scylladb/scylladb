@@ -166,7 +166,7 @@ async def op_drop_column(
 # existing row transiently invisible to readers, which the Porcupine checker
 # reports as a linearizability violation.  There is a race between the memtable
 # schema update and the prepared statement cache invalidation in
-# `schema_applier::post_commit()`: for a short window a read executes with the
+# `schema_and_topology_applier::post_commit()`: for a short window a read executes with the
 # old schema (c: int) against data already stored in the new format (c: varint),
 # and the asymmetric type compatibility check in the schema upgrader silently
 # drops such cells.
