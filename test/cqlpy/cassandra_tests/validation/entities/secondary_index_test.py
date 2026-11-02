@@ -47,7 +47,6 @@ from ...porting import *
 from ....util import new_cql
 from cassandra.protocol import SyntaxException, InvalidRequest, ConfigurationException
 from uuid import UUID
-from ....test_materialized_view_old import clock
 
 # Test creating and dropping an index with the specified name.
 # @param indexName         the index name
