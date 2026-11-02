@@ -235,7 +235,10 @@ def restore_with_refresh(cql, data_dir, saved, table):
 # --table options). The translation of these nodetool options to the REST
 # API is checked by test/nodetool's test_snapshot_keyspace_with_table, and
 # snapshots of a list of tables by test/rest_api's
-# test_storage_service_snapshot.
+# test_storage_service_snapshot. The test also checks that loading again
+# (another "nodetool refresh") doesn't change the data, as scylla-dtest's
+# backup_restore_tests.py::TestBackupRestore::test_replay_restore_no_additional_data
+# checked.
 def test_snapshot_restore_with_refresh(cql, scylla_data_dir, temp_workdir, scylla_only):
     with keyspaces_with_tables(cql, 1, 2) as tables:
         [(ks, ks_tables)] = tables.items()
@@ -253,6 +256,9 @@ def test_snapshot_restore_with_refresh(cql, scylla_data_dir, temp_workdir, scyll
             cql.execute(f'CREATE TABLE {table} (key int PRIMARY KEY, val text)')
             assert list(cql.execute(f'SELECT * FROM {table}')) == []
             restore_with_refresh(cql, scylla_data_dir, saved_dir, table)
+            assert list(cql.execute(f'SELECT * FROM {table}')) == [(1, 'asdf')]
+            ks, cf = split_table(table)
+            rest_request(cql, 'POST', f'storage_service/sstables/{ks}', cf=cf)
             assert list(cql.execute(f'SELECT * FROM {table}')) == [(1, 'asdf')]
 
 # Test that a snapshot request may not list tables together with more than
@@ -577,3 +583,67 @@ def test_snapshot_skip_flush(cql, test_keyspace, scylla_data_dir, scylla_only):
         finally:
             nodetool.del_snapshot(cql, tag1)
             nodetool.del_snapshot(cql, tag2)
+
+# Test deleting snapshots by tag, in all keyspaces or in one keyspace, and
+# deleting all the snapshots of keyspaces: Only the requested snapshots are
+# deleted, and the files of the other snapshots don't change.
+# Translated from scylla-dtest's backup_restore_tests.py::TestBackupRestore::test_clearsnapshot_options.
+# The dtest finally deleted all the snapshots ("nodetool clearsnapshot"); this
+# test deletes all the snapshots of its keyspaces, so it doesn't delete
+# snapshots it didn't take.
+def test_snapshot_delete_by_tag_and_keyspace(cql, scylla_data_dir, scylla_only):
+    with keyspaces_with_tables(cql, 2, 1) as tables:
+        ks0, ks1 = tables
+        tags = [unique_name() for _ in range(3)]
+        for i, tag in enumerate(tags):
+            for ks_tables in tables.values():
+                cql.execute(f"INSERT INTO {ks_tables[0]} (key, val) VALUES ({i + 2}, 'asdf')")
+            rest_request(cql, 'POST', 'storage_service/snapshots', tag=tag, kn=f'{ks0},{ks1}')
+        def snapshot_files(ks, tag):
+            [table] = tables[ks]
+            directory = os.path.join(table_dir(cql, scylla_data_dir, table), 'snapshots', tag)
+            return sorted(os.listdir(directory)) if os.path.isdir(directory) else None
+        files = {(ks, tag): snapshot_files(ks, tag) for ks in tables for tag in tags}
+        assert all(files.values())
+        try:
+            # Delete the first tag in all keyspaces
+            rest_request(cql, 'DELETE', 'storage_service/snapshots', tag=tags[0])
+            assert snapshot_files(ks0, tags[0]) is None and snapshot_files(ks1, tags[0]) is None
+            for ks in tables:
+                for tag in tags[1:]:
+                    assert snapshot_files(ks, tag) == files[(ks, tag)]
+            # Delete the second tag only in the second keyspace
+            rest_request(cql, 'DELETE', 'storage_service/snapshots', tag=tags[1], kn=ks1)
+            assert snapshot_files(ks1, tags[1]) is None
+            assert snapshot_files(ks0, tags[1]) == files[(ks0, tags[1])]
+            for ks in tables:
+                assert snapshot_files(ks, tags[2]) == files[(ks, tags[2])]
+            # Delete all the snapshots of the keyspaces
+            rest_request(cql, 'DELETE', 'storage_service/snapshots', kn=f'{ks0},{ks1}')
+            assert all(snapshot_files(ks, tag) is None for ks in tables for tag in tags)
+        finally:
+            for tag in tags:
+                nodetool.del_snapshot(cql, tag)
+
+# Test incremental backups: When they are enabled, each flushed sstable is
+# also linked into the table's "backups" directory, and compaction doesn't
+# change the backups.
+# Translated from scylla-dtest's backup_restore_tests.py::TestBackupRestore::test_incremental_backup.
+def test_incremental_backup(cql, test_keyspace, scylla_data_dir, scylla_only):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val text') as table:
+        def files(directory):
+            return sorted(f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f)))
+        directory = table_dir(cql, scylla_data_dir, table)
+        rest_request(cql, 'POST', 'storage_service/incremental_backups', value='true')
+        try:
+            with nodetool.no_autocompaction_context(cql, table):
+                for key in range(3):
+                    cql.execute(f"INSERT INTO {table} (key, val) VALUES ({key}, 'asdf')")
+                    nodetool.flush(cql, table)
+                backups = files(os.path.join(directory, 'backups'))
+                assert backups and backups == files(directory)
+            nodetool.compact(cql, table)
+            assert files(directory) != backups
+            assert files(os.path.join(directory, 'backups')) == backups
+        finally:
+            rest_request(cql, 'POST', 'storage_service/incremental_backups', value='false')
