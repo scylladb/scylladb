@@ -2447,3 +2447,67 @@ async def test_hints_older_than_gc_grace_are_not_replayed(manager: ScyllaCluster
                 f"A hint to {table_name} has NOT been replayed"
         else:
             pytest.fail(f"Unknown gc_grace_seconds value for {table_name}: {gc_grace_seconds}")
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_hint_rejected_by_large_data_guardrail_is_discarded(manager: ScyllaClusterManager):
+    """
+    A replica rejects a write to a partition over a large data guardrail hard limit,
+    and it rejects every later attempt to deliver a hint of that write the same way.
+    The hint sender used to retry such a hint until it was older than gc_grace_seconds,
+    blocking the hints written after it to the same replica, and every hint sync point,
+    including the one repair waits for. It must discard the hint instead.
+
+    s1 rejects a write that s2 accepts: s1 has an sstable recording that the partition
+    is over the row count limit, while s2 has the same rows in a memtable, which the
+    row count check does not consult. The write succeeds at CL=ONE through s2, which
+    then hints s1, the replica that failed it. Check that the hint is discarded on its
+    first rejection, not delivered, and does not hold back the sync point.
+
+    Reproduces "Batchlog and hint replay are rejected by the large data guardrail
+    forever, breaking repair".
+    """
+    cmdline = [
+        "--logger-log-level", "hints_manager=trace",
+        # For simplicity: keep the hint and its metrics on a single shard.
+        "--smp", "1",
+    ]
+    config = {
+        # Sstables record the row count of partitions with more rows than the warning threshold.
+        "compaction_rows_count_warning_threshold": 10,
+        "rows_count_fail_threshold": 10,
+        # To speed up the test.
+        "error_injections_at_startup": ["decrease_hints_flush_period"],
+    }
+    s1, s2 = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+
+    cql = await manager.get_cql_exclusive(s2)
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                        "'replication_factor': 2}")
+    await cql.run_async("CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck)) "
+                        "WITH large_data_guardrails_enabled = true")
+
+    insert = cql.prepare("INSERT INTO ks.t (pk, ck, v) VALUES (?, ?, ?)")
+    insert.consistency_level = ConsistencyLevel.ALL
+    for ck in range(20):
+        await cql.run_async(insert, [0, ck, 0])
+    await manager.api.keyspace_flush(s1.ip_addr, "ks", "t")
+
+    await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, ck, v) VALUES (0, 100, 1)",
+                                        consistency_level=ConsistencyLevel.ONE))
+
+    # The write returns once node2 applies it, node1's rejection may come later.
+    async def hint_written():
+        metrics = await get_all_hint_metrics(manager.metrics, s2.ip_addr)
+        return True if metrics["written"] >= 1 else None
+    await wait_for(hint_written, time.time() + 60)
+
+    sync_point = await create_sync_point(manager.api.client, s2.ip_addr)
+    assert await await_sync_point(manager.api.client, s2.ip_addr, sync_point, 60), \
+        "The hint rejected by the large data guardrail holds back the sync point"
+
+    metrics = await get_all_hint_metrics(manager.metrics, s2.ip_addr)
+    assert metrics["written"] == 1, f"Unexpected number of written hints: {metrics}"
+    assert metrics["sent_total"] == 0, f"Unexpected number of sent hints: {metrics}"
+    assert metrics["discarded"] == 1, f"Unexpected number of discarded hints: {metrics}"
+    assert metrics["send_errors"] == 0, f"The hint was retried: {metrics}"
