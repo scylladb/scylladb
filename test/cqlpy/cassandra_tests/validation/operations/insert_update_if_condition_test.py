@@ -352,7 +352,11 @@ def testDropCreateIndexIfNotExists(cql, test_keyspace):
         cql.execute(f"DROP INDEX IF EXISTS {test_keyspace}.myindex")
 
         # create and confirm
+        # Cassandra's createIndex() waits for the index to be built, so
+        # we do it too: wait_for_index() waits until the index appears in
+        # system."IndexInfo".
         execute(cql, table, f"CREATE INDEX IF NOT EXISTS myindex ON %s (value1)")
+        assert wait_for_index(cql, table, "myindex")
 
         # unsuccessful create since it's already there
         execute(cql, table, "CREATE INDEX IF NOT EXISTS myindex ON %s (value1)")
@@ -360,8 +364,12 @@ def testDropCreateIndexIfNotExists(cql, test_keyspace):
         # drop and confirm
         execute(cql, test_keyspace, "DROP INDEX IF EXISTS %s.myindex")
 
-        _, tableName = table.split('.')
-        rows = getRows(execute(cql, table, "select index_name from system.\"IndexInfo\" where table_name = ?", tableName))
+        # The Java test looked for rows with "table_name = tableName", but
+        # the "table_name" column of IndexInfo actually holds the keyspace
+        # name, so that check found no rows even if the index was still
+        # listed. Here we look for this index in the table's keyspace, as
+        # the original Python test in cql_tests.py did.
+        rows = getRows(execute(cql, table, "select index_name from system.\"IndexInfo\" where table_name = ? and index_name = ?", test_keyspace, "myindex"))
         assertEquals(0, len(rows))
 
 # Migrated from cql_tests.py:TestCQL.conditional_ddl_type_test()
