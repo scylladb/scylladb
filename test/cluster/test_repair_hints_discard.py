@@ -62,19 +62,21 @@ async def start_cluster(manager: ScyllaClusterManager, nodes: int, tablets: bool
     return servers
 
 
-async def write_hinted(manager: ScyllaClusterManager, cql, down: ServerInfo, keys: range, both_replicas_live: frozenset[int] = frozenset()) -> None:
+async def write_hinted(manager: ScyllaClusterManager, cql, down: ServerInfo, keys: range, both_replicas_live: frozenset[int] = frozenset(),
+                       coordinator=None) -> None:
     """
     Writes the keys to ks.hinted with `down` stopped, so that the live nodes store hints for them.
 
     A write waits for every live replica, so that a slow one is not hinted on the write timeout:
     a key in `both_replicas_live` has two live replicas and is written at CL TWO, any other at CL ONE.
+    The regular hints are stored by the coordinator, the driver's choice unless `coordinator` is given.
     """
     await manager.server_stop_gracefully(down.server_id)
     await manager.others_not_see_server(down.ip_addr)
     # v differs from pk so that a view keyed by v has a different token, and possibly different replicas, than the base row.
     def insert(pk: int):
         cl = ConsistencyLevel.TWO if pk in both_replicas_live else ConsistencyLevel.ONE
-        return cql.run_async(SimpleStatement(f"INSERT INTO ks.hinted (pk, v) VALUES ({pk}, {pk + 1000})", consistency_level=cl))
+        return cql.run_async(SimpleStatement(f"INSERT INTO ks.hinted (pk, v) VALUES ({pk}, {pk + 1000})", consistency_level=cl), host=coordinator)
     await asyncio.gather(*(insert(pk) for pk in keys))
 
 
@@ -370,11 +372,15 @@ async def test_repair_discards_hints_only_once_view_hints_are_sent(manager: Scyl
     view_on_n3 = await keys_replicated_on(manager, n1, n3, "hinted_by_v", {pk: pk + 1000 for pk in keys})
     view_rows_for_n3 = view_on_n3 - base_on_n3
     assert base_on_n3 and view_rows_for_n3
+    view_on_n1 = await keys_replicated_on(manager, n1, n1, "hinted_by_v", {pk: pk + 1000 for pk in view_rows_for_n3})
+    hinting = n2 if view_on_n1 else n1
 
-    await write_hinted(manager, cql, n3, keys, both_replicas_live=frozenset(keys) - base_on_n3)
+    # Set while n3 is up: the statement is audited, and a hint for the audit row would not be rejected.
+    await set_option(manager, cql, [n1, n2, n3], hosts, True)
+    await write_hinted(manager, cql, n3, keys, both_replicas_live=frozenset(keys) - base_on_n3,
+                       coordinator=host_of(hosts, hinting))
     await wait_for_hints_stored(manager, live, "hints_manager", len(base_on_n3))
     await wait_for_hints_stored(manager, live, "hints_for_views_manager", len(view_rows_for_n3))
-    await set_option(manager, cql, live, [host_of(hosts, n) for n in live], True)
     await short_flush_timeout(manager, n1)
 
     # n3 is down, so neither kind of hint can be sent, and the timeout discards nothing. Every live node
