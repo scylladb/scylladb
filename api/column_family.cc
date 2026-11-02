@@ -1411,12 +1411,6 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         co_return json_void();
     });
 
-    ss::logstor_flush.set(r, [&db] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        apilog.info("logstor_flush");
-        co_await replica::database::flush_logstor_separator_on_all_shards(db);
-        co_return json_void();
-    });
-
     ss::sstable_info.set(r, [&db] (std::unique_ptr<http::request> req) {
         return sstable_info(db, std::move(req));
     });
@@ -1584,7 +1578,6 @@ void unset_column_family(http_context& ctx, routes& r) {
     ss::is_incremental_backups_enabled.unset(r);
     ss::set_incremental_backups_enabled.unset(r);
     ss::logstor_compaction.unset(r);
-    ss::logstor_flush.unset(r);
     ss::sstable_info.unset(r);
     ss::drop_quarantined_sstables.unset(r);
     cm::get_pending_tasks_by_table.unset(r);
