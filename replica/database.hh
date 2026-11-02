@@ -1196,7 +1196,11 @@ public:
 
     void start();
     future<> stop() noexcept;
+    // Flushes the memtables only. For a logstor table, use flush_separator().
     future<> flush(std::optional<db::replay_position> = {});
+    // Flushes the recent writes of the table to its storage: the memtables, or the separator
+    // buffers of a logstor table.
+    future<> flush_storage();
     bool needs_flush() const;
     future<> clear(); // discards memtable(s) without flushing them to disk.
     future<db::replay_position> discard_sstables(db_clock::time_point);

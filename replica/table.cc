@@ -4708,6 +4708,10 @@ size_t storage_group::memtable_count() const {
     return count;
 }
 
+future<> table::flush_storage() {
+    return uses_logstor() ? flush_separator() : flush();
+}
+
 future<> table::flush(std::optional<db::replay_position> pos) {
     // There is nothing to flush if the table was stopped.
     if (_pending_flushes_phaser.is_closed()) {
