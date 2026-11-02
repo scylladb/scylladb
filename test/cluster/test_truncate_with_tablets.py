@@ -8,7 +8,8 @@ from cassandra.cluster import TruncateError
 from cassandra.policies import FallthroughRetryPolicy
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import get_topology_coordinator, new_test_keyspace, FeatureConfig, feature_configs, \
-    FeatureConfigurations, count_rows, trigger_stepdown
+    FeatureConfigurations, count_rows, trigger_stepdown, ensure_raft_group_leader_on
+from test.pylib.rest_client import read_barrier
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 import time
@@ -537,3 +538,59 @@ async def test_truncate_by_stale_coordinator_with_foreign_session(manager: Scyll
 
         row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.tb', consistency_level=ConsistencyLevel.ALL))
         assert row[0].count == 0
+
+
+@pytest.mark.skip_bug(
+    link="https://scylladb.atlassian.net/browse/SCYLLADB-5969",
+    reason="the raft log replay re-applies the entries that wrote the truncated rows",
+)
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.STRONG_CONSISTENCY))
+async def test_truncated_rows_stay_gone_after_replica_crash(manager: ScyllaClusterManager, feature_config: FeatureConfig,
+                                                            storage_config: FeatureConfig):
+    """Idea: TRUNCATE removes the rows on every replica, but the Raft entries that wrote them
+    stay in the commitlog until the group's snapshot covers them. A replica that is killed and
+    restarted replays those entries, and the replay must not bring the truncated rows back, the
+    way the eventually consistent replay honours the truncation record.
+
+    Setup: 3 nodes in 3 racks, strongly consistent keyspace with RF 3 and 2 tablets. The rows
+    are written at QUORUM and applied on every replica (a raft read barrier per tablet group),
+    the table is truncated and a per-partition QUORUM count confirms it is empty. One replica is
+    then killed with SIGKILL and started again, and made the leader of both tablet groups, so
+    that the count is served from its data. The assertion is that the count is still 0.
+    """
+    cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg({'tablets_mode_for_new_keyspaces': 'enabled'}))
+    keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 2}"))
+    servers = await manager.servers_add(3, config=cfg, property_file=[{'dc': 'dc1', 'rack': f'rack{i}'} for i in range(3)])
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(feature_config.get_table_opts(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);'))
+        keys = range(256)
+        insert = cql.prepare(f'INSERT INTO {ks}.test (pk, c) VALUES (?, ?)')
+        insert.consistency_level = ConsistencyLevel.QUORUM
+        await asyncio.gather(*(cql.run_async(insert, (k, k)) for k in keys))
+
+        # A write is acked once committed; wait until every replica has applied all of them.
+        table_id = await manager.get_table_id(ks, 'test')
+        group_ids = [str(r.raft_group_id) for r in
+                     await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")]
+        assert len(group_ids) == 2
+        await asyncio.gather(*(read_barrier(manager.api, s.ip_addr, group_id=gid, timeout=60) for s in servers for gid in group_ids))
+
+        await cql.run_async(f'TRUNCATE TABLE {ks}.test')
+        assert await count_rows(cql, feature_config, query_template="SELECT COUNT(*) FROM {ks}.{table}",
+                                ks=ks, table='test', keys=keys, partition_key='pk') == 0
+
+        # Crash and restart one replica; its commitlog replay re-applies the raft entries.
+        crashed = servers[2]
+        await manager.server_stop(crashed.server_id, convict=False)
+        await manager.server_start(crashed.server_id, wait_others=2)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        for gid in group_ids:
+            await ensure_raft_group_leader_on(manager, crashed, gid)
+
+        back = await count_rows(cql, feature_config, query_template="SELECT COUNT(*) FROM {ks}.{table}",
+                                ks=ks, table='test', keys=keys, partition_key='pk')
+        assert back == 0, f'{back} of {len(keys)} truncated rows came back on the replica restarted after a crash'
