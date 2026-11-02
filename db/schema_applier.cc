@@ -865,6 +865,12 @@ future<schema_persisted_state> schema_applier::get_schema_persisted_state() {
 future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
     schema_ptr s = keyspaces();
     for (auto& mutation : muts) {
+        replica::update_tablet_metadata_change_hint(_tablet_hint, mutation);
+        if (mutation.schema()->ks_name() != NAME) {
+            // Mutations of tables outside system_schema, which group 0 commands carry
+            // together with schema mutations, are not keyed by keyspace name.
+            continue;
+        }
         if (schema_tables::v3::is_cluster_config_table(mutation.schema()->ks_name(), mutation.schema()->cf_name())) {
             _cluster_config_changed = true;
             if (schema_tables::v3::is_node_oriented_config_table(mutation.schema()->cf_name())) {
@@ -882,8 +888,6 @@ future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
         if (schema_tables_holding_schema_mutations().contains(mutation.schema()->id())) {
             _affected_tables[keyspace_name] += get_affected_tables(keyspace_name, mutation);
         }
-
-        replica::update_tablet_metadata_change_hint(_tablet_hint, mutation);
 
         _keyspaces.emplace(std::move(keyspace_name));
     }
