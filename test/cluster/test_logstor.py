@@ -349,6 +349,44 @@ async def test_start_with_live_data_and_no_more_free_segments_than_the_reserve(m
     cfg = {'logstor_disk_size_in_mb': 4, 'logstor_file_size_in_mb': 1, 'logstor_compaction_trigger_threshold': 0}
     await check_recovery_separates_mixed_data(manager, write, min_flushed=1, extra_cfg=cfg, drop_keyspace=False)
 
+async def test_shutdown_with_writes_waiting_for_a_segment(manager: ScyllaClusterManager):
+    """
+    Shut a node down on a disk full of live data while writes wait for a segment. Compaction frees
+    none, so only the shutdown can end those writes, and it has to complete.
+    """
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    # Auto compaction could take a reserve segment, and the test counts on the reserve being free.
+    cfg = {'experimental_features': ['logstor'], 'logstor_disk_size_in_mb': 4, 'logstor_file_size_in_mb': 1,
+           'logstor_compaction_trigger_threshold': 0}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    # The keyspace is left in place, as dropping its table would wait for a segment.
+    ks = await create_new_test_keyspace(cql, "WITH tablets = {'initial': 1}")
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+    await write_until_only_the_reserve_is_free(manager, cql, ks, servers[0].ip_addr, writes_per_key=1, value_size=100 * 1024)
+
+    async def waits():
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        return metrics.get("scylla_logstor_sm_segment_pool_normal_segments_wait") or 0
+
+    waits_before = await waits()
+    value = 'x' * (100 * 1024)
+    writes = [cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({1000 + i}, '{value}')") for i in range(4)]
+
+    async def writes_waiting():
+        return await waits() > waits_before or None
+    await wait_for(writes_waiting, time.time() + 60)
+
+    try:
+        await manager.server_stop_gracefully(servers[0].server_id)
+    finally:
+        # Always retrieve the outcomes. Which error a write gets depends on how far it got.
+        results = await asyncio.gather(*writes, return_exceptions=True)
+    assert all(isinstance(r, Exception) for r in results), f"a write was acknowledged: {results}"
+    # The write that waits is failed by the shutdown, which a timeout alone would not show.
+    assert any(isinstance(r, WriteFailure) for r in results), f"no write was failed by the shutdown: {results}"
+
 async def test_recovery_with_segment_reuse(manager: ScyllaClusterManager):
     """
     Test recovery after segments have been compacted and reused.
