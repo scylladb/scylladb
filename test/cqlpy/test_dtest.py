@@ -13,13 +13,17 @@
 #############################################################################
 
 import re
+import time
+from datetime import datetime
 
 import pytest
+import requests
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.protocol import AlreadyExists, InvalidRequest
 from cassandra.query import SimpleStatement, UNSET_VALUE
 
-from .util import new_materialized_view, new_test_table, new_type, new_user, unique_name
+from . import nodetool
+from .util import ScyllaMetrics, config_value_context, new_materialized_view, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
 # Test that a SELECT can list the same column more than once, and returns
@@ -1074,3 +1078,128 @@ def test_grant_revoke_list_permissions(cql, test_keyspace):
             assert perms == [(role, '<all keyspaces>', 'SELECT')]
         finally:
             cql.execute(f'REVOKE SELECT ON ALL KEYSPACES FROM {role}')
+
+# Test timestamps given as strings over a wide range of years - from 1901,
+# before the UNIX epoch, up to 9999, the largest four-digit year - in the
+# clustering key, in both clustering orders: that they are read back
+# correctly, and that SELECT with and without LIMIT returns the right number
+# of rows.
+# Translated from scylla-dtest's cql_additional_tests.py::TestsCQLAdditional
+# tests test_limit_date_value_out_of_range (issue #1694, a client-side
+# "OverflowError: date value out of range" in cqlsh) and
+# test_limit_date_value_out_of_range_upper_limit. Those tests also ran the
+# same SELECTs in cqlsh, which test/cqlpy doesn't run. They wrote 100 and
+# 8000 rows, one per year; this test writes the same 100 years before 2000,
+# but only every 100th year after it (and 9999), to be fast.
+@pytest.mark.parametrize('order', ['ASC', 'DESC'])
+def test_timestamp_year_range(cql, test_keyspace, order):
+    schema = 'test_id int, partition_key text, time timestamp, value double, PRIMARY KEY ((test_id, partition_key), time)'
+    with new_test_table(cql, test_keyspace, schema, f'WITH CLUSTERING ORDER BY (time {order})') as table:
+        assert list(cql.execute(f'SELECT * FROM {table} LIMIT 1')) == []
+        years = list(range(1901, 2001)) + list(range(2100, 10000, 100)) + [9999]
+        for i, year in enumerate(years):
+            cql.execute(f"INSERT INTO {table} (test_id, partition_key, time, value) VALUES ({i}, '{i}', '{year:04}-02-03 04:05+0000', {i * 1.0})")
+        assert len(list(cql.execute(f'SELECT * FROM {table} LIMIT 1'))) == 1
+        assert len(list(cql.execute(f'SELECT * FROM {table} LIMIT 10'))) == 10
+        rows = list(cql.execute(f'SELECT test_id, time FROM {table}'))
+        assert sorted(rows) == [(i, datetime(year, 2, 3, 4, 5)) for i, year in enumerate(years)]
+
+# Test timestamps given as strings with years before 1900, back to year 1.
+# Cassandra accepts them, but Scylla fails to parse such dates.
+# Reproduces issue #2251.
+# Translated from scylla-dtest's cql_additional_tests.py::TestsCQLAdditional::
+# test_limit_date_value_out_of_range_lower_limit, which was skipped until
+# issue #2251 is fixed. That test wrote 2000 rows, one per year from 1 to
+# 2000, and also ran its SELECTs in cqlsh; this test checks a few years.
+@pytest.mark.xfail(reason='issue #2251')
+def test_timestamp_ancient_year(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, t timestamp') as table:
+        years = [1, 100, 1399, 1899]
+        for year in years:
+            cql.execute(f"INSERT INTO {table} (k, t) VALUES ({year}, '{year:04}-02-03 04:05+0000')")
+        assert sorted(cql.execute(f'SELECT k, t FROM {table}')) == [(year, datetime(year, 2, 3, 4, 5)) for year in years]
+
+# Test the restrict_future_timestamp configuration option: when it is
+# enabled, a USING TIMESTAMP more than 3 days into the future is rejected in
+# INSERT, UPDATE and DELETE, and when it is disabled, it is allowed. A
+# timestamp up to 3 days into the future is always allowed.
+# test_using_timestamp.py::test_futuristic_timestamp checks a very futuristic
+# timestamp in INSERT, in whichever mode the server runs; this test sets the
+# option to each value, so it is scylla_only.
+# Translated from scylla-dtest's cql_additional_tests.py::TestsCQLAdditional::
+# test_restricted_future_timestamp.
+@pytest.mark.parametrize('restrict', [False, True], ids=['unrestricted', 'restricted'])
+def test_restrict_future_timestamp(cql, test_keyspace, scylla_only, restrict):
+    day = 24 * 3600 * 1000000
+    with config_value_context(cql, 'restrict_future_timestamp', str(restrict).lower()), \
+         new_test_table(cql, test_keyspace, 'key bigint PRIMARY KEY, val1 text, val2 float') as table:
+        def check_allowed(timestamp):
+            cql.execute(f"INSERT INTO {table} (key, val1, val2) VALUES (1, 'java1', 1.0) USING TIMESTAMP {timestamp}")
+            assert list(cql.execute(f'SELECT writetime(val1) FROM {table} WHERE key = 1')) == [(timestamp,)]
+            cql.execute(f"UPDATE {table} USING TIMESTAMP {timestamp + 100} SET val1 = 'test' WHERE key = 1")
+            assert list(cql.execute(f'SELECT writetime(val1) FROM {table} WHERE key = 1')) == [(timestamp + 100,)]
+            cql.execute(f'DELETE val1 FROM {table} USING TIMESTAMP {timestamp + 1000} WHERE key = 1')
+            assert list(cql.execute(f'SELECT val1 FROM {table} WHERE key = 1')) == [(None,)]
+        now = int(time.time() * 1000000)
+        # Check that a timestamp up to 3 days into the future is always allowed
+        for days in [0, 1, 2]:
+            check_allowed(now + days * day)
+        # Check that a timestamp further into the future is allowed only if
+        # restrict_future_timestamp is disabled
+        for days in [5, 10, 100, 1000]:
+            timestamp = now + days * day
+            if restrict:
+                with pytest.raises(InvalidRequest, match='into the future'):
+                    cql.execute(f"INSERT INTO {table} (key, val1, val2) VALUES (1, 'java1', 1.0) USING TIMESTAMP {timestamp}")
+                with pytest.raises(InvalidRequest, match='into the future'):
+                    cql.execute(f"UPDATE {table} USING TIMESTAMP {timestamp} SET val1 = 'test' WHERE key = 1")
+                with pytest.raises(InvalidRequest, match='into the future'):
+                    cql.execute(f'DELETE val1 FROM {table} USING TIMESTAMP {timestamp} WHERE key = 1')
+            else:
+                check_allowed(timestamp)
+
+# Test a single-partition read with a clustering-key restriction, in a table
+# using TimeWindowCompactionStrategy, when the row cache is empty and the only
+# sstable holding the partition doesn't match the clustering restriction.
+# For such reads, TWCS skips sstables whose clustering-key range doesn't
+# match, so no sstable is left to read - but the reader must still return
+# the start of the partition, because the row cache expects it for any
+# partition that exists. In issue #8447, it returned nothing, so the row
+# cache remembered that partition 1 doesn't exist, and a later read of that
+# partition's existing row returned nothing.
+# The table is in a keyspace with a single tablet, so both of its sstables
+# are in the same set of sstables - which is why the test needs tablets. The test needs Scylla's REST API to empty
+# the row cache, and Scylla's metrics to check that the read took the TWCS
+# code path described above, so it is scylla_only.
+# Translated from scylla-dtest's cql_additional_tests.py::TestsCQLAdditional::
+# test_twcs_ck_filtering_with_cache, which restarted the node to empty the
+# row cache; this test uses the REST API's drop_sstable_caches instead, which
+# also empties the row cache. The dtest's comment said that, thanks to
+# bloom_filter_fp_chance = 1, both sstables pass the partition-key filter.
+# But that filter also checks each sstable's range of keys, so the sstable of
+# partition 0 doesn't pass it - this didn't matter for reproducing the bug.
+def test_twcs_ck_filtering_with_cache(cql, skip_without_tablets):
+    ksdef = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"
+    with new_test_keyspace(cql, ksdef) as keyspace, \
+         new_test_table(cql, keyspace, 'pk int, ck int, PRIMARY KEY (pk, ck)', "WITH compaction = {'class': 'TimeWindowCompactionStrategy'} AND bloom_filter_fp_chance = 1") as table:
+        cql.execute(f'INSERT INTO {table} (pk, ck) VALUES (1, 0)')
+        nodetool.flush(cql, table)
+        cql.execute(f'INSERT INTO {table} (pk, ck) VALUES (0, 1)')
+        nodetool.flush(cql, table)
+        requests.post(f'{nodetool.rest_api_url(cql)}/system/drop_sstable_caches').raise_for_status()
+        def clustering_filter_metrics():
+            metrics = ScyllaMetrics.query(cql)
+            return [metrics.get(f'scylla_database_clustering_filter_{name}') or 0
+                    for name in ['count', 'sstables_checked', 'surviving_sstables']]
+        before = clustering_filter_metrics()
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE pk = 1 AND ck = 1')) == []
+        # Check that this read took the TWCS single-partition read path that
+        # had the bug: it was not served by the row cache, the sstable of
+        # partition 1 passed the partition-key filter, and the clustering-key
+        # filter then left no sstables. If this check fails, the test no
+        # longer reproduces the situation of #8447 and needs to be fixed.
+        after = clustering_filter_metrics()
+        assert [a - b for a, b in zip(after, before)] == [1, 1, 0]
+        # If the previous read made the cache remember that partition 1
+        # doesn't exist, this read would return nothing.
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE pk = 1 AND ck = 0')) == [(1, 0)]
