@@ -12,7 +12,9 @@
 # Cassandra to check their assumptions.
 #############################################################################
 
+import math
 import re
+import sys
 import time
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
@@ -1434,3 +1436,489 @@ def test_filter_by_pk_and_two_non_indexed_collection_columns(cql, collections_ta
     assert collections_select_ids(cql, table, "id = 1 AND set_uuid CONTAINS 8e4fe826-b383-11e9-a2a3-2a2ae2dbcce4 AND f_map_int = {'f1': 1, 'f2': 2, 'f3': 3}") == [1]
     # This map_uuid value differs from row 0's value in one digit
     assert collections_select_ids(cql, table, 'id = 0 AND map_uuid CONTAINS f54f6a76-b383-11e9-a2a3-2a2ae2dbcce4 AND f_set_int CONTAINS 9') == []
+
+#############################################################################
+# The following tests check the results of CAST between many pairs of types,
+# for specific values, and of CAST combined with the aggregate functions
+# avg(), sum(), min() and max(): casting a column and aggregating the casts,
+# casting an aggregate, and casting a cast. Casts from fields of a
+# user-defined type are also tested.
+#
+# These tests were translated from scylla-dtest's cql_cast_test.py. That
+# test ran its queries in cqlsh, and its expected results - kept here as
+# they were, in POSITIVE_VALUES - are the values as cqlsh printed them. So
+# the tests here format each result the same way before comparing it: in
+# particular, cqlsh printed float and double values with only 5 significant
+# digits, so these tests compare them to that precision.
+#############################################################################
+
+# Format a result value as cqlsh printed it.
+def format_cqlsh_result(value):
+    if value is None:
+        return 'null'
+    if isinstance(value, float):
+        # cqlsh's format_floating_point_type(), with cqlsh's default
+        # precision of 5 for both float and double
+        if math.isnan(value):
+            return 'NaN'
+        if math.isinf(value):
+            return 'Infinity' if value > 0 else '-Infinity'
+        precision = 5
+        exponent = int(math.log10(abs(value))) if abs(value) > sys.float_info.epsilon else -sys.maxsize - 1
+        if -4 <= exponent < precision:
+            precision += exponent + 1
+        return '%.*g' % (precision, value)
+    if isinstance(value, datetime):
+        return value.strftime('%Y-%m-%d %H:%M:%S.%f') + '+0000'
+    return str(value)
+
+# The expression to SELECT for each kind of check.
+def cast_select_expression(kind, column, to_type):
+    if kind == 'cast':
+        return f'cast({column} as {to_type})'
+    if kind in ['avg', 'sum', 'min', 'max']:
+        return f'{kind}(cast({column} as {to_type}))'
+    if kind in ['cast_avg', 'cast_sum', 'cast_min', 'cast_max']:
+        return f'cast({kind[5:]}({column}) as {to_type})'
+    if kind == 'cast_cast':
+        first, second = to_type.split('/')
+        return f'cast(cast({column} as {first}) as {second})'
+    raise ValueError(kind)
+
+# Check the results expected in "rows" - a list in the format of a
+# POSITIVE_VALUES entry - for "column" of type "from_type" in "table", whose
+# row k holds the value of rows[k]. The "cast" and "cast_cast" checks read
+# one row, and the other checks aggregate over all rows.
+# Expected results that are None aren't checked, and neither are checks or
+# target types whose name begins with "#". The checks of casts to varchar
+# are also skipped, because varchar is just another name for text.
+# If "include" is given, only the checks for which include(kind, to_type)
+# is true are done.
+def check_casts(cql, table, column, from_type, rows, include=None):
+    for k, (_, checks) in enumerate(rows):
+        for kind, results in checks.items():
+            if kind.startswith('#'):
+                continue
+            for to_type, expected in results.items():
+                if to_type.startswith('#') or expected is None or to_type == 'varchar':
+                    continue
+                if include and not include(kind, to_type):
+                    continue
+                where = f' WHERE k = {k}' if kind in ['cast', 'cast_cast'] else ''
+                query = f'SELECT {cast_select_expression(kind, column, to_type)} FROM {table}{where}'
+                [[value]] = cql.execute(query)
+                actual = format_cqlsh_result(value)
+                expected = str(expected)
+                if to_type == 'text' and from_type == 'timestamp':
+                    # Scylla omits zero milliseconds
+                    actual = actual.removesuffix('.000Z')
+                    expected = expected.removesuffix('.000Z')
+                if to_type in ['decimal', 'text']:
+                    # Cassandra's decimal omits ".0" (issue #3109)
+                    actual = actual.removesuffix('.0')
+                    expected = expected.removesuffix('.0')
+                if to_type == 'decimal' and from_type in ['float', 'double']:
+                    assert float(actual) == pytest.approx(float(expected), rel=1e-6), query
+                else:
+                    assert actual == expected, query
+
+# Values to cast and the expected results, as cqlsh printed them, from
+# scylla-dtest's cql_cast_test.py. See check_casts() for the format.
+POSITIVE_VALUES = {
+    "bigint": [
+        [
+            7657139128428828644,
+            {
+                "cast": {
+                    "tinyint": -28,
+                    "smallint": -26652,
+                    "int": -776038428,
+                    "float": "7.6571e+18",
+                    "double": "7.6571e+18",
+                    "decimal": "7657139128428828644",
+                    "varint": 7657139128428828644,
+                    "text": "7657139128428828644",
+                    "varchar": "7657139128428828644",
+                },
+                "avg": {"tinyint": 10, "smallint": -10741, "int": -258681333, "float": "2.5524e+18", "double": "2.5524e+18", "decimal": "2552379709476274357", "varint": 2552379709476274357, "text": None, "varchar": None},
+                "sum": {"tinyint": 31, "smallint": -32225, "int": -776044001, "float": "7.6571e+18", "double": "7.6571e+18", "decimal": "7657139128428823071", "varint": 7657139128428823071, "text": None, "varchar": None},
+                "min": {"tinyint": -66, "smallint": -26652, "int": -776038428, "float": -5698, "double": -5698, "decimal": -5698.0, "varint": -5698, "text": "-5698", "varchar": "-5698"},
+                "max": {
+                    "tinyint": 125,
+                    "smallint": 125,
+                    "int": 125,
+                    "float": "7.6571e+18",
+                    "double": "7.6571e+18",
+                    "decimal": "7657139128428828644",
+                    "varint": 7657139128428828644,
+                    "text": "7657139128428828644",
+                    "varchar": "7657139128428828644",
+                },
+            },
+        ],
+        [125, {"cast": {"tinyint": 125, "smallint": 125, "int": 125, "float": 125, "double": 125, "decimal": 125.0, "varint": 125, "text": "125", "varchar": "125"}}],
+        [-5698, {"cast": {"tinyint": -66, "smallint": -5698, "int": -5698, "double": -5698, "decimal": -5698.0, "varint": -5698, "text": "-5698", "varchar": "-5698"}}],
+    ],
+    "boolean": [[True, {"cast": {"text": "true", "varchar": "true"}}], [False, {"cast": {"text": "false", "varchar": "false"}}]],
+    "decimal": [
+        [
+            76571.345,
+            {
+                "cast": {"tinyint": 27, "smallint": 11035, "int": 76571, "float": 76571.34375, "double": 76571.345, "bigint": 76571, "varint": 76571, "text": "76571.345", "varchar": "76571.345"},
+                "avg": {"tinyint": 14, "smallint": 5390, "int": 38158, "float": 38158.54297, "double": 38158.54401, "bigint": 38158, "varint": 38158, "text": None, "varchar": None},
+                "sum": {"tinyint": 29, "smallint": 10781, "int": 76317, "float": 76317.08594, "double": 76317.08801, "bigint": 76317, "varint": 76317, "text": None, "varchar": None},
+                "min": {"tinyint": 2, "smallint": -254, "int": -254, "float": -254.25699, "double": -254.25699, "bigint": -254, "varint": -254, "text": "-254.256987", "varchar": "-254.256987"},
+                "max": {"tinyint": 27, "smallint": 11035, "int": 76571, "float": 76571.34375, "double": 76571.345, "bigint": 76571, "varint": 76571, "text": "76571.345", "varchar": "76571.345"},
+                "cast_avg": {"tinyint": 14, "smallint": -27378, "int": 38158, "float": "38158.54297", "double": "38158.54401", "bigint": 38158, "varint": 38158, "text": None, "varchar": None},
+                "cast_sum": {"tinyint": 29, "smallint": 10781, "int": 76317, "float": "76317.08594", "double": "76317.08801", "bigint": 76317, "varint": 76317, "text": None, "varchar": None},
+                "cast_min": {"tinyint": 2, "smallint": -254, "int": -254, "float": "-254.25699", "double": "-254.25699", "bigint": -254, "varint": -254, "text": "-254.256987", "varchar": "-254.256987"},
+                "cast_max": {"tinyint": 27, "smallint": 11035, "int": 76571, "float": 76571.34375, "double": "76571.345", "bigint": 76571, "varint": 76571, "text": "76571.345", "varchar": "76571.345"},
+                "cast_cast": {"double/bigint": "76571"},
+            },
+        ],
+        [-254.256987, {"cast": {"tinyint": 2, "smallint": -254, "int": -254, "float": -254.25699, "double": -254.25699, "bigint": -254, "varint": -254, "text": "-254.256987", "varchar": "-254.256987"}}],
+    ],
+    "double": [
+        [
+            76571.345,
+            {
+                "cast": {"tinyint": 27, "smallint": 11035, "int": 76571, "float": 76571.34375, "decimal": "76571.345000000001", "bigint": 76571, "varint": 76571, "text": "76571.345", "varchar": "76571.345"},
+                "avg": {"tinyint": 14, "smallint": 5390, "int": 38158, "float": 38158.54297, "decimal": "38158.54400650000050", "bigint": 38158, "varint": 38158, "text": None, "varchar": None},
+                "sum": {"tinyint": 29, "smallint": 10781, "int": 76317, "float": 76317.08594, "decimal": "76317.08801300000099", "bigint": 76317, "varint": 76317, "text": None, "varchar": None},
+                "min": {"tinyint": 2, "smallint": -254, "int": -254, "float": -254.25699, "decimal": "-254.25698700000001", "bigint": -254, "varint": -254, "text": "-254.256987", "varchar": "-254.256987"},
+                "max": {"tinyint": 27, "smallint": 11035, "int": 76571, "float": 76571.34375, "decimal": "76571.345000000001", "bigint": 76571, "varint": 76571, "text": "76571.345", "varchar": "76571.345"},
+            },
+        ],
+        [-254.256987, {"cast": {"tinyint": 2, "smallint": -254, "int": -254, "float": -254.25699, "decimal": "-254.25698700000001", "bigint": -254, "varint": -254, "text": "-254.256987", "varchar": "-254.256987"}}],
+    ],
+    "float": [
+        [
+            -564,
+            {
+                "cast": {"tinyint": -52, "smallint": -564, "int": -564, "double": -564, "decimal": "-564.0", "bigint": -564, "varint": -564, "text": "-564.0", "varchar": "-564.0"},
+                "avg": {"tinyint": 10, "smallint": 1034, "int": 1034, "double": "1034.23883", "decimal": "1034.238824", "bigint": 1034, "varint": 1034, "text": None, "varchar": None},
+                "sum": {"tinyint": 30, "smallint": 3102, "int": 3102, "double": "3102.71648", "decimal": "3102.716473", "bigint": 3102, "varint": 3102, "text": None, "varchar": None},
+                "min": {"tinyint": -52, "smallint": -564, "int": -564, "double": -564, "decimal": "-564.0", "bigint": -564, "varint": -564, "text": "-564.0", "varchar": "-564.0"},
+                "max": {"tinyint": 123, "smallint": 3543, "int": 3543, "double": "3543.45654", "decimal": "3543.45654", "bigint": 3543, "varint": 3543, "text": "3543.4565", "varchar": "3543.4565"},
+            },
+        ],
+        [3543.4565429688, {"cast": {"tinyint": -41, "smallint": 3543, "int": 3543, "double": 3543.45654, "decimal": "3543.45654", "bigint": 3543, "varint": 3543, "text": "3543.4565", "varchar": "3543.4565"}}],
+        ["123.25993624886543132316548678", {"cast": {"tinyint": 123, "smallint": 123, "int": 123, "double": "123.25993", "decimal": "123.259933", "bigint": 123, "varint": 123, "text": "123.25993", "varchar": "123.25993"}}],
+    ],
+    "int": [
+        [
+            0,
+            {
+                "cast": {"tinyint": 0, "smallint": 0, "float": 0, "double": 0, "decimal": "0.0", "bigint": 0, "varint": 0, "text": "0", "varchar": "0"},
+                "avg": {"tinyint": 3, "smallint": -2044, "float": -2044.40002, "double": -2044.4, "decimal": "-2044.4", "bigint": -2044, "varint": -2044, "text": None, "varchar": None},
+                "sum": {"tinyint": 18, "smallint": -10222, "float": -10222, "double": -10222, "decimal": "-10222.0", "bigint": -10222, "varint": -10222, "text": None, "varchar": None},
+                "min": {"tinyint": -76, "smallint": -32767, "float": -32767, "double": -32767, "decimal": "-32767.0", "bigint": -32767, "varint": -32767, "text": "-12876", "varchar": "-12876"},
+                "max": {"tinyint": 94, "smallint": 32767, "float": 32767, "double": 32767, "decimal": "32767.0", "bigint": 32767, "varint": 32767, "text": "32767", "varchar": "32767"},
+            },
+        ],
+        [32767, {"cast": {"tinyint": -1, "smallint": 32767, "float": 32767, "double": 32767, "decimal": "32767.0", "bigint": 32767, "varint": 32767, "text": "32767", "varchar": "32767"}}],
+        [-32767, {"cast": {"tinyint": 1, "smallint": -32767, "float": -32767, "double": -32767, "decimal": "-32767.0", "bigint": -32767, "varint": -32767, "text": "-32767", "varchar": "-32767"}}],
+        [-12876, {}],
+        [2654, {}],
+    ],
+    "smallint": [
+        [
+            32767,
+            {
+                "cast": {"tinyint": -1, "int": 32767, "float": 32767, "double": 32767, "decimal": "32767.0", "bigint": 32767, "varint": 32767, "text": "32767", "varchar": "32767"},
+                "avg": {"tinyint": 4, "int": -2555, "float": -2555.5, "double": -2555.5, "decimal": "-2555.5", "bigint": -2555, "varint": -2555, "text": None, "varchar": None},
+                "sum": {"tinyint": 18, "int": -10222, "float": -10222, "double": -10222, "decimal": "-10222.0", "bigint": -10222, "varint": -10222, "text": None, "varchar": None},
+                "min": {"tinyint": -76, "int": -32767, "float": -32767, "double": -32767, "decimal": "-32767.0", "bigint": -32767, "varint": -32767, "text": "-12876", "varchar": "-12876"},
+                "max": {"tinyint": 94, "int": 32767, "float": 32767, "double": 32767, "decimal": "32767.0", "bigint": 32767, "varint": 32767, "text": "32767", "varchar": "32767"},
+            },
+        ],
+        [-32767, {"cast": {"tinyint": 1, "int": -32767, "float": -32767, "double": -32767, "decimal": "-32767.0", "bigint": -32767, "varint": -32767, "text": "-32767", "varchar": "-32767"}}],
+        [-12876, {"cast": {"tinyint": -76, "int": -12876, "float": -12876, "double": -12876, "decimal": "-12876.0", "bigint": -12876, "varint": -12876, "text": "-12876", "varchar": "-12876"}}],
+        [2654, {"cast": {"tinyint": 94, "int": 2654, "float": 2654, "double": 2654, "decimal": "2654.0", "bigint": 2654, "varint": 2654, "text": "2654", "varchar": "2654"}}],
+    ],
+    "tinyint": [
+        [
+            127,
+            {
+                "cast": {"smallint": 127, "int": 127, "float": 127, "double": 127, "decimal": "127.0", "bigint": 127, "varint": 127, "text": "127", "varchar": "127"},
+                "avg": {"smallint": 11, "int": 11, "float": 11.33333, "double": 11.33333, "decimal": "11.3", "bigint": 11, "varint": 11, "text": None, "varchar": None},
+                "sum": {"smallint": 34, "int": 34, "float": 34, "double": 34, "decimal": "34.0", "bigint": 34, "varint": 34, "text": None, "varchar": None},
+                "min": {"smallint": -128, "int": -128, "float": -128, "double": -128, "decimal": "-128.0", "bigint": -128, "varint": -128, "text": "-128", "varchar": "-128"},
+                "max": {"smallint": 127, "int": 127, "float": 127, "double": 127, "decimal": "127.0", "bigint": 127, "varint": 127, "text": "35", "varchar": "35"},
+            },
+        ],
+        [-128, {"cast": {"smallint": -128, "int": -128, "float": -128, "double": -128, "decimal": "-128.0", "bigint": -128, "varint": -128, "text": "-128", "varchar": "-128"}}],
+        [35, {"cast": {"smallint": 35, "int": 35, "float": 35, "double": 35, "decimal": "35.0", "bigint": 35, "varint": 35, "text": "35", "varchar": "35"}}],
+    ],
+    "varint": [
+        [
+            32767456456456456456545678943512357658768763546575675,
+            {
+                "cast": {
+                    "tinyint": 59,
+                    "smallint": 9019,
+                    "int": -1446698181,
+                    "float": "Infinity",
+                    "double": 3.2767e52,
+                    "decimal": "32767456456456456456545678943512357658768763546575675",
+                    "bigint": -4832518953173179589,
+                    "text": "32767456456456456456545678943512357658768763546575675",
+                    "varchar": "32767456456456456456545678943512357658768763546575675",
+                },
+                "avg": {
+                    "tinyint": -9,
+                    "smallint": 8011,
+                    "int": -678398815,
+                    "float": "NaN",
+                    "double": "1419.33333",
+                    "#decimal": "-2110054581",  # commented cause cassandra is rounding the result
+                    "bigint": -2110054580,
+                    "text": None,
+                    "varchar": None,
+                },
+                "sum": {"tinyint": -29, "smallint": 24035, "int": -2035196445, "float": "NaN", "double": 4258, "decimal": "-6330163741", "bigint": -6330163741, "text": None, "varchar": None},
+                "min": {
+                    "tinyint": -94,
+                    "smallint": 4258,
+                    "int": -1446698181,
+                    "float": "-Infinity",
+                    "double": -3.2767e52,
+                    "decimal": "-32767456456456456456545678943512357658768769876743674",
+                    "bigint": -4832518953173179589,
+                    "text": "-32767456456456456456545678943512357658768769876743674",
+                    "varchar": "-32767456456456456456545678943512357658768769876743674",
+                },
+                "max": {
+                    "tinyint": 59,
+                    "smallint": 10758,
+                    "int": 4258,
+                    "float": "Infinity",
+                    "double": 3.2767e52,
+                    "decimal": "32767456456456456456545678943512357658768763546575675",
+                    "bigint": 4832518946843011590,
+                    "text": "4258",
+                    "varchar": "4258",
+                },
+                "cast_avg": {"tinyint": 76, "smallint": 8012, "int": -2110054580, "float": "-2.1101e+09", "double": "-2.1101e+09", "decimal": "-2110054580", "bigint": -2110054580, "text": None, "varchar": None},
+                "cast_sum": {"tinyint": -29, "smallint": 24035, "int": -2035196445, "float": "-6.3302e+09", "double": "-6.3302e+09", "decimal": "-6330163741", "bigint": -6330163741, "text": None, "varchar": None},
+                "cast_min": {
+                    "tinyint": 6,
+                    "smallint": 10758,
+                    "int": -588502522,
+                    "float": "-Infinity",
+                    "double": "-3.2767e+52",
+                    "decimal": "-32767456456456456456545678943512357658768769876743674",
+                    "bigint": 4832518946843011590,
+                    "text": "-32767456456456456456545678943512357658768769876743674",
+                    "varchar": "-32767456456456456456545678943512357658768769876743674",
+                },
+                "cast_max": {
+                    "tinyint": 59,
+                    "smallint": 9019,
+                    "int": -1446698181,
+                    "float": "Infinity",
+                    "double": "3.2767e+52",
+                    "decimal": "32767456456456456456545678943512357658768763546575675",
+                    "bigint": -4832518953173179589,
+                    "text": "32767456456456456456545678943512357658768763546575675",
+                    "varchar": "32767456456456456456545678943512357658768763546575675",
+                },
+            },
+        ],
+        [
+            -32767456456456456456545678943512357658768769876743674,
+            {
+                "cast": {
+                    "tinyint": 6,
+                    "smallint": 10758,
+                    "int": -588502522,
+                    "float": "-Infinity",
+                    "double": -3.2767e52,
+                    "decimal": "-32767456456456456456545678943512357658768769876743674",
+                    "bigint": 4832518946843011590,
+                    "text": "-32767456456456456456545678943512357658768769876743674",
+                    "varchar": "-32767456456456456456545678943512357658768769876743674",
+                }
+            },
+        ],
+        [4258, {"cast": {"tinyint": -94, "smallint": 4258, "int": 4258, "float": 4258, "double": 4258, "decimal": "4258.0", "bigint": 4258, "text": "4258", "varchar": "4258"}}],
+    ],
+    "ascii": [
+        ["'045asciitext'", {"cast": {"text": "045asciitext", "varchar": "045asciitext"}, "min": {"text": "045asciitext", "varchar": "045asciitext"}, "max": {"text": "abcdefj", "varchar": "abcdefj"}}],
+        ["'abcdefj'", {"cast": {"text": "abcdefj", "varchar": "abcdefj"}}],
+    ],
+    "date": [
+        ["'2017-11-25'", {"cast": {"timestamp": "2017-11-25 00:00:00.000000+0000"}, "min": {"timestamp": "1900-01-01 00:00:00.000000+0000"}, "max": {"timestamp": "2458-12-13 00:00:00.000000+0000"}}],
+        ["'1900-01-01'", {"cast": {"timestamp": "1900-01-01 00:00:00.000000+0000"}}],
+        ["'2458-12-13'", {"cast": {"timestamp": "2458-12-13 00:00:00.000000+0000"}}],
+    ],
+    "time": [
+        [
+            "'13:07:45.089'",
+            {"cast": {"text": "13:07:45.089000000", "varchar": "13:07:45.089000000"}, "min": {"text": "00:45:25.123000000", "varchar": "00:45:25.123000000"}, "max": {"text": "13:07:45.089000000", "varchar": "13:07:45.089000000"}},
+        ],
+        ["'00:45:25.123'", {"cast": {"text": "00:45:25.123000000", "varchar": "00:45:25.123000000"}}],
+        ["'10:14:36.0002312'", {"cast": {"text": "10:14:36.000231200", "varchar": "10:14:36.000231200"}}],
+    ],
+    "timestamp": [
+        [
+            "'2017-12-27 11:57:42+0000'",
+            {
+                "cast": {"date": "2017-12-27", "text": "2017-12-27T11:57:42.000Z", "varchar": "2017-12-27T11:57:42.000Z"},
+                "min": {"date": "1900-01-01", "text": "1900-01-01T00:00:00.000Z", "varchar": "1900-01-01T00:00:00.000Z"},
+                "max": {"date": "2018-02-01", "text": "2018-02-01T01:00:42.000Z", "varchar": "2018-02-01T01:00:42.000Z"},
+            },
+        ],
+        [
+            "'2017-12-27 11:57:42+0100'",  # timezone offset
+            {
+                "cast": {"date": "2017-12-27", "text": "2017-12-27T10:57:42.000Z", "varchar": "2017-12-27T10:57:42.000Z"},
+            },
+        ],
+        [
+            "'2017-12-27 11:57:42.500+0100'",  # with milliseconds, scylla is returning with 6 digit vs. cassandra with 3 digits
+            {
+                "cast": {"date": "2017-12-27", "text": "2017-12-27T10:57:42.500Z", "varchar": "2017-12-27T10:57:42.500Z"},
+            },
+        ],
+        ["'2018-02-01 01:00:42+0000'", {"cast": {"date": "2018-02-01", "text": "2018-02-01T01:00:42.000Z", "varchar": "2018-02-01T01:00:42.000Z"}}],
+        ["'1900-01-01 00:00:00+0000'", {"cast": {"date": "1900-01-01", "text": "1900-01-01T00:00:00.000Z", "varchar": "1900-01-01T00:00:00.000Z"}}],
+    ],
+    "timeuuid": [
+        [
+            "minTimeuuid('2018-01-01 17:01:07+0000')",
+            {
+                "cast": {"timestamp": "2018-01-01 17:01:07.000000+0000", "date": "2018-01-01", "text": "5bb48b80-ef15-11e7-8080-808080808080", "varchar": "5bb48b80-ef15-11e7-8080-808080808080"},
+                "min": {"timestamp": "1900-01-01 00:00:00.000000+0000", "date": "1900-01-01", "text": "3c230000-a32f-1163-8080-808080808080", "varchar": "3c230000-a32f-1163-8080-808080808080"},
+                "max": {"timestamp": "2018-01-01 17:01:07.000000+0000", "date": "2018-01-01", "text": "7a73e600-eb01-11e7-8080-808080808080", "varchar": "7a73e600-eb01-11e7-8080-808080808080"},
+            },
+        ],
+        ["minTimeuuid('2017-12-27 12:28:44+0000')", {"cast": {"timestamp": "2017-12-27 12:28:44.000000+0000", "date": "2017-12-27", "text": "7a73e600-eb01-11e7-8080-808080808080", "varchar": "7a73e600-eb01-11e7-8080-808080808080"}}],
+        ["minTimeuuid('1900-01-01 00:00:00+0000')", {"cast": {"timestamp": "1900-01-01 00:00:00.000000+0000", "date": "1900-01-01", "text": "3c230000-a32f-1163-8080-808080808080", "varchar": "3c230000-a32f-1163-8080-808080808080"}}],
+    ],
+    "uuid": [
+        [
+            "de5cba0d-41a2-4f39-8834-35130d8b5d86",
+            {
+                "cast": {"text": "de5cba0d-41a2-4f39-8834-35130d8b5d86", "varchar": "de5cba0d-41a2-4f39-8834-35130d8b5d86"},
+                "min": {"text": "de5cba0d-41a2-4f39-8834-35130d8b5d86", "varchar": "de5cba0d-41a2-4f39-8834-35130d8b5d86"},
+                "max": {"text": "fa80080c-a4c5-46d6-afe4-5e184fec35ae", "varchar": "fa80080c-a4c5-46d6-afe4-5e184fec35ae"},
+            },
+        ],
+        ["f5f576e7-efb6-41b5-804e-fa3205548137", {"cast": {"text": "f5f576e7-efb6-41b5-804e-fa3205548137", "varchar": "f5f576e7-efb6-41b5-804e-fa3205548137"}}],
+        ["fa80080c-a4c5-46d6-afe4-5e184fec35ae", {"cast": {"text": "fa80080c-a4c5-46d6-afe4-5e184fec35ae", "varchar": "fa80080c-a4c5-46d6-afe4-5e184fec35ae"}}],
+    ],
+    "inet": [
+        ["'205.118.5.3'", {"cast": {"text": "205.118.5.3", "varchar": "205.118.5.3"}, "min": {"text": "192.168.122.255", "varchar": "192.168.122.255"}, "max": {"text": "205.118.5.3", "varchar": "205.118.5.3"}}],
+        ["'192.168.2.1'", {"cast": {"text": "192.168.2.1", "varchar": "192.168.2.1"}}],
+        ["'192.168.122.255'", {"cast": {"text": "192.168.122.255", "varchar": "192.168.122.255"}}],
+    ],
+    "udt": {
+        "bigint": [
+            [
+                4561313648948,
+                {
+                    "cast": {"decimal": "4561313648948.0", "text": "4561313648948"},
+                    "avg": {"decimal": "2280656551235.0", "text": None},
+                    "sum": {"decimal": "4561313102470.0", "text": None},
+                    "min": {"decimal": "-546478.0", "text": "-546478"},
+                    "max": {"decimal": "4561313648948.0", "text": "4561313648948"},
+                    "cast_avg": {"decimal": "2280656551235.0", "text": "2280656551235"},
+                    "cast_sum": {"decimal": "4561313102470.0", "text": "4561313102470"},
+                    "cast_min": {"decimal": "-546478.0", "text": "-546478"},
+                    "cast_max": {"decimal": "4561313648948.0", "text": "4561313648948"},
+                    "cast_cast": {"decimal/float": "4.5613e+12", "smallint/text": "-11980"},
+                },
+            ],
+            [-546478, {"cast": {"decimal": "-546478.0", "text": "-546478"}}],
+        ],
+        "float": [[55646.234556984, {"cast": {"int": 55646, "double": "55646.23438"}}]],
+        "timestamp": [["'2017-12-27 11:57:42+0000'", {"cast": {"date": "2017-12-27", "text": "2017-12-27T11:57:42.000Z"}}]],
+    },
+}
+
+
+# Test casts from columns of each type in POSITIVE_VALUES.
+# Translated from scylla-dtest's cql_cast_test.py::TestCQLCast tests
+# test_cast_{varint,tinyint,smallint,int,bigint,float,double,decimal,date,
+# time,timestamp,uuid,boolean,ascii,inet,timeuuid}.
+# The checks of avg() of casts to decimal of columns of these types are done
+# in test_cast_avg_to_decimal() below instead.
+AVG_TO_DECIMAL_TYPES = ['int', 'smallint', 'tinyint']
+
+def is_avg_to_decimal(kind, to_type):
+    return kind == 'avg' and to_type == 'decimal'
+
+def create_cast_table(cql, keyspace, from_type):
+    return new_test_table(cql, keyspace, f'k int PRIMARY KEY, {from_type}_clmn {from_type}')
+
+def insert_cast_values(cql, table, from_type):
+    for k, (value, _) in enumerate(POSITIVE_VALUES[from_type]):
+        cql.execute(f'INSERT INTO {table} (k, {from_type}_clmn) VALUES ({k}, {value})')
+
+@pytest.mark.parametrize('from_type', [t for t in POSITIVE_VALUES if t != 'udt'])
+def test_cast_from(cql, test_keyspace, from_type):
+    include = None
+    if from_type in AVG_TO_DECIMAL_TYPES:
+        include = lambda kind, to_type: not is_avg_to_decimal(kind, to_type)
+    with create_cast_table(cql, test_keyspace, from_type) as table:
+        insert_cast_values(cql, table, from_type)
+        check_casts(cql, table, f'{from_type}_clmn', from_type, POSITIVE_VALUES[from_type], include)
+
+# Test avg() of casts to decimal of integer columns. The average of these
+# decimals, whose values are integers, is not necessarily an integer: for
+# example, the average of the int values is exactly -2044.4, which is what
+# Scylla returns. Cassandra returns -2044 - and for the tinyint values,
+# whose average is 11.333..., it returns 12, which isn't even the nearest
+# integer. This is CASSANDRA-18470: Cassandra updates a running average whose
+# precision is that of the values, instead of dividing the sum by the count.
+# test_aggregate.py::test_avg_decimal and test_avg_decimal_2 also mark this
+# Cassandra behavior as a bug, so this test is marked cassandra_bug.
+# Note that Scylla's precision for such averages is also questionable (issue
+# #13601): it returns the tinyint values' average as 11.3, and that is the
+# value this test expects.
+# This check was part of the tests test_cast_{int,smallint,tinyint} in
+# scylla-dtest's cql_cast_test.py::TestCQLCast.
+@pytest.mark.parametrize('from_type', AVG_TO_DECIMAL_TYPES)
+def test_cast_avg_to_decimal(cql, test_keyspace, from_type, cassandra_bug):
+    with create_cast_table(cql, test_keyspace, from_type) as table:
+        insert_cast_values(cql, table, from_type)
+        check_casts(cql, table, f'{from_type}_clmn', from_type, POSITIVE_VALUES[from_type], is_avg_to_decimal)
+
+# Test casts from fields of a user-defined type, with the field types and
+# values in POSITIVE_VALUES['udt'].
+# Translated from scylla-dtest's cql_cast_test.py::TestCQLCast::test_cast_udt.
+def test_cast_from_udt_fields(cql, test_keyspace):
+    fields = POSITIVE_VALUES['udt']
+    with new_type(cql, test_keyspace, '(' + ', '.join(f'{t}_clmn {t}' for t in fields) + ')') as typ, \
+         new_test_table(cql, test_keyspace, f'k int PRIMARY KEY, udt_clmn frozen<{typ}>') as table:
+        for k in range(max(len(rows) for rows in fields.values())):
+            values = ', '.join(f'{t}_clmn: {rows[k][0]}' for t, rows in fields.items() if len(rows) > k)
+            cql.execute(f'INSERT INTO {table} (k, udt_clmn) VALUES ({k}, {{{values}}})')
+        for from_type, rows in fields.items():
+            check_casts(cql, table, f'udt_clmn.{from_type}_clmn', from_type, rows)
+
+# Test that the error messages for invalid casts - from text to int, uuid,
+# ascii and inet, also inside aggregates, and from date to int - don't
+# expose internal details such as Cassandra's Java class names: Scylla
+# reports, for example, "org.apache.cassandra.db.marshal.UTF8Type cannot be
+# cast to org.apache.cassandra.db.marshal.Int32Type".
+# Reproduces issue #3108.
+# Translated from scylla-dtest's cql_cast_test.py::TestCQLCast::test_cast_negative,
+# which was skipped until issue #3108 is fixed. It expected Cassandra's exact
+# error messages, which list the signatures of a function in an order that
+# changes between Cassandra versions, so this test only checks that the
+# messages don't contain Java class names. The dtest couldn't have passed even
+# if #3108 were fixed: its text value wasn't quoted, so it was never inserted,
+# and its date checks were malformed.
+@pytest.mark.xfail(reason='issue #3108')
+def test_cast_invalid_error_message(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, text_clmn text, date_clmn date') as table:
+        cql.execute(f"INSERT INTO {table} (k, text_clmn, date_clmn) VALUES (0, 'jhkhkjh', '2015-12-23')")
+        for expression in ['cast(text_clmn as int)', 'cast(text_clmn as uuid)', 'cast(text_clmn as ascii)',
+                           'avg(cast(text_clmn as int))', 'sum(cast(text_clmn as float))',
+                           'min(cast(text_clmn as inet))', 'max(cast(text_clmn as uuid))',
+                           'cast(date_clmn as int)']:
+            with pytest.raises(InvalidRequest) as e:
+                cql.execute(f'SELECT {expression} FROM {table}')
+            assert 'org.apache.cassandra' not in str(e.value), expression
