@@ -90,7 +90,7 @@ def users(cql, test_keyspace):
         yield table
 
 # Test that a counter batch accepts counter updates, and applies them.
-# Translated from batch_test.py::TestBatch::test_counter_batch_accepts_counter_mutations.
+# Translated from scylla-dtest's batch_test.py::TestBatch::test_counter_batch_accepts_counter_mutations.
 def test_counter_batch_accepts_counter_mutations(cql, clicks):
     user1 = unique_key_int()
     user2 = unique_key_int()
@@ -106,7 +106,7 @@ def test_counter_batch_accepts_counter_mutations(cql, clicks):
 
 # Test that a logged or unlogged batch accepts regular (non-counter) writes,
 # and applies them.
-# Translated from batch_test.py::TestBatch tests
+# Translated from scylla-dtest's batch_test.py::TestBatch tests
 # test_logged_batch_accepts_regular_mutations and
 # test_unlogged_batch_accepts_regular_mutations.
 @pytest.mark.parametrize('batch_type', ['', 'UNLOGGED'])
@@ -127,7 +127,7 @@ def test_batch_accepts_regular_mutations(cql, users, batch_type):
 # has its own error message. For a logged batch, both errors apply: Scylla
 # reports that a logged batch can't contain counter updates, and Cassandra
 # reports that counter updates and regular writes can't be mixed.
-# Translated from batch_test.py::TestBatch tests
+# Translated from scylla-dtest's batch_test.py::TestBatch tests
 # test_counter_batch_rejects_regular_mutations,
 # test_logged_batch_rejects_counter_mutations and
 # def_unlogged_batch_rejects_counter_mutations (which never ran, because
@@ -147,7 +147,7 @@ def test_batch_rejects_mixed_mutations(cql, clicks, users, batch_type, message):
 
 # Test that a logged batch can't contain counter updates, also when it
 # contains nothing else.
-# Added to the translation of batch_test.py::TestBatch::test_logged_batch_rejects_counter_mutations
+# Added to the translation of scylla-dtest's batch_test.py::TestBatch::test_logged_batch_rejects_counter_mutations
 # above, because for that test's batch, which also has a regular write,
 # Cassandra reports a different error.
 def test_logged_batch_rejects_counter_mutations(cql, clicks):
@@ -161,7 +161,7 @@ def test_logged_batch_rejects_counter_mutations(cql, clicks):
 # Test that a logged batch writing to a table with gc_grace_seconds = 0
 # returns a warning to the client, because the gc_grace_seconds is used as
 # the TTL of the batchlog entries, so they may expire before being replayed.
-# Translated from batch_test.py::TestBatch::test_logged_batch_gcgs_below_threshold_single_table,
+# Translated from scylla-dtest's batch_test.py::TestBatch::test_logged_batch_gcgs_below_threshold_single_table,
 # which looked for the warning in the log instead.
 @pytest.mark.xfail(reason='issue #2483')
 def test_logged_batch_gc_grace_seconds_0_warning(cql, test_keyspace):
@@ -180,7 +180,7 @@ def test_logged_batch_gc_grace_seconds_0_warning(cql, test_keyspace):
 
 # Like test_logged_batch_gc_grace_seconds_0_warning, with a batch writing to
 # two tables with gc_grace_seconds = 0: one warning names both tables.
-# Translated from batch_test.py::TestBatch::test_logged_batch_gcgs_below_threshold_multi_table.
+# Translated from scylla-dtest's batch_test.py::TestBatch::test_logged_batch_gcgs_below_threshold_multi_table.
 @pytest.mark.xfail(reason='issue #2483')
 def test_logged_batch_gc_grace_seconds_0_warning_two_tables(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, firstname text, lastname text', 'WITH gc_grace_seconds = 0') as table1, \
@@ -202,7 +202,7 @@ def test_logged_batch_gc_grace_seconds_0_warning_two_tables(cql, test_keyspace):
 
 # Test that an unlogged batch writing to a table with gc_grace_seconds = 0
 # doesn't return a warning: an unlogged batch doesn't use the batchlog.
-# Translated from batch_test.py::TestBatch::test_unlogged_batch_gcgs_below_threshold_should_not_print_warning.
+# Translated from scylla-dtest's batch_test.py::TestBatch::test_unlogged_batch_gcgs_below_threshold_should_not_print_warning.
 # The dtest looked for a message in the log which neither Scylla nor
 # Cassandra ever print, so it could never fail; this test checks that the
 # response has no warnings at all.

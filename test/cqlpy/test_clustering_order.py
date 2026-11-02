@@ -225,7 +225,7 @@ def check_reversed_multi_partition_selects(cql, table, suffix=''):
 
 # Test reversed queries on a single partition with range tombstones, reading
 # from the memtable and then, after a flush, from the sstable (and cache).
-# Translated from reversed_queries_test.py::TestSinglePartitionReversedQueriesSelectors::test_reverse_selectors,
+# Translated from scylla-dtest's reversed_queries_test.py::TestSinglePartitionReversedQueriesSelectors::test_reverse_selectors,
 # except its reads with BYPASS CACHE, which are in
 # test_reversed_selects_single_partition_bypass_cache below.
 def test_reversed_selects_single_partition(cql, test_keyspace):
@@ -236,7 +236,7 @@ def test_reversed_selects_single_partition(cql, test_keyspace):
 
 # Like test_reversed_selects_single_partition, reading the sstable with
 # BYPASS CACHE, which is a Scylla extension.
-# Translated from reversed_queries_test.py::TestSinglePartitionReversedQueriesSelectors::test_reverse_selectors.
+# Translated from scylla-dtest's reversed_queries_test.py::TestSinglePartitionReversedQueriesSelectors::test_reverse_selectors.
 def test_reversed_selects_single_partition_bypass_cache(cql, test_keyspace, scylla_only):
     with table_for_reversed_selects(cql, test_keyspace) as table:
         nodetool.flush(cql, table)
@@ -245,7 +245,7 @@ def test_reversed_selects_single_partition_bypass_cache(cql, test_keyspace, scyl
 # Test reversed queries on two partitions, one with range tombstones,
 # reading from the memtable and then, after a flush, from the sstable (and
 # cache).
-# Translated from reversed_queries_test.py::TestMultiPartitionReversedQueriesSelectors::test_reverse_selectors,
+# Translated from scylla-dtest's reversed_queries_test.py::TestMultiPartitionReversedQueriesSelectors::test_reverse_selectors,
 # except its reads with BYPASS CACHE, which are in
 # test_reversed_selects_multi_partition_bypass_cache below.
 def test_reversed_selects_multi_partition(cql, test_keyspace):
@@ -256,7 +256,7 @@ def test_reversed_selects_multi_partition(cql, test_keyspace):
 
 # Like test_reversed_selects_multi_partition, reading the sstable with
 # BYPASS CACHE, which is a Scylla extension.
-# Translated from reversed_queries_test.py::TestMultiPartitionReversedQueriesSelectors::test_reverse_selectors.
+# Translated from scylla-dtest's reversed_queries_test.py::TestMultiPartitionReversedQueriesSelectors::test_reverse_selectors.
 def test_reversed_selects_multi_partition_bypass_cache(cql, test_keyspace, scylla_only):
     with table_for_reversed_selects(cql, test_keyspace) as table:
         nodetool.flush(cql, table)
@@ -265,7 +265,7 @@ def test_reversed_selects_multi_partition_bypass_cache(cql, test_keyspace, scyll
 # Test a reversed query (ORDER BY ASC on a table with CLUSTERING ORDER BY
 # DESC) on a table using TimeWindowCompactionStrategy, whose rows are spread
 # over five sstables in five different time windows.
-# Translated from reversed_queries_test.py::TestReversedQueriesWithTimeWindowCompactionStrategy::test_reversed_queries_with_time_window_compaction_strategy.
+# Translated from scylla-dtest's reversed_queries_test.py::TestReversedQueriesWithTimeWindowCompactionStrategy::test_reversed_queries_with_time_window_compaction_strategy.
 # The dtest wrote 300 rows, one per second, and flushed every 60 rows. It
 # meant to spread the rows over five one-minute windows, but its USING
 # TIMESTAMP values were in seconds instead of microseconds, so all the rows

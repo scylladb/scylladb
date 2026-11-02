@@ -3067,7 +3067,7 @@ def test_index_query_with_stale_index_entry(cql, test_keyspace, scylla_only):
 # all the matching rows, both in a regular table and in a COMPACT STORAGE
 # table (CASSANDRA-11104 was about such queries missing rows when the
 # partitions are spread over many token ranges).
-# Translated from secondary_indexes_test.py::TestSecondaryIndexes::test_query_indexes_with_vnodes.
+# Translated from scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_query_indexes_with_vnodes.
 @pytest.mark.parametrize('extra', ['', 'WITH COMPACT STORAGE'])
 def test_index_query_many_partitions(cql, test_keyspace, compact_storage, extra):
     with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, b int', extra) as table:
@@ -3081,7 +3081,7 @@ def test_index_query_many_partitions(cql, test_keyspace, compact_storage, extra)
 
 # Test that an index on two or more columns can't be created, unless it is
 # a CUSTOM index.
-# Translated from secondary_indexes_test.py::TestSecondaryIndexes::test_multi_column_index.
+# Translated from scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_multi_column_index.
 def test_index_multiple_columns(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, b int, c int, d int, e int, f int, g int') as table:
         for columns in ['b, c', 'b, c, d, e, f, g']:
@@ -3091,7 +3091,7 @@ def test_index_multiple_columns(cql, test_keyspace):
 # Like test_index_multiple_columns, for a local index: a local index can
 # only index one column in addition to the partition key. Local indexes are
 # a Scylla-only feature.
-# Translated from secondary_indexes_test.py::TestLocalIndexes::test_multi_column_local_index.
+# Translated from scylla-dtest's secondary_indexes_test.py::TestLocalIndexes::test_multi_column_local_index.
 def test_local_index_multiple_columns(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, b int, c int, d int, e int, f int, g int') as table:
         for columns in ['b, c', 'b, c, d, e, f, g']:
@@ -3115,7 +3115,7 @@ def table_with_index_for_ttl(cql, test_keyspace, local=False):
 # through the index.
 # Translated (except the checks of the index's view, which are in
 # test_index_ttl_indexed_column_view below) from
-# secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_index_column.
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_index_column.
 def test_index_ttl_indexed_column(cql, test_keyspace, clock):
     with table_with_index_for_ttl(cql, test_keyspace) as (table, _):
         assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 1')) == [(0, 1, 2)]
@@ -3132,7 +3132,7 @@ def test_index_ttl_indexed_column(cql, test_keyspace, clock):
 # view which Scylla uses to implement the index expires too. This is
 # scylla_only because it reads that view directly.
 # Translated from the view checks of
-# secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_index_column.
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_index_column.
 def test_index_ttl_indexed_column_view(cql, test_keyspace, clock, scylla_only):
     with table_with_index_for_ttl(cql, test_keyspace) as (table, view):
         cql.execute(f'UPDATE {table} USING TTL {clock.ttl} SET b = 3 WHERE key = 0')
@@ -3143,7 +3143,7 @@ def test_index_ttl_indexed_column_view(cql, test_keyspace, clock, scylla_only):
 # Test that the expiration of a non-indexed column doesn't affect the index.
 # Translated (except the checks of the index's view, which are in
 # test_index_ttl_non_indexed_column_view below) from
-# secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_non_index_column.
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_non_index_column.
 def test_index_ttl_non_indexed_column(cql, test_keyspace, clock):
     with table_with_index_for_ttl(cql, test_keyspace) as (table, _):
         cql.execute(f'UPDATE {table} USING TTL {clock.ttl} SET c = 3 WHERE key = 0')
@@ -3157,7 +3157,7 @@ def test_index_ttl_non_indexed_column(cql, test_keyspace, clock):
 # materialized view which Scylla uses to implement the index. This is
 # scylla_only because it reads that view directly.
 # Translated from the view checks of
-# secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_non_index_column.
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_non_index_column.
 def test_index_ttl_non_indexed_column_view(cql, test_keyspace, clock, scylla_only):
     with table_with_index_for_ttl(cql, test_keyspace) as (table, view):
         cql.execute(f'UPDATE {table} USING TTL {clock.ttl} SET c = 3 WHERE key = 0')
@@ -3167,7 +3167,7 @@ def test_index_ttl_non_indexed_column_view(cql, test_keyspace, clock, scylla_onl
 
 # Like test_index_ttl_indexed_column and test_index_ttl_indexed_column_view,
 # for a local index. Local indexes are a Scylla-only feature.
-# Translated from secondary_indexes_test.py::TestLocalIndexes::test_ttl_local_index_column.
+# Translated from scylla-dtest's secondary_indexes_test.py::TestLocalIndexes::test_ttl_local_index_column.
 def test_local_index_ttl_indexed_column(cql, test_keyspace, clock, scylla_only):
     with table_with_index_for_ttl(cql, test_keyspace, local=True) as (table, view):
         assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 1 AND key = 0')) == [(0, 1, 2)]
@@ -3186,7 +3186,7 @@ def test_local_index_ttl_indexed_column(cql, test_keyspace, clock, scylla_only):
 # before it is indexed, and after it is indexed, the index finds the rows
 # written before the index was created, rows written after it, and rows
 # whose tuple was modified.
-# Translated from secondary_indexes_test.py::TestSecondaryIndexesOnCollections::test_tuple_indexes.
+# Translated from scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexesOnCollections::test_tuple_indexes.
 # The dtest used 50 values, written 5 times before creating the indexes and
 # 3 times after, and modified the rows of 5 values; this test uses 10
 # values, written twice before and once after, and modifies the rows of 3.
@@ -3234,7 +3234,7 @@ def test_index_tuple(cql, test_keyspace):
 # collection column.
 # Translated (except the local index, which is in
 # test_local_index_frozen_collection below) from
-# secondary_indexes_test.py::TestSecondaryIndexesOnCollections tests
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexesOnCollections tests
 # test_frozen_list_indexes, test_frozen_set_indexes and test_frozen_map_indexes.
 @pytest.mark.parametrize('typ', ['frozen<list<uuid>>', 'frozen<set<uuid>>', 'frozen<map<uuid, uuid>>'])
 def test_index_frozen_collection(cql, test_keyspace, typ):
@@ -3245,7 +3245,7 @@ def test_index_frozen_collection(cql, test_keyspace, typ):
 # Like test_index_frozen_collection, for a local index. Local indexes are a
 # Scylla-only feature.
 # Translated from the local index part of
-# secondary_indexes_test.py::TestSecondaryIndexesOnCollections tests
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexesOnCollections tests
 # test_frozen_list_indexes, test_frozen_set_indexes and test_frozen_map_indexes.
 @pytest.mark.parametrize('typ', ['frozen<list<uuid>>', 'frozen<set<uuid>>', 'frozen<map<uuid, uuid>>'])
 def test_local_index_frozen_collection(cql, test_keyspace, typ, scylla_only):
