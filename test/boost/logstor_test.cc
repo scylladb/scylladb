@@ -22,6 +22,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/with_timeout.hh>
 #include <seastar/core/format.hh>
 #include <seastar/core/temporary_buffer.hh>
@@ -1324,8 +1325,13 @@ public:
 
     // The segment_pool_size metric of the logstor, the only view of the pool.
     static uint64_t segment_pool_size() {
+        return metric_value("logstor_sm_segment_pool_size");
+    }
+
+    // A value of a logstor metric.
+    static uint64_t metric_value(const char* metric_name) {
         for (const auto& [name, family] : seastar::metrics::impl::get_value_map()) {
-            if (name == "logstor_sm_segment_pool_size") {
+            if (name == metric_name) {
                 for (const auto& [labels, metric] : family) {
                     if (metric) {
                         return (*metric)().ui();
@@ -1333,7 +1339,7 @@ public:
                 }
             }
         }
-        BOOST_FAIL("segment_pool_size metric is not registered");
+        BOOST_FAIL(fmt::format("{} metric is not registered", metric_name));
         return 0;
     }
 
@@ -1369,6 +1375,21 @@ public:
         } catch (...) {
             BOOST_ERROR(fmt::format("stopping logstor failed: {}", std::current_exception()));
         }
+    }
+
+    // Whether `done` completes within `timeout`.
+    static bool completes_within(seastar::shared_future<>& done, std::chrono::seconds timeout) {
+        try {
+            seastar::with_timeout(seastar::lowres_clock::now() + timeout, done.get_future()).get();
+            return true;
+        } catch (const seastar::timed_out_error&) {
+            return false;
+        }
+    }
+
+    // Starts stopping the logstor. The destructor awaits this stop, so the groups outlive it.
+    seastar::shared_future<>& stop_logstor() {
+        return _stopping.emplace(ls.stop());
     }
 
     // Only compaction can take segments out of the reserve of the pool, one per group it compacts.
@@ -1429,6 +1450,72 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_several_compactions_wait_for_a_segment_of_
         g->await_compaction();
         BOOST_REQUIRE_MESSAGE(g->compacted(), "a compaction failed while waiting for a segment");
     }
+}
+
+// Checks that stopping the logstor does not wait for a compaction that waits for a segment of an
+// empty pool, which nothing but the abort of the compaction can end when no segment is left to free.
+SEASTAR_THREAD_TEST_CASE(test_logstor_stops_while_a_compaction_waits_for_a_segment) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    full_disk_logstor env(1);
+    env.empty_pool();
+    env.compact_until_they_wait(1);
+
+    auto& stopping = env.stop_logstor();
+    const bool stopped = full_disk_logstor::completes_within(stopping, std::chrono::seconds(10));
+    // A stop that hangs ends once the replenisher hands out the segments again.
+    utils::get_local_injector().disable(hold_back_free_segments);
+    BOOST_REQUIRE_MESSAGE(stopped || full_disk_logstor::completes_within(stopping, std::chrono::seconds(30)), "stop did not complete even with the free segments handed out");
+    BOOST_REQUIRE_MESSAGE(stopped, "stop did not complete while a compaction waited for a segment");
+}
+
+// Checks that removing a group does not wait for its compaction that waits for a segment of an empty
+// pool, as dropping a table or cleaning up a tablet does, and leaves the other groups alone.
+SEASTAR_THREAD_TEST_CASE(test_logstor_removing_a_group_while_its_compaction_waits_for_a_segment) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    full_disk_logstor env(2);
+    env.empty_pool();
+    const auto waiting = env.compact_until_they_wait(2);
+
+    seastar::shared_future<> removing(env.ls.get_compaction_manager().remove(waiting[0]->group));
+    const bool removed = full_disk_logstor::completes_within(removing, std::chrono::seconds(10));
+    // A removal that hangs ends once the replenisher hands out the segments again.
+    utils::get_local_injector().disable(hold_back_free_segments);
+    BOOST_REQUIRE_MESSAGE(removed || full_disk_logstor::completes_within(removing, std::chrono::seconds(30)), "removal did not complete even with the free segments handed out");
+    BOOST_REQUIRE_MESSAGE(removed, "removal did not complete while its compaction waited for a segment");
+    // The abort of a compaction is not a failure of it.
+    BOOST_REQUIRE_EQUAL(full_disk_logstor::metric_value("logstor_sm_compaction_failures"), 0);
+
+    // The compaction of the other group did not take part in it, and goes on once it gets a segment.
+    waiting[1]->await_compaction();
+    BOOST_REQUIRE_MESSAGE(waiting[1]->compacted(), "the compaction of another group failed");
+}
+
+// Checks that discarding the segments of a group does not wait for its compaction that waits for a
+// segment of an empty pool, as dropping a table or cleaning up a tablet does.
+SEASTAR_THREAD_TEST_CASE(test_logstor_discarding_a_group_while_its_compaction_waits_for_a_segment) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    full_disk_logstor env(1);
+    env.empty_pool();
+    auto& group = env.compact_until_they_wait(1)[0]->group;
+
+    // Discarding needs the group without data.
+    group.logstor_index().clear().get();
+    seastar::shared_future<> discarding(env.ls.get_segment_manager().discard_segments(group));
+    const bool discarded = full_disk_logstor::completes_within(discarding, std::chrono::seconds(10));
+    // A discard that hangs ends once the replenisher hands out the segments again.
+    utils::get_local_injector().disable(hold_back_free_segments);
+    BOOST_REQUIRE_MESSAGE(discarded || full_disk_logstor::completes_within(discarding, std::chrono::seconds(30)), "discard did not complete even with the free segments handed out");
+    BOOST_REQUIRE_MESSAGE(discarded, "discard did not complete while the compaction of the group waited for a segment");
+    BOOST_REQUIRE_EQUAL(full_disk_logstor::metric_value("logstor_sm_compaction_failures"), 0);
 }
 
 // Checks that primary_index accounting callbacks track live bytes across
