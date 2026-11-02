@@ -89,11 +89,15 @@ def routing_information_of(response: cql_frames.Response) -> RoutingInformation 
 # The two blocks differ only in their value nibble, so they can't both match the
 # tablet's version: if the server checks the version, at least one of the
 # responses carries routing information. Returns the routing information of
-# each response, None for none.
-def execute_with_both_blocks(sock: socket.socket, statement_id: bytes, values: list[int]) -> list[RoutingInformation | None]:
+# each response, None for none. The paging arguments are as in
+# cql_frames.execute().
+def execute_with_both_blocks(sock: socket.socket, statement_id: bytes, values: list[int],
+                             page_size: int | None = None,
+                             paging_state: bytes | None = None) -> list[RoutingInformation | None]:
     infos: list[RoutingInformation | None] = []
     for block in (0x00, 0x01):
-        response = cql_frames.execute(sock, statement_id, values, tablet_version_block=block)
+        response = cql_frames.execute(sock, statement_id, values, page_size=page_size, paging_state=paging_state,
+                                      tablet_version_block=block)
         infos.append(routing_information_of(response))
     return infos
 
