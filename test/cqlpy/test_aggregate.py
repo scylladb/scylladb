@@ -335,7 +335,7 @@ def test_bind_variable_on_aggregate(cql, test_keyspace):
 
 # Test the built-in aggregate functions min, max, sum, avg and count on a
 # whole table of several partitions, on an int and a double column.
-# Translated from user_functions_test.py::TestUserFunctions::test_default_aggregate.
+# Translated from scylla-dtest's user_functions_test.py::TestUserFunctions::test_default_aggregate.
 def test_builtin_aggregates_whole_table(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val double') as table:
         for x in range(1, 10):

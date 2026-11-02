@@ -176,7 +176,7 @@ def test_prepared_alter_table_options_validated_on_every_execute(cql, test_keysp
 # Cassandra had the same restriction until version 4.0, when it was lost in
 # the rewrite of the DDL statements (CASSANDRA-13426), so this test is
 # scylla_only.
-# Translated from schema_test.py::TestSchema::test_drop_column_compact.
+# Translated from scylla-dtest's schema_test.py::TestSchema::test_drop_column_compact.
 def test_drop_column_compact_storage(cql, test_keyspace, compact_storage, scylla_only):
     with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, c1 int, c2 int', 'WITH COMPACT STORAGE') as table:
         with pytest.raises(InvalidRequest, match='Cannot drop columns from a'):
@@ -186,7 +186,7 @@ def test_drop_column_compact_storage(cql, test_keyspace, compact_storage, scylla
 # before the drop are no longer returned, while values written after the
 # re-add are. Check this when the data is still in the memtable, and again
 # after a flush and a major compaction.
-# Translated from schema_test.py::TestSchema tests test_drop_column_queries
+# Translated from scylla-dtest's schema_test.py::TestSchema tests test_drop_column_queries
 # (reads from the memtable) and test_drop_column_compaction (reads after
 # flush and compaction).
 def test_drop_and_readd_column(cql, test_keyspace):

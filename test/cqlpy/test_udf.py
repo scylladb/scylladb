@@ -160,7 +160,7 @@ def test_create_function_in_missing_keyspace(cql, has_java_udf):
 # of text so the function on varchar is the one on text, DROP FUNCTION of
 # a signature which doesn't exist fails, and DROP FUNCTION without a
 # signature fails while the function is overloaded.
-# Translated from user_functions_test.py::TestUserFunctions::test_udf_overload_test.
+# Translated from scylla-dtest's user_functions_test.py::TestUserFunctions::test_udf_overload_test.
 def test_udf_overload(cql, test_keyspace, has_java_udf):
     def body(arg, result):
         if has_java_udf:

@@ -1933,7 +1933,7 @@ def test_cast_invalid_error_message(cql, test_keyspace):
 
 # Test CREATE TABLE (including a COMPACT STORAGE table), ALTER TABLE ADD,
 # INSERT, SELECT, TRUNCATE and DROP TABLE.
-# Translated from cql_tests.py::TestStorageProxyCQL::test_table.
+# Translated from scylla-dtest's cql_tests.py::TestStorageProxyCQL::test_table.
 def test_smoke_table_statements(cql, test_keyspace, compact_storage):
     table1 = f'{test_keyspace}.{unique_name()}'
     table2 = f'{test_keyspace}.{unique_name()}'
@@ -1959,7 +1959,7 @@ def test_smoke_table_statements(cql, test_keyspace, compact_storage):
 
 # Test CREATE INDEX, a query using the index, and DROP INDEX, after which
 # the same query requires ALLOW FILTERING.
-# Translated from cql_tests.py::TestStorageProxyCQL::test_index.
+# Translated from scylla-dtest's cql_tests.py::TestStorageProxyCQL::test_index.
 def test_smoke_index_statements(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v1 int, v2 int') as table:
         index = unique_name()
@@ -1973,7 +1973,7 @@ def test_smoke_index_statements(cql, test_keyspace):
 
 # Test CREATE TYPE, ALTER TYPE ADD, tables using the type before and after
 # the ALTER, and DROP TYPE, after which the type can't be used.
-# Translated from cql_tests.py::TestStorageProxyCQL::test_type.
+# Translated from scylla-dtest's cql_tests.py::TestStorageProxyCQL::test_type.
 def test_smoke_type_statements(cql, test_keyspace):
     # new_type() runs CREATE TYPE, and DROP TYPE when the block ends.
     with new_type(cql, test_keyspace, '(street text, city text, zip_code int)') as typ:
@@ -1986,7 +1986,7 @@ def test_smoke_type_statements(cql, test_keyspace):
             pass
 
 # Test CREATE USER, ALTER USER and DROP USER.
-# Translated from cql_tests.py::TestStorageProxyCQL::test_user.
+# Translated from scylla-dtest's cql_tests.py::TestStorageProxyCQL::test_user.
 def test_smoke_user_statements(cql):
     user1 = unique_name()
     cql.execute(f"CREATE USER {user1} WITH PASSWORD 'secret'")
@@ -2002,7 +2002,7 @@ def test_smoke_user_statements(cql):
         cql.execute(f'DROP USER {user2}')
 
 # Test INSERT, UPDATE, SELECT (also with IN), SELECT COUNT and DELETE.
-# Translated from cql_tests.py::TestStorageProxyCQL::test_statements.
+# Translated from scylla-dtest's cql_tests.py::TestStorageProxyCQL::test_statements.
 def test_smoke_data_statements(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'kind text, time int, v1 int, v2 int, PRIMARY KEY (kind, time)') as table:
         for i in range(10):
@@ -2022,7 +2022,7 @@ def test_smoke_data_statements(cql, test_keyspace):
 
 # Test a BATCH of INSERTs, an UPDATE and a DELETE. The dtest only checked
 # that the batch succeeds; this test also checks its result.
-# Translated from cql_tests.py::TestStorageProxyCQL::test_batch.
+# Translated from scylla-dtest's cql_tests.py::TestStorageProxyCQL::test_batch.
 def test_smoke_batch_statement(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'userid text PRIMARY KEY, name text, password text') as table:
         cql.execute(f"""
@@ -2041,7 +2041,7 @@ def test_smoke_batch_statement(cql, test_keyspace):
 # column is dropped or added, while a statement listing the dropped column
 # fails (CASSANDRA-7910).
 # Translated, together with test_prepared_statement_invalidation_alter_type
-# below, from cql_tests.py::TestMiscellaneousCQL::test_prepared_statement_invalidation.
+# below, from scylla-dtest's cql_tests.py::TestMiscellaneousCQL::test_prepared_statement_invalidation.
 def test_prepared_statement_invalidation(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, a int, b int, c int') as table:
         cql.execute(f'INSERT INTO {table} (k, a, b, c) VALUES (0, 0, 0, 0)')
@@ -2063,7 +2063,7 @@ def test_prepared_statement_invalidation(cql, test_keyspace):
 # ALTER TABLE ... TYPE in version 3.0.11 (CASSANDRA-12443), but Scylla
 # still supports it, so this test is scylla_only.
 # Translated, together with test_prepared_statement_invalidation above,
-# from cql_tests.py::TestMiscellaneousCQL::test_prepared_statement_invalidation.
+# from scylla-dtest's cql_tests.py::TestMiscellaneousCQL::test_prepared_statement_invalidation.
 def test_prepared_statement_invalidation_alter_type(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, a int, b int, d int') as table:
         cql.execute(f'INSERT INTO {table} (k, a, b) VALUES (0, 0, 0)')
@@ -2080,7 +2080,7 @@ def test_prepared_statement_invalidation_alter_type(cql, test_keyspace, scylla_o
 # many elements as the threshold is not. The test sets the threshold at
 # runtime and reads Scylla's log, so it is Scylla-only (the logfile fixture
 # skips it on Cassandra).
-# Translated from cql_tests.py::TestMiscellaneousCQL::test_large_collection.
+# Translated from scylla-dtest's cql_tests.py::TestMiscellaneousCQL::test_large_collection.
 def test_large_collection(cql, test_keyspace, logfile):
     threshold = 1000
     with config_value_context(cql, 'compaction_collection_elements_count_warning_threshold', str(threshold)), \
@@ -2102,7 +2102,7 @@ def test_large_collection(cql, test_keyspace, logfile):
 # server's request timeouts are zero: a full-table scan, and a query
 # filtering on an indexed column. The dtests restarted the node with these
 # timeouts; these tests set them at runtime, so they are scylla_only.
-# Translated from cql_tests.py::TestAbortedQueries tests test_local_query
+# Translated from scylla-dtest's cql_tests.py::TestAbortedQueries tests test_local_query
 # and test_index_query (the original Cassandra tests used a test-only
 # option of Cassandra to slow down reads instead).
 # Scylla copies the timeouts into each connection when it is opened, so
