@@ -3252,3 +3252,37 @@ def test_local_index_frozen_collection(cql, test_keyspace, typ, scylla_only):
     with new_test_table(cql, test_keyspace, f'key uuid PRIMARY KEY, email text, uuids {typ}') as table:
         with pytest.raises(InvalidRequest, match='Cannot create index on (index_values|value) of frozen'):
             cql.execute(f'CREATE INDEX ON {table}((key), uuids)')
+
+# Test an index on one of the columns of a composite partition key, and
+# queries which restrict this column (and the other one) with ALLOW FILTERING.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_partition_key_as_secondary_index.
+def test_index_on_partition_key_column_with_filtering(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a bigint, b bigint, c bigint, PRIMARY KEY ((a, b))') as table:
+        cql.execute(f'CREATE INDEX ON {table}(a)')
+        for a, b, c in [(0, 2, 1), (1, 2, 3), (2, 2, 4)]:
+            cql.execute(f'INSERT INTO {table} (a, b, c) VALUES ({a}, {b}, {c})')
+        assert set(cql.execute(f'SELECT * FROM {table} WHERE a > 0 AND b = 2 ALLOW FILTERING')) == {(1, 2, 3), (2, 2, 4)}
+        assert set(cql.execute(f'SELECT b, c FROM {table} WHERE a >= 2 ALLOW FILTERING')) == {(2, 4)}
+
+# Test selecting columns other than the indexed column which the query
+# restricts.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_restricted_column_not_in_select_clause.
+def test_index_restricted_column_not_selected(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a bigint, b bigint, c bigint, d int, e int, PRIMARY KEY ((a, b), c)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(d)')
+        cql.execute(f'INSERT INTO {table} (a, b, c, d, e) VALUES (1, 2, 3, 4, 5)')
+        cql.execute(f'INSERT INTO {table} (a, b, c, d, e) VALUES (11, 22, 33, 44, 55)')
+        assert list(cql.execute(f'SELECT c, e FROM {table} WHERE d = 44')) == [(33, 55)]
+        assert list(cql.execute(f'SELECT a FROM {table} WHERE d > 43 ALLOW FILTERING')) == [(11,)]
+
+# Test a query which restricts an indexed column twice, to two different
+# values ("c0 = 'a' AND c0 = 'b'"), so no row matches. Reproduces #7772,
+# where such a query crashed Scylla. Cassandra rejects restricting a column
+# with an equality more than once, so this test is scylla_only.
+# Translated from scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_index_same_key_twice.
+def test_index_restricted_twice(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'key uuid PRIMARY KEY, c0 text, c1 text') as table:
+        cql.execute(f'CREATE INDEX ON {table}(c0)')
+        for c0, c1 in [('a', 'b'), ('a', 'b'), ('q', 'b'), ('a', 'e')]:
+            cql.execute(f"INSERT INTO {table} (key, c0, c1) VALUES (uuid(), '{c0}', '{c1}')")
+        assert list(cql.execute(f"SELECT count(*) FROM {table} WHERE c0 = 'a' AND c0 = 'b'")) == [(0,)]

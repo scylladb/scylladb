@@ -345,3 +345,32 @@ def test_builtin_aggregates_whole_table(cql, test_keyspace):
         assert list(cql.execute(f'SELECT sum(key) FROM {table}')) == [(45,)]
         assert list(cql.execute(f'SELECT avg(val) FROM {table}')) == [(5.0,)]
         assert list(cql.execute(f'SELECT count(*) FROM {table}')) == [(9,)]
+
+# Test min() and max() of sets of various element types, and of a UDT,
+# which compare the values lexicographically. Reproduces #6768.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_min_and_max_on_sets_and_udt.
+def test_min_max_sets_and_udt(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(first text, second int, third int)') as udt, \
+         new_test_table(cql, test_keyspace, f'id int PRIMARY KEY, s1 set<int>, s2 set<blob>, s3 set<ascii>, u frozen<{udt}>') as table:
+        cql.execute(f"INSERT INTO {table} (id, s1, s2, s3, u) VALUES (1, {{-1, 1}}, {{0xff, 0x01}}, {{'hi', 'im', 'ascii'}}, {{first: 'a', second: 2, third: 3}})")
+        cql.execute(f"INSERT INTO {table} (id, s1, s2, s3, u) VALUES (2, {{-2, 2}}, {{0xfe, 0x02}}, {{'im', 'ascii', 'too'}}, {{first: 'b', second: 5, third: 6}})")
+        [row] = cql.execute(f'SELECT max(s3), min(s3) FROM {table}')
+        assert row == ({'ascii', 'im', 'too'}, {'ascii', 'hi', 'im'})
+        [row] = cql.execute(f'SELECT max(u), min(u) FROM {table}')
+        assert (tuple(row[0]), tuple(row[1])) == (('b', 5, 6), ('a', 2, 3))
+        [row] = cql.execute(f'SELECT max(s1), max(s2) FROM {table}')
+        assert row == ({-1, 1}, {b'\x02', b'\xfe'})
+
+# Test a selection of both aggregates and a regular column - whose value is
+# taken from the first row of the aggregated rows.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_aggregate_and_simple_selection_together.
+def test_aggregates_and_column_together(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, PRIMARY KEY (a, c)') as table:
+        for a, b, c in [(1, 2, 3), (2, 4, 6), (3, 6, 9), (3, 8, 10)]:
+            cql.execute(f'INSERT INTO {table} (a, b, c) VALUES ({a}, {b}, {c})')
+        # The rows with b > 2 are, in partition order, those of a=2 and a=3,
+        # but the order of the partitions depends on their tokens. So check
+        # the column's value against the first row of the same query.
+        first = list(cql.execute(f'SELECT a FROM {table} WHERE b > 2 ALLOW FILTERING'))[0].a
+        assert list(cql.execute(f'SELECT sum(c), avg(b), min(c), a FROM {table} WHERE b > 2 ALLOW FILTERING')) == [(25, 6, 6, first)]
+        assert list(cql.execute(f'SELECT count(c), max(b) FROM {table} WHERE a = 3')) == [(2, 8)]

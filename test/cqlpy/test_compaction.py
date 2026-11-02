@@ -954,3 +954,12 @@ def test_scrub_validate_valid_sstables(scylla_only, cql, test_keyspace):
         # 0 means that the sstables are valid (3 means validation errors)
         assert response.json() == 0
         assert set(sstable_timestamps(cql, table)) == before
+
+# Test that the default compaction strategy of a table is
+# IncrementalCompactionStrategy.
+# Translated from scylla-dtest's ics_compaction_test.py::TestIcsCompaction::test_check_default_compaction_strategy.
+def test_default_compaction_strategy(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v int') as table:
+        ks, cf = table.split('.')
+        compaction = cql.execute(f"SELECT compaction FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one().compaction
+        assert compaction['class'].endswith('IncrementalCompactionStrategy')
