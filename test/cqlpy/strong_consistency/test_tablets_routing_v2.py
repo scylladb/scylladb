@@ -24,7 +24,7 @@ import pytest
 from test.pylib.skip_types import skip_env
 
 from .. import cql_frames
-from ..util import new_test_table
+from ..util import new_test_table, paging_plan_rederivations
 
 
 EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL"
@@ -186,3 +186,30 @@ def test_no_routing_information_for_range_scan(cql, connect, test_keyspace):
 def test_no_routing_information_for_literal_partition_key(cql, connect, test_keyspace):
     assert_no_routing_information(cql, connect, test_keyspace,
                                   "INSERT INTO {} (pk, ck, v) VALUES (1, ?, ?)", [1, 1])
+
+
+# A page continues with the query plan of the first page. If the plan of the
+# prepared statement has changed since, the server prepares the statement anew
+# with the plan of the first page. It's still the statement the driver
+# prepared, so the server still checks the tablet version block.
+def test_routing_information_after_query_plan_change(cql, connect, test_keyspace_tablets):
+    if not test_keyspace_tablets:
+        skip_env("The test needs a keyspace with tablets")
+    with new_test_table(cql, test_keyspace_tablets, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table, connect() as sock:
+        for ck in range(2):
+            cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, {ck}, 1)")
+        query = f"SELECT ck FROM {table} WHERE pk = ? AND v = ? ALLOW FILTERING"
+        statement_id = cql.prepare(query).query_id
+        first_page = cql_frames.execute(sock, statement_id, [1, 1], page_size=1, tablet_version_block=0x00)
+        paging_state = cql_frames.paging_state_of(first_page)
+        assert paging_state is not None
+
+        # The paging state pins the base table, while the statement, prepared
+        # anew, reads the index. The server only returns routing information
+        # for reads of the base table.
+        cql.execute(f"CREATE INDEX ON {table} ((pk), v)")
+        assert cql.prepare(query).query_id == statement_id
+        rederivations = paging_plan_rederivations(cql)
+        infos = execute_with_both_blocks(sock, statement_id, [1, 1], page_size=1, paging_state=paging_state)
+        assert paging_plan_rederivations(cql) > rederivations
+        assert any(info is not None for info in infos)

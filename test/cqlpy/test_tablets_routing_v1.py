@@ -18,6 +18,8 @@ import pytest
 from test.pylib.skip_types import skip_env
 
 from . import cql_frames
+from .rest_api import tablet_balancing_disabled
+from .util import new_test_table, paging_plan_rederivations
 
 EXTENSION = "TABLETS_ROUTING_V1"
 PAYLOAD_KEY = "tablets-routing-v1"
@@ -66,3 +68,42 @@ def partition_shards(cql, table: str) -> dict[int, int]:
 def has_routing_information(response: cql_frames.Response) -> bool:
     assert response.opcode == cql_frames.RESULT
     return PAYLOAD_KEY in response.custom_payload
+
+
+# A page continues with the query plan of the first page. If the plan of the
+# prepared statement has changed since, the server prepares the statement anew
+# with the plan of the first page. It's still the statement the driver
+# prepared, so the server still returns routing information for it on the
+# wrong shard.
+def test_routing_information_after_query_plan_change(cql, connect, test_keyspace_tablets):
+    if not test_keyspace_tablets:
+        skip_env("The test needs a keyspace with tablets")
+    # Enough tablets to have some on every shard.
+    schema = "pk int, ck int, v int, PRIMARY KEY (pk, ck)"
+    extras = "WITH tablets = {'min_tablet_count': 8}"
+    with new_test_table(cql, test_keyspace_tablets, schema, extras) as table, connect() as sock:
+        with tablet_balancing_disabled(cql):
+            # Balancing is off, so the partition stays on the shard it's on now.
+            for pk in range(16):
+                for ck in range(2):
+                    cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ({pk}, {ck}, 1)")
+            shard = shard_of(sock)
+            remote_pks = [pk for pk, pk_shard in partition_shards(cql, table).items() if pk_shard != shard]
+            assert remote_pks, f"No partition on a shard other than {shard}"
+            pk = remote_pks[0]
+
+            query = f"SELECT ck FROM {table} WHERE pk = ? AND v = ? ALLOW FILTERING"
+            statement_id = cql.prepare(query).query_id
+            first_page = cql_frames.execute(sock, statement_id, [pk, 1], page_size=1)
+            paging_state = cql_frames.paging_state_of(first_page)
+            assert paging_state is not None
+
+            # The paging state pins the base table, while the statement, prepared
+            # anew, reads the index. The server only returns routing information
+            # for reads of the base table.
+            cql.execute(f"CREATE INDEX ON {table} ((pk), v)")
+            assert cql.prepare(query).query_id == statement_id
+            rederivations = paging_plan_rederivations(cql)
+            response = cql_frames.execute(sock, statement_id, [pk, 1], page_size=1, paging_state=paging_state)
+            assert paging_plan_rederivations(cql) > rederivations
+            assert has_routing_information(response)

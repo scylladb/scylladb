@@ -94,3 +94,14 @@ def wait_for_injection_enter(cql, err, timeout=60):
 # Sends a message to a fiber paused on the given error injection, resuming it.
 def message_injection(cql, err):
     post_request(cql, f'v2/error_injection/injection/{err}/message')
+
+# Disables tablet load balancing for the duration of the context, so that the
+# tablets stay where they are. Disabling it also waits until no tablet
+# transition is in flight.
+@contextmanager
+def tablet_balancing_disabled(cql):
+    post_request(cql, 'storage_service/tablets/balancing?enabled=false')
+    try:
+        yield
+    finally:
+        post_request(cql, 'storage_service/tablets/balancing?enabled=true')
