@@ -1684,12 +1684,14 @@ compact_and_expire_result row::compact_and_expire(
                 res.live_cells++;
             }
         } else {
-            auto compact_res = ::compact_and_expire(c.as_collection_mutation(), id, *def.type, tomb, query_time, can_gc, gc_before, collector);
+            auto compact_res = ::compact_and_expire_if_changed(c.as_collection_mutation(), id, *def.type, tomb, query_time, can_gc, gc_before, collector);
             res += compact_res.result;
-            if (collection_mutation_view(compact_res.collection).empty()) {
+            if (!compact_res.collection) {
+                erase = c.as_collection_mutation().empty();
+            } else if (collection_mutation_view(*compact_res.collection).empty()) {
                  erase = true;
             } else {
-                c = std::move(compact_res.collection);
+                c = std::move(*compact_res.collection);
             }
         }
         return erase;

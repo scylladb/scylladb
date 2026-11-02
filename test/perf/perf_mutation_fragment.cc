@@ -363,6 +363,10 @@ PERF_TEST_F(large_set, merge) { perf_tests::do_not_optimize(merge(*_type, _big, 
 PERF_TEST_F(large_set, compact) {
     perf_tests::do_not_optimize(compact_and_expire(_big, _def.id, *_type, row_tombstone(), gc_clock::now(), always_gc, gc_clock::time_point::min(), nullptr));
 }
+// The variant row::compact_and_expire() uses; no copy of an unchanged cell.
+PERF_TEST_F(large_set, compact_if_changed) {
+    perf_tests::do_not_optimize(compact_and_expire_if_changed(_big, _def.id, *_type, row_tombstone(), gc_clock::now(), always_gc, gc_clock::time_point::min(), nullptr));
+}
 // Long expired, so purged as a real read would.
 PERF_TEST_F(large_set, compact_expired) {
     perf_tests::do_not_optimize(compact_and_expire(_expired, _def.id, *_type, row_tombstone(), gc_clock::now(), always_gc, gc_clock::now(), nullptr));

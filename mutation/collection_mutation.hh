@@ -239,6 +239,8 @@ public:
     void push_back(managed_bytes_view key, atomic_cell value) {
         push_back(std::move(key), atomic_cell_view(value));
     }
+    // Appends `count` already-serialized elements verbatim.
+    void append_serialized(managed_bytes_view elements, uint32_t count);
 
     void push_back(value_type kv) {
         push_back(std::move(kv.first), std::move(kv.second));
@@ -251,6 +253,22 @@ struct collection_mutation_compact_and_expire_result {
     collection_mutation collection; // can be empty
     compact_and_expire_result result;
 };
+
+struct collection_mutation_compact_and_expire_if_changed_result {
+    std::optional<collection_mutation> collection; // nullopt: cmv is unchanged
+    compact_and_expire_result result;
+};
+
+// compact_and_expire() that returns no copy of a collection it leaves unchanged.
+collection_mutation_compact_and_expire_if_changed_result compact_and_expire_if_changed(
+        collection_mutation_view cmv,
+        column_id id,
+        const abstract_type& type,
+        row_tombstone base_tomb,
+        gc_clock::time_point query_time,
+        can_gc_fn& can_gc,
+        gc_clock::time_point gc_before,
+        compaction_garbage_collector* collector);
 
 // Expires cells based on query_time. Expires tombstones based on max_purgeable and gc_before.
 // Removes cells covered by base_tomb or cmv.tomb.
@@ -265,6 +283,10 @@ collection_mutation_compact_and_expire_result compact_and_expire(
         compaction_garbage_collector* collector);
 
 collection_mutation merge(const abstract_type&, collection_mutation_view, collection_mutation_view);
+
+// Size from which collection merges take their large-collection fast paths.
+// Tests lower it, per shard, to cover them.
+extern thread_local size_t collection_fast_path_min_size;
 
 collection_mutation difference(const abstract_type&, collection_mutation_view, collection_mutation_view);
 

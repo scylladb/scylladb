@@ -7,6 +7,7 @@
  */
 
 #include "utils/assert.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/on_internal_error.hh"
 #include "types/collection.hh"
 #include "types/user.hh"
@@ -142,7 +143,7 @@ auto fmt::formatter<collection_mutation_view::printer>::format(const collection_
     return fmt::format_to(out, "}}");
 }
 
-collection_mutation_compact_and_expire_result compact_and_expire(
+collection_mutation_compact_and_expire_if_changed_result compact_and_expire_if_changed(
         collection_mutation_view cmv,
         column_id id,
         const abstract_type& type,
@@ -166,8 +167,35 @@ collection_mutation_compact_and_expire_result compact_and_expire(
     }
     t.apply(base_tomb.regular());
     collection_mutation_writer survivors(tomb);
+    auto rest = cmv.data;
+    auto n = collection_mutation_detail::skip_header(rest);
+    // Usually nothing is dropped, expired or purged: then return no copy, and otherwise
+    // copy the leading run of unchanged elements verbatim instead of element by element.
+    if (tomb == cmv.tomb()) {
+        const auto shadowable = base_tomb.shadowable().tomb();
+        const auto first = rest;
+        uint32_t kept = 0;
+        for (; n; --n, ++kept) {
+            auto next = rest;
+            auto cell = atomic_cell_view::from_bytes(collection_mutation_detail::read_element(next).second);
+            if (!cell.is_live() || cell.has_expired(query_time) || cell.is_covered_by(t, false) || cell.is_covered_by(shadowable, false)) {
+                break;
+            }
+            rest = next;
+        }
+        res.live_cells += kept;
+        if (!n) {
+            if (collector) {
+                collector->collect(id, collection_mutation());
+            }
+            return {std::nullopt, std::move(res)};
+        }
+        survivors.append_serialized(first.prefix(first.size_bytes() - rest.size_bytes()), kept);
+    }
     collection_mutation_writer losers(purged_tomb);
-    for (auto& [key, cell] : cmv) {
+    for (; n; --n) {
+        auto [key, value] = collection_mutation_detail::read_element(rest);
+        auto cell = atomic_cell_view::from_bytes(value);
         auto cannot_erase_cell = [&] {
             // Only row tombstones can be shadowable, (collection) cell tombstones aren't
             return cell.deletion_time() >= gc_before || !can_gc(tombstone(cell.timestamp(), cell.deletion_time()), is_shadowable::no);
@@ -201,6 +229,19 @@ collection_mutation_compact_and_expire_result compact_and_expire(
         collector->collect(id, std::move(losers).finish());
     }
     return {std::move(survivors).finish(), std::move(res)};
+}
+
+collection_mutation_compact_and_expire_result compact_and_expire(
+        collection_mutation_view cmv,
+        column_id id,
+        const abstract_type& type,
+        row_tombstone base_tomb,
+        gc_clock::time_point query_time,
+        can_gc_fn& can_gc,
+        gc_clock::time_point gc_before,
+        compaction_garbage_collector* collector) {
+    auto r = compact_and_expire_if_changed(cmv, id, type, base_tomb, query_time, can_gc, gc_before, collector);
+    return {r.collection ? std::move(*r.collection) : collection_mutation(cmv), r.result};
 }
 
 /// A CollectionMutationAdaptor is a static interface that adapts a collection
@@ -338,6 +379,13 @@ void collection_mutation_writer::push_back(managed_bytes_view key, atomic_cell_v
     ++_size;
 }
 
+void collection_mutation_writer::append_serialized(managed_bytes_view elements, uint32_t count) {
+    for (bytes_view frag : fragment_range(elements)) {
+        _out.write(frag);
+    }
+    _size += count;
+}
+
 collection_mutation collection_mutation_writer::finish() && {
     if (empty()) {
         return {};
@@ -357,6 +405,93 @@ collection_mutation collection_mutation_writer::finish() && {
             return collection_mutation(tmp);
         });
     });
+}
+
+thread_local size_t collection_fast_path_min_size = 64 * 1024;
+
+// Copies the large side's unchanged runs verbatim; byte-identical to the general merge.
+// Requires small.tomb() to be empty, so nothing on the large side is filtered out.
+template <typename C>
+static collection_mutation
+merge_into_large(collection_mutation_view large, collection_mutation_view small, bool large_is_a, C&& key_type) {
+    struct element {
+        managed_bytes_view key;
+        atomic_cell_view value;
+    };
+    const auto tomb = large.tomb();
+    utils::chunked_vector<element> ins;
+    for (auto&& [key, value] : small) {
+        // Same filter as the general merge: a tombstone wins over an equal timestamp.
+        if (!tomb || tomb.timestamp < value.timestamp()) {
+            ins.push_back({key, value});
+        }
+    }
+
+    managed_bytes_view body = large.data;
+    auto remaining = collection_mutation_detail::skip_header(body);
+    const size_t header_size = large.data.size_bytes() - body.size_bytes() - sizeof(int32_t);
+    uint32_t count = remaining;
+
+    // Replace `replaced` bytes at `offset` of the large side's elements with `e`.
+    struct splice {
+        size_t offset;
+        size_t replaced;
+        element e;
+    };
+    utils::chunked_vector<splice> splices;
+    splices.reserve(ins.size());
+    size_t out_size = large.data.size_bytes();
+    auto insert_at = [&] (size_t offset, size_t replaced, element e) {
+        out_size += 2 * sizeof(int32_t) + e.key.size_bytes() + e.value.serialize().size_bytes() - replaced;
+        splices.push_back({offset, replaced, e});
+    };
+
+    auto next = ins.begin();
+    managed_bytes_view cur = body;
+    while (next != ins.end() && remaining) {
+        const size_t offset = body.size_bytes() - cur.size_bytes();
+        auto [key, value_bytes] = collection_mutation_detail::read_element(cur);
+        auto value = atomic_cell_view::from_bytes(value_bytes);
+        --remaining;
+        const size_t size = body.size_bytes() - cur.size_bytes() - offset;
+        std::strong_ordering cmp = std::strong_ordering::less;
+        while (next != ins.end() && (cmp = key_type.compare(next->key, key)) < 0) {
+            insert_at(offset, 0, *next++);
+            ++count;
+        }
+        if (cmp == 0) {
+            // Same rule as the general merge: a's key, a's cell only if it compares greater.
+            const element s = *next++;
+            const bool a_wins = large_is_a ? compare_atomic_cell_for_merge(value, s.value) > 0 : compare_atomic_cell_for_merge(s.value, value) > 0;
+            const bool large_wins = a_wins == large_is_a;
+            // The result takes a's key, so a large b element stays as is when the keys are byte-equal.
+            if (!large_wins || (!large_is_a && s.key != key)) {
+                insert_at(offset, size, element{large_is_a ? key : s.key, large_wins ? value : s.value});
+            }
+        }
+    }
+    for (; next != ins.end(); ++next) {
+        insert_at(body.size_bytes(), 0, *next);
+        ++count;
+    }
+
+    managed_bytes ret(managed_bytes::initialized_later(), out_size);
+    managed_bytes_mutable_view out(ret);
+    write_fragmented(out, large.data.prefix(header_size));
+    write<int32_t>(out, count);
+    size_t copied = 0;
+    for (auto& sp : splices) {
+        write_fragmented(out, body.prefix(sp.offset - copied));
+        body.remove_prefix(sp.offset - copied + sp.replaced);
+        copied = sp.offset + sp.replaced;
+        write<int32_t>(out, sp.e.key.size_bytes());
+        write_fragmented(out, sp.e.key);
+        auto v = sp.e.value.serialize();
+        write<int32_t>(out, v.size_bytes());
+        write_fragmented(out, v);
+    }
+    write_fragmented(out, body);
+    return collection_mutation(std::move(ret));
 }
 
 template <typename C>
@@ -393,6 +528,15 @@ merge(collection_mutation_view a, collection_mutation_view b, C&& key_type) {
             // FIXME: should we consider TTLs too?
         });
     };
+
+    // Heuristic thresholds: below them re-serializing both sides is cheap enough.
+    const auto min_size = collection_fast_path_min_size;
+    if (a.data.size_bytes() >= min_size && b.data.size_bytes() * 8 <= a.data.size_bytes() && !b.tomb()) {
+        return merge_into_large(a, b, true, key_type);
+    }
+    if (b.data.size_bytes() >= min_size && a.data.size_bytes() * 8 <= b.data.size_bytes() && !a.tomb()) {
+        return merge_into_large(b, a, false, key_type);
+    }
 
     collection_mutation_writer merged(std::max(a.tomb(), b.tomb()));
 

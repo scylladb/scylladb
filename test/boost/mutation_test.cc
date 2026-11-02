@@ -8,6 +8,7 @@
 
 
 #include <random>
+#include <seastar/util/defer.hh>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/combine.hpp>
 #include "compaction/compaction_garbage_collector.hh"
@@ -285,6 +286,126 @@ SEASTAR_THREAD_TEST_CASE(test_collection_hash_truncated_cell) {
     auto expiring = atomic_cell::make_live(*empty_type, 1, bytes_view(), gc_clock::now(), std::chrono::seconds(10), atomic_cell::collection_member::yes);
     check(expiring, 12);
     check(expiring, 18);
+}
+
+// compact_and_expire() returns a collection with nothing to compact unchanged,
+// and still compacts one with a single expired element or a covering tombstone.
+SEASTAR_THREAD_TEST_CASE(test_collection_compact_and_expire_unchanged) {
+    auto set_type = set_type_impl::get_instance(long_type, true);
+    const auto now = gc_clock::now();
+    auto make = [&] (int n, tombstone tomb, int expired_at) {
+        collection_mutation_writer w(tomb);
+        for (int i = 0; i < n; ++i) {
+            auto key = long_type->decompose(int64_t(i));
+            if (i == expired_at) {
+                w.push_back(managed_bytes_view(key), atomic_cell::make_live(*bytes_type, 10, bytes(), now - std::chrono::seconds(1), std::chrono::seconds(10), atomic_cell::collection_member::yes));
+            } else {
+                w.push_back(managed_bytes_view(key), atomic_cell::make_live(*bytes_type, 10, bytes(), atomic_cell::collection_member::yes));
+            }
+        }
+        return std::move(w).finish();
+    };
+    auto bytes_of = [] (collection_mutation_view v) { return managed_bytes(v.data); };
+    auto compact = [&] (const collection_mutation& m, row_tombstone base) {
+        return compact_and_expire(m, 0, *set_type, base, now, always_gc, gc_clock::time_point::min(), nullptr);
+    };
+
+    // 20000 elements span several fragments.
+    for (int n : {1, 100, 20000}) {
+        for (auto tomb : {tombstone(), tombstone(5, now)}) {
+            auto m = make(n, tomb, -1);
+            auto r = compact(m, row_tombstone());
+            BOOST_REQUIRE(bytes_of(r.collection) == bytes_of(m));
+            BOOST_REQUIRE_EQUAL(r.result.live_cells, n);
+            BOOST_REQUIRE_EQUAL(r.result.dead_cells, 0);
+            BOOST_REQUIRE_EQUAL(r.result.collection_tombstones, bool(tomb));
+
+            BOOST_REQUIRE(!compact_and_expire_if_changed(m, 0, *set_type, row_tombstone(), now, always_gc, gc_clock::time_point::min(), nullptr).collection);
+
+            auto expired = make(n, tomb, n / 2);
+            auto re = compact(expired, row_tombstone());
+            BOOST_REQUIRE(bytes_of(re.collection) != bytes_of(expired));
+            BOOST_REQUIRE_EQUAL(re.result.live_cells, n - 1);
+            BOOST_REQUIRE_EQUAL(re.result.dead_cells, 1);
+            // The unchanged leading run is copied verbatim; the rest is rebuilt.
+            int i = 0;
+            collection_mutation_view(re.collection).for_each_element([&] (managed_bytes_view key, atomic_cell_view cell) {
+                BOOST_REQUIRE(managed_bytes(key) == managed_bytes(long_type->decompose(int64_t(i))));
+                BOOST_REQUIRE_EQUAL(cell.is_live(), i != n / 2);
+                ++i;
+                return true;
+            });
+            BOOST_REQUIRE_EQUAL(i, n);
+
+            // A row tombstone newer than the elements covers all of them.
+            auto rc = compact(m, row_tombstone(tombstone(20, now)));
+            BOOST_REQUIRE_EQUAL(rc.result.live_cells, 0);
+            BOOST_REQUIRE_EQUAL(rc.result.dead_cells, n);
+        }
+    }
+}
+
+// merge() splices a small delta into a large collection; the result must be
+// byte-identical to the general merge, in both argument orders.
+SEASTAR_THREAD_TEST_CASE(test_collection_merge_into_large_equivalence) {
+    auto map_type = map_type_impl::get_instance(int32_type, bytes_type, true);
+    auto set_type = set_type_impl::get_instance(long_type, true);
+    std::mt19937 rng(tests::random::get_int<uint32_t>());
+    auto rnd = [&] (int n) { return int(rng() % n); };
+    const auto now = gc_clock::now();
+
+    auto make_cell = [&] (const abstract_type& value_type, api::timestamp_type ts) {
+        switch (rnd(6)) {
+        case 0:
+            return atomic_cell::make_dead(ts, now);
+        case 1:
+            return atomic_cell::make_live(value_type, ts, bytes(rnd(40), 'e'), now + std::chrono::seconds(rnd(100)), std::chrono::seconds(100), atomic_cell::collection_member::yes);
+        default:
+            return atomic_cell::make_live(value_type, ts, bytes(rnd(40), 'v'), atomic_cell::collection_member::yes);
+        }
+    };
+    auto make = [&] (bool is_map, const std::vector<int64_t>& keys, tombstone tomb) {
+        collection_mutation_writer w(tomb);
+        for (auto k : keys) {
+            auto key = is_map ? int32_type->decompose(int32_t(k)) : long_type->decompose(k);
+            w.push_back(managed_bytes_view(key), make_cell(*bytes_type, rnd(4)));
+        }
+        return std::move(w).finish();
+    };
+    auto rnd_tomb = [&] (int chance) { return rnd(chance) ? tombstone() : tombstone(rnd(4), now); };
+    auto bytes_of = [] (const collection_mutation& m) { return managed_bytes(collection_mutation_view(m).data); };
+
+    const auto saved = collection_fast_path_min_size;
+    auto restore = seastar::defer([saved] () noexcept { collection_fast_path_min_size = saved; });
+    for (int iter = 0; iter < 300; ++iter) {
+        const bool is_map = rnd(2);
+        const abstract_type& type = is_map ? static_cast<const abstract_type&>(*map_type) : *set_type;
+        // Every 50th large side spans several 128 KB fragments.
+        const int n_large = iter % 50 == 0 ? 20000 : rnd(500);
+        std::vector<int64_t> large_keys, small_keys;
+        for (int i = 0; i < n_large; ++i) {
+            large_keys.push_back(rnd(4 * n_large + 10));
+        }
+        for (int i = rnd(6); i > 0; --i) {
+            // Half of the small keys collide with large ones.
+            small_keys.push_back(rnd(2) && n_large ? large_keys[rnd(n_large)] : rnd(4 * n_large + 10));
+        }
+        for (auto* v : {&large_keys, &small_keys}) {
+            std::ranges::sort(*v);
+            v->erase(std::unique(v->begin(), v->end()), v->end());
+        }
+        auto large = make(is_map, large_keys, rnd_tomb(3));
+        auto small = make(is_map, small_keys, rnd_tomb(4));
+        for (bool large_first : {true, false}) {
+            auto& a = large_first ? large : small;
+            auto& b = large_first ? small : large;
+            collection_fast_path_min_size = std::numeric_limits<size_t>::max();
+            auto expected = merge(type, a, b);
+            collection_fast_path_min_size = 0;
+            auto got = merge(type, a, b);
+            BOOST_REQUIRE_MESSAGE(bytes_of(got) == bytes_of(expected), fmt::format("iter {} large_first {} n_large {} n_small {}", iter, large_first, large_keys.size(), small_keys.size()));
+        }
+    }
 }
 
 // Unit tests for collection_mutation_writer and collection_mutation_view::iterator,
