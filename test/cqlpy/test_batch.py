@@ -7,7 +7,7 @@
 #############################################################################
 from cassandra import InvalidRequest
 from cassandra.cluster import NoHostAvailable
-from .util import new_test_table
+from .util import new_test_table, unique_key_int
 from .rest_api import scylla_inject_error
 
 
@@ -74,3 +74,145 @@ def test_batch_with_error(cql, table1):
         # exceptions::exception_code::SERVER_ERROR, it gets converted to NoHostAvailable by the driver
         with pytest.raises(NoHostAvailable, match="Value too large"):
             cql.execute(generate_big_batch(table1, 100) + injection_key)
+
+#############################################################################
+# The following tests were translated from scylla-dtest's batch_test.py.
+#############################################################################
+
+@pytest.fixture(scope='module')
+def clicks(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'userid int, url text, total counter, PRIMARY KEY (userid, url)') as table:
+        yield table
+
+@pytest.fixture(scope='module')
+def users(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, firstname text, lastname text') as table:
+        yield table
+
+# Test that a counter batch accepts counter updates, and applies them.
+# Translated from batch_test.py::TestBatch::test_counter_batch_accepts_counter_mutations.
+def test_counter_batch_accepts_counter_mutations(cql, clicks):
+    user1 = unique_key_int()
+    user2 = unique_key_int()
+    cql.execute(f"""
+        BEGIN COUNTER BATCH
+        UPDATE {clicks} SET total = total + 1 WHERE userid = {user1} AND url = 'http://foo.com'
+        UPDATE {clicks} SET total = total + 1 WHERE userid = {user1} AND url = 'http://bar.com'
+        UPDATE {clicks} SET total = total + 1 WHERE userid = {user2} AND url = 'http://baz.com'
+        APPLY BATCH
+    """)
+    assert sorted(cql.execute(f'SELECT userid, url, total FROM {clicks} WHERE userid IN ({user1}, {user2})')) == [
+        (user1, 'http://bar.com', 1), (user1, 'http://foo.com', 1), (user2, 'http://baz.com', 1)]
+
+# Test that a logged or unlogged batch accepts regular (non-counter) writes,
+# and applies them.
+# Translated from batch_test.py::TestBatch tests
+# test_logged_batch_accepts_regular_mutations and
+# test_unlogged_batch_accepts_regular_mutations.
+@pytest.mark.parametrize('batch_type', ['', 'UNLOGGED'])
+def test_batch_accepts_regular_mutations(cql, users, batch_type):
+    id1 = unique_key_int()
+    id2 = unique_key_int()
+    cql.execute(f"""
+        BEGIN {batch_type} BATCH
+        INSERT INTO {users} (id, firstname, lastname) VALUES ({id1}, 'Jack', 'Sparrow')
+        INSERT INTO {users} (id, firstname, lastname) VALUES ({id2}, 'Will', 'Turner')
+        APPLY BATCH
+    """)
+    assert sorted(cql.execute(f'SELECT * FROM {users} WHERE id IN ({id1}, {id2})')) == sorted([
+        (id1, 'Jack', 'Sparrow'), (id2, 'Will', 'Turner')])
+
+# Test that counter updates and regular writes can't be mixed in one batch,
+# and that a logged batch can't contain counter updates. Each kind of batch
+# has its own error message. For a logged batch, both errors apply: Scylla
+# reports that a logged batch can't contain counter updates, and Cassandra
+# reports that counter updates and regular writes can't be mixed.
+# Translated from batch_test.py::TestBatch tests
+# test_counter_batch_rejects_regular_mutations,
+# test_logged_batch_rejects_counter_mutations and
+# def_unlogged_batch_rejects_counter_mutations (which never ran, because
+# its name doesn't begin with "test").
+@pytest.mark.parametrize('batch_type,message', [
+    ('COUNTER', 'Cannot include non-counter statement in a counter batch'),
+    ('', 'Cannot include a counter statement in a logged batch|Counter and non-counter mutations cannot exist in the same batch'),
+    ('UNLOGGED', 'Counter and non-counter mutations cannot exist in the same batch')])
+def test_batch_rejects_mixed_mutations(cql, clicks, users, batch_type, message):
+    with pytest.raises(InvalidRequest, match=message):
+        cql.execute(f"""
+            BEGIN {batch_type} BATCH
+            UPDATE {clicks} SET total = total + 1 WHERE userid = 1 AND url = 'http://foo.com'
+            INSERT INTO {users} (id, firstname, lastname) VALUES (0, 'Jack', 'Sparrow')
+            APPLY BATCH
+        """)
+
+# Test that a logged batch can't contain counter updates, also when it
+# contains nothing else.
+# Added to the translation of batch_test.py::TestBatch::test_logged_batch_rejects_counter_mutations
+# above, because for that test's batch, which also has a regular write,
+# Cassandra reports a different error.
+def test_logged_batch_rejects_counter_mutations(cql, clicks):
+    with pytest.raises(InvalidRequest, match='Cannot include a counter statement in a logged batch'):
+        cql.execute(f"""
+            BEGIN BATCH
+            UPDATE {clicks} SET total = total + 1 WHERE userid = 1 AND url = 'http://foo.com'
+            APPLY BATCH
+        """)
+
+# Test that a logged batch writing to a table with gc_grace_seconds = 0
+# returns a warning to the client, because the gc_grace_seconds is used as
+# the TTL of the batchlog entries, so they may expire before being replayed.
+# Translated from batch_test.py::TestBatch::test_logged_batch_gcgs_below_threshold_single_table,
+# which looked for the warning in the log instead.
+@pytest.mark.xfail(reason='issue #2483')
+def test_logged_batch_gc_grace_seconds_0_warning(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, firstname text, lastname text', 'WITH gc_grace_seconds = 0') as table:
+        response_future = cql.execute_async(f"""
+            BEGIN BATCH
+            INSERT INTO {table} (id, firstname, lastname) VALUES (0, 'Jack', 'Sparrow')
+            INSERT INTO {table} (id, firstname, lastname) VALUES (1, 'Will', 'Turner')
+            APPLY BATCH
+        """)
+        response_future.result()
+        assert response_future.warnings == [
+            f'Executing a LOGGED BATCH on table [{table}], configured with a gc_grace_seconds of 0. '
+            'The gc_grace_seconds is used to TTL batchlog entries, so setting gc_grace_seconds too low '
+            'on tables involved in an atomic batch might cause batchlog entries to expire before being replayed.']
+
+# Like test_logged_batch_gc_grace_seconds_0_warning, with a batch writing to
+# two tables with gc_grace_seconds = 0: one warning names both tables.
+# Translated from batch_test.py::TestBatch::test_logged_batch_gcgs_below_threshold_multi_table.
+@pytest.mark.xfail(reason='issue #2483')
+def test_logged_batch_gc_grace_seconds_0_warning_two_tables(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, firstname text, lastname text', 'WITH gc_grace_seconds = 0') as table1, \
+         new_test_table(cql, test_keyspace, 'userid int, url text, PRIMARY KEY (userid, url)', 'WITH gc_grace_seconds = 0') as table2:
+        response_future = cql.execute_async(f"""
+            BEGIN BATCH
+            INSERT INTO {table1} (id, firstname, lastname) VALUES (0, 'Jack', 'Sparrow')
+            INSERT INTO {table2} (userid, url) VALUES (1, 'Will')
+            APPLY BATCH
+        """)
+        response_future.result()
+        assert response_future.warnings is not None and len(response_future.warnings) == 1
+        warning = response_future.warnings[0]
+        # The order of the two tables in the warning is unspecified
+        assert warning in [f'Executing a LOGGED BATCH on tables [{t1}, {t2}], configured with a gc_grace_seconds of 0. '
+                           'The gc_grace_seconds is used to TTL batchlog entries, so setting gc_grace_seconds too low '
+                           'on tables involved in an atomic batch might cause batchlog entries to expire before being replayed.'
+                           for t1, t2 in [(table1, table2), (table2, table1)]]
+
+# Test that an unlogged batch writing to a table with gc_grace_seconds = 0
+# doesn't return a warning: an unlogged batch doesn't use the batchlog.
+# Translated from batch_test.py::TestBatch::test_unlogged_batch_gcgs_below_threshold_should_not_print_warning.
+# The dtest looked for a message in the log which neither Scylla nor
+# Cassandra ever print, so it could never fail; this test checks that the
+# response has no warnings at all.
+def test_unlogged_batch_gc_grace_seconds_0_no_warning(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, firstname text, lastname text', 'WITH gc_grace_seconds = 0') as table:
+        response_future = cql.execute_async(f"""
+            BEGIN UNLOGGED BATCH
+            INSERT INTO {table} (id, firstname, lastname) VALUES (0, 'Jack', 'Sparrow')
+            INSERT INTO {table} (id, firstname, lastname) VALUES (1, 'Will', 'Turner')
+            APPLY BATCH
+        """)
+        response_future.result()
+        assert not response_future.warnings
