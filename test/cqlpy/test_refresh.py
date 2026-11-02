@@ -19,8 +19,8 @@ import requests
 from test.pylib.skip_types import skip_env
 
 from . import nodetool
-from .test_snapshot import table_dir
-from .util import new_test_table
+from .test_snapshot import restore_with_refresh, save_snapshot, snapshot_tables, table_dir
+from .util import new_test_table, unique_name
 
 # Test that loading sstables from the upload directory fails, with an error
 # message which explains why, when the directory isn't writable, when the
@@ -65,3 +65,35 @@ def test_refresh_bad_upload_directory(cql, test_keyspace, scylla_data_dir, scyll
             assert 'Must be either a regular file or a directory' in refresh_error()
         finally:
             os.remove(symlink)
+
+# Test loading the sstables of a snapshot back into the same table, after
+# it was truncated, more data was written to it and its compaction strategy
+# was changed to IncrementalCompactionStrategy: The table should have both
+# the snapshot's rows and the newer rows.
+# Translated from scylla-dtest's ics_compaction_test.py::TestIcsCompaction
+# tests test_strategy_to_ics_snapshot_refresh (from the other strategies)
+# and test_ics_sstables_refresh_with_collisions (from ICS, with more data
+# written after the snapshot), which wrote the data with cassandra-stress,
+# in sstables of 1 to 4 MB.
+@pytest.mark.parametrize('strategy', ['SizeTieredCompactionStrategy', 'LeveledCompactionStrategy',
+                                      'TimeWindowCompactionStrategy', 'IncrementalCompactionStrategy'])
+def test_refresh_snapshot_into_ics_table(cql, test_keyspace, scylla_data_dir, temp_workdir, scylla_only, strategy):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val text', f"WITH compaction = {{'class': '{strategy}'}}") as table:
+        def write(keys):
+            for key in keys:
+                cql.execute(f"INSERT INTO {table} (key, val) VALUES ({key}, 'value{key}')")
+                nodetool.flush(cql, table)
+        write(range(4))
+        tag = unique_name()
+        snapshot_tables(cql, [table], tag)
+        try:
+            saved = save_snapshot(cql, scylla_data_dir, table, tag, temp_workdir)
+        finally:
+            nodetool.del_snapshot(cql, tag)
+        # Truncate the table, so the snapshot's rows can only come back by
+        # loading its sstables
+        cql.execute(f'TRUNCATE {table}')
+        write(range(4, 8))
+        cql.execute(f"ALTER TABLE {table} WITH compaction = {{'class': 'IncrementalCompactionStrategy'}}")
+        restore_with_refresh(cql, scylla_data_dir, saved, table)
+        assert sorted(cql.execute(f'SELECT * FROM {table}')) == [(key, f'value{key}') for key in range(8)]
