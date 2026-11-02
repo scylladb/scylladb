@@ -4641,9 +4641,9 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
             }));
         }
         future<result<>> sync_write_to_batchlog() {
-            auto m = db::get_batchlog_mutation_for(_schema, _mutations, netw::messaging_service::current_version, _batch_write_time, _batch_uuid);
+            auto m = co_await db::get_batchlog_mutation_for_gently(_schema, _mutations, netw::messaging_service::current_version, _batch_write_time, _batch_uuid);
             tracing::trace(_trace_state, "Sending a batchlog write mutation");
-            return send_batchlog_mutation(std::move(m));
+            co_return co_await send_batchlog_mutation(std::move(m));
         };
         future<> async_remove_from_batchlog() {
             // delete batch

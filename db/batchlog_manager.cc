@@ -113,21 +113,31 @@ mutation get_batchlog_mutation_for(schema_ptr schema, managed_bytes data, int32_
     return m;
 }
 
+// The batch's data is its mutations' canonical forms, one after another.
 mutation get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, int32_t version, db::batchlog_stage stage, db_clock::time_point now, const utils::UUID& id) {
-    auto data = [&mutations] {
-        utils::chunked_vector<canonical_mutation> fm(mutations.begin(), mutations.end());
-        bytes_ostream out;
-        for (auto& m : fm) {
-            ser::serialize(out, m);
-        }
-        return std::move(out).to_managed_bytes();
-    }();
+    bytes_ostream out;
+    for (auto& m : mutations) {
+        ser::serialize(out, canonical_mutation(m));
+    }
+    return get_batchlog_mutation_for(std::move(schema), std::move(out).to_managed_bytes(), version, stage, now, id);
+}
 
-    return get_batchlog_mutation_for(std::move(schema), std::move(data), version, stage, now, id);
+// Same as above, yielding between mutations, for batches with many partitions.
+future<mutation> get_batchlog_mutation_for_gently(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, int32_t version, db::batchlog_stage stage, db_clock::time_point now, const utils::UUID& id) {
+    bytes_ostream out;
+    for (auto& m : mutations) {
+        ser::serialize(out, canonical_mutation(m));
+        co_await coroutine::maybe_yield();
+    }
+    co_return get_batchlog_mutation_for(std::move(schema), std::move(out).to_managed_bytes(), version, stage, now, id);
 }
 
 mutation get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, int32_t version, db_clock::time_point now, const utils::UUID& id) {
     return get_batchlog_mutation_for(std::move(schema), mutations, version, batchlog_stage::initial, now, id);
+}
+
+future<mutation> get_batchlog_mutation_for_gently(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, int32_t version, db_clock::time_point now, const utils::UUID& id) {
+    return get_batchlog_mutation_for_gently(std::move(schema), mutations, version, batchlog_stage::initial, now, id);
 }
 
 mutation get_batchlog_delete_mutation(schema_ptr schema, int32_t version, db::batchlog_stage stage, db_clock::time_point now, const utils::UUID& id) {
@@ -492,7 +502,7 @@ static future<db::all_batches_replayed> process_batch(
     try {
         if (send_failed) {
             blogger.debug("Moving batch {} to stage failed_replay", id);
-            auto m = get_batchlog_mutation_for(schema, mutations, netw::messaging_service::current_version, db::batchlog_stage::failed_replay, written_at, id);
+            auto m = co_await get_batchlog_mutation_for_gently(schema, mutations, netw::messaging_service::current_version, db::batchlog_stage::failed_replay, written_at, id);
             co_await sp.mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no, deadline);
         }
 
