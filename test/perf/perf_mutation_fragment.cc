@@ -7,6 +7,7 @@
  */
 
 #include <seastar/testing/perf_tests.hh>
+#include <seastar/util/defer.hh>
 
 #include "test/lib/simple_schema.hh"
 #include "test/perf/perf.hh"
@@ -302,7 +303,7 @@ PERF_TEST_F(narrow_row_hash, xx) {
     perf_tests::do_not_optimize(hash());
 }
 
-// A ~1 MB set<blob> (10k 90-byte elements) and near-copies of it (an append, an expiry):
+// A ~1 MB set<blob> (10k 90-byte elements) and near-copies (an append, a rewrite, an expiry):
 // the passes reads and read repair make over a large collection cell, timed one by one.
 class large_set {
 protected:
@@ -315,6 +316,7 @@ protected:
     collection_mutation _big;
     collection_mutation _delta;
     collection_mutation _merged;
+    collection_mutation _changed; // one element rewritten
     collection_mutation _expired; // element 9/10 in expired: ~90% copied verbatim, the rest per element
     std::optional<frozen_mutation> _frozen;
     std::optional<mutation> _m;
@@ -346,6 +348,7 @@ public:
         _big = make(keys, 1);
         _delta = make({keys[keys.size() / 2] + 1}, 2);
         _merged = merge(*_type, _big, _delta);
+        _changed = merge(*_type, _big, make({keys[keys.size() / 2]}, 2));
         _expired = merge(*_type, _big, make({keys[keys.size() * 9 / 10]}, 2, /* expired */ true));
         mutation m(_s, partition_key::from_single_value(*_s, int32_type->decompose(int32_t(0))));
         m.set_clustered_cell(clustering_key::make_empty(), _def, atomic_cell_or_collection(collection_mutation(collection_mutation_view(_big))));
@@ -356,8 +359,15 @@ public:
 
 // Read repair merges near-identical replica results.
 PERF_TEST_F(large_set, merge_near) { perf_tests::do_not_optimize(merge(*_type, _merged, _big)); }
+PERF_TEST_F(large_set, merge_near_general) {
+    auto restore = seastar::defer([saved = std::exchange(collection_fast_path_min_size, std::numeric_limits<size_t>::max())] () noexcept {
+        collection_fast_path_min_size = saved;
+    });
+    perf_tests::do_not_optimize(merge(*_type, _merged, _big));
+}
 PERF_TEST_F(large_set, difference_same) { perf_tests::do_not_optimize(difference(*_type, _big, _big)); }
 PERF_TEST_F(large_set, difference_delta) { perf_tests::do_not_optimize(difference(*_type, _merged, _big)); }
+PERF_TEST_F(large_set, difference_changed) { perf_tests::do_not_optimize(difference(*_type, _changed, _big)); }
 PERF_TEST_F(large_set, copy) { perf_tests::do_not_optimize(collection_mutation(collection_mutation_view(_big))); }
 PERF_TEST_F(large_set, merge) { perf_tests::do_not_optimize(merge(*_type, _big, _delta)); }
 PERF_TEST_F(large_set, compact) {

@@ -465,6 +465,146 @@ SEASTAR_THREAD_TEST_CASE(test_collection_freeze_unfreeze_round_trip) {
     }
 }
 
+// difference() skips the inputs' common prefix and suffix; the result must match the
+// element-by-element definition however much of a and b is common.
+SEASTAR_THREAD_TEST_CASE(test_collection_difference_equivalence) {
+    auto set_type = set_type_impl::get_instance(long_type, true);
+    std::mt19937 rng(tests::random::get_int<uint32_t>());
+    auto rnd = [&] (int n) { return int(rng() % n); };
+    const auto now = gc_clock::now();
+    using element = std::pair<bytes, atomic_cell>;
+
+    auto make_cell = [&] (api::timestamp_type ts) {
+        switch (rnd(6)) {
+        case 0: return atomic_cell::make_dead(ts, now);
+        case 1: return atomic_cell::make_live(*bytes_type, ts, bytes(rnd(40), 'e'), now + std::chrono::seconds(rnd(100)), std::chrono::seconds(100), atomic_cell::collection_member::yes);
+        default: return atomic_cell::make_live(*bytes_type, ts, bytes(rnd(40), 'v'), atomic_cell::collection_member::yes);
+        }
+    };
+    auto make = [&] (const std::vector<element>& elements, tombstone tomb) {
+        collection_mutation_writer w(tomb);
+        for (auto& [k, c] : elements) {
+            w.push_back(managed_bytes_view(k), atomic_cell_view(c));
+        }
+        return std::move(w).finish();
+    };
+    auto reference = [&] (const std::vector<element>& a, const std::vector<element>& b, tombstone ta, tombstone tb) {
+        std::vector<element> out;
+        for (auto& [k, c] : a) {
+            auto it = std::ranges::find_if(b, [&] (const element& e) { return e.first == k; });
+            if (it == b.end() || compare_atomic_cell_for_merge(atomic_cell_view(c), atomic_cell_view(it->second)) > 0) {
+                out.emplace_back(k, atomic_cell(*bytes_type, atomic_cell_view(c)));
+            }
+        }
+        return make(out, ta > tb ? ta : tombstone());
+    };
+    auto bytes_of = [] (const collection_mutation& m) { return managed_bytes(collection_mutation_view(m).data); };
+
+    const auto saved = collection_fast_path_min_size;
+    auto restore = seastar::defer([saved] () noexcept { collection_fast_path_min_size = saved; });
+    collection_fast_path_min_size = 0;
+    for (int iter = 0; iter < 300; ++iter) {
+        // Every 50th case spans several 128 KB fragments.
+        const int n = iter % 50 == 0 ? 20000 : rnd(300);
+        std::vector<int64_t> keys;
+        for (int i = 0; i < n; ++i) {
+            keys.push_back(rnd(4 * n + 10));
+        }
+        std::ranges::sort(keys);
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        std::vector<element> a;
+        for (auto k : keys) {
+            a.emplace_back(long_type->decompose(k), make_cell(rnd(4)));
+        }
+        // b is a with a few elements changed, dropped or added, so the common prefix varies.
+        std::vector<element> b;
+        for (auto& [k, c] : a) {
+            b.emplace_back(k, atomic_cell(*bytes_type, atomic_cell_view(c)));
+        }
+        for (int edits = rnd(4); edits > 0 && !b.empty(); --edits) {
+            auto i = rnd(b.size());
+            switch (rnd(3)) {
+            case 0: b[i].second = make_cell(rnd(4)); break;
+            case 1: b.erase(b.begin() + i); break;
+            default: b.emplace_back(long_type->decompose(int64_t(4 * n + 10 + rnd(100))), make_cell(rnd(4)));
+            }
+        }
+        std::ranges::sort(b, [] (const element& x, const element& y) { return long_type->less(x.first, y.first); });
+        b.erase(std::unique(b.begin(), b.end(), [] (const element& x, const element& y) { return x.first == y.first; }), b.end());
+        const tombstone ta = rnd(3) ? tombstone() : tombstone(rnd(4), now);
+        const tombstone tb = rnd(3) ? tombstone() : tombstone(rnd(4), now);
+        auto expected = reference(a, b, ta, tb);
+        auto got = difference(*set_type, make(a, ta), make(b, tb));
+        BOOST_REQUIRE_MESSAGE(bytes_of(got) == bytes_of(expected), fmt::format("iter {} n {} b {}", iter, a.size(), b.size()));
+    }
+}
+
+// merge() of two near-identical collections with equal tombstones skips their
+// common parts; the result must match the general merge.
+SEASTAR_THREAD_TEST_CASE(test_collection_merge_near_identical_equivalence) {
+    auto set_type = set_type_impl::get_instance(long_type, true);
+    std::mt19937 rng(tests::random::get_int<uint32_t>());
+    auto rnd = [&] (int n) { return int(rng() % n); };
+    const auto now = gc_clock::now();
+    using element = std::pair<bytes, atomic_cell>;
+
+    auto make_cell = [&] (api::timestamp_type ts) {
+        switch (rnd(6)) {
+        case 0: return atomic_cell::make_dead(ts, now);
+        case 1: return atomic_cell::make_live(*bytes_type, ts, bytes(rnd(40), 'e'), now + std::chrono::seconds(rnd(100)), std::chrono::seconds(100), atomic_cell::collection_member::yes);
+        default: return atomic_cell::make_live(*bytes_type, ts, bytes(rnd(40), 'v'), atomic_cell::collection_member::yes);
+        }
+    };
+    auto make = [&] (const std::vector<element>& elements, tombstone tomb) {
+        collection_mutation_writer w(tomb);
+        for (auto& [k, c] : elements) {
+            w.push_back(managed_bytes_view(k), atomic_cell_view(c));
+        }
+        return std::move(w).finish();
+    };
+    auto bytes_of = [] (const collection_mutation& m) { return managed_bytes(collection_mutation_view(m).data); };
+
+    const auto saved = collection_fast_path_min_size;
+    auto restore = seastar::defer([saved] () noexcept { collection_fast_path_min_size = saved; });
+    for (int iter = 0; iter < 300; ++iter) {
+        // Every 50th case spans several 128 KB fragments.
+        const int n = iter % 50 == 0 ? 20000 : rnd(300);
+        std::vector<int64_t> keys;
+        for (int i = 0; i < n; ++i) {
+            keys.push_back(rnd(4 * n + 10));
+        }
+        std::ranges::sort(keys);
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        std::vector<element> a;
+        for (auto k : keys) {
+            a.emplace_back(long_type->decompose(k), make_cell(rnd(4)));
+        }
+        std::vector<element> b;
+        for (auto& [k, c] : a) {
+            b.emplace_back(k, atomic_cell(*bytes_type, atomic_cell_view(c)));
+        }
+        for (int edits = rnd(4); edits > 0 && !b.empty(); --edits) {
+            auto i = rnd(b.size());
+            switch (rnd(3)) {
+            case 0: b[i].second = make_cell(rnd(4)); break;
+            case 1: b.erase(b.begin() + i); break;
+            default: b.emplace_back(long_type->decompose(int64_t(4 * n + 10 + rnd(100))), make_cell(rnd(4)));
+            }
+        }
+        std::ranges::sort(b, [] (const element& x, const element& y) { return long_type->less(x.first, y.first); });
+        b.erase(std::unique(b.begin(), b.end(), [] (const element& x, const element& y) { return x.first == y.first; }), b.end());
+        // Equal tombstones, sometimes covering some of the elements.
+        const tombstone t = rnd(3) ? tombstone() : tombstone(rnd(4), now);
+        auto ca = make(a, t);
+        auto cb = make(b, t);
+        collection_fast_path_min_size = std::numeric_limits<size_t>::max();
+        auto expected = merge(*set_type, ca, cb);
+        collection_fast_path_min_size = 0;
+        auto got = merge(*set_type, ca, cb);
+        BOOST_REQUIRE_MESSAGE(bytes_of(got) == bytes_of(expected), fmt::format("iter {} n {} b {} tomb {}", iter, a.size(), b.size(), t));
+    }
+}
+
 // Unit tests for collection_mutation_writer and collection_mutation_view::iterator,
 // which provide direct, zero-copy access to the serialized collection format.
 

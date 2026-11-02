@@ -6,9 +6,11 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <cstring>
 #include "utils/assert.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/on_internal_error.hh"
+#include "utils/small_vector.hh"
 #include "types/collection.hh"
 #include "types/user.hh"
 #include "types/concrete_types.hh"
@@ -631,17 +633,190 @@ merge_into_large(collection_mutation_view large, collection_mutation_view small,
 }
 
 template <typename C>
+static bool key_less(const C& key_type, managed_bytes_view k1, managed_bytes_view k2) {
+    return k1.with_linearized([&] (bytes_view k1) {
+        return k2.with_linearized([&] (bytes_view k2) {
+            return key_type.less(k1, k2);
+        });
+    });
+}
+
+// Length of the common prefix of two fragmented views.
+static size_t common_prefix(managed_bytes_view a, managed_bytes_view b) {
+    size_t n = 0;
+    while (!a.empty() && !b.empty()) {
+        auto fa = a.current_fragment();
+        auto fb = b.current_fragment();
+        const auto len = std::min(fa.size(), fb.size());
+        if (std::memcmp(fa.data(), fb.data(), len)) {
+            return n + (std::mismatch(fa.begin(), fa.begin() + len, fb.begin()).first - fa.begin());
+        }
+        n += len;
+        a.remove_prefix(len);
+        b.remove_prefix(len);
+    }
+    return n;
+}
+
+// Length of the common suffix of two fragmented views.
+static size_t common_suffix(managed_bytes_view a, managed_bytes_view b) {
+    utils::small_vector<bytes_view, 16> fa, fb;
+    for (auto f : fragment_range(a)) { fa.push_back(f); }
+    for (auto f : fragment_range(b)) { fb.push_back(f); }
+    size_t n = 0;
+    auto ia = fa.rbegin();
+    auto ib = fb.rbegin();
+    bytes_view ca, cb;
+    while (true) {
+        if (ca.empty()) { if (ia == fa.rend()) { break; } ca = *ia++; }
+        if (cb.empty()) { if (ib == fb.rend()) { break; } cb = *ib++; }
+        const auto len = std::min(ca.size(), cb.size());
+        const auto* pa = ca.data() + ca.size() - len;
+        const auto* pb = cb.data() + cb.size() - len;
+        if (std::memcmp(pa, pb, len)) {
+            return n + (std::mismatch(ca.rbegin(), ca.rbegin() + len, cb.rbegin()).first - ca.rbegin());
+        }
+        n += len;
+        ca.remove_suffix(len);
+        cb.remove_suffix(len);
+    }
+    return n;
+}
+
+// Advances both element streams past the whole elements within their `prefix` identical leading
+// bytes; returns the number of elements skipped on each side.
+static uint32_t skip_common_prefix(managed_bytes_view& ra, managed_bytes_view& rb, uint32_t& na, uint32_t& nb, size_t prefix) {
+    uint32_t total = 0;
+    while (na && nb && prefix) {
+        const auto frag = ra.current_fragment().substr(0, prefix);
+        size_t len = 0;
+        uint32_t skipped = 0;
+        while (skipped < std::min(na, nb)) {
+            const auto size = collection_mutation_detail::contiguous_element_size(frag.substr(len));
+            if (!size) {
+                break;
+            }
+            len += size;
+            ++skipped;
+        }
+        if (!len) {
+            // The next element crosses a fragment boundary: measure it the slow way.
+            auto peek = ra;
+            collection_mutation_detail::read_element(peek);
+            len = ra.size_bytes() - peek.size_bytes();
+            if (len > prefix) {
+                break;
+            }
+            skipped = 1;
+        }
+        ra.remove_prefix(len);
+        rb.remove_prefix(len);
+        prefix -= len;
+        na -= skipped;
+        nb -= skipped;
+        total += skipped;
+    }
+    return total;
+}
+
+namespace {
+
+// Walks `n` serialized elements of `r`, keeping the stream from the current element on.
+struct element_cursor {
+    managed_bytes_view& r;
+    uint32_t& n;
+    std::optional<std::pair<managed_bytes_view, atomic_cell_view>> cur;
+    managed_bytes_view before; // stream including cur
+    uint32_t n_before = 0;
+    void next() {
+        before = r;
+        n_before = n;
+        if (n) {
+            --n;
+            auto [key, value] = collection_mutation_detail::read_element(r);
+            cur.emplace(key, atomic_cell_view::from_bytes(value));
+        } else {
+            cur.reset();
+        }
+    }
+};
+
+} // anonymous namespace
+
+// With equal tombstones, elements identical on both sides merge to themselves (unless covered),
+// so only the middle between the common prefix and suffix is compared. Same result as merge().
+template <typename C>
+static collection_mutation merge_near_identical(collection_mutation_view a, collection_mutation_view b, size_t prefix, size_t suffix, C&& key_type) {
+    const tombstone t = a.tomb();
+    collection_mutation_writer merged(t);
+    auto live = [t] (atomic_cell_view c) { return !t || t.timestamp < c.timestamp(); };
+    auto emit_all = [&] (managed_bytes_view r, uint32_t n) {
+        if (!t) {
+            merged.append_serialized(r, n); // nothing to filter
+            return;
+        }
+        for (; n; --n) {
+            auto [key, value] = collection_mutation_detail::read_element(r);
+            auto cell = atomic_cell_view::from_bytes(value);
+            if (live(cell)) {
+                merged.push_back(key, cell);
+            }
+        }
+    };
+
+    auto ra = a.data;
+    auto rb = b.data;
+    auto na = collection_mutation_detail::skip_header(ra);
+    auto nb = collection_mutation_detail::skip_header(rb);
+    const auto ra0 = ra;
+    const auto skipped = skip_common_prefix(ra, rb, na, nb, prefix);
+    emit_all(ra0.prefix(ra0.size_bytes() - ra.size_bytes()), skipped);
+
+    auto less = [&] (managed_bytes_view k1, managed_bytes_view k2) { return key_less(key_type, k1, k2); };
+    element_cursor sa{ra, na};
+    element_cursor sb{rb, nb};
+    sa.next();
+    sb.next();
+    while (sa.cur || sb.cur) {
+        if (sa.cur && sb.cur && sa.before.size_bytes() == sb.before.size_bytes() && sa.before.size_bytes() <= suffix) {
+            emit_all(sa.before, sa.n_before); // the rest is identical on both sides
+            break;
+        }
+        if (!sb.cur || (sa.cur && less(sa.cur->first, sb.cur->first))) {
+            if (live(sa.cur->second)) {
+                merged.push_back(sa.cur->first, sa.cur->second);
+            }
+            sa.next();
+        } else if (!sa.cur || less(sb.cur->first, sa.cur->first)) {
+            if (live(sb.cur->second)) {
+                merged.push_back(sb.cur->first, sb.cur->second);
+            }
+            sb.next();
+        } else {
+            const bool a_live = live(sa.cur->second);
+            const bool b_live = live(sb.cur->second);
+            if (a_live && b_live) {
+                merged.push_back(sa.cur->first, compare_atomic_cell_for_merge(sa.cur->second, sb.cur->second) > 0 ? sa.cur->second : sb.cur->second);
+            } else if (a_live) {
+                merged.push_back(sa.cur->first, sa.cur->second);
+            } else if (b_live) {
+                merged.push_back(sb.cur->first, sb.cur->second);
+            }
+            sa.next();
+            sb.next();
+        }
+    }
+    return std::move(merged).finish();
+}
+
+template <typename C>
 requires std::is_base_of_v<abstract_type, std::remove_reference_t<C>>
 static collection_mutation
 merge(collection_mutation_view a, collection_mutation_view b, C&& key_type) {
     using element_type = collection_mutation_view::iterator::value_type;
 
     auto compare = [&] (const element_type& e1, const element_type& e2) {
-        return e1.first.with_linearized([&] (bytes_view k1) {
-            return e2.first.with_linearized([&] (bytes_view k2) {
-                return key_type.less(k1, k2);
-            });
-        });
+        return key_less(key_type, e1.first, e2.first);
     };
 
     auto merge = [] (const element_type& e1, const element_type& e2) {
@@ -672,6 +847,23 @@ merge(collection_mutation_view a, collection_mutation_view b, C&& key_type) {
     }
     if (b.data.size_bytes() >= min_size && a.data.size_bytes() * 8 <= b.data.size_bytes() && !a.tomb()) {
         return merge_into_large(b, a, false, key_type);
+    }
+
+    // Read repair merges near-identical replica results; skip their common parts.
+    if (a.tomb() == b.tomb() && std::min(a.data.size_bytes(), b.data.size_bytes()) >= min_size) {
+        auto ra = a.data;
+        auto rb = b.data;
+        collection_mutation_detail::skip_header(ra);
+        collection_mutation_detail::skip_header(rb);
+        const auto body = std::min(ra.size_bytes(), rb.size_bytes());
+        const auto prefix = common_prefix(ra, rb);
+        // Taken after the prefix, so identical cells need no reverse scan.
+        ra.remove_prefix(prefix);
+        rb.remove_prefix(prefix);
+        const auto suffix = common_suffix(ra, rb);
+        if ((prefix + suffix) * 2 >= body) {
+            return merge_near_identical(a, b, prefix, suffix, key_type);
+        }
     }
 
     collection_mutation_writer merged(std::max(a.tomb(), b.tomb()));
@@ -708,31 +900,42 @@ requires std::is_base_of_v<abstract_type, std::remove_reference_t<C>>
 static collection_mutation
 difference(collection_mutation_view a, collection_mutation_view b, C&& key_type)
 {
-    using element_type = collection_mutation_view::iterator::value_type;
-
     tombstone diff_tomb;
     if (a.tomb() > b.tomb()) {
         diff_tomb = a.tomb();
     }
     collection_mutation_writer diff(diff_tomb);
 
-    auto less = [&] (const element_type& e1, const element_type& e2) {
-        return e1.first.with_linearized([&] (bytes_view k1) {
-            return e2.first.with_linearized([&] (bytes_view k2) {
-                return key_type.less(k1, k2);
-            });
-        });
-    };
+    auto ra = a.data;
+    auto rb = b.data;
+    auto na = collection_mutation_detail::skip_header(ra);
+    auto nb = collection_mutation_detail::skip_header(rb);
 
-    auto it = b.begin();
-    for (auto&& c : a) {
-        while (it != b.end() && less(*it, c)) {
-            ++it;
+    // Read repair diffs near-identical large cells: identical leading elements cannot contribute,
+    // and the walk ends where both sides reach their identical trailing elements.
+    size_t suffix = 0;
+    if (std::min(ra.size_bytes(), rb.size_bytes()) >= collection_fast_path_min_size) {
+        skip_common_prefix(ra, rb, na, nb, common_prefix(ra, rb));
+        // Taken after the prefix, so identical cells need no reverse scan.
+        suffix = common_suffix(ra, rb);
+    }
+
+    auto less = [&] (managed_bytes_view k1, managed_bytes_view k2) { return key_less(key_type, k1, k2); };
+
+    element_cursor cb{rb, nb};
+    cb.next();
+    for (; na; --na) {
+        if ((ra.size_bytes() == cb.before.size_bytes() || ra.size_bytes() == rb.size_bytes()) && ra.size_bytes() <= suffix) {
+            break; // the rest is identical on both sides
         }
-        if (it == b.end() || !key_type.equal(it->first, c.first)
-            || compare_atomic_cell_for_merge(c.second, it->second) > 0) {
-
-            diff.push_back(c.first, c.second);
+        auto [key, value] = collection_mutation_detail::read_element(ra);
+        auto cell = atomic_cell_view::from_bytes(value);
+        while (cb.cur && less(cb.cur->first, key)) {
+            cb.next();
+        }
+        if (!cb.cur || !key_type.equal(cb.cur->first, key)
+            || compare_atomic_cell_for_merge(cell, cb.cur->second) > 0) {
+            diff.push_back(key, cell);
         }
     }
 
