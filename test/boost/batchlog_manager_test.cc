@@ -26,6 +26,7 @@
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/config.hh"
+#include "exceptions/exceptions.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "message/messaging_service.hh"
@@ -867,6 +868,66 @@ SEASTAR_TEST_CASE(test_batchlog_replay_write_time) {
                 }
             }
         }
+    }, cfg);
+}
+
+// Once its batchlog entry is written, a logged batch must be applied in full,
+// even if a replica rejected part of it with the large data guardrail: the
+// replay used to be rejected the same way, so the entry stayed in the batchlog
+// for good and failed every repair's hints and batchlog flush.
+// Reproduces "Batchlog and hint replay are rejected by the large data guardrail
+// forever, breaking repair".
+SEASTAR_TEST_CASE(test_batchlog_replay_bypasses_large_data_guardrails) {
+    cql_test_config cfg;
+    cfg.db_config->batchlog_replay_cleanup_after_replays.set_value("9999999", utils::config_file::config_source::Internal);
+    cfg.db_config->compaction_rows_count_warning_threshold.set_value("10", utils::config_file::config_source::Internal);
+    cfg.db_config->rows_count_fail_threshold.set_value("10", utils::config_file::config_source::Internal);
+    cfg.batchlog_replay_timeout = 0s;
+    cfg.batchlog_delay = 9999h;
+
+    return do_with_cql_env_thread([] (cql_test_env& env) -> void {
+        auto& bm = env.batchlog_manager().local();
+
+        env.execute_cql("CREATE TABLE tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH large_data_guardrails_enabled = true").get();
+        for (int ck = 0; ck < 20; ++ck) {
+            env.execute_cql(format("INSERT INTO tbl (pk, ck, v) VALUES (0, {}, 0)", ck)).get();
+        }
+        // The replica checks the row count of a partition against the records of its sstables,
+        // which are written for partitions with more rows than compaction_rows_count_warning_threshold.
+        replica::database::flush_table_on_all_shards(env.db(), "ks", "tbl").get();
+
+        auto rejected_by_large_data_guardrail = [] (const exceptions::mutation_write_failure_exception& e) {
+            return !e.failed_replicas.empty() && std::ranges::all_of(e.failed_replicas, [] (const exceptions::replica_failure& f) {
+                return f.reason == exceptions::request_failure_reason::SCYLLA_LARGE_DATA_REJECTED;
+            });
+        };
+
+        BOOST_REQUIRE_EXCEPTION(env.execute_cql("BEGIN BATCH "
+                    "INSERT INTO tbl (pk, ck, v) VALUES (0, 100, 1); "
+                    "INSERT INTO tbl (pk, ck, v) VALUES (1, 0, 1); "
+                    "APPLY BATCH").get(),
+                exceptions::mutation_write_failure_exception, [&] (const exceptions::mutation_write_failure_exception& e) {
+            // Not BATCH_LOG: the client is told that the batch is in the batchlog and will be replayed.
+            return e.type == db::write_type::BATCH && rejected_by_large_data_guardrail(e);
+        });
+        BOOST_REQUIRE_EQUAL(bm.count_all_batches().get(), 1);
+        assert_that(env.execute_cql("SELECT v FROM tbl WHERE pk = 1 AND ck = 0").get())
+            .is_rows()
+            .with_rows({{int32_type->decompose(1)}});
+        assert_that(env.execute_cql("SELECT v FROM tbl WHERE pk = 0 AND ck = 100").get())
+            .is_rows()
+            .is_empty();
+
+        // Repair's batchlog flush replays without cleanup, and fails unless every batch is replayed.
+        BOOST_REQUIRE(bm.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no).get() == db::all_batches_replayed::yes);
+        BOOST_REQUIRE_EQUAL(bm.count_all_batches().get(), 0);
+        assert_that(env.execute_cql("SELECT v FROM tbl WHERE pk = 0 AND ck = 100").get())
+            .is_rows()
+            .with_rows({{int32_type->decompose(1)}});
+
+        // Only the replay skips the guardrail.
+        BOOST_REQUIRE_EXCEPTION(env.execute_cql("INSERT INTO tbl (pk, ck, v) VALUES (0, 101, 1)").get(),
+                exceptions::mutation_write_failure_exception, rejected_by_large_data_guardrail);
     }, cfg);
 }
 
