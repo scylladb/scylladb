@@ -608,4 +608,18 @@ SEASTAR_THREAD_TEST_CASE(test_rejects_dev_null) {
     }
 }
 
+// The startup check refuses what starting the sink refuses, and writes
+// nothing to a pipe it accepts.
+SEASTAR_THREAD_TEST_CASE(test_startup_check) {
+    test_pipe pipe;
+    audit::audit_stdout_storage_helper::check(pipe.path).get();
+    BOOST_REQUIRE(pipe.in.read().get().empty());
+
+    tmpdir dir;
+    auto path = (dir.path() / "stdout").native();
+    file_desc::open(path, O_CREAT | O_WRONLY, 0600);
+    BOOST_REQUIRE_EXCEPTION(audit::audit_stdout_storage_helper::check(path).get(), audit::audit_exception,
+            exception_predicate::message_contains("is a regular file"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
