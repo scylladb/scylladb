@@ -23,7 +23,7 @@
 #include "types/types.hh"
 #include "utils/error_injection.hh"
 
-// A schema change is committed shard by shard, shard 0 first (see schema_applier::commit()).
+// A schema change is committed shard by shard, shard 0 first (see schema_and_topology_applier::commit()).
 // The tests below pause the applier in between and send requests built on shard 0 to shard 1
 // in that window, reproducing scylladb/scylladb#23831, scylladb/scylladb#14146 and SCYLLADB-3847.
 // The requests must wait for shard 1 to commit the change, see global_schema_ptr::get().
