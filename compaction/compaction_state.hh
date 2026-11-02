@@ -104,6 +104,11 @@ public:
     // Raised by any function running under run_with_compaction_disabled();
     long compaction_disabled_counter = 0;
 
+    // Set by automatic scrub if compactions are disabled.
+    // If set, the compaction reenabler will retrigger automatic scrub instead
+    // of the periodic timer.
+    bool automatic_scrub_blocked = false;
+
     // Signaled whenever a compaction task completes.
     condition_variable compaction_done;
 
