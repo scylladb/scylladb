@@ -39,19 +39,26 @@ def test_snapshot_ttl(cql, test_keyspace):
         nodetool.take_snapshot(cql, table, tag, ttl=f"{ttl}s")
         expires_at = time.time() + ttl + 1
 
-        # Verify that the snapshot exists
-        snapshots = nodetool.list_snapshots(cql)
-        print(f"Snapshots for {table}: {snapshots}")
-        infos = has_snapshot(snapshots, tag)
-        assert len(infos) == 1, f"Expected to find {tag} in {snapshots=}, found {len(infos)} infos"
-        # Currently, Cassandra returns the snapshot creation and expiration times in nodetool listsnapshots.
-        # Scylla does not support that yet
-        info = infos[0]
-        if info.get("created_at"):
-            created_at = float(info["created_at"])
-            assert info.get("expires_at")
-            expires_at = float(info["expires_at"])
-            assert expires_at - created_at == ttl
+        try:
+            # Verify that the snapshot exists
+            snapshots = nodetool.list_snapshots(cql)
+            print(f"Snapshots for {table}: {snapshots}")
+            infos = has_snapshot(snapshots, tag)
+            assert len(infos) == 1, f"Expected to find {tag} in {snapshots=}, found {len(infos)} infos"
+            # Currently, Cassandra returns the snapshot creation and expiration times in nodetool listsnapshots.
+            # Scylla does not support that yet
+            info = infos[0]
+            if info.get("created_at"):
+                created_at = float(info["created_at"])
+                assert info.get("expires_at")
+                expires_at = float(info["expires_at"])
+                assert expires_at - created_at == ttl
+        finally:
+            # Delete the snapshot, so it doesn't remain until it expires.
+            # A remaining snapshot keeps the dropped table's directory, so a
+            # later test which reuses the table's name would find two
+            # directories for it.
+            nodetool.del_snapshot(cql, tag)
 
 #############################################################################
 # The following tests were translated from scylla-dtest's
