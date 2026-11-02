@@ -2156,3 +2156,120 @@ def test_delete_range_with_condition(cql, test_keyspace):
         for condition in ['IF EXISTS', 'IF v1 = 1', 'IF v1 >= 1 AND v1 < 3']:
             with pytest.raises(InvalidRequest, match='DELETE statements must restrict all PRIMARY KEY columns with equality relations in order to delete non static columns'):
                 cql.execute(f"DELETE FROM {table} WHERE pk = 1 AND ck < '2019-11-21' AND ck >= '2019-11-19' {condition}")
+
+# The following tests check that reads from sstables correctly skip, or
+# don't skip, sstables by the range of clustering keys in each sstable.
+# Each write is flushed to a separate sstable, and the reads use BYPASS
+# CACHE, so they read the sstables. Each test runs with two compaction
+# strategies (with compaction disabled), because Scylla selects the sstables
+# to read differently for TimeWindowCompactionStrategy. The tests are
+# scylla_only because BYPASS CACHE and NullCompactionStrategy are Scylla
+# extensions.
+# Translated from scylla-dtest's clustering_key_filter_test.py::TestClusteringKeyFilter.
+# The dtests started Scylla with the row cache disabled instead of using
+# BYPASS CACHE.
+@pytest.fixture(params=['TimeWindowCompactionStrategy', 'NullCompactionStrategy'])
+def clustering_filter_compaction(request):
+    return f"WITH compaction = {{'class': '{request.param}', 'enabled': 'false'}}"
+
+def select_bypass_cache(cql, query):
+    return [tuple(r) for r in cql.execute(f'{query} BYPASS CACHE')]
+
+# Test that a partition tombstone in an sstable which doesn't contain any
+# row in the queried clustering range is still applied: here, 'key2' is
+# deleted in an sstable which contains a row of 'key1' with ck 'c' but no
+# row in the queried range ['a', 'b'].
+# Translated from scylla-dtest's clustering_key_filter_test.py::TestClusteringKeyFilter::test_check_consistence_after_row_tombstone.
+def test_clustering_filter_partition_tombstone(cql, test_keyspace, clustering_filter_compaction, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p1 text, c1 text, r1 int, PRIMARY KEY (p1, c1)', clustering_filter_compaction) as table:
+        cql.execute(f"INSERT INTO {table} (p1, c1, r1) VALUES ('key1', 'a', 1)")
+        nodetool.flush(cql, table)
+        cql.execute(f"INSERT INTO {table} (p1, c1, r1) VALUES ('key2', 'b', 1)")
+        nodetool.flush(cql, table)
+        assert select_bypass_cache(cql, f'SELECT COUNT(*) FROM {table}') == [(2,)]
+        cql.execute(f"INSERT INTO {table} (p1, c1, r1) VALUES ('key1', 'c', 1)")
+        cql.execute(f"DELETE FROM {table} WHERE p1 = 'key2'")
+        nodetool.flush(cql, table)
+        assert select_bypass_cache(cql, f'SELECT COUNT(*) FROM {table}') == [(2,)]
+        assert select_bypass_cache(cql, f"SELECT p1, c1 FROM {table} WHERE p1 IN ('key1', 'key2') AND c1 >= 'a' AND c1 <= 'b'") == [('key1', 'a')]
+
+# Test clustering ranges on a table with one clustering column, whose two
+# rows are in two sstables.
+# Translated from scylla-dtest's clustering_key_filter_test.py::TestClusteringKeyFilter::test_check_non_composite.
+def test_clustering_filter_one_column(cql, test_keyspace, clustering_filter_compaction, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p1 text, c1 text, r1 int, PRIMARY KEY (p1, c1)', clustering_filter_compaction) as table:
+        for c1 in ['a', 'b']:
+            cql.execute(f"INSERT INTO {table} (p1, c1, r1) VALUES ('key1', '{c1}', 1)")
+            nodetool.flush(cql, table)
+        assert select_bypass_cache(cql, f'SELECT COUNT(*) FROM {table}') == [(2,)]
+        def select(where):
+            return [r[0] for r in select_bypass_cache(cql, f"SELECT c1 FROM {table} WHERE p1 = 'key1' AND {where}")]
+        assert select("c1 <= 'a' AND c1 >= 'b'") == []
+        assert select("c1 >= 'a' AND c1 <= 'b'") == ['a', 'b']
+        assert select("c1 > 'a' AND c1 <= 'b'") == ['b']
+        assert select("c1 >= 'a' AND c1 < 'b'") == ['a']
+        assert select("c1 > 'a' AND c1 < 'b'") == []
+        assert select("c1 > 'a'") == ['b']
+        assert select("c1 < 'b'") == ['a']
+
+# Test clustering ranges on a table with two clustering columns, whose four
+# rows are in four sstables.
+# Translated from scylla-dtest's clustering_key_filter_test.py::TestClusteringKeyFilter::test_check_composite.
+def test_clustering_filter_two_columns(cql, test_keyspace, clustering_filter_compaction, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p1 text, c1 text, c2 text, r1 int, PRIMARY KEY (p1, c1, c2)', clustering_filter_compaction) as table:
+        for c1, c2 in [('a', '1'), ('a', '2'), ('b', '1'), ('b', '2')]:
+            cql.execute(f"INSERT INTO {table} (p1, c1, c2, r1) VALUES ('key1', '{c1}', '{c2}', 1)")
+            nodetool.flush(cql, table)
+        assert select_bypass_cache(cql, f'SELECT COUNT(*) FROM {table}') == [(4,)]
+        def select(where):
+            return select_bypass_cache(cql, f"SELECT c1, c2 FROM {table} WHERE p1 = 'key1' AND {where}")
+        assert select("c1 <= 'a' AND c1 >= 'b'") == []
+        assert select("c1 >= 'a' AND c1 <= 'b'") == [('a', '1'), ('a', '2'), ('b', '1'), ('b', '2')]
+        assert select("c1 > 'a' AND c1 <= 'b'") == [('b', '1'), ('b', '2')]
+        assert select("c1 >= 'a' AND c1 < 'b'") == [('a', '1'), ('a', '2')]
+        assert select("c1 > 'a' AND c1 < 'b'") == []
+        assert select("c1 > 'a'") == [('b', '1'), ('b', '2')]
+        assert select("c1 < 'b'") == [('a', '1'), ('a', '2')]
+        assert select("c1 = 'a' AND c2 > '1' AND c2 < '2'") == []
+        assert select("c1 = 'a' AND c2 >= '1' AND c2 < '2'") == [('a', '1')]
+        assert select("c1 = 'a' AND c2 > '1' AND c2 <= '2'") == [('a', '2')]
+        assert select("c1 = 'a' AND c2 >= '1' AND c2 <= '2'") == [('a', '1'), ('a', '2')]
+        assert select("c1 = 'a' AND c2 > '1'") == [('a', '2')]
+        assert select("c1 = 'a' AND c2 >= '1'") == [('a', '1'), ('a', '2')]
+
+# Test a query whose clustering range is [a, a] for the first clustering
+# column and (b, d) for the second, on an sstable whose minimum and maximum
+# clustering key are both (a, c): the sstable must not be skipped.
+# Translated from scylla-dtest's clustering_key_filter_test.py::TestClusteringKeyFilter::test_check_composite_2.
+def test_clustering_filter_two_columns_single_row(cql, test_keyspace, clustering_filter_compaction, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p1 text, c1 text, c2 text, r1 int, PRIMARY KEY (p1, c1, c2)', clustering_filter_compaction) as table:
+        cql.execute(f"INSERT INTO {table} (p1, c1, c2, r1) VALUES ('key1', 'a', 'c', 1)")
+        nodetool.flush(cql, table)
+        assert select_bypass_cache(cql, f"SELECT c1, c2 FROM {table} WHERE p1 = 'key1' AND c1 = 'a' AND c2 > 'b' AND c2 < 'd'") == [('a', 'c')]
+        assert select_bypass_cache(cql, f'SELECT COUNT(*) FROM {table}') == [(1,)]
+
+# Test that a counter wraps around when it passes the maximum (or minimum)
+# 64-bit integer. Issue #2225 asked to report an error instead, and was
+# closed as WONTFIX.
+# Translated from scylla-dtest's counter_tests.py::TestCounters::test_int_rollover.
+def test_counter_wraps_around(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 't int PRIMARY KEY, c counter') as table:
+        cql.execute(f'UPDATE {table} SET c = c + {sys.maxsize} WHERE t = 0')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, sys.maxsize)]
+        cql.execute(f'UPDATE {table} SET c = c + 1 WHERE t = 0')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, -sys.maxsize - 1)]
+        cql.execute(f'UPDATE {table} SET c = c - 1 WHERE t = 0')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, sys.maxsize)]
+
+# Test that a counter update with an UNSET_VALUE increment does nothing - in
+# particular, it doesn't create a counter for a key that doesn't have one.
+# Translated from scylla-dtest's counter_tests.py::TestCounters::test_prepare_unset_value,
+# which updated 1000 keys instead of 10.
+def test_counter_update_unset_value(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 't int PRIMARY KEY, c counter') as table:
+        cql.execute(f'UPDATE {table} SET c = c + 1 WHERE t = 0')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, 1)]
+        update = cql.prepare(f'UPDATE {table} SET c = c + ? WHERE t = ?')
+        for key in range(10):
+            cql.execute(update, [UNSET_VALUE, key])
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, 1)]
