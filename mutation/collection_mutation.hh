@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <seastar/core/future.hh>
 #include "utils/chunked_vector.hh"
 #include "schema/schema_fwd.hh"
 #include "gc_clock.hh"
@@ -295,6 +296,11 @@ collection_mutation difference(const abstract_type&, collection_mutation_view, c
 // Only the final collection-mutation blob is allocated, no intermediate allocations needed.
 // Safe to use in LSA, it won't produce garbage.
 collection_mutation read_from_collection_cell_view(const abstract_type&, const ser::collection_cell_view&);
+// Same, yielding inside the cell so that a large collection does not stall.
+// Not for LSA: compaction could move the output buffer while it yields.
+seastar::future<collection_mutation> read_from_collection_cell_view_gently(const ser::collection_cell_view&);
+// Size of a collection cell from which the gentle (un)freezing paths yield inside it.
+constexpr size_t gentle_collection_min_size = 128 * 1024;
 
 // Serializes the given collection of cells to a sequence of bytes ready to be sent over the CQL protocol.
 bytes_ostream serialize_for_cql(const abstract_type&, collection_mutation_view);

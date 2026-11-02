@@ -18,6 +18,8 @@
 #include "idl/mutation.dist.impl.hh"
 
 #include "collection_mutation.hh"
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 collection_mutation::collection_mutation() : _data(managed_bytes::initialized_later{}, sizeof(uint8_t) + sizeof(int32_t)) {
     auto out = managed_bytes_mutable_view(_data);
@@ -244,56 +246,76 @@ collection_mutation_compact_and_expire_result compact_and_expire(
     return {r.collection ? std::move(*r.collection) : collection_mutation(cmv), r.result};
 }
 
-/// A CollectionMutationAdaptor is a static interface that adapts a collection
-/// element (an iterator value type) to the serialization requirements of
-/// serialize_collection_mutation(). It provides static methods to measure the
-/// serialized sizes and to write the key and value of each element into a buffer.
-template <typename Adaptor, typename Element>
-concept CollectionMutationAdaptor = requires(const Element& e, managed_bytes_mutable_view& out) {
-    { Adaptor::key_size(e) } -> std::convertible_to<size_t>;
-    { Adaptor::value_size(e) } -> std::convertible_to<size_t>;
-    { Adaptor::write_key(e, out) };
-    { Adaptor::write_value(e, out) };
-};
-
-template <typename Adaptor, typename Iterator>
-    requires CollectionMutationAdaptor<Adaptor, std::iter_value_t<Iterator>>
-static collection_mutation serialize_collection_mutation(
-        const tombstone& tomb,
-        std::ranges::subrange<Iterator> cells) {
-    auto element_size = [] (size_t c, auto&& e) -> size_t {
-        return c + 8 + Adaptor::key_size(e) + Adaptor::value_size(e);
-    };
-    auto size = std::ranges::fold_left(cells, (size_t)4, element_size);
-    size += 1;
-    if (tomb) {
-        size += sizeof(int64_t) + sizeof(int64_t);
-    }
-    managed_bytes ret(managed_bytes::initialized_later(), size);
-    managed_bytes_mutable_view out(ret);
-    write<uint8_t>(out, uint8_t(bool(tomb)));
-    if (tomb) {
-        write<int64_t>(out, tomb.timestamp);
-        write<int64_t>(out, tomb.deletion_time.time_since_epoch().count());
-    }
-    auto writek = [&out] (auto& kv) {
-        write<int32_t>(out, Adaptor::key_size(kv));
-        Adaptor::write_key(kv, out);
-    };
-    auto writev = [&out] (auto& kv) {
-        write<int32_t>(out, Adaptor::value_size(kv));
-        Adaptor::write_value(kv, out);
-    };
-    // FIXME: overflow?
-    write<int32_t>(out, std::ranges::distance(cells));
-    for (auto&& kv : cells) {
-        writek(kv);
-        writev(kv);
-    }
-    return collection_mutation(std::move(ret));
-}
-
 namespace {
+
+// A collection_element as laid out by idl/mutation.idl.hh, parsed from one
+// contiguous frame. Only leading fields are read, so appended fields are ignored.
+struct frozen_collection_element {
+    // Variant alternatives of collection_element::value, in IDL order.
+    enum kind_type : uint32_t { live, expiring, dead };
+    bytes_view key;
+    kind_type kind;
+    api::timestamp_type timestamp;
+    bytes_view value;
+    gc_clock::time_point time; // expiry or deletion time
+    gc_clock::duration ttl;
+
+    static bytes_view read_bytes(seastar::simple_memory_input_stream& in) {
+        auto len = ser::deserialize(in, std::type_identity<uint32_t>());
+        auto p = in.begin();
+        in.skip(len);
+        return bytes_view(reinterpret_cast<const int8_t*>(p), len);
+    }
+
+    explicit frozen_collection_element(bytes_view frame) {
+        seastar::simple_memory_input_stream in(reinterpret_cast<const char*>(frame.data()), frame.size());
+        in.skip(sizeof(uint32_t)); // element frame
+        key = read_bytes(in);
+        in.skip(sizeof(uint32_t)); // variant frame
+        kind = kind_type(ser::deserialize(in, std::type_identity<uint32_t>()));
+        switch (kind) {
+        case expiring:
+            in.skip(sizeof(uint32_t)); // expiring_cell frame
+            ttl = ser::deserialize(in, std::type_identity<gc_clock::duration>());
+            time = ser::deserialize(in, std::type_identity<gc_clock::time_point>());
+            [[fallthrough]];
+        case live:
+            in.skip(sizeof(uint32_t)); // live_cell frame
+            timestamp = ser::deserialize(in, std::type_identity<api::timestamp_type>());
+            value = read_bytes(in);
+            break;
+        case dead:
+            in.skip(sizeof(uint32_t)); // tombstone frame; dead_cell itself is final
+            timestamp = ser::deserialize(in, std::type_identity<api::timestamp_type>());
+            time = ser::deserialize(in, std::type_identity<gc_clock::time_point>());
+            break;
+        default:
+            utils::on_internal_error("Trying to deserialize cell in unknown state");
+        }
+    }
+
+    size_t cell_size() const {
+        switch (kind) {
+        case live: return atomic_cell_type::live_serialized_size(value.size());
+        case expiring: return atomic_cell_type::live_expiring_serialized_size(value.size());
+        case dead: return atomic_cell_type::dead_serialized_size();
+        }
+        __builtin_unreachable();
+    }
+
+    void write_to(managed_bytes_mutable_view& out) const {
+        write<int32_t>(out, key.size());
+        write_fragmented(out, single_fragmented_view(key));
+        const auto size = cell_size();
+        write<int32_t>(out, size);
+        switch (kind) {
+        case live: atomic_cell_type::write_live(out, timestamp, single_fragment_range(value)); break;
+        case expiring: atomic_cell_type::write_live(out, timestamp, single_fragment_range(value), time, ttl); break;
+        case dead: atomic_cell_type::write_dead(out, timestamp, time); break;
+        }
+        out.remove_prefix(size);
+    }
+};
 
 struct serialized_cell_adaptor {
     static size_t key_size(const ser::collection_element_view& v) {
@@ -344,12 +366,126 @@ struct serialized_cell_adaptor {
     }
 };
 
+size_t element_size(const frozen_collection_element& e) {
+    return 2 * sizeof(int32_t) + e.key.size() + e.cell_size();
+}
+
+void write_element(managed_bytes_mutable_view& out, const frozen_collection_element& e) {
+    e.write_to(out);
+}
+
+size_t element_size(const ser::collection_element_view& e) {
+    return 2 * sizeof(int32_t) + serialized_cell_adaptor::key_size(e) + serialized_cell_adaptor::value_size(e);
+}
+
+void write_element(managed_bytes_mutable_view& out, const ser::collection_element_view& e) {
+    write<int32_t>(out, serialized_cell_adaptor::key_size(e));
+    serialized_cell_adaptor::write_key(e, out);
+    write<int32_t>(out, serialized_cell_adaptor::value_size(e));
+    serialized_cell_adaptor::write_value(e, out);
+}
+
+// Calls fn on each of the `remaining` elements of `in`, advancing both; a preemptible call may stop early.
+// Frames within one fragment are parsed in place, as the generic IDL views cost thousands of instructions.
+template <typename Fn>
+void for_each_frozen_element(utils::input_stream& in, uint32_t& remaining, bool preemptible, Fn&& fn) {
+    seastar::with_serialized_stream(in, [&] (auto& s) {
+        for (uint32_t i = 0; remaining; --remaining, ++i) {
+            // Checked per element, as elements can be large; i > 0 guarantees progress.
+            if (preemptible && i && seastar::need_preempt()) {
+                return;
+            }
+            bytes_view frag;
+            if constexpr (requires { s.first_fragment_data(); }) {
+                // A substream shares its parent's fragment, which can extend past the stream.
+                frag = bytes_view(reinterpret_cast<const int8_t*>(s.first_fragment_data()), std::min(s.first_fragment_size(), s.size()));
+            } else {
+                frag = bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size());
+            }
+            if (frag.size() >= sizeof(uint32_t)) {
+                const auto frame = seastar::read_le<uint32_t>(reinterpret_cast<const char*>(frag.data()));
+                if (frame <= frag.size()) {
+                    fn(frozen_collection_element(frag.substr(0, frame)));
+                    s.skip(frame);
+                    continue;
+                }
+            }
+            fn(ser::deserialize(s, std::type_identity<ser::collection_element_view>()));
+        }
+    });
+}
+
+// Sizes the output exactly in a first pass, then writes it: this also runs under LSA
+// (memtable apply), where slack would be garbage.
+struct frozen_collection_decoder {
+    tombstone tomb;
+    utils::input_stream in;
+    uint32_t count;
+    utils::input_stream sizing_in;
+    uint32_t sizing_left;
+    uint32_t left;
+    size_t size;
+    std::optional<managed_bytes> buf;
+    managed_bytes_mutable_view out;
+
+    // Positioned at the element count.
+    static utils::input_stream elements(const ser::collection_cell_view& collection) {
+        auto in = collection.v;
+        ser::skip(in, std::type_identity<uint32_t>());
+        ser::skip(in, std::type_identity<ser::tombstone_view>());
+        return in;
+    }
+
+    explicit frozen_collection_decoder(const ser::collection_cell_view& collection)
+            : tomb(collection.tomb())
+            , in(elements(collection))
+            , count(ser::deserialize(in, std::type_identity<uint32_t>()))
+            , sizing_in(in)
+            , sizing_left(count)
+            , left(count)
+            , size(sizeof(uint8_t) + (tomb ? 2 * sizeof(int64_t) : 0) + sizeof(int32_t)) {
+    }
+
+    // Returns true when done.
+    bool decode(bool preemptible) {
+        if (!buf) {
+            for_each_frozen_element(sizing_in, sizing_left, preemptible, [this] (const auto& e) { size += element_size(e); });
+            if (sizing_left) {
+                return false;
+            }
+            buf.emplace(managed_bytes::initialized_later(), size);
+            out = managed_bytes_mutable_view(*buf);
+            write<uint8_t>(out, uint8_t(bool(tomb)));
+            if (tomb) {
+                write<int64_t>(out, tomb.timestamp);
+                write<int64_t>(out, tomb.deletion_time.time_since_epoch().count());
+            }
+            // FIXME: overflow?
+            write<int32_t>(out, count);
+        }
+        for_each_frozen_element(in, left, preemptible, [this] (const auto& e) { write_element(out, e); });
+        return !left;
+    }
+
+    collection_mutation finish() && {
+        return collection_mutation(std::move(*buf));
+    }
+};
+
 }
 
 collection_mutation read_from_collection_cell_view(const abstract_type& type, const ser::collection_cell_view& collection) {
-    auto tomb = collection.tomb();
-    auto cells = collection.elements();
-    return serialize_collection_mutation<serialized_cell_adaptor>(tomb, std::ranges::subrange(cells.begin(), cells.end()));
+    frozen_collection_decoder d(collection);
+    d.decode(false);
+    return std::move(d).finish();
+}
+
+future<collection_mutation> read_from_collection_cell_view_gently(const ser::collection_cell_view& collection) {
+    frozen_collection_decoder d(collection);
+    while (!d.decode(true)) {
+        co_await coroutine::maybe_yield();
+    }
+    co_return std::move(d).finish();
 }
 
 collection_mutation_writer::collection_mutation_writer(::tombstone tomb) : _tomb(tomb) {

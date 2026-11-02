@@ -408,6 +408,63 @@ SEASTAR_THREAD_TEST_CASE(test_collection_merge_into_large_equivalence) {
     }
 }
 
+// A frozen collection cell must unfreeze to the same bytes, whatever the cell
+// kinds, the legacy 32-bit ttl encoding, or elements split across fragments.
+SEASTAR_THREAD_TEST_CASE(test_collection_freeze_unfreeze_round_trip) {
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("m", map_type_impl::get_instance(int32_type, bytes_type, true))
+            .with_column("sm", map_type_impl::get_instance(int32_type, bytes_type, true), column_kind::static_column)
+            .build();
+    const auto& def = *s->get_column_definition(to_bytes("m"));
+    const auto& sdef = *s->get_column_definition(to_bytes("sm"));
+    const auto ckey = clustering_key::from_single_value(*s, int32_type->decompose(int32_t(1)));
+    const auto now = gc_clock::now();
+    const bool saved = ser::gc_clock_using_3_1_0_serialization;
+    auto restore = seastar::defer([saved] () noexcept { ser::gc_clock_using_3_1_0_serialization = saved; });
+    for (bool v3_1 : {false, true}) {
+        ser::gc_clock_using_3_1_0_serialization = v3_1;
+        for (bool tomb : {false, true}) {
+            collection_mutation_writer w(tomb ? tombstone(5, now) : tombstone());
+            for (int i = 0; i < 2000; ++i) {
+                // A few large values force elements to straddle fragments.
+                auto value = bytes(i % 500 == 7 ? 200000 : i % 50, 'v');
+                auto cell = i % 3 == 0 ? atomic_cell::make_dead(10 + i, now)
+                        : i % 3 == 1 ? atomic_cell::make_live(*bytes_type, 10 + i, value, atomic_cell::collection_member::yes)
+                        : atomic_cell::make_live(*bytes_type, 10 + i, value, now + std::chrono::seconds(i), std::chrono::seconds(i + 1), atomic_cell::collection_member::yes);
+                w.push_back(managed_bytes_view(int32_type->decompose(int32_t(i))), std::move(cell));
+            }
+            // Many fixed-size elements end chunks exactly on element boundaries.
+            for (int i = 2000; i < 60000; ++i) {
+                w.push_back(managed_bytes_view(int32_type->decompose(int32_t(i))), atomic_cell::make_live(*bytes_type, 1, bytes_view(), atomic_cell::collection_member::yes));
+            }
+            auto cm = std::move(w).finish();
+            mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(int32_t(0))));
+            m.set_clustered_cell(ckey, def, atomic_cell_or_collection(collection_mutation(collection_mutation_view(cm))));
+            m.set_static_cell(sdef, atomic_cell_or_collection(collection_mutation(collection_mutation_view(cm))));
+            auto fm = freeze(m);
+            // The gentle variants must encode and decode the same bytes.
+            BOOST_REQUIRE(freeze_gently(m).get().representation() == fm.representation());
+            for (auto back : {fm.unfreeze(s), unfreeze_gently(fm, s).get()}) {
+                const auto* row = back.partition().find_row(*s, ckey);
+                BOOST_REQUIRE(row);
+                const auto* cell = row->find_cell(def.id);
+                BOOST_REQUIRE(cell);
+                BOOST_REQUIRE(cell->as_collection_mutation().data == collection_mutation_view(cm).data);
+                const auto* scell = back.partition().static_row().find_cell(sdef.id);
+                BOOST_REQUIRE(scell);
+                BOOST_REQUIRE(scell->as_collection_mutation().data == collection_mutation_view(cm).data);
+            }
+            // The ordered path read repair uses (frozen_mutation::consume_gently).
+            mutation_rebuilder_v2 rebuilder(s);
+            auto rebuilt = fm.consume_gently(s, rebuilder).get().result;
+            BOOST_REQUIRE(rebuilt);
+            assert_that(std::move(*rebuilt)).is_equal_to(m);
+        }
+    }
+}
+
 // Unit tests for collection_mutation_writer and collection_mutation_view::iterator,
 // which provide direct, zero-copy access to the serialized collection format.
 
