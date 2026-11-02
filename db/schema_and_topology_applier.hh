@@ -158,7 +158,7 @@ class pending_schema_getter;
 // Schema_applier encapsulates intermediate state needed to construct schema objects from
 // set of rows read from system tables (see struct schema_state). It does atomic (per shard)
 // application of a new schema.
-class schema_applier {
+class schema_and_topology_applier {
     using keyspace_name = sstring;
 
     sharded<service::storage_proxy>& _proxy;
@@ -208,7 +208,7 @@ class schema_applier {
 public:
     // If reload_topology is true, the change also reloads the topology state
     // machine state from system.topology (see apply_persisted()).
-    schema_applier(
+    schema_and_topology_applier(
             sharded<service::storage_proxy>& proxy,
             sharded<service::storage_service>& ss,
             sharded<db::system_keyspace>& sys_ks,
@@ -235,7 +235,7 @@ public:
 private:
     // Update is called after mutations are applied, it should create
     // all updates but not yet commit them to a subsystem (i.e. copy on write style).
-    // All changes should be visible only to schema_applier object but not to other subsystems.
+    // All changes should be visible only to schema_and_topology_applier object but not to other subsystems.
     future<> update();
     // Makes updates visible. Before calling this function in memory state as observed by other
     // components should not yet change. The function atomically switches current state with

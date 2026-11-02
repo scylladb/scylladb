@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
-#include "schema_applier.hh"
+#include "schema_and_topology_applier.hh"
 
 #include <memory>
 #include <seastar/util/noncopyable_function.hh>
@@ -217,7 +217,7 @@ static read_table_names_of_keyspace(sharded<service::storage_proxy>& proxy, cons
     }) | std::ranges::to<std::vector>();
 }
 
-future<> schema_applier::merge_keyspaces()
+future<> schema_and_topology_applier::merge_keyspaces()
 {
     /*
      * - we don't care about entriesOnlyOnLeft() or entriesInCommon(), because only the changes are of interest to us
@@ -427,7 +427,7 @@ static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, con
 }
 
 // see the comments for merge_keyspaces()
-future<> schema_applier::merge_types()
+future<> schema_and_topology_applier::merge_types()
 {
     auto diff = diff_rows(_before.types, _after.types);
     co_await _affected_user_types.start();
@@ -552,7 +552,7 @@ in_progress_types_storage_per_shard& in_progress_types_storage::local() {
 // that when a base schema and a subset of its views are modified together (i.e.,
 // upon an alter table or alter type statement), then they are published together
 // as well, without any deferring in-between.
-future<> schema_applier::merge_tables_and_views()
+future<> schema_and_topology_applier::merge_tables_and_views()
 {
     auto& user_types = _types_storage.local();
     auto ctxt = _proxy.local().local_db().get_schema_ctxt();
@@ -758,7 +758,7 @@ static void drop_cached_func(replica::database& db, const query::result_set_row&
     }
 }
 
-future<> schema_applier::merge_functions() {
+future<> schema_and_topology_applier::merge_functions() {
     auto diff = diff_rows(_before.functions, _after.functions);
     co_await _functions_batch.start();
     co_await _functions_batch.invoke_on_all(coroutine::lambda([&] (cql3::functions::change_batch& batch) -> future<> {
@@ -783,7 +783,7 @@ future<> schema_applier::merge_functions() {
     }));
 }
 
-future<> schema_applier::merge_aggregates() {
+future<> schema_and_topology_applier::merge_aggregates() {
     auto diff = diff_aggregates_rows(_before.aggregates, _after.aggregates, _before.scylla_aggregates, _after.scylla_aggregates);
 
     co_await _functions_batch.invoke_on_all([&] (cql3::functions::change_batch& batch)-> future<> {
@@ -823,7 +823,7 @@ static extracted_cdc extract_cdc(std::map<table_id, schema_mutations> tables) {
     return extracted_cdc{std::move(tables), std::move(cdc_tables)};
 }
 
-future<schema_persisted_state> schema_applier::get_schema_persisted_state() {
+future<schema_persisted_state> schema_and_topology_applier::get_schema_persisted_state() {
     auto tables_and_cdc = co_await read_tables_for_keyspaces(_proxy, _keyspaces, table_kind::table, _affected_tables);
     auto [tables, cdc] = extract_cdc(std::move(tables_and_cdc));
 
@@ -841,7 +841,7 @@ future<schema_persisted_state> schema_applier::get_schema_persisted_state() {
     co_return v;
 }
 
-future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
+future<> schema_and_topology_applier::prepare(utils::chunked_vector<mutation>& muts) {
     schema_ptr s = keyspaces();
     for (auto& mutation : muts) {
         replica::update_tablet_metadata_change_hint(_tablet_hint, mutation);
@@ -892,10 +892,10 @@ future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
 
 class pending_schema_getter : public service::schema_getter {
 private:
-    schema_applier& _sa;
+    schema_and_topology_applier& _sa;
     sharded<replica::database>& _db;
 public:
-    pending_schema_getter(schema_applier& sa) :
+    pending_schema_getter(schema_and_topology_applier& sa) :
             _sa(sa), _db(sa._proxy.local().get_db()) {
     };
 
@@ -953,7 +953,7 @@ public:
     };
 };
 
-future<> schema_applier::update_tablets() {
+future<> schema_and_topology_applier::update_tablets() {
     // Has to be after tablets and views change is prepared
     // otherwise this preparation will generate orphaned erms.
     if (_tablet_hint || _topology_change) {
@@ -970,7 +970,7 @@ future<> schema_applier::update_tablets() {
 
 // Loads metadata into a single source of truth to ensure consistency.
 // It will be committed later if required by the current schema change.
-future<> schema_applier::load_mutable_token_metadata() {
+future<> schema_and_topology_applier::load_mutable_token_metadata() {
     if (_topology_change) {
         co_return co_await _pending_token_metadata.assign(
                 co_await _ss.local().prepare_topology_token_metadata(*_topology_change, _tablet_hint));
@@ -984,9 +984,9 @@ future<> schema_applier::load_mutable_token_metadata() {
     co_await _pending_token_metadata.assign(current_token_metadata);
 }
 
-future<> schema_applier::update() {
+future<> schema_and_topology_applier::update() {
     co_await utils::get_local_injector().inject("schema_applier_update_fail",
-            [] { return std::make_exception_ptr(std::runtime_error("injected failure in schema_applier::update")); });
+            [] { return std::make_exception_ptr(std::runtime_error("injected failure in schema_and_topology_applier::update")); });
     _after = co_await get_schema_persisted_state();
     co_await load_mutable_token_metadata();
     co_await merge_keyspaces();
@@ -997,7 +997,7 @@ future<> schema_applier::update() {
     co_await merge_aggregates();
 }
 
-void schema_applier::commit_tables_and_views() {
+void schema_and_topology_applier::commit_tables_and_views() {
     auto& sharded_db = _proxy.local().get_db();
     auto& db = sharded_db.local();
     auto& diff = _affected_tables_and_views;
@@ -1044,7 +1044,7 @@ void schema_applier::commit_tables_and_views() {
     }
 }
 
-void schema_applier::commit_on_shard(replica::database& db, uint64_t commit_gen) {
+void schema_and_topology_applier::commit_on_shard(replica::database& db, uint64_t commit_gen) {
     // commit keyspace operations
     for (auto& ks_per_shard : _affected_keyspaces.created) {
         auto ks = ks_per_shard[this_shard_id()].release();
@@ -1093,7 +1093,7 @@ void schema_applier::commit_on_shard(replica::database& db, uint64_t commit_gen)
 
 // TODO: move per shard logic directly to raft so that all subsystems can be updated together
 // (requires switching all affected subsystems to 'applier' interface first)
-future<> schema_applier::commit() {
+future<> schema_and_topology_applier::commit() {
     auto& sharded_db = _proxy.local().get_db();
     // Adding and dropping tables, or changing tablet metadata, uses this
     // locking mechanism to prevent changes to tables_metadata during preemptive
@@ -1121,7 +1121,7 @@ future<> schema_applier::commit() {
     _metadata_locks = nullptr;
 }
 
-future<> schema_applier::finalize_tables_and_views() {
+future<> schema_and_topology_applier::finalize_tables_and_views() {
     auto& sharded_db = _proxy.local().get_db();
     auto& diff = _affected_tables_and_views;
 
@@ -1192,7 +1192,7 @@ future<> schema_applier::finalize_tables_and_views() {
     });
 }
 
-future<> schema_applier::post_commit() {
+future<> schema_and_topology_applier::post_commit() {
     co_await finalize_tables_and_views();
     auto& sharded_db = _proxy.local().get_db();
     co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
@@ -1244,7 +1244,7 @@ future<> schema_applier::post_commit() {
     co_return;
 }
 
-future<> schema_applier::destroy() {
+future<> schema_and_topology_applier::destroy() {
     co_await _affected_user_types.stop();
     co_await _affected_tables_and_views.tables_and_views.stop();
     co_await _pending_token_metadata.destroy();
@@ -1252,7 +1252,7 @@ future<> schema_applier::destroy() {
     co_await _functions_batch.stop();
 }
 
-future<> schema_applier::apply_persisted() {
+future<> schema_and_topology_applier::apply_persisted() {
     SCYLLA_ASSERT(this_shard_id() == 0);
     if (_reload_topology) {
         // Reading the topology state enables the cluster features it lists, which

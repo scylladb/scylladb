@@ -91,7 +91,7 @@
 #include "db/config.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "db/schema_tables.hh"
-#include "db/schema_applier.hh"
+#include "db/schema_and_topology_applier.hh"
 #include "db/view/view_builder.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
@@ -796,7 +796,7 @@ future<> storage_service::finish_topology_state_change(topology_state_change& ch
 
 future<> storage_service::topology_state_load() {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    db::schema_tables::schema_applier ap(_qp.proxy().container(), container(), _sys_ks, true);
+    db::schema_tables::schema_and_topology_applier ap(_qp.proxy().container(), container(), _sys_ks, true);
     co_await ap.apply_persisted().finally([&ap] {
         return ap.destroy();
     });

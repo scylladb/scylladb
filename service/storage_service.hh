@@ -84,7 +84,7 @@ class view_builder;
 class view_building_worker;
 }
 namespace schema_tables {
-class schema_applier;
+class schema_and_topology_applier;
 }
 }
 
@@ -412,7 +412,7 @@ private:
     }
 
     friend void check_raft_rpc_scheduling_group(storage_service&, std::string_view);
-    friend class db::schema_tables::schema_applier;
+    friend class db::schema_tables::schema_and_topology_applier;
 public:
 
     const gms::gossiper& gossiper() const noexcept {
@@ -1087,7 +1087,7 @@ private:
 
     // Topology state machine state read from system.topology. The schema applier
     // builds token metadata from it and commits both together with the schema
-    // (see db::schema_tables::schema_applier).
+    // (see db::schema_tables::schema_and_topology_applier).
     struct topology_state_change {
         topology new_topology;
         token_metadata_ptr prev_token_metadata;

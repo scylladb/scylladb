@@ -1449,7 +1449,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint_split_with_tombstone) {
         );
         auto mut2 = builder.build();
 
-        // Build hint incrementally, as schema_applier::prepare() does
+        // Build hint incrementally, as schema_and_topology_applier::prepare() does
         locator::tablet_metadata_change_hint hint;
         replica::update_tablet_metadata_change_hint(hint, mut1);
         replica::update_tablet_metadata_change_hint(hint, mut2);

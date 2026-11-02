@@ -138,7 +138,7 @@ public:
             // If the table doesn't exist, it means it was already dropped.
             // This cannot happen if the table wasn't created yet on the node
             // because the state machine is created only after the table is created
-            // (see `schema_applier::commit_on_shard()` and `storage_service::commit_token_metadata_change()`).
+            // (see `schema_and_topology_applier::commit_on_shard()` and `storage_service::commit_token_metadata_change()`).
             // In this case, we should just ignore mutations without throwing an error.
             logger.log(log_level::warn, rate_limit, "apply(): table {} was already dropped, ignoring mutations", _tablet.table);
             note_batch_discarded(command);
@@ -280,7 +280,7 @@ future<schema_ptr> schema_store::resolve_and_upgrade(frozen_mutation& m) {
             }
         }
         if (!schema) {
-            // Old schema are TTLed after 10 days (see comment in `schema_applier::finalize_tables_and_views()`),
+            // Old schema are TTLed after 10 days (see comment in `schema_and_topology_applier::finalize_tables_and_views()`),
             // so this error theoretically may be triggered if a node is stuck longer than this.
             // But in practice we should do a snapshot much earlier, that's why `on_internal_error()` here.
             // And if the table or keyspace was already dropped, `no_such_column_family`

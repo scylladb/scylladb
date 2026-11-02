@@ -24,7 +24,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "db/config.hh"
 #include "db/cluster_config_registry.hh"
-#include "db/schema_applier.hh"
+#include "db/schema_and_topology_applier.hh"
 #include "db/schema_tables.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "types/list.hh"
@@ -49,7 +49,7 @@ static schema_ptr random_schema() {
 
 // Applies schema mutations the way the group 0 state machine does.
 static void apply_schema_change(cql_test_env& e, utils::chunked_vector<mutation> muts) {
-    db::schema_tables::schema_applier ap(e.get_storage_proxy(), e.get_storage_service(), e.get_system_keyspace());
+    db::schema_tables::schema_and_topology_applier ap(e.get_storage_proxy(), e.get_storage_service(), e.get_system_keyspace());
     try {
         ap.prepare(muts).get();
         service::write_mutations_to_database(e.get_storage_service().local(), e.get_storage_proxy().local(), std::move(muts)).get();

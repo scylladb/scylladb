@@ -40,7 +40,7 @@
 #include "replica/tablets.hh"
 #include "locator/tablets.hh"
 #include "replica/query.hh"
-#include "db/schema_applier.hh"
+#include "db/schema_and_topology_applier.hh"
 #include "db/schema_tables.hh"
 #include "types/user.hh"
 #include "db/system_keyspace.hh"
