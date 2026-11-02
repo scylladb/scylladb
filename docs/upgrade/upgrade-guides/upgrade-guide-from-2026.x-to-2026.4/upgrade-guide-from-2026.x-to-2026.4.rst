@@ -1,10 +1,10 @@
 .. |SCYLLA_NAME| replace:: ScyllaDB
 
 .. |SRC_VERSION| replace:: 2026.x
-.. |NEW_VERSION| replace:: 2026.3
+.. |NEW_VERSION| replace:: 2026.4
 
-.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 2026.x to 2026.3
-.. _SCYLLA_METRICS: ../metric-update-2026.x-to-2026.3
+.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 2026.x to 2026.4
+.. _SCYLLA_METRICS: ../metric-update-2026.x-to-2026.4
 
 =======================================================================================
 Upgrade from |SCYLLA_NAME| |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION|
@@ -346,7 +346,7 @@ Restore the configuration file
 .. code:: sh
 
    sudo rm -rf /etc/scylla/scylla.yaml
-   sudo cp /etc/scylla/scylla.yaml-backup /etc/scylla/scylla.yaml
+   sudo cp /etc/scylla/scylla.yaml.backup /etc/scylla/scylla.yaml
 
 Reload systemd configuration
 ----------------------------
