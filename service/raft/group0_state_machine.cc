@@ -631,10 +631,16 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     if (_in_memory_state_machine_enabled) {
         try {
             co_await _mm.merge_schema_from(hid, std::move(*cm));
+            // Lets a test fail the snapshot transfer after the snapshot is persisted,
+            // but before the in-memory state is updated from it.
+            co_await utils::get_local_injector().inject("group0_snapshot_transfer_apply_fail", [] {
+                return std::make_exception_ptr(db::schema_tables::schema_persisted_but_not_applied());
+            });
         } catch (const db::schema_tables::schema_persisted_but_not_applied&) {
             // Raft retries a failed snapshot transfer, but the retry finds the schema
             // already persisted and does not update the in-memory schema. Stop the
             // group 0 server, as raft does when apply() fails.
+            slogger.error("The group 0 snapshot from {} was persisted, but applying it to the in-memory state failed: {:t}. Stopping group 0.", hid, std::current_exception());
             fail();
             _on_fatal_error(std::current_exception());
             throw;

@@ -1101,8 +1101,9 @@ private:
         std::vector<locator::host_id> released;
     };
 
-    // Topology state machine state read from system.topology, and what is needed
-    // to build token metadata from it and to finish the change after committing it.
+    // Topology state machine state read from system.topology. The schema applier
+    // builds token metadata from it and commits both together with the schema
+    // (see db::schema_tables::schema_applier).
     struct topology_state_change {
         topology new_topology;
         state_change_hint hint;
@@ -1126,8 +1127,8 @@ private:
     // Builds token metadata for the loaded topology state, without making either visible.
     // Must be called under token_metadata_lock, on shard 0.
     future<mutable_token_metadata_ptr> prepare_topology_token_metadata(topology_state_change& change);
-    // Makes the loaded topology state current.
-    // Must be called under token_metadata_lock, on shard 0.
+    // Makes the loaded topology state current. Called on shard 0 in the same
+    // non-preemptible section that commits the token metadata built from it.
     void commit_topology_state(topology_state_change& change) noexcept;
     // Runs the actions which follow committing the topology state.
     // Must not be called under token_metadata_lock.

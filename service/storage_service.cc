@@ -91,6 +91,7 @@
 #include "db/config.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "db/schema_tables.hh"
+#include "db/schema_applier.hh"
 #include "db/view/view_builder.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
@@ -764,6 +765,9 @@ future<> storage_service::finish_topology_state_change(topology_state_change& ch
     SCYLLA_ASSERT(this_shard_id() == 0);
     const auto& topology = _topology_state_machine._topology;
 
+    rtlogger.debug("topology_state_load: notifying nodes after token metadata replication");
+    co_await notify_nodes_after_sync(std::move(change.nodes_to_notify));
+
     co_await update_fence_version(topology.fence_version);
 
     // As soon as a node joins token_metadata.topology we
@@ -798,28 +802,11 @@ future<> storage_service::finish_topology_state_change(topology_state_change& ch
 }
 
 future<> storage_service::topology_state_load(state_change_hint hint) {
-#ifdef SEASTAR_DEBUG
-    static bool running = false;
-    SCYLLA_ASSERT(!running); // The function is not re-entrant
-    auto d = defer([] noexcept {
-        running = false;
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    db::schema_tables::schema_applier ap(_qp.proxy().container(), container(), _sys_ks, std::move(hint));
+    co_await ap.apply_persisted().finally([&ap] {
+        return ap.destroy();
     });
-    running = true;
-#endif
-
-    auto change = co_await load_topology_state(std::move(hint));
-    {
-        rtlogger.debug("topology_state_load: waiting for token metadata lock");
-        auto tmlock = co_await get_token_metadata_lock();
-        auto tmptr = co_await prepare_topology_token_metadata(*change);
-        commit_topology_state(*change);
-        rtlogger.debug("topology_state_load: replicating token metadata to all cores");
-        co_await replicate_to_all_cores(std::move(tmptr));
-        rtlogger.debug("topology_state_load: notifying nodes after token metadata replication");
-        co_await notify_nodes_after_sync(std::move(change->nodes_to_notify));
-        rtlogger.debug("topology_state_load: token metadata replication to all cores finished");
-    }
-    co_await finish_topology_state_change(*change);
 }
 
 future<> storage_service::topology_transition(state_change_hint hint) {
