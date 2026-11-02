@@ -4076,6 +4076,31 @@ static constexpr size_t max_partitions_without_preemption = 16;
 
 template<typename Range, typename CreateWriteHandler>
 future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mutate_prepare(Range&& mutations, CreateWriteHandler create_handler) {
+    if (size_t(std::distance(std::begin(mutations), std::end(mutations))) > max_partitions_without_preemption) {
+        // Preparing freezes each mutation and looks up its replicas, so prepare a
+        // large batch with preemption points. An rvalue range is moved into the
+        // coroutine before its first yield; an lvalue range must be kept alive by
+        // the caller until the returned future resolves.
+        return [] (storage_proxy& sp, Range&& mutations, CreateWriteHandler create_handler) -> future<result<unique_response_handler_vector>> {
+            std::conditional_t<std::is_lvalue_reference_v<Range>, Range, std::remove_cvref_t<Range>> ms = std::forward<Range>(mutations);
+            unique_response_handler_vector ids;
+            ids.reserve(std::distance(std::begin(ms), std::end(ms)));
+            for (auto&& m : ms) {
+                auto r_handler = create_handler(m);
+                if (!r_handler) {
+                    co_return std::move(r_handler).as_failure();
+                }
+                ids.emplace_back(sp, std::move(r_handler).value());
+                // Don't yield with cancellable handlers (batchlog replay, hints):
+                // on_down() could cancel and remove them meanwhile, and we, our
+                // caller and mutate_begin() all expect them to still exist.
+                if (!sp.get_write_response_handler(ids.back().id)->is_linked()) {
+                    co_await coroutine::maybe_yield();
+                }
+            }
+            co_return std::move(ids);
+        }(*this, std::forward<Range>(mutations), std::move(create_handler));
+    }
     // apply is used to convert exceptions to exceptional future
     return futurize_invoke([this] (Range&& mutations, CreateWriteHandler create_handler) {
         unique_response_handler_vector ids;
@@ -4402,16 +4427,26 @@ future<result<>> storage_proxy::mutate_result(utils::chunked_vector<mutation> mu
 }
 
 future<result<>> storage_proxy::do_mutate(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker, coordinator_mutate_options options) {
-    auto mid = raw_counters ? mutations.begin() : std::ranges::partition(mutations, [] (auto&& m) {
-        return m.schema()->is_counter();
-    }).begin();
-    return seastar::when_all_succeed(
-        mutate_counters(std::ranges::subrange(mutations.begin(), mid), cl, tr_state, permit, timeout),
-        mutate_internal(std::ranges::subrange(mid, mutations.end()), cl, tr_state, permit, timeout, {}, std::move(cdc_tracker), allow_limit, std::move(options))
-    ).then([] (std::tuple<result<>> res) {
-        // For now, only mutate_internal returns a result<>
-        return std::get<0>(std::move(res));
-    });
+    auto mutate = [this, cl, timeout, tr_state = std::move(tr_state), permit = std::move(permit), raw_counters, allow_limit, cdc_tracker = std::move(cdc_tracker), options = std::move(options)] (utils::chunked_vector<mutation>& mutations) mutable {
+        auto mid = raw_counters ? mutations.begin() : std::ranges::partition(mutations, [] (auto&& m) {
+            return m.schema()->is_counter();
+        }).begin();
+        return seastar::when_all_succeed(
+            mutate_counters(std::ranges::subrange(mutations.begin(), mid), cl, tr_state, permit, timeout),
+            mutate_internal(std::ranges::subrange(mid, mutations.end()), cl, tr_state, permit, timeout, {}, std::move(cdc_tracker), allow_limit, std::move(options))
+        ).then([] (std::tuple<result<>> res) {
+            // For now, only mutate_internal returns a result<>
+            return std::get<0>(std::move(res));
+        });
+    };
+    if (mutations.size() <= max_partitions_without_preemption) {
+        return mutate(mutations);
+    }
+    // mutate_prepare() yields for this many mutations, so keep them alive: the
+    // subranges in mutate() refer to them.
+    return [] (utils::chunked_vector<mutation> mutations, decltype(mutate) mutate) -> future<result<>> {
+        co_return co_await mutate(mutations);
+    }(std::move(mutations), std::move(mutate));
 }
 
 future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
@@ -4448,7 +4483,7 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, tracin
     utils::latency_counter lc;
     lc.start();
 
-    return mutate_prepare(mutations, cl, type, tr_state, std::move(permit), allow_limit, std::move(options)).then(utils::result_wrap([this, cl, timeout_opt, tracker = std::move(cdc_tracker),
+    return mutate_prepare(std::move(mutations), cl, type, tr_state, std::move(permit), allow_limit, std::move(options)).then(utils::result_wrap([this, cl, timeout_opt, tracker = std::move(cdc_tracker),
             tr_state] (storage_proxy::unique_response_handler_vector ids) mutable {
         register_cdc_operation_result_tracker(ids, tracker);
         return mutate_begin(std::move(ids), cl, tr_state, timeout_opt);
