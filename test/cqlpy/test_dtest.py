@@ -28,6 +28,7 @@ from cassandra.query import SimpleStatement, UNSET_VALUE
 
 from . import nodetool
 from .test_logs import logfile, logfile_path, wait_for_log
+from .test_secondary_index import wait_for_index
 from .util import ScyllaMetrics, config_value_context, new_cql, new_materialized_view, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
@@ -2269,3 +2270,45 @@ def test_counter_update_unset_value(cql, test_keyspace):
         for key in range(10):
             cql.execute(update, [UNSET_VALUE, key])
         assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, 1)]
+
+# Test that executing a prepared statement which used an index, after the
+# index is dropped, fails cleanly with InvalidRequest - because without the
+# index, the query requires ALLOW FILTERING.
+# Translated from scylla-dtest's prepared_statements_test.py::TestPreparedStatements::test_dropped_index.
+# The dtest also passed if the query succeeded.
+def test_prepared_statement_with_dropped_index(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int PRIMARY KEY, b int') as table:
+        index = unique_name()
+        cql.execute(f'CREATE INDEX {index} ON {table}(b)')
+        wait_for_index(cql, test_keyspace, index)
+        insert = cql.prepare(f'INSERT INTO {table} (a, b) VALUES (?, ?)')
+        for i in range(10):
+            cql.execute(insert, (i, 0))
+        query = cql.prepare(f'SELECT * FROM {table} WHERE b=?')
+        assert len(list(cql.execute(query, (0,)))) == 10
+        cql.execute(f'DROP INDEX {test_keyspace}.{index}')
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(query, (0,))
+
+# Test that a "SELECT *" statement, prepared on two different connections,
+# returns the new set of columns on both after columns are added to and
+# dropped from the table (CASSANDRA-10786).
+# Translated from scylla-dtest's prepared_statements_test.py::TestPreparedStatements::test_prepared_select_star_on_schema_change.
+def test_prepared_select_star_on_schema_change_two_connections(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int PRIMARY KEY, b int') as table, new_cql(cql) as cql2:
+        insert = cql.prepare(f'INSERT INTO {table} (a, b) VALUES (?, ?)')
+        for i in range(10):
+            cql.execute(insert, (i, 0))
+        queries = []
+        for session in [cql, cql2]:
+            query = session.prepare(f'SELECT * FROM {table}')
+            rows = list(session.execute(query))
+            assert len(rows) == 10
+            assert all(r._fields == ('a', 'b') for r in rows)
+            queries.append((session, query))
+        cql.execute(f'ALTER TABLE {table} ADD c int')
+        cql.execute(f'ALTER TABLE {table} DROP b')
+        for session, query in queries:
+            rows = list(session.execute(query))
+            assert len(rows) == 10
+            assert all(r._fields == ('a', 'c') for r in rows)
