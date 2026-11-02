@@ -906,8 +906,6 @@ SEASTAR_TEST_CASE(test_block_table_schema_changes_during_migration) {
 SEASTAR_TEST_CASE(test_block_view_schema_changes_during_migration) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto ks = start_migration_with_views(e, "test_migration_ks");
-        require_rejected_during_migration(e, format("CREATE MATERIALIZED VIEW {}.mv2 AS SELECT * FROM {}.t "
-                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks, ks));
         require_rejected_during_migration(e, format("DROP MATERIALIZED VIEW {}.mv", ks));
         // Altering a view doesn't change the set of tables.
         e.execute_cql(format("ALTER MATERIALIZED VIEW {}.mv WITH gc_grace_seconds = 3600", ks)).get();
@@ -920,7 +918,6 @@ SEASTAR_TEST_CASE(test_block_view_schema_changes_during_migration) {
 SEASTAR_TEST_CASE(test_block_index_schema_changes_during_migration) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto ks = start_migration_with_views(e, "test_migration_ks");
-        require_rejected_during_migration(e, format("CREATE INDEX ON {}.t (v)", ks));
         require_rejected_during_migration(e, format("DROP INDEX {}.local_idx", ks));
         // Altering the backing view of an index doesn't change the set of tables.
         e.execute_cql(format("ALTER MATERIALIZED VIEW {}.local_idx_index WITH gc_grace_seconds = 3600", ks)).get();

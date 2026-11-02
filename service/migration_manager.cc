@@ -645,14 +645,14 @@ future<utils::chunked_vector<mutation>> prepare_column_family_update_announcemen
         auto& db = sp.local_db();
         auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
         auto&& keyspace = db.find_keyspace(cfm->ks_name()).metadata();
-        // Creating or dropping an index adds or removes its backing view.
-        // Other table updates don't change the set of tables in the keyspace
-        // and so they are ignored.
+        // Dropping an index removes its backing view. Creating one adds a view, which
+        // joins a migration like any table (storage_service::on_before_create_column_family()),
+        // and other table updates don't change the set of tables in the keyspace.
         auto index_names = [] (const schema& s) {
             return s.all_indices() | std::views::keys | std::ranges::to<std::set<sstring>>();
         };
-        if (index_names(*old_schema) != index_names(*cfm)) {
-            validate_no_tablets_migration(sp, *keyspace, "create or drop an index");
+        if (!std::ranges::includes(index_names(*cfm), index_names(*old_schema))) {
+            validate_no_tablets_migration(sp, *keyspace, "drop an index");
         }
         mlogger.info("Update table '{}.{}' From {} To {}", cfm->ks_name(), cfm->cf_name(), *old_schema, *cfm);
 
@@ -887,7 +887,6 @@ future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_pr
         if (keyspace->cf_meta_data().contains(view->cf_name())) {
             throw exceptions::already_exists_exception(view->ks_name(), view->cf_name());
         }
-        validate_no_tablets_migration(sp, *keyspace, "create materialized view");
         mlogger.info("Create new view: {}", view);
         co_return co_await seastar::async([&db, keyspace = std::move(keyspace), &sp, view = std::move(view), ts] {
             auto mutations = db::schema_tables::make_create_view_mutations(keyspace, view, ts);
