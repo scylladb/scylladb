@@ -8,6 +8,8 @@
 #pragma once
 
 #include "raft/raft.hh"
+#include "mutation/timestamp.hh"
+#include "utils/UUID.hh"
 
 #include <optional>
 #include <vector>
@@ -36,6 +38,23 @@ class database;
 }
 
 namespace service::strong_consistency {
+
+// The last truncate a group's state machine applied, as recorded in system.raft_groups.
+// A default-constructed record means the group has never been truncated.
+struct truncate_record {
+    // The write timestamp the leader assigned to the truncate. Every write ordered after the
+    // truncate in the group's log is stamped above it.
+    api::timestamp_type truncated_at = api::min_timestamp;
+    // The id of the topology request which issued the truncate, null if none did. A retried
+    // request can put a second truncate entry in the log; the id lets the state machine apply
+    // it as a no-op.
+    utils::UUID last_truncate_request_id;
+    // The log index of the truncate entry. The commitlog replay skips the entries below it.
+    raft::index_t truncate_index = raft::index_t(0);
+    // The write timestamp of the record's cells, from this node's clock like every other
+    // cell of the row; the next record is stamped above it.
+    api::timestamp_type written_at = api::min_timestamp;
+};
 
 // Ask table `id` to flush, in the background. `pos` only decides whether the
 // table skips the request.
@@ -135,6 +154,7 @@ public:
         raft::term_t term{0};
         raft::configuration config;
         std::vector<truncation_record> truncations;
+        truncate_record truncate;
     };
 
     // The statics below read and write a group's row without a raft_groups_storage,
@@ -177,6 +197,14 @@ public:
     static future<> store_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
         raft::index_t idx, raft::term_t term, const raft::configuration& config,
         const std::vector<truncation_record>& truncations);
+    // The last truncate applied by the group `gid` hosted on `shard`, a default record if none.
+    // Static like load_descriptor(), so that the commitlog replay can read it without a
+    // raft_groups_storage instance.
+    static future<truncate_record> load_truncate_record(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    // Writes `record` through the commitlog and returns once it is synced to disk. Stamped above
+    // `record.written_at`, the previous record's write time, which is updated to the new one.
+    static future<> store_truncate_record(replica::database& db, raft::group_id gid, shard_id shard,
+            truncate_record& record);
 
 private:
     // Write the released record's descriptor and the group's truncation history into
