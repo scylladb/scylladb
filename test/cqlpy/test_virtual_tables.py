@@ -132,6 +132,11 @@ def test_clients(scylla_only, cql):
         client_options = cl[13]
         assert(client_options.get('DRIVER_NAME') == cl[4])
         assert(client_options.get('DRIVER_VERSION') == cl[5])
+        # The port, connection_stage, protocol_version, shard_id and
+        # username columns all have values (this check was translated from
+        # scylla-dtest's cql_system_clients_test.py::TestSystemClients::test_system_client_not_none_non_ssl).
+        for i in [1, 3, 7, 8, 12]:
+            assert cl[i] is not None, cl
 
 # We only want to check that the table exists with the listed columns, to assert
 # backwards compatibility.
