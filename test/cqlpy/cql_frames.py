@@ -42,6 +42,14 @@ QUORUM = 0x0004
 
 # Flags of the query parameters.
 VALUES_FLAG = 0x01
+PAGE_SIZE_FLAG = 0x04
+PAGING_STATE_FLAG = 0x08
+
+# Kinds of results.
+ROWS = 0x0002
+
+# Flags of the metadata of a Rows result.
+HAS_MORE_PAGES_FLAG = 0x0002
 
 def build_frame(*, opcode: int, stream: int, body: bytes) -> bytearray:
     frame = bytearray()
@@ -220,15 +228,34 @@ def supported(sock: socket.socket) -> dict[str, list[str]]:
     return response.body.read_string_multimap()
 
 # Sends an EXECUTE request of a prepared statement at QUORUM, with the given int
-# values. With the tablets-routing-v2 protocol extension, the request ends with
-# `tablet_version_block`; None leaves it out.
+# values. The result is paged if `page_size` is given, and continues from
+# `paging_state` if given. With the tablets-routing-v2 protocol extension, the
+# request ends with `tablet_version_block`; None leaves it out.
 def execute(sock: socket.socket, statement_id: bytes, values: list[int], *,
+            page_size: int | None = None, paging_state: bytes | None = None,
             tablet_version_block: int | None = None) -> Response:
+    flags = VALUES_FLAG
+    if page_size is not None:
+        flags |= PAGE_SIZE_FLAG
+    if paging_state is not None:
+        flags |= PAGING_STATE_FLAG
     body = encode_short_bytes(statement_id)
     body += encode_short(QUORUM)
-    body += encode_byte(VALUES_FLAG)
+    body += encode_byte(flags)
     body += encode_short(len(values))
     body += b''.join(encode_bytes(encode_int(value)) for value in values)
+    if page_size is not None:
+        body += encode_int(page_size)
+    if paging_state is not None:
+        body += encode_bytes(paging_state)
     if tablet_version_block is not None:
         body += encode_byte(tablet_version_block)
     return request(sock, EXECUTE, body)
+
+# The paging state of a Rows result, or None if it's the last page.
+def paging_state_of(response: Response) -> bytes | None:
+    assert response.opcode == RESULT, f"expected RESULT, got {hex(response.opcode)}"
+    assert response.body.read_int() == ROWS
+    flags = response.body.read_int()
+    response.body.read_int()  # The column count.
+    return response.body.read_bytes() if flags & HAS_MORE_PAGES_FLAG else None
