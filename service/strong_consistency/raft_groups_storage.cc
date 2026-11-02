@@ -184,6 +184,26 @@ future<> raft_groups_storage::erase_persisted_state(cql3::query_processor& qp, r
     rgslog.info("erase_persisted_state: erased the persisted raft state of group {} on shard {}", gid, shard);
 }
 
+future<truncate_record> raft_groups_storage::load_truncate_record(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    co_return (co_await load_descriptor(qp, gid, shard)).truncate;
+}
+
+future<> raft_groups_storage::store_truncate_record(replica::database& db, raft::group_id gid, shard_id shard,
+        truncate_record& record) {
+    auto& cf = db.find_column_family(db::system_keyspace::raft_groups()->id());
+    auto s = cf.schema();
+    mutation m(s, partition_key::from_exploded(*s, {short_type->decompose(int16_t(shard)), timeuuid_type->decompose(gid.id)}));
+    // No clustering key: the whole row is one clustered row at the empty key.
+    const auto ckey = clustering_key::make_empty();
+    // This node's clock, like the rest of the row, so that erase_persisted_state() beats it.
+    const auto ts = std::max(api::new_timestamp(), record.written_at + 1);
+    record.written_at = ts;
+    m.set_clustered_cell(ckey, "truncated_at", data_value(int64_t(record.truncated_at)), ts);
+    m.set_clustered_cell(ckey, "last_truncate_request_id", data_value(record.last_truncate_request_id), ts);
+    m.set_clustered_cell(ckey, "truncate_index", data_value(int64_t(record.truncate_index.value())), ts);
+    co_await db.apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog_force_sync::yes, db::no_timeout);
+}
+
 future<raft::log_entries> raft_groups_storage::load_log() {
     return make_ready_future<raft::log_entries>(_raft_commitlog.load_log());
 }
@@ -414,7 +434,8 @@ void raft_groups_storage::write_descriptor_and_purge_stale_truncations(segment_r
 future<raft_groups_storage::persisted_descriptor> raft_groups_storage::load_descriptor(
         cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
     static const auto load_cql = format(
-            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations FROM system.{} "
+            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations, "
+            "truncated_at, last_truncate_request_id, truncate_index, WRITETIME(truncate_index) AS written_at FROM system.{} "
             "WHERE shard = ? AND group_id = ? LIMIT 1",
             db::system_keyspace::RAFT_GROUPS);
     auto result = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id},
@@ -433,6 +454,10 @@ future<raft_groups_storage::persisted_descriptor> raft_groups_storage::load_desc
     if (row.has("truncations")) {
         ret.truncations = deserialize_truncations(row.get_view("truncations"));
     }
+    ret.truncate.truncated_at = row.get_or<int64_t>("truncated_at", ret.truncate.truncated_at);
+    ret.truncate.last_truncate_request_id = row.get_or<utils::UUID>("last_truncate_request_id", ret.truncate.last_truncate_request_id);
+    ret.truncate.truncate_index = raft::index_t(row.get_or<int64_t>("truncate_index", ret.truncate.truncate_index.value()));
+    ret.truncate.written_at = row.get_or<int64_t>("written_at", ret.truncate.written_at);
     co_return ret;
 }
 
