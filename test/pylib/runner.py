@@ -33,7 +33,7 @@ import yaml
 from _pytest.junitxml import xml_key
 
 
-from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
+from test import ALL_MODES, DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, HOST_ID, path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
@@ -885,6 +885,17 @@ class TestSuiteConfig:
         return str(path.relative_to(self.path).with_suffix("")) in self.disabled_tests(build_mode=build_mode)
 
     @classmethod
+    def from_path(cls, path: pathlib.Path) -> TestSuiteConfig | None:
+        """The config of the nearest ancestor directory that has one, up to test/."""
+        for directory in path.parents:
+            config_file = directory / TEST_CONFIG_FILENAME
+            if config_file.is_file():
+                return cls(config_file=config_file)
+            if directory == TEST_DIR:
+                break
+        return None
+
+    @classmethod
     def from_pytest_node(cls, node: _pytest.nodes.Node) -> TestSuiteConfig | None:
         config_file = node.path / TEST_CONFIG_FILENAME
         if config_file.is_file():
@@ -903,6 +914,31 @@ class TestSuiteConfig:
                 suite.cfg['extra_scylla_cmdline_options'] = extra_cmd
             node.stash[TEST_SUITE] = suite
         return suite
+
+
+def drop_disabled_tests(args: list[str], modes: list[str]) -> list[str]:
+    """Drop ``file::test`` arguments whose file the suite config disables in
+    every requested mode.
+
+    Such a file collects nothing, which pytest accepts for a plain file
+    argument but reports as "found no collectors" (exit code 4) for a test
+    inside it.
+    """
+    suites: dict[pathlib.Path, TestSuiteConfig | None] = {}
+    kept = []
+    for arg in args:
+        strpath, sep, _ = arg.partition("::")
+        path = pathlib.Path(strpath).absolute()
+        suite = None
+        if sep and path.is_file():
+            if path.parent not in suites:
+                suites[path.parent] = TestSuiteConfig.from_path(path)
+            suite = suites[path.parent]
+        if suite and all(suite.is_test_disabled(build_mode=mode, path=path) for mode in modes):
+            print(f"skipping {arg}: disabled in {', '.join(modes)} mode", file=sys.stderr)
+            continue
+        kept.append(arg)
+    return kept
 
 
 TEST_SUITE = pytest.StashKey[TestSuiteConfig | None]()
