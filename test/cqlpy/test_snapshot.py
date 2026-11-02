@@ -461,6 +461,59 @@ def test_snapshot_restore_native_types(cql, scylla_data_dir, temp_workdir, scyll
         restore_with_refresh(cql, scylla_data_dir, saved, table)
         assert read_rows() == rows
 
+# Test restoring a table with CDC, and its CDC log table, from a snapshot:
+# After the table is dropped and created again, loading the snapshot's
+# sstables of the table restores its rows without adding CDC log rows, and
+# loading the snapshot's sstables of the CDC log table then restores the
+# log rows. The table has columns of native and collection types, and half
+# of the rows were deleted (and then written again) before the snapshot.
+# Translated from scylla-dtest's cdc_snapshot_operation_test.py::TestCDCSnapshotOperation.
+# Its 32 tests each used a table with a single value column - text, varchar,
+# ascii, list, set or map - with or without deleting the rows, for each of
+# the four CDC image modes. This test has columns of these types in one
+# table and deletes half of the rows, for each image mode.
+@pytest.mark.parametrize('cdc', [
+    "{'enabled': true}",
+    "{'enabled': true, 'preimage': true}",
+    "{'enabled': true, 'postimage': true}",
+    "{'enabled': true, 'preimage': true, 'postimage': true}"],
+    ids=['delta', 'preimage', 'postimage', 'preimage_postimage'])
+def test_snapshot_restore_cdc(cql, scylla_data_dir, temp_workdir, scylla_only, cdc):
+    with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        schema = 'pk int, ck int, t text, a ascii, l list<text>, s set<varchar>, m map<int, text>, m2 map<tinyint, ascii>, PRIMARY KEY (pk, ck)'
+        table = f'{ks}.{unique_name()}'
+        log = f'{table}_scylla_cdc_log'
+        cql.execute(f'CREATE TABLE {table} ({schema}) WITH cdc = {cdc}')
+        insert = cql.prepare(f'INSERT INTO {table} (pk, ck, t, a, l, s, m, m2) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        update = cql.prepare(f'UPDATE {table} SET t = ?, a = ?, l = ?, s = ?, m = ?, m2 = ? WHERE pk = ? AND ck = ?')
+        delete = cql.prepare(f'DELETE FROM {table} WHERE pk = ? AND ck = ?')
+        def values(v, i):
+            return [v, v, [v], {v}, {i: v}, {i: v}]
+        for i in range(10):
+            pk, ck = i % 2, i
+            cql.execute(insert, [pk, ck] + values(f'{i}', i))
+            cql.execute(update, values(f'new_{i}', i) + [pk, ck])
+            if i >= 5:
+                cql.execute(delete, [pk, ck])
+            cql.execute(update, values(f'new_{i}', i) + [pk, ck])
+        rows = list(cql.execute(f'SELECT * FROM {table}'))
+        log_rows = list(cql.execute(f'SELECT * FROM {log}'))
+        tag = unique_name()
+        rest_request(cql, 'POST', 'storage_service/snapshots', tag=tag, kn=ks)
+        try:
+            saved = save_snapshot(cql, scylla_data_dir, table, tag, temp_workdir)
+            saved_log = save_snapshot(cql, scylla_data_dir, log, tag, temp_workdir)
+        finally:
+            nodetool.del_snapshot(cql, tag)
+        # Dropping the table also drops its CDC log table
+        cql.execute(f'DROP TABLE {table}')
+        cql.execute(f'CREATE TABLE {table} ({schema}) WITH cdc = {cdc}')
+        restore_with_refresh(cql, scylla_data_dir, saved, table)
+        assert list(cql.execute(f'SELECT * FROM {table}')) == rows
+        assert list(cql.execute(f'SELECT * FROM {log}')) == []
+        restore_with_refresh(cql, scylla_data_dir, saved_log, log)
+        assert list(cql.execute(f'SELECT * FROM {log}')) == log_rows
+
 # Test that a snapshot request which doesn't list keyspaces takes a snapshot
 # of every keyspace which has tables, including the system keyspaces, and
 # that each table's snapshot has a manifest file. The test then deletes the
