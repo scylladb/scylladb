@@ -248,13 +248,14 @@ def scylla_path(cql):
     return path
 
 # A fixture for finding Scylla's data directory. We get it using the CQL
-# interface to Scylla's configuration. Note that if the server is remote,
-# the directory retrieved this way may be irrelevant, whether or not it
-# exists on the local machine... However, if the same test that uses this
-# fixture also uses the scylla_path fixture, the test will anyway be skipped
-# if the running Scylla is not on the local machine local.
+# interface to Scylla's configuration. If the server is remote, the directory
+# retrieved this way is irrelevant, whether or not it exists on the local
+# machine, and the tests using this fixture access the directory. So this
+# fixture skips the test if the running Scylla is not on the local machine.
 @pytest.fixture(scope=dynamic_scope())
 def scylla_data_dir(cql):
+    if not local_process_id(cql):
+        skip_env("Can't find local Scylla process")
     try:
         dir = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'data_file_directories'").one().value)[0]
         return dir
