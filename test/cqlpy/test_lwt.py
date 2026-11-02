@@ -12,7 +12,7 @@ import re
 import pytest
 import requests
 from cassandra.concurrent import execute_concurrent_with_args
-from cassandra.protocol import InvalidRequest, SyntaxException
+from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.cluster import NoHostAvailable
 
 from .util import new_test_table, unique_key_int, new_user, new_session
@@ -554,3 +554,27 @@ def test_lwt_reads_use_attached_service_level(scylla_only, cql, host, test_keysp
         assert default_delta == 0, (
             f"LWT reads leaked to sl:default: {default_delta} reads "
             f"accounted to sl:default vs {sl_delta} to {sl_class}")
+
+# Test conditional inserts (IF NOT EXISTS) whose partition key is generated
+# by non-deterministic functions - uuid() and currentTimestamp() - with an
+# unprepared and a prepared statement. Each insert creates a new row.
+# Translated from scylla-dtest's lwt_test.py::TestLwt::test_not_deterministic_function_in_pk,
+# which inserted 1000 rows with each statement.
+def test_lwt_non_deterministic_function_in_partition_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk1 uuid, pk2 timestamp, ck date, PRIMARY KEY ((pk1, pk2), ck)') as table:
+        insert = f'INSERT INTO {table} (pk1, pk2, ck) VALUES (uuid(), currentTimestamp(), currentDate()) IF NOT EXISTS'
+        for _ in range(10):
+            assert cql.execute(insert).one()[0]
+        assert list(cql.execute(f'SELECT count(*) FROM {table}')) == [(10,)]
+        prepared = cql.prepare(insert)
+        for _ in range(10):
+            assert cql.execute(prepared).one()[0]
+        assert list(cql.execute(f'SELECT count(*) FROM {table}')) == [(20,)]
+
+# Test that a table can't be created with a negative paxos_grace_seconds.
+# paxos_grace_seconds is a Scylla-only table option.
+# Translated from scylla-dtest's lwt_test.py::TestLWTPaxos::test_paxos_grace_seconds_negative.
+def test_negative_paxos_grace_seconds(cql, test_keyspace, scylla_only):
+    with pytest.raises(ConfigurationException, match=r'paxos_grace_seconds cannot be smaller than 0'):
+        with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v int', 'WITH paxos_grace_seconds = -1'):
+            pass

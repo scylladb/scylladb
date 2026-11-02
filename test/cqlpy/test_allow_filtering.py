@@ -31,7 +31,7 @@ import time
 from cassandra.protocol import InvalidRequest, ConfigurationException
 
 from test.pylib.skip_types import skip_env
-from .util import unique_name, new_test_table
+from .util import unique_name, new_test_table, config_value_context
 
 # check_af_optional() and check_af_mandatory() are utility functions for
 # checking that ALLOW FILTERING is optional or mandatory on a SELECT on a
@@ -534,3 +534,19 @@ def test_allow_filtering_index_intersection_sai(cql, test_keyspace, cassandra_bu
         check_af_mandatory(cql, (table, everything),
             "x = 1 AND y = 1",
             lambda r : r.x == 1 and r.y == 1)
+
+# Test that when the strict_allow_filtering option is "warn" (its default),
+# a query which filters by a clustering key without restricting the
+# partition key - and should therefore require ALLOW FILTERING, as
+# test_allow_filtering_clustering_key above checks - is accepted, with a
+# warning that it will be rejected in the future.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_cql_warning_when_filtering_potentially_infinite_partitions.
+def test_allow_filtering_clustering_key_warning(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)') as table:
+        for pk in range(3):
+            cql.execute(f'INSERT INTO {table} (pk, ck, v) VALUES ({pk}, 2, 100)')
+        with config_value_context(cql, 'strict_allow_filtering', 'warn'):
+            result = cql.execute(f'SELECT pk, ck FROM {table} WHERE ck = 2')
+            assert sorted(result) == [(pk, 2) for pk in range(3)]
+            assert any('This query should use ALLOW FILTERING and will be rejected in future versions' in w
+                       for w in result.response_future.warnings)

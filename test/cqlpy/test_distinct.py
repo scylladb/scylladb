@@ -9,6 +9,7 @@
 import pytest
 from .util import new_test_table, unique_key_int
 from cassandra.protocol import InvalidRequest
+from cassandra.query import SimpleStatement
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -73,6 +74,23 @@ def test_distinct_limit(cql, test_keyspace):
             results = list(cql.execute(f"select distinct p from {table} limit {n}"))
             assert n == len(results)
             assert set(results).issubset(set(all))
+
+# Test a paged SELECT DISTINCT of a table with a deleted partition: The
+# deleted partition is skipped, whatever the page size.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_select_distinct_with_deletions,
+# which used a page size of 5. Its translation in Cassandra's unit tests
+# (testSelectDistinctWithDeletions in cassandra_tests) lost the paging.
+def test_distinct_paged_with_deleted_partition(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, c int, v int') as table:
+        for i in range(10):
+            cql.execute(f'INSERT INTO {table} (k, c, v) VALUES ({i}, {i}, {i})')
+        keys = [row.k for row in cql.execute(f'SELECT DISTINCT k FROM {table}')]
+        assert sorted(keys) == list(range(10))
+        deleted = keys[3]
+        cql.execute(f'DELETE FROM {table} WHERE k = {deleted}')
+        for page_size in range(1, 11):
+            result = [row.k for row in cql.execute(SimpleStatement(f'SELECT DISTINCT k FROM {table}', fetch_size=page_size))]
+            assert result == [k for k in keys if k != deleted]
 
 # Test that SELECT DISTINCT and PER PARTITION LIMIT is not allowed in the same query
 # reproduces #15109
