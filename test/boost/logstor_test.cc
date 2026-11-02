@@ -1653,6 +1653,81 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_discarding_a_group_while_its_compaction_wa
     BOOST_REQUIRE_EQUAL(full_disk_logstor::metric_value("logstor_sm_compaction_failures"), 0);
 }
 
+// Checks that stopping the logstor gives up the final flushes of separator buffers that find the
+// segment pool empty, while a compaction waits for a segment too: on a full disk nothing may refill
+// the pool. The records stay in their mixed segment, for recovery to separate.
+SEASTAR_THREAD_TEST_CASE(test_logstor_stop_gives_up_separator_flushes_on_an_empty_pool) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    constexpr size_t buffering = 2;
+    full_disk_logstor env(1 + buffering);
+    env.empty_pool();
+    env.compact_until_they_wait(1);
+
+    // More groups with buffered records than the empty pool has segments for.
+    for (size_t i = 0; i < buffering; ++i) {
+        auto& g = env.groups[max_compaction_parallelism + 1 + i]->group;
+        env.ls.write(make_kv_mutation(env.schema(), seastar::format("separated{}", i), "v"), write_target(&g, {}), db::no_timeout).get();
+    }
+    env.ls.flush_to_separator().get();
+    for (size_t i = 0; i < buffering; ++i) {
+        BOOST_REQUIRE(env.groups[max_compaction_parallelism + 1 + i]->group.separator_has_data());
+    }
+
+    auto& stopping = env.stop_logstor();
+    const bool stopped = full_disk_logstor::completes_within(stopping, std::chrono::seconds(10));
+    // A stop that hangs ends once the replenisher hands out the segments again.
+    utils::get_local_injector().disable(hold_back_free_segments);
+    BOOST_REQUIRE_MESSAGE(stopped || full_disk_logstor::completes_within(stopping, std::chrono::seconds(30)), "stop did not complete even with the free segments handed out");
+    BOOST_REQUIRE_MESSAGE(stopped, "stop did not complete while the separator flushes found the segment pool empty");
+    // Giving up a flush on a stop is not a failure of it.
+    BOOST_REQUIRE_EQUAL(full_disk_logstor::metric_value("logstor_sm_separator_flush_failures"), 0);
+}
+
+// Checks that discarding a group, as a truncate, a drop or a cleanup does once the index has dropped
+// its records, ends a flush of its separator buffer that waits for a segment, and frees no segment
+// of the other group whose records share the mixed segment.
+SEASTAR_THREAD_TEST_CASE(test_logstor_discarding_a_group_ends_its_separator_flush_waiting_for_a_segment) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    full_disk_logstor env(2);
+    env.fill_disk();
+    auto& dropped = env.groups[max_compaction_parallelism]->group;
+    auto& kept = env.groups[max_compaction_parallelism + 1]->group;
+    env.ls.write(make_kv_mutation(env.schema(), "dropped", "v"), write_target(&dropped, {}), db::no_timeout).get();
+    auto kept_mutation = make_kv_mutation(env.schema(), "kept", "v");
+    env.ls.write(kept_mutation, write_target(&kept, {}), db::no_timeout).get();
+    env.ls.flush_to_separator().get();
+
+    // The pool holds only the reserve for compaction, which the separator may not take.
+    seastar::shared_future<> flushing(dropped.flush_separator());
+    BOOST_REQUIRE(!full_disk_logstor::completes_within(flushing, std::chrono::seconds(1)));
+    const auto pool_size = full_disk_logstor::segment_pool_size();
+
+    dropped.logstor_index().clear().get();
+    env.ls.get_segment_manager().discard_segments(dropped).get();
+    const bool flushed = full_disk_logstor::completes_within(flushing, std::chrono::seconds(10));
+    // A flush that hangs ends once the replenisher hands out the discarded segments.
+    utils::get_local_injector().disable(hold_back_free_segments);
+    BOOST_REQUIRE_MESSAGE(flushed || full_disk_logstor::completes_within(flushing, std::chrono::seconds(30)), "flush did not complete even with the free segments handed out");
+    BOOST_REQUIRE_MESSAGE(flushed, "flush of a discarded group waited for a segment");
+
+    // The dropped records took no segment, and their source segment was released, not given up.
+    BOOST_REQUIRE(!dropped.separator_has_data());
+    BOOST_REQUIRE_EQUAL(full_disk_logstor::segment_pool_size(), pool_size);
+    BOOST_REQUIRE_EQUAL(full_disk_logstor::metric_value("logstor_sm_segment_free_failures"), 0);
+    BOOST_REQUIRE_EQUAL(full_disk_logstor::metric_value("logstor_sm_separator_flush_failures"), 0);
+
+    BOOST_REQUIRE(kept.separator_has_data());
+    auto actual = read_mutation(env.ls, env.schema(), kept.logstor_index(), kept_mutation.decorated_key(), env.schema()->full_slice()).get();
+    BOOST_REQUIRE(actual);
+    assert_that(*actual).is_equal_to(kept_mutation);
+}
+
 // Checks that primary_index accounting callbacks track live bytes across
 // inserts, overwrites, relocations, erases, range erases, and clear().
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {

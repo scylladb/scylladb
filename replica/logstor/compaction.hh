@@ -13,8 +13,10 @@
 #include "write_buffer.hh"
 #include "utils/log_heap.hh"
 #include "segment_stats.hh"
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/format.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/shared_ptr.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "mutation_writer/token_group_based_splitting_writer.hh"
@@ -352,8 +354,13 @@ private:
 struct separator_buffer {
     owned_write_buffer buf;
     utils::chunked_vector<future<>> pending_updates;
+    // The index update of each record, by its position. The writes apply them once the buffer is
+    // written, and they tell whether a record is still live.
+    lw_shared_ptr<utils::chunked_vector<separator_index_update>> index_updates;
     utils::chunked_vector<segment_ref> held_segments;
     std::optional<segment_sequence> min_seq_num;
+    // Aborted to make the flush of this buffer, while it waits for a segment, check again whether it needs one.
+    abort_source segment_wait;
 
     separator_buffer() = default;
 
@@ -376,10 +383,22 @@ struct separator_buffer {
             min_seq_num = *segment_seq_num;
         }
 
+        if (!index_updates) {
+            index_updates = make_lw_shared<utils::chunked_vector<separator_index_update>>();
+        }
+        const auto i = index_updates->size();
+        index_updates->push_back(std::move(after_written));
+        // The writes resolve once the buffer is written, when no record is added any more.
         pending_updates.push_back(
-            buf->write(std::move(writer)).then_unpack(std::move(after_written))
+            buf->write(std::move(writer)).then_unpack([updates = index_updates, i] (record_location loc, seastar::gate::holder h) {
+                (*updates)[i](loc, std::move(h));
+            })
         );
     }
+
+    // Whether the index still points at any of the records where they were read from. A record that
+    // is not live stays so: the index never points back at an old location.
+    future<bool> has_live_records() const;
 
     bool allocated() const noexcept {
         return bool(buf);
@@ -515,12 +534,13 @@ public:
         _separator_enabled = true;
     }
 
-    // Stops taking separator writes and gives up what the separator has already buffered for this
-    // group, handing its buffers back to the pool. What is dropped here was never written out, so the
-    // source segments the buffers hold are marked as failed rather than released: the index still
-    // points at those records there. A group is expected to have been flushed before it is closed, so
-    // anything this finds costs the segments it is holding, and it says so.
+    // Stops taking separator writes and hands the buffers back to the pool. The source segments of the
+    // records dropped are marked as failed, unless the index no longer points at them.
     future<> close_separator();
+
+    // The index dropped the records of this group. Flushes what is buffered, which needs no segment if
+    // none of it is live, and makes a flush that waits for a segment check that again.
+    void on_index_records_dropped();
 
     bool empty() const noexcept {
         return _logstor_segments.empty()

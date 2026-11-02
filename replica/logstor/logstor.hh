@@ -66,6 +66,9 @@ public:
 
     future<> start();
     future<> stop();
+    // Fails the writes waiting for a segment and lets the separator flushes give up on a full disk,
+    // so that stopping the tables does not wait for segments. Idempotent; stop() calls it too.
+    void begin_stop();
 
     size_t get_memory_usage() const;
 

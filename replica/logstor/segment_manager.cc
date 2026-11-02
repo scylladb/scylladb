@@ -520,6 +520,8 @@ class segment_pool {
     size_t _reserved_for_compaction;
     seastar::condition_variable _segment_available;
     bool _stopping = false;
+    // Whether a segment can still reach the pool, which only the segment manager knows.
+    std::function<bool()> _can_refill = [] () noexcept { return false; };
 
 public:
 
@@ -541,8 +543,18 @@ public:
         _segment_available.broadcast();
     }
 
+    void set_can_refill(std::function<bool()> f) {
+        _can_refill = std::move(f);
+    }
+
+    // Wakes the waiters to check again whether a segment can still arrive.
+    void refill_state_changed() {
+        _segment_available.broadcast();
+    }
+
     // From now on a normal write or a streaming one fails instead of waiting for a segment, and the
-    // separator may take the reserve. Only the flushes of the separator free segments of mixed data.
+    // separator may take the reserve but fails once no segment can arrive: with compactions waiting
+    // too, nothing may ever refill the pool. Its records stay in their mixed segments for recovery.
     void begin_stop() {
         _stopping = true;
         _segment_available.broadcast();
@@ -573,7 +585,6 @@ public:
         const auto reserve = [this, src] -> size_t {
             return src == write_source::compaction || (src == write_source::separator && _stopping) ? 0 : _reserved_for_compaction;
         };
-        const bool client_write = src == write_source::normal_write || src == write_source::streaming;
         if (src == write_source::normal_write && _segments.size() <= reserve()) {
             _stats.normal_segments_wait++;
         }
@@ -582,8 +593,13 @@ public:
             co_return coroutine::exception(as->abort_requested_exception_ptr());
         }
         // Once stopped the queue is empty, so this waits on the broken condition variable and throws.
-        while (_segments.size() <= reserve()) {
-            if (client_write && _stopping) {
+        // The injection makes a full disk for the separator.
+        const auto no_segment = [src] {
+            return src == write_source::separator && utils::get_local_injector().is_enabled("logstor_separator_no_segment");
+        };
+        while (_segments.size() <= reserve() || no_segment()) {
+            // A compaction waits on, as the flushes at a stop need the segments it frees.
+            if (_stopping && src != write_source::compaction && (src != write_source::separator || !_can_refill())) {
                 co_return coroutine::exception(std::make_exception_ptr(abort_requested_exception()));
             }
             // Subscribe only once a wait is needed.
@@ -687,6 +703,10 @@ class segment_manager_impl {
     seastar::gate _async_gate;
     future<> _reserve_replenisher{make_ready_future<>()};
     bool _reserve_replenisher_started = false;
+    // The replenisher has picked a segment for the pool, which it has not put there yet.
+    bool _refill_pending = false;
+    // The last attempt of the replenisher failed, so no segment is coming until it succeeds.
+    bool _refill_failing = false;
     seastar::condition_variable _segment_freed_cv;
 
     write_buffer_pool _compaction_buffer_pool;
@@ -1067,6 +1087,11 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     }
 
     _free_segments.reserve(static_cast<size_t>(_configured_max_segments));
+
+    _segment_pool.set_can_refill([this] () noexcept {
+        return !_refill_failing && (_refill_pending || allocatable_new_segment_count() > 0
+            || (!_free_segments.empty() && !utils::get_local_injector().is_enabled("logstor_hold_back_free_segments")));
+    });
 
     namespace sm = seastar::metrics;
 
@@ -1495,8 +1520,15 @@ future<> segment_manager_impl::replenish_reserve() {
         try {
             auto seg = co_await allocate_segment();
             co_await _segment_pool.put(std::move(seg));
+            _refill_pending = false;
+            _refill_failing = false;
+        } catch (seastar::condition_variable_timed_out&) {
+            // No free segment yet, allocate_segment() runs the compaction again.
+            continue;
         } catch (abort_requested_exception&) {
             logstor_logger.debug("Reserve replenisher stopping due to abort");
+            _refill_pending = false;
+            _segment_pool.refill_state_changed();
             break;
         } catch (...) {
             retry = true;
@@ -1504,6 +1536,9 @@ future<> segment_manager_impl::replenish_reserve() {
         }
 
         if (retry) {
+            _refill_pending = false;
+            _refill_failing = true;
+            _segment_pool.refill_state_changed();
             co_await seastar::sleep(std::chrono::seconds(1));
         }
     }
@@ -1531,6 +1566,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
         // first, allocate all new segments sequentially
         if (_next_new_segment_id < _configured_max_segments) {
             auto seg_id = log_segment_id(_next_new_segment_id++);
+            _refill_pending = true;
             co_return co_await make_segment(seg_id);
         }
 
@@ -1540,6 +1576,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
         if (!_free_segments.empty() && !utils::get_local_injector().is_enabled("logstor_hold_back_free_segments")) {
             auto seg_id = _free_segments.front();
             _free_segments.pop_front();
+            _refill_pending = true;
             co_return co_await make_segment(seg_id);
         }
 
@@ -1585,6 +1622,9 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
     auto compaction_disable_guard = co_await _compaction_mgr.disable_compaction_aborting(cg);
 
     auto holder = _async_gate.hold();
+
+    // The index no longer has the group's records, so the separator can give up the ones it holds.
+    cg.on_index_records_dropped();
 
     auto& ss = cg.logstor_segments();
 
@@ -1731,6 +1771,9 @@ future<> compaction_manager_impl::remove(logstor_group& cg) {
 
     auto state = std::move(it->second);
     _groups.erase(it);
+    // Before the close waits for a separator flush: the compaction, which the removal ends anyway, may
+    // compete with it for a segment.
+    state->as.request_abort();
 
     auto close_result = co_await coroutine::as_future(cg.close_separator());
     if (close_result.failed()) {
@@ -1740,7 +1783,6 @@ future<> compaction_manager_impl::remove(logstor_group& cg) {
 
     _sm.update_group_count(_groups.size());
 
-    state->as.request_abort();
     auto f = co_await coroutine::as_future(state->completion.get_future());
     f.ignore_ready_future();
 }
@@ -2274,6 +2316,9 @@ future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::reco
     });
 }
 
+// Wakes a separator flush that waits for a segment, so that it checks again whether its records are live.
+struct separator_flush_woken : public abort_requested_exception {};
+
 future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, logstor_group& cg) {
     logstor_logger.trace("Flushing separator buffer with {} bytes", buf.serialized_size());
 
@@ -2282,17 +2327,36 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
             throw std::runtime_error("flush_separator_buffer failed by injection");
         });
 
-        if (!buf.empty()) {
-            co_await with_scheduling_group(_cfg.separator_sg, [&] {
-                return _sm.write_full_segment(*buf.buf, cg, write_source::separator);
-            });
-            _stats.separator_buffers_flushed++;
+        // Records that are no longer live need no segment: release() gives up their writes and lets
+        // their source segments be freed.
+        bool live = true;
+        while (!buf.empty()) {
+            // Reset before the check: a wake from here on comes after the index changed, and fails the wait.
+            buf.segment_wait = abort_source();
+            live = co_await buf.has_live_records();
+            if (!live) {
+                break;
+            }
+            auto f = co_await coroutine::as_future(with_scheduling_group(_cfg.separator_sg, [&] {
+                return _sm.write_full_segment(*buf.buf, cg, write_source::separator, &buf.segment_wait);
+            }));
+            if (!f.failed()) {
+                _stats.separator_buffers_flushed++;
+                break;
+            }
+            auto ep = f.get_exception();
+            // Thrown only by the wait for a segment, before anything was written.
+            if (!try_catch<separator_flush_woken>(ep)) {
+                co_await coroutine::return_exception_ptr(std::move(ep));
+            }
         }
 
-        auto updates = std::move(buf.pending_updates);
-        buf.pending_updates.clear();
-        co_await when_all_succeed(updates.begin(), updates.end());
-        co_await buf.close();
+        if (live) {
+            auto updates = std::move(buf.pending_updates);
+            buf.pending_updates.clear();
+            co_await when_all_succeed(updates.begin(), updates.end());
+            co_await buf.close();
+        }
 
         // wait for read operations that use the old locations before freeing the old segments
         co_await cg.logstor_index().await_pending_reads();
@@ -2300,7 +2364,10 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
 
     if (flush_result.failed()) {
         auto ep = flush_result.get_exception();
-        ++_stats.separator_flush_failures;
+        // A stop gives up a flush that finds no segment, which is no failure: recovery separates its records.
+        if (!try_catch<abort_requested_exception>(ep)) {
+            ++_stats.separator_flush_failures;
+        }
         logstor_logger.debug("logstor separator flush failure: {}", ep);
 
         auto abort_result = co_await coroutine::as_future(buf.abort(ep));
@@ -2765,8 +2832,22 @@ future<> separator_buffer::release() {
         (void)std::move(update).handle_exception([] (std::exception_ptr) {});
     }
     pending_updates.clear();
+    index_updates = nullptr;
     held_segments.clear();
     min_seq_num.reset();
+}
+
+future<bool> separator_buffer::has_live_records() const {
+    // By position, the buffer may take records while this yields.
+    const auto updates = index_updates;
+    for (size_t i = 0; updates && i < updates->size(); ++i) {
+        const auto& u = (*updates)[i];
+        if (u.index->is_record_alive(u.key, u.prev_location)) {
+            co_return true;
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return false;
 }
 
 // logstor_group
@@ -2863,6 +2944,24 @@ future<> logstor_group::flush_separator(std::optional<segment_sequence> seq_num)
     }
 }
 
+void logstor_group::on_index_records_dropped() {
+    if (!_separator_flush.available()) {
+        _flushing_buffer.segment_wait.request_abort_ex(std::make_exception_ptr(separator_flush_woken()));
+        // The active buffer holds source segments too, flush it once this flush is done.
+        // Only while enabled: close_separator() clears that before it waits, so its continuation is registered after ours.
+        if (_separator_enabled) {
+            (void)_separator_flush.get_future().then_wrapped([this] (future<> f) {
+                f.ignore_ready_future();
+                if (_separator_enabled && !_active_buffer.empty() && _separator_flush.available()) {
+                    switch_active_separator_buffer();
+                }
+            });
+        }
+    } else if (_separator_enabled && !_active_buffer.empty()) {
+        switch_active_separator_buffer();
+    }
+}
+
 future<> logstor_group::close_separator() {
     // Before anything that can wait: a separator write that is parked on the pool or on the flush
     // below resumes into write_to_separator()'s check and fails there, rather than buffering a record
@@ -2880,10 +2979,14 @@ future<> logstor_group::close_separator() {
         if (!buf.allocated()) {
             co_return;
         }
-        if (!buf.empty()) {
-            logstor_logger.warn("Discarding a logstor separator buffer of table {} with {} bytes from {} segments,"
-                    " the segments will not be reclaimed", table_id(), buf.serialized_size(), buf.held_segments.size());
+        if (!co_await buf.has_live_records()) {
+            // The index points elsewhere, so the source segments may go once no read uses them.
+            co_await logstor_index().await_pending_reads();
+            co_await buf.release();
+            co_return;
         }
+        logstor_logger.warn("Discarding a logstor separator buffer of table {} with {} bytes from {} segments,"
+                " the segments will not be reclaimed", table_id(), buf.serialized_size(), buf.held_segments.size());
         // The same teardown a failed flush takes: abort() fails the writes the buffer holds, which
         // is what lets it be closed, and marks the segments those writes came from. Failing partway
         // leaves the rest to the group's destruction, which is why remove() only logs what comes out

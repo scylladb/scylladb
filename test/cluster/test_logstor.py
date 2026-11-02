@@ -9,7 +9,7 @@ import random
 import time
 from pathlib import Path
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import create_new_test_keyspace, new_test_keyspace
+from test.cluster.util import new_test_keyspace
 from cassandra import WriteFailure, WriteTimeout
 from cassandra.protocol import ConfigurationException, ServerError
 import pytest
@@ -237,7 +237,7 @@ async def test_recovery_basic(manager: ScyllaClusterManager, fail_separator_flus
             assert rows[0].pk == pk, f"Key {pk} has wrong pk value"
             assert rows[0].v == expected_v, f"Key {pk} has wrong value after additional writes"
 
-async def check_recovery_separates_mixed_data(manager: ScyllaClusterManager, write, min_flushed: int, extra_cfg=None, drop_keyspace=True):
+async def check_recovery_separates_mixed_data(manager: ScyllaClusterManager, write, min_flushed: int, extra_cfg=None):
     """
     Recovery separates the live records of mixed segments: restart with `write`'s data left in
     them, expect more than `min_flushed` separator flushes and no lost key.
@@ -266,11 +266,8 @@ async def check_recovery_separates_mixed_data(manager: ScyllaClusterManager, wri
             rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
             assert len(rows) == 1 and rows[0].v == v, f"Key {pk} wrong after recovery"
 
-    if drop_keyspace:
-        async with new_test_keyspace(manager, "WITH tablets = {'initial': 1}") as ks:
-            await check(ks)
-    else:
-        await check(await create_new_test_keyspace(cql, "WITH tablets = {'initial': 1}"))
+    async with new_test_keyspace(manager, "WITH tablets = {'initial': 1}") as ks:
+        await check(ks)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_recovery_separates_more_than_two_buffers(manager: ScyllaClusterManager):
@@ -338,8 +335,8 @@ async def test_recovery_with_no_more_free_segments_than_the_reserve(manager: Scy
 async def test_start_with_live_data_and_no_more_free_segments_than_the_reserve(manager: ScyllaClusterManager):
     """
     Restart on a disk full of live data: recovery leaves no more free segments than the compaction
-    reserve, so the node has to start without the first active segment. The keyspace is left in
-    place, as dropping its table would wait for a separator flush that needs a segment.
+    reserve, so the node has to start without the first active segment. Dropping the keyspace then
+    must not wait for a segment for the separator records recovery left buffered.
     """
     async def write(cql, ks, ip_addr):
         # One record per segment, mixed or separated, so that recovery frees as many segments as it takes.
@@ -347,7 +344,7 @@ async def test_start_with_live_data_and_no_more_free_segments_than_the_reserve(m
 
     # Auto compaction could take a reserve segment, and the test counts on the reserve being free.
     cfg = {'logstor_disk_size_in_mb': 4, 'logstor_file_size_in_mb': 1, 'logstor_compaction_trigger_threshold': 0}
-    await check_recovery_separates_mixed_data(manager, write, min_flushed=1, extra_cfg=cfg, drop_keyspace=False)
+    await check_recovery_separates_mixed_data(manager, write, min_flushed=1, extra_cfg=cfg)
 
 async def test_recovery_with_segment_reuse(manager: ScyllaClusterManager):
     """
@@ -903,9 +900,11 @@ async def test_compaction(manager: ScyllaClusterManager):
         for i in range(10):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
 
-        # few writes to the same key to create dead data except the last one
+        # few writes to the same key to create dead data except the last one. Flush each one while it
+        # is live: the separator writes no segment for records that are already dead.
         for _ in range(5):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (100, '{value}')")
+            await manager.api.logstor_flush(servers[0].ip_addr)
 
         # flush all segments and put them into a single compaction group since
         # there is a single tablet.

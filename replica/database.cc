@@ -2945,6 +2945,11 @@ future<> database::shutdown() {
     co_await _compaction_manager.drain();
     co_await _stop_barrier.arrive_and_wait();
 
+    // Closing a table flushes its separator buffers, which on a full disk would wait for ever for a segment.
+    if (_logstor) {
+        _logstor->begin_stop();
+    }
+
     // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
     // system.large_partitions after the regular tables.
     co_await close_tables(database::table_kind::user);
@@ -3351,9 +3356,8 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
             co_await flush_or_clear(*v);
         });
         if (cf.uses_logstor()) {
-            // flush and only then disable the compaction. flush writes to new segments, and the compaction
-            // is what generates free segments for new writes.
-            co_await cf.flush_separator();
+            // No separator flush: the truncate drops the buffered records from the index, and then they
+            // need no segment, which a full disk may not have.
             auto& logstor_cm = cf.get_logstor_compaction_manager();
             co_await cf.parallel_foreach_logstor_compaction_group([&logstor_cm, &st] (replica::compaction_group& cg) -> future<> {
                 st.logstor_cres.emplace_back(co_await logstor_cm.disable_compaction(cg.as_logstor_group()));
