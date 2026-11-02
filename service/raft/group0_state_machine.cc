@@ -30,7 +30,7 @@
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "service/storage_service.hh"
-#include "db/schema_applier.hh"
+#include "db/schema_and_topology_applier.hh"
 #include "idl/storage_service.dist.hh"
 #include "idl/group0_state_machine.dist.hh"
 #include "idl/group0_state_machine.dist.impl.hh"
@@ -375,10 +375,10 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     // effective replication maps from the persisted state and commits them together.
     // Before non-system keyspaces are loaded (early raft log replay) the mutations
     // are only persisted.
-    std::unique_ptr<db::schema_tables::schema_applier> applier;
+    std::unique_ptr<db::schema_tables::schema_and_topology_applier> applier;
     if (state_change && _in_memory_state_machine_enabled) {
-        applier = std::make_unique<db::schema_tables::schema_applier>(_sp.container(), _ss.container(), _ss._sys_ks,
-                topology_changed ? db::schema_tables::schema_applier::topology_reload::incremental : db::schema_tables::schema_applier::topology_reload::none);
+        applier = std::make_unique<db::schema_tables::schema_and_topology_applier>(_sp.container(), _ss.container(), _ss._sys_ks,
+                topology_changed ? db::schema_tables::schema_and_topology_applier::topology_reload::incremental : db::schema_tables::schema_and_topology_applier::topology_reload::none);
     }
     std::exception_ptr ex;
     try {
@@ -663,10 +663,10 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
 
     // The schema in the snapshot is applied to memory together with the topology
     // in it, once both are persisted.
-    std::unique_ptr<db::schema_tables::schema_applier> applier;
+    std::unique_ptr<db::schema_tables::schema_and_topology_applier> applier;
     if (_in_memory_state_machine_enabled) {
-        applier = std::make_unique<db::schema_tables::schema_applier>(_sp.container(), _ss.container(), _ss._sys_ks,
-                db::schema_tables::schema_applier::topology_reload::full);
+        applier = std::make_unique<db::schema_tables::schema_and_topology_applier>(_sp.container(), _ss.container(), _ss._sys_ks,
+                db::schema_tables::schema_and_topology_applier::topology_reload::full);
     }
     std::exception_ptr ex;
     bool persisted = false;
