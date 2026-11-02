@@ -17,7 +17,7 @@ import re
 import pytest
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.protocol import AlreadyExists, InvalidRequest
-from cassandra.query import UNSET_VALUE
+from cassandra.query import SimpleStatement, UNSET_VALUE
 
 from .util import new_test_table, new_type, unique_name
 
@@ -698,3 +698,70 @@ def test_function_with_null(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, t timeuuid') as table:
         cql.execute(f'INSERT INTO {table} (k) VALUES (0)')
         assert list(cql.execute(f'SELECT dateOf(t), unixTimestampOf(t) FROM {table} WHERE k = 0')) == [(None, None)]
+
+# Test that SELECT COUNT(*) on a whole table counts all the rows, even when
+# the table has more rows than one page. Although COUNT(*) returns a single
+# row, the aggregation reads the table internally in pages, and when the
+# request has a page size (fetch_size), that page size is used for this
+# internal paging. The test checks counts just below, at, and just above
+# the page size, and of one and a half pages.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_large_count, which originally came
+# from Cassandra's old Python cql_tests.py (large_count_test). The dtest
+# used a page size of 10,000 and wrote 15,000 rows, which was slow. This test
+# checks the same page boundaries with a page size of 10 and 15 rows.
+def test_count_across_pages(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v int') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (k) VALUES (?)')
+        count = SimpleStatement(f'SELECT COUNT(*) FROM {table}', fetch_size=10)
+        k = 0
+        for n in [9, 10, 11, 15]:
+            while k < n:
+                k += 1
+                cql.execute(insert, [k])
+            assert list(cql.execute(count)) == [(n,)]
+
+# Test SELECT DISTINCT of the partition key and static columns, with paging,
+# on tables with several rows in each partition. Every partition should be
+# returned exactly once, with its static columns' values, whatever the page
+# size. The test checks a whole-table scan, a SELECT with "k IN (...)", which
+# returns the partitions in the order of the IN list, and a LIMIT. The second
+# table has 25 rows in each partition, so some of the page sizes are just
+# below, at, and just above the number of rows in a partition.
+# CASSANDRA-8108 and CASSANDRA-8087 were bugs in paging such DISTINCT queries
+# on static columns.
+# Translated from the paging parts of scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_static_columns_with_distinct, which
+# originally came from Cassandra's old Python cql_tests.py
+# (static_columns_with_distinct_test). The rest of that test is in
+# cassandra_tests/validation/entities/static_columns_test.py::testStaticColumnsWithDistinct,
+# but that translation does not page. The dtest paged the first table only
+# with page size 7, and this test tries the second table's page sizes on both
+# tables, except page size 1000, which on these small tables is no different
+# from the default page size.
+def test_static_distinct_paging(cql, test_keyspace):
+    fetch_sizes = [None, 2, 5, 7, 10, 24, 25, 26]
+    keys = ', '.join(str(i) for i in range(10))
+    with new_test_table(cql, test_keyspace, 'k int, p int, s int static, PRIMARY KEY (k, p)') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (k, p, s) VALUES (?, ?, ?)')
+        execute_concurrent_with_args(cql, insert, [(i, j, i) for i in range(10) for j in range(10)])
+        expected = [(i, i) for i in range(10)]
+        for fetch_size in fetch_sizes:
+            stmt = SimpleStatement(f'SELECT DISTINCT k, s FROM {table}', fetch_size=fetch_size)
+            assert sorted(cql.execute(stmt)) == expected
+            stmt = SimpleStatement(f'SELECT DISTINCT k, s FROM {table} WHERE k IN ({keys})', fetch_size=fetch_size)
+            assert list(cql.execute(stmt)) == expected
+    with new_test_table(cql, test_keyspace, 'k int, c1 int, c2 int, s1 int static, s2 int static, PRIMARY KEY (k, c1, c2)') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (k, c1, c2, s1, s2) VALUES (?, ?, ?, ?, ?)')
+        execute_concurrent_with_args(cql, insert, [(i, j, k, i, i + 1) for i in range(10) for j in range(5) for k in range(5)])
+        expected_s1 = [(i, i) for i in range(10)]
+        expected_s2 = [(i, i + 1) for i in range(10)]
+        def select(columns, rest, fetch_size):
+            return list(cql.execute(SimpleStatement(f'SELECT DISTINCT {columns} FROM {table} {rest}', fetch_size=fetch_size)))
+        for fetch_size in fetch_sizes:
+            assert sorted(select('k, s1', '', fetch_size)) == expected_s1
+            assert sorted(select('k, s2', '', fetch_size)) == expected_s2
+            assert sorted(select('k, s1', 'LIMIT 10', fetch_size)) == expected_s1
+            assert select('k, s1', f'WHERE k IN ({keys})', fetch_size) == expected_s1
+            assert select('k, s2', f'WHERE k IN ({keys})', fetch_size) == expected_s2
+            assert sorted(select('k, s1', f'WHERE k IN ({keys}) LIMIT 10', fetch_size)) == expected_s1
