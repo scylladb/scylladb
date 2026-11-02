@@ -21,12 +21,14 @@ from datetime import datetime
 
 import pytest
 import requests
+from cassandra import ConsistencyLevel, ReadFailure, ReadTimeout, Unavailable
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.protocol import AlreadyExists, InvalidRequest
 from cassandra.query import SimpleStatement, UNSET_VALUE
 
 from . import nodetool
-from .util import ScyllaMetrics, config_value_context, new_materialized_view, new_test_keyspace, new_test_table, new_type, new_user, unique_name
+from .test_logs import logfile, logfile_path, wait_for_log
+from .util import ScyllaMetrics, config_value_context, new_cql, new_materialized_view, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
 # Test that a SELECT can list the same column more than once, and returns
@@ -1922,3 +1924,211 @@ def test_cast_invalid_error_message(cql, test_keyspace):
             with pytest.raises(InvalidRequest) as e:
                 cql.execute(f'SELECT {expression} FROM {table}')
             assert 'org.apache.cassandra' not in str(e.value), expression
+
+#############################################################################
+# The following tests were translated from scylla-dtest's cql_tests.py.
+# The first six are from TestStorageProxyCQL, smoke tests which run each
+# kind of CQL statement at least once.
+#############################################################################
+
+# Test CREATE TABLE (including a COMPACT STORAGE table), ALTER TABLE ADD,
+# INSERT, SELECT, TRUNCATE and DROP TABLE.
+# Translated from cql_tests.py::TestStorageProxyCQL::test_table.
+def test_smoke_table_statements(cql, test_keyspace, compact_storage):
+    table1 = f'{test_keyspace}.{unique_name()}'
+    table2 = f'{test_keyspace}.{unique_name()}'
+    cql.execute(f'CREATE TABLE {table1} (k int PRIMARY KEY, v1 int)')
+    cql.execute(f'CREATE TABLE {table2} (k int, c1 int, v1 int, PRIMARY KEY (k, c1)) WITH COMPACT STORAGE')
+    try:
+        cql.execute(f'ALTER TABLE {table1} ADD v2 int')
+        for i in range(10):
+            cql.execute(f'INSERT INTO {table1} (k, v1, v2) VALUES ({i}, {i}, {i})')
+            cql.execute(f'INSERT INTO {table2} (k, c1, v1) VALUES ({i}, {i}, {i})')
+        assert sorted(cql.execute(f'SELECT * FROM {table1}')) == [(i, i, i) for i in range(10)]
+        assert sorted(cql.execute(f'SELECT * FROM {table2}')) == [(i, i, i) for i in range(10)]
+        cql.execute(f'TRUNCATE {table1}')
+        cql.execute(f'TRUNCATE {table2}')
+        assert list(cql.execute(f'SELECT * FROM {table1}')) == []
+        assert list(cql.execute(f'SELECT * FROM {table2}')) == []
+    finally:
+        cql.execute(f'DROP TABLE {table1}')
+        cql.execute(f'DROP TABLE {table2}')
+    for table in [table1, table2]:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f'SELECT * FROM {table}')
+
+# Test CREATE INDEX, a query using the index, and DROP INDEX, after which
+# the same query requires ALLOW FILTERING.
+# Translated from cql_tests.py::TestStorageProxyCQL::test_index.
+def test_smoke_index_statements(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v1 int, v2 int') as table:
+        index = unique_name()
+        cql.execute(f'CREATE INDEX {index} ON {table} (v1)')
+        for i in range(10):
+            cql.execute(f'INSERT INTO {table} (k, v1, v2) VALUES ({i}, {i}, {i})')
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE v1 = 0')) == [(0, 0, 0)]
+        cql.execute(f'DROP INDEX {test_keyspace}.{index}')
+        with pytest.raises(InvalidRequest):
+            cql.execute(f'SELECT * FROM {table} WHERE v1 = 0')
+
+# Test CREATE TYPE, ALTER TYPE ADD, tables using the type before and after
+# the ALTER, and DROP TYPE, after which the type can't be used.
+# Translated from cql_tests.py::TestStorageProxyCQL::test_type.
+def test_smoke_type_statements(cql, test_keyspace):
+    # new_type() runs CREATE TYPE, and DROP TYPE when the block ends.
+    with new_type(cql, test_keyspace, '(street text, city text, zip_code int)') as typ:
+        with new_test_table(cql, test_keyspace, f'id int PRIMARY KEY, address frozen<{typ}>'):
+            cql.execute(f'ALTER TYPE {typ} ADD phones set<text>')
+            with new_test_table(cql, test_keyspace, f'id int PRIMARY KEY, address frozen<{typ}>'):
+                pass
+    with pytest.raises(InvalidRequest):
+        with new_test_table(cql, test_keyspace, f'id int PRIMARY KEY, address frozen<{typ}>'):
+            pass
+
+# Test CREATE USER, ALTER USER and DROP USER.
+# Translated from cql_tests.py::TestStorageProxyCQL::test_user.
+def test_smoke_user_statements(cql):
+    user1 = unique_name()
+    cql.execute(f"CREATE USER {user1} WITH PASSWORD 'secret'")
+    cql.execute(f'DROP USER {user1}')
+    # Cassandra limits how often a role's password may be changed, and
+    # counts the password set by CREATE USER, so the user for ALTER USER is
+    # created without a password and ALTER USER sets its first password.
+    user2 = unique_name()
+    cql.execute(f'CREATE USER {user2}')
+    try:
+        cql.execute(f"ALTER USER {user2} WITH PASSWORD 'secret^2'")
+    finally:
+        cql.execute(f'DROP USER {user2}')
+
+# Test INSERT, UPDATE, SELECT (also with IN), SELECT COUNT and DELETE.
+# Translated from cql_tests.py::TestStorageProxyCQL::test_statements.
+def test_smoke_data_statements(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'kind text, time int, v1 int, v2 int, PRIMARY KEY (kind, time)') as table:
+        for i in range(10):
+            cql.execute(f"INSERT INTO {table} (kind, time, v1, v2) VALUES ('ev1', {i}, {i}, {i})")
+            cql.execute(f"INSERT INTO {table} (kind, time, v1, v2) VALUES ('ev2', {i}, {i}, {i})")
+        assert list(cql.execute(f"SELECT COUNT(*) FROM {table} WHERE kind = 'ev1'")) == [(10,)]
+        assert list(cql.execute(f"SELECT COUNT(*) FROM {table} WHERE kind IN ('ev1', 'ev2')")) == [(20,)]
+        assert list(cql.execute(f"SELECT COUNT(*) FROM {table} WHERE kind IN ('ev1', 'ev2') AND time = 0")) == [(2,)]
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE kind = 'ev1'")) == [('ev1', i, i, i) for i in range(10)]
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE kind = 'ev2'")) == [('ev2', i, i, i) for i in range(10)]
+        for i in range(10):
+            cql.execute(f"UPDATE {table} SET v1 = 0, v2 = 0 WHERE kind = 'ev1' AND time = {i}")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE kind = 'ev1'")) == [('ev1', i, 0, 0) for i in range(10)]
+        cql.execute(f"DELETE FROM {table} WHERE kind = 'ev1'")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE kind = 'ev1'")) == []
+        assert list(cql.execute(f"SELECT COUNT(*) FROM {table} WHERE kind = 'ev1'")) == [(0,)]
+
+# Test a BATCH of INSERTs, an UPDATE and a DELETE. The dtest only checked
+# that the batch succeeds; this test also checks its result.
+# Translated from cql_tests.py::TestStorageProxyCQL::test_batch.
+def test_smoke_batch_statement(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'userid text PRIMARY KEY, name text, password text') as table:
+        cql.execute(f"""
+            BEGIN BATCH
+                INSERT INTO {table} (userid, password, name) VALUES ('user2', 'ch@ngem3b', 'second user');
+                UPDATE {table} SET password = 'ps22dhds' WHERE userid = 'user3';
+                INSERT INTO {table} (userid, password) VALUES ('user4', 'ch@ngem3c');
+                DELETE name FROM {table} WHERE userid = 'user1';
+            APPLY BATCH
+        """)
+        assert sorted(cql.execute(f'SELECT userid, name, password FROM {table}')) == [
+            ('user2', 'second user', 'ch@ngem3b'), ('user3', None, 'ps22dhds'), ('user4', None, 'ch@ngem3c')]
+
+# Test that prepared statements keep working after the table's schema
+# changes: a "SELECT *" statement is transparently re-prepared after a
+# column is dropped or added, while a statement listing the dropped column
+# fails (CASSANDRA-7910).
+# Translated, together with test_prepared_statement_invalidation_alter_type
+# below, from cql_tests.py::TestMiscellaneousCQL::test_prepared_statement_invalidation.
+def test_prepared_statement_invalidation(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, a int, b int, c int') as table:
+        cql.execute(f'INSERT INTO {table} (k, a, b, c) VALUES (0, 0, 0, 0)')
+        wildcard_prepared = cql.prepare(f'SELECT * FROM {table}')
+        explicit_prepared = cql.prepare(f'SELECT k, a, b, c FROM {table}')
+        assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0, 0)]
+        cql.execute(f'ALTER TABLE {table} DROP c')
+        # The wildcard SELECT can be automatically re-prepared by the driver
+        assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0)]
+        # but re-preparing the statement with the dropped column fails
+        with pytest.raises(InvalidRequest):
+            cql.execute(explicit_prepared)
+        cql.execute(f'ALTER TABLE {table} ADD d int')
+        assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0, None)]
+
+# Test that prepared statements keep working after a column's type is
+# changed with ALTER TABLE ... TYPE: both a "SELECT *" statement and one
+# listing the columns are re-prepared successfully. Cassandra removed
+# ALTER TABLE ... TYPE in version 3.0.11 (CASSANDRA-12443), but Scylla
+# still supports it, so this test is scylla_only.
+# Translated, together with test_prepared_statement_invalidation above,
+# from cql_tests.py::TestMiscellaneousCQL::test_prepared_statement_invalidation.
+def test_prepared_statement_invalidation_alter_type(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, a int, b int, d int') as table:
+        cql.execute(f'INSERT INTO {table} (k, a, b) VALUES (0, 0, 0)')
+        wildcard_prepared = cql.prepare(f'SELECT * FROM {table}')
+        explicit_prepared = cql.prepare(f'SELECT k, a, b, d FROM {table}')
+        cql.execute(f'ALTER TABLE {table} ALTER d TYPE blob')
+        assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0, None)]
+        assert list(cql.execute(explicit_prepared)) == [(0, 0, 0, None)]
+
+# Test that a collection with more elements than the threshold
+# compaction_collection_elements_count_warning_threshold is reported when
+# written to an sstable, with a "Writing large collection" warning in the
+# log and a row in system.large_cells, while a collection with exactly as
+# many elements as the threshold is not. The test sets the threshold at
+# runtime and reads Scylla's log, so it is Scylla-only (the logfile fixture
+# skips it on Cassandra).
+# Translated from cql_tests.py::TestMiscellaneousCQL::test_large_collection.
+def test_large_collection(cql, test_keyspace, logfile):
+    threshold = 1000
+    with config_value_context(cql, 'compaction_collection_elements_count_warning_threshold', str(threshold)), \
+         new_test_table(cql, test_keyspace, 'userid text PRIMARY KEY, properties map<int, text>') as table:
+        ks, name = table.split('.')
+        message = f'Writing large collection {ks}/{name}'
+        large_cells = f"SELECT * FROM system.large_cells WHERE keyspace_name = '{ks}' AND table_name = '{name}' ALLOW FILTERING"
+        update = cql.prepare(f"UPDATE {table} SET properties[?] = 'x' WHERE userid = 'user'")
+        execute_concurrent_with_args(cql, update, [(i,) for i in range(threshold)])
+        nodetool.compact(cql, table)
+        assert message not in logfile.read()
+        assert list(cql.execute(large_cells)) == []
+        cql.execute(update, [threshold])
+        nodetool.compact(cql, table)
+        wait_for_log(logfile, re.escape(message))
+        assert len(list(cql.execute(large_cells))) == 1
+
+# The following two tests check that a query fails with a timeout when the
+# server's request timeouts are zero: a full-table scan, and a query
+# filtering on an indexed column. The dtests restarted the node with these
+# timeouts; these tests set them at runtime, so they are scylla_only.
+# Translated from cql_tests.py::TestAbortedQueries tests test_local_query
+# and test_index_query (the original Cassandra tests used a test-only
+# option of Cassandra to slow down reads instead).
+# Scylla copies the timeouts into each connection when it is opened, so
+# the query must be sent on a new connection opened after the change.
+# A zero timeout reliably fails these queries: since 2021, Seastar's
+# lowres_clock, which the timeout timers use, is updated every task quota
+# (0.5ms), not every 10ms, so a 0ms timeout fails the read as soon as it
+# yields to the reactor - which a scan of hundreds of rows does.
+def check_query_times_out(cql, statement, args=None):
+    with config_value_context(cql, 'read_request_timeout_in_ms', '0'), \
+         config_value_context(cql, 'range_request_timeout_in_ms', '0'), \
+         new_cql(cql) as ncql:
+        with pytest.raises((ReadTimeout, ReadFailure, Unavailable)):
+            ncql.execute(statement, args)
+
+def test_local_query_times_out(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, val text') as table:
+        insert = cql.prepare(f"INSERT INTO {table} (id, val) VALUES (?, 'foo')")
+        execute_concurrent_with_args(cql, insert, [(i,) for i in range(500)])
+        check_query_times_out(cql, SimpleStatement(f'SELECT * FROM {table}', consistency_level=ConsistencyLevel.ONE))
+
+def test_index_query_times_out(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, col int, val text') as table:
+        cql.execute(f'CREATE INDEX ON {table} (col)')
+        insert = cql.prepare(f"INSERT INTO {table} (id, col, val) VALUES (?, ?, 'foo')")
+        execute_concurrent_with_args(cql, insert, [(i, i // 10) for i in range(500)])
+        statement = cql.prepare(f'SELECT * FROM {table} WHERE col < ? ALLOW FILTERING')
+        statement.consistency_level = ConsistencyLevel.ONE
+        check_query_times_out(cql, statement, [50])
