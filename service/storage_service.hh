@@ -134,6 +134,7 @@ class raft_group0_client;
 class tablet_virtual_task;
 class task_manager_module;
 class topology_state_machine;
+struct topology;
 namespace strong_consistency {
     class groups_manager;
 }
@@ -661,6 +662,13 @@ public:
     // The message of the error finalization raises, here and in the topology coordinator,
     // when table `s` of keyspace `ks_name` has no tablet map: why, and the way out.
     static sstring missing_tablet_map_error(const sstring& ks_name, const schema& s);
+
+    // Throws unless every materialized view of keyspace `ks_name` is built on every
+    // normal node of `topology`: the migration does not hand builds over to tablets.
+    // Checked when the migration starts and, since a view can be created while it
+    // runs, by forward finalization before the keyspace switches.
+    static future<> validate_keyspace_views_for_tablets_migration(replica::database& db, db::system_keyspace& sys_ks,
+            const topology& topology, const sstring& ks_name);
 
     // Tables created in a keyspace that is being migrated from vnodes to
     // tablets need a tablet map of their own, or the migration can never be

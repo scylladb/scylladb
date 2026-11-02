@@ -4587,16 +4587,21 @@ async def test_create_view_and_index_during_migration(manager: ScyllaClusterMana
     with the base table's partition key is co-located with it, any other view and an
     index's backing view get a vnode-derived map of their own. Forward finalization must
     insist on those maps as it does for base tables, or a view stays on vnodes in a
-    tablets keyspace and the next schema change fails to build its replication map.
+    tablets keyspace and the next schema change fails to build its replication map. It
+    must also wait for their builds, which are not handed over to tablets, as the start
+    of the migration waits for the builds of the views that are there.
 
     Steps:
     1. Start a single node, create a vnode keyspace with one table and populate it.
-    2. Start the migration; create two materialized views and a secondary index on the
-       table. The view keyed by the base's partition key must be co-located with it, the
-       other view and the index must get the vnode-derived tablet map.
-    3. Upgrade the node and restart it.
-    4. Finalize. The keyspace must switch to tablets, and the base table, the view and
-       the index must all still answer.
+    2. Start the migration and upgrade the node; pause the view builder before it
+       marks a view as built.
+    3. Create two materialized views and a secondary index on the table. The view keyed
+       by the base's partition key must be co-located with it, the other view and the
+       index must get the vnode-derived tablet map.
+    4. Forward finalization must refuse while the views are unbuilt. Let the builds
+       finish.
+    5. Restart the node and finalize. The keyspace must switch to tablets, and the base
+       table, the views and the index must all still answer.
     """
     num_keys = 100
 
@@ -4612,10 +4617,14 @@ async def test_create_view_and_index_during_migration(manager: ScyllaClusterMana
         stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c, d) VALUES (?, ?, ?)")
         await asyncio.gather(*(cql.run_async(stmt, [k, k, k % 10]) for k in range(num_keys)))
 
-        logger.info("Starting vnodes-to-tablets migration")
+        logger.info("Starting vnodes-to-tablets migration and upgrading the node")
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
 
-        logger.info("Creating a materialized view and a secondary index on the migrating table")
+        pause = "view_builder_pause_before_mark_success"
+        await manager.api.enable_injection(server.ip_addr, pause, one_shot=False)
+
+        logger.info("Creating materialized views and a secondary index on the migrating table")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.test_by_c AS SELECT * FROM {ks}.test "
                             "WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, pk)")
         await cql.run_async(f"CREATE INDEX test_d_idx ON {ks}.test (d)")
@@ -4628,11 +4637,16 @@ async def test_create_view_and_index_during_migration(manager: ScyllaClusterMana
         view_id = await manager.get_table_or_view_id(ks, "test_by_pk")
         assert await get_base_table(manager, view_id) == base_id, \
             "The view with the base table's partition key was not co-located with it"
+
+        logger.info("Verifying forward finalization waits for the views to be built")
+        with pytest.raises(HTTPError, match="is not built"):
+            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.message_injection(server.ip_addr, pause)
+        await manager.api.disable_injection(server.ip_addr, pause)
         for view in ("test_by_c", "test_d_idx_index", "test_by_pk"):
             await wait_for_view(cql, view, len(servers))
 
-        logger.info("Upgrading the node and restarting it")
-        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        logger.info("Restarting the node")
         await manager.server_restart(server.server_id)
         await reconnect_driver(manager)
         cql, _ = await manager.get_ready_cql(servers)

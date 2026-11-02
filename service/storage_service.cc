@@ -4487,7 +4487,7 @@ static void validate_rf_for_tablets_migration(const replica::database& db,
 // using it are accepted: finalizing the migration switches them to 'timeout'.
 //
 // Throws std::runtime_error if any view cannot be migrated.
-static future<> validate_keyspace_views_for_tablets_migration(
+future<> storage_service::validate_keyspace_views_for_tablets_migration(
         replica::database& db,
         db::system_keyspace& sys_ks,
         const topology& topology,
@@ -5181,6 +5181,8 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
                     throw std::runtime_error(missing_tablet_map_error(ks_name, *schema));
                 }
             }
+            // A view created mid-migration may still be building.
+            co_await validate_keyspace_views_for_tablets_migration(db, get_system_keyspace(), _topology_state_machine._topology, ks_name);
         }
 
         slogger.info("Submitting finalization request for keyspace '{}' with {} table(s) and view(s)",

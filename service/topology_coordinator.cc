@@ -1773,6 +1773,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 throw std::runtime_error(storage_service::missing_tablet_map_error(ks_name, *schema));
                             }
                         }
+                        // A view created mid-migration may still be building, and a build is
+                        // not handed over to tablets: the switch has to wait for it, as the
+                        // start of the migration waited for the views that were there.
+                        co_await storage_service::validate_keyspace_views_for_tablets_migration(_db, _sys_ks, _topo_sm._topology, ks_name);
                     }
 
                     co_await _tablet_load_stats_refresh.trigger();
