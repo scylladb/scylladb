@@ -18,6 +18,8 @@
 #include <forward_list>
 #include <iterator>
 #include <optional>
+#include <seastar/core/byteorder.hh>
+#include "utils/fragment_range.hh"
 
 class abstract_type;
 class compaction_garbage_collector;
@@ -102,6 +104,11 @@ public:
     iterator begin() const;
     iterator end() const;
 
+    // Calls fn(key, cell) for each element until it returns false. Cheaper than
+    // the iterator in hot loops: elements are parsed in place, not copied out.
+    template <typename Fn>
+    void for_each_element(Fn&& fn) const;
+
     class printer {
         const abstract_type& _type;
         const collection_mutation_view& _cmv;
@@ -111,6 +118,80 @@ public:
         friend fmt::formatter<printer>;
     };
 };
+
+namespace collection_mutation_detail {
+
+// Size of the element framed at the start of `frag`, or 0 if it does not lie wholly within it.
+[[gnu::always_inline]] inline size_t contiguous_element_size(bytes_view frag) {
+    constexpr size_t len_size = sizeof(uint32_t);
+    const auto p = reinterpret_cast<const char*>(frag.data());
+    if (frag.size() < 2 * len_size) {
+        return 0;
+    }
+    const size_t key_size = seastar::read_be<uint32_t>(p);
+    if (frag.size() - 2 * len_size < key_size) {
+        return 0;
+    }
+    const size_t value_size = seastar::read_be<uint32_t>(p + len_size + key_size);
+    if (frag.size() - 2 * len_size - key_size < value_size) {
+        return 0;
+    }
+    return 2 * len_size + key_size + value_size;
+}
+
+// Reads (and consumes) one element's key and value bytes from `v`. Elements
+// almost always lie within one fragment; parse those without fragmented reads.
+[[gnu::always_inline]] inline std::pair<managed_bytes_view, managed_bytes_view> read_element(managed_bytes_view& v) {
+    constexpr size_t len_size = sizeof(uint32_t);
+    const auto frag = v.current_fragment();
+    if (const auto total = contiguous_element_size(frag)) {
+        const size_t key_size = seastar::read_be<uint32_t>(reinterpret_cast<const char*>(frag.data()));
+        std::pair<managed_bytes_view, managed_bytes_view> ret{
+                managed_bytes_view(frag.substr(len_size, key_size)),
+                managed_bytes_view(frag.substr(2 * len_size + key_size, total - 2 * len_size - key_size))};
+        v.remove_prefix(total);
+        return ret;
+    }
+    auto key = v.prefix(read_simple<uint32_t>(v));
+    v.remove_prefix(key.size_bytes());
+    auto value = v.prefix(read_simple<uint32_t>(v));
+    v.remove_prefix(value.size_bytes());
+    return {key, value};
+}
+
+// Reads (and consumes) the tombstone prefix from `v`; empty if the has_tombstone flag is not set.
+inline tombstone read_collection_tombstone(managed_bytes_view& v) {
+    if (read_simple<uint8_t>(v)) {
+        auto timestamp = read_simple<api::timestamp_type>(v);
+        auto deletion_time = read_simple<gc_clock::duration::rep>(v);
+        return tombstone{timestamp, gc_clock::time_point(gc_clock::duration(deletion_time))};
+    }
+    return tombstone{};
+}
+
+// Reads (and consumes) the cell-count field, after the tombstone.
+inline uint32_t read_collection_size(managed_bytes_view& v) {
+    return read_simple<uint32_t>(v);
+}
+
+// Skips the tombstone and returns the element count.
+inline uint32_t skip_header(managed_bytes_view& v) {
+    read_collection_tombstone(v);
+    return read_collection_size(v);
+}
+
+}
+
+template <typename Fn>
+void collection_mutation_view::for_each_element(Fn&& fn) const {
+    auto v = data;
+    for (auto n = collection_mutation_detail::skip_header(v); n; --n) {
+        auto [key, value] = collection_mutation_detail::read_element(v);
+        if (!fn(key, atomic_cell_view::from_bytes(value))) {
+            return;
+        }
+    }
+}
 
 // A serialized mutation of a collection of cells.
 // Used to represent mutations of collections (lists, maps, sets) or non-frozen user defined types.

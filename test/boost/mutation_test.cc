@@ -226,6 +226,67 @@ collection_mutation make_collection_mutation(tombstone t, bytes key1, atomic_cel
     return std::move(w).finish();
 }
 
+// serialize_for_cql() of a collection with dead and tombstoned elements, spanning
+// several fragments, must match the CQL encoding built from the iterator.
+SEASTAR_THREAD_TEST_CASE(test_collection_serialize_for_cql) {
+    auto map_type = map_type_impl::get_instance(int32_type, bytes_type, true);
+    auto set_type = set_type_impl::get_instance(long_type, true);
+    const auto now = gc_clock::now();
+    for (bool is_map : {false, true}) {
+        const abstract_type& type = is_map ? static_cast<const abstract_type&>(*map_type) : *set_type;
+        collection_mutation_writer w(tombstone(5, now));
+        for (int i = 0; i < 20000; ++i) {
+            auto key = is_map ? int32_type->decompose(int32_t(i)) : long_type->decompose(int64_t(i));
+            auto cell = i % 3 == 0 ? atomic_cell::make_dead(10, now)
+                    : atomic_cell::make_live(*bytes_type, i % 7 == 0 ? 5 : 10, bytes(i % 20, 'v'), atomic_cell::collection_member::yes);
+            w.push_back(managed_bytes_view(key), std::move(cell));
+        }
+        auto cm = std::move(w).finish();
+        collection_mutation_view v = cm;
+
+        bytes expected(bytes::initialized_later(), 4);
+        int32_t count = 0;
+        auto append = [&] (managed_bytes_view b) {
+            bytes len(bytes::initialized_later(), 4);
+            write_be(reinterpret_cast<char*>(len.data()), int32_t(b.size_bytes()));
+            expected += len;
+            expected += to_bytes(b);
+        };
+        for (auto&& [key, cell] : v) {
+            if (cell.is_live(v.tomb(), false)) {
+                append(key);
+                if (is_map) {
+                    append(cell.value());
+                }
+                ++count;
+            }
+        }
+        write_be(reinterpret_cast<char*>(expected.data()), count);
+        BOOST_REQUIRE_EQUAL(to_bytes(serialize_for_cql(type, v).linearize()), expected);
+    }
+}
+
+// A truncated element cell must fail hashing as on the checked path, not be read past its end.
+SEASTAR_THREAD_TEST_CASE(test_collection_hash_truncated_cell) {
+    auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("s", set_type_impl::get_instance(long_type, true))
+            .build();
+    auto& def = *s->get_column_definition(to_bytes("s"));
+    auto check = [&] (const atomic_cell& cell, size_t len) {
+        collection_mutation_writer w({});
+        w.push_back(managed_bytes_view(long_type->decompose(int64_t(1))), atomic_cell_view::from_bytes(cell.serialize().prefix(len)));
+        auto cm = std::move(w).finish();
+        xx_hasher h;
+        BOOST_REQUIRE_THROW(feed_hash(h, collection_mutation_view(cm), def), marshal_exception);
+    };
+    check(atomic_cell::make_live(*empty_type, 1, bytes_view(), atomic_cell::collection_member::yes), 5);
+    check(atomic_cell::make_dead(1, gc_clock::now()), 12);
+    auto expiring = atomic_cell::make_live(*empty_type, 1, bytes_view(), gc_clock::now(), std::chrono::seconds(10), atomic_cell::collection_member::yes);
+    check(expiring, 12);
+    check(expiring, 18);
+}
+
 // Unit tests for collection_mutation_writer and collection_mutation_view::iterator,
 // which provide direct, zero-copy access to the serialized collection format.
 
@@ -3249,11 +3310,25 @@ SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_collection_digest) {
     auto& m_def = *s->get_column_definition(to_bytes("m"));
     auto& e_def = *s->get_column_definition(to_bytes("e"));
 
-    collection_mutation_writer w(tombstone(1, gc_clock::now()));
+    // The tombstone is older than every element, so none is shadowed.
+    collection_mutation_writer w(tombstone(-3000, gc_clock::now()));
     // Large enough to overflow the hasher's 4 KB buffer several times.
+    // Live, dead and expiring elements; some times need more than 32 bits.
+    const auto far = gc_clock::time_point(gc_clock::duration(int64_t(1) << 33));
     for (int32_t i = 0; i < 2000; ++i) {
-        w.push_back(managed_bytes_view(int32_type->decompose(i)),
-                atomic_cell::make_live(*bytes_type, i + 2, bytes(i % 50, 'x'), atomic_cell::collection_member::yes));
+        const auto key_bytes = int32_type->decompose(i);
+        const auto key = managed_bytes_view(key_bytes);
+        switch (i % 5) {
+        case 0:
+            w.push_back(key, atomic_cell::make_dead(i, i % 2 ? far : gc_clock::now()));
+            break;
+        case 1:
+            w.push_back(key, atomic_cell::make_live(*bytes_type, i, bytes(i % 50, 'x'), i % 2 ? far : gc_clock::now() + std::chrono::seconds(100),
+                    std::chrono::seconds(100), atomic_cell::collection_member::yes));
+            break;
+        default:
+            w.push_back(key, atomic_cell::make_live(*bytes_type, -i, bytes(i % 50, 'x'), atomic_cell::collection_member::yes));
+        }
     }
     // A value of bypass_size (256 B) or more skips the buffer.
     w.push_back(managed_bytes_view(int32_type->decompose(int32_t(2000))),
@@ -3267,10 +3342,23 @@ SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_collection_digest) {
     const query::column_id_vector columns{v_def.id, m_def.id, e_def.id};
     xx_hasher expected_h;
     std::map<column_id, uint64_t> cell_digest;
-    for (auto* def : {&v_def, &m_def, &e_def}) {
+    {
         xx_hasher cellh;
-        feed_hash(cellh, *r.find_cell(def->id), *def);
+        feed_hash(cellh, *r.find_cell(v_def.id), v_def);
+        cell_digest[v_def.id] = cellh.finalize_uint64();
+    }
+    // Walk the collections with the iterator, independently of appending_hash.
+    for (auto* def : {&m_def, &e_def}) {
+        auto cm = r.find_cell(def->id)->as_collection_mutation();
+        xx_hasher cellh;
+        feed_hash(cellh, cm.tomb());
+        for (auto&& [key, cell] : cm) {
+            feed_hash(cellh, key);
+            feed_hash(cellh, cell, *def);
+        }
         cell_digest[def->id] = cellh.finalize_uint64();
+    }
+    for (auto* def : {&v_def, &m_def, &e_def}) {
         feed_hash(expected_h, cell_digest[def->id]);
     }
     const auto expected = expected_h.finalize_uint64();
