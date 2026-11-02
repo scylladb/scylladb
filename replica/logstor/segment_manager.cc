@@ -534,8 +534,9 @@ public:
     }
 
     future<> stop() {
-        _segments.abort(std::make_exception_ptr(abort_requested_exception()));
-        _segment_available.broken();
+        auto ex = std::make_exception_ptr(abort_requested_exception());
+        _segments.abort(ex);
+        _segment_available.broken(ex);
         co_return;
     }
 
@@ -546,20 +547,14 @@ public:
     }
 
     future<seg_ptr> get_segment(write_source src) {
-        seg_ptr seg;
-        if (src == write_source::compaction) {
-            _stats.segments_get[static_cast<size_t>(src)]++;
-            co_return co_await _segments.pop_eventually();
+        // Not queue::pop_eventually(): it supports a single waiter, and several compactions may wait.
+        const size_t reserve = src == write_source::compaction ? 0 : _reserved_for_compaction;
+        if (src == write_source::normal_write && _segments.size() <= reserve) {
+            _stats.normal_segments_wait++;
         }
-        if (_segments.size() <= _reserved_for_compaction) {
-            if (src == write_source::normal_write) {
-                _stats.normal_segments_wait++;
-            }
-            while (_segments.size() <= _reserved_for_compaction) {
-                co_await _segment_available.wait([this] {
-                    return _segments.size() > _reserved_for_compaction;
-                });
-            }
+        // Once stopped the queue is empty, so this waits on the broken condition variable and throws.
+        while (_segments.size() <= reserve) {
+            co_await _segment_available.wait();
         }
         _stats.segments_get[static_cast<size_t>(src)]++;
         co_return _segments.pop();
@@ -1287,6 +1282,10 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
         throw std::runtime_error(fmt::format("Chunk size {} exceeds segment size {}", chunk_size, _cfg.segment_size));
     }
 
+    // Lets a test tell that a compaction asks for its segment, which it waits for on an empty pool.
+    if (source == write_source::compaction) {
+        utils::get_local_injector().inject("logstor_compaction_segment_request", [] {});
+    }
     auto seg = co_await get_segment(source);
     logstor_logger.trace("Write full segment {} seq {} from {}", seg->id(), seg->seq_num(), write_source_to_string(source));
 
@@ -1459,7 +1458,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
         _compaction_mgr.schedule_auto_compaction();
 
         // reuse freed segments
-        if (!_free_segments.empty()) {
+        if (!_free_segments.empty() && !utils::get_local_injector().is_enabled("logstor_hold_back_free_segments")) {
             auto seg_id = _free_segments.front();
             _free_segments.pop_front();
             co_return co_await make_segment(seg_id);
