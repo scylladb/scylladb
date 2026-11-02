@@ -839,6 +839,61 @@ def test_lwt_list_null_or_negative_index(cql, test_keyspace, scylla_only, frozen
             assert list(cql.execute(f"UPDATE {table} SET l = ['foo', 'bar', 'foobar'] WHERE k = 0 IF l[{index}] = null")) == [(True, l)]
             assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, l)]
 
+# Test that in an LWT condition, a map element with a null key, m[null], is
+# null - like the element of a key missing from the map - instead of being an
+# error. So "m[null] = 'foo'" is false, and "m[null] = null" is true. Scylla
+# deliberately allows a null subscript (and since commit 433b778a4d, evaluates
+# "m[null] = null" as true instead of short-circuiting the whole condition to
+# false), while Cassandra rejects it with "Invalid null value for map element
+# access", so this test is scylla_only. The Cassandra versions of these checks
+# are commented out in
+# cassandra_tests/validation/operations/insert_update_if_condition_collections_test.py.
+# Translated from the Scylla-specific checks in scylla-dtest's
+# cql_additional_tests.py::TestCQL tests test_map_item_conditional and
+# test_expanded_map_item_conditional; the rest of these tests are in that
+# cassandra_tests file.
+@pytest.mark.parametrize('frozen', [False, True], ids=['unfrozen', 'frozen'])
+def test_lwt_map_null_key(cql, test_keyspace, scylla_only, frozen):
+    map_type = 'frozen<map<text, text>>' if frozen else 'map<text, text>'
+    with new_test_table(cql, test_keyspace, f'k int PRIMARY KEY, m {map_type}') as table:
+        m = {'foo': 'bar'}
+        cql.execute(f"INSERT INTO {table} (k, m) VALUES (0, {{'foo': 'bar'}})")
+        # Check that m[null] is not equal to 'foo', so the conditional delete
+        # does not apply
+        assert list(cql.execute(f"DELETE FROM {table} WHERE k = 0 IF m[null] = 'foo'")) == [(False, m)]
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, m)]
+        # Check that m[null] is null, so the conditional update applies
+        assert list(cql.execute(f"UPDATE {table} SET m = {{'foo': 'bar'}} WHERE k = 0 IF m[null] = null")) == [(True, m)]
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, m)]
+
+# Test that in an LWT condition, a list value may contain a null element, as
+# in "l = [null]" - which is never true, because a stored list cannot contain
+# a null. Scylla deliberately allows lists with nulls as transient values
+# (pull request #12411), because a list value such as the one bound to
+# "IF v IN ?" may need to contain a null, while Cassandra rejects such a
+# condition. So this test is scylla_only. The Cassandra version of this check
+# is commented out in testWholeList in
+# cassandra_tests/validation/operations/insert_update_if_condition_collections_test.py.
+# The test also checks that a list with a null element still cannot be stored.
+# Translated from the Scylla-specific check in scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_whole_list_conditional; the rest of
+# that test is testWholeList in that cassandra_tests file. The check that a
+# list with a null cannot be stored is new.
+@pytest.mark.parametrize('frozen', [False, True], ids=['unfrozen', 'frozen'])
+def test_lwt_list_with_null_element(cql, test_keyspace, scylla_only, frozen):
+    list_type = 'frozen<list<text>>' if frozen else 'list<text>'
+    with new_test_table(cql, test_keyspace, f'k int PRIMARY KEY, l {list_type}') as table:
+        l = ['foo', 'bar', 'foobar']
+        cql.execute(f"INSERT INTO {table} (k, l) VALUES (0, ['foo', 'bar', 'foobar'])")
+        # Check that "l = [null]" is allowed, but false
+        assert list(cql.execute(f"UPDATE {table} SET l = ['foo', 'bar', 'foobar'] WHERE k = 0 IF l = [null]")) == [(False, l)]
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, l)]
+        # Check that a list with a null element cannot be stored, even when
+        # the condition, which allows nulls, is true
+        with pytest.raises(InvalidRequest, match='NULL'):
+            cql.execute(f"UPDATE {table} SET l = ['foo', null] WHERE k = 0 IF l != [null]")
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, l)]
+
 # Test LIMIT on a slice of the clustering key - in one partition and in
 # several partitions selected with IN - in a COMPACT STORAGE table whose only
 # columns are the partition key and one clustering column, so it has no
