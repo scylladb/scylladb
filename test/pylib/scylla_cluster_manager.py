@@ -738,7 +738,7 @@ class ScyllaClusterManager:
                 port: int = 9042,
                 use_ssl: bool = False,
                 auth_provider: AuthProvider | None = None,
-                load_balancing_policy: LoadBalancingPolicy = RoundRobinPolicy(),
+                load_balancing_policy: LoadBalancingPolicy | None = None,
                 control_connection_fallback: bool = False,
                 queries_only_via_control_connection: bool = False) -> CassandraCluster:
         """Create a CQL Cluster connection object according to configuration.
@@ -749,6 +749,9 @@ class ScyllaClusterManager:
         the installed driver supports it.
         """
         assert hosts, "python driver connection needs at least one host to connect to"
+        # Policies own mutable host state, so each Cluster needs its own default.
+        if load_balancing_policy is None:
+            load_balancing_policy = RoundRobinPolicy()
         profile = ExecutionProfile(
             load_balancing_policy=load_balancing_policy,
             consistency_level=ConsistencyLevel.LOCAL_QUORUM,
