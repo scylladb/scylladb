@@ -429,7 +429,7 @@ public:
     // Like make_sstable_set(), but restricted to repaired sstables only across all compaction groups.
     lw_shared_ptr<const sstables::sstable_set> make_repaired_sstable_set() const;
 
-    future<utils::chunked_vector<logstor::segment_snapshot>> take_logstor_snapshot() const;
+    future<utils::chunked_vector<logstor::segment_snapshot>> take_logstor_snapshot();
 
     // Flush all memtables.
     future<> flush() noexcept;

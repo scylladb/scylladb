@@ -613,6 +613,7 @@ class segment_manager_impl {
         uint64_t live_record_count{0};
         uint64_t separator_task_failures{0};
         uint64_t segment_free_failures{0};
+        uint64_t unreferenced_waits{0};
     };
 
     file_manager _file_mgr;
@@ -653,6 +654,8 @@ class segment_manager_impl {
     seastar::gate _async_gate;
     future<> _reserve_replenisher{make_ready_future<>()};
     seastar::condition_variable _segment_freed_cv;
+    // Signalled when a segment is left with only the reference of its group and a discard waits.
+    seastar::condition_variable _segment_unreferenced_cv;
 
     write_buffer_pool _compaction_buffer_pool;
     write_buffer_pool _separator_buffer_pool;
@@ -735,6 +738,10 @@ public:
     }
 
     future<> discard_segments(logstor_group&);
+    future<> await_unreferenced(logstor_group&);
+    uint64_t unreferenced_waits() const noexcept {
+        return _stats.unreferenced_waits;
+    }
 
     size_t get_memory_usage() const noexcept {
         return _segment_descs.capacity() * sizeof(segment_descriptor)
@@ -771,6 +778,9 @@ public:
     }
 
     future<utils::chunked_vector<segment_snapshot>> make_snapshot(logstor_group&);
+
+    // Waits until the first `segment_count` segments of the group have no reference but the group's.
+    future<> wait_unreferenced(logstor_group&, size_t segment_count);
 
     future<seastar::input_stream<char>> create_segment_input_stream(log_segment_id segment_id, const seastar::file_input_stream_options& opts);
     future<std::unique_ptr<segment_stream_sink>> create_segment_output_stream(replica::database&);
@@ -838,6 +848,9 @@ private:
                 auto& desc = get_segment_descriptor(seg_id);
                 if (--desc.ref_count == 0) {
                     return free_segment(seg_id);
+                }
+                if (desc.ref_count == 1 && _segment_unreferenced_cv.has_waiters()) {
+                    _segment_unreferenced_cv.broadcast();
                 }
             },
             [this, seg_id] {
@@ -1062,6 +1075,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of data bytes freed.")),
         sm::make_counter("segments_allocated", _stats.segments_allocated,
                        sm::description("Counts number of segments allocated.")),
+        sm::make_counter("unreferenced_waits", _stats.unreferenced_waits,
+                       sm::description("Counts the waits of a discard of segments for the snapshots that reference them to be released.")),
         sm::make_counter("segments_freed", _stats.segments_freed,
                        sm::description("Counts number of segments freed.")),
         sm::make_gauge("disk_usage", [this] { return get_disk_usage(); },
@@ -1143,6 +1158,9 @@ future<> segment_manager_impl::stop() {
         co_return;
     }
     logstor_logger.info("Stopping segment manager");
+
+    // A discard waiting for snapshots to be released holds the gate.
+    _segment_unreferenced_cv.broken(std::make_exception_ptr(seastar::abort_requested_exception()));
 
     // stop admitting new writes and external operations
     co_await _async_gate.close();
@@ -1502,12 +1520,43 @@ void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
     _stats.segments_freed++;
 }
 
+future<> segment_manager_impl::wait_unreferenced(logstor_group& cg, size_t segment_count) {
+    auto& ss = cg.logstor_segments();
+    bool logged = false;
+    for (size_t i = 0; i < segment_count; ++i) {
+        auto& desc = get_segment_descriptor(desc_to_segment_id(ss.segment_at(i)));
+        if (desc.ref_count <= 1) {
+            continue;
+        }
+        if (!logged) {
+            logged = true;
+            ++_stats.unreferenced_waits;
+            const auto referenced = std::ranges::count_if(std::views::iota(i, segment_count), [&] (size_t j) {
+                return ss.segment_at(j).ref_count > 1;
+            });
+            logstor_logger.info("Waiting for snapshots to release {} of {} segments of a group", referenced, segment_count);
+        }
+        co_await _segment_unreferenced_cv.when([&desc] { return desc.ref_count <= 1; });
+    }
+}
+
+future<> segment_manager_impl::await_unreferenced(logstor_group& cg) {
+    auto compaction_disable_guard = co_await _compaction_mgr.disable_compaction(cg);
+    auto holder = _async_gate.hold();
+
+    co_await wait_unreferenced(cg, cg.logstor_segments().segment_count());
+}
+
 future<> segment_manager_impl::discard_segments(logstor_group& cg) {
     auto compaction_disable_guard = co_await _compaction_mgr.disable_compaction(cg);
 
     auto holder = _async_gate.hold();
 
     auto& ss = cg.logstor_segments();
+
+    // No new snapshot takes references from here on, so none is left to wait for once the wait is over.
+    cg.start_discard();
+    auto end_discard = defer([&cg] () noexcept { cg.end_discard(); });
 
     // Collect and validate the segments to discard before removing any of them, so that this
     // cannot fail with a segment already out of the group but not yet freed, which would leak it
@@ -1516,6 +1565,7 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
     // the positions of the first `segment_count` segments stay valid. Segments appended while this runs
     // are past `segment_count` and are left in the group.
     const auto segment_count = ss.segment_count();
+    co_await wait_unreferenced(cg, segment_count);
     utils::chunked_vector<log_segment_id> segments;
     segments.reserve(segment_count);
     for (size_t i = 0; i < segment_count; ++i) {
@@ -2453,6 +2503,9 @@ future<utils::chunked_vector<segment_snapshot>> segment_manager_impl::make_snaps
     utils::chunked_vector<segment_snapshot> snp;
     snp.reserve(segment_count);
     for (size_t i = 0; i < segment_count; ++i) {
+        if (cg.discarding()) {
+            co_return coroutine::exception(std::make_exception_ptr(gate_closed_exception()));
+        }
         auto seg_id = desc_to_segment_id(segments.segment_at(i));
         snp.push_back(segment_snapshot{
             .segment_id = seg_id,
@@ -2533,6 +2586,14 @@ sstring segment_manager::get_segment_file_path(log_segment_id segment_id) const 
 
 future<> segment_manager::discard_segments(logstor_group& cg) {
     return _impl->discard_segments(cg);
+}
+
+future<> segment_manager::await_unreferenced(logstor_group& cg) {
+    return _impl->await_unreferenced(cg);
+}
+
+uint64_t segment_manager::unreferenced_waits() const noexcept {
+    return _impl->unreferenced_waits();
 }
 
 segment_manager_usage segment_manager::get_usage() const noexcept {

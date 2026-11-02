@@ -149,6 +149,15 @@ public:
     // The index must be cleared first, so that no record of the group is reachable.
     future<> discard_segments(logstor_group&);
 
+    // Waits until no segment of the group is referenced by anything but the group, which a snapshot
+    // of the segments is until it is released. Discarding does this too, but it may do it under a lock.
+    // The caller keeps the discard started (logstor_group::start_discard()) until the discard itself,
+    // so that no new snapshot takes references in between.
+    future<> await_unreferenced(logstor_group&);
+
+    // The number of times a discard had to wait for snapshots to release segments.
+    uint64_t unreferenced_waits() const noexcept;
+
     segment_manager_usage get_usage() const noexcept;
 
     future<> await_pending_writes();

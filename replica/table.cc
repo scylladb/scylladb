@@ -1362,22 +1362,15 @@ lw_shared_ptr<const sstables::sstable_set> storage_group::make_sstable_set() con
     return make_lw_shared(sstables::make_compound_sstable_set(schema, std::move(underlying)));
 }
 
-future<utils::chunked_vector<logstor::segment_snapshot>> storage_group::take_logstor_snapshot() const {
-    if (_split_ready_groups.empty() && _merging_groups.empty()) {
-        co_return co_await _main_cg->take_logstor_snapshot();
-    }
+future<utils::chunked_vector<logstor::segment_snapshot>> storage_group::take_logstor_snapshot() {
     utils::chunked_vector<logstor::segment_snapshot> snp;
-    auto append = [&snp] (utils::chunked_vector<logstor::segment_snapshot> cg_snp) {
-        snp.insert(snp.end(), std::make_move_iterator(cg_snp.begin()), std::make_move_iterator(cg_snp.end()));
-    };
-    append(co_await _main_cg->take_logstor_snapshot());
-    for (const auto& cg : _merging_groups) {
-        if (!cg->empty()) {
-            append(co_await cg->take_logstor_snapshot());
+    // The groups are copied, as the lists change while a snapshot is taken. An empty group has nothing to take.
+    for (const auto& cg : compaction_groups_immediate()) {
+        if (cg->empty()) {
+            continue;
         }
-    }
-    for (const auto& cg : _split_ready_groups) {
-        append(co_await cg->take_logstor_snapshot());
+        auto cg_snp = co_await cg->take_logstor_snapshot();
+        snp.insert(snp.end(), std::make_move_iterator(cg_snp.begin()), std::make_move_iterator(cg_snp.end()));
     }
     co_return std::move(snp);
 }
@@ -1799,12 +1792,20 @@ future<utils::chunked_vector<sstables::shared_sstable>> table::take_sstable_set_
 future<utils::chunked_vector<logstor::segment_snapshot>> table::take_logstor_snapshot(dht::token_range tr) {
     co_await _logstor->flush_to_separator();
 
-    utils::chunked_vector<logstor::segment_snapshot> snp;
-    for (auto& sg : storage_groups_for_token_range(tr)) {
+    auto sgs = storage_groups_for_token_range(tr);
+    // A stale request for a storage group being stopped fails. Its segments are about to be discarded.
+    std::vector<decltype(sgs.front()->async_gate().hold())> sg_holders;
+    for (auto& sg : sgs) {
+        sg_holders.push_back(sg->async_gate().hold());
         co_await sg->flush_separator();
+    }
 
-        auto deletion_guard = co_await get_sstable_list_permit();
+    // The permit is taken once, so that no segment reference is held while waiting for it. A discard
+    // of segments referenced by a snapshot may wait for the references while holding the permit.
+    auto deletion_guard = co_await get_sstable_list_permit();
 
+    utils::chunked_vector<logstor::segment_snapshot> snp;
+    for (auto& sg : sgs) {
         auto sg_snp = co_await sg->take_logstor_snapshot();
         snp.insert(snp.end(), std::make_move_iterator(sg_snp.begin()), std::make_move_iterator(sg_snp.end()));
     }
@@ -5937,6 +5938,20 @@ future<> compaction_group::cleanup() {
             _t.refresh_compound_sstable_set();
         }
     };
+
+    // Streams may hold snapshots of the segments for long. Wait for them without the permit, which the
+    // discard below would hold while it waited. No new snapshot may take references until then.
+    if (_t.uses_logstor()) {
+        as_logstor_group().start_discard();
+    }
+    auto end_discard = defer([this] () noexcept {
+        if (_t.uses_logstor()) {
+            as_logstor_group().end_discard();
+        }
+    });
+    if (_t.uses_logstor()) {
+        co_await get_logstor_segment_manager().await_unreferenced(as_logstor_group());
+    }
 
     auto permit = co_await _t.get_sstable_list_permit();
     auto updater = row_cache::external_updater(std::make_unique<compaction_group_cleaner>(*this));

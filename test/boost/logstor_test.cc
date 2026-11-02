@@ -21,6 +21,7 @@
 #include <seastar/core/memory.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/with_timeout.hh>
 #include <seastar/core/format.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/util/memory-data-source.hh>
@@ -39,6 +40,8 @@
 
 #include "replica/logstor/segment_io.hh"
 #include "replica/database.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
 #include "schema/schema_builder.hh"
 #include "schema/schema_registry.hh"
 #include "data_dictionary/user_types_metadata.hh"
@@ -48,6 +51,7 @@
 #include "init.hh"
 #include <seastar/core/simple-stream.hh>
 #include "partition_slice_builder.hh"
+#include "test/lib/cql_test_env.hh"
 #include "test/lib/logstor_test_utils.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
@@ -4367,4 +4371,117 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_serves_a_reversed_read) {
             env.make_reader(query::full_partition_range, bypassing));
     BOOST_REQUIRE_EQUAL(stats.partition_hits, hits + ms.size());
     BOOST_REQUIRE_EQUAL(stats.partition_misses, misses);
+}
+
+namespace {
+
+auto logstor_tablets_db_config() {
+    auto db_cfg = make_shared<db::config>();
+    db_cfg->experimental_features({db::experimental_features_t::feature::LOGSTOR});
+    db_cfg->logstor_disk_size_in_mb(20);
+    db_cfg->logstor_file_size_in_mb(1);
+    return db_cfg;
+}
+
+void create_logstor_table_with_rows(cql_test_env& e, unsigned tablets, unsigned rows) {
+    e.execute_cql(format("CREATE KEYSPACE ls_ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+            "AND tablets = {{'initial': {}}}", tablets)).get();
+    e.execute_cql("CREATE TABLE ls_ks.t (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'").get();
+    for (unsigned i = 0; i < rows; ++i) {
+        e.execute_cql(format("INSERT INTO ls_ks.t (pk, v) VALUES ({}, {})", i, i)).get();
+    }
+}
+
+// Yields until the discard of segments waits for a snapshot, and surfaces the error of one that failed.
+void wait_until_discard_waits(replica::table& t, uint64_t waits_before, future<>& discard) {
+    const auto deadline = lowres_clock::now() + std::chrono::seconds(60);
+    while (t.get_logstor_segment_manager().unreferenced_waits() == waits_before && !discard.available()) {
+        if (lowres_clock::now() >= deadline) {
+            BOOST_FAIL("the discard did not start to wait");
+        }
+        seastar::yield().get();
+    }
+    if (discard.available()) {
+        discard.get();
+        BOOST_FAIL("the discard completed without waiting for the snapshot");
+    }
+}
+
+}
+
+// A tablet cleanup has to wait for a stream that holds a snapshot of the tablet's segments, and not
+// under the sstable list permit, which the stream needs for its next tablet.
+SEASTAR_THREAD_TEST_CASE(test_logstor_tablet_cleanup_waits_for_a_snapshot_of_its_segments) {
+    const unsigned tablet_count = 2 * this_smp_shard_count();
+    do_with_cql_env_thread([tablet_count] (cql_test_env& e) {
+        create_logstor_table_with_rows(e, tablet_count, 20 * tablet_count);
+
+        const auto shards_tested = e.db().map_reduce0([&e] (replica::database& db) {
+            return seastar::async([&e, &db] () -> unsigned {
+                auto& t = db.find_column_family("ls_ks", "t");
+                const auto& tmap = t.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(t.schema()->id());
+                std::vector<locator::tablet_id> local;
+                for (auto tid : tmap.tablet_ids()) {
+                    if (std::ranges::any_of(tmap.get_tablet_info(tid).replicas, [] (const locator::tablet_replica& r) { return r.shard == this_shard_id(); })) {
+                        local.push_back(tid);
+                    }
+                }
+                if (local.size() < 2) {
+                    return 0;
+                }
+                const auto full_range = dht::token_range::make_open_ended_both_sides();
+                const auto first_range = tmap.get_token_range(local[0]);
+                const auto second_range = tmap.get_token_range(local[1]);
+
+                // A stream over every tablet of the shard holds all their segments.
+                auto snapshot = t.take_logstor_snapshot(full_range).get();
+                BOOST_REQUIRE(!snapshot.empty());
+
+                const auto waits_before = t.get_logstor_segment_manager().unreferenced_waits();
+                auto cleanup = t.cleanup_tablet(db, e.get_system_keyspace().local(), local[0]);
+                wait_until_discard_waits(t, waits_before, cleanup);
+
+                // The stream goes on with the next tablet, which takes the permit. The timeout only turns a deadlock into a failure.
+                auto next_snapshot = with_timeout(lowres_clock::now() + std::chrono::seconds(60), t.take_logstor_snapshot(second_range)).get();
+                BOOST_REQUIRE(!cleanup.available());
+                BOOST_REQUIRE_THROW(t.take_logstor_snapshot(first_range).get(), gate_closed_exception);
+
+                snapshot.clear();
+                cleanup.get();
+                BOOST_REQUIRE_THROW(t.take_logstor_snapshot(first_range).get(), gate_closed_exception);
+                return 1;
+            });
+        }, 0u, std::plus<unsigned>()).get();
+        BOOST_REQUIRE_GT(shards_tested, 0u);
+    }, cql_test_config(logstor_tablets_db_config())).get();
+}
+
+// Discarding the segments of a table, as a truncate does, waits for a snapshot of them, and no snapshot
+// is taken meanwhile.
+SEASTAR_THREAD_TEST_CASE(test_logstor_discard_waits_for_a_snapshot_of_its_segments) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        create_logstor_table_with_rows(e, 1, 20);
+
+        const auto shards_tested = e.db().map_reduce0([] (replica::database& db) {
+            return seastar::async([&db] () -> unsigned {
+                auto& t = db.find_column_family("ls_ks", "t");
+                if (t.get_stats().tablet_count == 0) {
+                    return 0;
+                }
+                const auto range = dht::token_range::make_open_ended_both_sides();
+                auto snapshot = t.take_logstor_snapshot(range).get();
+                BOOST_REQUIRE(!snapshot.empty());
+
+                const auto waits_before = t.get_logstor_segment_manager().unreferenced_waits();
+                auto discard = t.discard_logstor_segments();
+                wait_until_discard_waits(t, waits_before, discard);
+                BOOST_REQUIRE_THROW(t.take_logstor_snapshot(range).get(), gate_closed_exception);
+
+                snapshot.clear();
+                discard.get();
+                return 1;
+            });
+        }, 0u, std::plus<unsigned>()).get();
+        BOOST_REQUIRE_EQUAL(shards_tested, 1u);
+    }, cql_test_config(logstor_tablets_db_config())).get();
 }
