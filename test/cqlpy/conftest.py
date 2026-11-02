@@ -22,7 +22,7 @@ import random
 from test.pylib.skip_types import skip_env
 from test.pylib.connect_options import add_host_option, add_cql_connection_options, add_s3_options
 from test.pylib.scylla_cluster import ScyllaCluster
-from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context, is_cassandra_older_than
+from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context, is_cassandra_older_than, Clock
 from .nodetool import scylla_log
 from ..conftest import dynamic_scope
 from .vector_store_mock import VectorStoreMock
@@ -348,3 +348,11 @@ def needs_vector_store(cql):
 def vector_store_mock(_vector_store_mock_session):
     _vector_store_mock_session.reset()
     yield _vector_store_mock_session
+
+# The "clock" fixture lets a test move the server's clock forward instead
+# of really waiting. See the Clock class in util.py.
+@pytest.fixture(scope="function")
+def clock(cql):
+    c = Clock(cql)
+    yield c
+    c._restore()
