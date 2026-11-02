@@ -37,6 +37,12 @@ TRACING_FLAG = 0x02
 CUSTOM_PAYLOAD_FLAG = 0x04
 WARNING_FLAG = 0x08
 
+# Consistency levels.
+QUORUM = 0x0004
+
+# Flags of the query parameters.
+VALUES_FLAG = 0x01
+
 def build_frame(*, opcode: int, stream: int, body: bytes) -> bytearray:
     frame = bytearray()
     frame += struct.pack("!B", 0x04)         # version 4
@@ -206,3 +212,23 @@ def connection(host: str, port: int, startup_options: dict[str, str] = {}):
         yield sock
     finally:
         sock.close()
+
+# The options the server supports, from its SUPPORTED response.
+def supported(sock: socket.socket) -> dict[str, list[str]]:
+    response = request(sock, OPTIONS, b'')
+    assert response.opcode == SUPPORTED, f"expected SUPPORTED, got {hex(response.opcode)}"
+    return response.body.read_string_multimap()
+
+# Sends an EXECUTE request of a prepared statement at QUORUM, with the given int
+# values. With the tablets-routing-v2 protocol extension, the request ends with
+# `tablet_version_block`; None leaves it out.
+def execute(sock: socket.socket, statement_id: bytes, values: list[int], *,
+            tablet_version_block: int | None = None) -> Response:
+    body = encode_short_bytes(statement_id)
+    body += encode_short(QUORUM)
+    body += encode_byte(VALUES_FLAG)
+    body += encode_short(len(values))
+    body += b''.join(encode_bytes(encode_int(value)) for value in values)
+    if tablet_version_block is not None:
+        body += encode_byte(tablet_version_block)
+    return request(sock, EXECUTE, body)
