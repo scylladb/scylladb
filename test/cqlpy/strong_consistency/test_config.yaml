@@ -1,4 +1,0 @@
-extra_scylla_cmdline_options:
-  - '--rf-rack-valid-keyspaces=1'
-  - '--enable-tablets=true'
-  - '--tablets-initial-scale-factor=1'
