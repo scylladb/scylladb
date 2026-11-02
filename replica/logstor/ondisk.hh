@@ -64,6 +64,12 @@ static constexpr uint32_t chunk_header_magic = 0x4c475342;
 // from corruption.
 static constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
 
+// segment_kind is the kind of the segment that holds a chunk, as the chunk header records it.
+enum class segment_kind : uint8_t {
+    mixed = 1,
+    full = 2,
+};
+
 template <>
 struct field<segment_kind> : enum_field<segment_kind, uint8_t> {};
 
@@ -352,3 +358,10 @@ inline std::optional<parsed_record_frame> try_read_record_frame(seastar::simple_
 }
 
 } // namespace replica::logstor::ondisk
+
+namespace replica::logstor {
+
+// The code that picks a chunk layout uses the on-disk kind directly.
+using ondisk::segment_kind;
+
+}
