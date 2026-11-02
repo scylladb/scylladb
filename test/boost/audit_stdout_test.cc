@@ -252,13 +252,60 @@ SEASTAR_THREAD_TEST_CASE(test_escapes_fields) {
 
     auto lines = read_lines(pipe.in, 2);
     audit::audit_info info(audit::statement_category::DML, "ks", "t", false);
-    info.set_query_string(std::string_view("a\"b\\c\nd\re\tf\x1bg\x7fh"));
+    info.set_query_string(std::string_view("a\"b\\c\nd\re\tf\x1bg\x7fh\xc2\x9bi\xc2\x85j\xc2\xa0k\x9bl\xc2"));
     helper.write(test_sinks(), &info, test_addr, test_addr, db::consistency_level::ONE, "us\"er\n", false).get();
     helper.write_login(test_sinks(), "x\ny", test_addr, test_addr, true).get();
 
     auto written = lines.get();
-    BOOST_REQUIRE(written[0].ends_with(R"(keyspace="ks", query="a\"b\\c\nd\re\tf\x1bg\x7fh", client_ip="127.0.0.1:9042", table="t", username="us\"er\n")"));
+    BOOST_REQUIRE(written[0].ends_with(R"(keyspace="ks", query="a\"b\\c\nd\re\tf\x1bg\x7fh\u009bi\u0085j)" "\xc2\xa0" R"(k\x9bl\xc2", client_ip="127.0.0.1:9042", table="t", username="us\"er\n")"));
     BOOST_REQUIRE(written[1].ends_with(R"(category="AUTH", cl="", error="true", keyspace="", query="", client_ip="127.0.0.1:9042", table="", username="x\ny")"));
+}
+
+// A byte that does not belong to well-formed UTF-8 is escaped alone, and the
+// decoding resumes right after it.
+SEASTAR_THREAD_TEST_CASE(test_escapes_invalid_utf8) {
+    test_pipe pipe;
+    audit::audit_stdout_storage_helper helper(pipe.path);
+    helper.start(db::config()).get();
+    auto stop_helper = defer([&helper] noexcept {
+        helper.stop().get();
+    });
+
+    auto lines = read_lines(pipe.in, 1);
+    audit::audit_info info(audit::statement_category::DML, "ks", "t", false);
+    // 2-, 3- and 4-byte sequences cut short by ASCII, overlong forms of each
+    // length, a surrogate, a code point past U+10FFFF, and well-formed 3- and
+    // 4-byte sequences
+    info.set_query_string(std::string_view("\xc2" "A|\xe2\x82" "A|\xf0\x9f\x98" "A|\xc0\x80|\xe0\x80\x80|\xf0\x80\x80\x80|"
+            "\xed\xa0\x80|\xf4\x90\x80\x80|\xe2\x82\xac|\xf0\x9f\x98\x80"));
+    helper.write(test_sinks(), &info, test_addr, test_addr, db::consistency_level::ONE, "user", false).get();
+
+    BOOST_REQUIRE(lines.get()[0].ends_with(R"(query="\xc2A|\xe2\x82A|\xf0\x9f\x98A|\xc0\x80|\xe0\x80\x80|\xf0\x80\x80\x80|)"
+            R"(\xed\xa0\x80|\xf4\x90\x80\x80|)" "\xe2\x82\xac|\xf0\x9f\x98\x80"
+            R"(", client_ip="127.0.0.1:9042", table="t", username="user")"));
+}
+
+// A failed login is audited with a username that nothing has validated as
+// UTF-8, and escaping a long one must not take quadratic time.
+SEASTAR_THREAD_TEST_CASE(test_escapes_long_invalid_field) {
+    test_pipe pipe;
+    audit::audit_stdout_storage_helper helper(pipe.path, std::chrono::minutes(1));
+    helper.start(db::config()).get();
+    auto stop_helper = defer([&helper] noexcept {
+        helper.stop().get();
+    });
+
+    constexpr size_t length = 1024 * 1024;
+    auto lines = read_lines(pipe.in, 1);
+    auto started = std::chrono::steady_clock::now();
+    helper.write_login(test_sinks(), sstring(length, '\xff'), test_addr, test_addr, true).get();
+    BOOST_REQUIRE_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(20));
+
+    std::string escaped;
+    for (size_t i = 0; i < length; ++i) {
+        escaped += "\\xff";
+    }
+    BOOST_REQUIRE(lines.get()[0].ends_with(seastar::format(R"(username="{}")", escaped)));
 }
 
 // The write fails rather than the node being killed by SIGPIPE.
