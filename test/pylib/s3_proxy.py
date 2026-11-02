@@ -141,6 +141,12 @@ class InjectingHandler(BaseHTTPRequestHandler):
     def get_retryable_http_codes(self):
         return random.choice(self.retryable_codes), random.choice(self.error_names)
 
+    # Requests whose failure S3 may report inside a 200 OK reply (CopyObject, UploadPart, UploadPartCopy,
+    # CompleteMultipartUpload); aws-sdk-cpp checks the body of each of them for an <Error>
+    def can_embed_error(self):
+        return (self.command == "PUT" and (self.headers['x-amz-copy-source'] is not None or "uploadId" in self.parsed_qs())) or \
+            (self.command == "POST" and "uploadId" in self.parsed_qs())
+
     def respond_with_error(self, reset_connection: bool):
         if reset_connection:
             try:
@@ -150,6 +156,9 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 pass
             return
         code, error_name = self.get_retryable_http_codes()
+        # The client turns an expired token into a retry only when it comes with a failing status
+        if error_name != "ExpiredTokenException" and self.can_embed_error() and true_or_false():
+            code = 200
         self.send_response(code)
         self.send_header('Content-Type', 'text/plain; charset=utf-8')
         self.send_header('Connection', 'keep-alive')
