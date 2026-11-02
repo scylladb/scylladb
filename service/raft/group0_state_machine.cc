@@ -170,28 +170,38 @@ static future<> maybe_partially_apply_cdc_generation_deletion_then_get_stuck(
     }
 }
 
-future<> write_mutations_to_database(storage_service& storage_service, storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms) {
-    utils::chunked_vector<frozen_mutation_and_schema> mutations;
-    client_routes_service::client_route_keys client_routes_update;
-
+future<utils::chunked_vector<mutation>> to_mutations(storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms) {
+    utils::chunked_vector<mutation> mutations;
     mutations.reserve(cms.size());
-    bool need_system_topology_flush = false;
     try {
         for (auto& cm : cms) {
             auto& tbl = proxy.local_db().find_column_family(cm.column_family_id());
-            auto& s = tbl.schema();
-            auto mut = co_await to_mutation_gently(cm, s);
-
-            need_system_topology_flush = need_system_topology_flush || should_flush_system_topology_after_applying(mut, proxy.data_dictionary());
-            if (proxy.data_dictionary().has_schema(db::system_keyspace::NAME, db::system_keyspace::CLIENT_ROUTES)) {
-                collect_client_routes_update(mut, client_routes_update);
-            }
-
-            mutations.emplace_back(co_await freeze_gently(mut), s);
+            mutations.push_back(co_await to_mutation_gently(cm, tbl.schema()));
         }
     } catch (replica::no_such_column_family& e) {
         slogger.error("Error while applying mutations from {}: {}", from, e);
         throw std::runtime_error(::format("Error while applying mutations: {}", e));
+    }
+    co_return mutations;
+}
+
+future<> write_mutations_to_database(storage_service& storage_service, storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms) {
+    co_await write_mutations_to_database(storage_service, proxy, co_await to_mutations(proxy, from, std::move(cms)));
+}
+
+future<> write_mutations_to_database(storage_service& storage_service, storage_proxy& proxy, utils::chunked_vector<mutation> muts) {
+    utils::chunked_vector<frozen_mutation_and_schema> mutations;
+    client_routes_service::client_route_keys client_routes_update;
+
+    mutations.reserve(muts.size());
+    bool need_system_topology_flush = false;
+    for (auto& mut : muts) {
+        need_system_topology_flush = need_system_topology_flush || should_flush_system_topology_after_applying(mut, proxy.data_dictionary());
+        if (proxy.data_dictionary().has_schema(db::system_keyspace::NAME, db::system_keyspace::CLIENT_ROUTES)) {
+            collect_client_routes_update(mut, client_routes_update);
+        }
+
+        mutations.emplace_back(co_await freeze_gently(mut), mut.schema());
     }
 
     auto mutate = [&proxy] (utils::chunked_vector<frozen_mutation_and_schema> mutations) {
