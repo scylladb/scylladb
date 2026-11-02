@@ -57,6 +57,7 @@
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/storage_service.hh"
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
@@ -1735,15 +1736,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         | std::ranges::to<std::vector<schema_ptr>>();
                     auto kind = [] (const schema& s) { return s.is_view() ? "view" : "table"; };
 
-                    // Verify all tables and views have tablet maps.
-                    for (const auto& schema : tables) {
-                        if (!tablet_metadata.has_tablet_map(schema->id())) {
-                            throw std::runtime_error(fmt::format(
-                                "{} {}.{} does not have a tablet map",
-                                schema->is_view() ? "View" : "Table", ks_name, schema->cf_name()));
-                        }
-                    }
-
                     // Find the migration direction (tablets or rollback to vnodes).
                     // Nodes that haven't set their intended mode are treated as vnodes (the default).
                     std::optional<storage_mode> global_intended_mode;
@@ -1765,6 +1757,27 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     rtlogger.info("Finalizing migration for keyspace '{}': direction={}",
                         ks_name, rollback ? "rollback to vnodes" : "forward to tablets");
+
+                    // There has to be a migration to finalize at all.
+                    if (!locator::is_keyspace_undergoing_tablets_migration(tablet_metadata, *ks.metadata())) {
+                        throw std::runtime_error(fmt::format(
+                            "No table in keyspace '{}' has a tablet map; there is no migration to finalize", ks_name));
+                    }
+
+                    // Going forward every table needs a tablet map, or it stays on vnodes
+                    // once the keyspace switches. A rollback drops the maps that exist, so
+                    // a table without one is already final.
+                    if (!rollback) {
+                        for (const auto& schema : tables) {
+                            if (!tablet_metadata.has_tablet_map(schema->id())) {
+                                throw std::runtime_error(storage_service::missing_tablet_map_error(ks_name, *schema));
+                            }
+                        }
+                        // A view created mid-migration may still be building, and a build is
+                        // not handed over to tablets: the switch has to wait for it, as the
+                        // start of the migration waited for the views that were there.
+                        co_await storage_service::validate_keyspace_views_for_tablets_migration(_db, _sys_ks, _topo_sm._topology, ks_name);
+                    }
 
                     co_await _tablet_load_stats_refresh.trigger();
 
@@ -1904,9 +1917,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             updates.emplace_back(m);
                         }
                     } else {
-                        // Rollback: delete tablet maps for all tables in the keyspace.
+                        // Rollback: drop every tablet map in the keyspace. A table created
+                        // through a node without the migration listener has none.
                         for (const auto& schema : tables) {
-                            updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
+                            if (tablet_metadata.has_tablet_map(schema->id())) {
+                                updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
+                            }
                         }
                     }
                 } catch (const std::exception& e) {

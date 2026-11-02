@@ -134,6 +134,7 @@ class raft_group0_client;
 class tablet_virtual_task;
 class task_manager_module;
 class topology_state_machine;
+struct topology;
 namespace strong_consistency {
     class groups_manager;
 }
@@ -658,8 +659,42 @@ public:
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 
+    // The message of the error finalization raises, here and in the topology coordinator,
+    // when table `s` of keyspace `ks_name` has no tablet map: why, and the way out.
+    static sstring missing_tablet_map_error(const sstring& ks_name, const schema& s);
+
+    // Throws unless every materialized view of keyspace `ks_name` is built on every
+    // normal node of `topology`: the migration does not hand builds over to tablets.
+    // Checked when the migration starts and, since a view can be created while it
+    // runs, by forward finalization before the keyspace switches.
+    static future<> validate_keyspace_views_for_tablets_migration(replica::database& db, db::system_keyspace& sys_ks,
+            const topology& topology, const sstring& ks_name);
+
+    // Tables created in a keyspace that is being migrated from vnodes to
+    // tablets need a tablet map of their own, or the migration can never be
+    // finalized. See allocate_tablets_for_new_tables_under_migration().
+    virtual void on_before_create_column_family(const data_dictionary::keyspace_metadata& ksm, const schema& s,
+            utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override;
+    virtual void on_before_create_column_families(const data_dictionary::keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms,
+            utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override;
+
     future<> on_cleanup_for_drop_table(const table_id& id);
 private:
+    // Appends tablet map mutations for tables created while `ksm` is mid-migration
+    // from vnodes to tablets, so that they take part in the migration like any
+    // table that was already there when it started. No-op otherwise.
+    void allocate_tablets_for_new_tables_under_migration(const data_dictionary::keyspace_metadata& ksm,
+            const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts);
+
+    // Gives those of `cfms` that have no tablet map the layout prepare_for_tablets_migration()
+    // would have: one migration map shared by the tables that get their own, a co-located
+    // entry for a view with its base table's partition key. Feeds the mutations to
+    // `add_mutation`. `erm` is their keyspace's static ERM; the keyspace must still use
+    // vnodes and be under migration. Returns how many got one.
+    // By value: a coroutine, so a reference would have to outlive every suspension.
+    future<size_t> append_tablet_maps_for_unmapped_tables(locator::static_effective_replication_map_ptr erm,
+            std::vector<schema_ptr> cfms, api::timestamp_type ts,
+            std::function<future<>(mutation)> add_mutation);
     std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(locator::host_id endpoint);
     // return an engaged value iff app_state_map has changes to the peer info
     std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(locator::host_id endpoint, const gms::application_state_map& app_state_map);

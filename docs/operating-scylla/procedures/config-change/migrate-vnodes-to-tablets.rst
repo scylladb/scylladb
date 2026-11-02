@@ -100,10 +100,16 @@ The current migration procedure has the following limitations:
   replication factors to rack lists with ``ALTER KEYSPACE``, then enable it
   again.
 
-* **No schema changes** during the migration. Creating or dropping tables, views,
-  or indexes, and dropping the migrating keyspace are rejected until the
-  migration is finished. Altering the properties of existing tables and views is
-  allowed, except enabling CDC, which is not supported.
+* **Schema changes** during the migration are supported, except enabling CDC on
+  a table. Creating, dropping, and truncating tables, creating and dropping
+  materialized views and secondary indexes, altering the properties of tables
+  and views, and dropping the migrating keyspace all work: a table, view, or
+  index created during the migration joins it, so give a new table the
+  ``repair`` mode of ``tombstone_gc`` too, and a view created during the
+  migration has to be built before the migration can be finalized. DROP and
+  TRUNCATE take an automatic snapshot when ``auto_snapshot`` is enabled, which
+  keeps the data on disk until you remove it with ``nodetool clearsnapshot``;
+  account for it in the disk headroom above.
 * **No planned topology changes** during the migration. Do not add, remove,
   decommission, or rebuild nodes while a migration is in progress. Replacing
   a dead node is supported as an emergency recovery operation.
@@ -112,7 +118,6 @@ The current migration procedure has the following limitations:
 * **No backup and restore** for migrating tables during the migration.
   Do not take snapshots, run backups, or restore into the migrating keyspace
   while the migration is in progress.
-* **No TRUNCATE** on tables in the migrating keyspace during the migration.
 * Only **CQL tables, materialized views, and secondary indexes** can be
   migrated. CDC tables and Alternator tables are not supported. Views whose
   partition key consists of exactly the base table's partition key columns,

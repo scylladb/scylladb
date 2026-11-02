@@ -880,53 +880,209 @@ static sstring start_migration_with_views(cql_test_env& e, const sstring& ks_nam
     return ks_name;
 }
 
-// Schema changes in a keyspace undergoing migration would break the
-// correspondence between its tables and their tablet maps, so they must be
-// rejected until the migration is finalized or rolled back.
-static void require_rejected_during_migration(cql_test_env& e, const sstring& cql) {
-    BOOST_TEST_CONTEXT(cql) {
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql(cql).get(),
-                exceptions::invalid_request_exception,
-                exception_predicate::message_contains("undergoing vnodes-to-tablets migration"));
-    }
-}
-
-SEASTAR_TEST_CASE(test_block_table_schema_changes_during_migration) {
+// Altering a table or a view, the backing view of an index included, is allowed in a
+// keyspace under migration, as is CREATE ... IF NOT EXISTS of something that exists.
+SEASTAR_TEST_CASE(test_alter_allowed_during_migration) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto ks = start_migration_with_views(e, "test_migration_ks");
-        require_rejected_during_migration(e, format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks));
-        require_rejected_during_migration(e, format("DROP TABLE {}.t", ks));
-        require_rejected_during_migration(e, format("DROP KEYSPACE {}", ks));
-        // Other table updates don't change the set of tables.
         e.execute_cql(format("ALTER TABLE {}.t ADD w int", ks)).get();
-        // Creating a table that already exists doesn't change the set of tables.
-        e.execute_cql(format("CREATE TABLE IF NOT EXISTS {}.t (pk int PRIMARY KEY)", ks)).get();
-    });
-}
-
-SEASTAR_TEST_CASE(test_block_view_schema_changes_during_migration) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto ks = start_migration_with_views(e, "test_migration_ks");
-        require_rejected_during_migration(e, format("CREATE MATERIALIZED VIEW {}.mv2 AS SELECT * FROM {}.t "
-                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks, ks));
-        require_rejected_during_migration(e, format("DROP MATERIALIZED VIEW {}.mv", ks));
-        // Altering a view doesn't change the set of tables.
         e.execute_cql(format("ALTER MATERIALIZED VIEW {}.mv WITH gc_grace_seconds = 3600", ks)).get();
-        // Creating a view that already exists doesn't change the set of tables.
+        e.execute_cql(format("ALTER MATERIALIZED VIEW {}.local_idx_index WITH gc_grace_seconds = 3600", ks)).get();
+        e.execute_cql(format("CREATE TABLE IF NOT EXISTS {}.t (pk int PRIMARY KEY)", ks)).get();
         e.execute_cql(format("CREATE MATERIALIZED VIEW IF NOT EXISTS {}.mv AS SELECT * FROM {}.t "
                 "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks, ks)).get();
+        e.execute_cql(format("CREATE INDEX IF NOT EXISTS local_idx ON {}.t ((pk), v)", ks)).get();
     });
 }
 
-SEASTAR_TEST_CASE(test_block_index_schema_changes_during_migration) {
+// SCYLLADB-1169: a table created while its keyspace migrates to tablets gets a tablet
+// map built as prepare_for_tablets_migration() builds the others - one tablet per vnode
+// range, plus MAX_TOKEN - with no pow2 pre-split target, since it is empty. This runs
+// the real CREATE TABLE path, through storage_service's migration listener.
+SEASTAR_TEST_CASE(test_new_table_in_migrating_keyspace_gets_tablet_map) {
+    std::vector<int64_t> tokens = {-4611686018427387904, 0, 4611686018427387904};
+
+    cql_test_config cfg;
+    cfg.db_config->initial_token.set(fmt::format("{}", fmt::join(tokens, ", ")));
+
+    return do_with_cql_env_thread([tokens] (cql_test_env& e) {
+        auto ks_name = sstring("test_new_table_ks");
+        e.execute_cql(format("CREATE KEYSPACE {} "
+                "WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'enabled': false}}", ks_name)).get();
+        e.execute_cql(format("CREATE TABLE {}.t (pk int PRIMARY KEY)", ks_name)).get();
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+
+        e.execute_cql(format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks_name)).get();
+
+        auto t2 = e.local_db().find_schema(ks_name, "t2")->id();
+        auto& stm = e.shared_token_metadata().local();
+        BOOST_REQUIRE_MESSAGE(stm.get()->tablets().has_tablet_map(t2),
+                "Table created during migration did not get a tablet map");
+
+        auto& tmap = stm.get()->tablets().get_tablet_map(t2);
+
+        std::set<dht::token> boundaries;
+        for (size_t i = 0; i < tmap.tablet_count(); ++i) {
+            boundaries.insert(tmap.get_last_token(locator::tablet_id(i)));
+        }
+
+        std::set<dht::token> expected;
+        for (auto t : tokens) {
+            expected.insert(dht::token(t));
+        }
+        expected.insert(dht::last_token());
+
+        BOOST_REQUIRE_MESSAGE(boundaries == expected,
+                fmt::format("Tablet map boundaries {} do not match the vnode boundaries {}",
+                        fmt::join(boundaries, ", "), fmt::join(expected, ", ")));
+
+        // Empty table: no pow2 target, unlike the tables prepare_for_tablets_migration() pre-splits.
+        BOOST_REQUIRE(!tmap.is_converging_to_pow2());
+    }, cfg);
+}
+
+// SCYLLADB-1169: the converse - a keyspace that is merely on vnodes, with no migration
+// under way, must keep getting plain vnode tables.
+SEASTAR_TEST_CASE(test_new_table_in_vnodes_keyspace_gets_no_tablet_map) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto ks = start_migration_with_views(e, "test_migration_ks");
-        require_rejected_during_migration(e, format("CREATE INDEX ON {}.t (v)", ks));
-        require_rejected_during_migration(e, format("DROP INDEX {}.local_idx", ks));
-        // Altering the backing view of an index doesn't change the set of tables.
-        e.execute_cql(format("ALTER MATERIALIZED VIEW {}.local_idx_index WITH gc_grace_seconds = 3600", ks)).get();
-        // Creating an index that already exists doesn't change the set of tables.
-        e.execute_cql(format("CREATE INDEX IF NOT EXISTS local_idx ON {}.t ((pk), v)", ks)).get();
+        auto ks_name = sstring("test_plain_vnodes_ks");
+        e.execute_cql(format("CREATE KEYSPACE {} "
+                "WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'enabled': false}}", ks_name)).get();
+        e.execute_cql(format("CREATE TABLE {}.t (pk int PRIMARY KEY)", ks_name)).get();
+        e.execute_cql(format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks_name)).get();
+
+        auto& stm = e.shared_token_metadata().local();
+        for (auto cf_name : {"t", "t2"}) {
+            auto id = e.local_db().find_schema(ks_name, cf_name)->id();
+            BOOST_REQUIRE_MESSAGE(!stm.get()->tablets().has_tablet_map(id),
+                    fmt::format("Table {}.{} got a tablet map without a migration", ks_name, cf_name));
+        }
+    });
+}
+
+// SCYLLADB-1169: views and secondary indexes created mid-migration reach storage_service
+// through prepare_new_view_announcement() rather than CREATE TABLE, and must get the
+// layout prepare_for_tablets_migration() gives views: a view with its base table's
+// partition key shares the base's map, any other gets a map of its own.
+SEASTAR_TEST_CASE(test_new_view_and_index_in_migrating_keyspace_get_tablet_maps) {
+    std::vector<int64_t> tokens = {-4611686018427387904, 0, 4611686018427387904};
+
+    cql_test_config cfg;
+    cfg.db_config->initial_token.set(fmt::format("{}", fmt::join(tokens, ", ")));
+
+    return do_with_cql_env_thread([tokens] (cql_test_env& e) {
+        auto ks_name = sstring("test_new_view_ks");
+        e.execute_cql(format("CREATE KEYSPACE {} "
+                "WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'enabled': false}}", ks_name)).get();
+        e.execute_cql(format("CREATE TABLE {}.t (pk int PRIMARY KEY, v int, w int)", ks_name)).get();
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, pk)", ks_name, ks_name)).get();
+        e.execute_cql(format("CREATE INDEX ON {}.t (w)", ks_name)).get();
+        e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv_by_pk AS SELECT * FROM {}.t "
+                "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks_name, ks_name)).get();
+
+        std::set<dht::token> expected;
+        for (auto t : tokens) {
+            expected.insert(dht::token(t));
+        }
+        expected.insert(dht::last_token());
+
+        auto& stm = e.shared_token_metadata().local();
+        for (auto cf_name : {"mv", "t_w_idx_index"}) {
+            auto id = e.local_db().find_schema(ks_name, cf_name)->id();
+            BOOST_REQUIRE_MESSAGE(stm.get()->tablets().has_tablet_map(id),
+                    fmt::format("{}.{} created during migration did not get a tablet map", ks_name, cf_name));
+
+            auto& tmap = stm.get()->tablets().get_tablet_map(id);
+            std::set<dht::token> boundaries;
+            for (size_t i = 0; i < tmap.tablet_count(); ++i) {
+                boundaries.insert(tmap.get_last_token(locator::tablet_id(i)));
+            }
+            BOOST_REQUIRE_MESSAGE(boundaries == expected,
+                    fmt::format("Tablet map boundaries {} of {}.{} do not match the vnode boundaries {}",
+                            fmt::join(boundaries, ", "), ks_name, cf_name, fmt::join(expected, ", ")));
+        }
+
+        const auto& tablets = stm.get()->tablets();
+        auto t = e.local_db().find_schema(ks_name, "t")->id();
+        auto mv_by_pk = e.local_db().find_schema(ks_name, "mv_by_pk")->id();
+        BOOST_REQUIRE_MESSAGE(tablets.has_tablet_map(mv_by_pk), "The view with its base table's partition key got no tablet map");
+        BOOST_REQUIRE_MESSAGE(tablets.get_base_table(mv_by_pk) == t, "The view with its base table's partition key was not co-located with it");
+        BOOST_REQUIRE(&tablets.get_tablet_map(mv_by_pk) == &tablets.get_tablet_map(t));
+    }, cfg);
+}
+
+// SCYLLADB-1098: dropping a table of a keyspace being migrated to tablets drops its
+// tablet map with it, whichever DDL statement drops it, and so does dropping the
+// whole keyspace.
+SEASTAR_TEST_CASE(test_drop_in_migrating_keyspace_drops_tablet_maps) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto has_map = [&] (table_id id) {
+            return e.shared_token_metadata().local().get()->tablets().has_tablet_map(id);
+        };
+        auto id_of = [&] (const sstring& ks_name, const sstring& cf_name) {
+            return e.local_db().find_schema(ks_name, cf_name)->id();
+        };
+        auto create_migrating_keyspace = [&] (const sstring& ks_name) {
+            e.execute_cql(format("CREATE KEYSPACE {} "
+                    "WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                    "AND tablets = {{'enabled': false}}", ks_name)).get();
+            e.execute_cql(format("CREATE TABLE {}.t (pk int PRIMARY KEY, v int, w int)", ks_name)).get();
+            e.execute_cql(format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks_name)).get();
+            e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+            e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv AS SELECT * FROM {}.t "
+                    "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, pk)", ks_name, ks_name)).get();
+            e.execute_cql(format("CREATE INDEX ON {}.t (w)", ks_name)).get();
+            e.execute_cql(format("CREATE MATERIALIZED VIEW {}.mv_by_pk AS SELECT * FROM {}.t "
+                    "WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v)", ks_name, ks_name)).get();
+        };
+
+        auto ks_name = sstring("test_drop_table_ks");
+        create_migrating_keyspace(ks_name);
+        auto t = id_of(ks_name, "t");
+        auto t2 = id_of(ks_name, "t2");
+        auto mv = id_of(ks_name, "mv");
+        auto idx = id_of(ks_name, "t_w_idx_index");
+        auto mv_by_pk = id_of(ks_name, "mv_by_pk");
+        for (auto id : {t, t2, mv, idx, mv_by_pk}) {
+            BOOST_REQUIRE(has_map(id));
+        }
+
+        e.execute_cql(format("DROP INDEX {}.t_w_idx", ks_name)).get();
+        BOOST_REQUIRE_MESSAGE(!has_map(idx), "DROP INDEX left the index's tablet map behind");
+
+        e.execute_cql(format("DROP MATERIALIZED VIEW {}.mv", ks_name)).get();
+        BOOST_REQUIRE_MESSAGE(!has_map(mv), "DROP MATERIALIZED VIEW left the view's tablet map behind");
+
+        e.execute_cql(format("DROP MATERIALIZED VIEW {}.mv_by_pk", ks_name)).get();
+        BOOST_REQUIRE_MESSAGE(!has_map(mv_by_pk), "DROP MATERIALIZED VIEW left the co-located view's tablet map behind");
+        BOOST_REQUIRE_MESSAGE(has_map(t), "DROP MATERIALIZED VIEW of a co-located view took its base table's tablet map");
+
+        e.execute_cql(format("DROP TABLE {}.t", ks_name)).get();
+        BOOST_REQUIRE_MESSAGE(!has_map(t), "DROP TABLE left the table's tablet map behind");
+
+        BOOST_REQUIRE_MESSAGE(has_map(t2), "DROP TABLE dropped the tablet map of another table");
+
+        auto ks2_name = sstring("test_drop_keyspace_ks");
+        create_migrating_keyspace(ks2_name);
+        std::vector<table_id> ids;
+        for (auto cf_name : {"t", "t2", "mv", "t_w_idx_index", "mv_by_pk"}) {
+            ids.push_back(id_of(ks2_name, cf_name));
+        }
+
+        e.execute_cql(format("DROP KEYSPACE {}", ks2_name)).get();
+        for (auto id : ids) {
+            BOOST_REQUIRE_MESSAGE(!has_map(id), fmt::format("DROP KEYSPACE left the tablet map of {} behind", id));
+        }
+
+        BOOST_REQUIRE_MESSAGE(has_map(t2), "DROP KEYSPACE dropped the tablet map of a table in another keyspace");
     });
 }
 
