@@ -531,6 +531,7 @@ coordinator::coordinator(groups_manager& groups_manager, replica::database& db, 
 
 auto coordinator::mutate(schema_ptr schema,
         const dht::token& token,
+        db::consistency_level cl,
         mutation_gen&& mutation_gen,
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
@@ -792,13 +793,17 @@ auto coordinator::mutate(schema_ptr schema,
 auto coordinator::query(schema_ptr schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
-        read_type rtype,
+        db::consistency_level cl,
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
         abort_source& as,
         std::optional<locator::tablet_version_block> tablet_version_block
     ) -> future<query_result_type>
 {
+    // The statement accepts only QUORUM/LOCAL_QUORUM and ONE/LOCAL_ONE.
+    const auto rtype = cl == db::consistency_level::ONE || cl == db::consistency_level::LOCAL_ONE
+            ? read_type::non_linearizable : read_type::linearizable;
+
     auto aoe = abort_on_expiry<timeout_clock>(timeout);
     [[maybe_unused]] const auto sub = utils::chain_abort_source(aoe.abort_source(), as);
 
