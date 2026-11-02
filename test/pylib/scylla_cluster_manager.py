@@ -442,7 +442,8 @@ class ScyllaClusterManager:
                             expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                             cmdline_options_override: list[str] | None = None,
                             append_env_override: dict[str, str] | None = None,
-                            auth_provider: dict[str, str] | None = None) -> None:
+                            auth_provider: dict[str, str] | None = None,
+                            replace_cmdline_options: bool = False) -> None:
         """Start a specified server (must be stopped.)"""
 
         await self.cluster.server_start(
@@ -453,6 +454,7 @@ class ScyllaClusterManager:
             cmdline_options_override=cmdline_options_override,
             append_env_override=append_env_override,
             auth_provider=auth_provider,
+            replace_cmdline_options=replace_cmdline_options,
         )
 
     @manager_op
@@ -1094,7 +1096,8 @@ class ScyllaClusterManager:
                            expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                            cmdline_options_override: list[str] | None = None,
                            append_env_override: dict[str, str] | None = None,
-                           auth_provider: dict[str, str] | None = None) -> None:
+                           auth_provider: dict[str, str] | None = None,
+                           replace_cmdline_options: bool = False) -> None:
         """Start specified server.
 
         When expected_error is None, waits until Scylla reports that all
@@ -1109,8 +1112,13 @@ class ScyllaClusterManager:
         coordinates the requests which follow. When restarting a server, pass
         them as seen_by when stopping it too, or they may still see it as alive
         from before it was stopped.
-        Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
-        if provided.
+
+        `cmdline_options_override` is merged into the server's command line for
+        this start only, like `server_update_cmdline()` but without persisting:
+        `--logger-log-level` appends, any other option replaces its current
+        value, and the harness defaults (`--smp 2 -m 1G --overprovisioned ...`)
+        stay. `replace_cmdline_options=True` makes it the whole argv instead.
+        `append_env_override` replaces the server's environment.
 
         If `expected_crash` is True, ignore cores and backtraces related to `expected_error`.
         """
@@ -1131,6 +1139,7 @@ class ScyllaClusterManager:
                 cmdline_options_override=cmdline_options_override,
                 append_env_override=append_env_override,
                 auth_provider=auth_provider,
+                replace_cmdline_options=replace_cmdline_options,
             )
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         await self._server_seen_live_by(server_id, seen_by, interval=wait_interval)
