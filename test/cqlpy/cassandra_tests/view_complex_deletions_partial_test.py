@@ -9,7 +9,6 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from .porting import *
-from ..test_materialized_view_old import clock
 
 # The original Java test class is parameterized to run each test with each of
 # the CQL protocol versions which Cassandra supports. We use only the Python
