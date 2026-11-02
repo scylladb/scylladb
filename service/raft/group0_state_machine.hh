@@ -274,5 +274,9 @@ bool should_flush_system_topology_after_applying(const mutation& mut, const data
 // and also for schema tables during early raft log replay (before
 // non-system keyspaces are loaded).
 future<> write_mutations_to_database(storage_service& storage_service, storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms);
+future<> write_mutations_to_database(storage_service& storage_service, storage_proxy& proxy, utils::chunked_vector<mutation> mutations);
+
+// Converts group 0 command mutations, which target tables known to the local database.
+future<utils::chunked_vector<mutation>> to_mutations(storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms);
 
 } // end of namespace service
