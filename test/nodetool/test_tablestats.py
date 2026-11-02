@@ -366,17 +366,23 @@ class keyspace_stats:
 
 @pytest.mark.parametrize('command,args,tables_to_print,human_readable',
                          [
-                             ('tablestats', [], ['keyspace1.standard1', 'system.local'], False),
-                             ('tablestats', ['keyspace1'], ['keyspace1.standard1'], False),
+                             ('tablestats', [], ['keyspace1.counter1', 'keyspace1.standard1', 'system.local'], False),
+                             ('tablestats', ['keyspace1'], ['keyspace1.counter1', 'keyspace1.standard1'], False),
                              ('tablestats', ['keyspace1.standard1'], ['keyspace1.standard1'], False),
-                             ('tablestats', ['-i', 'system'], ['keyspace1.standard1'], False),
-                             ('tablestats', ['--ignore', 'keyspace1.standard1'], ['system.local'], False),
-                             ('tablestats', ['-H'], ['keyspace1.standard1', 'system.local'], True),
-                             ('tablestats', ['--human-readable'], ['keyspace1.standard1', 'system.local'], True),
-                             ('cfstats', [], ['keyspace1.standard1', 'system.local'], False),
+                             ('tablestats', ['keyspace1/standard1'], ['keyspace1.standard1'], False),
+                             ('tablestats', ['keyspace1/'], ['keyspace1.counter1', 'keyspace1.standard1'], False),
+                             ('tablestats', ['system', 'keyspace1'], ['keyspace1.counter1', 'keyspace1.standard1', 'system.local'], False),
+                             ('tablestats', ['-i', 'system'], ['keyspace1.counter1', 'keyspace1.standard1'], False),
+                             ('tablestats', ['--ignore', 'keyspace1.standard1'], ['keyspace1.counter1', 'system.local'], False),
+                             ('tablestats', ['-H'], ['keyspace1.counter1', 'keyspace1.standard1', 'system.local'], True),
+                             ('tablestats', ['--human-readable'], ['keyspace1.counter1', 'keyspace1.standard1', 'system.local'], True),
+                             ('cfstats', [], ['keyspace1.counter1', 'keyspace1.standard1', 'system.local'], False),
                          ])
 def test_plain_text_output(nodetool, command, args, tables_to_print, human_readable):
-    tables = [Table('keyspace1', 'standard1', 'ColumnFamilies'),
+    # keyspace1 has two tables, so the tests of a table filter, such as
+    # "keyspace1.standard1", check that it doesn't print the whole keyspace
+    tables = [Table('keyspace1', 'counter1', 'ColumnFamilies'),
+              Table('keyspace1', 'standard1', 'ColumnFamilies'),
               Table('system', 'local', 'ColumnFamilies')]
     expected_requests = [expected_request(
         'GET', '/column_family/',
