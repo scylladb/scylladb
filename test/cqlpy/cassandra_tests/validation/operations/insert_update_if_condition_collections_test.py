@@ -395,7 +395,6 @@ def testUDTField(cql, test_keyspace):
                 checkDoesNotApplyUDT(cql, table, "v.b != null AND v.b IN ()", v)
 
 # Migrated from cql_tests.py:TestCQL.whole_list_conditional_test()
-@pytest.mark.xfail(reason="Issue #13586")
 def testWholeList(cql, test_keyspace):
     for frozen in [False, True]:   
         typename = "list<text>"
@@ -410,14 +409,10 @@ def testWholeList(cql, test_keyspace):
             check_applies_list(cql, table, "l < ['z']")
             check_applies_list(cql, table, "l <= ['z']")
             check_applies_list(cql, table, "l IN (null, ['foo', 'bar', 'foobar'], ['a'])")
-            # Reproduces #13586:
-            check_applies_list(cql, table, "l CONTAINS 'bar'")
 
             # multiple conditions
             check_applies_list(cql, table, "l > ['aaa', 'bbb'] AND l > ['aaa']")
             check_applies_list(cql, table, "l != null AND l IN (['foo', 'bar', 'foobar'])")
-            # Reproduces #13586:
-            check_applies_list(cql, table, "l CONTAINS 'foo' AND l CONTAINS 'foobar'")
 
             # should not apply
             check_does_not_apply_list(cql, table, "l = ['baz']")
@@ -428,14 +423,10 @@ def testWholeList(cql, test_keyspace):
             check_does_not_apply_list(cql, table, "l <= ['a']")
             check_does_not_apply_list(cql, table, "l IN (['a'], null)")
             check_does_not_apply_list(cql, table, "l IN ()")
-            # Reproduces #13586:
-            check_does_not_apply_list(cql, table, "l CONTAINS 'baz'")
 
             # multiple conditions
             check_does_not_apply_list(cql, table, "l IN () AND l IN (['foo', 'bar', 'foobar'])")
             check_does_not_apply_list(cql, table, "l > ['zzz'] AND l < ['zzz']")
-            # Reproduces #13586:
-            check_does_not_apply_list(cql, table, "l CONTAINS 'bar' AND l CONTAINS 'baz'")
 
             # Scylla does allow the check for l = [null], it just is never true.
             #check_invalid_list(cql, table, "l = [null]", InvalidRequest)
@@ -445,7 +436,22 @@ def testWholeList(cql, test_keyspace):
             check_invalid_list(cql, table, "l >= null", InvalidRequest)
             check_invalid_list(cql, table, "l IN null", SyntaxException)
             check_invalid_list(cql, table, "l IN 367", SyntaxException)
-            # Reproduces #13586:
+
+# The CONTAINS and CONTAINS KEY checks of testWholeList, split into a separate
+# test because Scylla does not yet support CONTAINS in LWT conditions
+# (issue #13586), so the rest of testWholeList can run on Scylla.
+@pytest.mark.xfail(reason="Issue #13586")
+def testWholeListContains(cql, test_keyspace):
+    for frozen in [False, True]:
+        typename = "list<text>"
+        f = f"frozen<{typename}>" if frozen else typename
+        with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, l {f})") as table:
+            execute(cql, table, "INSERT INTO %s(k, l) VALUES (0, ['foo', 'bar', 'foobar'])")
+
+            check_applies_list(cql, table, "l CONTAINS 'bar'")
+            check_applies_list(cql, table, "l CONTAINS 'foo' AND l CONTAINS 'foobar'")
+            check_does_not_apply_list(cql, table, "l CONTAINS 'baz'")
+            check_does_not_apply_list(cql, table, "l CONTAINS 'bar' AND l CONTAINS 'baz'")
             check_invalid_list(cql, table, "l CONTAINS KEY 123", InvalidRequest)
             check_invalid_list(cql, table, "l CONTAINS null", InvalidRequest)
 
@@ -553,7 +559,6 @@ def testExpandedListItem(cql, test_keyspace):
             #check_invalid_list(cql, table, "l[null] = null", InvalidRequest)
 
 # Migrated from cql_tests.py:TestCQL.whole_set_conditional_test()
-@pytest.mark.xfail(reason="Issue #13586")
 def testWholeSet(cql, test_keyspace):
     for frozen in [False, True]:   
         typename = "set<text>"
@@ -569,14 +574,10 @@ def testWholeSet(cql, test_keyspace):
             check_applies_set(cql, table, "s < {'z'}")
             check_applies_set(cql, table, "s <= {'z'}")
             check_applies_set(cql, table, "s IN (null, {'bar', 'foo'}, {'a'})")
-            # Reproduces #13586:
-            check_applies_set(cql, table, "s CONTAINS 'foo'")
 
             # multiple conditions
             check_applies_set(cql, table, "s > {'a'} AND s < {'z'}")
             check_applies_set(cql, table, "s IN (null, {'bar', 'foo'}, {'a'}) AND s IN ({'a'}, {'bar', 'foo'}, null)")
-            # Reproduces #13586:
-            check_applies_set(cql, table, "s CONTAINS 'foo' AND s CONTAINS 'bar'")
 
             # should not apply
             check_does_not_apply_set(cql, table, "s = {'baz'}")
@@ -588,23 +589,37 @@ def testWholeSet(cql, test_keyspace):
             check_does_not_apply_set(cql, table, "s IN ({'a'}, null)")
             check_does_not_apply_set(cql, table, "s IN ()")
             check_does_not_apply_set(cql, table, "s != null AND s IN ()")
-            # Reproduces #13586:
-            check_does_not_apply_set(cql, table, "s CONTAINS 'baz'")
 
-            # ScyllaDB does allow check =null, so this test is commented out
-            #check_invalid_set(cql, table, "s = {null}", InvalidRequest)
+            check_invalid_set(cql, table, "s = {null}", InvalidRequest)
             check_invalid_set(cql, table, "s < null", InvalidRequest)
             check_invalid_set(cql, table, "s <= null", InvalidRequest)
             check_invalid_set(cql, table, "s > null", InvalidRequest)
             check_invalid_set(cql, table, "s >= null", InvalidRequest)
             check_invalid_set(cql, table, "s IN null", SyntaxException)
             check_invalid_set(cql, table, "s IN 367", SyntaxException)
-            # Reproduces #13586:
-            check_invalid_set(cql, table, "s CONTAINS null", InvalidRequest)
-            check_invalid_set(cql, table, "s CONTAINS KEY 123", InvalidRequest)
 
             # element access is not allow for sets
-            check_invalid_set(cql, table, "s['foo'] = 'foobar'", InvalidRequest)
+            # Scylla does allow element access for sets in a condition: s['foo']
+            # is 'foo' if the set contains 'foo', or null otherwise - as in
+            # "SELECT s['foo']" - so this check is commented out.
+            #check_invalid_set(cql, table, "s['foo'] = 'foobar'", InvalidRequest)
+
+# The CONTAINS and CONTAINS KEY checks of testWholeSet, split into a separate
+# test because Scylla does not yet support CONTAINS in LWT conditions
+# (issue #13586), so the rest of testWholeSet can run on Scylla.
+@pytest.mark.xfail(reason="Issue #13586")
+def testWholeSetContains(cql, test_keyspace):
+    for frozen in [False, True]:
+        typename = "set<text>"
+        f = f"frozen<{typename}>" if frozen else typename
+        with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, s {f})") as table:
+            execute(cql, table, "INSERT INTO %s (k, s) VALUES (0, {'bar', 'foo'})")
+
+            check_applies_set(cql, table, "s CONTAINS 'foo'")
+            check_applies_set(cql, table, "s CONTAINS 'foo' AND s CONTAINS 'bar'")
+            check_does_not_apply_set(cql, table, "s CONTAINS 'baz'")
+            check_invalid_set(cql, table, "s CONTAINS null", InvalidRequest)
+            check_invalid_set(cql, table, "s CONTAINS KEY 123", InvalidRequest)
 
 def check_applies_set(cql, table, condition):
     # UPDATE statement
@@ -632,7 +647,6 @@ def check_invalid_set(cql, table, condition, expected):
     assertRows(execute(cql, table, "SELECT * FROM %s"), row(0, {"bar", "foo"}))
 
 # Migrated from cql_tests.py:TestCQL.whole_map_conditional_test()
-@pytest.mark.xfail(reason="Issue #13586")
 def testWholeMap(cql, test_keyspace):
     for frozen in [False, True]:   
         typename = "map<text,text>"
@@ -647,15 +661,10 @@ def testWholeMap(cql, test_keyspace):
             check_applies_map(cql, table, "m <= {'z': 'z'}")
             check_applies_map(cql, table, "m != {'a': 'a'}")
             check_applies_map(cql, table, "m IN (null, {'a': 'a'}, {'foo': 'bar'})")
-            # Reproduces #13586:
-            check_applies_map(cql, table, "m CONTAINS 'bar'")
-            check_applies_map(cql, table, "m CONTAINS KEY 'foo'")
 
             # multiple conditions
             check_applies_map(cql, table, "m > {'a': 'a'} AND m < {'z': 'z'}")
             check_applies_map(cql, table, "m != null AND m IN (null, {'a': 'a'}, {'foo': 'bar'})")
-            # Reproduces #13586:
-            check_applies_map(cql, table, "m CONTAINS 'bar' AND m CONTAINS KEY 'foo'")
 
             # should not apply
             check_does_not_apply_map(cql, table, "m = {'a': 'a'}")
@@ -667,18 +676,31 @@ def testWholeMap(cql, test_keyspace):
             check_does_not_apply_map(cql, table, "m IN ({'a': 'a'}, null)")
             check_does_not_apply_map(cql, table, "m IN ()")
             check_does_not_apply_map(cql, table, "m = null AND m != null")
-            # Reproduces #13586:
-            check_does_not_apply_map(cql, table, "m CONTAINS 'foo'")
-            check_does_not_apply_map(cql, table, "m CONTAINS KEY 'bar'")
 
             check_invalid_map(cql, table, "m = {null: null}", InvalidRequest)
             check_invalid_map(cql, table, "m = {'a': null}", InvalidRequest)
             check_invalid_map(cql, table, "m = {null: 'a'}", InvalidRequest)
-            # Reproduces #13586:
-            check_invalid_map(cql, table, "m CONTAINS null", InvalidRequest)
-            check_invalid_map(cql, table, "m CONTAINS KEY null", InvalidRequest)
             check_invalid_map(cql, table, "m < null", InvalidRequest)
             check_invalid_map(cql, table, "m IN null", SyntaxException)
+
+# The CONTAINS and CONTAINS KEY checks of testWholeMap, split into a separate
+# test because Scylla does not yet support CONTAINS in LWT conditions
+# (issue #13586), so the rest of testWholeMap can run on Scylla.
+@pytest.mark.xfail(reason="Issue #13586")
+def testWholeMapContains(cql, test_keyspace):
+    for frozen in [False, True]:
+        typename = "map<text,text>"
+        f = f"frozen<{typename}>" if frozen else typename
+        with create_table(cql, test_keyspace, f"(k int PRIMARY KEY, m {f})") as table:
+            execute(cql, table, "INSERT INTO %s (k, m) VALUES (0, {'foo' : 'bar'})")
+
+            check_applies_map(cql, table, "m CONTAINS 'bar'")
+            check_applies_map(cql, table, "m CONTAINS KEY 'foo'")
+            check_applies_map(cql, table, "m CONTAINS 'bar' AND m CONTAINS KEY 'foo'")
+            check_does_not_apply_map(cql, table, "m CONTAINS 'foo'")
+            check_does_not_apply_map(cql, table, "m CONTAINS KEY 'bar'")
+            check_invalid_map(cql, table, "m CONTAINS null", InvalidRequest)
+            check_invalid_map(cql, table, "m CONTAINS KEY null", InvalidRequest)
 
 # Migrated from cql_tests.py:TestCQL.map_item_conditional_test()
 @pytest.mark.parametrize("test_keyspace",
