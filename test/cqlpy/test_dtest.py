@@ -19,7 +19,7 @@ from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.protocol import AlreadyExists, InvalidRequest
 from cassandra.query import SimpleStatement, UNSET_VALUE
 
-from .util import new_test_table, new_type, unique_name
+from .util import new_materialized_view, new_test_table, new_type, new_user, unique_name
 
 
 # Test that a SELECT can list the same column more than once, and returns
@@ -979,3 +979,98 @@ def test_scan_text_keys_in_token_order(cql, test_keyspace):
         assert [row[1] for row in rows] == [3, 0, 2, 6, 4, 7, 1, 5]
         tokens = [row[0] for row in rows]
         assert tokens == sorted(tokens)
+
+# Test that a SELECT with ALLOW FILTERING can restrict a materialized view's
+# clustering column without restricting the view's partition key, and that
+# COUNT(*) on the base table and on the view, with and without filtering,
+# counts the right rows.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_filtering_with_mv.
+def test_view_filtering_and_count(cql, test_keyspace):
+    schema = 'username text, password text, gender text, state text, birth_year bigint, PRIMARY KEY (username)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with new_materialized_view(cql, table, '*', 'state, username', 'state IS NOT NULL AND username IS NOT NULL') as view:
+            insert = cql.prepare(f'INSERT INTO {table} (username, password, gender, state, birth_year) VALUES (?, ?, ?, ?, ?)')
+            cql.execute(insert, ['user1', 'ch@ngem3a', 'f', 'TX', 1968])
+            cql.execute(insert, ['user2', 'ch@ngem3b', 'm', 'CA', 1971])
+            cql.execute(insert, ['user3', 'ch@ngem3c', 'f', 'FL', 1978])
+            cql.execute(insert, ['user4', 'ch@ngem3d', 'm', 'TX', 1974])
+            assert list(cql.execute(f"SELECT count(*) FROM {table} WHERE username = 'user1'")) == [(1,)]
+            assert list(cql.execute(f"SELECT count(*) FROM {view} WHERE username = 'user1' ALLOW FILTERING")) == [(1,)]
+            assert list(cql.execute(f"SELECT count(*) FROM {view} WHERE state = 'TX' AND username = 'user1'")) == [(1,)]
+            assert list(cql.execute(f"SELECT count(*) FROM {view} WHERE state = 'TX'")) == [(2,)]
+            assert list(cql.execute(f"SELECT count(*) FROM {view}")) == [(4,)]
+
+# Test filtering with ALLOW FILTERING on the components of a composite
+# partition key: an equality or a range on just one component, ranges on
+# both, and restrictions on the partition key together with the clustering
+# key, with SELECT * and with COUNT(*). The test also checks that such
+# queries are rejected without ALLOW FILTERING.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_partition_key_allow_filtering
+# (CASSANDRA-11031).
+def test_filtering_on_partition_key_components(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k1 int, k2 int, ck1 int, v int, PRIMARY KEY ((k1, k2), ck1)') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (k1, k2, ck1, v) VALUES (?, ?, ?, 0)')
+        for k1 in [0, 1]:
+            for k2 in [0, 1]:
+                for ck1 in range(4):
+                    cql.execute(insert, [k1, k2, ck1])
+        def select(where):
+            return sorted(cql.execute(f'SELECT * FROM {table} WHERE {where}'))
+        def rows(k1s, k2s, ck1s=range(4)):
+            return [(k1, k2, ck1, 0) for k1 in k1s for k2 in k2s for ck1 in ck1s]
+        assert select('k1 = 0 ALLOW FILTERING') == rows([0], [0, 1])
+        assert select('k1 <= 1 AND k2 >= 1 ALLOW FILTERING') == rows([0, 1], [1])
+        assert select('k1 = 2 ALLOW FILTERING') == []
+        assert select('k1 <= 0 AND k2 > 1 ALLOW FILTERING') == []
+        assert select('k2 <= 0 ALLOW FILTERING') == rows([0, 1], [0])
+        assert select('k1 <= 0 AND k2 = 0 ALLOW FILTERING') == rows([0], [0])
+        assert select('k2 = 1 ALLOW FILTERING') == rows([0, 1], [1])
+        assert select('k2 = 2 ALLOW FILTERING') == []
+        assert select('k1 = 0 AND ck1 = 0 ALLOW FILTERING') == rows([0], [0, 1], [0])
+        assert select('k1 = 0 AND k2 = 1 AND ck1 = 0') == rows([0], [1], [0])
+        for k2, count in [(0, 8), (1, 8), (2, 0)]:
+            assert list(cql.execute(f'SELECT count(*) FROM {table} WHERE k2 = {k2} ALLOW FILTERING')) == [(count,)]
+        # Check that these queries need ALLOW FILTERING
+        for where in ['k1 = 0', 'k1 = 0 AND k2 > 0', 'k1 >= 0 AND k2 IN (0, 1, 2)', 'k2 > 0']:
+            with pytest.raises(InvalidRequest, match=re.compile('allow filtering', re.IGNORECASE)):
+                cql.execute(f'SELECT * FROM {table} WHERE {where}')
+
+# Test UPDATE statements, with bound values, that set some or all of a row's
+# regular columns to null. An UPDATE doesn't create a row marker, so an UPDATE
+# that sets all the regular columns to null doesn't create a row, while one
+# that sets only some of them to null does.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestsCQLAdditional::test_simple_null_value. The
+# dtest only checked the number of rows, and this test also checks their
+# contents.
+def test_update_with_null_values(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'key text PRIMARY KEY, val1 text, val2 float') as table:
+        update = cql.prepare(f'UPDATE {table} SET val1 = ?, val2 = ? WHERE key = ?')
+        cql.execute(update, ['ccc', 1.0, 'java1'])
+        cql.execute(update, [None, 1.0, 'java2'])
+        cql.execute(update, [None, None, 'java3'])
+        cql.execute(update, ['ddd', None, 'java4'])
+        assert sorted(cql.execute(f'SELECT * FROM {table}')) == [
+            ('java1', 'ccc', 1.0), ('java2', None, 1.0), ('java4', 'ddd', None)]
+
+# Test GRANT, REVOKE and LIST PERMISSIONS on a few kinds of resources:
+# granting a permission on all keyspaces, revoking the same permission on one
+# table - which was never granted on that table, so it does nothing - and
+# listing the permissions on a table, which include those granted on all
+# keyspaces.
+# Translated from scylla-dtest's cql_additional_tests.py::TestsCQLAdditional
+# tests test_grant, test_revoke and test_list, which were written when
+# Scylla did not implement these statements yet, so they also accepted a
+# "Not implemented" error, and didn't check what LIST returns. This test
+# checks that the statements succeed, and what LIST returns.
+def test_grant_revoke_list_permissions(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table, new_user(cql) as role:
+        cql.execute(f'GRANT SELECT ON ALL KEYSPACES TO {role}')
+        try:
+            cql.execute(f'REVOKE SELECT ON {table} FROM {role}')
+            perms = [(r.role, r.resource, r.permission) for r in cql.execute(f'LIST ALL PERMISSIONS ON {table}') if r.role == role]
+            assert perms == [(role, '<all keyspaces>', 'SELECT')]
+        finally:
+            cql.execute(f'REVOKE SELECT ON ALL KEYSPACES FROM {role}')
