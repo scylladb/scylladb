@@ -336,10 +336,15 @@ def test_compaction_deletes_sstables_of_deleted_data(scylla_only, cql, test_keys
             time.sleep(0.1)
         assert data_files() == []
 
-# Test that changing a table's compaction strategy doesn't lose data or
-# revive deleted data.
+# Test that changing a table's compaction strategy - and changing it back -
+# doesn't lose data or revive deleted data, that the schema has the new
+# strategy, and that major compaction with the new strategy works.
 # Translated from scylla-dtest's compaction_test.py::TestCompaction::test_compaction_strategy_switching,
-# which didn't check one of the rows (key 10).
+# which didn't check one of the rows (key 10), and from scylla-dtest's
+# ics_compaction_test.py::TestIcsCompaction tests test_alter_table_to_ics,
+# test_alter_table_from_ics, test_alter_table_strategy_twice and
+# test_lcs_major_compaction_then_ics_major_compaction, which checked only
+# the strategy in the schema and that the major compaction succeeded.
 @pytest.mark.parametrize('strategy', compaction_strategies)
 def test_compaction_strategy_switching(scylla_only, cql, test_keyspace, strategy):
     for new_strategy in compaction_strategies:
@@ -347,15 +352,23 @@ def test_compaction_strategy_switching(scylla_only, cql, test_keyspace, strategy
             continue
         with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val int',
                             f"WITH gc_grace_seconds = 0 AND compaction = {{'class': '{strategy}'}}") as table:
+            ks, cf = table.split('.')
+            def check(expected_strategy):
+                assert sorted(cql.execute(f'SELECT * FROM {table}')) == [(key, 1) for key in range(3, 10)]
+                compaction = cql.execute(f"SELECT compaction FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one().compaction
+                assert compaction['class'].endswith(expected_strategy)
             for key in range(10):
                 cql.execute(f'INSERT INTO {table} (key, val) VALUES ({key}, 1)')
             nodetool.flush(cql, table)
             for key in range(3):
                 cql.execute(f'DELETE FROM {table} WHERE key = {key}')
-            cql.execute(f"ALTER TABLE {table} WITH compaction = {{'class': '{new_strategy}'}}")
-            assert sorted(cql.execute(f'SELECT * FROM {table}')) == [(key, 1) for key in range(3, 10)]
-            nodetool.flush(cql, table)
-            assert sorted(cql.execute(f'SELECT * FROM {table}')) == [(key, 1) for key in range(3, 10)]
+            for alter_to in [new_strategy, strategy]:
+                cql.execute(f"ALTER TABLE {table} WITH compaction = {{'class': '{alter_to}'}}")
+                check(alter_to)
+                nodetool.flush(cql, table)
+                check(alter_to)
+                nodetool.compact(cql, table)
+                check(alter_to)
 
 #############################################################################
 # The following tests check disabling and enabling the automatic compaction
