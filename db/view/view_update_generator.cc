@@ -433,6 +433,10 @@ future<> view_update_generator::populate_views(const replica::table& table,
         }
     }
     co_await builder.close();
+    // mutate_MV() records the backlog when each view update completes, but while it still holds the
+    // update's memory units, so the recorded backlog - which gossip publishes to coordinators - still
+    // includes the last batch. Record it again now that all the units were released.
+    _proxy.local().update_view_update_backlog();
     if (err) {
         std::rethrow_exception(err);
     }
