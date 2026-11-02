@@ -3976,6 +3976,7 @@ storage_proxy::create_write_response_handler(const hint_wrapper& h, db::consiste
 
 result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler(const batchlog_replay_mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options) {
+    options.bypass_large_data_guardrails = true;
     return create_write_response_handler_helper(m.mut.schema(), m.mut.token(), std::make_unique<shared_mutation>(m.mut), cl, type, tr_state,
             std::move(permit), allow_limit, is_cancellable::yes, std::move(options));
 }
