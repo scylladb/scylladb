@@ -355,7 +355,7 @@ public:
     future<> discard_logstor_segments();
 
     // Flushes the separator buffers of the group. The table must use logstor.
-    future<> flush_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
+    future<> flush_separator();
 
     logstor::segment_set& logstor_segments() noexcept;
     const logstor::segment_set& logstor_segments() const noexcept;

@@ -1304,7 +1304,7 @@ public:
     logstor::compaction_manager& get_logstor_compaction_manager() noexcept;
 
     // Flushes the separator buffers of the table. The table must use logstor.
-    future<> flush_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
+    future<> flush_separator();
 
     table_stats& get_stats() const {
         return _stats;
@@ -2266,8 +2266,6 @@ public:
 
     static future<> trigger_logstor_compaction_on_all_shards(sharded<database>& sharded_db, bool major);
     void trigger_logstor_compaction(bool major);
-    static future<> flush_logstor_separator_on_all_shards(sharded<database>& sharded_db);
-    future<> flush_logstor_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
     size_t get_logstor_memory_usage() const;
     // Only valid when logstor is used.
     logstor::recovery_catalog& logstor_catalog() noexcept {

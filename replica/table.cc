@@ -1322,8 +1322,8 @@ logstor::compaction_manager& compaction_group_logstor_state::logstor_compaction_
     return _cg->get_logstor_compaction_manager();
 }
 
-future<> compaction_group::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
-    return _logstor_state->flush_separator(seq_num);
+future<> compaction_group::flush_separator() {
+    return _logstor_state->flush_separator();
 }
 
 future<utils::chunked_vector<logstor::segment_snapshot>> compaction_group::take_logstor_snapshot() {
@@ -4820,7 +4820,7 @@ future<> table::flush_memtables(std::optional<db::replay_position> pos) {
     co_await parallel_foreach_compaction_group([pos](auto& cg) { return cg.flush_memtables(pos); });
 }
 
-future<> table::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
+future<> table::flush_separator() {
     // table::stop() closes the phaser only after it stopped all compaction groups, and
     // compaction_group::stop() flushes the separator buffers of its group, so there is nothing to
     // flush. The check is also necessary because start() throws on a closed phaser.
@@ -4833,8 +4833,8 @@ future<> table::flush_separator(std::optional<logstor::segment_sequence> seq_num
     co_await _logstor->flush_to_separator();
 
     // flush separator buffers
-    co_await parallel_foreach_compaction_group([seq_num] (compaction_group& cg) {
-        return cg.flush_separator(seq_num);
+    co_await parallel_foreach_compaction_group([] (compaction_group& cg) {
+        return cg.flush_separator();
     });
 }
 
