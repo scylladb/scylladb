@@ -634,7 +634,7 @@ protected:
         co_await coroutine::switch_to(_cm.maintenance_sg());
 
         switch_state(state::pending);
-        auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+        auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem, compaction_manager::maintenance_ops_sem_name);
         // Write lock is used to synchronize selection of sstables for compaction and their registration.
         // Also used to synchronize with regular compaction, so major waits for regular to cease before selecting candidates.
         auto lock_holder = co_await _compaction_state.lock.hold_write_lock();
@@ -755,7 +755,7 @@ protected:
             co_return std::nullopt;
         }
         switch_state(state::pending);
-        auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+        auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem, compaction_manager::maintenance_ops_sem_name);
 
         if (!can_proceed(throw_if_stopping::yes)) {
             co_return std::nullopt;
@@ -1095,8 +1095,23 @@ sstables::shared_sstable sstables_task_executor::consume_sstable() {
 }
 
 template <typename ExceptionFactory>
-future<semaphore_units<ExceptionFactory>> compaction_task_executor::acquire_semaphore(basic_semaphore<ExceptionFactory>& sem, size_t units) {
-    return seastar::get_units(sem, units, _compaction_data.abort).handle_exception_type([this] (const abort_requested_exception& e) {
+future<semaphore_units<ExceptionFactory>> compaction_task_executor::acquire_semaphore(basic_semaphore<ExceptionFactory>& sem, const char* sem_name, size_t units) {
+    // Make a contended acquisition visible, as it's otherwise a silent and unbounded wait.
+    auto contended = sem.waiters() > 0 || sem.available_units() < ssize_t(units);
+    auto start = seastar::lowres_clock::now();
+    if (contended) {
+        cmlog.debug("{}: waiting for {} ({} waiters ahead)", *this, sem_name, sem.waiters());
+    }
+    auto fut = seastar::get_units(sem, units, _compaction_data.abort);
+    if (contended) {
+        // Reported only when the wait ends in success, an aborted one throws below instead.
+        fut = std::move(fut).then([this, sem_name, start] (semaphore_units<ExceptionFactory> permit) {
+            cmlog.debug("{}: acquired {} after waiting for {} ms", *this, sem_name,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(seastar::lowres_clock::now() - start).count());
+            return permit;
+        });
+    }
+    return std::move(fut).handle_exception_type([this] (const abort_requested_exception& e) {
         auto s = _compacting_table->schema();
         return make_exception_future<semaphore_units<ExceptionFactory>>(
                 compaction_stopped_exception(s->ks_name(), s->cf_name(), e.what()));
@@ -1764,7 +1779,7 @@ protected:
             std::optional<semaphore_units<>> automatic_scrub_exclusion;
             if (!_compacting_table->get_compaction_strategy().parallel_compaction()) {
                 // Wait for auto scrub to finish scrubbing its current sstable.
-                automatic_scrub_exclusion = co_await acquire_semaphore(_compaction_state.automatic_compaction_sem);
+                automatic_scrub_exclusion = co_await acquire_semaphore(_compaction_state.automatic_compaction_sem, compaction_state::automatic_compaction_sem_name);
             }
 
             // Read lock serializes with major compaction (which takes write lock).
@@ -2035,7 +2050,7 @@ protected:
                 co_return std::nullopt;
             }
             switch_state(state::pending);
-            auto units = co_await acquire_semaphore(_cm._off_strategy_sem);
+            auto units = co_await acquire_semaphore(_cm._off_strategy_sem, compaction_manager::off_strategy_sem_name);
             if (!can_proceed()) {
                 co_return std::nullopt;
             }
@@ -2108,7 +2123,7 @@ protected:
         compaction_stats stats{};
 
         switch_state(state::pending);
-        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem, compaction_manager::maintenance_ops_sem_name);
 
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
@@ -2363,9 +2378,9 @@ public:
             }
             switch_state(state::pending);
 
-            auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+            auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem, compaction_manager::maintenance_ops_sem_name);
 
-            auto auto_scrub_permit = co_await acquire_semaphore(_compaction_state.automatic_compaction_sem);
+            auto auto_scrub_permit = co_await acquire_semaphore(_compaction_state.automatic_compaction_sem, compaction_state::automatic_compaction_sem_name);
 
             auto lock_holder = co_await _compaction_state.lock.hold_read_lock();
             if (!can_proceed()) {
@@ -2476,7 +2491,7 @@ protected:
         compaction_stats stats{};
 
         switch_state(state::pending);
-        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem, compaction_manager::maintenance_ops_sem_name);
 
         while (!_sstables.empty()) {
             auto sst = consume_sstable();
