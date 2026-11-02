@@ -133,6 +133,18 @@ def test_clients(scylla_only, cql):
         client_options = cl[13]
         assert(client_options.get('DRIVER_NAME') == cl[4])
         assert(client_options.get('DRIVER_VERSION') == cl[5])
+        # The port, connection_stage, protocol_version, shard_id and
+        # username columns all have values, and so do driver_name and
+        # driver_version once the connection is ready. A connection whose
+        # startup didn't finish doesn't have the driver's name - e.g., a
+        # connection which the driver is still opening, or one which it left
+        # behind (scylladb/python-driver#1131). This check was translated from
+        # scylla-dtest's cql_system_clients_test.py::TestSystemClients::test_system_client_not_none_non_ssl,
+        # which checked an authenticated connection.
+        for i in [1, 3, 7, 8, 12] + ([4, 5] if cl[3] == 'READY' else []):
+            assert cl[i] is not None, cl
+    # At least the connection which sent this request is ready
+    assert any(cl[3] == 'READY' for cl in cls)
 
 # We only want to check that the table exists with the listed columns, to assert
 # backwards compatibility.
