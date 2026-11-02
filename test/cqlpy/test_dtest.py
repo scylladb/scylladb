@@ -14,6 +14,7 @@
 
 import re
 import time
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 
 import pytest
@@ -1203,3 +1204,233 @@ def test_twcs_ck_filtering_with_cache(cql, skip_without_tablets):
         # If the previous read made the cache remember that partition 1
         # doesn't exist, this read would return nothing.
         assert list(cql.execute(f'SELECT * FROM {table} WHERE pk = 1 AND ck = 0')) == [(1, 0)]
+
+#############################################################################
+# The following tests check filtering with ALLOW FILTERING on several regular
+# columns of different types, sometimes together with restrictions on the
+# primary key, a secondary index or a materialized view.
+# Translated from scylla-dtest's cql_additional_tests.py class
+# TestsMultiColumnRestrictionSimple.
+#############################################################################
+
+UUID1 = 'de5cba0d-41a2-4f39-8834-35130d8b5d86'
+UUID2 = 'fa80080c-a4c5-46d6-afe4-5e184fec35ae'
+# The rows to insert: the columns, and the values as CQL literals. The
+# timestamps are given as strings of milliseconds since the epoch.
+MULTI_COLUMN_INSERTS = [
+    ('key, clmn_int, clmn_text, clmn_timestamp, clmn_bool, clmn_ascii, clmn_uuid, clmn_blob',
+     f"0, 0, 'text1', '12345674987', True, '045asciitext', {UUID1}, textAsBlob('cccccccccc')"),
+    ('key, clmn_int, clmn_text, clmn_timestamp, clmn_bool, clmn_ascii, clmn_uuid, clmn_blob',
+     f"1, 0, 'text2', '63873478378', False, 'abcdefj', {UUID2}, textAsBlob('bbbbbbbbbb')"),
+    ('key, clmn_int, clmn_text, clmn_timestamp, clmn_bool, clmn_ascii, clmn_uuid, clmn_blob',
+     f"2, 2, 'text3', '398793781719', True, '354dsfsd', {UUID1}, textAsBlob('bbbbbbbbbb')"),
+    ('key, clmn_int, clmn_text, clmn_timestamp, clmn_bool, clmn_ascii, clmn_uuid, clmn_blob',
+     f"3, 3, 'text4', '398793781719', False, '897dfjka9', {UUID2}, textAsBlob('aaaaaaaaaa')"),
+    ('key, clmn_int', '4, 4'),
+]
+# The rows as read by multi_column_select(), which reads the timestamp and
+# uuid columns cast to text.
+MULTI_COLUMN_ROWS = [
+    (0, 0, 'text1', '1970-05-23T21:21:14.987Z', True, '045asciitext', UUID1, b'c' * 10),
+    (1, 0, 'text2', '1972-01-10T06:37:58.378Z', False, 'abcdefj', UUID2, b'b' * 10),
+    (2, 2, 'text3', '1982-08-21T16:03:01.719Z', True, '354dsfsd', UUID1, b'b' * 10),
+    (3, 3, 'text4', '1982-08-21T16:03:01.719Z', False, '897dfjka9', UUID2, b'a' * 10),
+    (4, 4, None, None, None, None, None, None),
+]
+
+# Create a table with the columns of MULTI_COLUMN_INSERTS, with clmn_int as a
+# clustering key if with_ck, and with an optional index or materialized
+# view created by the "prepare" function, before inserting the first
+# "nrows" rows of MULTI_COLUMN_INSERTS.
+@contextmanager
+def multi_column_table(cql, keyspace, with_ck, prepare=None, nrows=len(MULTI_COLUMN_INSERTS)):
+    schema = 'key int, clmn_int int, clmn_text text, clmn_timestamp timestamp, clmn_bool boolean, clmn_ascii ascii, clmn_uuid uuid, clmn_blob blob, '
+    schema += 'PRIMARY KEY (key, clmn_int)' if with_ck else 'PRIMARY KEY (key)'
+    with new_test_table(cql, keyspace, schema) as table:
+        with prepare(table) if prepare else nullcontext() as extra:
+            for columns, values in MULTI_COLUMN_INSERTS[:nrows]:
+                cql.execute(f'INSERT INTO {table} ({columns}) VALUES ({values})')
+            yield table, extra
+
+def multi_column_select(cql, table, where):
+    columns = 'key, clmn_int, clmn_text, cast(clmn_timestamp as text), clmn_bool, clmn_ascii, cast(clmn_uuid as text), clmn_blob'
+    return sorted(cql.execute(f'SELECT {columns} FROM {table} WHERE {where} ALLOW FILTERING'))
+
+def multi_column_rows(*keys):
+    return [MULTI_COLUMN_ROWS[k] for k in keys]
+
+# Test filtering on one regular column, for columns of several types.
+def test_filter_by_one_non_indexed_column(cql, test_keyspace):
+    with multi_column_table(cql, test_keyspace, with_ck=False) as (table, _):
+        assert multi_column_select(cql, table, 'clmn_int = 0') == multi_column_rows(0, 1)
+        assert multi_column_select(cql, table, "clmn_text = 'text3'") == multi_column_rows(2)
+        assert multi_column_select(cql, table, 'clmn_timestamp = 398793781719') == multi_column_rows(2, 3)
+        assert multi_column_select(cql, table, 'clmn_bool = True') == multi_column_rows(0, 2)
+        assert multi_column_select(cql, table, "clmn_ascii = 'abcdefj'") == multi_column_rows(1)
+        assert multi_column_select(cql, table, f'clmn_uuid = {UUID1}') == multi_column_rows(0, 2)
+        assert multi_column_select(cql, table, "clmn_blob = textAsBlob('bbbbbbbbbb')") == multi_column_rows(1, 2)
+
+# Test filtering on three regular columns at once.
+def test_filter_by_three_non_indexed_columns(cql, test_keyspace):
+    with multi_column_table(cql, test_keyspace, with_ck=False) as (table, _):
+        assert multi_column_select(cql, table, f'clmn_int = 2 AND clmn_uuid = {UUID1} AND clmn_timestamp = 398793781719') == multi_column_rows(2)
+        assert multi_column_select(cql, table, "clmn_ascii = '897dfjka9' AND clmn_text = 'text4' AND clmn_blob = textAsBlob('aaaaaaaaaa')") == multi_column_rows(3)
+
+# Test filtering on regular columns together with a restriction on the
+# partition key, with and without one on the clustering key.
+def test_filter_by_pk_ck_and_non_indexed_columns(cql, test_keyspace):
+    with multi_column_table(cql, test_keyspace, with_ck=True) as (table, _):
+        assert multi_column_select(cql, table, 'key = 0 AND clmn_timestamp = 12345674987') == multi_column_rows(0)
+        assert multi_column_select(cql, table, 'key = 0 AND clmn_int = 0 AND clmn_timestamp = 12345674987') == multi_column_rows(0)
+        assert multi_column_select(cql, table, 'key = 0 AND clmn_timestamp = 12345674987 AND clmn_bool = True') == multi_column_rows(0)
+        assert multi_column_select(cql, table, f'key = 0 AND clmn_int = 0 AND clmn_timestamp = 12345674987 AND clmn_uuid = {UUID1}') == multi_column_rows(0)
+
+# The checks of the following two tests, with a global and with a local
+# secondary index on clmn_text: filtering on regular columns together with
+# restrictions on the partition key, the clustering key and the indexed
+# column.
+def check_filter_by_pk_ck_si_and_non_indexed_columns(cql, table):
+    assert multi_column_select(cql, table, "key = 1 AND clmn_text = 'text2' AND clmn_timestamp = 63873478378") == multi_column_rows(1)
+    assert multi_column_select(cql, table, "key = 1 AND clmn_int = 0 AND clmn_text = 'text2' AND clmn_timestamp = 63873478378") == multi_column_rows(1)
+    assert multi_column_select(cql, table, f"key = 1 AND clmn_text = 'text2' AND clmn_uuid = {UUID2} AND clmn_timestamp = 63873478378") == multi_column_rows(1)
+    assert multi_column_select(cql, table, "key = 1 AND clmn_int = 0 AND clmn_text = 'text2' AND clmn_bool = False AND clmn_timestamp = 63873478378") == multi_column_rows(1)
+
+def global_index_on_clmn_text(cql):
+    @contextmanager
+    def prepare(table):
+        cql.execute(f'CREATE INDEX ON {table} (clmn_text)')
+        yield
+    return prepare
+
+def local_index_on_clmn_text(cql):
+    @contextmanager
+    def prepare(table):
+        cql.execute(f'CREATE INDEX ON {table} ((key), clmn_text)')
+        yield
+    return prepare
+
+def test_filter_by_pk_ck_global_si_and_non_indexed_columns(cql, test_keyspace):
+    with multi_column_table(cql, test_keyspace, with_ck=True, prepare=global_index_on_clmn_text(cql)) as (table, _):
+        check_filter_by_pk_ck_si_and_non_indexed_columns(cql, table)
+
+# Local secondary indexes are a Scylla-only feature.
+def test_filter_by_pk_ck_local_si_and_non_indexed_columns(cql, test_keyspace, scylla_only):
+    with multi_column_table(cql, test_keyspace, with_ck=True, prepare=local_index_on_clmn_text(cql)) as (table, _):
+        check_filter_by_pk_ck_si_and_non_indexed_columns(cql, table)
+
+# Test filtering on two regular columns with "<" and "<=" operators.
+def test_filter_by_two_non_indexed_columns_with_operator(cql, test_keyspace):
+    with multi_column_table(cql, test_keyspace, with_ck=False) as (table, _):
+        assert multi_column_select(cql, table, f'clmn_int < 2 AND clmn_uuid <= {UUID2}') == multi_column_rows(0, 1)
+
+# The checks of the following two tests, with a global and with a local
+# secondary index on clmn_text: filtering with range operators on the
+# partition key, the clustering key, the indexed column and a regular column.
+def check_filter_by_pk_ck_si_and_non_indexed_columns_with_operator(cql, table):
+    assert multi_column_select(cql, table, "key > 1 AND clmn_int < 5 AND clmn_text >= 'text2' AND clmn_timestamp > 63873478378") == multi_column_rows(2, 3)
+
+def test_filter_by_pk_ck_global_si_and_non_indexed_columns_with_operator(cql, test_keyspace):
+    with multi_column_table(cql, test_keyspace, with_ck=True, prepare=global_index_on_clmn_text(cql), nrows=4) as (table, _):
+        check_filter_by_pk_ck_si_and_non_indexed_columns_with_operator(cql, table)
+
+# Local secondary indexes are a Scylla-only feature.
+def test_filter_by_pk_ck_local_si_and_non_indexed_columns_with_operator(cql, test_keyspace, scylla_only):
+    with multi_column_table(cql, test_keyspace, with_ck=True, prepare=local_index_on_clmn_text(cql), nrows=4) as (table, _):
+        check_filter_by_pk_ck_si_and_non_indexed_columns_with_operator(cql, table)
+
+def view_by_clmn_text(cql):
+    def prepare(table):
+        return new_materialized_view(cql, table, '*', 'key, clmn_int, clmn_text',
+            'key IS NOT NULL AND clmn_int IS NOT NULL AND clmn_text IS NOT NULL')
+    return prepare
+
+# Test filtering on regular columns of a materialized view, whose primary
+# key adds a regular column of the base table (clmn_text). The test also
+# checks that "clmn_text = ''" matches no rows, in the view and in the base
+# table: row 4's clmn_text is null, not an empty string, so it isn't in the
+# view at all, and in the base table an empty string doesn't match it. The
+# dtest had this check commented out, expecting it to find row 4, citing
+# issue #4776 - but that issue, asking for such matching of null values, was
+# closed as "won't fix", and Cassandra doesn't match row 4 either.
+def test_filter_by_non_indexed_columns_from_mv(cql, test_keyspace):
+    with multi_column_table(cql, test_keyspace, with_ck=True, prepare=view_by_clmn_text(cql)) as (table, view):
+        assert multi_column_select(cql, view, "clmn_text = 'text1'") == multi_column_rows(0)
+        assert multi_column_select(cql, view, "clmn_text = ''") == []
+        assert multi_column_select(cql, table, "clmn_text = ''") == []
+        assert multi_column_select(cql, view, f"key > 1 AND clmn_int < 5 AND clmn_uuid = {UUID2} AND clmn_blob = textAsBlob('aaaaaaaaaa')") == multi_column_rows(3)
+
+# Test filtering which matches no rows, on a base table and on its
+# materialized view.
+def test_filter_by_multiple_columns_empty_result(cql, test_keyspace):
+    with multi_column_table(cql, test_keyspace, with_ck=True, prepare=view_by_clmn_text(cql), nrows=4) as (table, view):
+        assert multi_column_select(cql, table, "key > 1 AND clmn_int < 5 AND clmn_text <= 'text2' AND clmn_timestamp < 63873478378") == []
+        assert multi_column_select(cql, table, f"key > 1 AND clmn_int < 5 AND clmn_uuid = {UUID2} AND clmn_blob = textAsBlob('bbbbbbbbbb')") == []
+        assert multi_column_select(cql, view, "key > 1 AND clmn_int < 5 AND clmn_text <= 'text2' AND clmn_timestamp < 63873478378") == []
+
+#############################################################################
+# The following tests check filtering with ALLOW FILTERING on collection
+# columns - frozen and unfrozen lists, sets and maps - with CONTAINS,
+# CONTAINS KEY and equality.
+# Translated from scylla-dtest's cql_additional_tests.py class
+# TestsMultiColumnRestrictionCollection.
+#############################################################################
+
+COLLECTIONS_SCHEMA = ('id int PRIMARY KEY, list_int list<int>, list_blob list<blob>, '
+    'set_uuid set<uuid>, set_text set<text>, map_bool map<text, boolean>, '
+    'map_uuid map<text, uuid>, f_list_int frozen<list<int>>, f_list_text frozen<list<text>>, '
+    'f_set_int frozen<set<int>>, f_set_text frozen<set<text>>, f_map_text frozen<map<text, text>>, '
+    'f_map_int frozen<map<text, int>>')
+
+COLLECTIONS_ROWS = [
+    "0, [0, 1, 2], [textAsBlob('t1'), textAsBlob('t2')], "
+    "{de5cba0d-41a2-4f39-8834-35130d8b5d86, fa80080c-a4c5-46d6-afe4-5e184fec35ae}, {'t3', 't4', 't5'}, "
+    "{'a': True, 'b': True, 'c': False}, "
+    "{'a': f34f6a76-b383-11e9-a2a3-2a2ae2dbcce4, 'c': f34f6cec-b383-11e9-a2a3-2a2ae2dbcce4}, "
+    "[5, 6], ['f1', 'f2'], {7, 9}, {'f3', 'f4', 'f5'}, {'fa': 'b', 'fc': 'd'}, {'fa': 1, 'fb': 2, 'fc': 3}",
+    "1, [3, 4, 5], [textAsBlob('t3'), textAsBlob('t4')], "
+    "{8e4fe826-b383-11e9-a2a3-2a2ae2dbcce4, 8e4fea9c-b383-11e9-a2a3-2a2ae2dbcce4}, {'t5', 't6', 't7'}, "
+    "{'a1': False, 'c1': False}, "
+    "{'a1': 26a8e352-b384-11e9-a2a3-2a2ae2dbcce4, 'b1': 26a8e5be-b384-11e9-a2a3-2a2ae2dbcce4, 'c1': 26a8e712-b384-11e9-a2a3-2a2ae2dbcce4}, "
+    "[7, 8], ['f3', 'f4'], {9, 10}, {'f6', 'f7', 'f8'}, {'f1': 'c', 'f2': 'e'}, {'f1': 1, 'f2': 2, 'f3': 3}",
+]
+
+@pytest.fixture(scope='module')
+def collections_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, COLLECTIONS_SCHEMA) as table:
+        for row in COLLECTIONS_ROWS:
+            cql.execute(f'INSERT INTO {table} (id, list_int, list_blob, set_uuid, set_text, map_bool, map_uuid, '
+                        f'f_list_int, f_list_text, f_set_int, f_set_text, f_map_text, f_map_int) VALUES ({row})')
+        yield table
+
+def collections_select_ids(cql, table, where):
+    return sorted(row.id for row in cql.execute(f'SELECT id FROM {table} WHERE {where} ALLOW FILTERING'))
+
+# Test filtering on one collection column, for frozen and unfrozen lists,
+# sets and maps of several element types.
+def test_filter_by_one_non_indexed_collection_column(cql, collections_table):
+    table = collections_table
+    assert collections_select_ids(cql, table, 'list_int CONTAINS 4') == [1]
+    assert collections_select_ids(cql, table, "list_blob CONTAINS textAsBlob('t1')") == [0]
+    assert collections_select_ids(cql, table, 'set_uuid CONTAINS 8e4fe826-b383-11e9-a2a3-2a2ae2dbcce4') == [1]
+    assert collections_select_ids(cql, table, "set_text CONTAINS 't5'") == [0, 1]
+    assert collections_select_ids(cql, table, "map_bool CONTAINS False AND map_bool CONTAINS KEY 'a1'") == [1]
+    assert collections_select_ids(cql, table, 'map_uuid CONTAINS f34f6a76-b383-11e9-a2a3-2a2ae2dbcce4') == [0]
+    assert collections_select_ids(cql, table, "map_uuid CONTAINS KEY 'a1'") == [1]
+    assert collections_select_ids(cql, table, 'f_list_int CONTAINS 8') == [1]
+    assert collections_select_ids(cql, table, "f_list_text CONTAINS 'f4'") == [1]
+    assert collections_select_ids(cql, table, 'f_set_int = {9, 7}') == [0]
+    assert collections_select_ids(cql, table, 'f_set_int CONTAINS 9 AND f_set_int CONTAINS 10') == [1]
+    assert collections_select_ids(cql, table, "f_set_text CONTAINS 'f6'") == [1]
+    assert collections_select_ids(cql, table, "f_map_text = {'f2': 'e', 'f1': 'c'}") == [1]
+    assert collections_select_ids(cql, table, "f_map_text CONTAINS 'c'") == [1]
+    assert collections_select_ids(cql, table, "f_map_text CONTAINS KEY 'f2'") == [1]
+    assert collections_select_ids(cql, table, 'f_map_int CONTAINS 2') == [0, 1]
+
+# Test filtering on two collection columns together with a restriction on
+# the partition key, including one that matches no rows.
+def test_filter_by_pk_and_two_non_indexed_collection_columns(cql, collections_table):
+    table = collections_table
+    assert collections_select_ids(cql, table, 'id = 0 AND map_uuid CONTAINS f34f6a76-b383-11e9-a2a3-2a2ae2dbcce4 AND f_set_int CONTAINS 9') == [0]
+    assert collections_select_ids(cql, table, "id = 1 AND set_uuid CONTAINS 8e4fe826-b383-11e9-a2a3-2a2ae2dbcce4 AND f_map_int = {'f1': 1, 'f2': 2, 'f3': 3}") == [1]
+    # This map_uuid value differs from row 0's value in one digit
+    assert collections_select_ids(cql, table, 'id = 0 AND map_uuid CONTAINS f54f6a76-b383-11e9-a2a3-2a2ae2dbcce4 AND f_set_int CONTAINS 9') == []
