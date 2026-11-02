@@ -765,3 +765,76 @@ def test_static_distinct_paging(cql, test_keyspace):
             assert select('k, s1', f'WHERE k IN ({keys})', fetch_size) == expected_s1
             assert select('k, s2', f'WHERE k IN ({keys})', fetch_size) == expected_s2
             assert sorted(select('k, s1', f'WHERE k IN ({keys}) LIMIT 10', fetch_size)) == expected_s1
+
+# Test slicing - restricting the clustering columns to a range - in a
+# partition of a COMPACT STORAGE table which also has rows with only a
+# prefix of the clustering key. In a COMPACT STORAGE table with two
+# clustering columns, an INSERT may leave out the last clustering column c2,
+# and such a row sorts before all the rows with the same c1 and a non-null
+# c2. The test checks single-column and multi-column slices on c1 and c2,
+# including empty and contradictory ranges, and that a slice on c2 includes
+# the prefix row only when it has no lower bound on c2.
+# Reproduces issue #1669, where Scylla returned no rows for some slices with
+# only a lower or only an upper bound on the second clustering column, such
+# as "c1 = 0 AND c2 > 1".
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_slicing.
+def test_slicing_with_clustering_prefix_rows(cql, test_keyspace, compact_storage):
+    with new_test_table(cql, test_keyspace, 'k int, c1 int, c2 int, v int, PRIMARY KEY (k, c1, c2)', 'WITH COMPACT STORAGE') as table:
+        for i in range(3):
+            cql.execute(f'INSERT INTO {table} (k, c1, v) VALUES (0, {i}, 1)')
+            for j in range(3):
+                cql.execute(f'INSERT INTO {table} (k, c1, c2, v) VALUES (0, {i}, {j}, 0)')
+        def select(where):
+            return list(cql.execute(f'SELECT c1, c2, v FROM {table} WHERE k = 0 {where}'))
+        all_rows = [(i, j, 0) if j is not None else (i, None, 1) for i in range(3) for j in [None, 0, 1, 2]]
+        assert select('') == all_rows
+        assert select('AND c1 >= 0') == all_rows
+        assert select('AND c1 < 1') == all_rows[:4]
+        assert select('AND c1 < 1 AND c1 > 1') == []
+
+        assert select('AND c1 = 0 AND c2 >= 1 AND c2 < 2') == [(0, 1, 0)]
+        assert select('AND c1 = 0 AND c2 > 1') == [(0, 2, 0)]
+        assert select('AND c1 = 0 AND c2 >= 1') == [(0, 1, 0), (0, 2, 0)]
+        assert select('AND c1 = 0 AND c2 < 2') == [(0, None, 1), (0, 0, 0), (0, 1, 0)]
+        assert select('AND c1 = 0 AND c2 <= 2') == [(0, None, 1), (0, 0, 0), (0, 1, 0), (0, 2, 0)]
+        assert select('AND c1 = 0 AND c2 < 1 AND c2 > 2') == []
+        assert select('AND c1 = 0 AND c2 < 1 AND c2 >= 2') == []
+        assert select('AND c1 = 0 AND c2 < 2 AND c2 > 1') == []
+        assert select('AND c1 = 0 AND c2 < 3 AND c2 > 1') == [(0, 2, 0)]
+
+        assert select('AND (c1, c2) < (0, 1) AND (c1, c2) > (0, 2)') == []
+        assert select('AND (c1, c2) >= (0, 1) AND (c1) < (0)') == []
+        assert select('AND (c1, c2) >= (0, 1) AND (c1) <= (0)') == [(0, 1, 0), (0, 2, 0)]
+        assert select('AND (c1, c2) < (0, 1) AND (c1, c2) >= (0, 2)') == []
+        assert select('AND (c1, c2) < (0, 2) AND (c1, c2) > (0, 1)') == []
+        assert select('AND (c1, c2) < (0, 3) AND (c1, c2) > (0, 1)') == [(0, 2, 0)]
+
+# Test that in an LWT condition, a list element with a null or negative
+# index, such as l[null] or l[-2], is null - like an index beyond the end of
+# the list - instead of being an error. Scylla deliberately allows such
+# indexes (since commit 8e972b52c5), for consistency with subscripts outside
+# LWT conditions, while Cassandra rejects them with "Invalid null value for
+# list element access" or "Invalid negative list index", so this test is
+# scylla_only. The Cassandra versions of these checks are commented out in
+# cassandra_tests/validation/operations/insert_update_if_condition_collections_test.py.
+# Translated from the Scylla-specific checks in scylla-dtest's
+# cql_additional_tests.py::TestCQL tests test_list_item_conditional and
+# test_expanded_list_item_conditional; the rest of these tests are in that
+# cassandra_tests file. The dtests didn't check "l[-2] = null", which this
+# test adds.
+@pytest.mark.parametrize('frozen', [False, True], ids=['unfrozen', 'frozen'])
+def test_lwt_list_null_or_negative_index(cql, test_keyspace, scylla_only, frozen):
+    list_type = 'frozen<list<text>>' if frozen else 'list<text>'
+    with new_test_table(cql, test_keyspace, f'k int PRIMARY KEY, l {list_type}') as table:
+        l = ['foo', 'bar', 'foobar']
+        cql.execute(f"INSERT INTO {table} (k, l) VALUES (0, ['foo', 'bar', 'foobar'])")
+        # Check that l[null] and l[-2] are not equal to 'foobar', so the
+        # conditional delete does not apply
+        for index in ['null', '-2']:
+            assert list(cql.execute(f"DELETE FROM {table} WHERE k = 0 IF l[{index}] = 'foobar'")) == [(False, l)]
+            assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, l)]
+        # Check that l[null] and l[-2] are null, so the conditional update
+        # applies
+        for index in ['null', '-2']:
+            assert list(cql.execute(f"UPDATE {table} SET l = ['foo', 'bar', 'foobar'] WHERE k = 0 IF l[{index}] = null")) == [(True, l)]
+            assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, l)]
