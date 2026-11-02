@@ -1263,6 +1263,7 @@ namespace {
 
 constexpr auto hold_back_free_segments = "logstor_hold_back_free_segments";
 constexpr auto compaction_segment_request = "logstor_compaction_segment_request";
+constexpr auto hold_compaction_segment_request = "logstor_hold_compaction_segment_request";
 
 // A compaction group of two segments that compaction rewrites into one new segment, which it takes
 // from the segment pool.
@@ -1323,6 +1324,10 @@ public:
     logstor& ls;
     std::vector<std::unique_ptr<compactable_group>> groups;
 
+    schema_ptr schema() const {
+        return _schema;
+    }
+
     // The segment_pool_size metric of the logstor, the only view of the pool.
     static uint64_t segment_pool_size() {
         return metric_value("logstor_sm_segment_pool_size");
@@ -1356,6 +1361,8 @@ public:
     ~full_disk_logstor() {
         utils::get_local_injector().disable(hold_back_free_segments);
         utils::get_local_injector().disable(compaction_segment_request);
+        utils::get_local_injector().receive_message(hold_compaction_segment_request);
+        utils::get_local_injector().disable(hold_compaction_segment_request);
         try {
             if (!_stopping) {
                 groups.clear();
@@ -1377,6 +1384,32 @@ public:
         }
     }
 
+    // Starts `count` writes of half a segment to the last group. They fill the active segment, so
+    // all but the first ones need the next segment.
+    std::vector<seastar::future<>> start_half_segment_writes(size_t count) {
+        const size_t record_size = ls.get_segment_manager().get_segment_size() / 2;
+        std::vector<seastar::future<>> writes;
+        for (size_t i = 0; i < count; ++i) {
+            writes.push_back(ls.write(make_kv_mutation_of_record_size(_schema, seastar::format("pk{}", i), record_size),
+                    write_target(&groups.back()->group, {}), db::no_timeout));
+        }
+        return writes;
+    }
+
+    // Waits for the writes and returns how many of them failed with abort_requested_exception, which
+    // is how a stop fails a write. Another failure is thrown.
+    static size_t await_writes_counting_aborts(std::vector<seastar::future<>>& writes) {
+        size_t aborted = 0;
+        for (auto& w : writes) {
+            try {
+                std::move(w).get();
+            } catch (const seastar::abort_requested_exception&) {
+                ++aborted;
+            }
+        }
+        return aborted;
+    }
+
     // Whether `done` completes within `timeout`.
     static bool completes_within(seastar::shared_future<>& done, std::chrono::seconds timeout) {
         try {
@@ -1392,12 +1425,17 @@ public:
         return _stopping.emplace(ls.stop());
     }
 
-    // Only compaction can take segments out of the reserve of the pool, one per group it compacts.
-    void empty_pool() {
+    // Writes the groups, which leaves the pool with its reserve for compaction and no free segment.
+    void fill_disk() {
         for (size_t i = 0; i < max_compaction_parallelism + _extra_groups; ++i) {
             groups.push_back(std::make_unique<compactable_group>(_schema, ls));
         }
         utils::get_local_injector().enable(hold_back_free_segments);
+    }
+
+    // Only compaction can take segments out of the reserve of the pool, one per group it compacts.
+    void empty_pool() {
+        fill_disk();
         for (size_t i = 0; i < max_compaction_parallelism; ++i) {
             groups[i]->submit_compaction();
             groups[i]->await_compaction();
@@ -1469,6 +1507,68 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_stops_while_a_compaction_waits_for_a_segme
     utils::get_local_injector().disable(hold_back_free_segments);
     BOOST_REQUIRE_MESSAGE(stopped || full_disk_logstor::completes_within(stopping, std::chrono::seconds(30)), "stop did not complete even with the free segments handed out");
     BOOST_REQUIRE_MESSAGE(stopped, "stop did not complete while a compaction waited for a segment");
+}
+
+// Checks that stopping the logstor does not wait for a write that is blocked at the pool's reserve for
+// compaction, and fails it. The write holds the gate that stop() closes, and is not acknowledged.
+SEASTAR_THREAD_TEST_CASE(test_logstor_stop_fails_a_write_that_waits_at_the_compaction_reserve) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    full_disk_logstor env(1);
+    env.fill_disk();
+
+    // The pool holds only the reserve and no segment is free, so a write that needs the next
+    // segment waits for it.
+    const auto waits = full_disk_logstor::metric_value("logstor_sm_segment_pool_normal_segments_wait");
+    auto writes = env.start_half_segment_writes(4);
+    BOOST_REQUIRE(eventually_true([&] { return full_disk_logstor::metric_value("logstor_sm_segment_pool_normal_segments_wait") > waits; }));
+
+    auto& stopping = env.stop_logstor();
+    BOOST_REQUIRE_MESSAGE(full_disk_logstor::completes_within(stopping, std::chrono::seconds(10)),
+            "stop did not complete while a write waited at the compaction reserve");
+    BOOST_REQUIRE_MESSAGE(full_disk_logstor::await_writes_counting_aborts(writes) > 0,
+            "the write that waited at the compaction reserve did not fail with abort_requested_exception");
+}
+
+// Checks that stopping the logstor completes when the writes waiting at the reserve could, if let
+// through, take the segments that a running compaction and a separator buffer's final flush need.
+// With no free segment left, only the compaction, which the stop aborts last, could free any.
+SEASTAR_THREAD_TEST_CASE(test_logstor_stops_with_waiting_writes_a_compaction_and_a_separator_buffer_that_need_segments) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    full_disk_logstor env(1);
+    env.fill_disk();
+    auto& injector = utils::get_local_injector();
+
+    // A compaction that is about to take its output segment from the pool.
+    injector.enable(hold_compaction_segment_request);
+    env.groups[0]->submit_compaction();
+    BOOST_REQUIRE(eventually_true([&] { return injector.enter_count(hold_compaction_segment_request) == 1; }));
+
+    // A record in the separator buffer of a group, which the stop flushes into a segment of the pool.
+    auto& spare = env.groups.back()->group;
+    env.ls.write(make_kv_mutation(env.schema(), "separated", "v"), write_target(&spare, {}), db::no_timeout).get();
+
+    // More writes than the pool has segments for, all waiting at the reserve.
+    const auto waits = full_disk_logstor::metric_value("logstor_sm_segment_pool_normal_segments_wait");
+    auto writes = env.start_half_segment_writes(2 * max_compaction_parallelism + 8);
+    BOOST_REQUIRE(eventually_true([&] { return full_disk_logstor::metric_value("logstor_sm_segment_pool_normal_segments_wait") > waits; }));
+
+    auto& stopping = env.stop_logstor();
+    // Either the stop fails the writes, or they take the pool's segments, and then the compaction goes on.
+    BOOST_REQUIRE(eventually_true([&] {
+        return std::ranges::all_of(writes, [] (const auto& w) { return w.available(); }) || full_disk_logstor::segment_pool_size() == 0;
+    }));
+    injector.receive_message(hold_compaction_segment_request);
+
+    BOOST_REQUIRE_MESSAGE(full_disk_logstor::completes_within(stopping, std::chrono::seconds(10)),
+            "stop did not complete with writes waiting for segments that a compaction and a separator flush need");
+    BOOST_REQUIRE_MESSAGE(full_disk_logstor::await_writes_counting_aborts(writes) > 0,
+            "no write that waited for a segment failed with abort_requested_exception");
 }
 
 // Checks that removing a group does not wait for its compaction that waits for a segment of an empty

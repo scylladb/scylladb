@@ -519,6 +519,7 @@ class segment_pool {
     seastar::queue<seg_ptr> _segments;
     size_t _reserved_for_compaction;
     seastar::condition_variable _segment_available;
+    bool _stopping = false;
 
 public:
 
@@ -532,6 +533,13 @@ public:
         : _segments(pool_size)
         , _reserved_for_compaction(reserved_for_compaction)
     {}
+
+    // From now on a normal write or a streaming one fails instead of waiting for a segment, and the
+    // separator may take the reserve. Only the flushes of the separator free segments of mixed data.
+    void begin_stop() {
+        _stopping = true;
+        _segment_available.broadcast();
+    }
 
     future<> start() {
         co_return;
@@ -554,8 +562,12 @@ public:
     // that waits here has to be abortable.
     future<seg_ptr> get_segment(write_source src, abort_source* as = nullptr) {
         // Not queue::pop_eventually(): it supports a single waiter, and several compactions may wait.
-        const size_t reserve = src == write_source::compaction ? 0 : _reserved_for_compaction;
-        if (src == write_source::normal_write && _segments.size() <= reserve) {
+        // The reserve is read again on each check, it changes while a waiter waits.
+        const auto reserve = [this, src] -> size_t {
+            return src == write_source::compaction || (src == write_source::separator && _stopping) ? 0 : _reserved_for_compaction;
+        };
+        const bool client_write = src == write_source::normal_write || src == write_source::streaming;
+        if (src == write_source::normal_write && _segments.size() <= reserve()) {
             _stats.normal_segments_wait++;
         }
         optimized_optional<abort_source::subscription> on_abort;
@@ -563,7 +575,10 @@ public:
             co_return coroutine::exception(as->abort_requested_exception_ptr());
         }
         // Once stopped the queue is empty, so this waits on the broken condition variable and throws.
-        while (_segments.size() <= reserve) {
+        while (_segments.size() <= reserve()) {
+            if (client_write && _stopping) {
+                co_return coroutine::exception(std::make_exception_ptr(abort_requested_exception()));
+            }
             // Subscribe only once a wait is needed.
             if (as && !on_abort) {
                 on_abort = as->subscribe([this] () noexcept { _segment_available.broadcast(); });
@@ -693,6 +708,12 @@ public:
 
     future<> start();
     future<> stop();
+
+    // Fails the writes that wait for a segment and lets the final separator flushes take the reserve,
+    // so that a stop need not wait for either. Idempotent.
+    void begin_stop() {
+        _segment_pool.begin_stop();
+    }
 
     future<> write(write_buffer&);
     future<> write_full_segment(write_buffer&, logstor_group&, write_source, abort_source* as = nullptr);
@@ -1156,6 +1177,9 @@ future<> segment_manager_impl::stop() {
     }
     logstor_logger.info("Stopping segment manager");
 
+    // Idempotent; logstor::stop() calls it earlier, before its own gate closes.
+    begin_stop();
+
     // stop admitting new writes and external operations
     co_await _async_gate.close();
 
@@ -1302,6 +1326,7 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
     // Lets a test tell that a compaction asks for its segment, which it waits for on an empty pool.
     if (source == write_source::compaction) {
         utils::get_local_injector().inject("logstor_compaction_segment_request", [] {});
+        co_await utils::get_local_injector().inject("logstor_hold_compaction_segment_request", utils::wait_for_message(std::chrono::seconds(60)));
     }
     auto seg = co_await get_segment(source, as);
     logstor_logger.trace("Write full segment {} seq {} from {}", seg->id(), seg->seq_num(), write_source_to_string(source));
@@ -2533,6 +2558,10 @@ future<> segment_manager::start() {
 
 future<> segment_manager::stop() {
     return _impl->stop();
+}
+
+void segment_manager::begin_stop() {
+    _impl->begin_stop();
 }
 
 future<> segment_manager::write(write_buffer& wb) {
