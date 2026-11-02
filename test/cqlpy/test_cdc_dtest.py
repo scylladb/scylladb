@@ -4,12 +4,14 @@
 
 #############################################################################
 # Tests for the contents of the CDC log - delta rows, preimages and
-# postimages - for writes to columns of many types: native types, frozen
-# collections (as key and regular columns), non-frozen collections, and
-# frozen and non-frozen user-defined types. CDC is a Scylla-only feature,
-# so all tests here are scylla_only.
+# postimages - translated from three scylla-dtest files: cdc_types_test.py,
+# cdc_batch_test.py and cdc_static_row_test.py. The tests check writes to
+# columns of many types: native types, frozen collections (as key and
+# regular columns), non-frozen collections, and frozen and non-frozen
+# user-defined types - single writes, batches, and writes to static
+# columns. CDC is a Scylla-only feature, so all tests here are scylla_only.
 #
-# These tests were translated from scylla-dtest's cdc_types_test.py. That
+# The tests of the first part were translated from cdc_types_test.py. That
 # test created a separate table - and a separate cluster - for each column
 # type, each kind of write and each CDC image mode. To be fast, the tests
 # here share one table for each image mode ("delta", "preimage",
@@ -26,6 +28,7 @@
 #   dtest did, from an empty partition, and only reads its own CDC log rows.
 #############################################################################
 
+import itertools
 import re
 import time
 from contextlib import ExitStack
@@ -35,7 +38,7 @@ from uuid import UUID, uuid1
 
 import pytest
 from cassandra.encoder import Encoder
-from cassandra.query import SimpleStatement
+from cassandra.query import BatchStatement, BatchType, SimpleStatement
 from cassandra.util import OrderedMapSerializedKey, Time
 
 from .util import new_test_table, new_type
@@ -630,3 +633,222 @@ def test_cdc_udt_update_fields(cql, cdc_tables, mode, fields):
     update_udt_fields(cql, table, s, {f'value_{u["id"]}': u[fields] for u in NON_FROZEN_UDT_TYPES}, timestamp)
     check_udt_log_rows(log_rows_by_timestamp(cql, table, timestamp), UPDATE, NON_FROZEN_UDT_TYPES, pre, post,
                        'ins', f'{fields}_delta', f'{fields}_postimage')
+
+#############################################################################
+# The following tests were translated from scylla-dtest's cdc_batch_test.py
+# and cdc_static_row_test.py. Those tests created, for each column type and
+# each CDC image mode, a separate cluster and a table with several columns
+# of that type. Here, each test creates one table, with columns of all the
+# types, and each write writes the columns of all the types together.
+# Like in the tests above, varchar (just another name for text) is not
+# tested separately.
+#############################################################################
+
+# The column types of the tests below, and for each a function giving a
+# distinct value for each number n.
+ROW_TYPES = [
+    ('int', lambda n: n),
+    ('bigint', lambda n: 32000 + n),
+    ('text', lambda n: f'text{n}'),
+    ('frozen<set<int>>', lambda n: {n, n + 10}),
+    ('frozen<set<text>>', lambda n: {f'frozenset{n}', f'frozenset{n + 10}'}),
+    ('frozen<list<int>>', lambda n: [n, n + 10]),
+    ('list<int>', lambda n: [n, n + 10]),
+    ('set<int>', lambda n: {n, n + 10}),
+    ('map<int,int>', lambda n: {n: n + 10}),
+]
+# cdc_batch_test.py also tested map<text,blob>
+BATCH_TYPES = ROW_TYPES + [('map<text,blob>', lambda n: {f'file{n}': b'\x00' * n})]
+
+def cdc_options(preimage, postimage):
+    options = "{'enabled': true"
+    if preimage:
+        options += f", 'preimage': '{preimage}'"
+    if postimage:
+        options += ", 'postimage': true"
+    return options + '}'
+
+# Columns named prefix<k>_<type> for each k < n and each type, as a dict
+# from column name to (type, value function, k).
+def row_columns(prefix, n, types):
+    return {f'{prefix}{k}_{ident(t)}': (t, f, k) for k in range(n) for t, f in types}
+
+# Values for the given columns, for the write number n. Each column of the
+# same type gets a different value, and each write gets different values.
+def column_values(columns, n):
+    return {c: f(n * 100 + k) for c, (t, f, k) in columns.items()}
+
+# The CDC log of the table, as a list of groups - one for each write to
+# each partition, in the order of the writes - each a tuple of the
+# partition key and the log rows of the write, in their cdc$batch_seq_no
+# order. Each log row is a tuple of its operation, its clustering key and
+# a dict of the values of the given columns. A non-frozen list is read
+# from the log as a map from timeuuid to element, so it is converted to a
+# list of the elements. Also checks that all the rows of each group are in
+# the same CDC stream.
+def cdc_log_groups(cql, table, columns):
+    names = list(columns)
+    rows = cql.execute(f'SELECT "cdc$time", "cdc$batch_seq_no", "cdc$operation", pk, ck, "cdc$stream_id", {", ".join(names)} FROM {table}_scylla_cdc_log')
+    rows = sorted(rows, key=lambda r: (r[0].time, r[3], r[1]))
+    groups = []
+    for (_, pk), group in itertools.groupby(rows, key=lambda r: (r[0].time, r[3])):
+        group = list(group)
+        assert len({r[5] for r in group}) == 1
+        assert [r[1] for r in group] == list(range(len(group)))
+        log_rows = []
+        for r in group:
+            values = {}
+            for name, value in zip(names, r[6:]):
+                if columns[name][0] == 'list<int>' and value is not None:
+                    value = list(value.values())
+                values[name] = value
+            log_rows.append((r[2], r[4], values))
+        groups.append((pk, log_rows))
+    return groups
+
+# Test the CDC log of a sequence of LOGGED batches, each writing all the
+# columns, or some of them, of several rows in several partitions, one
+# column per statement: The first batch inserts all the columns, then
+# batches update all the columns, only the columns with an even number,
+# only those with an odd number, all the columns to null, and all the
+# columns again. For each partition, the log has the preimage rows (if
+# enabled, and if the rows existed), then the delta rows, then the
+# postimage rows (if enabled) of the batch's rows.
+# Translated from scylla-dtest's cdc_batch_test.py::TestCDCBatchesSimple.
+# The dtest had separate tests for preimage True and 'true', which are the
+# same option value. The dtest used 10 columns of each type; this test
+# uses 4, enough for even and odd columns. The dtest's check of the delta
+# rows without a postimage skipped the last delta row of each partition.
+@pytest.mark.parametrize('preimage,postimage', [(False, False), ('true', False), ('full', False),
+                                                (False, True), ('true', True), ('full', True)],
+                         ids=['delta', 'preimage', 'preimage_full', 'postimage', 'preimage_postimage', 'preimage_full_postimage'])
+def test_cdc_batch(cql, test_keyspace, preimage, postimage, scylla_only):
+    npartitions, nrows, ncolumns = 5, 3, 4
+    columns = row_columns('cval', ncolumns, BATCH_TYPES)
+    schema = 'pk bigint, ck bigint, ' + ', '.join(f'{c} {t}' for c, (t, f, k) in columns.items()) + ', PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema, f'WITH cdc = {cdc_options(preimage, postimage)}') as table:
+        current = None
+        expected = []
+        steps = [('insert', range(ncolumns), 1), ('update', range(ncolumns), 2), ('update', range(0, ncolumns, 2), 3),
+                 ('update', range(1, ncolumns, 2), 4), ('update', range(ncolumns), None), ('update', range(ncolumns), 6)]
+        for op, ks, n in steps:
+            written = {c: (v if n is not None else None) for c, v in column_values(columns, n or 0).items() if columns[c][2] in ks}
+            batch = BatchStatement(batch_type=BatchType.LOGGED)
+            for pk in range(npartitions):
+                for ck in range(nrows):
+                    for c, v in written.items():
+                        if op == 'insert':
+                            batch.add(f'INSERT INTO {table} (pk, ck, {c}) VALUES (%s, %s, %s)', (pk, ck, v))
+                        else:
+                            batch.add(f'UPDATE {table} SET {c} = %s WHERE pk = %s AND ck = %s', (v, pk, ck))
+            cql.execute(batch)
+            new = {c: written.get(c, current[c] if current else None) for c in columns}
+            for pk in range(npartitions):
+                log_rows = []
+                if preimage and current:
+                    image = current if preimage == 'full' else {c: current[c] if c in written else None for c in columns}
+                    log_rows += [(PREIMAGE, ck, image) for ck in range(nrows)]
+                log_rows += [(INSERT if op == 'insert' else UPDATE, ck, {c: written.get(c) for c in columns}) for ck in range(nrows)]
+                if postimage:
+                    log_rows += [(POSTIMAGE, ck, new) for ck in range(nrows)]
+                expected.append((pk, log_rows))
+            current = new
+        assert cdc_log_groups(cql, table, columns) == expected
+
+
+# Test the CDC log of writes to only the static columns of a partition: an
+# INSERT, an UPDATE, a DELETE of the static columns, and another UPDATE, of
+# each of several partitions. Each write's log has a delta row with a null
+# clustering key and operation UPDATE, and if enabled, a preimage row if
+# the static columns had values, and a postimage row.
+# The test uses separate tables for the non-frozen collection types and for
+# the other types, because CDC shows the deletion of a non-frozen collection
+# at timestamp T as a change at T+1 (see cdc/split.cc), so a DELETE of
+# columns of both kinds has two entries in the log, while each of the
+# dtest's tables had columns of a single type.
+# Translated from scylla-dtest's cdc_static_row_test.py::TestCDCStaticRow
+# tests test_single_static_row* and test_several_partitions_with_single_static_row*,
+# which wrote one partition or 3 to 10 partitions; this test writes 3.
+NON_FROZEN_ROW_TYPES = [(t, f) for t, f in ROW_TYPES if not t.startswith('frozen') and '<' in t]
+ATOMIC_ROW_TYPES = [(t, f) for t, f in ROW_TYPES if (t, f) not in NON_FROZEN_ROW_TYPES]
+@pytest.mark.parametrize('types', [ATOMIC_ROW_TYPES, NON_FROZEN_ROW_TYPES], ids=['atomic', 'non_frozen'])
+@pytest.mark.parametrize('preimage,postimage', [(False, False), ('true', False), (False, True), ('true', True), ('full', True)],
+                         ids=['delta', 'preimage', 'postimage', 'preimage_postimage', 'preimage_full_postimage'])
+def test_cdc_static_row(cql, test_keyspace, preimage, postimage, types, scylla_only):
+    npartitions = 3
+    statics = row_columns('stval', 2, types)
+    schema = 'pk bigint, ck bigint, ' + ', '.join(f'{c} {t} STATIC' for c, (t, f, k) in statics.items()) + ', PRIMARY KEY (pk, ck)'
+    with new_test_table(cql, test_keyspace, schema, f'WITH cdc = {cdc_options(preimage, postimage)}') as table:
+        current = {pk: None for pk in range(npartitions)}
+        expected = []
+        for step, n in [('insert', 1), ('update', 2), ('delete', None), ('update', 4)]:
+            for pk in range(npartitions):
+                values = column_values(statics, n) if n is not None else {c: None for c in statics}
+                if step == 'insert':
+                    cql.execute(f'INSERT INTO {table} (pk, {", ".join(values)}) VALUES (%s{", %s" * len(values)})', [pk, *values.values()])
+                elif step == 'update':
+                    cql.execute(f'UPDATE {table} SET {", ".join(f"{c} = %s" for c in values)} WHERE pk = %s', [*values.values(), pk])
+                else:
+                    cql.execute(f'DELETE {", ".join(values)} FROM {table} WHERE pk = %s', [pk])
+                log_rows = []
+                if preimage and current[pk]:
+                    log_rows.append((PREIMAGE, None, current[pk]))
+                log_rows.append((UPDATE, None, values))
+                if postimage:
+                    log_rows.append((POSTIMAGE, None, values))
+                expected.append((pk, log_rows))
+                current[pk] = values if n is not None else None
+        assert cdc_log_groups(cql, table, statics) == expected
+
+# Test the CDC log of writes to both static and regular columns of rows in
+# several partitions: an INSERT of each row, an UPDATE of each row, an
+# UPDATE of each row setting all the columns to null, and another UPDATE.
+# CDC splits each write into a change of the static row (with a null
+# clustering key and operation UPDATE) and a change of the clustering row.
+# So each write's log has, if enabled, a preimage row of the static row (if
+# its columns had values) and of the clustering row (if it existed), then
+# the two delta rows, and then, if enabled, the two postimage rows. The
+# static columns are only in the static row's images.
+# Translated from scylla-dtest's cdc_static_row_test.py::TestCDCStaticRow
+# tests test_operations_with_static_row_and_regular_columns* and
+# test_operations_with_large_number_of_static_and_regular_columns*. The
+# dtests didn't check the preimage and postimage of the update to null.
+@pytest.mark.parametrize('ncolumns,preimage,postimage', [(2, False, False), (2, 'true', False), (2, False, True), (2, 'true', True),
+                                                         (10, False, False), (10, 'true', True)],
+                         ids=['delta', 'preimage', 'postimage', 'preimage_postimage', 'many_columns_delta', 'many_columns_preimage_postimage'])
+def test_cdc_static_and_regular_row(cql, test_keyspace, ncolumns, preimage, postimage, scylla_only):
+    npartitions, nrows = 3, 3
+    statics = row_columns('stval', ncolumns, ROW_TYPES)
+    regulars = row_columns('cval', ncolumns, ROW_TYPES)
+    schema = ('pk bigint, ck bigint, ' + ', '.join(f'{c} {t} STATIC' for c, (t, f, k) in statics.items()) + ', ' +
+              ', '.join(f'{c} {t}' for c, (t, f, k) in regulars.items()) + ', PRIMARY KEY (pk, ck)')
+    with new_test_table(cql, test_keyspace, schema, f'WITH cdc = {cdc_options(preimage, postimage)}') as table:
+        current_static = {pk: None for pk in range(npartitions)}
+        current_regular = {}
+        expected = []
+        for step, n in [('insert', 1), ('update', 2), ('update', None), ('update', 4)]:
+            for pk in range(npartitions):
+                for ck in range(nrows):
+                    # Each row's write sets the static columns to different
+                    # values, so each preimage shows whether it has the old value
+                    static_values = column_values(statics, n * 10 + ck) if n is not None else {c: None for c in statics}
+                    regular_values = column_values(regulars, n) if n is not None else {c: None for c in regulars}
+                    values = {**regular_values, **static_values}
+                    if step == 'insert':
+                        cql.execute(f'INSERT INTO {table} (pk, ck, {", ".join(values)}) VALUES (%s, %s{", %s" * len(values)})', [pk, ck, *values.values()])
+                    else:
+                        cql.execute(f'UPDATE {table} SET {", ".join(f"{c} = %s" for c in values)} WHERE pk = %s AND ck = %s', [*values.values(), pk, ck])
+                    log_rows = []
+                    if preimage and current_static[pk]:
+                        log_rows.append((PREIMAGE, None, {**current_static[pk], **{c: None for c in regulars}}))
+                    if preimage and (pk, ck) in current_regular:
+                        log_rows.append((PREIMAGE, ck, {**{c: None for c in statics}, **current_regular[(pk, ck)]}))
+                    log_rows.append((UPDATE, None, {**static_values, **{c: None for c in regulars}}))
+                    log_rows.append((INSERT if step == 'insert' else UPDATE, ck, {**{c: None for c in statics}, **regular_values}))
+                    if postimage:
+                        log_rows.append((POSTIMAGE, None, {**static_values, **{c: None for c in regulars}}))
+                        log_rows.append((POSTIMAGE, ck, {**{c: None for c in statics}, **regular_values}))
+                    expected.append((pk, log_rows))
+                    current_static[pk] = static_values if n is not None else None
+                    current_regular[(pk, ck)] = regular_values
+        assert cdc_log_groups(cql, table, {**statics, **regulars}) == expected
