@@ -206,7 +206,7 @@ def test_udt_literal_invalid_field_in_map(cql, test_keyspace):
 
 # Test that a table can't use a user-defined type from another keyspace
 # (CASSANDRA-9409).
-# Translated from user_types_test.py::TestUserTypes::test_user_type_isolation.
+# Translated from scylla-dtest's user_types_test.py::TestUserTypes::test_user_type_isolation.
 def test_udt_from_another_keyspace(cql, test_keyspace):
     with new_type(cql, test_keyspace, '(first text, second int, third int)') as typ:
         with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
@@ -215,7 +215,7 @@ def test_udt_from_another_keyspace(cql, test_keyspace):
 
 # Test that a keyspace containing a table with a user-defined type column
 # can be dropped. Reproduces #3068.
-# Translated from user_types_test.py::TestUserTypes::test_keyspace_drop_with_table_containing_udt.
+# Translated from scylla-dtest's user_types_test.py::TestUserTypes::test_keyspace_drop_with_table_containing_udt.
 def test_drop_keyspace_with_udt_table(cql):
     ks = unique_name()
     cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
@@ -228,7 +228,7 @@ def test_drop_keyspace_with_udt_table(cql):
 # types, a list of UDTs containing a list of UDTs, and a list and a map of
 # UDTs. All the values are written as literals, and then each column is
 # read back. Finally, a list is replaced.
-# Translated from user_types_test.py::TestUserTypes::test_complex_data_types.
+# Translated from scylla-dtest's user_types_test.py::TestUserTypes::test_complex_data_types.
 def test_udt_complex_data_types(cql, test_keyspace):
     with new_type(cql, test_keyspace, '(label text, details text)') as todo_item, \
          new_type(cql, test_keyspace, f'(name text, todo_list list<frozen<{todo_item}>>)') as todo_list, \

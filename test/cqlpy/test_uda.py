@@ -363,7 +363,7 @@ def test_create_aggregate_null_state_with_returns_null_sfunc(cql, test_keyspace)
 # Test a user-defined aggregate with a state function, a final function
 # and an initial condition, and that an aggregate can't be created with
 # a state function or final function which isn't an existing function.
-# Translated from user_functions_test.py::TestUserFunctions::test_aggregate_udf.
+# Translated from scylla-dtest's user_functions_test.py::TestUserFunctions::test_aggregate_udf.
 def test_aggregate_with_final_func_and_initcond(scylla_only, cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val int') as table:
         for x in range(1, 4):

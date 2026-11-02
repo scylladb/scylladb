@@ -1627,7 +1627,7 @@ def role_creator_permissions(creator, role):
 # this test. The dtest also checked that the keyspace's creator doesn't get
 # permissions on the functions in that keyspace (Cassandra's creator does),
 # which this test doesn't check.
-# Translated from test_list_permissions.
+# Translated from scylla-dtest's auth_roles_test.py::TestAuthRoles::test_list_permissions.
 def test_list_permissions(cql):
     # The superuser which created the test's keyspace, table and roles
     superuser = cql.cluster.auth_provider.username
@@ -1670,7 +1670,7 @@ def test_list_permissions(cql):
 
 # Test that a user can list the permissions of roles granted to it, but
 # not everyone's permissions or the permissions of other roles.
-# Translated from test_list_permissions_validation.
+# Translated from scylla-dtest's auth_roles_test.py::TestAuthRoles::test_list_permissions_validation.
 def test_list_permissions_validation(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, val int') as table, \
          new_user(cql) as mike, new_user(cql) as john, new_user_nologin(cql) as role1, new_user_nologin(cql) as role2:
@@ -1694,7 +1694,7 @@ def test_list_permissions_validation(cql, test_keyspace):
 # check during the DROP cached the fact that the role doesn't exist, so
 # later authorization of the new role failed. Scylla doesn't have such a
 # roles cache, but this checks that nothing similar happens.
-# Translated from test_drop_non_existent_role_should_not_update_cache.
+# Translated from scylla-dtest's auth_roles_test.py::TestAuthRoles::test_drop_non_existent_role_should_not_update_cache.
 def test_drop_non_existent_role_then_create_it(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, val int') as table:
         mike = unique_name()
@@ -1708,7 +1708,7 @@ def test_drop_non_existent_role_then_create_it(cql, test_keyspace):
 # LOGIN: LIST ROLES OF the role lists both roles, each with its own LOGIN
 # value. Cassandra's LIST ROLES has an additional "datacenters" column, so
 # only the first four columns (role, super, login, options) are checked.
-# Translated from test_roles_do_not_inherit_login_privilege.
+# Translated from scylla-dtest's auth_roles_test.py::TestAuthRoles::test_roles_do_not_inherit_login_privilege.
 def test_roles_do_not_inherit_login_privilege(cql):
     with new_user_nologin(cql) as mike, new_user(cql) as with_login:
         cql.execute(f'GRANT {with_login} TO {mike}')
@@ -1723,7 +1723,7 @@ def test_roles_do_not_inherit_login_privilege(cql):
 # including CREATE and DESCRIBE - on all roles, and all of them except
 # CREATE on a specific role. GRANT of a permission which a resource doesn't
 # support is an error.
-# Translated from the parts of test_filter_granted_permissions_by_resource_type
+# Translated from the parts of scylla-dtest's auth_roles_test.py::TestAuthRoles::test_filter_granted_permissions_by_resource_type
 # which don't involve functions; those are tested in
 # test_filter_granted_permissions_by_resource_type_functions above. That
 # dtest never ran, because it created functions in Java and Javascript,
