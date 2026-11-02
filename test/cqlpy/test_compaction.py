@@ -5,7 +5,7 @@
 import pytest
 import requests
 from .util import new_materialized_view, new_test_table, unique_name, sleep_till_whole_second
-from . import nodetool
+from . import nodetool, rest_api
 from .test_materialized_view import wait_for_view_built
 
 def test_tombstone_gc_with_conflict_in_memtable(scylla_only, cql, test_keyspace):
@@ -210,3 +210,22 @@ def test_nodetool_py_compact(cql, test_keyspace):
         nodetool.compact(cql, table, flush_memtables=True)
         nodetool.compact_keyspace(cql, test_keyspace, flush_memtables=False)
         nodetool.compact_keyspace(cql, test_keyspace, flush_memtables=True)
+
+# Test that major compaction - of all tables, or of one table - merges the
+# table's two sstables into one.
+# Translated from scylla-dtest's nodetool_additional_test.py::TestNodetool
+# tests test_general_compact and test_specific_compact.
+@pytest.mark.parametrize('scope', ['all', 'table'])
+def test_major_compaction_merges_sstables(scylla_only, cql, test_keyspace, scope):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val text') as table:
+        with nodetool.no_autocompaction_context(cql, table):
+            for val in ['a', 'b']:
+                cql.execute(f"INSERT INTO {table} (key, val) VALUES (1, '{val}')")
+                nodetool.flush(cql, table)
+            assert rest_api.get_column_family_metric(cql, 'live_ss_table_count', table) == 2
+            if scope == 'all':
+                requests.post(f'{nodetool.rest_api_url(cql)}/storage_service/compact').raise_for_status()
+            else:
+                nodetool.compact(cql, table)
+            assert rest_api.get_column_family_metric(cql, 'live_ss_table_count', table) == 1
+            assert list(cql.execute(f'SELECT * FROM {table}')) == [(1, 'b')]
