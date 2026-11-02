@@ -16,6 +16,10 @@
 #include "schema/schema_builder.hh"
 #include "types/map.hh"
 #include "utils/xx_hasher.hh"
+#include "compaction/compaction_garbage_collector.hh"
+#include "types/set.hh"
+#include "mutation/frozen_mutation.hh"
+#include <random>
 
 namespace tests {
 
@@ -297,4 +301,81 @@ public:
 PERF_TEST_F(narrow_row_hash, xx) {
     perf_tests::do_not_optimize(hash());
 }
+
+// A ~1 MB set<blob> (10k 90-byte elements) and near-copies of it (an append, an expiry):
+// the passes reads and read repair make over a large collection cell, timed one by one.
+class large_set {
+protected:
+    data_type _type = set_type_impl::get_instance(bytes_type, true);
+    schema_ptr _s = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("s", _type)
+            .build();
+    const column_definition& _def = *_s->get_column_definition(to_bytes("s"));
+    collection_mutation _big;
+    collection_mutation _delta;
+    collection_mutation _merged;
+    collection_mutation _expired; // element 9/10 in expired: ~90% copied verbatim, the rest per element
+    std::optional<frozen_mutation> _frozen;
+    std::optional<mutation> _m;
+
+    static collection_mutation make(const std::vector<int64_t>& keys, api::timestamp_type ts, bool expired = false) {
+        collection_mutation_writer w({});
+        for (auto k : keys) {
+            auto e = long_type->decompose(k); // big-endian, so positive keys sort as integers
+            e.resize(90);
+            w.push_back(managed_bytes_view(e), expired
+                    ? atomic_cell::make_live(*empty_type, ts, bytes_view(), gc_clock::time_point(gc_clock::duration(1)), gc_clock::duration(1), atomic_cell::collection_member::yes)
+                    : atomic_cell::make_live(*empty_type, ts, bytes_view(), atomic_cell::collection_member::yes));
+        }
+        return std::move(w).finish();
+    }
+
+public:
+    large_set() {
+        std::mt19937_64 rng(42);
+        std::vector<int64_t> keys(10000);
+        for (auto& k : keys) {
+            k = int64_t(rng() >> 2);
+        }
+        std::ranges::sort(keys);
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        if (std::ranges::binary_search(keys, keys[keys.size() / 2] + 1)) {
+            throw std::logic_error("large_set: delta key must be a new element");
+        }
+        _big = make(keys, 1);
+        _delta = make({keys[keys.size() / 2] + 1}, 2);
+        _merged = merge(*_type, _big, _delta);
+        _expired = merge(*_type, _big, make({keys[keys.size() * 9 / 10]}, 2, /* expired */ true));
+        mutation m(_s, partition_key::from_single_value(*_s, int32_type->decompose(int32_t(0))));
+        m.set_clustered_cell(clustering_key::make_empty(), _def, atomic_cell_or_collection(collection_mutation(collection_mutation_view(_big))));
+        _frozen.emplace(freeze(m));
+        _m.emplace(std::move(m));
+    }
+};
+
+// Read repair merges near-identical replica results.
+PERF_TEST_F(large_set, merge_near) { perf_tests::do_not_optimize(merge(*_type, _merged, _big)); }
+PERF_TEST_F(large_set, difference_same) { perf_tests::do_not_optimize(difference(*_type, _big, _big)); }
+PERF_TEST_F(large_set, difference_delta) { perf_tests::do_not_optimize(difference(*_type, _merged, _big)); }
+PERF_TEST_F(large_set, copy) { perf_tests::do_not_optimize(collection_mutation(collection_mutation_view(_big))); }
+PERF_TEST_F(large_set, merge) { perf_tests::do_not_optimize(merge(*_type, _big, _delta)); }
+PERF_TEST_F(large_set, compact) {
+    perf_tests::do_not_optimize(compact_and_expire(_big, _def.id, *_type, row_tombstone(), gc_clock::now(), always_gc, gc_clock::time_point::min(), nullptr));
+}
+// Long expired, so purged as a real read would.
+PERF_TEST_F(large_set, compact_expired) {
+    perf_tests::do_not_optimize(compact_and_expire(_expired, _def.id, *_type, row_tombstone(), gc_clock::now(), always_gc, gc_clock::now(), nullptr));
+}
+PERF_TEST_F(large_set, serialize_for_cql) { perf_tests::do_not_optimize(serialize_for_cql(*_type, _big)); }
+PERF_TEST_F(large_set, last_update) { perf_tests::do_not_optimize(collection_mutation_view(_big).last_update(*_type)); }
+PERF_TEST_F(large_set, hash) {
+    buffered_xx_hasher h;
+    feed_hash(h, collection_mutation_view(_big), _def);
+    perf_tests::do_not_optimize(h.finalize_uint64());
+}
+// Read repair: replica results arrive frozen and are unfrozen (and refrozen).
+PERF_TEST_F(large_set, unfreeze) { perf_tests::do_not_optimize(_frozen->unfreeze(_s)); }
+PERF_TEST_F(large_set, freeze) { perf_tests::do_not_optimize(freeze(*_m)); }
+
 }
