@@ -1155,11 +1155,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
     auto pk1_v0 = make_kv_mutation(schema, "pk1", "v1", api::timestamp_type(2));
     auto pk0_v1 = make_kv_mutation(schema, "pk0", "v0-new", api::timestamp_type(3));
 
-    write_and_flush_segment(ls, cg, pk0_v0);
-    write_and_flush_segment(ls, cg, pk1_v0);
+    // No segment is left empty, which compaction would take on its own without rewriting anything.
+    write_and_flush_segment(ls, cg, std::array{pk0_v0, pk1_v0});
     write_and_flush_segment(ls, cg, pk0_v1);
 
-    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 3u);
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 2u);
 
     const auto pk0 = make_index_key(*schema, pk0_v1.decorated_key());
     const auto pk1 = make_index_key(*schema, pk1_v0.decorated_key());
@@ -1178,7 +1178,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
     setup_guard = ls.get_compaction_manager().disable_compaction(cg).get();
 
     // Nothing was flushed, so the group and the index are unchanged.
-    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 3u);
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 2u);
     BOOST_REQUIRE(cg.logstor_index().get(pk0)->location == pk0_before->location);
     BOOST_REQUIRE(cg.logstor_index().get(pk1)->location == pk1_before->location);
 
@@ -3090,6 +3090,35 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
     // An empty group has nothing to compact.
     segment_set empty{segment_size};
     BOOST_REQUIRE(!select_compaction_batch(empty, segment_size, compaction_batch_limits{.batch_cap = min_segments_per_compaction}));
+}
+
+// A segment that holds one small record shares the top free-space bucket with the empty ones, and
+// within a bucket the order is by when a segment last moved. Compacting an empty segment costs no
+// I/O, so the empty ones have to be taken first whatever that order is.
+SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch_takes_empty_segments_first) {
+    constexpr uint64_t segment_size = 128 * 1024;
+    constexpr size_t record_size = 1024;
+    constexpr size_t count = min_segments_per_compaction;
+
+    std::deque<segment_descriptor> descs;
+    segment_set segments{segment_size};
+    for (size_t i = 0; i < 2 * count; ++i) {
+        auto& desc = descs.emplace_back();
+        desc.reset(segment_size);
+        desc.on_write(record_size, 1);
+        segments.add_segment(desc);
+    }
+    // The segments added first are at the back of the bucket; empty them the way an overwrite does.
+    for (size_t i = 0; i < count; ++i) {
+        descs[i].on_free(record_size, 1);
+        segments.update_segment(descs[i], record_size);
+    }
+
+    auto batch = select_compaction_batch(segments, segment_size, compaction_batch_limits{.batch_cap = count});
+    BOOST_REQUIRE(batch);
+    BOOST_REQUIRE_EQUAL(batch->segments.size(), count);
+    BOOST_REQUIRE_EQUAL(batch->score.live_bytes, 0u);
+    BOOST_REQUIRE_EQUAL(batch->score.n_out, 0u);
 }
 
 // A segment set does not walk its segments to get its statistics. It updates them when it links or

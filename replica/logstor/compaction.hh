@@ -63,7 +63,13 @@ using split_target_group = std::function<logstor_group&(log_segment_id, dht::tok
 // is the same back-pressure it already takes when its own flush is in flight.
 constexpr size_t separator_flush_reserve = 16;
 
-inline constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 128 * 1024);
+// The largest segment size the free-space histogram admits.
+inline constexpr size_t max_segment_size = 128 * 1024;
+
+// Segments are keyed by free space, except that an empty one is keyed at max_size, above any free
+// space. The top free-space bucket is ~4 KiB wide, and an empty segment, which compacts without any
+// I/O, must not be ordered behind one that still holds a small record.
+inline constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 2 * max_segment_size);
 
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {
     // free_space = segment_size - record_bytes
@@ -77,6 +83,10 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     // Position in segment_set::_segment_list, set to no_index when the segment has no owner.
     static constexpr uint32_t no_index = std::numeric_limits<uint32_t>::max();
     uint32_t index_in_set{no_index};
+
+    bool empty() const noexcept {
+        return record_count == 0;
+    }
 
     void reset(size_t segment_size) noexcept {
         free_space = segment_size;
