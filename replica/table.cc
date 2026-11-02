@@ -2363,8 +2363,8 @@ table::stop() noexcept {
     auto gate_closed_fut = _async_gate.close();
     co_await when_all(
         _pending_reads_phaser.close(),
-        _pending_writes_phaser.close(),
-        _pending_streams_phaser.close());
+        close_writes(),
+        close_streams());
     // Allow parallel flushes from the commitlog path
     // to synchronize with table::stop
     {
