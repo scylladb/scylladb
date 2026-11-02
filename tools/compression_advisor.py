@@ -119,6 +119,9 @@ def parse_current_config(cql_compression_map: dict) -> dict:
     This is reported via ``uncompressed: True`` (with ``algorithm: ''``) so the
     advisor can treat the current ratio as 1.0 (raw size) and still recommend
     beneficial configurations instead of silently suppressing them.
+
+    The default compression level depends on the algorithm: Zstd uses level 3
+    (including when compression_level is 0), and other compressors use level 1.
     """
     raw_algo = cql_compression_map.get("sstable_compression", "")
     raw_algo_str = raw_algo if isinstance(raw_algo, str) else ""
@@ -134,13 +137,24 @@ def parse_current_config(cql_compression_map: dict) -> dict:
     except (ValueError, TypeError):
         chunk_kb = 4
 
-    # Scylla uses ZSTD_defaultCLevel() (3) when the option is omitted.
-    default_level = 3 if algo in ("ZstdCompressor", "ZstdWithDictsCompressor") else 1
+    # Zstd uses ZSTD_defaultCLevel() (3) when the option is omitted or zero.
+    default_level = 3 if estimation_algo == "ZstdWithDictsCompressor" else 1
     level_str = cql_compression_map.get("compression_level", default_level)
     try:
         level = int(level_str)
     except (ValueError, TypeError):
         level = default_level
+
+    if estimation_algo == "ZstdWithDictsCompressor":
+        if level == 0:
+            level = default_level
+        elif not 1 <= level <= 5:
+            print(
+                f"Warning: Zstd compression level {level} is outside the "
+                "estimator's range (1-5); the current compression ratio "
+                "cannot be compared.",
+                file=sys.stderr,
+            )
 
     return {
         "algorithm": estimation_algo,
@@ -349,15 +363,15 @@ def select_best_for_family(results: list, family_prefix: str) -> dict:
                     f"Level {chosen_level} chosen (levels {chosen_level + 1}-{best_level_r['level']} add only {abs(pct):.1f}% improvement)"
                 )
             elif chosen_level > 1:
-                lvl1 = [r for r in levels_sorted if r["level"] == 1]
-                if lvl1:
-                    pct = (
-                        (lvl1[0]["ratio"] - best_level_ratio) / best_level_ratio * 100
-                        if best_level_ratio
-                        else 0
-                    )
+                level3 = next((r for r in levels_sorted if r["level"] == 3), None)
+                if level3 and chosen_level != 3 and level3["ratio"]:
+                    pct = (level3["ratio"] - best_level_ratio) / level3["ratio"] * 100
                     notes.append(
-                        f"Level {chosen_level} chosen ({abs(pct):.1f}% better than level 1)"
+                        f"Level {chosen_level} chosen ({pct:.1f}% better than default level 3)"
+                    )
+                else:
+                    notes.append(
+                        f"Level {chosen_level} chosen (best ratio for selected chunk/dictionary)"
                     )
         else:
             chosen_level = 1

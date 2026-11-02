@@ -237,13 +237,60 @@ class TestParseCurrentConfig:
         )
         assert cfg["level"] == 3
 
-    @pytest.mark.parametrize("level", [-1, 0, 1, 3, 7])
-    def test_explicit_zstd_level(self, level):
+    @pytest.mark.parametrize("level, expected_level", [
+        (-1, -1),
+        (0, 3),
+        (1, 1),
+        (3, 3),
+        (7, 7),
+    ])
+    def test_explicit_zstd_level(self, level, expected_level):
+        cfg = ca.parse_current_config({
+            "sstable_compression": "ZstdCompressor",
+            "compression_level": str(level),
+        })
+        assert cfg["level"] == expected_level
+
+    @pytest.mark.parametrize("compressor", [
+        "ZstdCompressor",
+        "ZstdWithDictsCompressor",
+    ])
+    def test_zero_zstd_level_does_not_recommend_change_when_optimal(self, compressor):
+        cfg = ca.parse_current_config({
+            "sstable_compression": compressor,
+            "compression_level": "0",
+        })
+        results = [
+            _zstd(4, 3, "none", 0.5),
+            _zstd(4, 3, "future", 0.5),
+        ]
+        summary = ca.generate_summary(results, cfg)
+        assert summary["current"]["ratio"] == 0.5
+        assert summary["best_zstd"]["improvement_pct"] == 0.0
+        assert "ALTER TABLE" not in ca.format_alter_table(
+            summary, "ks", "tbl", use_color=False
+        )
+
+    @pytest.mark.parametrize("level", [-1, 7])
+    def test_out_of_range_zstd_level_warns(self, level, capsys):
         cfg = ca.parse_current_config({
             "sstable_compression": "ZstdCompressor",
             "compression_level": str(level),
         })
         assert cfg["level"] == level
+        warning = capsys.readouterr().err
+        assert f"level {level}" in warning
+        assert "1-5" in warning
+        summary = ca.generate_summary(make_full_result_set(), cfg)
+        assert summary["current"]["ratio"] is None
+
+    def test_zero_zstd_level_does_not_warn(self, capsys):
+        cfg = ca.parse_current_config({
+            "sstable_compression": "ZstdCompressor",
+            "compression_level": "0",
+        })
+        assert cfg["level"] == 3
+        assert capsys.readouterr().err == ""
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +514,8 @@ class TestSelectBestForFamily:
         best = ca.select_best_for_family(results, "Zstd")
         # Each level far apart from best=0.20. Only level 5 is within 5% of 0.20
         assert best["config"]["level"] == 5
+        assert any("default level 3" in note for note in best["notes"])
+        assert all("better than level 1" not in note for note in best["notes"])
 
     # --- LZ4 always level 1 ---
 
