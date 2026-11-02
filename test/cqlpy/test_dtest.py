@@ -838,3 +838,36 @@ def test_lwt_list_null_or_negative_index(cql, test_keyspace, scylla_only, frozen
         for index in ['null', '-2']:
             assert list(cql.execute(f"UPDATE {table} SET l = ['foo', 'bar', 'foobar'] WHERE k = 0 IF l[{index}] = null")) == [(True, l)]
             assert list(cql.execute(f'SELECT * FROM {table}')) == [(0, l)]
+
+# Test LIMIT on a slice of the clustering key - in one partition and in
+# several partitions selected with IN - in a COMPACT STORAGE table whose only
+# columns are the partition key and one clustering column, so it has no
+# regular columns. The slices' lower bounds exclude some rows (v > 0) or none
+# (v > -1), and their upper bound (v <= 4) is beyond the last row of each
+# partition. LIMIT counts rows across partitions, so a LIMIT smaller than the
+# number of matching rows stops in the middle of a partition.
+# The original test was a regression test for CASSANDRA-7052.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::limit_compact_table
+# (which never ran, because its name does not start with "test"), which
+# originally came from Cassandra's old Python cql_tests.py
+# (limit_compact_table_test). That test also expected the filtering query
+# "v > 1 AND v <= 3 ... ALLOW FILTERING" to be rejected (CASSANDRA-7059), but
+# both Scylla and Cassandra now allow it, so this test checks its results
+# instead.
+def test_limit_compact_table(cql, test_keyspace, compact_storage):
+    with new_test_table(cql, test_keyspace, 'k int, v int, PRIMARY KEY (k, v)', 'WITH COMPACT STORAGE') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (k, v) VALUES (?, ?)')
+        for i in range(4):
+            for j in range(4):
+                cql.execute(insert, [i, j])
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND v > 0 AND v <= 4 LIMIT 2')) == [(1,), (2,)]
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = 0 AND v > -1 AND v <= 4 LIMIT 2')) == [(0,), (1,)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE k IN (0, 1, 2) AND v > 0 AND v <= 4 LIMIT 2')) == [(0, 1), (0, 2)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE k IN (0, 1, 2) AND v > -1 AND v <= 4 LIMIT 2')) == [(0, 0), (0, 1)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE k IN (0, 1, 2) AND v > 0 AND v <= 4 LIMIT 6')) == [(0, 1), (0, 2), (0, 3), (1, 1), (1, 2), (1, 3)]
+        # Without a partition-key restriction, rows are returned in token
+        # order, so with LIMIT we expect the first rows of the same query
+        # without a LIMIT.
+        all_rows = list(cql.execute(f'SELECT * FROM {table} WHERE v > 1 AND v <= 3 ALLOW FILTERING'))
+        assert sorted(all_rows) == [(i, j) for i in range(4) for j in [2, 3]]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE v > 1 AND v <= 3 LIMIT 6 ALLOW FILTERING')) == all_rows[:6]
