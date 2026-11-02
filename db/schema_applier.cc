@@ -871,6 +871,7 @@ future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
             // together with schema mutations, are not keyed by keyspace name.
             continue;
         }
+        _schema_changed = true;
         if (schema_tables::v3::is_cluster_config_table(mutation.schema()->ks_name(), mutation.schema()->cf_name())) {
             _cluster_config_changed = true;
             if (schema_tables::v3::is_node_oriented_config_table(mutation.schema()->cf_name())) {
@@ -976,18 +977,25 @@ public:
 future<> schema_applier::update_tablets() {
     // Has to be after tablets and views change is prepared
     // otherwise this preparation will generate orphaned erms.
-    if (_tablet_hint) {
-        slogger.info("Tablet metadata changed");
+    if (_tablet_hint || _topology_change) {
+        if (!_topology_change) {
+            slogger.info("Tablet metadata changed");
+        }
         pending_schema_getter getter{*this};
         auto& ss = _ss.local();
         _token_metadata_change = co_await ss.prepare_token_metadata_change(
-                _pending_token_metadata.local(), getter, ss._topology_state_machine._topology);
+                _pending_token_metadata.local(), getter,
+                _topology_change ? _topology_change->new_topology : ss._topology_state_machine._topology);
     }
 }
 
 // Loads metadata into a single source of truth to ensure consistency.
 // It will be committed later if required by the current schema change.
 future<> schema_applier::load_mutable_token_metadata() {
+    if (_topology_change) {
+        co_return co_await _pending_token_metadata.assign(
+                co_await _ss.local().prepare_topology_token_metadata(*_topology_change));
+    }
     locator::mutable_token_metadata_ptr current_token_metadata = co_await _ss.local().get_mutable_token_metadata_ptr();
     if (_tablet_hint) {
         auto new_token_metadata = co_await _ss.local().prepare_tablet_metadata(
@@ -1080,7 +1088,10 @@ void schema_applier::commit_on_shard(replica::database& db, uint64_t commit_gen)
 
     commit_tables_and_views();
 
-    if (_tablet_hint) {
+    if (_topology_change && this_shard_id() == 0) {
+        _ss.local().commit_topology_state(*_topology_change);
+    }
+    if (_tablet_hint || _topology_change) {
         _ss.local().commit_token_metadata_change(_token_metadata_change);
     }
 
@@ -1170,11 +1181,15 @@ future<> schema_applier::finalize_tables_and_views() {
         co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
     }
 
-    if (_tablet_hint) {
+    if (_tablet_hint || _topology_change) {
         auto& db = sharded_db.local();
         co_await db.get_compaction_manager().get_shared_tombstone_gc_state().
                 flush_pending_repair_time_update(sharded_db, _sys_ks);
-        _ss.local().wake_up_topology_state_machine();
+        // A topology change wakes the topology state machine once
+        // finish_topology_state_change() has run.
+        if (!_topology_change) {
+            _ss.local().wake_up_topology_state_machine();
+        }
     }
 
     co_await sharded_db.invoke_on_all([&diff] (replica::database& db) -> future<> {
@@ -1272,6 +1287,48 @@ future<> schema_applier::destroy() {
     co_await _pending_token_metadata.destroy();
     co_await _token_metadata_change.destroy();
     co_await _functions_batch.stop();
+}
+
+future<> schema_applier::apply_persisted() {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    if (_topology_reload) {
+        // Reading the topology state enables the cluster features it lists, which
+        // runs feature listeners, so it is done without holding the merge_lock.
+        _topology_change = co_await _ss.local().load_topology_state(std::move(*_topology_reload));
+        _topology_reload.reset();
+    }
+    std::exception_ptr post_commit_ex;
+    co_await with_merge_lock([this, &post_commit_ex] () -> future<> {
+        co_await update();
+        try {
+            co_await commit();
+        } catch (...) {
+            // We have no good way to recover from partial commit and continuing
+            // would mean that schema is in inconsistent state.
+            on_fatal_internal_error(slogger, format("schema commit failed: {:t}", std::current_exception()));
+        }
+        try {
+            co_await post_commit();
+            if (_schema_changed) {
+                auto version = co_await get_group0_schema_version(_sys_ks.local());
+                co_await update_schema_version_and_announce(_sys_ks, _proxy, version);
+            }
+        } catch (...) {
+            post_commit_ex = std::current_exception();
+        }
+    });
+    if (_topology_change) {
+        // The new topology state and token metadata are already visible, so the actions
+        // that follow the topology change (fencing, node notifications) run even if the
+        // work after the schema commit failed.
+        if (post_commit_ex) {
+            slogger.error("Failed after committing the change: {:t}. Finishing the topology change before propagating the error.", post_commit_ex);
+        }
+        co_await _ss.local().finish_topology_state_change(*_topology_change);
+    }
+    if (post_commit_ex) {
+        std::rethrow_exception(std::move(post_commit_ex));
+    }
 }
 
 static future<> execute_do_merge_schema(sharded<service::storage_proxy>& proxy, schema_applier& ap, utils::chunked_vector<mutation> mutations) {
