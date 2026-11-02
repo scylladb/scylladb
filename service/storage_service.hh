@@ -372,8 +372,9 @@ private:
     // Prepares token metadata change without making it visible. Combined with commit function
     // and appropriate lock it does exactly the same as mutate_token_metadata.
     // Note: prepare_token_metadata_change must be called on shard 0.
+    // `t` is the topology state machine state that tmptr was built from.
     future<token_metadata_change> prepare_token_metadata_change(mutable_token_metadata_ptr tmptr,
-            const schema_getter& loader);
+            const schema_getter& loader, const topology& t);
 
     // Commits prepared token metadata changes. Must be called under token_metadata_lock
     // and on all shards.
@@ -382,7 +383,7 @@ private:
     // Update pending ranges locally and then replicate to all cores.
     // Should be serialized under token_metadata_lock.
     // Must be called on shard 0.
-    future<> update_topology_change_info(mutable_token_metadata_ptr tmptr, sstring reason);
+    future<> update_topology_change_info(const topology& t, mutable_token_metadata_ptr tmptr, sstring reason);
     future<> update_topology_change_info(sstring reason, acquire_merge_lock aml = acquire_merge_lock::yes);
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
@@ -1089,16 +1090,37 @@ private:
         std::vector<locator::host_id> released;
     };
 
+    // Topology state machine state read from system.topology, and what is needed
+    // to build token metadata from it and to finish the change after committing it.
+    struct topology_state_change {
+        topology new_topology;
+        state_change_hint hint;
+        token_metadata_ptr prev_token_metadata;
+        nodes_to_notify_after_sync nodes_to_notify;
+    };
+
     using host_id_to_ip_map_t = db::system_keyspace::host_id_to_ip_map_t;
-    future<> raft_topology_update_ip(locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& map, nodes_to_notify_after_sync* nodes_to_notify);
+    future<> raft_topology_update_ip(const topology& t, locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& map, nodes_to_notify_after_sync* nodes_to_notify);
     // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
     // gossiper) to align it with the other raft topology nodes.
     // Optional target_node can be provided to restrict the synchronization to the specified node.
     // Returns a structure that describes which notifications to trigger after token metadata is updated.
-    future<nodes_to_notify_after_sync> sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::unordered_set<raft::server_id> prev_normal, std::optional<std::unordered_set<locator::host_id>> prev_released);
+    future<nodes_to_notify_after_sync> sync_raft_topology_nodes(const topology& t, mutable_token_metadata_ptr tmptr, std::unordered_set<raft::server_id> prev_normal, std::optional<std::unordered_set<locator::host_id>> prev_released);
     // Triggers notifications (on_joined, on_left) based on the recent changes to token metadata, as described by the passed in structure.
     // This function should be called on the result of `sync_raft_topology_nodes`, after the global token metadata is updated.
     future<> notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify);
+    // Reads the topology state from system.topology and enables the cluster features it lists.
+    // Must not be called under token_metadata_lock.
+    future<std::unique_ptr<topology_state_change>> load_topology_state(state_change_hint hint);
+    // Builds token metadata for the loaded topology state, without making either visible.
+    // Must be called under token_metadata_lock, on shard 0.
+    future<mutable_token_metadata_ptr> prepare_topology_token_metadata(topology_state_change& change);
+    // Makes the loaded topology state current.
+    // Must be called under token_metadata_lock, on shard 0.
+    void commit_topology_state(topology_state_change& change) noexcept;
+    // Runs the actions which follow committing the topology state.
+    // Must not be called under token_metadata_lock.
+    future<> finish_topology_state_change(topology_state_change& change);
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
     future<> topology_state_load(state_change_hint hint = {});
