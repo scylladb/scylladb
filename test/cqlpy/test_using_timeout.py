@@ -6,8 +6,9 @@
 
 from .util import unique_name, unique_key_int
 import pytest
-from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout, SyntaxException
-from cassandra.cluster import NoHostAvailable
+from cassandra.protocol import InvalidRequest, ReadTimeout, WriteTimeout, SyntaxException, TruncateError
+from cassandra.policies import FallthroughRetryPolicy
+from cassandra.query import SimpleStatement
 from cassandra.util import Duration
 
 @pytest.fixture(scope="module")
@@ -165,8 +166,8 @@ def test_truncate_using_timeout(scylla_only, cql, table1):
     cql.execute(f"TRUNCATE TABLE {table} USING TIMEOUT 1000s")
     res = list(cql.execute(f"SELECT * FROM {table} WHERE p = {key} and c = 1"))
     assert len(res) == 0
-    with pytest.raises(NoHostAvailable):
-        cql.execute(f"TRUNCATE TABLE {table} USING TIMEOUT 0s")
+    with pytest.raises(TruncateError):
+        cql.execute(SimpleStatement(f"TRUNCATE TABLE {table} USING TIMEOUT 0s", retry_policy=FallthroughRetryPolicy()))
     with pytest.raises(SyntaxException):
         cql.execute(f"TRUNCATE TABLE {table} USING TTL 1")
     with pytest.raises(SyntaxException):
@@ -193,5 +194,6 @@ def test_truncate_using_timeout_prepared(scylla_only, cql, table1):
     # An unprepared statement carries no value the marker could be bound to
     with pytest.raises(InvalidRequest):
         cql.execute(f"TRUNCATE TABLE {table} USING TIMEOUT ?")
-    with pytest.raises(NoHostAvailable):
+    prep.retry_policy = FallthroughRetryPolicy()
+    with pytest.raises(TruncateError):
         cql.execute(prep, (Duration(nanoseconds=0),))
