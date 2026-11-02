@@ -7,8 +7,9 @@
 import re
 import pytest
 
-from cassandra.protocol import ConfigurationException
+from cassandra.protocol import ConfigurationException, InvalidRequest
 from .util import is_scylla, new_test_table, unique_name
+from . import nodetool
 from .nodetool import flush
 
 # Test checks only case of preparing `ALTER TABLE ... DROP ... USING TIMESTAMP ?` statement.
@@ -168,3 +169,38 @@ def test_prepared_alter_table_options_validated_on_every_execute(cql, test_keysp
         for _ in range(2):
             with pytest.raises(ConfigurationException, match="min_index_interval"):
                 cql.execute(alter)
+
+# The following tests were translated from scylla-dtest's schema_test.py.
+
+# Test that a column can't be dropped from a COMPACT STORAGE table.
+# Cassandra had the same restriction until version 4.0, when it was lost in
+# the rewrite of the DDL statements (CASSANDRA-13426), so this test is
+# scylla_only.
+# Translated from schema_test.py::TestSchema::test_drop_column_compact.
+def test_drop_column_compact_storage(cql, test_keyspace, compact_storage, scylla_only):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, c1 int, c2 int', 'WITH COMPACT STORAGE') as table:
+        with pytest.raises(InvalidRequest, match='Cannot drop columns from a'):
+            cql.execute(f'ALTER TABLE {table} DROP c1')
+
+# Test that after a column is dropped and added again, its values written
+# before the drop are no longer returned, while values written after the
+# re-add are. Check this when the data is still in the memtable, and again
+# after a flush and a major compaction.
+# Translated from schema_test.py::TestSchema tests test_drop_column_queries
+# (reads from the memtable) and test_drop_column_compaction (reads after
+# flush and compaction).
+def test_drop_and_readd_column(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, c1 int, c2 int') as table:
+        for i in range(3):
+            cql.execute(f'INSERT INTO {table} (key, c1, c2) VALUES ({i}, {i + 1}, {i + 2})')
+        cql.execute(f'ALTER TABLE {table} DROP c1')
+        cql.execute(f'ALTER TABLE {table} ADD c1 int')
+        cql.execute(f'INSERT INTO {table} (key, c1, c2) VALUES (3, 4, 5)')
+        def check():
+            assert sorted(cql.execute(f'SELECT key, c1 FROM {table}')) == [(0, None), (1, None), (2, None), (3, 4)]
+            assert sorted(cql.execute(f'SELECT key, c1, c2 FROM {table}')) == [(0, None, 2), (1, None, 3), (2, None, 4), (3, 4, 5)]
+            assert list(cql.execute(f'SELECT c1 FROM {table} WHERE key = 0')) == [(None,)]
+            assert list(cql.execute(f'SELECT c1 FROM {table} WHERE key = 3')) == [(4,)]
+        check()
+        nodetool.compact(cql, table)
+        check()
