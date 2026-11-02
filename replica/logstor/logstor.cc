@@ -97,12 +97,20 @@ future<> logstor::stop() {
     logstor_logger.info("Stopping logstor");
 
     // A write that waits for a segment holds the gate, so fail it before closing the gate.
-    _segment_manager.begin_stop();
+    begin_stop();
     co_await _async_gate.close();
     co_await _write_buffer.stop();
     co_await _segment_manager.stop();
 
     logstor_logger.info("logstor stopped");
+}
+
+void logstor::begin_stop() noexcept {
+    _segment_manager.begin_stop();
+}
+
+void logstor::fail_writes_waiting_for_segments() noexcept {
+    _segment_manager.fail_writes_waiting_for_segments();
 }
 
 size_t logstor::get_memory_usage() const {

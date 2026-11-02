@@ -1903,6 +1903,9 @@ public:
     future<> init_commitlog();
     future<> init_logstor();
     future<> recover_logstor();
+    // Fails the logstor writes that wait for a segment, and the later ones that would have to, so that
+    // shutdown need not wait for them. Idempotent.
+    void fail_logstor_writes_waiting_for_segments() noexcept;
     const gms::feature_service& features() const { return _feat; }
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&,
                                db::timeout_clock::time_point timeout,

@@ -67,6 +67,12 @@ public:
     future<> start();
     future<> stop();
 
+    // See segment_manager::fail_writes_waiting_for_segments().
+    void fail_writes_waiting_for_segments() noexcept;
+
+    // See segment_manager::begin_stop(). stop() calls it too.
+    void begin_stop() noexcept;
+
     size_t get_memory_usage() const;
 
     segment_manager& get_segment_manager() noexcept;

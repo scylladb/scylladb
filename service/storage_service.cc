@@ -2028,6 +2028,9 @@ future<> storage_service::stop_transport() {
         seastar::async([this] {
             slogger.info("Stop transport: starts");
 
+            // A write waiting for a logstor segment holds its CQL request, which shutdown_protocol_servers() waits for.
+            _db.invoke_on_all(&replica::database::fail_logstor_writes_waiting_for_segments).get();
+
             slogger.debug("shutting down migration manager");
             _migration_manager.invoke_on_all(&service::migration_manager::drain).get();
 

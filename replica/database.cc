@@ -1029,6 +1029,12 @@ database::recover_logstor() {
     _dirty_memory_threshold_controller.arm_periodic(std::chrono::seconds(5));
 }
 
+void database::fail_logstor_writes_waiting_for_segments() noexcept {
+    if (_logstor) {
+        _logstor->fail_writes_waiting_for_segments();
+    }
+}
+
 future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func) {
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map
@@ -2944,6 +2950,12 @@ future<> database::shutdown() {
     // stop compaction across all shards before closing tables
     co_await _compaction_manager.drain();
     co_await _stop_barrier.arrive_and_wait();
+
+    // Closing a table flushes its separator, which has to take the segments reserved for compaction
+    // when a disk full of live data has no other.
+    if (_logstor) {
+        _logstor->begin_stop();
+    }
 
     // Closing a table can cause us to find a large partition. Since we want to record that, we have to close
     // system.large_partitions after the regular tables.

@@ -520,6 +520,7 @@ class segment_pool {
     size_t _reserved_for_compaction;
     seastar::condition_variable _segment_available;
     bool _stopping = false;
+    bool _fail_waiting_writes = false;
 
 public:
 
@@ -542,10 +543,16 @@ public:
     }
 
     // From now on a normal write or a streaming one fails instead of waiting for a segment, and the
-    // separator may take the reserve. Only the flushes of the separator free segments of mixed data.
-    void begin_stop() {
-        _stopping = true;
+    // ones already waiting fail.
+    void fail_writes_waiting_for_segments() noexcept {
+        _fail_waiting_writes = true;
         _segment_available.broadcast();
+    }
+
+    // Also lets the separator take the reserve. Only the flushes of the separator free segments of mixed data.
+    void begin_stop() noexcept {
+        _stopping = true;
+        fail_writes_waiting_for_segments();
     }
 
     future<> start() {
@@ -574,7 +581,7 @@ public:
             return src == write_source::compaction || (src == write_source::separator && _stopping) ? 0 : _reserved_for_compaction;
         };
         const bool client_write = src == write_source::normal_write || src == write_source::streaming;
-        if (src == write_source::normal_write && _segments.size() <= reserve()) {
+        if (src == write_source::normal_write && !_fail_waiting_writes && _segments.size() <= reserve()) {
             _stats.normal_segments_wait++;
         }
         optimized_optional<abort_source::subscription> on_abort;
@@ -583,7 +590,7 @@ public:
         }
         // Once stopped the queue is empty, so this waits on the broken condition variable and throws.
         while (_segments.size() <= reserve()) {
-            if (client_write && _stopping) {
+            if (client_write && _fail_waiting_writes) {
                 co_return coroutine::exception(std::make_exception_ptr(abort_requested_exception()));
             }
             // Subscribe only once a wait is needed.
@@ -719,8 +726,12 @@ public:
 
     // Fails the writes that wait for a segment and lets the final separator flushes take the reserve,
     // so that a stop need not wait for either. Idempotent.
-    void begin_stop() {
+    void begin_stop() noexcept {
         _segment_pool.begin_stop();
+    }
+
+    void fail_writes_waiting_for_segments() noexcept {
+        _segment_pool.fail_writes_waiting_for_segments();
     }
 
     future<> write(write_buffer&);
@@ -2598,8 +2609,12 @@ future<> segment_manager::stop() {
     return _impl->stop();
 }
 
-void segment_manager::begin_stop() {
+void segment_manager::begin_stop() noexcept {
     _impl->begin_stop();
+}
+
+void segment_manager::fail_writes_waiting_for_segments() noexcept {
+    _impl->fail_writes_waiting_for_segments();
 }
 
 future<> segment_manager::write(write_buffer& wb) {

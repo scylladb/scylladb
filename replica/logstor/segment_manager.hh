@@ -121,7 +121,11 @@ public:
     // Starts a stop: the writes that wait for a segment fail with abort_requested_exception, as do
     // later ones that would have to wait, and only the flushes of the separator may use the segments
     // reserved for compaction. Call it before waiting for writes, which hold up stop() while they wait.
-    void begin_stop();
+    void begin_stop() noexcept;
+
+    // Fails the writes that wait for a segment, and the later ones that would have to. Unlike
+    // begin_stop() it leaves the reserve to compaction, which is still running. Idempotent.
+    void fail_writes_waiting_for_segments() noexcept;
 
     future<> write(write_buffer& wb);
 
