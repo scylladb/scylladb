@@ -1745,6 +1745,7 @@ for t in sorted(perf_tests):
 
 deps['test/boost/combined_tests'] += [
     'test/boost/aggregate_fcts_test.cc',
+    'test/boost/audit_test.cc',
     'test/boost/auth_cache_test.cc',
     'test/boost/auth_test.cc',
     'test/boost/client_state_test.cc',
@@ -1818,7 +1819,6 @@ deps['test/boost/combined_tests'] += [
     'test/boost/statement_restrictions_test.cc',
     'test/boost/storage_proxy_test.cc',
     'test/boost/tablets_test.cc',
-    'test/boost/test_audit.cc',
     'test/boost/tracing_test.cc',
     'test/boost/user_function_test.cc',
     'test/boost/user_types_test.cc',
