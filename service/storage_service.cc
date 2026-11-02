@@ -964,20 +964,6 @@ future<> storage_service::load_cdc_streams(std::optional<std::unordered_set<tabl
     co_await _cdc_gens.local().load_cdc_tablet_streams(std::move(changed_tables));
 }
 
-// Moves the coroutine lambda onto the heap and extends its
-// lifetime until the resulting future is completed.
-// This allows to use captures in coroutine lambda after co_await-s.
-// Without this helper the coroutine lambda is destroyed immediately after
-// the caller (e.g. 'then' function implementation) has invoked it and got the future,
-// so referencing the captures after co_await would be use-after-free.
-template <typename Coro>
-static auto ensure_alive(Coro&& coro) {
-    return [coro_ptr = std::make_unique<Coro>(std::move(coro))]<typename ...Args>(Args&&... args) mutable {
-        auto& coro = *coro_ptr;
-        return coro(std::forward<Args>(args)...).finally([coro_ptr = std::move(coro_ptr)] {});
-    };
-}
-
 // {{{ ip_address_updater
 
 class storage_service::ip_address_updater: public gms::i_endpoint_state_change_subscriber {
@@ -1009,7 +995,7 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
         // If we call sync_raft_topology_nodes here directly, a gossiper lock and
         // the _group0.read_apply_mutex could be taken in cross-order leading to a deadlock.
         // To avoid this, we don't wait for sync_raft_topology_nodes to finish.
-        (void)futurize_invoke(ensure_alive([this, id, prev_ip, endpoint, h = _ss._async_gate.hold()]() -> future<> {
+        (void)futurize_invoke([this, id, prev_ip, endpoint, h = _ss._async_gate.hold()](this auto) -> future<> {
             auto guard = co_await _ss._group0->client().hold_read_apply_mutex(_ss._abort_source);
             co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
 
@@ -1035,7 +1021,7 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
                 co_await _ss._sys_ks.local().get_host_id_to_ip_map(),
                 prev_ip == endpoint ? nullptr : &nodes_to_notify);
             co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
-        }));
+        });
     }
 
 public:
