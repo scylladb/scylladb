@@ -2,11 +2,16 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
+import os
+import shutil
+import time
+
 import pytest
 import requests
-from .util import new_materialized_view, new_test_table, unique_name, sleep_till_whole_second
+from .util import new_materialized_view, new_test_keyspace, new_test_table, unique_name, sleep_till_whole_second
 from . import nodetool, rest_api
 from .test_materialized_view import wait_for_view_built
+from .test_snapshot import table_dir
 
 def test_tombstone_gc_with_conflict_in_memtable(scylla_only, cql, test_keyspace):
     """
@@ -229,3 +234,315 @@ def test_major_compaction_merges_sstables(scylla_only, cql, test_keyspace, scope
                 nodetool.compact(cql, table)
             assert rest_api.get_column_family_metric(cql, 'live_ss_table_count', table) == 1
             assert list(cql.execute(f'SELECT * FROM {table}')) == [(1, 'b')]
+
+#############################################################################
+# The following tests were translated from scylla-dtest's compaction_test.py
+# (class TestCompaction), which ran each test for each of four compaction
+# strategies, so these tests are parametrized by the strategy too. They are
+# scylla_only, because they use Scylla's REST API (which nodetool uses) and
+# Scylla's mutation_fragments() function to read the sstables.
+#############################################################################
+
+compaction_strategies = ['SizeTieredCompactionStrategy', 'LeveledCompactionStrategy',
+                         'TimeWindowCompactionStrategy', 'IncrementalCompactionStrategy']
+
+def sstable_count(cql, table):
+    return rest_api.get_column_family_metric(cql, 'live_ss_table_count', table)
+
+# Return the number of partition tombstones in the table's sstables
+def sstable_partition_tombstones(cql, table):
+    return sum(1 for r in cql.execute(f'SELECT * FROM mutation_fragments({table})')
+               if r.mutation_source.startswith('sstable:') and r.mutation_fragment_kind == 'partition start'
+               and 'deletion_time' in r.metadata)
+
+# Major compaction of the table, which purges every expired tombstone in it.
+# Compaction doesn't purge a tombstone while the commitlog may still have
+# data written to the table before the tombstone, and the commitlog keeps a
+# segment as long as any table has unflushed data in it - so whether a
+# test's tombstones would be purged would depend on other tables. So we
+# first flush all tables, which also switches to a new commitlog segment and
+# frees the old ones. (The dtests ran a global "nodetool compact", which
+# did the same the first time it ran.)
+def compact_purging_expired_tombstones(cql, table):
+    nodetool.flush_all(cql)
+    nodetool.compact(cql, table)
+
+# Test that a deletion writes a partition tombstone to the sstable, and
+# that compaction keeps the tombstones until gc_grace_seconds pass, and
+# then purges them.
+# Translated from scylla-dtest's compaction_test.py::TestCompaction tests
+# test_compaction_delete and test_compaction_delete_2 (the latter includes
+# the former). The dtests waited 25 seconds for gc_grace_seconds to pass;
+# this test moves the server's clock instead.
+@pytest.mark.parametrize('strategy', compaction_strategies)
+def test_compaction_purges_expired_tombstones(scylla_only, cql, test_keyspace, clock, strategy):
+    gc_grace_seconds = 100
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val int',
+                        f"WITH compaction = {{'class': '{strategy}'}} AND gc_grace_seconds = {gc_grace_seconds} "
+                        "AND tombstone_gc = {'mode': 'timeout'}") as table:
+        for key in range(10):
+            cql.execute(f'INSERT INTO {table} (key, val) VALUES ({key}, 1)')
+        nodetool.flush(cql, table)
+        for key in range(3):
+            cql.execute(f'DELETE FROM {table} WHERE key = {key}')
+        nodetool.flush(cql, table)
+        assert sorted(cql.execute(f'SELECT * FROM {table}')) == [(key, 1) for key in range(3, 10)]
+        assert sstable_partition_tombstones(cql, table) == 3
+        # Before each compaction, write another sstable, like the dtest did
+        # ("so that compact will have something to do").
+        # Check that compaction before gc_grace_seconds pass keeps the tombstones
+        cql.execute(f'INSERT INTO {table} (key, val) VALUES (99, 1)')
+        nodetool.flush(cql, table)
+        compact_purging_expired_tombstones(cql, table)
+        assert sstable_partition_tombstones(cql, table) == 3
+        # Check that compaction after gc_grace_seconds pass purges them
+        clock.jump(gc_grace_seconds + 1)
+        cql.execute(f'INSERT INTO {table} (key, val) VALUES (99, 1)')
+        nodetool.flush(cql, table)
+        compact_purging_expired_tombstones(cql, table)
+        assert sstable_partition_tombstones(cql, table) == 0
+        assert sorted(cql.execute(f'SELECT * FROM {table}')) == [(key, 1) for key in list(range(3, 10)) + [99]]
+
+# Test that when all the data of a table is deleted, and the tombstones can
+# be purged immediately (with tombstone_gc mode "immediate"), compaction
+# leaves no sstables.
+# Translated from scylla-dtest's compaction_test.py::TestCompaction::test_sstable_deletion,
+# which slept a second (the resolution of tombstones' deletion time); this
+# test moves the server's clock instead.
+@pytest.mark.parametrize('strategy', compaction_strategies)
+def test_compaction_deletes_sstables_of_deleted_data(scylla_only, cql, test_keyspace, clock, strategy):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val int',
+                        f"WITH compaction = {{'class': '{strategy}'}} AND tombstone_gc = {{'mode': 'immediate'}}") as table:
+        for key in range(10):
+            cql.execute(f'INSERT INTO {table} (key, val) VALUES ({key}, {key})')
+        nodetool.flush(cql, table)
+        for key in range(10):
+            cql.execute(f'DELETE FROM {table} WHERE key = {key}')
+        clock.jump(1)
+        nodetool.flush(cql, table)
+        assert sstable_count(cql, table) > 0
+        compact_purging_expired_tombstones(cql, table)
+        assert sstable_count(cql, table) == 0
+
+# Test that changing a table's compaction strategy doesn't lose data or
+# revive deleted data.
+# Translated from scylla-dtest's compaction_test.py::TestCompaction::test_compaction_strategy_switching,
+# which didn't check one of the rows (key 10).
+@pytest.mark.parametrize('strategy', compaction_strategies)
+def test_compaction_strategy_switching(scylla_only, cql, test_keyspace, strategy):
+    for new_strategy in compaction_strategies:
+        if new_strategy == strategy:
+            continue
+        with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val int',
+                            f"WITH gc_grace_seconds = 0 AND compaction = {{'class': '{strategy}'}}") as table:
+            for key in range(10):
+                cql.execute(f'INSERT INTO {table} (key, val) VALUES ({key}, 1)')
+            nodetool.flush(cql, table)
+            for key in range(3):
+                cql.execute(f'DELETE FROM {table} WHERE key = {key}')
+            cql.execute(f"ALTER TABLE {table} WITH compaction = {{'class': '{new_strategy}'}}")
+            assert sorted(cql.execute(f'SELECT * FROM {table}')) == [(key, 1) for key in range(3, 10)]
+            nodetool.flush(cql, table)
+            assert sorted(cql.execute(f'SELECT * FROM {table}')) == [(key, 1) for key in range(3, 10)]
+
+#############################################################################
+# The following tests check disabling and enabling the automatic compaction
+# of a table - with the REST API, which "nodetool disableautocompaction" and
+# "nodetool enableautocompaction" use, or with the table's "enabled"
+# compaction option. A test checks that a table isn't compacted by flushing
+# several sstables into it and into a reference table whose autocompaction
+# is enabled: When the reference table was compacted, the first table would
+# have been compacted too if its autocompaction had been enabled. The dtests
+# instead looked for compactions of the tables in system.compaction_history
+# for 2 seconds. All the sstables are of one partition, so they are all in
+# the same compaction group (shard or tablet).
+#############################################################################
+
+flushes = 6
+
+def autocompaction_url(cql, table):
+    ks, cf = table.split('.')
+    return f'{nodetool.rest_api_url(cql)}/column_family/autocompaction/{ks}:{cf}'
+
+def autocompaction_enabled(cql, table):
+    response = requests.get(autocompaction_url(cql, table))
+    response.raise_for_status()
+    return response.json()
+
+def set_autocompaction(cql, table, enabled):
+    response = requests.request('POST' if enabled else 'DELETE', autocompaction_url(cql, table))
+    response.raise_for_status()
+
+def flush_sstables(cql, table):
+    for ck in range(flushes):
+        cql.execute(f"INSERT INTO {table} (key, ck, val) VALUES (0, {ck}, 'hello')")
+        nodetool.flush(cql, table)
+
+def wait_for_compaction(cql, table, count, timeout=60):
+    deadline = time.time() + timeout
+    while sstable_count(cql, table) >= count:
+        assert time.time() < deadline, f'{table} was not compacted'
+        time.sleep(0.01)
+
+# Flush sstables into the table and the reference table, and check that
+# the reference table is compacted but the table isn't. Then compact the
+# table (and the reference table) to one sstable, for the next check.
+def check_not_compacted(cql, table, reference):
+    before = sstable_count(cql, table)
+    flush_sstables(cql, table)
+    reference_before = sstable_count(cql, reference)
+    flush_sstables(cql, reference)
+    wait_for_compaction(cql, reference, reference_before + flushes)
+    assert sstable_count(cql, table) == before + flushes
+    nodetool.compact(cql, table)
+    nodetool.compact(cql, reference)
+
+# Flush sstables into the table and check that it is compacted
+def check_compacted(cql, table):
+    before = sstable_count(cql, table)
+    flush_sstables(cql, table)
+    wait_for_compaction(cql, table, before + flushes)
+
+def new_compaction_test_table(cql, keyspace, strategy, enabled=None):
+    options = f"'class': '{strategy}'" + (f", 'enabled': '{enabled}'" if enabled is not None else '')
+    return new_test_table(cql, keyspace, 'key int, ck int, val text, PRIMARY KEY (key, ck)',
+                          f'WITH compaction = {{{options}}}')
+
+# Test disabling and enabling autocompaction of a table with the REST API:
+# disabling it doesn't affect other tables, and disabling it twice works.
+# Translated from scylla-dtest's compaction_test.py::TestCompaction tests
+# test_disable_autocompaction_nodetool and test_disable_autocompaction_twice.
+@pytest.mark.parametrize('strategy', compaction_strategies)
+def test_disable_autocompaction(scylla_only, cql, test_keyspace, strategy):
+    with new_compaction_test_table(cql, test_keyspace, strategy) as table, \
+         new_compaction_test_table(cql, test_keyspace, strategy) as reference:
+        set_autocompaction(cql, table, False)
+        assert not autocompaction_enabled(cql, table)
+        assert autocompaction_enabled(cql, reference)
+        check_not_compacted(cql, table, reference)
+        set_autocompaction(cql, table, False)
+        set_autocompaction(cql, table, False)
+        assert not autocompaction_enabled(cql, table)
+        check_not_compacted(cql, table, reference)
+        set_autocompaction(cql, table, True)
+        assert autocompaction_enabled(cql, table)
+        assert autocompaction_enabled(cql, reference)
+        check_compacted(cql, table)
+        check_compacted(cql, reference)
+
+# Test disabling and enabling autocompaction of all tables - for each
+# keyspace, with the REST API which "nodetool disableautocompaction" without
+# parameters uses. The reference table is in a keyspace created after
+# autocompaction was disabled, so its autocompaction is enabled.
+# Translated from scylla-dtest's compaction_test.py::TestCompaction::test_disable_autocompaction_without_params.
+@pytest.mark.parametrize('strategy', compaction_strategies)
+def test_disable_autocompaction_all_tables(scylla_only, cql, test_keyspace, strategy):
+    with new_compaction_test_table(cql, test_keyspace, strategy) as table1, \
+         new_compaction_test_table(cql, test_keyspace, strategy) as table2:
+        url = f'{nodetool.rest_api_url(cql)}/storage_service/auto_compaction'
+        keyspaces = [r.keyspace_name for r in cql.execute('SELECT keyspace_name FROM system_schema.keyspaces')]
+        try:
+            for ks in keyspaces:
+                requests.delete(f'{url}/{ks}').raise_for_status()
+            assert not autocompaction_enabled(cql, table1)
+            assert not autocompaction_enabled(cql, table2)
+            with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks, \
+                 new_compaction_test_table(cql, ks, strategy) as reference:
+                assert autocompaction_enabled(cql, reference)
+                flush_sstables(cql, table1)
+                flush_sstables(cql, table2)
+                flush_sstables(cql, reference)
+                wait_for_compaction(cql, reference, flushes)
+                assert sstable_count(cql, table1) == flushes
+                assert sstable_count(cql, table2) == flushes
+        finally:
+            # Re-enable autocompaction of all the keyspaces before checking
+            # for errors, so a failure doesn't leave it disabled for other
+            # tests on the shared server.
+            responses = [requests.post(f'{url}/{ks}') for ks in keyspaces]
+            for response in responses:
+                response.raise_for_status()
+        assert autocompaction_enabled(cql, table1)
+        assert autocompaction_enabled(cql, table2)
+        check_compacted(cql, table1)
+        check_compacted(cql, table2)
+
+# Test disabling and enabling autocompaction of a table with its "enabled"
+# compaction option, in CREATE TABLE and ALTER TABLE.
+# Translated from scylla-dtest's compaction_test.py::TestCompaction tests
+# test_disable_autocompaction_schema and test_disable_autocompaction_alter.
+# The first also checked that the option still disables autocompaction
+# after a restart; this test doesn't restart Scylla.
+@pytest.mark.parametrize('strategy', compaction_strategies)
+def test_disable_autocompaction_with_option(scylla_only, cql, test_keyspace, strategy):
+    with new_compaction_test_table(cql, test_keyspace, strategy, 'false') as table1, \
+         new_compaction_test_table(cql, test_keyspace, strategy) as table2, \
+         new_compaction_test_table(cql, test_keyspace, strategy) as reference:
+        cql.execute(f"ALTER TABLE {table2} WITH compaction = {{'class': '{strategy}', 'enabled': 'false'}}")
+        for table in [table1, table2]:
+            check_not_compacted(cql, table, reference)
+            cql.execute(f"ALTER TABLE {table} WITH compaction = {{'class': '{strategy}', 'enabled': 'true'}}")
+            check_compacted(cql, table)
+
+# Test that changing the compaction options of a table whose autocompaction
+# was disabled with the REST API keeps it disabled.
+# Translated from scylla-dtest's compaction_test.py::TestCompaction::test_disable_autocompaction_alter_and_nodetool.
+@pytest.mark.parametrize('strategy', compaction_strategies)
+def test_disable_autocompaction_survives_alter(scylla_only, cql, test_keyspace, strategy):
+    with new_compaction_test_table(cql, test_keyspace, strategy) as table, \
+         new_compaction_test_table(cql, test_keyspace, strategy) as reference:
+        set_autocompaction(cql, table, False)
+        check_not_compacted(cql, table, reference)
+        cql.execute(f"ALTER TABLE {table} WITH compaction = {{'class': '{strategy}', 'tombstone_threshold': 0.9}}")
+        assert not autocompaction_enabled(cql, table)
+        check_not_compacted(cql, table, reference)
+        set_autocompaction(cql, table, True)
+        check_compacted(cql, table)
+
+# Test that disabling autocompaction of a table doesn't prevent the user
+# from upgrading its sstables (with "nodetool upgradesstables"): The
+# upgrade rewrites all the table's sstables, and autocompaction remains
+# disabled.
+# Translated from scylla-dtest's compaction_test.py::TestCompaction::test_disable_autocompaction_doesnt_block_user_initiated_upgrade_compaction,
+# which checked the log message of the upgrade.
+@pytest.mark.parametrize('strategy', compaction_strategies)
+def test_disable_autocompaction_allows_upgrade(scylla_only, cql, test_keyspace, strategy):
+    with new_compaction_test_table(cql, test_keyspace, strategy) as table:
+        set_autocompaction(cql, table, False)
+        flush_sstables(cql, table)
+        def sstables():
+            return {r.mutation_source for r in cql.execute(f'SELECT mutation_source FROM mutation_fragments({table})')
+                    if r.mutation_source.startswith('sstable:')}
+        before = sstables()
+        assert len(before) == flushes
+        ks, cf = table.split('.')
+        requests.get(f'{nodetool.rest_api_url(cql)}/storage_service/keyspace_upgrade_sstables/{ks}', params={'cf': cf}).raise_for_status()
+        after = sstables()
+        assert len(after) == flushes and not (after & before)
+        assert not autocompaction_enabled(cql, table)
+
+# Test that disabling autocompaction of a table doesn't prevent reshaping the
+# sstables which "nodetool refresh" loads: TimeWindowCompactionStrategy with
+# max_threshold 2 needs to reshape many sstables of the same time window.
+# The test copies the table's own sstables to its upload directory, and
+# truncates it, to load them. It uses a keyspace without tablets, because
+# with tablets the sstables are streamed into the table, not reshaped.
+# Translated from scylla-dtest's compaction_test.py::TestCompaction::test_disable_autocompaction_doesnt_block_user_initiated_reshape_compaction,
+# which checked the log message of the reshape.
+def test_disable_autocompaction_allows_reshape(scylla_only, cql, test_keyspace_vnodes, scylla_data_dir):
+    with new_compaction_test_table(cql, test_keyspace_vnodes, 'SizeTieredCompactionStrategy') as table:
+        set_autocompaction(cql, table, False)
+        flush_sstables(cql, table)
+        directory = table_dir(cql, scylla_data_dir, table)
+        for f in os.listdir(directory):
+            if os.path.isfile(os.path.join(directory, f)):
+                shutil.copy(os.path.join(directory, f), os.path.join(directory, 'upload'))
+        cql.execute(f'TRUNCATE {table}')
+        cql.execute(f"ALTER TABLE {table} WITH compaction = {{'class': 'TimeWindowCompactionStrategy', "
+                    "'compaction_window_size': 1, 'compaction_window_unit': 'MINUTES', 'max_threshold': 2, 'min_threshold': 2}")
+        assert not autocompaction_enabled(cql, table)
+        ks, cf = table.split('.')
+        requests.post(f'{nodetool.rest_api_url(cql)}/storage_service/sstables/{ks}', params={'cf': cf}).raise_for_status()
+        assert sorted(r.ck for r in cql.execute(f'SELECT ck FROM {table}')) == list(range(flushes))
+        assert sstable_count(cql, table) < flushes
+        assert not autocompaction_enabled(cql, table)
