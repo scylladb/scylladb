@@ -3133,18 +3133,6 @@ void database::trigger_logstor_compaction(bool major) {
     });
 }
 
-future<> database::flush_logstor_separator_on_all_shards(sharded<database>& sharded_db) {
-    return sharded_db.invoke_on_all([] (replica::database& db) {
-        return db.flush_logstor_separator();
-    });
-}
-
-future<> database::flush_logstor_separator(std::optional<logstor::segment_sequence> seq_num) {
-    return _tables_metadata.parallel_for_each_table([seq_num] (table_id, lw_shared_ptr<table> table) {
-        return table->flush_separator(seq_num);
-    });
-}
-
 // Memory reserved elsewhere on the shard is taken off the memtables' share of it. The threshold
 // goes down, which makes the dirty memory manager flush, and goes back up when the memory is
 // released.
