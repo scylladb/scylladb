@@ -332,3 +332,16 @@ def test_bind_variable_on_aggregate(cql, test_keyspace):
         # With GROUP BY, there is a result row for each group.
         stmt = cql.prepare(f"select c, max(m)[?] from {table} where p = ? group by c")
         assert [(1, 10), (2, 11)] == list(cql.execute(stmt, [1, p]))
+
+# Test the built-in aggregate functions min, max, sum, avg and count on a
+# whole table of several partitions, on an int and a double column.
+# Translated from user_functions_test.py::TestUserFunctions::test_default_aggregate.
+def test_builtin_aggregates_whole_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val double') as table:
+        for x in range(1, 10):
+            cql.execute(f'INSERT INTO {table} (key, val) VALUES ({x}, {float(x)})')
+        assert list(cql.execute(f'SELECT min(key) FROM {table}')) == [(1,)]
+        assert list(cql.execute(f'SELECT max(val) FROM {table}')) == [(9.0,)]
+        assert list(cql.execute(f'SELECT sum(key) FROM {table}')) == [(45,)]
+        assert list(cql.execute(f'SELECT avg(val) FROM {table}')) == [(5.0,)]
+        assert list(cql.execute(f'SELECT count(*) FROM {table}')) == [(9,)]
