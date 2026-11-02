@@ -670,7 +670,7 @@ async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager:
     await manager.server_stop_gracefully(servers[-1].server_id)
     failed = False
     try:
-        await manager.server_start(server_id=servers[-1].server_id, wait_others=3, connect_driver=True, cmdline_options_override=["--enforce-rack-list", "true", "--smp", "2"])
+        await manager.server_start(server_id=servers[-1].server_id, wait_others=3, connect_driver=True, cmdline_options_override=["--enforce-rack-list", "true"])
     except Exception:
         failed = True
         await manager.server_stop_gracefully(servers[-1].server_id)
@@ -684,7 +684,7 @@ async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager:
     assert repl['dc1'] == ['rack1b']
 
     logging.info("Rolling restart")
-    await manager.rolling_restart(servers, wait_for_cql=True, cmdline_options_override=["--enforce-rack-list", "true", "--error-injections-at-startup", "[]", "--smp", "2"])
+    await manager.rolling_restart(servers, wait_for_cql=True, cmdline_options_override=["--enforce-rack-list", "true", "--error-injections-at-startup", "[]"])
 
     await cql.run_async(f"create keyspace ks2 with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2}} and tablets = {{'initial': 4}};")
     repl = await get_replication_options("ks2", host, servers[0].ip_addr)

@@ -879,11 +879,16 @@ class ScyllaServer:
                     expected_error: Optional[str] = None,
                     expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                     cmdline_options_override: list[str] | None = None,
-                    append_env_override: dict[str, str] | None = None) -> None:
+                    append_env_override: dict[str, str] | None = None,
+                    replace_cmdline_options: bool = False) -> None:
         """Start an installed server.
 
-        Use `cmdline_options_override` and `append_env_override` instead of `self.cmdline_options` and
-        `self.append_env` correspondingly if provided.
+        `cmdline_options_override` is merged into `self.cmdline_options` for this
+        start only, with the rules of `update_cmdline()`: `--logger-log-level`
+        appends, any other option replaces its current value. With
+        `replace_cmdline_options=True` it is the whole argv instead, which drops
+        the harness defaults (`--smp 2 -m 1G --overprovisioned ...`) as well.
+        `append_env_override` replaces `self.append_env`.
 
         May be used for restarts.
         """
@@ -903,9 +908,13 @@ class ScyllaServer:
         if self.log_file is None or self.log_file.closed:
             self.log_file = self.log_filename.open("ab")  # append mode to preserve previous logs
 
+        cmdline_options = self.cmdline_options
+        if cmdline_options_override is not None:
+            cmdline_options = (cmdline_options_override if replace_cmdline_options
+                               else merge_cmdline_options(cmdline_options, cmdline_options_override))
         self.cmd = await asyncio.create_subprocess_exec(
             self.exe,
-            *(self.cmdline_options if cmdline_options_override is None else cmdline_options_override),
+            *cmdline_options,
             cwd=self.workdir,
             stderr=self.log_file,
             stdout=self.log_file,

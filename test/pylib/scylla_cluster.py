@@ -393,11 +393,13 @@ class ScyllaCluster:
                            expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                            cmdline_options_override: list[str] | None = None,
                            append_env_override: dict[str, str] | None = None,
-                           auth_provider: dict[str, str] | None = None) -> None:
+                           auth_provider: dict[str, str] | None = None,
+                           replace_cmdline_options: bool = False) -> None:
         """Start a server.
 
-        Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
-        if provided.
+        `cmdline_options_override` is merged into the server's command line for
+        this start only and `append_env_override` replaces its environment, see
+        `ScyllaServer.start()`.
 
         No-op if already running.
         """
@@ -430,6 +432,7 @@ class ScyllaCluster:
             expected_server_up_state=expected_server_up_state,
             cmdline_options_override=cmdline_options_override,
             append_env_override=append_env_override,
+            replace_cmdline_options=replace_cmdline_options,
         )
         if expected_error is not None:
             self.running.pop(server_id)

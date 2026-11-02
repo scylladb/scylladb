@@ -209,7 +209,7 @@ async def test_empty_build_step_after_reshard(manager: ScyllaClusterManager):
     # Create second materialized view and immediately restart the server to cause resharding. The new view will effectively start building after the restart.
     await cql.run_async(f"CREATE MATERIALIZED VIEW ks.mv2 AS SELECT p, c FROM ks.test WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, p)")
     await manager.server_stop_gracefully(server.server_id)
-    await manager.server_start(server.server_id, cmdline_options_override=['--smp', '2', '--logger-log-level', 'view=debug'])
+    await manager.server_start(server.server_id, cmdline_options_override=['--smp', '2'])
     cql = await reconnect_driver(manager)
     await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
     await wait_for_view(cql, 'mv', 1)
@@ -240,7 +240,7 @@ async def test_interrupt_build_with_resharding(manager: ManagerClient, smp_befor
     - interrupt_resharding=True: interrupt build, start resharding, interrupt resharding too, restart, verify
     """
     cmdline_before = ['--smp', str(smp_before), '--logger-log-level', 'view=debug']
-    cmdline_after = ['--smp', str(smp_after), '--logger-log-level', 'view=debug']
+    cmdline_after = ['--smp', str(smp_after)]
 
     server = await manager.server_add(cmdline=cmdline_before)
     cql = manager.get_cql()
