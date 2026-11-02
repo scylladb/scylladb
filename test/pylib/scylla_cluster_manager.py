@@ -213,7 +213,6 @@ class ScyllaClusterManager:
         self.api: ScyllaRESTAPIClient = cluster.api
         self.metrics = ScyllaMetricsClient()
         self.thread_pool = ThreadPoolExecutor()
-        self.load_balancing_policy = RoundRobinPolicy()
 
         self.ccluster: CassandraCluster | None = None
         self.cql: CassandraSession | None = None
@@ -738,7 +737,7 @@ class ScyllaClusterManager:
                 port: int = 9042,
                 use_ssl: bool = False,
                 auth_provider: AuthProvider | None = None,
-                load_balancing_policy: LoadBalancingPolicy = RoundRobinPolicy(),
+                load_balancing_policy: LoadBalancingPolicy | None = None,
                 control_connection_fallback: bool = False,
                 queries_only_via_control_connection: bool = False) -> CassandraCluster:
         """Create a CQL Cluster connection object according to configuration.
@@ -755,6 +754,9 @@ class ScyllaClusterManager:
             ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
+        # Policies own mutable host state, so each Cluster needs its own default.
+        if load_balancing_policy is None:
+            load_balancing_policy = RoundRobinPolicy()
         profile = ExecutionProfile(
             load_balancing_policy=load_balancing_policy,
             consistency_level=ConsistencyLevel.LOCAL_QUORUM,
@@ -837,7 +839,6 @@ class ScyllaClusterManager:
             port=self.port,
             use_ssl=self.use_ssl,
             auth_provider=auth_provider if auth_provider else self.auth_provider,
-            load_balancing_policy=self.load_balancing_policy,
             control_connection_fallback=control_connection_fallback,
         )
         self.cql = self.ccluster.connect()
