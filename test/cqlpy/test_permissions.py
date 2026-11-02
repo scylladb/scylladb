@@ -1566,3 +1566,180 @@ def test_create_role_with_invalid_hashed_password(cql):
             cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = 'this_is_an_invalid_hash'")
     finally:
         cql.execute(f"DROP ROLE IF EXISTS {role}")
+
+#############################################################################
+# The following tests were translated from scylla-dtest's
+# auth_roles_test.py::TestAuthRoles, which originally came from Cassandra's
+# dtest auth_roles_test.py.
+#
+# Cassandra 4.1 and above give a role's creator the DESCRIBE permission on
+# that role (CASSANDRA-16902), and include DESCRIBE in GRANT ALL ON ROLE,
+# while Scylla doesn't have DESCRIBE on a specific role (SCYLLADB-5232,
+# see testListPermissionsOfChildByParent in
+# cassandra_tests/auth/cassandra_authorizer_test.py). Cassandra 5.0 and
+# above also have the UNMASK and SELECT_MASKED permissions of dynamic data
+# masking (CASSANDRA-17940), which Scylla doesn't support. So these tests
+# ignore DESCRIBE permissions on specific roles, and the UNMASK and
+# SELECT_MASKED permissions.
+#############################################################################
+
+# Like new_user(), but the new role can't log in. Such a role is typically
+# granted to other roles, to give them its permissions.
+@contextmanager
+def new_user_nologin(cql):
+    role = unique_name()
+    cql.execute(f'CREATE ROLE {role} WITH SUPERUSER = false AND LOGIN = false')
+    try:
+        yield role
+    finally:
+        cql.execute(f'DROP ROLE {role}')
+
+def listed_permissions(session, query, roles=None, resources=None):
+    perms = set()
+    for r in session.execute(query):
+        if r.permission == 'DESCRIBE' and r.resource.startswith('<role '):
+            continue
+        if r.permission in ['UNMASK', 'SELECT_MASKED']:
+            continue
+        if roles is not None and r.role not in roles:
+            continue
+        if resources is not None and r.resource not in resources:
+            continue
+        perms.add((r.role, r.resource, r.permission))
+    return perms
+
+def creator_permissions(creator, resource):
+    perms = {(creator, resource, p) for p in ['SELECT', 'MODIFY', 'ALTER', 'DROP', 'AUTHORIZE']}
+    if resource.startswith('<keyspace '):
+        perms.add((creator, resource, 'CREATE'))
+    return perms
+
+def role_creator_permissions(creator, role):
+    return {(creator, f'<role {role}>', p) for p in ['ALTER', 'DROP', 'AUTHORIZE']}
+
+# Test LIST PERMISSIONS: LIST ALL PERMISSIONS lists the permissions of all
+# roles - including those which the creator of a keyspace, table or role
+# gets automatically on it. LIST ... OF a role also lists the permissions
+# it inherits from the roles granted to it, LIST ... ON a resource lists
+# the permissions on that resource, and a role can list its own
+# permissions. Because other tests may leave other roles and permissions,
+# LIST ALL PERMISSIONS is checked only on the roles and resources created by
+# this test. The dtest also checked that the keyspace's creator doesn't get
+# permissions on the functions in that keyspace (Cassandra's creator does),
+# which this test doesn't check.
+# Translated from test_list_permissions.
+def test_list_permissions(cql):
+    # The superuser which created the test's keyspace, table and roles
+    superuser = cql.cluster.auth_provider.username
+    with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks, \
+         new_test_table(cql, ks, 'id int PRIMARY KEY, val int') as table, \
+         new_user(cql) as mike, new_user_nologin(cql) as role1, new_user_nologin(cql) as role2, new_user_nologin(cql) as role3:
+        t = f'<table {table}>'
+        cql.execute(f'GRANT SELECT ON TABLE {table} TO {role1}')
+        cql.execute(f'GRANT ALTER ON TABLE {table} TO {role2}')
+        cql.execute(f'GRANT MODIFY ON TABLE {table} TO {mike}')
+        cql.execute(f'GRANT ALTER ON ROLE {role1} TO {role2}')
+        cql.execute(f'GRANT {role1} TO {role2}')
+        cql.execute(f'GRANT {role2} TO {mike}')
+        ensure_updated_permissions(cql)
+        expected = {(mike, t, 'MODIFY'), (role1, t, 'SELECT'), (role2, t, 'ALTER'), (role2, f'<role {role1}>', 'ALTER')}
+        expected |= creator_permissions(superuser, f'<keyspace {ks}>') | creator_permissions(superuser, t)
+        for role in [mike, role1, role2, role3]:
+            expected |= role_creator_permissions(superuser, role)
+        roles = {superuser, mike, role1, role2, role3}
+        resources = {f'<keyspace {ks}>', t} | {f'<role {r}>' for r in [mike, role1, role2, role3]}
+        assert listed_permissions(cql, 'LIST ALL PERMISSIONS', roles, resources) == expected
+        assert listed_permissions(cql, f'LIST ALL PERMISSIONS OF {role1}') == {(role1, t, 'SELECT')}
+        assert listed_permissions(cql, f'LIST ALL PERMISSIONS OF {role2}') == \
+            {(role1, t, 'SELECT'), (role2, t, 'ALTER'), (role2, f'<role {role1}>', 'ALTER')}
+        assert listed_permissions(cql, f'LIST ALL PERMISSIONS ON ROLE {role1}') == \
+            role_creator_permissions(superuser, role1) | {(role2, f'<role {role1}>', 'ALTER')}
+        # DROP on role1 wasn't granted, so only its creator has it
+        assert listed_permissions(cql, f'LIST DROP PERMISSION ON ROLE {role1}') == {(superuser, f'<role {role1}>', 'DROP')}
+        # ALTER on role1 was granted to role2, so it is listed with or
+        # without an OF clause
+        assert listed_permissions(cql, f'LIST ALTER PERMISSION ON ROLE {role1}') == \
+            {(superuser, f'<role {role1}>', 'ALTER'), (role2, f'<role {role1}>', 'ALTER')}
+        assert listed_permissions(cql, f'LIST ALTER PERMISSION ON ROLE {role1} OF {role2}') == {(role2, f'<role {role1}>', 'ALTER')}
+        # ALTER on role1 isn't listed with OF another role
+        assert listed_permissions(cql, f'LIST ALTER PERMISSION ON ROLE {role1} OF {role3}') == set()
+        # A user can list its own permissions
+        with new_session(cql, mike) as mike_session:
+            assert listed_permissions(mike_session, f'LIST ALL PERMISSIONS OF {mike}') == \
+                {(mike, t, 'MODIFY'), (role1, t, 'SELECT'), (role2, t, 'ALTER'), (role2, f'<role {role1}>', 'ALTER')}
+
+# Test that a user can list the permissions of roles granted to it, but
+# not everyone's permissions or the permissions of other roles.
+# Translated from test_list_permissions_validation.
+def test_list_permissions_validation(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, val int') as table, \
+         new_user(cql) as mike, new_user(cql) as john, new_user_nologin(cql) as role1, new_user_nologin(cql) as role2:
+        t = f'<table {table}>'
+        cql.execute(f'GRANT SELECT ON TABLE {table} TO {role1}')
+        cql.execute(f'GRANT ALTER ON TABLE {table} TO {role2}')
+        cql.execute(f'GRANT MODIFY ON TABLE {table} TO {john}')
+        cql.execute(f'GRANT {role1} TO {role2}')
+        cql.execute(f'GRANT {role2} TO {mike}')
+        ensure_updated_permissions(cql)
+        with new_session(cql, mike) as mike_session:
+            assert listed_permissions(mike_session, f'LIST ALL PERMISSIONS OF {role2}') == {(role1, t, 'SELECT'), (role2, t, 'ALTER')}
+            assert listed_permissions(mike_session, f'LIST ALL PERMISSIONS OF {role1}') == {(role1, t, 'SELECT')}
+            with pytest.raises(Unauthorized, match="You are not authorized to view everyone's permissions"):
+                mike_session.execute('LIST ALL PERMISSIONS')
+            with pytest.raises(Unauthorized, match=f"You are not authorized to view {john}'s permissions"):
+                mike_session.execute(f'LIST ALL PERMISSIONS OF {john}')
+
+# Test that DROP ROLE IF EXISTS of a role which doesn't exist doesn't break
+# creating that role later and using it: In CASSANDRA-9189, the superuser
+# check during the DROP cached the fact that the role doesn't exist, so
+# later authorization of the new role failed. Scylla doesn't have such a
+# roles cache, but this checks that nothing similar happens.
+# Translated from test_drop_non_existent_role_should_not_update_cache.
+def test_drop_non_existent_role_then_create_it(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'id int PRIMARY KEY, val int') as table:
+        mike = unique_name()
+        cql.execute(f'DROP ROLE IF EXISTS {mike}')
+        with new_user(cql, mike):
+            cql.execute(f'GRANT ALL ON {table} TO {mike}')
+            with new_session(cql, mike) as mike_session:
+                mike_session.execute(f'SELECT * FROM {table}')
+
+# Test that a role granted another role which has LOGIN doesn't inherit the
+# LOGIN: LIST ROLES OF the role lists both roles, each with its own LOGIN
+# value. Cassandra's LIST ROLES has an additional "datacenters" column, so
+# only the first four columns (role, super, login, options) are checked.
+# Translated from test_roles_do_not_inherit_login_privilege.
+def test_roles_do_not_inherit_login_privilege(cql):
+    with new_user_nologin(cql) as mike, new_user(cql) as with_login:
+        cql.execute(f'GRANT {with_login} TO {mike}')
+        def list_roles_of(role):
+            return sorted(tuple(row[:4]) for row in cql.execute(f'LIST ROLES OF {role}'))
+        assert list_roles_of(mike) == sorted([(mike, False, False, {}), (with_login, False, True, {})])
+        assert list_roles_of(with_login) == [(with_login, False, True, {})]
+
+# Test which permissions GRANT ALL grants on each kind of resource other
+# than functions: all data permissions on a keyspace, all of them except
+# CREATE on a table (which must already exist), all role permissions -
+# including CREATE and DESCRIBE - on all roles, and all of them except
+# CREATE on a specific role. GRANT of a permission which a resource doesn't
+# support is an error.
+# Translated from the parts of test_filter_granted_permissions_by_resource_type
+# which don't involve functions; those are tested in
+# test_filter_granted_permissions_by_resource_type_functions above. That
+# dtest never ran, because it created functions in Java and Javascript,
+# which Scylla doesn't support.
+def test_filter_granted_permissions_by_resource_type(cql):
+    with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks, \
+         new_test_table(cql, ks, 'id int PRIMARY KEY, val int') as table, \
+         new_user(cql) as mike, new_user_nologin(cql) as role1:
+        def check_grant_all(resource, listed_resource, permissions):
+            cql.execute(f'GRANT ALL ON {resource} TO {mike}')
+            assert listed_permissions(cql, f'LIST ALL PERMISSIONS OF {mike}') == {(mike, listed_resource, p) for p in permissions}
+            cql.execute(f'REVOKE ALL ON {resource} FROM {mike}')
+        check_grant_all(f'KEYSPACE {ks}', f'<keyspace {ks}>', ['CREATE', 'ALTER', 'DROP', 'SELECT', 'MODIFY', 'AUTHORIZE'])
+        check_grant_all(table, f'<table {table}>', ['ALTER', 'DROP', 'SELECT', 'MODIFY', 'AUTHORIZE'])
+        check_grant_all('ALL ROLES', '<all roles>', ['CREATE', 'ALTER', 'DROP', 'DESCRIBE', 'AUTHORIZE'])
+        check_grant_all(f'ROLE {role1}', f'<role {role1}>', ['ALTER', 'DROP', 'AUTHORIZE'])
+        for grant in [f'GRANT CREATE ON {table} TO {mike}', f'GRANT SELECT ON ALL ROLES TO {mike}', f'GRANT CREATE ON ROLE {role1} TO {mike}']:
+            with pytest.raises((InvalidRequest, SyntaxException), match='support.*permissions'):
+                cql.execute(grant)
