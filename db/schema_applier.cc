@@ -979,8 +979,9 @@ future<> schema_applier::update_tablets() {
     if (_tablet_hint) {
         slogger.info("Tablet metadata changed");
         pending_schema_getter getter{*this};
-        _token_metadata_change = co_await _ss.local().prepare_token_metadata_change(
-                _pending_token_metadata.local(), getter);
+        auto& ss = _ss.local();
+        _token_metadata_change = co_await ss.prepare_token_metadata_change(
+                _pending_token_metadata.local(), getter, ss._topology_state_machine._topology);
     }
 }
 
