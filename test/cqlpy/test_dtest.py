@@ -13,6 +13,7 @@
 #############################################################################
 
 import math
+import os
 import re
 import sys
 import time
@@ -21,7 +22,7 @@ from datetime import datetime
 
 import pytest
 import requests
-from cassandra import ConsistencyLevel, ReadFailure, ReadTimeout, Unavailable
+from cassandra import ConsistencyLevel, ReadFailure, ReadTimeout, Unauthorized, Unavailable
 from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.protocol import AlreadyExists, InvalidRequest
 from cassandra.query import SimpleStatement, UNSET_VALUE
@@ -29,7 +30,7 @@ from cassandra.query import SimpleStatement, UNSET_VALUE
 from . import nodetool
 from .test_logs import logfile, logfile_path, wait_for_log
 from .test_secondary_index import wait_for_index
-from .util import ScyllaMetrics, config_value_context, new_cql, new_materialized_view, new_test_keyspace, new_test_table, new_type, new_user, unique_name
+from .util import ScyllaMetrics, config_value_context, is_scylla, new_cql, new_materialized_view, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
 # Test that a SELECT can list the same column more than once, and returns
@@ -2312,3 +2313,65 @@ def test_prepared_select_star_on_schema_change_two_connections(cql, test_keyspac
             rows = list(session.execute(query))
             assert len(rows) == 10
             assert all(r._fields == ('a', 'c') for r in rows)
+
+# Test that the system_auth keyspace can't be dropped, and that the session
+# keeps working after the attempt.
+# Translated from scylla-dtest's auth_test.py::TestAuth::test_dropping_keyspace_system_auth_1_node,
+# which only ran on clusters without consistent topology changes, so in
+# practice it no longer ran.
+def test_drop_system_auth_keyspace(cql):
+    with pytest.raises(Unauthorized, match=re.escape('Cannot DROP <keyspace system_auth>')):
+        cql.execute('DROP KEYSPACE system_auth')
+    assert list(cql.execute("SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = 'system_auth'")) == [('system_auth',)]
+    with new_cql(cql) as cql2:
+        assert list(cql2.execute("SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = 'system_auth'")) == [('system_auth',)]
+
+# Test that the driver's metadata shows the replication strategy of a
+# keyspace using EverywhereStrategy, which is a Scylla extension.
+# Translated from scylla-dtest's schema_everywhere_test.py::TestSchemaReplicationEverywhereStrategy::test_replication_strategy_name_in_description.
+def test_everywhere_strategy_name_in_driver_metadata(cql, scylla_only):
+    with new_test_keyspace(cql, "WITH REPLICATION = {'class': 'EverywhereStrategy'} AND TABLETS = {'enabled': false}") as ks:
+        cql.cluster.refresh_keyspace_metadata(ks)
+        assert cql.cluster.metadata.keyspaces[ks].replication_strategy.name == 'EverywhereStrategy'
+
+# Test that deleted partitions don't appear as "ghosts" (empty rows) in a
+# full scan - when the partitions and their deletions are in the memtable,
+# in different sstables, and after a compaction which purges the
+# tombstones. This test is scylla_only because it uses the tombstone_gc
+# option, and the clock fixture to make the tombstones purgeable.
+# Translated from scylla-dtest's range_ghost_test.py::TestRangeGhosts::test_ghosts,
+# which used 1000 partitions instead of 20, and slept a second instead of
+# moving the clock.
+def test_no_range_ghosts(cql, test_keyspace, clock, scylla_only):
+    with new_test_table(cql, test_keyspace, 'key varchar PRIMARY KEY, c text',
+            "WITH tombstone_gc = {'mode': 'immediate'} AND caching = {'enabled': false}") as table:
+        rows = 20
+        for i in range(rows):
+            cql.execute(f"UPDATE {table} SET c = 'value' WHERE key = 'k{i}'")
+        assert len(list(cql.execute(f'SELECT * FROM {table}'))) == rows
+        nodetool.flush(cql, table)
+        for i in range(rows // 2):
+            cql.execute(f"DELETE FROM {table} WHERE key = 'k{i}'")
+        assert len(list(cql.execute(f'SELECT * FROM {table}'))) == rows // 2
+        nodetool.flush(cql, table)
+        # Make sure the tombstones are purgeable
+        clock.jump(1)
+        nodetool.compact(cql, table)
+        assert sorted(cql.execute(f'SELECT * FROM {table}')) == [(f'k{i}', 'value') for i in sorted(range(rows // 2, rows), key=lambda i: f'k{i}')]
+
+# Test that incompressible (random) data written to a table compressed with
+# DeflateCompressor can be read back from the sstable (CASSANDRA-3370).
+# Scylla still requires the old name "sstable_compression" for the
+# compression class option (#8948), while Cassandra requires the new name
+# "class", so the test uses the name the server requires.
+# Translated from scylla-dtest's sstable_generation_loading_test.py::TestSSTableGenerationAndLoading::test_incompressible_data_in_compressed_table,
+# which only checked that the read returned some rows.
+def test_incompressible_data_deflate(cql, test_keyspace):
+    option = 'sstable_compression' if is_scylla(cql) else 'class'
+    with new_test_table(cql, test_keyspace, 'key varchar, c varchar, v varchar, PRIMARY KEY (key, c)',
+            f"WITH compression = {{'{option}': 'DeflateCompressor'}}") as table:
+        values = {str(col): os.urandom(5000).hex() for col in range(10)}
+        for c, v in values.items():
+            cql.execute(f"UPDATE {table} SET v = '{v}' WHERE key = '0' AND c = '{c}'")
+        nodetool.flush(cql, table)
+        assert list(cql.execute(f"SELECT c, v FROM {table} WHERE key = '0' AND c < '8'")) == [(c, values[c]) for c in sorted(values) if c < '8']
