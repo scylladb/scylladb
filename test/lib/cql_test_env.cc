@@ -231,15 +231,15 @@ private:
         }
     };
     sharded<core_local_state> _core_local;
-private:
-    cql3::dialect test_dialect() {
+public:
+    virtual cql3::dialect test_dialect() override {
         return cql3::dialect{
             .duplicate_bind_variable_names_refer_to_same_variable = _db.local().get_config().cql_duplicate_bind_variable_names_refer_to_same_variable(),
             .max_relations_in_where_clause = _db.local().get_config().max_relations_in_where_clause(),
             .in_bind_variable_name_uses_uppercase_operator = _db.local().get_config().cql_in_bind_variable_name_uses_uppercase_operator(),
         };
     }
-
+private:
     auto make_query_state() {
         // Only fall back to the default keyspace if the client state doesn't
         // have one yet, otherwise a keyspace selected with USE would be reset
@@ -339,7 +339,8 @@ public:
 
     virtual future<utils::chunked_vector<mutation>> get_modification_mutations(const sstring& text) override {
         auto qs = make_query_state();
-        auto cql_stmt = local_qp().get_statement(text, qs->get_client_state(), test_dialect())->statement;
+        auto cql_stmt = local_qp().get_statement(text, qs->get_client_state(), test_dialect(),
+                cql3::query_processor::prepared_for_driver::no)->statement;
         auto modif_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(std::move(cql_stmt));
         if (!modif_stmt) {
             throw std::runtime_error(format("get_stmt_mutations: not a modification statement: {}", text));
@@ -1361,7 +1362,8 @@ public:
 
         std::vector<batch_statement::single_statement> modifications;
         std::ranges::transform(queries, back_inserter(modifications), [this](const auto& query) {
-            auto stmt = local_qp().get_statement(query, _core_local.local().client_state, test_dialect());
+            auto stmt = local_qp().get_statement(query, _core_local.local().client_state, test_dialect(),
+                    cql3::query_processor::prepared_for_driver::no);
             if (!dynamic_cast<modification_statement*>(stmt->statement.get())) {
                 throw exceptions::invalid_request_exception(
                     "Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");

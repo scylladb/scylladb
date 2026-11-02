@@ -654,7 +654,8 @@ future<::shared_ptr<result_message>>
 query_processor::execute_direct_without_checking_exception_message(utils::chunked_string_view query_string, service::query_state& query_state, dialect d, query_options& options) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
-    auto p = get_statement(query_string, query_state.get_client_state(), d, pinned_plan_from_paging_state(options.get_paging_state()));
+    auto p = get_statement(query_string, query_state.get_client_state(), d, prepared_for_driver::no,
+            pinned_plan_from_paging_state(options.get_paging_state()));
     return execute_direct_statement_without_checking_exception_message(std::move(p), query_state, options);
 }
 
@@ -770,7 +771,7 @@ query_processor::prepare(utils::chunked_string query_string, const service::clie
     try {
         auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
         auto prep_entry = co_await _prepared_cache.get_pinned(key, [this, &query_string, &client_state, d] {
-                auto prepared = get_statement(query_string, client_state, d);
+                auto prepared = get_statement(query_string, client_state, d, prepared_for_driver::yes);
                 prepared->calculate_metadata_id();
                 auto bound_terms = prepared->statement->get_bound_terms();
                 if (bound_terms > std::numeric_limits<uint16_t>::max()) {
@@ -813,7 +814,7 @@ prepared_cache_key_type query_processor::compute_id(
 }
 
 std::unique_ptr<prepared_statement>
-query_processor::get_statement(utils::chunked_string_view query, const service::client_state& client_state, dialect d, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
+query_processor::get_statement(utils::chunked_string_view query, const service::client_state& client_state, dialect d, prepared_for_driver for_driver, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
     // Measuring allocation cost requires that no yield points exist
     // between bytes_before and bytes_after. It needs fixing if this
     // function is ever futurized.
@@ -836,6 +837,8 @@ query_processor::get_statement(utils::chunked_string_view query, const service::
     }
     ++_stats.prepare_invocations;
     auto p = statement->prepare(_db, _cql_stats, _cql_config);
+    // The driver gets the partition key bind indices in the PREPARED metadata.
+    p->statement->_may_use_token_aware_routing = for_driver && !p->partition_key_bind_indices.empty();
     p->statement->raw_cql_statement = utils::chunked_string(query);
     auto audit_info = p->statement->get_audit_info();
     if (audit_info) {

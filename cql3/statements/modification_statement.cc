@@ -339,7 +339,6 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     //
     // Prepare context is used to keep track of such AST nodes and also modifies
     // them to include an id, that will be used for caching the results.
-    prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
     return prepared_stmt;
 }
 

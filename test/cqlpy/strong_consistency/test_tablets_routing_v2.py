@@ -183,9 +183,21 @@ def test_no_routing_information_for_range_scan(cql, connect, test_keyspace):
 
 # The partition key is a literal, so the driver can't compute the token, and the
 # server ignores the tablet version block.
-def test_no_routing_information_for_literal_partition_key(cql, connect, test_keyspace):
-    assert_no_routing_information(cql, connect, test_keyspace,
-                                  "INSERT INTO {} (pk, ck, v) VALUES (1, ?, ?)", [1, 1])
+@pytest.mark.parametrize("query,values", [
+    pytest.param("INSERT INTO {} (pk, ck, v) VALUES (1, ?, ?)", [1, 1], id="insert"),
+    pytest.param("SELECT * FROM {} WHERE pk = 1 AND ck = ?", [1], id="select"),
+])
+def test_no_routing_information_for_literal_partition_key(cql, connect, test_keyspace, query, values):
+    assert_no_routing_information(cql, connect, test_keyspace, query, values)
+
+
+# The same goes for a strongly consistent table.
+@pytest.mark.parametrize("query,values", [
+    pytest.param("INSERT INTO {} (pk, ck, v) VALUES (1, ?, ?)", [1, 1], id="insert"),
+    pytest.param("SELECT * FROM {} WHERE pk = 1 AND ck = ?", [1], id="select"),
+])
+def test_no_routing_information_for_literal_partition_key_strongly_consistent(cql, connect, sc_keyspace, query, values):
+    assert_no_routing_information(cql, connect, sc_keyspace, query, values)
 
 
 # A page continues with the query plan of the first page. If the plan of the
