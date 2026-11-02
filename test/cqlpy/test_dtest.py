@@ -679,3 +679,22 @@ def test_cql_time_type(cql, test_keyspace):
         for v in ['14:53:12', '14:53:12.1234', '14:53:12.123456789']:
             cql.execute(f"INSERT INTO {table} (t) VALUES ('{v}')")
         assert {str(r.t) for r in cql.execute(f'SELECT * FROM {table}')} == {'14:53:12.000000000', '14:53:12.123400000', '14:53:12.123456789'}
+
+# Test that the deprecated functions dateOf() and unixTimestampOf() return
+# null when their argument, a timeuuid column, is null. The same check for
+# their replacements, toTimestamp() and toUnixTimestamp(), is in
+# cassandra_tests/validation/miscellaneous/overflow_test.py::testFunctionWithNull,
+# but Scylla implements dateOf() and unixTimestampOf() separately, so they
+# need their own test.
+# Cassandra removed these deprecated functions in version 5.0 (this test
+# passes on Cassandra 4.0), but Scylla still supports them, for backward
+# compatibility, so this test is scylla_only.
+# Translated from scylla-dtest's
+# cql_additional_tests.py::TestCQL::test_function_with_null, which
+# originally came from Cassandra's old Python cql_tests.py
+# (function_with_null_test). The dtest checked only dateOf(), and this test
+# also checks unixTimestampOf().
+def test_function_with_null(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, t timeuuid') as table:
+        cql.execute(f'INSERT INTO {table} (k) VALUES (0)')
+        assert list(cql.execute(f'SELECT dateOf(t), unixTimestampOf(t) FROM {table} WHERE k = 0')) == [(None, None)]
