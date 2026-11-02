@@ -491,3 +491,12 @@ class ScyllaMetrics:
                     if key == label:
                         values.add(val.strip('"'))
         return values
+
+# The number of pages so far that re-derived their statement with the query
+# plan their paging state pins. Tests watch it to tell a real exercise of
+# that code from a vacuous pass. 0 on Cassandra.
+def paging_plan_rederivations(cql):
+    if not is_scylla(cql):
+        return 0
+    count = ScyllaMetrics.query(cql).get('scylla_cql_select_paging_plan_rederivations')
+    return count if count is not None else 0
