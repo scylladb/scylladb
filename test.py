@@ -99,6 +99,7 @@ import treelib
 from scripts import coverage
 from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, DEBUG_MODES
 from test.pylib import coverage_utils
+from test.pylib.runner import drop_disabled_tests
 from test.pylib.util import LogPrefixAdapter, get_configured_modes, palette
 
 launch_time = time.monotonic()
@@ -384,6 +385,10 @@ def run_pytest(options: argparse.Namespace) -> int:
     report_dir =  temp_dir / 'report'
     junit_output_file = report_dir / f'pytest_cpp_{HOST_ID}.xml'
     files_to_run = options.name if options.keep_duplicates else _deduplicate_test_args(options.name)
+    # runner.py treats a custom executable as the "custom_exe" mode.
+    files_to_run = drop_disabled_tests(files_to_run, options.modes or ["custom_exe"])
+    if options.name and not files_to_run:
+        return pytest.ExitCode.NO_TESTS_COLLECTED
     files_to_run = files_to_run or [str(TOP_SRC_DIR / 'test/')]
     args = [
         '--color=yes',
