@@ -30,9 +30,6 @@ from ..util import new_test_table
 EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL"
 PAYLOAD_KEY = "tablets-routing-v2"
 
-CL_QUORUM = 0x0004
-VALUES_FLAG = 0x01
-
 PROTOCOL_ERROR = 0x000A
 
 
@@ -44,28 +41,13 @@ def connect(request, host, scylla_only):
         skip_env("The tests talk to the server over a plain socket")
     port = int(request.config.getoption("--port"))
     with cql_frames.connection(host, port) as sock:
-        response = cql_frames.request(sock, cql_frames.OPTIONS, b'')
-        assert response.opcode == cql_frames.SUPPORTED
-        supported = response.body.read_string_multimap()
+        supported = cql_frames.supported(sock)
     if EXTENSION not in supported:
         skip_env(f"The server doesn't support {EXTENSION}")
 
     def open_connection(negotiate: bool = True):
         return cql_frames.connection(host, port, {EXTENSION: ""} if negotiate else {})
     return open_connection
-
-
-# Sends an EXECUTE request of a prepared statement with the given int values.
-# `block` is the tablet version block, or None to leave it out.
-def execute(sock: socket.socket, statement_id: bytes, values: list[int], block: int | None) -> cql_frames.Response:
-    body = cql_frames.encode_short_bytes(statement_id)
-    body += cql_frames.encode_short(CL_QUORUM)
-    body += cql_frames.encode_byte(VALUES_FLAG)
-    body += cql_frames.encode_short(len(values))
-    body += b''.join(cql_frames.encode_bytes(cql_frames.encode_int(value)) for value in values)
-    if block is not None:
-        body += cql_frames.encode_byte(block)
-    return cql_frames.request(sock, cql_frames.EXECUTE, body)
 
 
 # The tablets-routing-v2 payload: a tuple (first token: bigint, last token:
@@ -111,7 +93,8 @@ def routing_information_of(response: cql_frames.Response) -> RoutingInformation 
 def execute_with_both_blocks(sock: socket.socket, statement_id: bytes, values: list[int]) -> list[RoutingInformation | None]:
     infos: list[RoutingInformation | None] = []
     for block in (0x00, 0x01):
-        infos.append(routing_information_of(execute(sock, statement_id, values, block)))
+        response = cql_frames.execute(sock, statement_id, values, tablet_version_block=block)
+        infos.append(routing_information_of(response))
     return infos
 
 
@@ -136,7 +119,7 @@ def tablet_last_tokens(cql, table: str) -> list[int]:
 def test_execute_without_extension(cql, connect, test_keyspace):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table, connect(negotiate=False) as sock:
         statement_id = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)").query_id
-        assert routing_information_of(execute(sock, statement_id, [1, 1], None)) is None
+        assert routing_information_of(cql_frames.execute(sock, statement_id, [1, 1])) is None
 
 
 # With the extension, the tablet version block is mandatory. The server reads
@@ -145,13 +128,13 @@ def test_execute_without_tablet_version_block(cql, connect, test_keyspace):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table, connect() as sock:
         statement_id = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)").query_id
 
-        response = execute(sock, statement_id, [1, 1], None)
+        response = cql_frames.execute(sock, statement_id, [1, 1])
         assert response.opcode == cql_frames.ERROR
         assert response.body.read_int() == PROTOCOL_ERROR
         assert response.body.read_string() == "truncated frame: expected 1 bytes, length is 0"
 
         # The same request with a block succeeds, so the rest of it is valid.
-        assert execute(sock, statement_id, [1, 1], 0x00).opcode == cql_frames.RESULT
+        assert cql_frames.execute(sock, statement_id, [1, 1], tablet_version_block=0x00).opcode == cql_frames.RESULT
 
 
 # The routing information is about the tablet of the partition the statement
