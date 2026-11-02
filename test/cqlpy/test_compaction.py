@@ -2,9 +2,11 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
+import json
 import os
 import shutil
 import time
+from contextlib import ExitStack
 
 import pytest
 import requests
@@ -546,3 +548,365 @@ def test_disable_autocompaction_allows_reshape(scylla_only, cql, test_keyspace_v
         assert sorted(r.ck for r in cql.execute(f'SELECT ck FROM {table}')) == list(range(flushes))
         assert sstable_count(cql, table) < flushes
         assert not autocompaction_enabled(cql, table)
+
+#############################################################################
+# The following tests were translated from scylla-dtest's
+# compaction_additional_test.py. The tests of TimeWindowCompactionStrategy
+# write all the rows to one partition, so all of a table's sstables are in
+# the same compaction group (shard or tablet), and write them with explicit
+# timestamps in past one-minute time windows.
+#############################################################################
+
+# Return a dict mapping each of the table's sstables to the minimum and
+# maximum write timestamps of the rows in it
+def sstable_timestamps(cql, table):
+    timestamps = {}
+    for r in cql.execute(f'SELECT mutation_source, mutation_fragment_kind, metadata FROM mutation_fragments({table})'):
+        if r.mutation_source.startswith('sstable:') and r.mutation_fragment_kind == 'clustering row':
+            metadata = json.loads(r.metadata)
+            row_timestamps = [metadata[k]['timestamp'] for k in ['marker', 'tombstone'] if metadata.get(k)]
+            row_timestamps += [c['timestamp'] for c in metadata.get('columns', {}).values()]
+            low, high = timestamps.get(r.mutation_source, (min(row_timestamps), max(row_timestamps)))
+            timestamps[r.mutation_source] = (min(low, *row_timestamps), max(high, *row_timestamps))
+    return timestamps
+
+def wait_for_compactions(cql):
+    deadline = time.time() + 60
+    while rest_api.get_request(cql, 'compaction_manager/compactions'):
+        assert time.time() < deadline, 'compactions did not finish'
+        time.sleep(0.01)
+
+# The start, in seconds, of a one-minute time window ten minutes ago
+def past_window_start():
+    return (int(time.time()) // 60 - 10) * 60
+
+# Test that when a memtable has both rows and the deletions of these rows,
+# the sstable which flushing it writes has only the deletions.
+# Translated from scylla-dtest's compaction_additional_test.py::TestCompactionAdditional::test_compact_tombstones_when_memtable_flush_one_node.
+def test_flush_drops_deleted_rows(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'i int PRIMARY KEY, t text') as table:
+        for i in range(10):
+            cql.execute(f"INSERT INTO {table} (i, t) VALUES ({i}, 'hello')")
+        for i in range(3):
+            cql.execute(f'DELETE FROM {table} WHERE i = {i}')
+        nodetool.flush(cql, table)
+        deleted = set()
+        rows = set()
+        for r in cql.execute(f'SELECT * FROM mutation_fragments({table})'):
+            if r.mutation_source.startswith('sstable:'):
+                if r.mutation_fragment_kind == 'partition start' and 'deletion_time' in r.metadata:
+                    deleted.add(r.i)
+                elif r.mutation_fragment_kind == 'clustering row':
+                    rows.add(r.i)
+        assert deleted == {0, 1, 2}
+        assert rows == set(range(3, 10))
+        assert sorted(r.i for r in cql.execute(f'SELECT i FROM {table}')) == list(range(3, 10))
+
+# Test that after a major compaction of a table with TimeWindowCompactionStrategy,
+# writing data in newer time windows doesn't compact the sstables of the
+# older windows again.
+# Translated from scylla-dtest's compaction_additional_test.py::TestCompactionAdditional::test_compact_data_by_time_window,
+# which, like this test, used millisecond timestamps.
+def test_twcs_old_windows_not_compacted_again(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v text, PRIMARY KEY (p, c)',
+                        "WITH compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': 1, "
+                        "'compaction_window_unit': 'MINUTES', 'timestamp_resolution': 'MILLISECONDS'}") as table:
+        first_window_ms = past_window_start() * 1000
+        # Each window has its own rows, so a compaction which merges windows
+        # doesn't make the older windows' versions of the rows disappear.
+        def write_window(window):
+            for _ in range(7):
+                for c in range(window * 10, window * 10 + 10):
+                    cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (0, {c}, 'hello') USING TIMESTAMP {first_window_ms + window * 60000}")
+                nodetool.flush(cql, table)
+        for window in range(4):
+            write_window(window)
+        nodetool.compact(cql, table)
+        sstables = set(sstable_timestamps(cql, table))
+        assert len(sstables) == 4
+        for window in range(4, 6):
+            write_window(window)
+        wait_for_compactions(cql)
+        assert sstables <= set(sstable_timestamps(cql, table))
+
+# Test that major compaction of a table with TimeWindowCompactionStrategy
+# compacts the sstables of each time window into one sstable, and doesn't
+# merge different windows.
+# Translated from scylla-dtest's compaction_additional_test.py::TestCompactionAdditional::test_major_compaction_with_several_timewindows,
+# which wrote many partitions, so it could only check that each window had
+# at most one sstable per shard. This test writes one partition, so it
+# checks that each window has exactly one sstable.
+def test_twcs_major_compaction_per_window(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v text, PRIMARY KEY (p, c)',
+                        "WITH compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': 1, "
+                        "'compaction_window_unit': 'MINUTES', 'min_threshold': 7, 'expired_sstable_check_frequency_seconds': 60}") as table:
+        first_window = past_window_start()
+        windows = 3
+        for window in range(windows):
+            # More flushes than min_threshold. Each window has its own rows,
+            # which are written again in several flushes in the window.
+            for flush in range(8):
+                timestamp = (first_window + window * 60 + flush * 5) * 1000000
+                for c in range(window * 100 + flush * 5, window * 100 + flush * 5 + 10):
+                    cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (0, {c}, 'hello') USING TIMESTAMP {timestamp}")
+                nodetool.flush(cql, table)
+        def sstable_windows():
+            return {sstable: (low // 60000000, high // 60000000) for sstable, (low, high) in sstable_timestamps(cql, table).items()}
+        expected_windows = {first_window // 60 + window for window in range(windows)}
+        # Check that no sstable has data of more than one window
+        assert all(low == high for low, high in sstable_windows().values())
+        assert {low for low, high in sstable_windows().values()} == expected_windows
+        nodetool.compact(cql, table)
+        assert sorted(low for low, high in sstable_windows().values()) == sorted(expected_windows)
+        assert all(low == high for low, high in sstable_windows().values())
+
+# Test that compaction of a table with TimeWindowCompactionStrategy removes
+# sstables whose data has all expired (by the table's default TTL), but only
+# when a compaction is triggered (here, by writing and flushing new data).
+# Translated from scylla-dtest's compaction_additional_test.py::TestCompactionAdditional::test_compaction_removes_ttld_data_by_time_windows.
+# The dtest waited for the 20-second TTL to pass; this test moves the
+# server's clock instead.
+def test_twcs_removes_expired_sstables(scylla_only, cql, test_keyspace, clock):
+    # A TTL long enough that nothing expires before the clock jumps past it
+    ttl = clock.ttl
+    gc_grace = 1
+    with new_test_table(cql, test_keyspace, 'p int, c int, v text, PRIMARY KEY (p, c)',
+                        f"WITH default_time_to_live = {ttl} AND gc_grace_seconds = {gc_grace} "
+                        "AND tombstone_gc = {'mode': 'immediate'} AND compaction = {'class': 'TimeWindowCompactionStrategy', "
+                        "'compaction_window_size': 1, 'compaction_window_unit': 'MINUTES', 'expired_sstable_check_frequency_seconds': 1}") as table:
+        first_window = past_window_start()
+        # 11 flushes, 15 seconds apart, span 3 one-minute time windows
+        for flush in range(11):
+            timestamp = (first_window + flush * 15) * 1000000
+            for c in range(10):
+                cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (0, {c}, 'hello') USING TIMESTAMP {timestamp}")
+            nodetool.flush(cql, table)
+        wait_for_compactions(cql)
+        sstables = set(sstable_timestamps(cql, table))
+        assert sstables
+        clock.jump(ttl + gc_grace + 2)
+        # Check that the expired sstables remain until a compaction is triggered
+        wait_for_compactions(cql)
+        assert set(sstable_timestamps(cql, table)) == sstables
+        # Check that the next compaction removes the expired sstables. Like
+        # compact_purging_expired_tombstones() above, we first flush all
+        # tables, to free the commitlog segments which have the table's data.
+        nodetool.flush_all(cql)
+        cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (1, 0, 'hello')")
+        nodetool.flush(cql, table)
+        wait_for_compactions(cql)
+        assert not (set(sstable_timestamps(cql, table)) & sstables)
+        # Check that only the new row, which didn't expire, is left
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(1, 0, 'hello')]
+
+# Test that major compaction compacts the smaller tables first: Each of
+# the three tables, of very different sizes, has one partition - with the
+# same key, in a keyspace without tablets, so all the tables' data is on the
+# same shard. The ids of the compactions in system.compaction_history are
+# time UUIDs taken when each compaction starts, so they give the order in
+# which the tables were compacted.
+# Translated from scylla-dtest's compaction_additional_test.py::TestCompactionAdditional::test_major_compaction_processes_tables_in_order_by_size,
+# which compared the tables' last compaction times, in milliseconds, and
+# sorted ties by the tables' sizes - so it passed if the tables were
+# compacted in the same millisecond, whatever their order.
+@pytest.mark.parametrize('sizes', [(100, 10000, 100000), (100, 100000, 10000), (10000, 100, 100000),
+                                   (10000, 100000, 100), (100000, 100, 10000), (100000, 10000, 100)],
+                         ids=lambda sizes: '-'.join(str(size) for size in sizes))
+def test_major_compaction_order_by_table_size(scylla_only, cql, has_tablets, sizes):
+    tablets = " AND tablets = {'enabled': false}" if has_tablets else ''
+    with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}" + tablets) as ks, \
+         ExitStack() as stack:
+        tables = [stack.enter_context(new_test_table(cql, ks, 'p int PRIMARY KEY, v blob')) for _ in sizes]
+        for table, size in zip(tables, sizes):
+            cql.execute(f'INSERT INTO {table} (p, v) VALUES (0, ?)'.replace('?', '0x' + os.urandom(size).hex()))
+            nodetool.flush(cql, table)
+        nodetool.compact_keyspace(cql, ks)
+        history = sorted(cql.execute(f"SELECT id, columnfamily_name, shard_id FROM system.compaction_history WHERE keyspace_name = '{ks}' ALLOW FILTERING"),
+                         key=lambda r: r.id.time)
+        assert len({r.shard_id for r in history}) == 1
+        assert [r.columnfamily_name for r in history] == [table.split('.')[1] for size, table in sorted(zip(sizes, tables))]
+
+# Test that although compaction of a table with TimeWindowCompactionStrategy
+# normally doesn't merge sstables of different time windows, major
+# compaction merges them with a newer sstable which deletes their data.
+# Translated from scylla-dtest's compaction_additional_test.py::TestCompactionAdditional::test_data_from_different_windows_compacted_together.
+def test_twcs_compacts_deleted_data_of_different_windows(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)',
+                        "WITH compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'MINUTES', "
+                        "'compaction_window_size': 1} AND tombstone_gc = {'mode': 'disabled'}") as table:
+        # Each row is in a different time window
+        for ck, timestamp in [(2, 100000000001), (3, 200000000001), (4, 300000000001), (5, 500000000001)]:
+            cql.execute(f'INSERT INTO {table} (pk, ck, v) VALUES (1, {ck}, 1) USING TIMESTAMP {timestamp}')
+        nodetool.flush(cql, table)
+        nodetool.compact(cql, table)
+        assert sstable_count(cql, table) == 4
+        cql.execute(f'DELETE FROM {table} WHERE pk = 1')
+        nodetool.flush(cql, table)
+        nodetool.compact(cql, table)
+        assert sstable_count(cql, table) == 1
+        assert list(cql.execute(f'SELECT * FROM {table}')) == []
+
+# Test that compaction removes data whose TTL expired.
+# Translated from scylla-dtest's compaction_additional_test.py::TestCompactionAdditionalStrategy::test_compaction_removes_ttld_data_after_gc_period,
+# which waited 6 seconds for the 3-second TTL to pass, and didn't check
+# that the data was in the sstables before it expired (it may have
+# expired before it was flushed). This test moves the server's clock.
+@pytest.mark.parametrize('strategy', compaction_strategies)
+def test_compaction_removes_expired_data(scylla_only, cql, test_keyspace, clock, strategy):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val int',
+                        f"WITH compaction = {{'class': '{strategy}'}} AND tombstone_gc = {{'mode': 'immediate'}}") as table:
+        def sstable_keys():
+            return {r.key for r in cql.execute(f'SELECT key, mutation_source, mutation_fragment_kind FROM mutation_fragments({table})')
+                    if r.mutation_source.startswith('sstable:') and r.mutation_fragment_kind == 'partition start'}
+        for key in range(10):
+            cql.execute(f'INSERT INTO {table} (key, val) VALUES ({key}, 1) USING TTL {clock.ttl}')
+        nodetool.flush(cql, table)
+        assert sstable_keys() == set(range(10))
+        clock.jump(clock.ttl + 1)
+        cql.execute(f'INSERT INTO {table} (key, val) VALUES (99, 1)')
+        compact_purging_expired_tombstones(cql, table)
+        assert sstable_keys() == {99}
+
+# The following tests were translated from scylla-dtest's
+# compaction_additional_test.py::TestTimeWindowDataSegregation. They write a
+# time series of one row per second, for several minutes, with
+# TimeWindowCompactionStrategy with one-minute windows. Like the dtests,
+# they use small timestamps (seconds since 1970), and flush every 10 rows.
+
+def new_time_series_table(cql, keyspace, gc_grace_seconds=1800):
+    return new_test_table(cql, keyspace, 'pk int, ck int, v blob, PRIMARY KEY (pk, ck)',
+                          f"WITH default_time_to_live = 1800 AND gc_grace_seconds = {gc_grace_seconds} "
+                          "AND tombstone_gc = {'mode': 'timeout'} AND compaction = {'class': 'TimeWindowCompactionStrategy', "
+                          "'compaction_window_size': 1, 'compaction_window_unit': 'MINUTES'}")
+
+def write_time_series(cql, table, minutes):
+    insert = cql.prepare(f'INSERT INTO {table} (pk, ck, v) VALUES (1, ?, 0x61) USING TIMESTAMP ?')
+    for second in range(minutes * 60):
+        cql.execute(insert, [second, second * 1000000])
+        if second % 10 == 0:
+            nodetool.flush(cql, table)
+
+# Delete rows, given as pairs of the row's second (clustering key) and the
+# deletion's timestamp in seconds, and flush the deletions.
+def delete_time_series_rows(cql, table, deletions):
+    delete = cql.prepare(f'DELETE FROM {table} USING TIMESTAMP ? WHERE pk = 1 AND ck = ?')
+    for second, timestamp_second in deletions:
+        cql.execute(delete, [timestamp_second * 1000000, second])
+    nodetool.flush(cql, table)
+
+# Check that each of the table's sstables has data of only one time window
+def check_sstable_windows(cql, table):
+    for low, high in sstable_timestamps(cql, table).values():
+        assert low // 60000000 == high // 60000000
+
+def time_series_cks(cql, table):
+    return [r.ck for r in cql.execute(f'SELECT ck FROM {table}')]
+
+# Test that after all the rows of the old time windows are deleted, major
+# compaction leaves only the sstable of the deletions.
+# Translated from scylla-dtest's compaction_additional_test.py::TestTimeWindowDataSegregation::test_compact_several_timewindows_after_delete_all_rows_in_old_timewindows.
+def test_twcs_compaction_after_deleting_all_rows(scylla_only, cql, test_keyspace):
+    with new_time_series_table(cql, test_keyspace) as table:
+        write_time_series(cql, table, 5)
+        nodetool.compact(cql, table)
+        check_sstable_windows(cql, table)
+        assert sstable_count(cql, table) == 5
+        # Delete each minute's rows with timestamps in the sixth minute
+        delete_time_series_rows(cql, table, [(ck, 300 + minute * 12) for minute in range(5) for ck in range(minute * 60, minute * 60 + 60)])
+        assert sstable_count(cql, table) == 6
+        nodetool.compact(cql, table)
+        check_sstable_windows(cql, table)
+        assert sstable_count(cql, table) == 1
+        assert time_series_cks(cql, table) == []
+
+# Test that after some of the rows of each old time window are deleted,
+# major compaction keeps the sstables of the old windows (without the
+# deleted rows), and the sstable of the deletions.
+# Translated from scylla-dtest's compaction_additional_test.py::TestTimeWindowDataSegregation::test_compact_several_timewindows_after_delete_several_rows_per_timewindow,
+# which wrote 4 partitions instead of one.
+def test_twcs_compaction_after_deleting_some_rows(scylla_only, cql, test_keyspace):
+    with new_time_series_table(cql, test_keyspace) as table:
+        write_time_series(cql, table, 5)
+        nodetool.compact(cql, table)
+        assert sstable_count(cql, table) == 5
+        deleted = [ck for minute in range(5) for ck in range(minute * 60, minute * 60 + 20)]
+        delete_time_series_rows(cql, table, [(ck, 300) for ck in deleted])
+        assert sstable_count(cql, table) == 6
+        nodetool.compact(cql, table)
+        check_sstable_windows(cql, table)
+        assert sstable_count(cql, table) == 6
+        assert time_series_cks(cql, table) == sorted(set(range(300)) - set(deleted))
+
+# Test that after all the rows of the first time window are deleted, major
+# compaction removes that window's sstable, and keeps the other windows'
+# sstables and the sstable of the deletions.
+# Translated from scylla-dtest's compaction_additional_test.py::TestTimeWindowDataSegregation::test_compact_several_timewindows_after_delete_rows_in_first_timewindow,
+# which wrote 5 partitions instead of one.
+def test_twcs_compaction_after_deleting_first_window(scylla_only, cql, test_keyspace):
+    with new_time_series_table(cql, test_keyspace) as table:
+        write_time_series(cql, table, 5)
+        nodetool.compact(cql, table)
+        assert sstable_count(cql, table) == 5
+        delete_time_series_rows(cql, table, [(ck, 300) for ck in range(60)])
+        assert sstable_count(cql, table) == 6
+        nodetool.compact(cql, table)
+        check_sstable_windows(cql, table)
+        assert sstable_count(cql, table) == 5
+        assert time_series_cks(cql, table) == list(range(60, 300))
+
+# Test that major compaction drops rows of an old time window which a newer
+# sstable deletes, keeps the row tombstones until gc_grace_seconds pass, and
+# then purges them.
+# Translated from scylla-dtest's compaction_additional_test.py::TestTimeWindowDataSegregation::test_compaction_remove_deleted_rows_in_previous_time_window.
+# The dtest checked the sstables for clustering rows of the deleted keys,
+# which didn't distinguish between live rows and row tombstones, and waited
+# 15 seconds for gc_grace_seconds to pass; this test moves the server's
+# clock instead.
+def test_twcs_compaction_of_deleted_rows_in_old_window(scylla_only, cql, test_keyspace, clock):
+    gc_grace_seconds = 15
+    with new_time_series_table(cql, test_keyspace, gc_grace_seconds) as table:
+        def sstable_rows():
+            live, deleted = set(), set()
+            for r in cql.execute(f'SELECT ck, mutation_source, mutation_fragment_kind, metadata FROM mutation_fragments({table})'):
+                if r.mutation_source.startswith('sstable:') and r.mutation_fragment_kind == 'clustering row':
+                    (deleted if json.loads(r.metadata).get('tombstone') else live).add(r.ck)
+            return live, deleted
+        write_time_series(cql, table, 1)
+        nodetool.compact(cql, table)
+        assert sstable_count(cql, table) == 1
+        delete_time_series_rows(cql, table, [(ck, 60) for ck in range(20)])
+        assert sstable_count(cql, table) == 2
+        assert sstable_rows() == (set(range(60)), set(range(20)))
+        # Check that compaction drops the deleted rows, but keeps the
+        # tombstones before gc_grace_seconds pass
+        nodetool.compact(cql, table)
+        check_sstable_windows(cql, table)
+        assert sstable_count(cql, table) == 2
+        assert sstable_rows() == (set(range(20, 60)), set(range(20)))
+        assert time_series_cks(cql, table) == list(range(20, 60))
+        # Check that compaction after gc_grace_seconds pass purges the tombstones
+        clock.jump(gc_grace_seconds + 1)
+        compact_purging_expired_tombstones(cql, table)
+        assert sstable_count(cql, table) == 1
+        assert sstable_rows() == (set(range(20, 60)), set())
+
+# Test that validation (scrub in VALIDATE mode) of a table's valid sstables
+# reports that they are valid, and doesn't change them.
+# Translated from scylla-dtest's compaction_additional_test.py::TestValidationCompaction::test_validation_compaction_with_valid_sstable,
+# which checked the log message that the sstables are valid.
+def test_scrub_validate_valid_sstables(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val text') as table:
+        for key in range(100):
+            cql.execute(f"INSERT INTO {table} (key, val) VALUES ({key}, 'hello')")
+        nodetool.flush(cql, table)
+        before = set(sstable_timestamps(cql, table))
+        assert before
+        ks, cf = table.split('.')
+        # Scrub takes a "pre-scrub" snapshot unless asked not to, and the
+        # snapshot would keep the table's directory after the table is dropped
+        response = requests.get(f'{nodetool.rest_api_url(cql)}/storage_service/keyspace_scrub/{ks}',
+                                params={'cf': cf, 'scrub_mode': 'VALIDATE', 'disable_snapshot': 'true'})
+        response.raise_for_status()
+        # 0 means that the sstables are valid (3 means validation errors)
+        assert response.json() == 0
+        assert set(sstable_timestamps(cql, table)) == before
