@@ -47,8 +47,172 @@ jobs:
             const branchPrefix = 'branch-';
             const oneWeekAgo = new Date();
             const conflictLabel = 'conflicts';
+            // Backport bot account; it is a regular user, so it is not detected by type === 'Bot'
+            const backportBot = 'scylladbbot';
+            const isHuman = user => user && user.type !== 'Bot' && user.login !== backportBot;
             oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
             console.log(`One week ago: ${oneWeekAgo.toISOString()}`);
+
+            // Per-PR errors are logged and skipped so one bad PR does not stop the others;
+            // they are counted so a run that failed on any PR still ends red
+            let failures = 0;
+
+            // Fetch PR details to check mergeability, re-fetching once if GitHub has not computed it yet.
+            // A known result is cached, so the label cleanup and the reminders fetch (and wait on) each PR once;
+            // a still-null one is not, so the reminders get another chance to read it.
+            const prDetailsCache = new Map();
+            async function getPrDetails(number) {
+              if (prDetailsCache.has(number)) {
+                return prDetailsCache.get(number);
+              }
+              let { data: prDetails } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: number,
+              });
+              console.log(`PR #${number} mergeable: ${prDetails.mergeable}`);
+              if (prDetails.mergeable === null) {
+                console.log(`PR #${number} mergeable is null, waiting 2 seconds and retrying...`);
+                await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2 seconds
+                prDetails = (await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: number,
+                })).data;
+                console.log(`PR #${number} mergeable after retry: ${prDetails.mergeable}`);
+              }
+              if (prDetails.mergeable !== null) {
+                prDetailsCache.set(number, prDetails);
+              }
+              return prDetails;
+            }
+
+            // Check whether the PR may still have leftover conflict markers (<<<<<<<, |||||||, ======= or >>>>>>>).
+            // GitHub omits the patch of large and binary files, so those are checked in full at the
+            // PR head. The files API lists at most 3000 files, so a PR at that limit counts as having
+            // markers, since the scan can't rule them out.
+            async function hasConflictMarkers(pr) {
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100,
+              });
+              if (files.length >= 3000) {
+                return true;
+              }
+              const addedMarkerRe = /^\+(<{7}|\|{7}|={7}|>{7})(\s|$)/m;
+              const markerRe = /^(<{7}|\|{7}|={7}|>{7})(\s|$)/m;
+              for (const f of files) {
+                if (f.patch) {
+                  if (addedMarkerRe.test(f.patch)) {
+                    return true;
+                  }
+                  continue;
+                }
+                // No patch and no changed lines: a rename, a mode change or a binary file adds no markers
+                if (f.status === 'removed' || f.changes === 0) {
+                  continue;
+                }
+                // Read from the base repo: it keeps the PR head commit even when the fork was deleted
+                const { data } = await github.rest.repos.getContent({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  path: f.filename,
+                  ref: pr.head.sha,
+                  mediaType: { format: 'raw' },
+                });
+                const content = typeof data === 'string' ? data : Buffer.from(data).toString('utf8');
+                if (markerRe.test(content)) {
+                  return true;
+                }
+              }
+              return false;
+            }
+
+            // Return who last added the conflicts label, or null if no event records it
+            async function getConflictLabeler(number) {
+              const events = await github.paginate(github.rest.issues.listEvents, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                per_page: 100,
+              });
+              const labeled = events
+                .filter(e => e.event === 'labeled' && e.label?.name === conflictLabel)
+                .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+              return labeled.length ? labeled[labeled.length - 1].actor?.login ?? null : null;
+            }
+
+            // Remove the conflicts label from PRs that no longer conflict with their base branch.
+            // Only labels this workflow added (as github-actions[bot]) are removed, as in
+            // scylla-ci-route.yaml. Anyone else may mean something GitHub can't see: the backport
+            // automation (scylladbbot) adds it when a cherry-pick conflicted, which may leave no
+            // markers, and its conflict resolver selects PRs by the label; a person may add it by
+            // hand. Those labels are removed by a person.
+            // Push events only check recent PRs, as the reminders do; the weekly run checks all open PRs.
+            for (const pr of isPushEvent ? recentPrs : prs) {
+              if (!pr.labels.some(label => label.name === conflictLabel)) {
+                continue;
+              }
+              let labeler;
+              try {
+                labeler = await getConflictLabeler(pr.number);
+              } catch (e) {
+                failures++;
+                core.warning(`PR #${pr.number}: failed to look up who added the '${conflictLabel}' label, keeping it: ${e.message}`);
+                continue;
+              }
+              if (labeler !== 'github-actions[bot]') {
+                console.log(`PR #${pr.number} skipped: '${conflictLabel}' label was added by ${labeler ?? 'an unknown actor'}, keeping it`);
+                continue;
+              }
+              try {
+                const prDetails = await getPrDetails(pr.number);
+                if (prDetails.mergeable !== true) {
+                  continue;
+                }
+                // prDetails, not pr: its head SHA matches the files listed now, even after a new push
+                if (await hasConflictMarkers(prDetails)) {
+                  console.log(`PR #${pr.number} is mergeable but may still have conflict markers, keeping '${conflictLabel}' label`);
+                  continue;
+                }
+              } catch (e) {
+                failures++;
+                core.warning(`PR #${pr.number}: failed to check mergeability or conflict markers, keeping '${conflictLabel}' label: ${e.message}`);
+                continue;
+              }
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  name: conflictLabel,
+                });
+                console.log(`Removed '${conflictLabel}' label from PR #${pr.number}`);
+              } catch (e) {
+                // A 404 can mean the label was removed concurrently (another run or a person);
+                // treat it as success only once a re-read confirms the label is gone
+                let gone = false;
+                if (e.status === 404) {
+                  try {
+                    const labels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: pr.number,
+                      per_page: 100,
+                    });
+                    gone = !labels.some(label => label.name === conflictLabel);
+                  } catch (_) {}
+                }
+                if (gone) {
+                  console.log(`'${conflictLabel}' label is already gone from PR #${pr.number}`);
+                } else {
+                  failures++;
+                  core.warning(`PR #${pr.number}: failed to remove '${conflictLabel}' label: ${e.message}`);
+                }
+              }
+            }
 
             for (const pr of recentPrs) {
               console.log(`Checking PR #${pr.number} on base branch '${pr.base.ref}'`);
@@ -64,94 +228,80 @@ jobs:
                 console.log(`PR #${pr.number} skipped: updated within last week`);
                 continue;
               }
-              if (pr.assignee === null) {
-                console.log(`PR #${pr.number} skipped: no assignee`);
-                continue;
-              }
+              try {
+                const prDetails = await getPrDetails(pr.number);
 
-              // Fetch PR details to check mergeability
-              let { data: prDetails } = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: pr.number,
-              });
-              console.log(`PR #${pr.number} mergeable: ${prDetails.mergeable}`);
+                if (prDetails.mergeable === false) {
+                  // pr.labels predates the cleanup above, but the cleanup only removes the label when the
+                  // (cached) details say mergeable, so it is accurate for a conflicting PR
+                  const hasConflictLabel = pr.labels.some(label => label.name === conflictLabel);
+                  console.log(`PR #${pr.number} has conflict label: ${hasConflictLabel}`);
 
-              // Wait and re-fetch if mergeable is null
-              if (prDetails.mergeable === null) {
-                console.log(`PR #${pr.number} mergeable is null, waiting 2 seconds and retrying...`);
-                await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2 seconds
-                prDetails = (await github.rest.pulls.get({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: pr.number,
-                })).data;
-                console.log(`PR #${pr.number} mergeable after retry: ${prDetails.mergeable}`);
-              }
-
-              if (prDetails.mergeable === false) {
-                const hasConflictLabel = pr.labels.some(label => label.name === conflictLabel);
-                console.log(`PR #${pr.number} has conflict label: ${hasConflictLabel}`);
-
-                // Fetch comments to check for existing notifications
-                const comments = await github.paginate(github.rest.issues.listComments, {
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pr.number,
-                  per_page: 100,
-                });
-                
-                // Find last notification comment from the bot
-                const notificationPrefix = `@${pr.assignee.login}, this PR has merge conflicts with the base branch.`;
-                const lastNotification = comments
-                  .filter(c =>
-                    c.user.type === "Bot" &&
-                    c.body.startsWith(notificationPrefix)
-                  )
-                  .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-
-                // Check if we should skip notification based on recent notification
-                let shouldSkipNotification = false;
-                if (lastNotification) {
-                  const lastNotified = new Date(lastNotification.created_at);
-                  if (lastNotified >= oneWeekAgo) {
-                    console.log(`PR #${pr.number} skipped: last notification was less than 1 week ago`);
-                    shouldSkipNotification = true;
+                  // Label every conflicting PR, including bot PRs that get no reminder
+                  if (!hasConflictLabel) {
+                    await github.rest.issues.addLabels({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: pr.number,
+                      labels: [conflictLabel],
+                    });
+                    console.log(`Added 'conflicts' label to PR #${pr.number}`);
                   }
-                }
 
-                // Additional check for push events on draft PRs with conflict labels
-                if (
-                  isPushEvent &&
-                  pr.draft === true &&
-                  hasConflictLabel &&
-                  shouldSkipNotification
-                ) {
-                  continue;
-                }
+                  // Notify the first human assignee, or the PR author when there is none
+                  const recipient = [...(pr.assignees ?? []), pr.user].find(isHuman);
+                  if (!recipient) {
+                    console.log(`PR #${pr.number}: no human assignee or author to notify`);
+                    continue;
+                  }
 
-                if (!hasConflictLabel) {
-                  await github.rest.issues.addLabels({
+                  // Fetch comments to check for existing notifications
+                  const comments = await github.paginate(github.rest.issues.listComments, {
                     owner: context.repo.owner,
                     repo: context.repo.repo,
                     issue_number: pr.number,
-                    labels: [conflictLabel],
+                    per_page: 100,
                   });
-                  console.log(`Added 'conflicts' label to PR #${pr.number}`);
-                }
                 
-                const assignee = pr.assignee.login;
-                if (assignee && !shouldSkipNotification) {
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: pr.number,
-                    body: `@${assignee}, this PR has merge conflicts with the base branch. Please resolve the conflicts so we can merge it.`,
-                  });
-                  console.log(`Notified @${assignee} for PR #${pr.number}`);
+                  // Find last notification comment from the bot, whoever it was addressed to, so a
+                  // change of assignee does not bypass the one-week throttle
+                  const notificationText = 'this PR has merge conflicts with the base branch.';
+                  const notificationPrefix = `@${recipient.login}, ${notificationText}`;
+                  const lastNotification = comments
+                    .filter(c =>
+                      c.user?.type === "Bot" &&
+                      (c.body ?? '').replace(/^@\S+, /, '').startsWith(notificationText)
+                    )
+                    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+
+                  // Check if we should skip notification based on recent notification
+                  let shouldSkipNotification = false;
+                  if (lastNotification) {
+                    const lastNotified = new Date(lastNotification.created_at);
+                    if (lastNotified >= oneWeekAgo) {
+                      console.log(`PR #${pr.number} skipped: last notification was less than 1 week ago`);
+                      shouldSkipNotification = true;
+                    }
+                  }
+
+                  if (!shouldSkipNotification) {
+                    await github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: pr.number,
+                      body: `${notificationPrefix} Please resolve the conflicts so we can merge it.`,
+                    });
+                    console.log(`Notified @${recipient.login} for PR #${pr.number}`);
+                  }
+                } else {
+                  console.log(`PR #${pr.number} is mergeable, no action needed.`);
                 }
-              } else {
-                console.log(`PR #${pr.number} is mergeable, no action needed.`);
+              } catch (e) {
+                failures++;
+                core.warning(`PR #${pr.number}: failed to check for conflicts or notify: ${e.message}`);
               }
             }
             console.log(`Total PRs checked: ${prs.length}`);
+            if (failures > 0) {
+              core.setFailed(`${failures} PR check(s) failed, see the warnings above`);
+            }
