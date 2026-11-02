@@ -175,13 +175,29 @@ class TestParseCurrentConfig:
         )
         assert cfg["chunk_length_kb"] == 4
 
-    def test_default_level(self):
+    @pytest.mark.parametrize("compressor", [
+        "ZstdCompressor",
+        "org.apache.cassandra.io.compress.ZstdCompressor",
+        "ZstdWithDictsCompressor",
+    ])
+    def test_default_zstd_level(self, compressor):
         cfg = ca.parse_current_config(
             {
-                "sstable_compression": "ZstdWithDictsCompressor",
+                "sstable_compression": compressor,
             }
         )
-        assert cfg["level"] == 1
+        assert cfg["level"] == 3
+
+    def test_default_zstd_level_uses_level_3_current_ratio(self):
+        cfg = ca.parse_current_config({"sstable_compression": "ZstdCompressor"})
+        results = [
+            _zstd(4, 1, "none", 0.8),
+            _zstd(4, 3, "none", 0.5),
+            _zstd(4, 3, "future", 0.4),
+        ]
+        summary = ca.generate_summary(results, cfg)
+        assert summary["current"]["ratio"] == 0.5
+        assert summary["best_zstd"]["improvement_pct"] == pytest.approx(20.0)
 
     def test_snappy_compressor(self):
         cfg = ca.parse_current_config(
@@ -212,14 +228,22 @@ class TestParseCurrentConfig:
         )
         assert cfg["chunk_length_kb"] == 4
 
-    def test_invalid_level_defaults_to_1(self):
+    def test_invalid_zstd_level_defaults_to_3(self):
         cfg = ca.parse_current_config(
             {
                 "sstable_compression": "ZstdWithDictsCompressor",
                 "compression_level": "high",
             }
         )
-        assert cfg["level"] == 1
+        assert cfg["level"] == 3
+
+    @pytest.mark.parametrize("level", [-1, 0, 1, 3, 7])
+    def test_explicit_zstd_level(self, level):
+        cfg = ca.parse_current_config({
+            "sstable_compression": "ZstdCompressor",
+            "compression_level": str(level),
+        })
+        assert cfg["level"] == level
 
 
 # ---------------------------------------------------------------------------

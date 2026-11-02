@@ -134,11 +134,13 @@ def parse_current_config(cql_compression_map: dict) -> dict:
     except (ValueError, TypeError):
         chunk_kb = 4
 
-    level_str = cql_compression_map.get("compression_level", "1")
+    # Scylla uses ZSTD_defaultCLevel() (3) when the option is omitted.
+    default_level = 3 if algo in ("ZstdCompressor", "ZstdWithDictsCompressor") else 1
+    level_str = cql_compression_map.get("compression_level", default_level)
     try:
         level = int(level_str)
     except (ValueError, TypeError):
-        level = 1
+        level = default_level
 
     return {
         "algorithm": estimation_algo,
