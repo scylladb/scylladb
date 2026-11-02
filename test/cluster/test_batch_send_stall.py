@@ -13,9 +13,6 @@ from test.cluster.util import new_test_keyspace
 
 # The test asserts on 5 ms stalls, so it only runs in the optimized modes.
 @pytest.mark.skip_mode(mode=['debug', 'sanitize', 'coverage'], reason='instrumented builds stall on their own')
-# Not strict: the fixes come in several commits, and until the last one the
-# test may pass or fail depending on which loops are left.
-@pytest.mark.xfail(strict=False, reason='SCYLLADB-5901: the coordinator handles all partitions of a batch in one task')
 async def test_large_logged_batch_does_not_stall_coordinator(manager: ScyllaClusterManager) -> None:
     """Reproduces SCYLLADB-5901: the coordinator of a logged batch with many
     partitions ran per-partition loops that never yielded: it copied the
