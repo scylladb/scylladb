@@ -607,18 +607,12 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         }
     }
     for (auto id : t.excluded_tablet_nodes) {
-        locator::node* n = tmptr->get_topology().find_node(locator::host_id(id.uuid()));
-        if (n) {
-            n->set_excluded(true);
-        }
+        tmptr->set_node_flag(locator::host_id(id.uuid()), locator::node::flag::excluded, true);
     }
 
     for (auto [node, req] : t.requests) {
         if (req == topology_request::leave || req == topology_request::remove) {
-            locator::node* n = tmptr->get_topology().find_node(locator::host_id(node.uuid()));
-            if (n) {
-                n->set_draining(true);
-            }
+            tmptr->set_node_flag(locator::host_id(node.uuid()), locator::node::flag::draining, true);
         }
     }
 

@@ -219,8 +219,7 @@ static void with_topology(
             for (auto pos : node.vnode_positions) {
                 tokens.insert(dht::bias(pos));
             }
-            tm.get_topology().add_or_update_endpoint(node.host, node.location,
-                                                     locator::node::state::normal, shard_count);
+            tm.update_topology(node.host, node.location, locator::node::state::normal, shard_count);
             co_await tm.update_normal_tokens(tokens, node.host);
         }
     }).get();

@@ -357,3 +357,77 @@ SEASTAR_THREAD_TEST_CASE(test_raw_token) {
     BOOST_REQUIRE(rt1 < t2);
     BOOST_REQUIRE(rt1 < dht::maximum_token());
 }
+
+// get_datacenter_token_owners() and get_datacenter_racks_token_owners()
+// are cached by token_metadata. Verify that the caches are invalidated
+// by the token_metadata mutators that can change them, and are not
+// carried over stale by cloning.
+SEASTAR_THREAD_TEST_CASE(test_datacenter_token_owners_track_mutations) {
+    const auto e1_id = gen_id(1);
+    const auto e2_id = gen_id(2);
+    const auto e3_id = gen_id(3);
+    const auto t1 = dht::token::from_int64(10);
+    const auto t2 = dht::token::from_int64(20);
+    const auto t3 = dht::token::from_int64(30);
+    const endpoint_dc_rack dc1_rack1{"dc1", "rack1"};
+    const endpoint_dc_rack dc1_rack2{"dc1", "rack2"};
+    const endpoint_dc_rack dc2_rack1{"dc2", "rack1"};
+    const endpoint_dc_rack dc2_rack2{"dc2", "rack2"};
+
+    using dc_owners_map = std::unordered_map<sstring, std::unordered_set<host_id>>;
+    using dc_racks_owners_map = std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>;
+
+    semaphore sem(1);
+    auto tm_cfg = create_token_metadata_config(e1_id);
+    shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto stop_stm = deferred_stop(stm);
+    auto tmptr = stm.make_token_metadata_ptr();
+    auto& tm = *tmptr;
+
+    tm.update_topology(e1_id, dc1_rack1, node::state::normal);
+    tm.update_topology(e2_id, dc1_rack2, node::state::normal);
+    tm.update_normal_tokens({t1}, e1_id).get();
+    tm.update_normal_tokens({t2}, e2_id).get();
+
+    BOOST_REQUIRE(tm.get_datacenter_token_owners() == (dc_owners_map{{"dc1", {e1_id, e2_id}}}));
+    BOOST_REQUIRE(tm.get_datacenter_racks_token_owners() == (dc_racks_owners_map{{"dc1", {{"rack1", {e1_id}}, {"rack2", {e2_id}}}}}));
+
+    // A node that owns no tokens is not a token owner.
+    tm.update_topology(e3_id, dc2_rack1, node::state::normal);
+    BOOST_REQUIRE(tm.get_datacenter_token_owners() == (dc_owners_map{{"dc1", {e1_id, e2_id}}}));
+
+    // Until it gets tokens.
+    tm.update_normal_tokens({t3}, e3_id).get();
+    BOOST_REQUIRE(tm.get_datacenter_token_owners() == (dc_owners_map{{"dc1", {e1_id, e2_id}}, {"dc2", {e3_id}}}));
+    BOOST_REQUIRE(tm.get_datacenter_racks_token_owners() == (dc_racks_owners_map{
+            {"dc1", {{"rack1", {e1_id}}, {"rack2", {e2_id}}}},
+            {"dc2", {{"rack1", {e3_id}}}}}));
+
+    // Moving a token owner to another DC/rack via update_topology().
+    tm.update_topology(e2_id, dc2_rack2, std::nullopt);
+    BOOST_REQUIRE(tm.get_datacenter_token_owners() == (dc_owners_map{{"dc1", {e1_id}}, {"dc2", {e2_id, e3_id}}}));
+    BOOST_REQUIRE(tm.get_datacenter_racks_token_owners() == (dc_racks_owners_map{
+            {"dc1", {{"rack1", {e1_id}}}},
+            {"dc2", {{"rack1", {e3_id}}, {"rack2", {e2_id}}}}}));
+
+    // Moving another token owner.
+    tm.update_topology(e1_id, dc2_rack1);
+    BOOST_REQUIRE(tm.get_datacenter_token_owners() == (dc_owners_map{{"dc2", {e1_id, e2_id, e3_id}}}));
+    BOOST_REQUIRE(tm.get_datacenter_racks_token_owners() == (dc_racks_owners_map{
+            {"dc2", {{"rack1", {e1_id, e3_id}}, {"rack2", {e2_id}}}}}));
+
+    // A clone sees the same owners.
+    auto clone = tm.clone_async().get();
+    BOOST_REQUIRE(clone.get_datacenter_token_owners() == tm.get_datacenter_token_owners());
+    BOOST_REQUIRE(clone.get_datacenter_racks_token_owners() == tm.get_datacenter_racks_token_owners());
+
+    // Removing a token owner.
+    tm.remove_endpoint(e3_id);
+    BOOST_REQUIRE(tm.get_datacenter_token_owners() == (dc_owners_map{{"dc2", {e1_id, e2_id}}}));
+    BOOST_REQUIRE(tm.get_datacenter_racks_token_owners() == (dc_racks_owners_map{
+            {"dc2", {{"rack1", {e1_id}}, {"rack2", {e2_id}}}}}));
+
+    // Mutating the original does not affect the clone.
+    BOOST_REQUIRE(clone.get_datacenter_token_owners() == (dc_owners_map{{"dc2", {e1_id, e2_id, e3_id}}}));
+    clone.clear_gently().get();
+}

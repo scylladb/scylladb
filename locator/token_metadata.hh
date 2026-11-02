@@ -221,6 +221,15 @@ public:
     void update_topology(host_id ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st = std::nullopt,
                          std::optional<shard_id> shard_count = std::nullopt);
     /**
+     * Set a flag of the node with the given host_id, see node::set_flag().
+     * No-op if there is no such node.
+     */
+    void set_node_flag(host_id id, node::flag f, bool value);
+    /**
+     * Records the local host_id in the topology config, see topology::set_host_id_cfg().
+     */
+    void set_host_id_cfg(host_id this_host_id);
+    /**
      * Creates an iterable range of the sorted tokens starting at the token t
      * such that t >= start.
      *
@@ -235,7 +244,6 @@ public:
      */
     std::ranges::subrange<tokens_iterator> ring_range(dht::ring_position_view start) const;
 
-    topology& get_topology();
     const topology& get_topology() const;
     void debug_show() const;
 
@@ -330,11 +338,13 @@ public:
 
     // Returns the map: DC -> host_id of token owners in that DC.
     // If there are no token owners in a DC, it is not present in the result.
-    std::unordered_map<sstring, std::unordered_set<host_id>> get_datacenter_token_owners() const;
+    // The result is cached and remains valid until this token_metadata is mutated.
+    const std::unordered_map<sstring, std::unordered_set<host_id>>& get_datacenter_token_owners() const;
 
     // Returns the map: DC -> (map: rack -> host_id of token owners in that rack).
     // If there are no token owners in a DC/rack, it is not present in the result.
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>
+    // The result is cached and remains valid until this token_metadata is mutated.
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>&
     get_datacenter_racks_token_owners() const;
 
     // Returns the map: DC -> token owners in that DC.
