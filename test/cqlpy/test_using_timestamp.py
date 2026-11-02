@@ -58,6 +58,11 @@ def test_negative_timestamp(cql, table1):
     # in the deletion time of cells.
     with pytest.raises(InvalidRequest, match='bound'):
         cql.execute(write, [p, 1, -2**63])
+    # A negative timestamp can also be given as a literal in the request,
+    # not just as a bound value.
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (k, v) VALUES ({p}, 1) USING TIMESTAMP -42")
+    assert -42 == cql.execute(read, [p]).one()[0]
 
 # As explained above, after issue #5619 Scylla can forbid timestamps higher
 # than the current time in microseconds plus three days. This test will
