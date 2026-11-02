@@ -76,9 +76,9 @@ struct file_manager_config {
 // I6. Recovery opens the files it found before it reads them. Every file a reader asks for is
 //     allocated, and open.
 // I7. Recovery drives the file manager through one recovery object, in three steps: open the found
-//     files, retire the unused files, finish. Recovery reads the found files between the first two
-//     steps. The file manager checks the order of the steps, and allocates no file before the
-//     recovery finished.
+//     files, retire the unused files, finish. Recovery reads the found files from the first step on,
+//     also after the last one. The file manager checks the order of the steps, and allocates no
+//     file before the recovery finished.
 class file_manager {
 public:
     explicit file_manager(file_manager_config cfg);
