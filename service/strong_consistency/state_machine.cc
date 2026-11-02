@@ -95,7 +95,7 @@ public:
                 logger.debug("apply(): waiting for the group0 barrier for tablet {}, group_id={}", _tablet, _group_id);
                 co_await _mm.get_group0_barrier().trigger(false, &_as);
             });
-            // Apply mutations sequentially to preserve linearizability.
+            // Apply the commands sequentially to preserve linearizability.
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
             for (size_t i = 0; i < command.size(); ++i) {
@@ -108,6 +108,16 @@ public:
                     co_await _db.apply_in_memory(m, m.schema()->table(),
                             _persistence.pin_raft_groups_for_apply(command[i]->idx), db::no_timeout);
                     _resize_tracker.mark_resize_phase(_group_id, *marker);
+                    _persistence.note_applied(command[i]->idx);
+                    continue;
+                }
+                if (const auto* tc = std::get_if<truncate_command>(&cmd.change)) {
+                    auto record = co_await raft_groups_storage::load_truncate_record(
+                            _sys_ks.query_processor(), _group_id, this_shard_id());
+                    // Nothing of this entry reaches a memtable, so no pin. The entry is
+                    // reported applied only below, once the record is durable, so its
+                    // segment outlives the record's sync and a crash replays the entry.
+                    co_await apply_truncate_command(_db, _tablet, _group_id, command[i]->idx, *tc, record);
                     _persistence.note_applied(command[i]->idx);
                     continue;
                 }
@@ -300,6 +310,25 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     raft_resize_tracker& resize_tracker)
 {
     return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, resize_tracker);
+}
+
+future<> apply_truncate_command(replica::database& db, locator::global_tablet_id tablet, raft::group_id gid,
+        raft::index_t idx, const truncate_command& tc, truncate_record& record) {
+    if (record.last_truncate_request_id == tc.request_id) {
+        logger.debug("group {}: truncate of tablet {} by request {} was already applied, skipping",
+                gid, tablet, tc.request_id);
+        co_return;
+    }
+    logger.info("group {}: truncating tablet {} at {} by request {}",
+            gid, tablet, tc.truncated_at, tc.request_id);
+    co_await db.find_column_family(tablet.table).truncate_tablet_locally(db, tablet.tablet);
+    record = truncate_record{.truncated_at = tc.truncated_at, .last_truncate_request_id = tc.request_id, .truncate_index = idx,
+            .written_at = record.written_at};
+    // Durable before returning, so no entry after this one is applied until the record is.
+    // Otherwise a crash could leave an sstable of post-truncate writes without the record,
+    // and the replayed entry would delete it.
+    co_await utils::get_local_injector().inject("truncate_apply_before_record", utils::wait_for_message(5min));
+    co_await raft_groups_storage::store_truncate_record(db, gid, this_shard_id(), record);
 }
 
 namespace detail {
