@@ -104,16 +104,25 @@ static void wait_for_alternator(const test_config& c, abort_source& as) {
     throw std::runtime_error("Timed out waiting for alternator port to become ready");
 }
 
-static void delete_alternator_table(http::client& cli) {
+// The GSI workloads use their own table, because the other workloads write
+// attributes of types that the GSI keys don't allow.
+static constexpr auto table_name = "workloads_test";
+static constexpr auto gsi_table_name = "workloads_test_gsi";
+
+static bool is_gsi_workload(const std::string& workload) {
+    return workload == "write_gsi" || workload == "batch_write_gsi";
+}
+
+static void delete_alternator_table(http::client& cli, std::string_view name) {
     try {
-        make_request(cli, "DeleteTable", R"({"TableName": "workloads_test"})").get();
+        make_request(cli, "DeleteTable", format(R"({{"TableName": "{}"}})", name)).get();
     } catch(...) {
         // table may exist or not
     }
 }
 
 static void create_alternator_table(http::client& cli) {
-    delete_alternator_table(cli); // cleanup in case of leftovers
+    delete_alternator_table(cli, table_name); // cleanup in case of leftovers
     make_request(cli, "CreateTable", R"(
         {
             "AttributeDefinitions": [{
@@ -141,7 +150,7 @@ static void create_alternator_table(http::client& cli) {
 }
 
 static void create_alternator_table_with_gsi(http::client& cli) {
-    delete_alternator_table(cli); // cleanup in case of leftovers
+    delete_alternator_table(cli, gsi_table_name); // cleanup in case of leftovers
     make_request(cli, "CreateTable", R"(
         {
             "AttributeDefinitions": [{
@@ -173,7 +182,7 @@ static void create_alternator_table_with_gsi(http::client& cli) {
                     "AttributeType": "S"
                 }
             ],
-            "TableName": "workloads_test",
+            "TableName": "workloads_test_gsi",
             "BillingMode": "PAY_PER_REQUEST",
             "KeySchema": [{
                     "AttributeName": "p",
@@ -277,7 +286,7 @@ static future<> update_item(const test_config& _, http::client& cli, uint64_t se
 
 static future<> update_item_gsi(const test_config& _, http::client& cli, uint64_t seq) {
     auto prefix = format(R"({{
-            "TableName": "workloads_test",
+            "TableName": "workloads_test_gsi",
             "Key": {{
                 "p": {{
                     "S": "{}"
@@ -411,7 +420,7 @@ static future<> batch_write_item_gsi(const test_config& c, http::client& cli, ui
             key, key >> 1, key >> 2, key >> 3, key >> 4, key, key);
     }
     co_await make_request(cli, "BatchWriteItem", format(R"({{
-        "RequestItems": {{ "workloads_test": [{}] }},
+        "RequestItems": {{ "workloads_test_gsi": [{}] }},
         "ReturnConsumedCapacity": "TOTAL"
     }})", fmt::to_string(items)));
 }
@@ -465,10 +474,10 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
     auto cli = get_client(c);
     auto finally = defer([&] noexcept {
         // Might throw, will terminate test
-        delete_alternator_table(cli);
+        delete_alternator_table(cli, is_gsi_workload(c.workload) ? gsi_table_name : table_name);
         cli.close().get();
     });
-    if (c.workload == "write_gsi" || c.workload == "batch_write_gsi") {
+    if (is_gsi_workload(c.workload)) {
         create_alternator_table_with_gsi(cli);
     } else {
         create_alternator_table(cli);
