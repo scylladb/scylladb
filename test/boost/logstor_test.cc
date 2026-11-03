@@ -1707,7 +1707,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_chunks_report_readable_
 
     BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 2u);
     for (const auto& sh : seen_segment_infos) {
-        BOOST_REQUIRE(sh.kind == segment_kind::mixed);
+        BOOST_REQUIRE(sh.kind() == segment_kind::mixed);
         BOOST_REQUIRE_EQUAL(sh.segment_seq.value, 23u);
     }
 
@@ -1731,7 +1731,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_chunks_report_readable_
 
     auto maybe_header = read_chunk_info_from_bytes(segment_copy);
     BOOST_REQUIRE(maybe_header);
-    BOOST_REQUIRE(maybe_header->kind == segment_kind::mixed);
+    BOOST_REQUIRE(maybe_header->kind() == segment_kind::mixed);
     BOOST_REQUIRE_EQUAL(maybe_header->segment_seq.value, 23u);
     BOOST_REQUIRE(std::holds_alternative<segment_info::mixed>(maybe_header->v));
 }
@@ -1828,7 +1828,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_chunk_records_with
     in.close().get();
 
     BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 1u);
-    BOOST_REQUIRE(seen_segment_infos.front().kind == segment_kind::full);
+    BOOST_REQUIRE(seen_segment_infos.front().kind() == segment_kind::full);
     BOOST_REQUIRE_EQUAL(seen_segment_infos.front().segment_seq.value, 41u);
     BOOST_REQUIRE(std::holds_alternative<segment_info::full>(seen_segment_infos.front().v));
     BOOST_REQUIRE_EQUAL(seen_records.size(), 3u);
@@ -1843,7 +1843,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_chunk_records_with
     assert_that(to_mutation(seen_records[2], schema)).is_equal_to(expected2);
 
     BOOST_REQUIRE(maybe_header);
-    BOOST_REQUIRE(maybe_header->kind == segment_kind::full);
+    BOOST_REQUIRE(maybe_header->kind() == segment_kind::full);
     BOOST_REQUIRE_EQUAL(maybe_header->segment_seq.value, 41u);
     BOOST_REQUIRE(std::holds_alternative<segment_info::full>(maybe_header->v));
     auto& full = std::get<segment_info::full>(maybe_header->v);
@@ -1900,7 +1900,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_chunk_lower_se
     in.close().get();
 
     BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 1u);
-    BOOST_REQUIRE(seen_segment_infos.front().kind == segment_kind::mixed);
+    BOOST_REQUIRE(seen_segment_infos.front().kind() == segment_kind::mixed);
     BOOST_REQUIRE_EQUAL(seen_segment_infos.front().segment_seq.value, 61u);
 
     BOOST_REQUIRE_EQUAL(seen_headers.size(), 2u);
@@ -2299,7 +2299,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial
     BOOST_REQUIRE(ondisk::validate_chunk_headers(ch, read_segment_header(rewritten.data)));
     BOOST_REQUIRE_EQUAL(ch.segment_seq.value, 221u);
     BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 1u);
-    BOOST_REQUIRE(seen_segment_infos.front().kind == segment_kind::full);
+    BOOST_REQUIRE(seen_segment_infos.front().kind() == segment_kind::full);
     BOOST_REQUIRE_EQUAL(seen_segment_infos.front().segment_seq.value, 221u);
     BOOST_REQUIRE(std::holds_alternative<segment_info::full>(seen_segment_infos.front().v));
     BOOST_REQUIRE_EQUAL(seen_records.size(), 3u);

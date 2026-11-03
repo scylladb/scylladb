@@ -2377,7 +2377,7 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
 
     bool need_separator = false;
 
-    switch (info.kind) {
+    switch (info.kind()) {
     case segment_kind::mixed:
         logstor_logger.debug("Recovering mixed segment {} using separator", seg_id);
         need_separator = true;
