@@ -298,7 +298,9 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
                 }
 
                 const auto mutation_size = m.fm.representation().size();
-                return this->send_one_mutation(std::move(m)).then([this, ctx_ptr, mutation_size] {
+                return utils::get_local_injector().inject("hinted_handoff_hold_hint_send", utils::wait_for_message(std::chrono::minutes(5))).then([this, m = std::move(m)] () mutable {
+                    return this->send_one_mutation(std::move(m));
+                }).then([this, ctx_ptr, mutation_size] {
                     ++this->shard_stats().sent_total;
                     this->shard_stats().sent_hints_bytes_total += mutation_size;
                 }).handle_exception([this, ctx_ptr] (auto eptr) {
