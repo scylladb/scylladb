@@ -1351,9 +1351,12 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClu
 async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterManager):
     """
     This test verifies that ongoing executions of state_machine::apply are
-    aborted when a node is shutting down.
+    aborted when a node is shutting down. The resumed apply() needs the group0
+    barrier, so the shutdown must stop the Raft group before it stops the barrier.
 
     For a similar scenario after dropping a table, see test_abort_state_machine_apply_after_dropping_table.
+
+    Reproduces SCYLLADB-4459.
     """
 
     cmdline = DEFAULT_CMDLINE + ["--logger-log-level", "sc_state_machine=debug:raft=debug"]
@@ -1399,13 +1402,16 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
         mark = await log.mark()
 
         stop_task = asyncio.create_task(manager.server_stop_gracefully(target_server.server_id))
-        # Wait until the Raft group has started being removed.
-        await log.wait_for(rf"schedule_raft_group_deletion\(\): starting aborting raft server for group id {group_id}", from_mark=mark)
-        mark = await log.mark()
+        try:
+            # Wait until the Raft group has started being removed.
+            await log.wait_for(rf"schedule_raft_group_deletion\(\): group id {group_id}: starting", from_mark=mark)
+            mark = await log.mark()
+        finally:
+            # At this point, the Raft server should already be getting aborted,
+            # so we can resume state_machine::apply. If the wait failed, resume it
+            # anyway, so that the shutdown does not wait for it.
+            await manager.api.message_injection(target_server.ip_addr, wait_before_apply_injection)
 
-        # At this point, the Raft server should already be getting aborted,
-        # so we can resume state_machine::apply.
-        await manager.api.message_injection(target_server.ip_addr, wait_before_apply_injection)
         # Verify that state_machine::apply was really aborted.
         await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark)
 
@@ -1416,7 +1422,11 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
         await manager.server_start(target_server.server_id)
         cql, [target_host] = await manager.get_ready_cql([target_server])
 
-        rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0", host=target_host)
+        # The leader serves linearizable reads. To read the target's own data,
+        # catch up with a read barrier on the target and read at ONE.
+        await read_barrier(manager.api, target_server.ip_addr, group_id=group_id, timeout=30)
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {table} WHERE pk = 0",
+                                                   consistency_level=ConsistencyLevel.ONE), host=target_host)
         assert len(rows) == 1
         assert rows[0].v == 13
 
