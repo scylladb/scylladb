@@ -218,27 +218,45 @@ std::optional<sstring> secondary_index_manager::custom_index_class(const schema&
     }
 }
 
-// This function returns a factory, as the custom index class should be lightweight, preferably not holding any state.
-// We prefer this over a static custom index class instance, as it allows us to avoid any issues with thread safety.
-//
-// Note: SAI class names (StorageAttachedIndex, sai) are not listed here
-// because maybe_rewrite_sai_index() in create_index_statement.cc rewrites
-// them to "vector_index" (or a regular index) before the metadata is persisted.
-std::optional<std::function<std::unique_ptr<custom_index>()>> secondary_index_manager::get_custom_class_factory(const sstring& class_name) {
-    sstring lower_class_name = class_name;
-    std::transform(lower_class_name.begin(), lower_class_name.end(), lower_class_name.begin(), ::tolower);
+using custom_class_map = std::unordered_map<std::string_view, std::function<std::unique_ptr<custom_index>()>>;
 
-    const static std::unordered_map<std::string_view, std::function<std::unique_ptr<custom_index>()>> classes = {
+// Class names are matched in any letter case; the registered spelling is lowercase.
+static const custom_class_map::value_type* find_custom_class(const sstring& class_name) {
+    // Note: SAI class names (StorageAttachedIndex, sai) are not listed here
+    // because maybe_rewrite_sai_index() in create_index_statement.cc rewrites
+    // them to "vector_index" (or a regular index) before the metadata is persisted.
+    const static custom_class_map classes = {
         {"fulltext_index", fulltext_index_factory},
         {"pattern_index", pattern_index_factory},
         {"vector_index", vector_index_factory},
     };
 
-    if (auto class_it = classes.find(lower_class_name); class_it != classes.end()) {
-        return class_it->second;
-    } else {
+    sstring lower_class_name = class_name;
+    std::transform(lower_class_name.begin(), lower_class_name.end(), lower_class_name.begin(), ::tolower);
+
+    auto class_it = classes.find(lower_class_name);
+    if (class_it == classes.end()) {
+        return nullptr;
+    }
+    return &*class_it;
+}
+
+// This function returns a factory, as the custom index class should be lightweight, preferably not holding any state.
+// We prefer this over a static custom index class instance, as it allows us to avoid any issues with thread safety.
+std::optional<std::function<std::unique_ptr<custom_index>()>> secondary_index_manager::get_custom_class_factory(const sstring& class_name) {
+    auto entry = find_custom_class(class_name);
+    if (!entry) {
         return std::nullopt;
     }
+    return entry->second;
+}
+
+std::optional<sstring> secondary_index_manager::canonical_custom_class_name(const sstring& class_name) {
+    auto entry = find_custom_class(class_name);
+    if (!entry) {
+        return std::nullopt;
+    }
+    return sstring(entry->first);
 }
 
 std::optional<std::unique_ptr<custom_index>> secondary_index_manager::get_custom_class(const index_metadata& im) {
