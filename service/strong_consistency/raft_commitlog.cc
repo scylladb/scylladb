@@ -108,7 +108,7 @@ static future<db::rp_handle> add_measured_raft_batch(db::commitlog& cl, table_id
         return writer.write(out);
     };
     auto handle = co_await cl.add(table, batch_size, db::no_timeout, db::commitlog_force_sync::yes, write_fn);
-    logger.debug("wrote raft batch: group_id={}, entries=[{}, {}], size={}, rp={}",
+    logger.trace("wrote raft batch: group_id={}, entries=[{}, {}], size={}, rp={}",
             group_id, entries.front()->idx, entries.back()->idx, batch_size, handle.rp());
     co_return handle;
 }
@@ -227,7 +227,7 @@ future<> raft_commitlog::store_log_entries(const std::vector<raft::log_entry_ptr
         auto handle = co_await add_measured_raft_batch(
                 _commit_log, _table_id, _group_id, entries, writer);
         account_batch(_commitlog_segment_queue, _raft_groups_table_id, std::move(handle), entries);
-        logger.debug("store_log_entries: group_id={}, entries=[{}, {}], segments={}",
+        logger.trace("store_log_entries: group_id={}, entries=[{}, {}], segments={}",
                 _group_id, entries.front()->idx, entries.back()->idx,
                 _commitlog_segment_queue.size());
         co_return;
@@ -245,7 +245,7 @@ future<> raft_commitlog::store_log_entries(const std::vector<raft::log_entry_ptr
         account_batch(_commitlog_segment_queue, _raft_groups_table_id, std::move(handle), batch);
         batch_begin = batch_end;
     }
-    logger.debug("store_log_entries: group_id={}, entries=[{}, {}], batches={}, segments={}",
+    logger.trace("store_log_entries: group_id={}, entries=[{}, {}], batches={}, segments={}",
             _group_id, entries.front()->idx, entries.back()->idx, batch_ends.size(),
             _commitlog_segment_queue.size());
 }

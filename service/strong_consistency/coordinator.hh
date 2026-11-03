@@ -100,7 +100,8 @@ private:
     future<value_or_redirect<operation_ctx>> create_operation_ctx(const schema& schema,
         const dht::token& token,
         abort_source& as,
-        bool needs_leader);
+        bool needs_leader,
+        const tracing::trace_state_ptr& trace_state);
 public:
     coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper,
         scheduling_group_key stats_key);
@@ -118,6 +119,7 @@ public:
     future<value_or_redirect<mutate_result>> mutate(schema_ptr schema,
         const dht::token& token,
         mutation_gen&& mutation_gen,
+        tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
         abort_source& as,
         std::optional<locator::tablet_version_block> tablet_version_block);
