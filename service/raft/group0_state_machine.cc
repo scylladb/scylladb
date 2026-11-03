@@ -538,7 +538,9 @@ void group0_state_machine::drop_snapshot(raft::snapshot_id id) {
 
 future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
-    if (_in_memory_state_machine_enabled) {
+    // transfer_snapshot() already brought the in-memory state in line with the
+    // snapshot it persisted, and the commands applied since keep it in line.
+    if (_in_memory_state_machine_enabled && id != _transferred_snapshot_id) {
         co_await reload_state();
     }
 }
@@ -589,6 +591,10 @@ future<> group0_state_machine::reload_state() {
     // we assume that the apply mutex is held, topology_state_load applies
     // persisted state machine into memory so it needs to be protected with it
     co_await _ss.topology_state_load();
+    co_await reload_non_topology_state();
+}
+
+future<> group0_state_machine::reload_non_topology_state() {
     if (_feature_service.compression_dicts) {
         co_await _ss.compression_dictionary_updated_callback_all();
     }
@@ -708,6 +714,26 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     }
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
+
+    // Reloads the rest of the in-memory state while the read_apply mutex is still
+    // held, so no reader sees the new persisted state with the old in-memory one.
+    // raft may reject the snapshot, and then load_snapshot() is not called for it.
+    if (_in_memory_state_machine_enabled) {
+        try {
+            co_await reload_non_topology_state();
+        } catch (...) {
+            // The schema and topology of the snapshot are already applied, and the rest
+            // of the in-memory state stays behind them. Stop the group 0 server, as raft
+            // does when load_snapshot() fails. A failure caused by shutdown is not fatal:
+            // the state is reloaded after the restart.
+            if (!_abort_source.abort_requested()) {
+                fail();
+                _on_fatal_error(std::current_exception());
+            }
+            throw;
+        }
+        _transferred_snapshot_id = snp.id;
+    }
 
     slogger.info("transfer snapshot from {} index {} snp id {} completed", hid, snp.idx, snp.id);
   } catch (const abort_requested_exception&) {
