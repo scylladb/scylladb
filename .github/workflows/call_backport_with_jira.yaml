@@ -22,7 +22,7 @@ permissions:
 jobs:
   backport-on-push:
     if: github.event_name == 'push'
-    uses: scylladb/github-automation/.github/workflows/backport-with-jira.yaml@main
+    uses: scylladb/github-automation/.github/workflows/backport-with-jira.yaml@a08b844bcde75475a11d645d7ee8a0d31f0b38cf # main
     with:
       event_type: 'push'
       base_branch: ${{ github.ref }}
@@ -33,10 +33,12 @@ jobs:
       copilot_token: ${{ secrets.COPILOT_TOKEN }}
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+      anthropic_base_url: ${{ secrets.ANTHROPIC_BASE_URL }}
+      anthropic_auth_token: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
 
   backport-on-label:
     if: github.event_name == 'pull_request_target' && github.event.action == 'labeled'
-    uses: scylladb/github-automation/.github/workflows/backport-with-jira.yaml@main
+    uses: scylladb/github-automation/.github/workflows/backport-with-jira.yaml@a08b844bcde75475a11d645d7ee8a0d31f0b38cf # main
     with:
       event_type: 'labeled'
       base_branch: refs/heads/${{ github.event.pull_request.base.ref }}
@@ -50,10 +52,12 @@ jobs:
       copilot_token: ${{ secrets.COPILOT_TOKEN }}
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+      anthropic_base_url: ${{ secrets.ANTHROPIC_BASE_URL }}
+      anthropic_auth_token: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
 
   backport-chain:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed' && github.event.pull_request.merged == true
-    uses: scylladb/github-automation/.github/workflows/backport-with-jira.yaml@main
+    uses: scylladb/github-automation/.github/workflows/backport-with-jira.yaml@a08b844bcde75475a11d645d7ee8a0d31f0b38cf # main
     with:
       event_type: 'chain'
       base_branch: refs/heads/${{ github.event.pull_request.base.ref }}
@@ -65,3 +69,5 @@ jobs:
       copilot_token: ${{ secrets.COPILOT_TOKEN }}
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+      anthropic_base_url: ${{ secrets.ANTHROPIC_BASE_URL }}
+      anthropic_auth_token: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
