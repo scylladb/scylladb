@@ -106,8 +106,15 @@ def test_too_large_request(dynamodb, test_table):
 # 1. An over-long request is rejected no matter if it is sent using a
 #    Content-Length header or chunked encoding (reproduces issue #8196).
 # 2. The client should be able to recognize this error as a 413 error, not
-#     some I/O error like broken pipe (reproduces issue #8195).
-@pytest.mark.xfail(reason="issue #8196, #12166")
+#     some I/O error like broken pipe. Reproduces issue #8195 and, rarely,
+#     #12166.
+#
+# Because issue #12166 is still open, currently we can (in theory, but
+# almost never in practice) get a "connection reset by peer" instead of a
+# clean 413 reply if the packets get reordered and the RST arrives before
+# the reply. So we accept this failure mode too to avoid test flakiness.
+# When #12166 is fixed, we should stop allowing that failure mode.
+
 def test_too_large_request_chunked(dynamodb, test_table):
     if Version(urllib3.__version__) < Version('1.26'):
         pytest.skip("urllib3 before 1.26.0 threw broken pipe and did not read response and cause issue #8195. Fixed by pull request urllib3/urllib3#1524")
@@ -117,20 +124,32 @@ def test_too_large_request_chunked(dynamodb, test_table):
         '{"TableName": "' + test_table.name + '", ' + spaces + '"Item": {"p": {"S": "x"}, "c": {"S": "x"}}}')
     def generator(s):
         yield s
-    response = requests.post(req.url, headers=req.headers, data=generator(req.body), verify=False)
+    try:
+        response = requests.post(req.url, headers=req.headers, data=generator(req.body), verify=False)
+    # Until #12166 is fixed, we need this except. See comment above why.
+    except requests.exceptions.ConnectionError as e:
+        return
     # In issue #8196, Alternator did not recognize the request is too long
     # because it uses chunked encoding instead of Content-Length, so the
     # request succeeded, and the status_code was 200 instead of 413.
     assert response.status_code == 413
 
-@pytest.mark.xfail(reason="issue #12166. Note that only fails very rairly, will usually xpass")
-def test_too_large_request_content_length(dynamodb, test_table):
+# 17 MB is enough to verify that Alternator set a 16 MB limit on request
+# length (as DynamoDB does), but let's also try a bigger size, which in
+# at some point during the development caused us to reserve too much memory
+# and hang.
+@pytest.mark.parametrize("mb", [17, 50])
+def test_too_large_request_content_length(dynamodb, test_table, mb):
     if Version(urllib3.__version__) < Version('1.26'):
         pytest.skip("urllib3 before 1.26.0 threw broken pipe and did not read response and cause issue #8195. Fixed by pull request urllib3/urllib3#1524")
-    spaces = ' ' * (17 * 1024 * 1024)
+    spaces = ' ' * (mb * 1024 * 1024)
     req = get_signed_request(dynamodb, 'PutItem',
         '{"TableName": "' + test_table.name + '", ' + spaces + '"Item": {"p": {"S": "x"}, "c": {"S": "x"}}}')
-    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    try:
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    # Until #12166 is fixed, we need this except. See comment above why.
+    except requests.exceptions.ConnectionError as e:
+        return
     # In issue #8195, Alternator closed the connection early, causing the
     # library to incorrectly throw an exception (Broken Pipe) instead noticing
     # the error code 413 which the server did send.
