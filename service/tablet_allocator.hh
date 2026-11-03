@@ -14,6 +14,8 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
+#include <chrono>
+#include <optional>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/bool_class.hh>
@@ -42,6 +44,17 @@ struct auto_repair_stats {
     size_t needs_repair_by_time_nr = 0;
     size_t needs_repair_by_size_nr = 0;
 };
+
+// How far past its own threshold a tablet is, which is what orders the repair plan: the larger
+// of the time since the last repair over the repair interval and the unrepaired fraction over
+// the size threshold. A term whose trigger is disabled, or whose measurement is missing, is 0.
+//
+// Reaching 1 on either term is what selects a tablet; ordering the selected ones by the larger
+// term is what keeps either trigger from holding the other back indefinitely. The size term is
+// bounded by 1/size_fraction, while the time term grows every round, so a time-selected tablet
+// overtakes each size-selected one once it is that tablet's ratio of intervals overdue.
+double auto_repair_urgency(std::chrono::seconds time_since_repair, std::chrono::seconds interval,
+        std::optional<double> unrepaired_fraction, double size_fraction);
 
 struct load_balancer_dc_stats {
     uint64_t calls = 0;
