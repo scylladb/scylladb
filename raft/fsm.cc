@@ -340,6 +340,7 @@ void fsm::become_leader() {
     // set_configuration() begins replicating from the last entry
     // in the log.
     leader_state().tracker.set_configuration(_log.get_configuration(), _log.last_idx());
+    leader_state().last_idx_at_prev_tick = _log.last_idx();
     logger.trace("fsm::become_leader() {} stable index: {} last index: {}",
         _tag, _log.stable_idx(), _log.last_idx());
 }
@@ -791,6 +792,11 @@ bool fsm::can_serve_lease_read() {
 // indefinitely.
 static constexpr int clock_stepdown_delta_multiple = 2;
 
+// A failed transfer blocks the group's writes for up to ELECTION_TIMEOUT. Waiting
+// this long before the next attempt keeps the writes blocked at most 1/6 of the time
+// while a target keeps failing.
+static constexpr logical_clock::duration transfer_retry_backoff = 5 * ELECTION_TIMEOUT;
+
 void fsm::sample_clock() {
     if (!leaseguard_enabled()) {
         return;
@@ -812,31 +818,81 @@ bool fsm::clock_lost() const {
                     >= _config.leaseguard->delta * clock_stepdown_delta_multiple;
 }
 
-void fsm::maybe_transfer_leadership_on_clock_loss() {
-    auto& state = leader_state();
-    if (!clock_lost()) {
-        return;
+size_t fsm::priority_of(server_id id) const {
+    const auto& list = _config.priority_members;
+    return std::ranges::find(list, id) - list.begin();
+}
+
+template <typename Pred>
+const follower_progress* fsm::best_leader(Pred pred) const {
+    // A working clock comes first, since without one a leader holds no lease; then
+    // the priority list. With leases off nobody reports a working clock, so only the
+    // list counts.
+    const auto rank = [&] (const follower_progress& p) {
+        return std::pair(!p.clock_ok, priority_of(p.id));
+    };
+    const follower_progress* best = nullptr;
+    for (const auto& [id, p] : leader_state().tracker) {
+        if (id != _my_id && p.can_vote && pred(p) && (!best || rank(p) < rank(*best))) {
+            best = &p;
+        }
+    }
+    return best;
+}
+
+std::optional<fsm::handover> fsm::handover_target() const {
+    const auto& state = leader_state();
+    const auto* me = state.tracker.find(_my_id);
+    if (configuration::voter_count(get_configuration().current) == 1 && me && me->can_vote) {
+        return std::nullopt;
+    }
+    const auto can_lead = [&] (const follower_progress& p) {
+        return (!leaseguard_enabled() || p.clock_ok) && _failure_detector.is_alive(p.id);
+    };
+    const auto keeps_up = [&] (const follower_progress& p) {
+        return p.match_idx >= state.last_idx_at_prev_tick;
+    };
+
+    if (clock_lost()) {
+        if (const auto* p = best_leader([&] (const follower_progress& f) {
+                return can_lead(f) && keeps_up(f);
+            })) {
+            return handover{p->id, "our clock is lost"};
+        }
+        return std::nullopt;
     }
 
-    // Only worth moving if the target can actually do what we cannot. Checking
-    // first also guarantees transfer_leadership() finds a candidate, so it
-    // cannot throw no_other_voting_member (which needs a lone voter, and we have
-    // just found another one).
-    const bool have_target = std::ranges::any_of(state.tracker, [this](const auto& e) {
-        const auto& p = e.second;
-        return p.id != _my_id && p.can_vote && p.clock_ok && p.match_idx == _log.last_idx();
+    const auto my_priority = priority_of(_my_id);
+    const auto* p = best_leader([&] (const follower_progress& f) {
+        return priority_of(f.id) < my_priority && can_lead(f);
     });
-    if (!have_target) {
+    // If the best target is behind, we wait for it rather than hand over to a worse one.
+    if (!p || !keeps_up(*p)) {
+        return std::nullopt;
+    }
+    return handover{p->id, "it is ahead of us in the priority list"};
+}
+
+void fsm::maybe_transfer_leadership() {
+    auto& state = leader_state();
+    if (_clock.now() < state.transfer_retry_not_before) {
         return;
     }
+    const auto h = handover_target();
+    if (!h) {
+        return;
+    }
+    logger.info("[{}]: transferring leadership to {}: {}", _tag, h->target, h->reason);
+    state.transfer_retry_not_before = _clock.now() + ELECTION_TIMEOUT + transfer_retry_backoff;
+    transfer_leadership(ELECTION_TIMEOUT, h->target);
+}
 
-    logger.info("[{}]: LeaseGuard clock has been unusable for too long; transferring leadership "
-        "to a replica whose clock works, so the group can serve local reads again", _tag);
-    // Re-arm before initiating: if the transfer does not complete, the stepdown
-    // times out and we stay leader, and we should then back off a full window
-    // rather than retry on the next tick.
-    _clock_unusable_since = _config.leaseguard->clock.monotonic_now();
-    transfer_leadership(ELECTION_TIMEOUT);
+void fsm::set_priority_members(std::vector<server_id> members) {
+    _config.priority_members = std::move(members);
+    // Act on the new list now rather than on the next tick.
+    if (is_leader() && !leader_state().stepdown) {
+        maybe_transfer_leadership();
+    }
 }
 
 void fsm::tick_leader() {
@@ -950,18 +1006,19 @@ void fsm::tick_leader() {
         }
     }
 
-    // LeaseGuard: what a clock failure does cost is the leases themselves. With
-    // no clock we serve no local reads, stamp no entries and renew nothing, so
-    // the group silently pays a quorum round-trip on every read for as long as
-    // the outage lasts, and nothing but the clock returning fixes it. If a
-    // replica's clock still works, give it the leadership. Before the renewal
+    // Hand the leadership over to a priority member ahead of us, or, with
+    // LeaseGuard, to a replica whose clock works when ours is lost: with no clock
+    // we serve no local reads, stamp no entries and renew nothing, so the group
+    // silently pays a quorum round-trip on every read for as long as the outage
+    // lasts, and nothing but the clock returning fixes it. Before the renewal
     // block below, which correctly refuses to append once stepdown is set.
-    if (leaseguard_enabled() && !leader_state().stepdown) {
-        maybe_transfer_leadership_on_clock_loss();
+    if (!leader_state().stepdown) {
+        maybe_transfer_leadership();
         if (!is_leader()) {
             return;
         }
     }
+    leader_state().last_idx_at_prev_tick = _log.last_idx();
 
     // LeaseGuard automatic lease extension (arXiv:2512.15659 "Raft Leases Done
     // Right", Section 5.1). A lease is only refreshed by committing entries, so
