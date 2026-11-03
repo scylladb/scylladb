@@ -198,6 +198,43 @@ static std::unordered_set<locator::tablet_id> split_string_to_tablet_id(std::str
     return std::unordered_set<locator::tablet_id>{tokens_view.begin(), tokens_view.end()};
 }
 
+// Which auto repair trigger selected a tablet. A tablet that both triggers selected counts
+// as selected by size, the trigger with the more specific thing to say about why; the plan
+// order itself comes from auto_repair_decision::urgency, which takes both into account.
+enum class auto_repair_trigger : uint8_t {
+    none,
+    // The tablet_keep_repairing error injection, which selects a tablet whatever the
+    // triggers say. It has a kind of its own so that a plan dump does not attribute an
+    // injected repair to a trigger that did not fire.
+    forced,
+    time,
+    size,
+};
+
+// The outcome of evaluating the auto repair triggers for one tablet.
+struct auto_repair_decision {
+    auto_repair_trigger trigger = auto_repair_trigger::none;
+    // How much of the tablet is unrepaired, set only when the size trigger selected it.
+    double unrepaired_fraction = 0;
+    // auto_repair_urgency() of the tablet, which orders the repair plan. 0 for a forced
+    // repair, which is ordered ahead of the rest regardless.
+    double urgency = 0;
+
+    explicit operator bool() const { return trigger != auto_repair_trigger::none; }
+};
+
+double auto_repair_urgency(std::chrono::seconds time_since_repair, std::chrono::seconds interval,
+        std::optional<double> unrepaired_fraction, double size_fraction) {
+    double urgency = 0;
+    if (interval > std::chrono::seconds::zero()) {
+        urgency = double(time_since_repair.count()) / double(interval.count());
+    }
+    if (unrepaired_fraction && size_fraction > 0) {
+        urgency = std::max(urgency, *unrepaired_fraction / size_fraction);
+    }
+    return urgency;
+}
+
 struct repair_plan {
     locator::global_tablet_id gid;
     locator::tablet_info tinfo;
@@ -205,6 +242,8 @@ struct repair_plan {
     dht::token last_token;
     db_clock::duration repair_time_diff;
     bool is_user_request;
+    // none for a user request, which is ordered ahead of every auto repair anyway.
+    auto_repair_decision auto_repair;
 };
 
 // Used to compare different migration choices in regard to impact on load imbalance.
@@ -493,11 +532,36 @@ struct fmt::formatter<service::migration_candidate> : fmt::formatter<std::string
 };
 
 template<>
+struct fmt::formatter<service::auto_repair_trigger> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(service::auto_repair_trigger trigger, FormatContext& ctx) const {
+        std::string_view name;
+        switch (trigger) {
+        case service::auto_repair_trigger::none:
+            name = "none";
+            break;
+        case service::auto_repair_trigger::forced:
+            name = "forced";
+            break;
+        case service::auto_repair_trigger::time:
+            name = "time";
+            break;
+        case service::auto_repair_trigger::size:
+            name = "size";
+            break;
+        }
+        return fmt::formatter<std::string_view>::format(name, ctx);
+    }
+};
+
+template<>
 struct fmt::formatter<service::repair_plan> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const service::repair_plan& p, FormatContext& ctx) const {
         auto diff_seconds = std::chrono::duration<float>(p.repair_time_diff).count();
-        fmt::format_to(ctx.out(), "{{tablet={} last_token={} is_user_req={} diff_seconds={}}}", p.gid, p.last_token, p.is_user_request, diff_seconds);
+        fmt::format_to(ctx.out(), "{{tablet={} last_token={} is_user_req={} diff_seconds={} trigger={} unrepaired_fraction={} urgency={}}}",
+                p.gid, p.last_token, p.is_user_request, diff_seconds, p.auto_repair.trigger, p.auto_repair.unrepaired_fraction,
+                p.auto_repair.urgency);
         return ctx.out();
     }
 };
@@ -1296,46 +1360,51 @@ public:
     // logstor therefore has nothing for this trigger to measure and is left to the time-based
     // one.
     //
-    // Returns false when the sizes are not known for every replica: a node that predates the
-    // TABLET_UNREPAIRED_LOAD_STATS cluster feature, or whose load stats have not arrived yet,
-    // leaves the tablet to the time-based trigger rather than being repaired on a guess.
-    bool needs_auto_repair_by_size(const locator::global_tablet_id& gid, const locator::tablet_map& tmap,
+    // Returns nullopt when the sizes are not known for every replica: a node that predates
+    // the TABLET_UNREPAIRED_LOAD_STATS cluster feature, or whose load stats have not arrived
+    // yet, leaves the tablet to the time-based trigger rather than being repaired on a guess.
+    // Returns the tablet's unrepaired fraction when it is selected, which is what the plan
+    // order weighs it by, or nullopt when it is not.
+    std::optional<double> needs_auto_repair_by_size(const locator::global_tablet_id& gid, const locator::tablet_map& tmap,
             const auto_repair_settings& settings) {
         if (settings.size_fraction <= 0 || !_table_load_stats) {
-            return false;
+            return std::nullopt;
         }
         auto sizes = _table_load_stats->get_avg_unrepaired_tablet_size(tmap, gid);
         if (!sizes) {
             lblogger.debug("Skipped size based auto repair for tablet={}: unrepaired size unknown", gid);
-            return false;
+            return std::nullopt;
         }
         if (!sizes->sstables_size) {
             lblogger.debug("Skipped size based auto repair for tablet={}: tablet has no sstable data", gid);
-            return false;
+            return std::nullopt;
         }
         if (sizes->unrepaired_size < uint64_t(settings.min_size_in_bytes)) {
-            return false;
+            return std::nullopt;
         }
         auto fraction = double(sizes->unrepaired_size) / double(sizes->sstables_size);
         lblogger.trace("Check gid={} unrepaired_size={} sstables_size={} fraction={} threshold_fraction={} min_size={}",
                 gid, sizes->unrepaired_size, sizes->sstables_size, fraction, settings.size_fraction, settings.min_size_in_bytes);
-        return fraction >= settings.size_fraction;
+        if (fraction < settings.size_fraction) {
+            return std::nullopt;
+        }
+        return fraction;
     }
 
-    future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
+    future<auto_repair_decision> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
             const locator::tablet_map& tmap, const auto_repair_settings& settings,
             db_clock::duration diff, service::auto_repair_stats& stats) {
         if (utils::get_local_injector().enter("tablet_keep_repairing")) {
             lblogger.info("Forced auto-repair for tablet={}", gid);
-            co_return true;
+            co_return auto_repair_decision{.trigger = auto_repair_trigger::forced};
         }
         if (!settings.enabled) {
-            co_return false;
+            co_return auto_repair_decision{};
         }
         auto size = info.replicas.size();
         if (size <= 1) {
             lblogger.debug("Skipped auto repair for tablet={} replicas={}", gid, size);
-            co_return false;
+            co_return auto_repair_decision{};
         }
         lblogger.trace("Check gid={} diff={} last_repair_time={} repair_time_threshold={}",
                 gid, diff, info.repair_time, settings.threshold);
@@ -1348,14 +1417,24 @@ public:
         if (time_trigger) {
             stats.needs_repair_by_time_nr++;
         }
-        bool size_trigger = needs_auto_repair_by_size(gid, tmap, settings);
+        auto size_trigger = needs_auto_repair_by_size(gid, tmap, settings);
         if (size_trigger) {
             stats.needs_repair_by_size_nr++;
         }
 
-        bool needed = time_trigger || size_trigger;
-        stats.needs_repair_nr += needed;
-        co_return needed;
+        auto_repair_decision decision;
+        if (size_trigger) {
+            decision.trigger = auto_repair_trigger::size;
+            decision.unrepaired_fraction = *size_trigger;
+        } else if (time_trigger) {
+            decision.trigger = auto_repair_trigger::time;
+        }
+        if (decision) {
+            decision.urgency = auto_repair_urgency(std::chrono::duration_cast<std::chrono::seconds>(diff),
+                    settings.threshold, size_trigger, settings.size_fraction);
+        }
+        stats.needs_repair_nr += bool(decision);
+        co_return decision;
     }
 
     void ensure_node(node_load_map& nodes, host_id host) {
@@ -1506,18 +1585,19 @@ public:
                 // Time since the last repair; orders the plans and is printed by the plan dump.
                 auto diff = now - info.repair_time;
                 auto is_user_request = info.repair_task_info && info.repair_task_info->is_user_repair_request();
+                auto_repair_decision decision;
                 if (is_user_request) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
-                    auto auto_repair = co_await needs_auto_repair(gid, info, tmap, settings, diff,
+                    decision = co_await needs_auto_repair(gid, info, tmap, settings, diff,
                             auto_repair_stats);
-                    if (!auto_repair) {
+                    if (!decision) {
                         co_return;
                     }
                 }
                 auto range = tmap.get_token_range(id);
                 auto last_token = tmap.get_last_token(id);
-                plans.push_back(repair_plan{gid, info, range, last_token, diff, is_user_request});
+                plans.push_back(repair_plan{gid, info, range, last_token, diff, is_user_request, decision});
                 ++_stats.for_cluster().repairs_produced;
             });
         }
@@ -1527,12 +1607,34 @@ public:
         _stats.for_cluster().auto_repair_needs_repair_by_size_nr = auto_repair_stats.needs_repair_by_size_nr;
         _stats.for_cluster().auto_repair_enabled_nr = auto_repair_stats.enabled_nr;
 
+        // User requests first, then forced repairs, then every other tablet by how far past
+        // its own threshold it is - auto_repair_urgency() - and, at equal urgency, by time
+        // since the last repair.
+        //
+        // The order matters because only the head of this plan is scheduled: the rest is
+        // dropped and rebuilt next round. Ordered by time alone, a tablet the size trigger
+        // selected shortly after its last repair would sort behind every time-selected
+        // tablet and, on a cluster that always has a time-based backlog, never be reached
+        // until its own interval was nearly up. Ordered with every size-selected tablet
+        // first, the opposite: on a cluster where those alone fill every round, a tablet
+        // weeks past its interval but holding little unrepaired data would never be
+        // reached. Urgency lets whichever trigger a tablet is further past decide, and
+        // since the size term is bounded while the time term grows, no tablet waits forever.
+        //
         // TODO: we could add other factors in addition to the repair time when
         // picking which tablet to repair, e.g., higher repair priority
         // specified by user, tablet with higher purgeable tombstone ratio.
         std::sort(plans.begin(), plans.end(), [] (const repair_plan& x, const repair_plan& y) {
             if (x.is_user_request != y.is_user_request) {
                 return x.is_user_request > y.is_user_request;
+            }
+            bool x_forced = x.auto_repair.trigger == auto_repair_trigger::forced;
+            bool y_forced = y.auto_repair.trigger == auto_repair_trigger::forced;
+            if (x_forced != y_forced) {
+                return x_forced > y_forced;
+            }
+            if (x.auto_repair.urgency != y.auto_repair.urgency) {
+                return x.auto_repair.urgency > y.auto_repair.urgency;
             }
             return x.repair_time_diff > y.repair_time_diff;
         });

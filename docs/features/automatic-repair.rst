@@ -127,6 +127,15 @@ can stand while one table is repaired on size alone:
 
 The two triggers are independent, and whichever condition is met first starts the repair.
 
+When more tablets are due than can be repaired at once, they are repaired in order of how far
+past their threshold they are: the time since the last repair as a multiple of the repair
+interval, or the unrepaired fraction as a multiple of the size threshold, whichever is the
+larger for the tablet. A tablet far overdue on either trigger is therefore repaired first, and
+neither trigger can hold the other back indefinitely: a tablet selected by the interval
+overtakes one selected by its size once it is as many intervals overdue as the other is
+multiples past its fraction — at most ten, with a fraction of ``0.1``, for a wholly unrepaired
+tablet. Repairs requested through the API come before all automatic ones.
+
 Repairing a tablet resets the repair interval for it, whichever trigger started the repair —
 including one requested through the API. The next time-based repair of that tablet is
 therefore due one interval after the last repair *began*, not one interval after the last
