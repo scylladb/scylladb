@@ -3652,7 +3652,7 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _logstor(logstor)
-    , _logstor_index(_schema->logstor_enabled() ? _logstor->make_primary_index(cache_enabled()) : nullptr)
+    , _logstor_index(_schema->logstor_enabled() ? _logstor->make_primary_index(_config.enable_cache, _schema->caching_options().enabled()) : nullptr)
     , _sg_manager(make_storage_group_manager())
     , _sstables(make_compound_sstable_set())
     , _sstable_deletion_gate(format("[table {}.{}] sstable_deletion_gate", _schema->ks_name(), _schema->cf_name()))
