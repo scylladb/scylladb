@@ -104,7 +104,7 @@ public:
     test_logstor_group(schema_ptr schema, replica::logstor::logstor& ls, bool cache_enabled = false)
         : logstor_group(ls.get_segment_manager().get_segment_size(), &ls.get_segment_manager().shard_segment_stats())
         , _table_id(schema->id())
-        , _owned_index(ls.make_primary_index(cache_enabled))
+        , _owned_index(ls.make_primary_index(cache_enabled, cache_enabled))
         , _index(*_owned_index)
         , _cm(ls.get_compaction_manager()) {
         _cm.add(*this);
@@ -248,7 +248,7 @@ inline index_entries entries_of(const replica::logstor::primary_index& index) {
 // separating or compacting while it runs: it reads the segments as they are.
 inline std::unique_ptr<replica::logstor::primary_index> rebuild_index_from_disk(replica::logstor::logstor& ls, ::table_id table,
         null_space_accounting& accounting) {
-    auto index = std::make_unique<replica::logstor::primary_index>(accounting, nullptr);
+    auto index = std::make_unique<replica::logstor::primary_index>(accounting, nullptr, false);
     ls.get_segment_manager().rebuild_index_from_disk([&] (const replica::logstor::record_header& h) -> replica::logstor::primary_index* {
         return h.table == table ? index.get() : nullptr;
     }).get();

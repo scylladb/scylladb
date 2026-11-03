@@ -736,7 +736,7 @@ public:
     future<> prepare_private_index() {
         // A tracker of its own, so cache-populate's churn doesn't tune the allocating sections the
         // other tests use; region and LRU are shared.
-        auto copy = std::make_unique<primary_index>(tests::logstor::noop_space_accounting, &_cache.logstor_tracker);
+        auto copy = std::make_unique<primary_index>(tests::logstor::noop_space_accounting, &_cache.logstor_tracker, true);
         for (const auto& key : _keys) {
             primary_index_key pk{key};
             auto entry = index().get(pk);

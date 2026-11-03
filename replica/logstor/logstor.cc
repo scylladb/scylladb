@@ -119,8 +119,8 @@ const compaction_manager& logstor::get_compaction_manager() const noexcept {
     return _segment_manager.get_compaction_manager();
 }
 
-std::unique_ptr<primary_index> logstor::make_primary_index(bool cache_enabled) {
-    return std::make_unique<primary_index>(_segment_manager, cache_enabled ? &_cache_tracker : nullptr);
+std::unique_ptr<primary_index> logstor::make_primary_index(bool with_cache_tracker, bool cache_enabled) {
+    return std::make_unique<primary_index>(_segment_manager, with_cache_tracker ? &_cache_tracker : nullptr, cache_enabled);
 }
 
 future<> logstor::flush_to_separator() {
