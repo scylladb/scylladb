@@ -48,15 +48,31 @@ def test_grant_applicable_data_and_role_permissions(cql, test_keyspace, cassandr
             'all roles': ['create', 'alter', 'drop', 'authorize', 'describe'],
             f'role {user}': ['alter', 'drop', 'authorize'],
         }
-        for resource, permissions in applicable_permissions.items():
-            # Applicable permissions can be legally granted
-            for permission in permissions:
-                cql.execute(f"GRANT {permission} ON {resource} TO {user}")
-            # Only applicable permissions can be granted - nonsensical combinations
-            # are refused with an error
-            for permission in all_permissions.difference(set(permissions)):
-                with pytest.raises((InvalidRequest, SyntaxException), match="support.*permissions"):
+        # The permissions granted directly to the user before the test (LIST
+        # also lists those which it inherits from other roles), and the
+        # permissions the test grants, as (resource, permission) pairs, where
+        # the resource is written like LIST PERMISSIONS lists it, e.g.,
+        # "<keyspace ks>"
+        permissions_before = {(r.resource, r.permission) for r in cql.execute(f"LIST ALL PERMISSIONS OF {user}")
+                              if r.role == user}
+        granted = {(f"<{resource}>", permission.upper())
+                   for resource, permissions in applicable_permissions.items() for permission in permissions}
+        try:
+            for resource, permissions in applicable_permissions.items():
+                # Applicable permissions can be legally granted
+                for permission in permissions:
                     cql.execute(f"GRANT {permission} ON {resource} TO {user}")
+                # Only applicable permissions can be granted - nonsensical combinations
+                # are refused with an error
+                for permission in all_permissions.difference(set(permissions)):
+                    with pytest.raises((InvalidRequest, SyntaxException), match="support.*permissions"):
+                        cql.execute(f"GRANT {permission} ON {resource} TO {user}")
+        finally:
+            # Revoke the permissions this test granted, because other tests
+            # using the same server may list the permissions - and listing
+            # the permissions on a role also lists those on all roles.
+            for resource, permission in granted - permissions_before:
+                cql.execute(f"REVOKE {permission} ON {resource[1:-1]} FROM {user}")
 
 
 def eventually_authorized(fun, timeout_s=10):
