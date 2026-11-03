@@ -18,6 +18,7 @@
 import pytest
 import json
 import random
+from test.pylib.skip_types import skip_env
 from .util import new_test_table, is_scylla, unique_name, config_value_context, wait_for_vector_index
 from cassandra.protocol import InvalidRequest, ConfigurationException
 
@@ -64,12 +65,99 @@ def test_create_vector_search_index(cql, test_keyspace, scylla_only, skip_withou
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
 
 
-def test_create_vector_search_index_uppercase_class(cql, test_keyspace, scylla_only, skip_without_tablets):
-    """Custom index class name lookup is case-insensitive, so 'VECTOR_INDEX'
-    should be accepted just like 'vector_index'."""
+vector_index_class_names = [
+    "sai", "SAI", "StorageAttachedIndex", "STORAGEATTACHEDINDEX",
+    "vector_index", "VECTOR_INDEX", "Vector_Index"]
+
+def skip_vector_index_class_on_cassandra(cql, class_name):
+    if class_name.lower() == 'vector_index' and not is_scylla(cql):
+        skip_env("Cassandra has no 'vector_index' class")
+
+def index_names(cql, table):
+    ks, cf = table.split('.')
+    return [row.index_name for row in cql.execute(
+        f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name = '{ks}' AND table_name = '{cf}'")]
+
+@pytest.mark.parametrize("class_name", vector_index_class_names)
+def test_vector_index_duplicate_ignores_class_name_case(cql, test_keyspace, skip_on_scylla_vnodes, class_name):
+    """The class name of a vector index may be written in any letter case,
+    so a second index on the same column is rejected whatever the spelling.
+    Before SCYLLADB-5524 was fixed, Scylla accepted an index created with
+    USING 'vector_index' next to one created with 'VECTOR_INDEX'."""
+    skip_vector_index_class_on_cassandra(cql, class_name)
+
     schema = 'p int primary key, v vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'VECTOR_INDEX'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{class_name}'")
+        [index_name] = index_names(cql, table)
+        for spelling in [class_name.lower(), class_name.upper()]:
+            # Scylla rejects it as a duplicate. Cassandra does not allow
+            # a second SAI index on a column at all.
+            with pytest.raises(InvalidRequest, match="duplicate|more than one"):
+                cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{spelling}'")
+        assert index_names(cql, table) == [index_name]
+
+
+@pytest.mark.parametrize("class_name", vector_index_class_names)
+def test_describe_vector_index_with_any_class_name_case(cql, test_keyspace, skip_on_scylla_vnodes, class_name):
+    """A vector index created with any spelling of its class name is described
+    as a statement that recreates the same index."""
+    skip_vector_index_class_on_cassandra(cql, class_name)
+
+    schema = 'p int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(v) USING '{class_name}'")
+        desc = cql.execute(f"DESC INDEX {test_keyspace}.{index_name}").one().create_statement
+        cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+        cql.execute(desc)
+        assert cql.execute(f"DESC INDEX {test_keyspace}.{index_name}").one().create_statement == desc
+
+
+@pytest.mark.parametrize("class_name", vector_index_class_names)
+def test_vector_index_if_not_exists_ignores_class_name_case(cql, test_keyspace, skip_on_scylla_vnodes, cassandra_bug, class_name):
+    """CREATE INDEX IF NOT EXISTS does nothing if the same index exists,
+    even if its class name was written in another letter case.
+    Cassandra compares the class name exactly, so it does not see the existing
+    index as the same one and fails because a column may have only one SAI index."""
+    skip_vector_index_class_on_cassandra(cql, class_name)
+
+    schema = 'p int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{class_name}'")
+        [index_name] = index_names(cql, table)
+        for spelling in [class_name.lower(), class_name.upper()]:
+            cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ON {table}(v) USING '{spelling}'")
+        assert index_names(cql, table) == [index_name]
+
+
+def test_create_vector_search_index_uppercase_class(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """Custom index class name lookup is case-insensitive, so 'VECTOR_INDEX'
+    should be accepted just like 'vector_index', and stored in lowercase,
+    because Vector Store recognizes a vector index only by its lowercase
+    class name."""
+    schema = 'p int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(v) USING 'VECTOR_INDEX'")
+        table_name = table.split('.')[1]
+        row = cql.execute(
+            f"SELECT options FROM system_schema.indexes WHERE keyspace_name = '{test_keyspace}' "
+            f"AND table_name = '{table_name}' AND index_name = '{index_name}'").one()
+        assert row.options['class_name'] == 'vector_index'
+
+
+def test_describe_vector_index_with_mixed_case_class(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """A local vector index created with USING 'Vector_Index' must be
+    described like one created with USING 'vector_index'.
+    Before SCYLLADB-5524 was fixed, it was described without its vector
+    and filtering columns, as '((p), )', which cannot be executed."""
+    schema = 'p int, c int, v vector<float, 3>, f1 int, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}((p), v, f1) USING 'Vector_Index'")
+        desc = cql.execute(f"DESC INDEX {test_keyspace}.{index_name}").one().create_statement
+        assert f"{table}((p), v, f1)" in desc
 
 
 def test_create_vector_search_index_using_sai(cql, test_keyspace, skip_on_scylla_vnodes):
