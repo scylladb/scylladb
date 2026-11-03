@@ -9,6 +9,123 @@ Alternator's compatibility with DynamoDB is described in the
 But Alternator also adds several features and APIs that are not available in
 DynamoDB. These Alternator-specific APIs are documented here.
 
+## Request timeout
+
+Alternator uses `alternator_timeout_in_ms` as the default timeout for backend
+operations. A client can override this timeout for an individual request with
+the `X-Scylla-Timeout` HTTP header on either HTTP or HTTPS requests.
+
+The override applies to `GetItem`, `BatchGetItem`, `Query`, `Scan`, `PutItem`,
+`UpdateItem`, `DeleteItem`, `BatchWriteItem`, `GetRecords`, and `SearchVectors`.
+Other APIs, including table/schema changes, tags, TTL settings, stream
+configuration and export jobs, validate the header but ignore a valid value.
+
+For example:
+
+```text
+X-Scylla-Timeout: 30s
+```
+
+If the header is absent, `alternator_timeout_in_ms` retains its existing
+behavior. The header can increase or decrease the configured timeout. Its name
+is case-insensitive. Values use CQL duration syntax, such as `500ms`, `5s`, or
+`1m30s`, and must be non-negative with millisecond granularity, at most
+`4294967295ms` (the largest unsigned 32-bit millisecond value). Days and months
+are not accepted, matching CQL's `USING TIMEOUT`. Invalid values return
+`ValidationException`. A zero timeout expires immediately.
+
+With a header, backend work shares one deadline measured from the start of HTTP
+request handling. Query and Scan, batch operations, read-before-write
+operations, and LWTs reuse this deadline instead of starting a fresh timeout at
+each step. The deadline also follows requests between shards, and bounds the
+wait for the target shard. A completed
+operation keeps its successful response even if response processing crosses the
+deadline. A preimage read for a stream with old or new images still has CDC's
+10-second limit, so a longer header does not extend that read.
+A strongly consistent read (`ConsistentRead: true`) may also wait for a
+read-repair write. That write uses `write_request_timeout_in_ms`, measured from
+when the repair starts, rather than the header deadline.
+An LWT that loses a Paxos round to a concurrent LWT waits a random 0-100 ms
+before its next round. It checks the deadline only after this wait, so it can
+fail up to 100 ms after the deadline.
+
+Expired operations return HTTP 500 `InternalServerError`, the same error class
+as existing Alternator backend timeouts. A write timeout does not prove that the
+write failed: it may already have reached replicas or committed through LWT.
+The header does not roll back writes. Retrying an increment or another
+non-idempotent operation after an uncertain result can apply it more than once.
+`BatchGetItem` can return successful reads together with `UnprocessedKeys` for
+timed-out reads; retry the unprocessed keys.
+
+The interval starts when the API handler receives the request headers, before
+waiting for request memory, reading and parsing the body, and authentication.
+It excludes connection establishment, TLS negotiation, any wait before the
+handler starts, and writing the response. Invalid headers are reported after
+authentication. Send the header once: repeated `X-Scylla-Timeout` fields are
+rejected with `ValidationException`.
+
+Under overload, short deadlines change slow requests into fast errors. Fast 500
+replies arrive before the client's own timeout, so clients keep their
+connections and send more requests. Set `max_concurrent_requests_per_shard`
+too, so that the server rejects excess requests with `RequestLimitExceeded`
+before any coordinator work. A starting value is the sustained request rate of
+one shard multiplied by the queueing time that you accept, for example 6,000
+requests/s x 25 ms = 150. Tune it under load.
+
+The header bounds the wait for request memory and the backend work. It does
+not bound the HTTP response latency. Body reception and parsing, signature
+verification (including fetching the signing key) and permission checks keep
+their existing wait policies. The header does not interrupt them, but their
+time reduces the budget that is left. If the deadline has already
+expired before parsing or dispatching the operation, or before starting a
+non-LWT write, the server returns a timeout without starting that step. These timeouts,
+including memory admission timeouts, increment
+`scylla_alternator_requests_timed_out_before_execution`.
+On a memory admission timeout, the server drains the unread body before
+replying so the HTTP connection remains reusable.
+
+The header does not persist on the HTTP connection. To configure a Boto3 client
+default once in application code, register a hook that adds the header to each
+request before signing:
+
+```python
+def set_timeout(request, **kwargs):
+    if 'X-Scylla-Timeout' not in request.headers:
+        request.headers['X-Scylla-Timeout'] = '5s'
+
+service = client.meta.service_model.service_id.hyphenize()
+client.meta.events.register(f'before-sign.{service}', set_timeout)
+```
+
+Register this hook on each client that needs the default. The signing event
+uses `dynamodb` for DynamoDB clients and `dynamodb-streams` for DynamoDB Streams
+clients.
+
+This server timeout is separate from the SDK's socket timeout and retry budget;
+an SDK retry is another HTTP request with its own deadline. SDKs can retry HTTP
+500 errors automatically, so the total call can take much longer than the header
+interval. To observe one attempt in Boto3, use
+`Config(retries={'total_max_attempts': 1})`. Choose a socket read timeout longer
+than the server budget; a shorter socket timeout can leave the outcome unknown.
+
+Client-side header optimization can remove `X-Scylla-Timeout` before it reaches
+the server. Configure it to preserve the header, or disable it for affected
+clients. Removing a header after signing can also invalidate the signature.
+The following settings disable filtering or extend its allowlist:
+
+| Client | Setting |
+| --- | --- |
+| Rust | `AlternatorConfig::builder().optimize_headers(false)` |
+| Go | `shared.WithOptimizeHeaders(false)`, or a `shared.WithCustomOptimizeHeaders` callback that retains `X-Scylla-Timeout` along with the required headers |
+| JavaScript | `headerOptimization: false`, or `headerOptimization: { additionalAllowedHeaders: ['X-Scylla-Timeout'] }` |
+
+Check the options supported by the client version in use. In particular, Rust's
+optimizer is enabled by default; versions that retain signed headers can still
+strip a custom header from unsigned requests. Any other client or proxy using a
+header allowlist must preserve this header too.
+During a rolling upgrade, older nodes can ignore the extension, so use endpoints
+on upgraded nodes when relying on the deadline.
+
 ## Vector search extensions
 Alternator implements Amazon DynamoDB's own Vector Search API
 (`VectorIndexes`, `VectorIndexUpdates`, `SearchVectors`), so this core
