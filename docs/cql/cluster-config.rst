@@ -184,7 +184,7 @@ Available options
      - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
      - Repair a tablet once the average unrepaired size of its replicas reaches this fraction of
        their average SSTable size, without waiting for ``auto_repair_threshold_in_seconds``. Accepts
-       a number from ``0`` to ``1``; ``0`` disables the size-based trigger. Default: ``0.0``. See
+       a number from ``0`` to ``1``; ``0`` disables the size-based trigger. Default: ``0.1``. See
        :doc:`automatic repair </features/automatic-repair>`.
    * - ``auto_repair_threshold_min_size_in_bytes``
      - integer
