@@ -22,6 +22,7 @@
 #include "utils/UUID.hh"
 #include "query/query-result-set.hh"
 #include "db_clock.hh"
+#include "db/timeout_clock.hh"
 #include "mutation_query.hh"
 #include "system_keyspace_view_types.hh"
 #include "sstables/sstables_registry.hh"
@@ -596,10 +597,12 @@ public:
     future<> read_cdc_streams_state(std::optional<table_id> table, noncopyable_function<future<>(table_id, db_clock::time_point, utils::chunked_vector<cdc::stream_id>)> f);
     future<> read_cdc_streams_history(table_id table, std::optional<db_clock::time_point> from, noncopyable_function<future<>(table_id, db_clock::time_point, cdc::cdc_stream_diff)> f);
 
-    // Reads current generation timestamp for the given table. Throws runtime_error (see `cql3::untyped_result_set::one()`) if table not found.
+    // Reads current generation timestamp for the given table. Throws runtime_error if table not found.
     // NOTE: there's a sibling `cdc_current_generation_timestamp` in `system_distributed_keyspace`, that does the same for tables backed up by vnodes.
+    // An optional deadline replaces the default internal read timeout.
     // NOTE: currently used only by alternator
-    future<db_clock::time_point> read_cdc_for_tablets_current_generation_timestamp(std::string_view ks_name, std::string_view table_name);
+    future<db_clock::time_point> read_cdc_for_tablets_current_generation_timestamp(std::string_view ks_name, std::string_view table_name,
+            std::optional<db::timeout_clock::time_point> deadline = std::nullopt);
 
     // Reads and builds generation map for a given table - a map from generation timestamps to vector of all stream ids for that generation.
     // Generations with timestamp >= `not_older_than` are returned, plus the one just before it (the straddling generation).

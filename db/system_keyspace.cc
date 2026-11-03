@@ -2127,17 +2127,26 @@ future<std::unordered_set<dht::token>> system_keyspace::get_local_tokens() {
 // Unlike the vnode version which reads from a replicated system_distributed table (and thus
 // requires QUORUM), this reads from a virtual table backed by local Raft-managed tablet
 // metadata, so consistency_level::ONE is the only meaningful level.
-future<db_clock::time_point> system_keyspace::read_cdc_for_tablets_current_generation_timestamp(std::string_view ks_name, std::string_view table_name) {
+future<db_clock::time_point> system_keyspace::read_cdc_for_tablets_current_generation_timestamp(std::string_view ks_name, std::string_view table_name,
+        std::optional<db::timeout_clock::time_point> deadline) {
     // note: we only care about the newest ("current") timestamp, hence limit 1.
     // this depends on table's native clustering order being DESC on timestamp, which is the case for CDC_TIMESTAMPS.
     static const sstring query = format("SELECT timestamp FROM {}.{} WHERE keyspace_name = ? and table_name = ? limit 1", NAME, CDC_TIMESTAMPS);
-    auto timestamp_cql = co_await _qp.execute_internal(
-            query,
-            db::consistency_level::ONE,
-            { ks_name, table_name },
-            cql3::query_processor::cache_internal::no);
-
-    co_return timestamp_cql->one().get_as<db_clock::time_point>("timestamp");
+    if (!deadline) {
+        auto timestamp_cql = co_await _qp.execute_internal(query, db::consistency_level::ONE,
+                { ks_name, table_name }, cql3::query_processor::cache_internal::no);
+        co_return timestamp_cql->one().get_as<db_clock::time_point>("timestamp");
+    }
+    std::optional<db_clock::time_point> timestamp;
+    co_await _qp.query_internal(query, db::consistency_level::ONE, { ks_name, table_name }, 1, *deadline,
+            [&] (const cql3::untyped_result_set_row& row) {
+                timestamp = row.get_as<db_clock::time_point>("timestamp");
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            });
+    if (!timestamp) {
+        throw std::runtime_error(fmt::format("No CDC generation timestamp found for {}.{}", ks_name, table_name));
+    }
+    co_return *timestamp;
 }
 
 // Tablet-based counterpart of system_distributed_keyspace::cdc_get_versioned_streams.
