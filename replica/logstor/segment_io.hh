@@ -24,7 +24,6 @@
 namespace replica::logstor {
 
 struct segment_info {
-    segment_kind kind;
     segment_sequence segment_seq;
 
     struct mixed {};
@@ -35,6 +34,10 @@ struct segment_info {
     };
 
     std::variant<mixed, full> v;
+
+    segment_kind kind() const noexcept {
+        return std::holds_alternative<full>(v) ? segment_kind::full : segment_kind::mixed;
+    }
 };
 
 // Returns the segment info of the chunk at the start of `in`, or nullopt if its headers are not

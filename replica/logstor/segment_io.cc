@@ -84,7 +84,6 @@ segment_info make_segment_info(const chunk_headers& headers) {
     const auto& ch = headers.chunk;
     const auto& sh = headers.segment;
     segment_info seg_info {
-        .kind = ch.kind,
         .segment_seq = ch.segment_seq,
     };
 
@@ -213,7 +212,7 @@ future<std::optional<scanned_chunk>> segment_scanner::read_chunk() {
     // even when the body of its chunk is torn.
     auto seg_info = make_segment_info(*headers);
     // A full segment has only one chunk.
-    if (seg_info.kind == segment_kind::full) {
+    if (seg_info.kind() == segment_kind::full) {
         _state = scan_state::last;
     }
 
