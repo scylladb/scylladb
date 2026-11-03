@@ -5,6 +5,18 @@ Service Levels
 Service Levels CQL commands
 ===========================
 
+Service levels are managed with the following CQL commands:
+
+* ``CREATE SERVICE_LEVEL``, ``ALTER SERVICE_LEVEL``, and ``DROP SERVICE_LEVEL`` - create, modify, and delete service levels.
+* ``LIST SERVICE_LEVEL`` and ``LIST ALL SERVICE_LEVELS`` - display the parameters of one or all service levels.
+* ``ATTACH SERVICE_LEVEL`` and ``DETACH SERVICE_LEVEL`` - assign a service level to a role or remove it from a role.
+* ``LIST ATTACHED SERVICE_LEVEL OF`` and ``LIST ALL ATTACHED SERVICE_LEVELS`` - display the service levels attached to roles.
+
+See :ref:`Service Level Management <workload-priorization-service-level-management>` on the
+:doc:`Workload Prioritization </features/workload-prioritization>` page for the syntax and examples of these commands.
+
+This page describes the ``LIST EFFECTIVE SERVICE LEVEL OF`` command.
+
 ``LIST EFFECTIVE SERVICE LEVEL OF <role>``
 -----------------------------------------------------------
 
