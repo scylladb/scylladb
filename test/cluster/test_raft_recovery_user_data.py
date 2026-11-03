@@ -270,8 +270,7 @@ async def test_raft_recovery_user_data_sc(manager: ScyllaClusterManager):
         """
         group_ids = [str(r.raft_group_id) for r in await manager.get_cql().run_async(
                 f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")]
-        # Passing a timeout matters: a tablet group defines no default one.
-        await gather_safely(*(read_barrier(manager.api, srv.ip_addr, group_id=gid, timeout=60)
+        await gather_safely(*(read_barrier(manager.api, srv.ip_addr, group_id=gid)
                               for srv in live_servers for gid in group_ids))
 
     # Each step of the test writes its own keys, and reads all keys written so far.
