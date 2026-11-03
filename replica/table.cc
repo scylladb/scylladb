@@ -4966,6 +4966,9 @@ void table::set_schema(schema_ptr s) {
     }
     const bool large_data_guardrail_toggled = large_data_guardrail_enabled(*s) != large_data_guardrail_enabled(*_schema);
     _schema = std::move(s);
+    if (_logstor_index) {
+        _logstor_index->set_cache_enabled(_schema->caching_options().enabled());
+    }
     if (large_data_guardrail_toggled) {
         _large_data_guardrail->rebuild({});
         _large_data_guardrail = make_large_data_guardrail();
