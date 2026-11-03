@@ -32,10 +32,16 @@ def test_create_fulltext_index_on_supported_text_column(cql, test_keyspace, colu
 
 
 def test_create_fulltext_index_uppercase_class(cql, test_keyspace):
-    """Custom index class name lookup is case-insensitive."""
+    """Custom index class name lookup is case-insensitive, and the name is stored in lowercase."""
     schema = 'p int primary key, content text'
     with new_test_table(cql, test_keyspace, schema) as table:
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'FULLTEXT_INDEX'")
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(content) USING 'FULLTEXT_INDEX'")
+        table_name = table.split('.')[1]
+        row = cql.execute(
+            f"SELECT options FROM system_schema.indexes WHERE keyspace_name = '{test_keyspace}' "
+            f"AND table_name = '{table_name}' AND index_name = '{index_name}'").one()
+        assert row.options['class_name'] == 'fulltext_index'
 
 
 @pytest.mark.parametrize("column_type", ["int", "blob", "vector<float, 3>"])

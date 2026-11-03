@@ -66,10 +66,28 @@ def test_create_vector_search_index(cql, test_keyspace, scylla_only, skip_withou
 
 def test_create_vector_search_index_uppercase_class(cql, test_keyspace, scylla_only, skip_without_tablets):
     """Custom index class name lookup is case-insensitive, so 'VECTOR_INDEX'
-    should be accepted just like 'vector_index'."""
+    should be accepted just like 'vector_index', and stored in lowercase."""
     schema = 'p int primary key, v vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'VECTOR_INDEX'")
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(v) USING 'VECTOR_INDEX'")
+        table_name = table.split('.')[1]
+        row = cql.execute(
+            f"SELECT options FROM system_schema.indexes WHERE keyspace_name = '{test_keyspace}' "
+            f"AND table_name = '{table_name}' AND index_name = '{index_name}'").one()
+        assert row.options['class_name'] == 'vector_index'
+
+
+def test_describe_vector_index_with_mixed_case_class(cql, test_keyspace, scylla_only, skip_without_tablets):
+    """A local vector index created with USING 'Vector_Index' must be
+    described like one created with USING 'vector_index', with the partition
+    key columns in parentheses. Reproduces SCYLLADB-5524."""
+    schema = 'p int, c int, v vector<float, 3>, f1 int, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}((p), v, f1) USING 'Vector_Index'")
+        desc = cql.execute(f"DESC INDEX {test_keyspace}.{index_name}").one().create_statement
+        assert f"{table}((p), v, f1)" in desc
 
 
 def test_create_vector_search_index_using_sai(cql, test_keyspace, skip_on_scylla_vnodes):
