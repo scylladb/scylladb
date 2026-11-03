@@ -321,6 +321,10 @@ int main(int argc, char **argv) {
         auto stats = app.configuration()["stats"].as<bool>();
 
         return seastar::async([count, iters, batch, col, tst, stats] {
+            if (count <= 0) {
+                fmt::print("count must be positive\n");
+                return;
+            }
             std::unique_ptr<collection_tester> c;
 
             if (col == "bptree") {
@@ -349,12 +353,22 @@ int main(int argc, char **argv) {
 
             fmt::print("Inserting {:d} k:v pairs into {} {:d} times\n", count, col, iters);
 
+            perf_sampler sampler;
+            // Counters read 0 when perf events are unavailable (e.g. in containers).
+            auto per_key = [count] (uint64_t v) {
+                return v ? fmt::format("{:.1f}", double(v) / count) : std::string("N/A");
+            };
+            auto report = [count, &per_key] (std::string_view what, const perf_sample& m) {
+                fmt::print("{}: {} instructions / {} cycles / {:.2f} allocs / {:.1f} ns per key\n", what,
+                        per_key(m.instructions), per_key(m.cycles), double(m.allocations) / count, m.time.count() * 1e9 / count);
+            };
+
             for (auto rep = 0; rep < iters; rep++) {
                 std::shuffle(keys.begin(), keys.end(), g);
                 seastar::thread::yield();
 
                 if (tst == "oneshot") {
-                    auto d = duration_in_seconds([&] {
+                    auto d = sampler.measure([&] {
                         for (int i = 0; i < count; i++) {
                             c->insert_and_erase(keys[i]);
                             if ((i + 1) % batch == 0) {
@@ -363,11 +377,11 @@ int main(int argc, char **argv) {
                         }
                     });
 
-                    fmt::print("one-shot: {:.6f} ms\n", d.count() * 1000);
+                    report("one-shot", d);
                     continue;
                 }
 
-                auto d = duration_in_seconds([&] {
+                auto d = sampler.measure([&] {
                     for (int i = 0; i < count; i++) {
                         c->insert(keys[i]);
                         if ((i + 1) % batch == 0) {
@@ -376,7 +390,7 @@ int main(int argc, char **argv) {
                     }
                 });
 
-                fmt::print("fill: {:.6f} ms\n", d.count() * 1000);
+                report("fill", d);
 
                 if (stats) {
                     c->show_stats();
@@ -386,7 +400,7 @@ int main(int argc, char **argv) {
                     std::shuffle(keys.begin(), keys.end(), g);
                     seastar::thread::yield();
 
-                    d = duration_in_seconds([&] {
+                    d = sampler.measure([&] {
                         for (int i = 0; i < count; i++) {
                             c->erase(keys[i]);
                             if ((i + 1) % batch == 0) {
@@ -395,24 +409,24 @@ int main(int argc, char **argv) {
                         }
                     });
 
-                    fmt::print("erase: {:.6f} ms\n", d.count() * 1000);
+                    report("erase", d);
                 } else if (tst == "drain") {
-                    d = duration_in_seconds([&] {
+                    d = sampler.measure([&] {
                         c->drain(batch);
                     });
 
-                    fmt::print("drain: {:.6f} ms\n", d.count() * 1000);
+                    report("drain", d);
                 } else if (tst == "clear") {
-                    d = duration_in_seconds([&] {
+                    d = sampler.measure([&] {
                         c->clear();
                     });
 
-                    fmt::print("clear: {:.6f} ms\n", d.count() * 1000);
+                    report("clear", d);
                 } else if (tst == "find") {
                     std::shuffle(keys.begin(), keys.end(), g);
                     seastar::thread::yield();
 
-                    d = duration_in_seconds([&] {
+                    d = sampler.measure([&] {
                         for (int i = 0; i < count; i++) {
                             c->lower_bound(keys[i]);
                             if ((i + 1) % batch == 0) {
@@ -421,18 +435,18 @@ int main(int argc, char **argv) {
                         }
                     });
 
-                    fmt::print("find: {:.6f} ms\n", d.count() * 1000);
+                    report("find", d);
                 } else if (tst == "scan") {
-                    d = duration_in_seconds([&] {
+                    d = sampler.measure([&] {
                         c->scan(batch);
                     });
 
-                    fmt::print("scan: {:.6f} ms\n", d.count() * 1000);
+                    report("scan", d);
                 } else if (tst == "clone") {
-                    d = duration_in_seconds([&] {
+                    d = sampler.measure([&] {
                         c->clone();
                     });
-                    fmt::print("clone: {:.6f} ms\n", d.count() * 1000);
+                    report("clone", d);
                 }
 
                 c->clear();

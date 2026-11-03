@@ -11,9 +11,8 @@
 #include "schema/schema_builder.hh"
 #include "utils/UUID_gen.hh"
 #include <seastar/core/app-template.hh>
-#include <seastar/core/memory.hh>
 #include <seastar/core/reactor.hh>
-#include <seastar/testing/linux_perf_event.hh>
+#include "test/perf/perf.hh"
 
 // Builds a partition with rows [first_row, first_row + rows), all columns set.
 static mutation make_mutation(schema_ptr s, const partition_key& key, int first_row, int rows,
@@ -36,26 +35,14 @@ static mutation make_mutation(schema_ptr s, const partition_key& key, int first_
 // the three, as they do not depend on whatever else the machine happens to be running.
 template <typename Op>
 static void time_op(const char* name, size_t iterations, Op op) {
-    using clk = std::chrono::steady_clock;
-    clk::duration total{};
-    uint64_t allocations = 0;
-    uint64_t instructions = 0;
-    auto instructions_counter = linux_perf_event::user_instructions_retired();
-    instructions_counter.enable();
+    perf_sampler sampler;
+    perf_sample total;
     for (size_t i = 0; i < iterations; i++) {
-        auto allocations_before = memory::stats().mallocs();
-        auto instructions_before = instructions_counter.read();
-        auto start = clk::now();
-        op();
-        auto end = clk::now();
-        instructions += instructions_counter.read() - instructions_before;
-        total += end - start;
-        allocations += memory::stats().mallocs() - allocations_before;
+        total += sampler.measure(op);
     }
-    instructions_counter.disable();
     fmt::print("{:<46}{:>8.1f} us {:>12.0f} instr {:>9.0f} allocs\n", name,
-            std::chrono::duration<double, std::micro>(total).count() / iterations,
-            double(instructions) / iterations, double(allocations) / iterations);
+            std::chrono::duration<double, std::micro>(total.time).count() / iterations,
+            double(total.instructions) / iterations, double(total.allocations) / iterations);
 }
 
 // Builds a schema with @column_count blob columns, and a second version of the same

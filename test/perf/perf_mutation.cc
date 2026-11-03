@@ -13,7 +13,6 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/reactor.hh>
 
-#include <seastar/testing/linux_perf_event.hh>
 #include <stdexcept>
 
 static atomic_cell make_atomic_cell(data_type dt, bytes value) {
@@ -93,8 +92,8 @@ int main(int argc, char* argv[]) {
         bytes value = int32_type->decompose(3);
 
         size_t total_ops = 0;
-        auto instructions_retired_counter = linux_perf_event::user_instructions_retired();
-        auto cpu_cycles_retired_counter = linux_perf_event::user_cpu_cycles_retired();
+        perf_sampler sampler;
+        perf_sample sample;
 
         if (merge_interleave) {
             size_t gap = merge_gap;
@@ -111,9 +110,9 @@ int main(int argc, char* argv[]) {
                 auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(int32_t(2 * gap * r + 1))});
                 src.set_clustered_cell(c_key, col, make_atomic_cell(col.type, value));
             }
-            instructions_retired_counter.enable();
-            cpu_cycles_retired_counter.enable();
-            target.apply(std::move(src));
+            sample = sampler.measure([&] {
+                target.apply(std::move(src));
+            });
             total_ops = merge_rows / gap;
         } else if (merge_mode) {
             std::cout << format("Merging two freshly-built mutations ({} row(s) x {} column(s) each) "
@@ -133,26 +132,26 @@ int main(int argc, char* argv[]) {
                 }
                 return m;
             };
-            instructions_retired_counter.enable();
-            cpu_cycles_retired_counter.enable();
-            time_it([&] {
-                mutation target = build_mutation();
-                mutation src = build_mutation();
-                target.apply(std::move(src));
-                total_ops++;
+            sample = sampler.measure([&] {
+                time_it([&] {
+                    mutation target = build_mutation();
+                    mutation src = build_mutation();
+                    target.apply(std::move(src));
+                    total_ops++;
+                });
             });
         } else if (sequential_columns) {
             std::cout << format("Inserting {} distinct columns into one row, once each (miss path)...\n", column_count);
             auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
-            instructions_retired_counter.enable();
-            cpu_cycles_retired_counter.enable();
-            for (size_t i = 0; i < column_count; i++) {
-                mutation m(s, key);
-                const column_definition& col = *s->get_column_definition(to_bytes(cnames[i]));
-                m.set_clustered_cell(c_key, col, make_atomic_cell(col.type, value));
-                mt.apply(std::move(m));
-                total_ops++;
-            }
+            sample = sampler.measure([&] {
+                for (size_t i = 0; i < column_count; i++) {
+                    mutation m(s, key);
+                    const column_definition& col = *s->get_column_definition(to_bytes(cnames[i]));
+                    m.set_clustered_cell(c_key, col, make_atomic_cell(col.type, value));
+                    mt.apply(std::move(m));
+                    total_ops++;
+                }
+            });
         } else {
             std::cout << format("Timing mutation of a single column, cycling through {} row(s)...\n", rows);
 
@@ -165,27 +164,23 @@ int main(int argc, char* argv[]) {
             }
             size_t row_idx = 0;
 
-            instructions_retired_counter.enable();
-            cpu_cycles_retired_counter.enable();
-            time_it([&] {
-                mutation m(s, key);
-                const column_definition& col = *s->get_column_definition(to_bytes(cnames[size_t(std::rand()) % column_count]));
-                m.set_clustered_cell(c_keys[row_idx], col, make_atomic_cell(col.type, value));
-                mt.apply(std::move(m));
-                row_idx = (row_idx + 1) % rows;
-                total_ops++;
+            sample = sampler.measure([&] {
+                time_it([&] {
+                    mutation m(s, key);
+                    const column_definition& col = *s->get_column_definition(to_bytes(cnames[size_t(std::rand()) % column_count]));
+                    m.set_clustered_cell(c_keys[row_idx], col, make_atomic_cell(col.type, value));
+                    mt.apply(std::move(m));
+                    row_idx = (row_idx + 1) % rows;
+                    total_ops++;
+                });
             });
         }
 
-        instructions_retired_counter.disable();
-        cpu_cycles_retired_counter.disable();
-        uint64_t insns = instructions_retired_counter.read();
-        uint64_t cycles = cpu_cycles_retired_counter.read();
         auto fmt_per_op = [&] (uint64_t v) {
             return v ? format("{:.1f}", double(v) / total_ops) : sstring("N/A");
         };
         std::cout << format("{} total ops, {} insns/op, {} cycles/op\n",
-                total_ops, fmt_per_op(insns), fmt_per_op(cycles));
+                total_ops, fmt_per_op(sample.instructions), fmt_per_op(sample.cycles));
 
         engine().exit(0);
     });
