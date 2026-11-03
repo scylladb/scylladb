@@ -1430,8 +1430,6 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
         return;
     }
 
-    const auto true_size = client.get("/storage_service/snapshots/size/true").GetInt64();
-
     constexpr size_t num_columns = 7;
     std::array<std::string, num_columns> header_row{"Snapshot name", "Keyspace name", "Column family name", "True size", "Size on disk",
             "Creation time", "Expiration time"};
@@ -1475,10 +1473,16 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
         return fmt::format("{:%FT%TZ}", std::chrono::sys_seconds(std::chrono::seconds(value->GetInt64())));
     };
 
+    // The total true disk space used is the sum of the true sizes reported
+    // above. Querying /storage_service/snapshots/size/true for it would make
+    // the server scan all the snapshot directories a second time.
+    int64_t true_size = 0;
+
     std::vector<std::array<std::string, num_columns>> rows;
     for (const auto& snapshot_by_name : snapshots.GetArray()) {
         const auto snapshot_name = std::string(rjson::to_string_view(snapshot_by_name.GetObject()["key"]));
         for (const auto& snapshot : snapshot_by_name.GetObject()["value"].GetArray()) {
+            true_size += snapshot["live"].GetInt64();
             rows.push_back({
                     snapshot_name,
                     std::string(rjson::to_string_view(snapshot["ks"])),
