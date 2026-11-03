@@ -1279,6 +1279,7 @@ future<> schema_and_topology_applier::apply_persisted() {
     });
     if (_topology_change) {
         co_await _ss.local().finish_topology_state_change(*_topology_change);
+        _ss.local().wake_up_topology_state_machine();
     }
 }
 
