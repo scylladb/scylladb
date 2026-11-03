@@ -12,7 +12,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, unique_name, wait_for, Host
 from test.cluster.util import ensure_raft_group_leader_on, get_topology_coordinator, new_test_keyspace, new_test_table
 from test.pylib.internal_types import HostID, ServerInfo
-from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout
+from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteFailure, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import ServerError
@@ -3825,3 +3825,93 @@ async def test_non_pure_pk_function_shard_bounce_is_at_most_one(manager: ScyllaC
             assert not offenders, (
                 f"{len(offenders)} of {STATEMENTS_CNT} {kind}s with uuid() as the key were bounced between shards more "
                 f"than once (bounces per request: {offenders}): the receiving shard evaluated uuid() again")
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_shutdown_does_not_abort_forwarded_write(manager: ScyllaClusterManager):
+    """
+    Reproducer for SCYLLADB-5594.
+
+    A write sent to a follower is forwarded to the leader over forward_cql. On
+    the leader it runs with the abort source of the leader's CQL server, but
+    no connection of the leader waits for it: the client's connection is on
+    the follower. On a graceful stop the leader's CQL server used to wait only
+    for its own connections and then abort its requests, so it aborted the
+    forwarded write at once, while the follower was still waiting for it, and
+    the client got an error for a write that may still be applied.
+
+    The write is paused on the leader, the leader is stopped gracefully, and
+    the write is released once the leader's CQL server is waiting for its
+    requests to finish. The write has to succeed: the follower's connection
+    that owns it is still waiting for it.
+
+    The followers refuse the leadership for the whole stop, so the leader stays
+    the leader and the released write goes to raft, which observes the abort
+    source. Without the fix it is aborted there. Had the leadership moved, the
+    write would be redirected to the new leader without observing the abort
+    source, and the test would pass without the fix.
+    """
+    cmdline = DEFAULT_CMDLINE + ["--smp=2", "--logger-log-level", "cql_server=debug"]
+    leader = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline,
+                                      property_file={"dc": "dc1", "rack": "r1"})
+    follower_config = DEFAULT_CONFIG | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    followers = await manager.servers_add(2, config=follower_config, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+    ])
+    cql, hosts = await manager.get_ready_cql([leader, *followers])
+    follower = followers[0]
+    follower_host = next(h for h in hosts if h.address == follower.rpc_address)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+        group_id = await get_table_raft_group_id(manager, ks, "test")
+        leader_host_id = await manager.get_host_id(leader.server_id)
+        await wait_for_leader(manager, follower, group_id, expected_host_id=leader_host_id)
+        leader_shard = next(shard for host_id, shard in await get_tablet_replicas(manager, leader, ks, "test", 0)
+                            if host_id == leader_host_id)
+
+        insert = SimpleStatement(f"INSERT INTO {ks}.test (pk, v) VALUES (0, 1)", retry_policy=FallthroughRetryPolicy())
+
+        node_bounces_metric = "scylla_strong_consistency_coordinator_write_node_bounces"
+        node_bounces_before = (await manager.metrics.query(follower.ip_addr)).get(node_bounces_metric) or 0
+
+        log = await manager.server_open_log(leader.server_id)
+        mark = await log.mark()
+        await manager.api.enable_injection(leader.ip_addr, "sc_coordinator_wait_before_begin_mutate", one_shot=True)
+        write_fut = asyncio.ensure_future(cql.run_async(insert, host=follower_host))
+        await log.wait_for(rf"\[shard {leader_shard}:.*sc_coordinator_wait_before_begin_mutate: waiting",
+                           from_mark=mark, timeout=30)
+
+        node_bounces_after = (await manager.metrics.query(follower.ip_addr)).get(node_bounces_metric) or 0
+        assert node_bounces_after > node_bounces_before, "The write was not forwarded to the leader"
+
+        logger.info("Stopping the leader while the forwarded write is in flight")
+        mark = await log.mark()
+        stop_task = asyncio.create_task(manager.server_stop_gracefully(leader.server_id))
+        # The CQL server of the maintenance socket stops later, so the first match is
+        # the CQL server of the clients. The line is printed with and without the fix,
+        # right before the server waits for its requests, or aborts them at once.
+        await log.wait_for(rf"\[shard {leader_shard}:[^\]]*\] cql_server - Waiting for connections to stop",
+                           from_mark=mark, timeout=30)
+        await manager.api.message_injection(leader.ip_addr, "sc_coordinator_wait_before_begin_mutate")
+
+        # Report the write's error even if the stop fails too.
+        write_result, stop_result = await asyncio.gather(write_fut, stop_task, return_exceptions=True)
+        if isinstance(write_result, (WriteTimeout, WriteFailure)):
+            pytest.fail(f"SCYLLADB-5594: the write forwarded to the leader failed while the follower's "
+                        f"connection was still waiting for it: {write_result!r}")
+        for result in (write_result, stop_result):
+            if isinstance(result, BaseException):
+                raise result
+
+        logger.info("Restarting the leader and reading the write back")
+        for f in followers:
+            await manager.api.disable_injection(f.ip_addr, "avoid_being_raft_leader")
+        await manager.server_start(leader.server_id)
+        cql, hosts = await manager.get_ready_cql([leader, *followers])
+        follower_host = next(h for h in hosts if h.address == follower.rpc_address)
+        # The restarted node reports a leader only once it hears from one.
+        await wait_for_leader(manager, leader, group_id)
+        rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = 0", host=follower_host)
+        assert [row.v for row in rows] == [1]
