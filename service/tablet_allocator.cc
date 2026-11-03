@@ -1297,8 +1297,10 @@ public:
         std::chrono::seconds threshold;
         // The size-based trigger: the fraction of a tablet that has to be unrepaired before
         // it is repaired ahead of its interval, and the floor in bytes below which that
-        // fraction is not consulted at all. A fraction of 0 - the default - leaves the
-        // trigger off, so only the interval applies.
+        // fraction is not consulted at all. A fraction of 0 leaves the trigger off, so only
+        // the interval applies. These initializers are not the effective default, which comes
+        // from the registry; they only stand where resolve_auto_repair_settings() leaves them
+        // alone because the trigger could not fire anyway.
         double size_fraction = 0;
         int64_t min_size_in_bytes = 0;
     };

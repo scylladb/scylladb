@@ -89,17 +89,15 @@ size-based threshold is recommended for such workloads. It also helps when a tab
 unevenly, since a tablet that has just absorbed a large amount of new data is repaired promptly
 rather than waiting out the full interval.
 
-The trigger is off by default and is enabled by setting a fraction, using the same per table,
-per keyspace or cluster-wide forms as ``auto_repair_enabled``:
+The trigger is on by default, at a fraction of ``0.1``: ScyllaDB repairs a tablet once the
+average unrepaired size of its replicas reaches 10% of their average total size. The fraction
+is set with the same per table, per keyspace or cluster-wide forms as ``auto_repair_enabled``:
 
 .. code-block:: cql
 
-    ALTER TABLE ks.tbl WITH auto_repair_threshold_size_fraction = 0.1;
+    ALTER TABLE ks.tbl WITH auto_repair_threshold_size_fraction = 0.25;
 
-ScyllaDB then repairs a tablet once the average unrepaired size of its replicas reaches that
-fraction of their average total size — in the example above, once 10% of the tablet is
-unrepaired. Setting the fraction back to ``0`` disables the trigger, leaving only the repair
-interval.
+Setting the fraction to ``0`` disables the trigger, leaving only the repair interval.
 
 A second option guards tablets that hold very little data, so that a nearly empty tablet is not
 repaired over and over for a handful of bytes:

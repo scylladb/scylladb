@@ -116,7 +116,7 @@ constexpr std::array registry_options = {
                        "replicas reaches this fraction of their average SSTable size. 0 disables the "
                        "size-based trigger, leaving only the time-based one",
         .scopes = table_oriented_scopes,
-        .default_value = 0.0,
+        .default_value = 0.1,
         .custom_parser = parse_auto_repair_threshold_size_fraction,
         .custom_expected_description = "a number between 0 and 1",
     },
