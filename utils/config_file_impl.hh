@@ -204,7 +204,11 @@ void utils::config_file::named_value<T>::the_value_type::update_from(const any_v
 
 template<typename T>
 utils::updateable_value_source<T>& utils::config_file::named_value<T>::the_value() {
-    any_value* av = _cf->_per_shard_values[_cf->s_shard_id][_per_shard_values_offset].get();
+    // Only broadcast_to_all_shards() adds the values of the other shards. A
+    // config that isn't broadcast has only the values of shard 0, and uses them
+    // on any shard, e.g. a config that is created on each shard.
+    auto shard = _cf->_per_shard_values.size() == 1 ? 0 : _cf->s_shard_id;
+    any_value* av = _cf->_per_shard_values[shard][_per_shard_values_offset].get();
     return static_cast<the_value_type*>(av)->value;
 }
 
