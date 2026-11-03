@@ -10,7 +10,7 @@ from typing import Tuple
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, unique_name, wait_for, Host
-from test.cluster.util import ensure_raft_group_leader_on, get_topology_coordinator
+from test.cluster.util import disable_schema_agreement_wait, ensure_raft_group_leader_on, get_topology_coordinator
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
@@ -665,7 +665,13 @@ async def test_no_schema_when_apply_write(manager: ScyllaClusterManager):
     # so strong consistency raft groups are created on the node but it won't receive next alter table mutations.
     group0_id = (await cql.run_async("SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
     await manager.api.enable_injection(servers[2].ip_addr, "raft_drop_incoming_append_entries_for_specified_group", one_shot=False, parameters={'value': group0_id})
-    await cql.run_async("ALTER TABLE ks.test ADD new_col int;", host=hosts[0])
+    # `servers[2]` drops the group0 entries now, so it keeps the old schema until the INSERT
+    # below lifts the injection, and the driver's schema agreement wait would only time out.
+    # Wait for the ALTER with read barriers on the other nodes instead: the INSERT goes to
+    # the leader, which can be either of them.
+    with disable_schema_agreement_wait(cql):
+        await cql.run_async("ALTER TABLE ks.test ADD new_col int;", host=hosts[0])
+    await gather_safely(*[read_barrier(manager.api, s.ip_addr) for s in servers[:2]])
 
     group_id = await get_table_raft_group_id(manager, "ks", 'test')
     leader_host_id = await wait_for_leader(manager, servers[0], group_id)
