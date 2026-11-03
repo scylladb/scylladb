@@ -18,7 +18,7 @@ using namespace cql3;
 
 using statements::index_target;
 
-BOOST_AUTO_TEST_SUITE(vector_index_test)
+BOOST_AUTO_TEST_SUITE(external_index_test)
 
 namespace {
 

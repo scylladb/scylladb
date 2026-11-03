@@ -380,6 +380,7 @@ add_scylla_test(combined_tests
     disk_space_monitor_test.cc
     digest_checked_data_source_test.cc
     error_injection_test.cc
+    external_index_test.cc
     external_search_test.cc
     extensions_test.cc
     filtering_test.cc
@@ -430,7 +431,6 @@ add_scylla_test(combined_tests
     tracing_test.cc
     user_function_test.cc
     user_types_test.cc
-    vector_index_test.cc
     view_build_test.cc
     virtual_reader_test.cc
     virtual_table_test.cc
