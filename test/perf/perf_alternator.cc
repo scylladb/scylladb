@@ -472,15 +472,34 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
     wait_for_alternator(c, as->local());
 
     auto cli = get_client(c);
+    // A run that owns its table creates it before the workload and
+    // deletes it after. populate keeps the tables that it creates. A run
+    // without prepopulate_partitions uses the tables of populate as they are.
+    const bool own_table = c.prepopulate_partitions && c.workload != "populate";
     auto finally = defer([&] noexcept {
         // Might throw, will terminate test
-        delete_alternator_table(cli, is_gsi_workload(c.workload) ? gsi_table_name : table_name);
+        if (own_table) {
+            delete_alternator_table(cli, is_gsi_workload(c.workload) ? gsi_table_name : table_name);
+        }
         cli.close().get();
     });
-    if (is_gsi_workload(c.workload)) {
-        create_alternator_table_with_gsi(cli);
-    } else {
+
+    if (c.workload == "populate") {
         create_alternator_table(cli);
+        // No items: the GSI workloads only write.
+        create_alternator_table_with_gsi(cli);
+        create_partitions(c, cli);
+        return;
+    }
+    if (own_table) {
+        if (is_gsi_workload(c.workload)) {
+            create_alternator_table_with_gsi(cli);
+        } else {
+            create_alternator_table(cli);
+            if (c.workload == "read" || c.workload == "batch_read" || c.workload == "scan") {
+                create_partitions(c, cli);
+            }
+        }
     }
 
     using fun_t = std::function<future<>(const test_config&, http::client&, uint64_t)>;
@@ -495,10 +514,6 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         // for realistic scenario
         {"write_rmw", update_item_rmw},
     };
-
-    if (c.prepopulate_partitions && (c.workload == "read" || c.workload == "batch_read" || c.workload == "scan")) {
-        create_partitions(c, cli);
-    }
 
     auto it = workloads.find(c.workload);
     if (it == workloads.end()) {
@@ -557,9 +572,9 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
 
         bpo::options_description opts_desc;
         opts_desc.add_options()
-            ("workload", bpo::value<std::string>()->default_value(""), "which workload type to run")
+            ("workload", bpo::value<std::string>()->default_value(""), "which workload type to run; populate creates both tables, fills workloads_test and keeps them")
             ("partitions", bpo::value<unsigned>()->default_value(10000), "number of partitions")
-            ("prepopulate-partitions", bpo::value<bool>()->default_value(true), "relevant for read workloads, can be disabled when data is prepopulated externally")
+            ("prepopulate-partitions", bpo::value<bool>()->default_value(true), "create the table before the test, fill it for the read workloads, and delete it after; when false, use the tables of an earlier populate run with the same or a larger --partitions, and do not create or delete a table")
             ("duration", bpo::value<unsigned>()->default_value(5), "test duration in seconds")
             ("operations-per-shard", bpo::value<unsigned>()->default_value(0), "run this many operations per shard (overrides duration)")
             ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
