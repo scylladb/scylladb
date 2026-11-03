@@ -1975,6 +1975,14 @@ future<> get_snapshot_details(std::unordered_map<sstring, db::snapshot_ctl::db_s
                 snp.cf = cf.cf;
                 snp.live = cf.details.live;
                 snp.total = cf.details.total;
+                // The expiration time is reported only along with the creation
+                // time, so that a client never sees one without the other.
+                if (cf.details.created_at) {
+                    snp.created_at = cf.details.created_at->time_since_epoch().count();
+                    if (cf.details.expires_at) {
+                        snp.expires_at = cf.details.expires_at->time_since_epoch().count();
+                    }
+                }
                 snapshot.push(std::move(snp));
             }
             ss::snapshots all_snapshots;
