@@ -440,6 +440,12 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
         throw exceptions::invalid_request_exception(format("index names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, _index_name.c_str()));
     }
 
+    // The class is found in any letter case, but the code and Vector Store compare the stored name exactly.
+    if (_idx_properties && _idx_properties->custom_class) {
+        auto& class_name = *_idx_properties->custom_class;
+        class_name = secondary_index::secondary_index_manager::canonical_custom_class_name(class_name).value_or(class_name);
+    }
+
     validate_for_local_index(*schema);
 
     std::vector<::shared_ptr<index_target>> targets;
