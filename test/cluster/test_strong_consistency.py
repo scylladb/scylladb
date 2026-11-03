@@ -39,13 +39,36 @@ DEFAULT_CMDLINE = [
     ]
 
 
+async def run_schema_change(manager: ScyllaClusterManager, statement: str, host: Host | None = None) -> None:
+    """Run a schema change and wait until every running node has applied it.
+
+    After a schema change, the driver waits for the nodes to agree on the schema by comparing
+    their schema versions in system.peers. Those are spread by gossip, so the wait takes a second
+    or two, even though the nodes apply the change through group0 within milliseconds. A group0
+    read barrier on every node waits only as long as the nodes need.
+    """
+    cql = manager.get_cql()
+    with disable_schema_agreement_wait(cql):
+        await cql.run_async(statement, host=host)
+    servers = await manager.running_servers()
+    await gather_safely(*[read_barrier(manager.api, s.ip_addr) for s in servers])
+
 async def run_create_keyspace(manager: ScyllaClusterManager, name: str, options: str, host: Host | None = None) -> None:
     # IF NOT EXISTS is a workaround for https://github.com/scylladb/python-driver/issues/317:
     # after nodes boot concurrently, the driver may execute a statement twice.
-    await manager.get_cql().run_async(f"CREATE KEYSPACE IF NOT EXISTS {name} WITH {options}", host=host)
+    await run_schema_change(manager, f"CREATE KEYSPACE IF NOT EXISTS {name} WITH {options}", host=host)
+
+async def run_alter_keyspace(manager: ScyllaClusterManager, name: str, options: str, host: Host | None = None) -> None:
+    await run_schema_change(manager, f"ALTER KEYSPACE {name} WITH {options}", host=host)
 
 async def run_create_table(manager: ScyllaClusterManager, name: str, schema: str, host: Host | None = None) -> None:
-    await manager.get_cql().run_async(f"CREATE TABLE {name} ({schema})", host=host)
+    await run_schema_change(manager, f"CREATE TABLE {name} ({schema})", host=host)
+
+async def run_alter_table(manager: ScyllaClusterManager, name: str, change: str, host: Host | None = None) -> None:
+    await run_schema_change(manager, f"ALTER TABLE {name} {change}", host=host)
+
+async def run_drop_table(manager: ScyllaClusterManager, name: str, host: Host | None = None) -> None:
+    await run_schema_change(manager, f"DROP TABLE {name}", host=host)
 
 
 async def wait_for_leader(manager: ScyllaClusterManager, s: ServerInfo, group_id: str,
@@ -374,7 +397,7 @@ async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
 
     # With the table in place, its leader would try to hand the leadership over to
     # replicas that are shutting down as well, and wait until the stepdown times out.
-    await cql.run_async("DROP TABLE ks.test")
+    await run_drop_table(manager, "ks.test")
 
     # To check that the servers can be stopped gracefully. By default the test runner just kills them.
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
@@ -414,7 +437,7 @@ async def test_multi_shard_write_read(manager: ScyllaClusterManager):
 
     # With the table in place, its leaders would try to hand the leadership over to
     # replicas that are shutting down as well.
-    await cql.run_async("DROP TABLE ks.tbl")
+    await run_drop_table(manager, "ks.tbl")
 
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
@@ -721,7 +744,7 @@ async def test_old_schema_when_apply_write(manager: ScyllaClusterManager):
     await manager.api.enable_injection(servers[2].ip_addr, "strong_consistency_state_machine_wait_before_apply", one_shot=False)
     await cql.run_async("INSERT INTO ks.test (pk, c) VALUES (10, 20)", host=leader_host)
 
-    await cql.run_async("ALTER TABLE ks.test ADD new_col int;", host=leader_host)
+    await run_alter_table(manager, "ks.test", "ADD new_col int", host=leader_host)
     # Following injection simulates that old schema version was already removed from the memory
     await manager.api.enable_injection(servers[2].ip_addr, "schema_registry_ignore_version", one_shot=False, parameters={'value': table_schema_version})
     await manager.api.message_injection(servers[2].ip_addr, "strong_consistency_state_machine_wait_before_apply")
@@ -803,7 +826,7 @@ async def test_forward_cql_cache_invalidation(manager: ScyllaClusterManager):
     prepared_not_found_before = metrics_before.get('scylla_transport_requests_forwarded_prepared_not_found') or 0
 
     # Altering schema invalidates prepared statement cache
-    await cql.run_async("ALTER TABLE ks.tbl ADD extra_column text")
+    await run_alter_table(manager, "ks.tbl", "ADD extra_column text")
     await cql.run_async(insert_stmt, [2, 200], host=non_leader_host)
     rows = await cql.run_async(select_stmt, [2], host=non_leader_host)
     assert len(rows) == 1
@@ -948,7 +971,7 @@ async def test_drop_table_during_insert(manager: ScyllaClusterManager):
     await manager.api.wait_for_injection_enter(server.ip_addr, "sc_coordinator_wait_before_acquire_server")
 
     # Drop the table while INSERT is paused.
-    await cql.run_async("DROP TABLE ks.tbl")
+    await run_drop_table(manager, "ks.tbl")
 
     # Wait for the raft group to be destroyed.
     await log.wait_for("schedule_raft_group_deletion.*raft server.*is destroyed", from_mark=mark, timeout=30)
@@ -1143,7 +1166,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
     mark_follower = await follower_log.mark()
 
     # Drop the table.
-    await cql.run_async(f"DROP TABLE {table}")
+    await run_drop_table(manager, table)
 
     # Sanity check: new queries are rejected immediately.
     with pytest.raises(InvalidRequest, match="unconfigured table"):
@@ -1875,7 +1898,7 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
 
     async def drop_table_and_release(table: str, injections: list[str]) -> None:
         mark = await log.mark()
-        await cql.run_async(f"DROP TABLE {table}")
+        await run_drop_table(manager, table)
         await log.wait_for("schedule_raft_group_deletion.*server aborted", from_mark=mark, timeout=30)
         for injection in injections:
             await manager.api.message_injection(server.ip_addr, injection)
@@ -2420,7 +2443,7 @@ async def test_rf_change(manager: ScyllaClusterManager):
     assert len(tablets[0].replicas) == 2, f"Expected 2 replicas, got {len(tablets[0].replicas)}"
 
     logger.info("Increasing RF from 2 to 3")
-    await cql.run_async("ALTER KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3']}")
+    await run_alter_keyspace(manager, "ks", "replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3']}")
     await manager.api.quiesce_topology(servers[0].ip_addr)
 
     logger.info("Stopping one node to verify quorum writes still work (quorum = 2/3)")
@@ -3538,7 +3561,7 @@ async def test_sc_raft_metrics_aggregated_per_table(manager: ScyllaClusterManage
         assert 'ks' not in line.labels
 
     logger.info("Dropping the table removes its series")
-    await cql.run_async("DROP TABLE ks.test")
+    await run_drop_table(manager, "ks.test")
     await wait_for_sc_raft_series_gone(manager, leader)
 
 async def test_sc_raft_metrics_rpc_memory(manager: ScyllaClusterManager):
@@ -3680,7 +3703,7 @@ async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterMa
     assert applied_after >= applied_before
 
     logger.info("Dropping the table removes the series of that node too")
-    await cql.run_async("DROP TABLE ks.test")
+    await run_drop_table(manager, "ks.test")
     await wait_for_sc_raft_series_gone(manager, src)
 
 QUERY = {'insert': "INSERT INTO {table} (pk, c) VALUES ({key}, {i})",
