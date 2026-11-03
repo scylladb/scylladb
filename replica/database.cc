@@ -3490,16 +3490,16 @@ std::pair<sstring, table_id> parse_table_directory_name(const sstring& directory
     return std::make_pair(directory_name.substr(0, pos), table_id(utils::UUID(directory_name.substr(pos + 1))));
 }
 
-future<std::unordered_map<sstring, database::snapshot_details>> database::get_snapshot_details() {
+future<std::unordered_map<sstring, database::snapshot_details>> database::get_snapshot_details(db::with_snapshot_times wst) {
     std::vector<sstring> data_dirs = _cfg.data_file_directories();
     std::unordered_map<sstring, snapshot_details> details;
 
     for (auto& datadir : data_dirs) {
-        co_await lister::scan_dir(fs::path{datadir}, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details] (fs::path parent_dir, directory_entry de) -> future<> {
+        co_await lister::scan_dir(fs::path{datadir}, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, wst] (fs::path parent_dir, directory_entry de) -> future<> {
             // KS directory
             sstring ks_name = de.name;
 
-            co_return co_await lister::scan_dir(parent_dir / de.name, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, ks_name = std::move(ks_name)] (fs::path parent_dir, directory_entry de) -> future<> {
+            co_return co_await lister::scan_dir(parent_dir / de.name, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, wst, ks_name = std::move(ks_name)] (fs::path parent_dir, directory_entry de) -> future<> {
                 // CF directory
                 auto cf_dir = parent_dir / de.name;
 
@@ -3511,9 +3511,9 @@ future<std::unordered_map<sstring, database::snapshot_details>> database::get_sn
                 }
 
                 auto cf_name_and_uuid = parse_table_directory_name(de.name);
-                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
+                co_return co_await lister::scan_dir(cf_dir / sstables::snapshots_dir, lister::dir_entry_types::of<directory_entry_type::directory>(), [&details, wst, &ks_name, &cf_name = cf_name_and_uuid.first, &cf_dir] (fs::path parent_dir, directory_entry de) -> future<> {
                     auto snapshot_name = de.name;
-                    auto cf_details = co_await table::get_snapshot_details(parent_dir / snapshot_name, cf_dir);
+                    auto cf_details = co_await table::get_snapshot_details(parent_dir / snapshot_name, cf_dir, wst);
                     details[snapshot_name].emplace_back(ks_name, cf_name, std::move(cf_details));
                 });
             });

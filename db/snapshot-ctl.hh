@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include <seastar/core/sharded.hh>
@@ -49,6 +50,11 @@ public:
 
 } // snapshot namespace
 
+// Reading the snapshot creation and expiration times requires parsing the
+// snapshot manifest, so they are read only when the caller is going to
+// report them, and left disengaged otherwise.
+enum class with_snapshot_times { no, yes };
+
 struct snapshot_options {
     bool skip_flush = false;
     gc_clock::time_point created_at = gc_clock::now();
@@ -60,6 +66,11 @@ public:
     struct table_snapshot_details {
         int64_t total;
         int64_t live;
+        // Taken from the snapshot manifest. Disengaged when the manifest
+        // does not record them, e.g. for snapshots taken by older versions.
+        std::optional<gc_clock::time_point> created_at;
+        // Engaged only for snapshots that were taken with a ttl.
+        std::optional<gc_clock::time_point> expires_at;
     };
 
     struct table_snapshot_details_ext {

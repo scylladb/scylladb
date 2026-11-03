@@ -1218,8 +1218,9 @@ public:
 
     future<std::pair<std::vector<sstables::shared_sstable>, sstable_list_permit>> snapshot_sstables();
 
-    future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
-    static future<snapshot_details> get_snapshot_details(std::filesystem::path snapshot_dir, std::filesystem::path datadir);
+    future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details(db::with_snapshot_times = db::with_snapshot_times::no);
+    static future<snapshot_details> get_snapshot_details(std::filesystem::path snapshot_dir, std::filesystem::path datadir,
+            db::with_snapshot_times = db::with_snapshot_times::no);
 
     bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;
@@ -2163,7 +2164,7 @@ public:
     future<> clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, const sstring& table_name);
 
     using snapshot_details = db::snapshot_ctl::db_snapshot_details;
-    future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details();
+    future<std::unordered_map<sstring, snapshot_details>> get_snapshot_details(db::with_snapshot_times = db::with_snapshot_times::no);
 
     future<std::optional<std::filesystem::path>> find_snapshot_dir(sstring ks_name, sstring table_name, sstring tag);
 

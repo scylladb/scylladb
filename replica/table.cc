@@ -4555,8 +4555,8 @@ future<bool> table::snapshot_exists(sstring tag) {
     co_return exists;
 }
 
-future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details() {
-    return seastar::async([this] {
+future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot_details(db::with_snapshot_times wst) {
+    return seastar::async([this, wst] {
         std::unordered_map<sstring, snapshot_details> all_snapshots;
         auto* so = std::get_if<storage_options::local>(&_storage_opts->value);
         if (so == nullptr || so->dir.empty()) {
@@ -4576,10 +4576,16 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
             while (auto de = lister.get().get()) {
                 auto snapshot_name = de->name;
                 all_snapshots.emplace(snapshot_name, snapshot_details());
-                auto details = get_snapshot_details(snapshots_dir / fs::path(snapshot_name), datadir).get();
+                auto details = get_snapshot_details(snapshots_dir / fs::path(snapshot_name), datadir, wst).get();
                 auto& sd = all_snapshots.at(snapshot_name);
                 sd.total += details.total;
                 sd.live += details.live;
+                // The snapshot was taken at once across all the data directories,
+                // so the times are the same in each of them.
+                if (!sd.created_at) {
+                    sd.created_at = details.created_at;
+                    sd.expires_at = details.expires_at;
+                }
                 utils::get_local_injector().inject("get_snapshot_details", [] {
                     throw std::runtime_error("Injected exception in get_snapshot_details");
                 });
@@ -4589,8 +4595,14 @@ future<std::unordered_map<sstring, table::snapshot_details>> table::get_snapshot
     });
 }
 
-future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_dir, fs::path datadir) {
+future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_dir, fs::path datadir, db::with_snapshot_times wst) {
     table::snapshot_details details{};
+    if (wst == db::with_snapshot_times::yes) {
+        if (auto times = co_await db::snapshot::read_snapshot_times(snapshot_dir)) {
+            details.created_at = times->created_at;
+            details.expires_at = times->expires_at;
+        }
+    }
     file snapshot_directory = co_await io_check(open_directory, snapshot_dir.native());
     file data_directory = co_await io_check(open_directory, datadir.native());
     file staging_directory;
