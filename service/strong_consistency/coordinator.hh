@@ -103,6 +103,11 @@ private:
         abort_source& as,
         bool needs_leader,
         const tracing::trace_state_ptr& trace_state);
+    // The Unavailable error for a request that needs the group's leader, when the group has
+    // had no leader for longer than strongly_consistent_tables_leaderless_timeout_in_seconds
+    // and fewer than a quorum of its voters are alive; null otherwise. Such a group is
+    // unlikely to get a leader before the request times out.
+    std::exception_ptr lost_quorum_error(const schema& schema, const operation_ctx& op, db::consistency_level cl) const;
 public:
     coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper,
         scheduling_group_key stats_key);
