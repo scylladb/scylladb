@@ -25,7 +25,9 @@ from test.pylib.util import gather_safely, wait_for
 
 KEYSPACE_OPTS = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
                  " AND tablets = {'initial': 1} AND consistency = 'global'")
-NO_QUORUM_CONFIG = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 3000, 'read_request_timeout_in_ms': 3000}
+# The tests with this config check the wait for a leader, so their requests must not fail fast.
+NO_QUORUM_CONFIG = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 3000, 'read_request_timeout_in_ms': 3000,
+                                     'strongly_consistent_tables_leaderless_timeout_in_seconds': 3600}
 WRITE_ERRORS = 'scylla_strong_consistency_coordinator_write_errors'
 READ_ERRORS = 'scylla_strong_consistency_coordinator_read_errors'
 READ_COUNT = 'scylla_strong_consistency_coordinator_read_latency_count'
@@ -163,9 +165,9 @@ async def test_no_quorum_times_out_and_relaxed_read_answers(manager: ScyllaClust
     driver-facing Scylla bug that a forwarded timeout triggers is kept out of the way
     here (driver retries off) and pinned by its own test.
 
-    Today "replicas alive but no quorum" surfaces as a timeout after the full wait rather
-    than as an immediate Unavailable; failing fast once the quorum is lost is tracked as
-    SCYLLADB-2574. Should the product go that way, the timeout assertions below flip.
+    The requests wait for a leader: NO_QUORUM_CONFIG sets
+    strongly_consistent_tables_leaderless_timeout_in_seconds to an hour, and only after
+    that would they fail at once (see test_no_quorum_fails_fast_after_leaderless_timeout).
     """
     async with sc_table(manager) as (cql, host_of, table, (group_id, leader, followers, non_replica)):
         alive = leader if survivor == "leader" else followers[0]
@@ -242,7 +244,6 @@ async def test_no_quorum_counts_leader_waits(manager: ScyllaClusterManager, scal
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("survivor", ["leader", "follower"])
-@pytest.mark.xfail(reason="SCYLLADB-2574: with no leader, a request waits for one until its timeout")
 async def test_no_quorum_fails_fast_after_leaderless_timeout(manager: ScyllaClusterManager, survivor: str):
     """
     Verify that once the only live replica of three has had no raft leader for longer than

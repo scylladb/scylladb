@@ -159,6 +159,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         condition_variable leader_info_cond = condition_variable();
         future<> leader_info_updater = make_ready_future<>();
 
+        // Since when this replica has known no leader of the group. Unset while it
+        // knows one. Kept by track_leaderless().
+        std::optional<lowres_clock::time_point> leaderless_since;
+        future<> leaderless_tracker = make_ready_future<>();
+
         // Aborts the migration RPC running on the group. The next one aborts it: the
         // coordinator retries a failed attempt on every replica, and the retry supersedes
         // the calls of the previous attempt that are still running.
@@ -250,6 +255,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     future<> leader_info_updater(raft_group_state& state, table_id table, raft::group_id gid,
         dht::token_range range);
+
+    // Keeps state.leaderless_since up to date until the group's server is aborted.
+    future<> track_leaderless(raft_group_state& state, raft::group_id gid);
 
     void init_messaging_service();
 
@@ -395,6 +403,9 @@ public:
     struct ok {};
     using begin_read_result = std::variant<ok, raft::not_a_leader, need_wait_for_leader>;
     begin_read_result begin_read(abort_source&);
+
+    // How long this replica has known no leader of the group, or nullopt while it knows one.
+    std::optional<lowres_clock::duration> leaderless_for() const;
 };
 
 } // namespace service::strong_consistency
