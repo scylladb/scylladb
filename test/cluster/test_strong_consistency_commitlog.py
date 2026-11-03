@@ -763,3 +763,85 @@ async def test_crash_after_recycling_a_segment(manager: ScyllaClusterManager):
         for pk in (0, rows // 2, rows - 1):
             got = await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = {pk}")
             assert len(got) == 1 and got[0].c == pk * 10, f"pk={pk} did not survive the crash"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='test_clocks_offset_seconds exists only in builds with error injection')
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-6011",
+                      reason="a descriptor release loses to the bootstrap row after a clock step back")
+async def test_restart_after_clock_steps_back(manager: ScyllaClusterManager):
+    """
+    Idea: a wall-clock step back must not cost a strongly consistent group its log.
+    The group's descriptor row in system.raft_groups is the replay floor: once a
+    segment's record is released, the row says every index up to that record's
+    last one is applied, and the segment may be reclaimed. bootstrap() writes the
+    first row by CQL under a wall-clock timestamp, and a release writes the next
+    one under a timestamp that only increases relative to the group's previous
+    release. If the clock has stepped back in between, the release loses to the
+    bootstrap row, the floor stays 0, the segment is reclaimed all the same, and
+    the next replay finds entries committed beyond a floor of 0 with the head of
+    the log gone.
+
+    Setup: one node, an RF=1 table with one tablet. The node's clock is moved an
+    hour ahead (test_clocks_offset_seconds) while the table is created and its
+    raft group bootstrapped, and back to the real time before the writes. A
+    one-second commitlog_max_data_lifetime_in_seconds makes the commitlog close
+    and reclaim segments on its own, as disk pressure does on a loaded node.
+
+    The test waits until the segment holding the head of the log is reclaimed,
+    writes more rows, whose batches carry a commit index past that head, kills
+    the node and checks that it starts again with every row in place.
+    """
+    config = {
+        'experimental_features': ['strongly-consistent-tables'],
+        'commitlog_max_data_lifetime_in_seconds': 1,
+    }
+    # Both log the events the test waits for.
+    cmdline = ['--logger-log-level', 'commitlog=debug:raft_commitlog=debug']
+    server = await manager.server_add(config=config, cmdline=cmdline)
+    cql = await manager.get_cql_exclusive(server)
+    log = await manager.server_open_log(server.server_id)
+
+    async def set_clock_offset(seconds: int):
+        await cql.run_async(
+            f"UPDATE system.config SET value = '{seconds}' WHERE name = 'test_clocks_offset_seconds'")
+
+    # Clock an hour ahead: the group is bootstrapped, so its descriptor row is
+    # written, under a timestamp an hour in the future.
+    await set_clock_offset(3600)
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', "
+                        "'replication_factor': 1} AND tablets = {'initial': 1} "
+                        "AND consistency = 'global'")
+    await cql.run_async("CREATE TABLE ks.tbl (pk int PRIMARY KEY, c int)")
+    await cql.run_async("INSERT INTO ks.tbl (pk, c) VALUES (0, 0)")
+
+    # The clock steps back to the real time.
+    await set_clock_offset(0)
+    for pk in range(1, 10):
+        await cql.run_async(f"INSERT INTO ks.tbl (pk, c) VALUES ({pk}, {pk})")
+
+    # The table's group is the only strongly consistent one, so the first raft
+    # batch in the log is its head.
+    _, [(_, head)] = await log.wait_for(r"wrote raft batch: .* rp=\{(\d+), (\d+), \d+\}", timeout=60)
+    segment = (int(head.group(1)) << 54) | int(head.group(2))
+    await log.wait_for(rf"(Recycling|Deleting) segment file \S+/CommitLog-4-{segment}\.", timeout=120)
+
+    table_id = await manager.get_table_id("ks", "tbl")
+    group_id = (await cql.run_async(
+        f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}"))[0].raft_group_id
+    floor = await cql.run_async(
+        f"SELECT shard, snapshot_idx, writetime(snapshot_idx) AS ts FROM system.raft_groups "
+        f"WHERE group_id = {group_id} ALLOW FILTERING")
+    logger.info("descriptor of group %s after the head segment was reclaimed: %s", group_id, floor)
+
+    # Batches in a later segment, carrying a commit index past the reclaimed head.
+    for pk in range(10, 20):
+        await cql.run_async(f"INSERT INTO ks.tbl (pk, c) VALUES ({pk}, {pk})")
+
+    await manager.server_stop(server.server_id, convict=False)
+    await manager.server_start(server.server_id)
+    cql = await manager.get_cql_exclusive(server)
+
+    for pk in range(20):
+        rows = await cql.run_async(f"SELECT c FROM ks.tbl WHERE pk = {pk}")
+        assert [r.c for r in rows] == [pk], f"pk={pk}"
