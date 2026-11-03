@@ -905,6 +905,38 @@ async def test_forward_cql_prepare_exception_passthrough(manager: ScyllaClusterM
             await manager.api.message_injection(forwarder.ip_addr, "group0_state_machine::block_apply")
 
 
+@pytest.mark.skip_mode('release', "error injections aren't enabled in release mode")
+async def test_forward_cql_prepare_timeout(manager: ScyllaClusterManager):
+    """
+    Verifies that a forwarded request whose statement times out while the Raft leader prepares
+    it fails with a write timeout, as when the request itself times out on the leader.
+    """
+    injection = "wait_before_handling_forwarded_prepare"
+    leader, coordinator = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+                                                    auto_rack_dc='my_dc')
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+            await ensure_raft_group_leader_on(manager, leader, group_id)
+
+            # The driver prepares the statement only on the coordinator, so the coordinator
+            # has to prepare it on the leader before the leader can execute it.
+            cql = await manager.get_cql_exclusive(coordinator)
+            stmt = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?) USING TIMEOUT 1s")
+            stmt.retry_policy = FallthroughRetryPolicy()
+
+            await manager.api.enable_injection(leader.ip_addr, injection, one_shot=True)
+            try:
+                with pytest.raises(WriteTimeout):
+                    await cql.run_async(stmt, [0, 1])
+            finally:
+                await manager.api.message_injection(leader.ip_addr, injection)
+
+
 @pytest.mark.skip_mode("release", "error injections aren't enabled in release mode")
 async def test_drop_table_during_insert(manager: ScyllaClusterManager):
     """Regression test for SCYLLADB-1450: node crashes when DROP TABLE races with

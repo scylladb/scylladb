@@ -526,6 +526,8 @@ void cql_forwarding_service::init_messaging_service() {
             auto src_host = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
             clogger.trace("Handling forward prepare request from {}", src_host);
 
+            co_await utils::get_local_injector().inject("wait_before_handling_forwarded_prepare", utils::wait_for_message(60s));
+
             service::client_state cs(_auth_service.local(), &_sl_controller, std::move(req.client_state));
             tracing::trace_state_ptr trace_state_ptr;
             if (req.trace_info) {
@@ -625,6 +627,39 @@ future<forward_cql_execute_response> cql_forwarding_service::handle_forward_exec
     };
 }
 
+// Translates the failure of an RPC which forwards a request to `host` into the error which the
+// client gets. After an RPC timeout or a closed connection, it is unknown whether the request was
+// executed, so the client gets a timeout or a failure of a write or a read, as when a replica
+// does not answer, and on_forwarding_finished learns that `host` did not answer. Any other error
+// is returned unchanged.
+static std::exception_ptr translate_forwarding_error(std::exception_ptr eptr, locator::host_id host, bool is_write,
+        const locator::host_id_or_exception_callback& on_forwarding_finished) {
+    if (try_catch<seastar::rpc::timeout_error>(eptr)) {
+        clogger.debug("Forwarding CQL request to {} failed due to RPC timeout. Will return blanket timeout exception", host);
+        if (on_forwarding_finished) {
+            on_forwarding_finished(eptr);
+        }
+        return is_write
+            ? std::make_exception_ptr(exceptions::mutation_write_timeout_exception(
+                format("Write request timed out while forwarding to {}", host), db::consistency_level::ONE, 0, 0, db::write_type::SIMPLE))
+            : std::make_exception_ptr(exceptions::read_timeout_exception(
+                format("Read request timed out while forwarding to {}", host), db::consistency_level::ONE, 0, 0, false));
+    }
+    if (try_catch<seastar::rpc::closed_error>(eptr)) {
+        clogger.debug("Forwarding CQL request to {} failed due to RPC closed connection. Will return blanket failure exception", host);
+        if (on_forwarding_finished) {
+            on_forwarding_finished(eptr);
+        }
+        return is_write
+            ? std::make_exception_ptr(exceptions::mutation_write_failure_exception(
+                format("Write request failed while forwarding to {}", host), db::consistency_level::ONE, 0, 0, 0, db::write_type::SIMPLE))
+            : std::make_exception_ptr(exceptions::read_failure_exception(
+                format("Read request failed while forwarding to {}", host), db::consistency_level::ONE, 0, 0, 0, false));
+    }
+    clogger.debug("Forwarding CQL request to {} failed with an unexpected error: {}. Will return this error to the client", host, eptr);
+    return eptr;
+}
+
 future<foreign_ptr<std::unique_ptr<cql_transport::response>>>
 cql_processor::forward_cql(
     locator::host_id target_host,
@@ -647,31 +682,7 @@ cql_processor::forward_cql(
         auto response_fut = co_await coroutine::as_future(ser::forward_cql_rpc_verbs::send_forward_cql_execute(&_ms, current_host, timeout, current_shard, req));
 
         if (response_fut.failed()) {
-            std::exception_ptr eptr = response_fut.get_exception();
-            if (try_catch<seastar::rpc::timeout_error>(eptr)) {
-                clogger.debug("Forwarding CQL request to {} shard {} failed due to RPC timeout. Will return blanket timeout exception", target_host, target_shard);
-                if (on_forwarding_finished) {
-                    on_forwarding_finished(eptr);
-                }
-                eptr = is_write
-                    ? std::make_exception_ptr(exceptions::mutation_write_timeout_exception(
-                        format("Write request timed out while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, db::write_type::SIMPLE))
-                    : std::make_exception_ptr(exceptions::read_timeout_exception(
-                        format("Read request timed out while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, false));
-            } else if (try_catch<seastar::rpc::closed_error>(eptr)) {
-                clogger.debug("Forwarding CQL request to {} shard {} failed due to RPC closed connection. Will return blanket failure exception", target_host, target_shard);
-                if (on_forwarding_finished) {
-                    on_forwarding_finished(eptr);
-                }
-                eptr = is_write
-                    ? std::make_exception_ptr(exceptions::mutation_write_failure_exception(
-                        format("Write request failed while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, 0, db::write_type::SIMPLE))
-                    : std::make_exception_ptr(exceptions::read_failure_exception(
-                        format("Read request failed while forwarding to {}", target_host), db::consistency_level::ONE, 0, 0, 0, false));
-            } else {
-                clogger.debug("Forwarding CQL request to {} shard {} failed with an unexpected error: {}. Will return this error to the client", target_host, target_shard, eptr);
-            }
-            co_return coroutine::exception(std::move(eptr));
+            co_return coroutine::exception(translate_forwarding_error(response_fut.get_exception(), current_host, is_write, on_forwarding_finished));
         }
 
         auto response = response_fut.get();
@@ -716,7 +727,11 @@ cql_processor::forward_cql(
                 .cql_version = req.cql_version,
             };
 
-            auto [prepared_id, prepare_error] = co_await ser::forward_cql_rpc_verbs::send_forward_cql_prepare(&_ms, current_host, timeout, prepare_req);
+            auto prepare_fut = co_await coroutine::as_future(ser::forward_cql_rpc_verbs::send_forward_cql_prepare(&_ms, current_host, timeout, prepare_req));
+            if (prepare_fut.failed()) {
+                co_return coroutine::exception(translate_forwarding_error(prepare_fut.get_exception(), current_host, is_write, on_forwarding_finished));
+            }
+            auto [prepared_id, prepare_error] = prepare_fut.get();
 
             if (prepare_error) {
                 _stats.requests_forwarded_failed++;
