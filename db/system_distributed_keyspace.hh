@@ -12,6 +12,7 @@
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
 #include "db/consistency_level_type.hh"
+#include "db/timeout_clock.hh"
 #include "locator/host_id.hh"
 #include "dht/token.hh"
 #include "sstables/types.hh"
@@ -144,10 +145,11 @@ public:
     // NOTE: currently used only by alternator
     future<std::map<db_clock::time_point, cdc::streams_version>> cdc_get_versioned_streams(db_clock::time_point not_older_than, context);
 
-    // Read current generation timestamp for the given table. Throws runtime_error (see `cql3::untyped_result_set::one()`) if table not found.
+    // Read current generation timestamp for the given table. Throws runtime_error if table not found.
     // NOTE: there's a sibling `read_cdc_for_tablets_current_generation_timestamp` in `system_keyspace`, that does the same for tables backed up by tablets.
+    // An optional deadline replaces the default per-query timeout.
     // NOTE: currently used only by alternator
-    future<db_clock::time_point> cdc_current_generation_timestamp(context);
+    future<db_clock::time_point> cdc_current_generation_timestamp(context, std::optional<db::timeout_clock::time_point> deadline = std::nullopt);
 
 private:
     future<> create_tables(std::vector<schema_ptr> tables);

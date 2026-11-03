@@ -742,16 +742,28 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
     co_return result;
 }
 
-future<db_clock::time_point> 
-system_distributed_keyspace::cdc_current_generation_timestamp(context ctx) {
-    auto timestamp_cql = co_await _qp.execute_internal(
-            format("SELECT time FROM {}.{} WHERE key = ? limit 1", NAME, CDC_TIMESTAMPS),
-            quorum_if_many(ctx.num_token_owners),
-            internal_distributed_query_state(),
-            { CDC_TIMESTAMPS_KEY },
-            cql3::query_processor::cache_internal::no);
-
-    co_return timestamp_cql->one().get_as<db_clock::time_point>("time");
+future<db_clock::time_point>
+system_distributed_keyspace::cdc_current_generation_timestamp(context ctx, std::optional<db::timeout_clock::time_point> deadline) {
+    static const sstring query = format("SELECT time FROM {}.{} WHERE key = ? limit 1", NAME, CDC_TIMESTAMPS);
+    if (!deadline) {
+        auto timestamp_cql = co_await _qp.execute_internal(
+                query,
+                quorum_if_many(ctx.num_token_owners), internal_distributed_query_state(),
+                { CDC_TIMESTAMPS_KEY }, cql3::query_processor::cache_internal::no);
+        co_return timestamp_cql->one().get_as<db_clock::time_point>("time");
+    }
+    std::optional<db_clock::time_point> timestamp;
+    co_await _qp.query_internal(
+            query,
+            quorum_if_many(ctx.num_token_owners), { CDC_TIMESTAMPS_KEY }, 1, *deadline,
+            [&] (const cql3::untyped_result_set_row& row) {
+                timestamp = row.get_as<db_clock::time_point>("time");
+                return make_ready_future<stop_iteration>(stop_iteration::yes);
+            });
+    if (!timestamp) {
+        throw std::runtime_error(fmt::format("No CDC generation timestamp found in {}.{}", NAME, CDC_TIMESTAMPS));
+    }
+    co_return *timestamp;
 }
 
 // TODO: this is very hardcoded.
