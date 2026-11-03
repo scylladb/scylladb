@@ -159,7 +159,7 @@ Start the node
 
 .. code:: sh
 
-   sudo service start scylla-server
+   sudo service scylla-server start
 
 Validate
 --------
