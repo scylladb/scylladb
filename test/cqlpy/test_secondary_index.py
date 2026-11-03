@@ -2656,6 +2656,27 @@ def test_limit_partition_slice(cql, test_keyspace, use_paging):
             assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
 
 
+# Same as test_limit_partition above, except that the selection includes a
+# function, so the query needs more than the rows of the base table read.
+# Reproduces #22158.
+@pytest.mark.parametrize("use_paging", [
+        pytest.param(False, marks=pytest.mark.xfail(reason="issue #22158")),
+        pytest.param(True, marks=pytest.mark.xfail(reason="issue #22158"))])
+def test_limit_partition_nontrivial_selection(cql, test_keyspace, use_paging):
+    with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck int, v int, primary key ((pk1, pk2), ck)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(pk2)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk1, pk2, ck, v) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1, 0])
+        cql.execute(stmt, [1, 1, 2, 0])
+        cql.execute(stmt, [2, 1, 1, 0])
+        cql.execute(stmt, [2, 1, 2, 0])
+        fetch_size = 100 if use_paging else None
+        stmt = SimpleStatement(f'SELECT pk1, ck, writetime(v) FROM {table} WHERE pk2 = 1 LIMIT 1', fetch_size=fetch_size)
+        assert len(list(cql.execute(stmt))) == 1
+        stmt = SimpleStatement(f'SELECT pk1, ck, writetime(v) FROM {table} WHERE pk2 = 1 LIMIT 3', fetch_size=fetch_size)
+        assert len(list(cql.execute(stmt))) == 3
+
+
 # Same as test_limit_partition_slice above, except that the indexed column is static.
 # Reproduces #22158.
 @pytest.mark.parametrize("use_paging", [False, True])
