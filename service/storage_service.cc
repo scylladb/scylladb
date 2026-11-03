@@ -5993,12 +5993,16 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         co_return res;
     }
 
+    // Wait until no tablet of the table carries the request. The whole map is
+    // scanned because a split copies the request to both new tablets, and a
+    // requested token covers only one of them.
     co_await _topology_state_machine.event.wait([&] {
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        return std::all_of(tokens.begin(), tokens.end(), [&] (const dht::token& token) {
-            auto id = tmap.get_tablet_id(token);
-            return tmap.get_tablet_info(id).repair_task_info == nullptr
-                || tmap.get_tablet_info(id).repair_task_info->tablet_task_id != repair_task_info.tablet_task_id;
+        auto is_ours = [&] (const std::unique_ptr<locator::tablet_task_info>& info) {
+            return info && info->tablet_task_id == repair_task_info.tablet_task_id;
+        };
+        return std::ranges::none_of(tmap.tablet_ids(), [&] (locator::tablet_id tid) {
+            return is_ours(tmap.get_tablet_info(tid).repair_task_info);
         });
     });
 
