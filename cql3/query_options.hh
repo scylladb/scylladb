@@ -15,6 +15,7 @@
 #include "mutation/timestamp.hh"
 #include "bytes.hh"
 #include "db/consistency_level_type.hh"
+#include "db/timeout_clock.hh"
 #include "service/query_state.hh"
 #include "service/pager/paging_state.hh"
 #include "cql3/values.hh"
@@ -89,6 +90,7 @@ private:
     const bool _skip_metadata;
     std::optional<locator::tablet_version_block> _tablet_version_block;
     const specific_options _options;
+    db::timeout_clock::time_point _read_deadline = db::no_timeout;
     std::optional<std::vector<query_options>> _batch_options;
     // We must use the same microsecond-precision timestamp for
     // all cells created by an LWT statement or when a statement
@@ -216,6 +218,15 @@ public:
 
     const query_options::specific_options& get_specific_options() const {
         return _options;
+    }
+
+    /// Absolute cap for deadline-bounded internal SELECTs, including dispatch and paging.
+    void set_read_deadline(db::timeout_clock::time_point deadline) {
+        _read_deadline = deadline;
+    }
+
+    db::timeout_clock::time_point get_read_deadline() const {
+        return _read_deadline;
     }
 
     // Set the tablet_version_block received in an EXECUTE request (TABLETS_ROUTING_V2).

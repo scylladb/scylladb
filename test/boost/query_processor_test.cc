@@ -17,6 +17,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/error_injection.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/metrics_api.hh>
@@ -226,6 +227,57 @@ SEASTAR_TEST_CASE(test_query_internal_with_deadline) {
             e.local_qp().query_internal("SELECT * from ks.cf", db::consistency_level::ONE, {}, 3,
                     db::timeout_clock::now(), count_rows).get();
             BOOST_FAIL("query_internal() did not fail past its deadline");
+        } catch (const exceptions::read_timeout_exception&) {
+        } catch (const semaphore_timed_out&) {
+        }
+        BOOST_CHECK_EQUAL(counter, 0);
+    });
+}
+
+// An internal SELECT may be dispatched after its absolute deadline even though
+// the relative timeout captured before dispatch is still positive (#31652).
+SEASTAR_TEST_CASE(test_internal_read_deadline_survives_select_dispatch) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.cf (k int PRIMARY KEY)").get();
+        for (int k = 0; k < 4; ++k) {
+            e.execute_cql(fmt::format("INSERT INTO ks.cf (k) VALUES ({})", k)).get();
+        }
+        for (int page_size : {-1, 1}) {
+            auto options = make_options(clevel::ONE);
+            const auto deadline = db::timeout_clock::now() - std::chrono::seconds(1);
+            options->set_read_deadline(deadline);
+            options = std::make_unique<cql3::query_options>(std::move(options),
+                    lw_shared_ptr<const service::pager::paging_state>{}, page_size);
+            BOOST_REQUIRE(options->get_read_deadline() == deadline);
+            try {
+                e.execute_cql("SELECT * FROM ks.cf", std::move(options)).get();
+                BOOST_FAIL("SELECT restarted the timeout after its absolute deadline");
+            } catch (const exceptions::read_timeout_exception&) {
+            } catch (const semaphore_timed_out&) {
+            }
+        }
+    });
+}
+
+// Model a SELECT dispatch delay after query_internal() snapshots its relative
+// timeout. The absolute bound must still expire before the read starts (#31652).
+SEASTAR_TEST_CASE(test_query_internal_deadline_after_dispatch_delay) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection injection("query_internal_delay_before_select");
+        if (!utils::get_local_injector().is_enabled("query_internal_delay_before_select")) {
+            return;
+        }
+        e.execute_cql("CREATE TABLE ks.cf (k int PRIMARY KEY)").get();
+        e.execute_cql("INSERT INTO ks.cf (k) VALUES (1)").get();
+        int counter = 0;
+        try {
+            e.local_qp().query_internal("SELECT * FROM ks.cf", db::consistency_level::ONE, {}, 1,
+                    db::timeout_clock::now() + std::chrono::milliseconds(100),
+                    [&counter] (const cql3::untyped_result_set::row&) {
+                        ++counter;
+                        return make_ready_future<stop_iteration>(stop_iteration::no);
+                    }).get();
+            BOOST_FAIL("query_internal() restarted the timeout after dispatch delay");
         } catch (const exceptions::read_timeout_exception&) {
         } catch (const semaphore_timed_out&) {
         }

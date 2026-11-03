@@ -103,7 +103,7 @@ query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<co
         std::move(qo->_unset),
         qo->_skip_metadata,
         query_options::specific_options{qo->_options.page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp}) {
-
+    _read_deadline = qo->_read_deadline;
 }
 
 query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<const service::pager::paging_state> paging_state, int32_t page_size)
@@ -115,7 +115,7 @@ query_options::query_options(std::unique_ptr<query_options> qo, lw_shared_ptr<co
         std::move(qo->_unset),
         qo->_skip_metadata,
         query_options::specific_options{page_size, paging_state, qo->_options.serial_consistency, qo->_options.timestamp}) {
-
+    _read_deadline = qo->_read_deadline;
 }
 
 query_options::query_options(cql3::raw_value_vector_with_unset values)
