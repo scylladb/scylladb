@@ -99,6 +99,11 @@ public:
     // and the consumer should use the registered default (the registry's to_* converters do
     // that).
     //
+    // The initial delivery does not depend on when the consumer registers: a registration
+    // made before the startup refresh is delivered by it, a later one requests a refresh
+    // pass of its own. Either way the delivery is asynchronous, so a consumer keeps its own
+    // default until it arrives.
+    //
     // The callback is registered on, and invoked only on, the calling shard. The caller owns
     // its safety there: captures must be valid on that shard and outlive the manager. Register
     // on every shard (invoke_on_all) for per-shard behavior, or on one shard to fire once. A
@@ -177,6 +182,7 @@ private:
     };
 
     void request_refresh();
+    void request_refresh_from_this_shard(std::string_view config_name);
     future<> refresh_fiber();
     future<scope_caches> load_caches();
     future<> apply_refresh(const scope_caches& caches);
@@ -264,6 +270,9 @@ private:
     // True while run_config_callbacks() is invoking this shard's callbacks; a
     // callback that unregisters itself mid-pass defers the sweep until the pass ends.
     bool _callbacks_in_progress = false;
+    // Set when the first callback pass starts on this shard, never cleared. A registration
+    // made before that is delivered by the startup pass; a later one has to request a pass.
+    bool _callback_pass_started = false;
     std::vector<config_callback> _config_callbacks;
 };
 

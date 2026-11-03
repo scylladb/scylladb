@@ -1069,4 +1069,115 @@ SEASTAR_TEST_CASE(test_db_config_backed_option_applies_to_db_config_and_restores
     });
 }
 
+// A callback registered after the manager is ready gets its initial delivery without a
+// further config write or an explicit refresh: the registration requests the pass itself.
+SEASTAR_TEST_CASE(test_callback_registered_after_ready_gets_initial_delivery) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_late WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_late.t1 (pk int PRIMARY KEY)").get();
+        e.execute_cql("ALTER TABLE ks_late.t1 WITH auto_repair_enabled = true").get();
+
+        auto& mgr = e.cluster_config_manager();
+        // Settle the pass the write triggered, so the delivery below can only come from the
+        // pass the registration requests.
+        mgr.local().refresh().get();
+        BOOST_REQUIRE(mgr.local().is_ready());
+
+        auto rec = std::make_shared<callback_recorder>();
+        auto registration = mgr.local().register_config_callback(
+            "auto_repair_enabled",
+            [rec] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                if (value) {
+                    rec->applies.emplace_back(ctx.keyspace_name.value_or(""), ctx.table_name.value_or(""), *value);
+                }
+                return make_ready_future<>();
+            });
+
+        REQUIRE_EVENTUALLY_EQUAL(std::function<sstring()>([&] {
+            return rec->last_apply("ks_late", "t1").value_or("");
+        }), sstring("true"));
+    });
+}
+
+// Same as above for a registration on a shard other than 0, which has to ask shard 0 for
+// the pass. The callback is registered and invoked on the last shard only.
+SEASTAR_TEST_CASE(test_callback_registered_after_ready_on_other_shard_gets_initial_delivery) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_late_shard WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_late_shard.t1 (pk int PRIMARY KEY)").get();
+        e.execute_cql("ALTER TABLE ks_late_shard.t1 WITH auto_repair_enabled = true").get();
+
+        auto& mgr = e.cluster_config_manager();
+        mgr.local().refresh().get();
+
+        const unsigned shard = this_smp_shard_count() - 1;
+
+        sharded<unsigned> applies;
+        applies.start(0u).get();
+        auto stop_applies = seastar::defer([&applies] noexcept {
+            applies.stop().get();
+        });
+        sharded<std::optional<db::cluster_config_manager::config_callback_registration>> registrations;
+        registrations.start(std::nullopt).get();
+        auto stop_registrations = seastar::defer([&registrations] noexcept {
+            registrations.stop().get();
+        });
+
+        mgr.invoke_on(shard, [&applies, &registrations] (db::cluster_config_manager& manager) {
+            registrations.local() = manager.register_config_callback(
+                "auto_repair_enabled",
+                [&applies] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                    if (ctx.keyspace_name == "ks_late_shard" && ctx.table_name == "t1" && value && *value == "true") {
+                        applies.local()++;
+                    }
+                    return make_ready_future<>();
+                });
+        }).get();
+
+        REQUIRE_EVENTUALLY_EQUAL(std::function<bool()>([&] {
+            return applies.invoke_on(shard, [] (unsigned& c) { return c; }).get() >= 1u;
+        }), true);
+    });
+}
+
+// A callback registered from inside another callback, while a pass is running on this
+// shard, gets its initial delivery from that same pass.
+SEASTAR_TEST_CASE(test_callback_registered_during_pass_gets_initial_delivery) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_mid WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_mid.t1 (pk int PRIMARY KEY)").get();
+        e.execute_cql("ALTER TABLE ks_mid.t1 WITH auto_repair_enabled = true").get();
+
+        auto& mgr = e.cluster_config_manager();
+
+        auto b_registration = std::make_shared<std::optional<db::cluster_config_manager::config_callback_registration>>();
+        auto b_values = std::make_shared<std::vector<std::optional<sstring>>>();
+
+        // A's initial delivery comes from the pass its own registration requests; A registers
+        // B from inside that pass.
+        auto a_registration = mgr.local().register_config_callback(
+            "auto_repair_enabled",
+            [&mgr, b_registration, b_values] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring>) {
+                if (ctx.keyspace_name == "ks_mid" && ctx.table_name == "t1" && !*b_registration) {
+                    *b_registration = mgr.local().register_config_callback(
+                        "auto_repair_enabled",
+                        [b_values] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                            if (ctx.keyspace_name == "ks_mid" && ctx.table_name == "t1") {
+                                b_values->push_back(std::move(value));
+                            }
+                            return make_ready_future<>();
+                        });
+                }
+                return make_ready_future<>();
+            });
+
+        // No config write or explicit refresh follows, so B's delivery can only come from the
+        // pass that registered it.
+        REQUIRE_EVENTUALLY_EQUAL(std::function<bool()>([&] { return b_registration->has_value(); }), true);
+        REQUIRE_EVENTUALLY_EQUAL(std::function<sstring()>([&] {
+            return b_values->empty() ? sstring("") : b_values->back().value_or("");
+        }), sstring("true"));
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
