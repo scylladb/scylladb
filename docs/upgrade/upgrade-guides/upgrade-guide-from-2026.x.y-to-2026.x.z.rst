@@ -202,7 +202,7 @@ Gracefully shutdown ScyllaDB
 .. code:: sh
     
    nodetool drain
-   sudo service stop scylla-server
+   sudo service scylla-server stop
 
 Downgrade to the previous release
 ----------------------------------
