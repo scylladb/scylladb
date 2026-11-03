@@ -163,8 +163,10 @@ struct fsm_config {
     // Servers to prefer as leader, best first. The first one which can vote and is
     // alive gets the earliest election timeout slot - unless its own clock is unusable
     // while leases are on - and everybody else randomizes after it. A bias, not a
-    // guarantee. Read whenever the election timer is armed, and replaced by
-    // fsm::set_priority_members(). Empty => ordinary Raft.
+    // guarantee. A leader hands the leadership over to a server ahead of it on the
+    // list once that one keeps up with its log. Read whenever the election timer is
+    // armed or the leader ticks, and replaced by fsm::set_priority_members(). Empty =>
+    // ordinary Raft.
     std::vector<server_id> priority_members;
 };
 
@@ -202,6 +204,10 @@ struct leader {
     // contains a time point in the future the transfer will be aborted at
     // unless completes successfully till then.
     std::optional<logical_clock::time_point> stepdown;
+    // No automatic transfer is started before this; see maybe_transfer_leadership().
+    logical_clock::time_point transfer_retry_not_before;
+    // _log.last_idx() as of the previous tick; see handover_target().
+    index_t last_idx_at_prev_tick;
     // If timeout_now was already sent to one of the followers contains the id of the follower
     // it was sent to
     std::optional<server_id> timeout_now_sent;
@@ -450,13 +456,27 @@ private:
     // LeaseGuard: whether our clock has been unusable long enough to hand the
     // leadership away. False unless leases are enabled.
     bool clock_lost() const;
-    // LeaseGuard: hand leadership to a replica whose clock still works, if ours
-    // is lost and such a replica exists. A no-op unless leases are enabled.
-    // Precondition: is_leader(), not already stepping down.
-    void maybe_transfer_leadership_on_clock_loss();
     // The first of the priority members which can vote and, if `skip_dead`, is not
     // reported dead by the failure detector; nullopt if there is none.
     std::optional<server_id> preferred_leader(bool skip_dead) const;
+    // A server's position in the priority list. Servers outside the list share the
+    // position past its end.
+    size_t priority_of(server_id id) const;
+    // Among the other voters matching pred, the one which would lead best, or null.
+    // Precondition: is_leader().
+    template <typename Pred>
+    const follower_progress* best_leader(Pred pred) const;
+    struct handover {
+        server_id target;
+        // Why the leadership moves; logged.
+        const char* reason;
+    };
+    // Whether to start handing the leadership over now, and to whom.
+    // Precondition: is_leader().
+    std::optional<handover> handover_target() const;
+    // Acts on handover_target(), unless backing off after a previous attempt.
+    // Precondition: is_leader(), not already stepping down.
+    void maybe_transfer_leadership();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return election_elapsed() >= _randomized_election_timeout;
@@ -748,10 +768,8 @@ public:
     // transfer with no one to hand leadership to. It then waits out `timeout` with the log limiter
     // consumed - the group takes no writes for that whole time - before tick_leader() cancels it.
     void transfer_leadership(logical_clock::duration timeout = logical_clock::duration(0), server_id target = {});
-    // Replaces fsm_config::priority_members.
-    void set_priority_members(std::vector<server_id> members) {
-        _config.priority_members = std::move(members);
-    }
+    // Replaces fsm_config::priority_members. A leader acts on the new list at once.
+    void set_priority_members(std::vector<server_id> members);
 
     void stop();
 
