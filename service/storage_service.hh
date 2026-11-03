@@ -957,10 +957,6 @@ private:
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
 
-    // Reloads the topology state from disk and notifies its listeners.
-    // raft_group0_client::_read_apply_mutex must be held
-    future<> topology_transition();
-    
     // This is called on all nodes for each new command related to tablet-view-building, received through raft
     // raft_group0_client::_read_apply_mutex must be held
     // Precondition: the mutations were already written to disk; the function only transitions the in-memory state machine.
@@ -1126,7 +1122,7 @@ private:
     // Runs the actions which follow committing the topology state.
     // Must not be called under token_metadata_lock.
     future<> finish_topology_state_change(topology_state_change& change);
-    // load topology state machine snapshot into memory
+    // load topology state machine snapshot into memory and notify its listeners
     // raft_group0_client::_read_apply_mutex must be held
     future<> topology_state_load();
     // Applies received raft snapshot to local state machine persistent storage

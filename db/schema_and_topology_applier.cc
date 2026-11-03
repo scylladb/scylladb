@@ -1328,6 +1328,7 @@ future<> schema_and_topology_applier::apply_persisted() {
             slogger.error("Failed after committing the change: {:t}. Finishing the topology change before propagating the error.", post_commit_ex);
         }
         co_await _ss.local().finish_topology_state_change(*_topology_change);
+        _ss.local().wake_up_topology_state_machine();
     }
     if (post_commit_ex) {
         std::rethrow_exception(std::move(post_commit_ex));

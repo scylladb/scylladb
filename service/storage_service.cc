@@ -808,12 +808,6 @@ future<> storage_service::topology_state_load() {
     });
 }
 
-future<> storage_service::topology_transition() {
-    SCYLLA_ASSERT(this_shard_id() == 0);
-    co_await topology_state_load(); // reload new state
-    _topology_state_machine.event.broadcast();
-}
-
 future<> storage_service::update_built_views() {
     co_await update_built_views(co_await _sys_ks.local().get_view_build_status_map());
 }
@@ -895,8 +889,7 @@ future<> storage_service::reload_raft_topology_state(service::raft_group0_client
     slogger.info("Waiting for group 0 read/apply mutex before reloading Raft topology state...");
     auto holder = co_await group0_client.hold_read_apply_mutex(_abort_source);
     slogger.info("Reloading Raft topology state");
-    // Using topology_transition() instead of topology_state_load(), because the former notifies listeners
-    co_await topology_transition();
+    co_await topology_state_load();
     // Group 0 commands recompute the built views in reload_modules(), which this reload bypasses.
     co_await update_built_views();
     slogger.info("Reloaded Raft topology state");

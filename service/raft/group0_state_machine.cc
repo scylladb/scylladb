@@ -400,9 +400,6 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
             co_await applier->apply_persisted();
         }
         if (_in_memory_state_machine_enabled) {
-            if (topology_changed) {
-                _ss._topology_state_machine.event.broadcast();
-            }
             co_await utils::get_local_injector().inject("group0_state_machine_pause_before_reload_modules", utils::wait_for_message(60s));
             co_await reload_modules(std::move(modules_to_reload));
         }
@@ -612,8 +609,6 @@ future<> group0_state_machine::reload_non_topology_state() {
     if (_schema_dependent_state_enabled) {
         co_await do_reload_schema_dependent_state();
     }
-
-    _ss._topology_state_machine.event.broadcast();
 }
 
 future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) {
