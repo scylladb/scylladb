@@ -1032,3 +1032,18 @@ SEASTAR_THREAD_TEST_CASE(test_parse_object_storage_endpoints_one_entry_broken) {
     BOOST_CHECK(endpoints.front().is_gs_storage());
     BOOST_CHECK_EQUAL(endpoints.front().key(), "https://storage.googleapis.com");
 }
+
+// Checks that a config that isn't broadcast to all shards can be used on a
+// shard other than 0, even after another config was broadcast on that shard.
+SEASTAR_THREAD_TEST_CASE(test_config_not_broadcast_on_other_shard) {
+    if (smp::count < 2) {
+        return;
+    }
+    auto broadcast_cfg = std::make_unique<config>();
+    broadcast_cfg->broadcast_to_all_shards().get();
+    smp::submit_to(1, [] {
+        auto cfg = std::make_unique<config>();
+        cfg->data_file_directories.set({"/some/dir"});
+        BOOST_REQUIRE_EQUAL(cfg->data_file_directories(), std::vector<sstring>{"/some/dir"});
+    }).get();
+}
