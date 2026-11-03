@@ -47,17 +47,19 @@ std::optional<sstring> find_ineligible_auto_rf_rack(const auto_rf_eligible_racks
     return std::nullopt;
 }
 
-auto_rf_racks get_auto_rf_racks(const replica::database& db, const topology& topology) {
+auto_rf_racks get_auto_rf_racks(const replica::database& db, const topology& topology,
+                                const data_dictionary::keyspace_metadata* updated_ks) {
     auto_rf_racks racks;
     for (const auto& [ks_name, ks] : db.get_keyspaces()) {
         if (is_auto_rf_keyspace(ks_name)) {
             continue;
         }
-        auto ks_md = ks->metadata();
-        if (!ks_md->uses_tablets()) {
+        auto stored = ks->metadata();
+        const auto& ks_md = updated_ks && updated_ks->name() == ks_name ? *updated_ks : *stored;
+        if (!ks_md.uses_tablets()) {
             continue;
         }
-        for (const auto& [dc, rf] : ks_md->strategy_options()) {
+        for (const auto& [dc, rf] : ks_md.strategy_options()) {
             auto rf_data = locator::replication_factor_data(rf);
             if (rf_data.is_numeric()) {
                 // RF 0 is how a DC is drained; it must not pull the auto-RF keyspaces into it.
