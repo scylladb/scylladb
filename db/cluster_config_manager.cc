@@ -156,6 +156,16 @@ future<> cluster_config_manager::wait_until_ready() {
 }
 
 cluster_config_manager::config_callback_registration cluster_config_manager::register_config_callback(sstring config_name, config_callback_function on_change) {
+    // A registration made before this shard's first pass is delivered by that pass, and one
+    // made while a pass runs here is picked up by it (the pass re-reads the vector size).
+    // One made between passes would otherwise get nothing until the next config write, so
+    // it requests a pass of its own; change detection keeps that pass from re-delivering
+    // what the other entries already got. Requested before the push_back so a failure here
+    // leaves no entry behind; nothing yields between the two, so the pass cannot start in
+    // between.
+    if (_callback_pass_started && !_callbacks_in_progress) {
+        request_refresh_from_this_shard(config_name);
+    }
     const auto callback_id = ++_next_callback_id;
     _config_callbacks.push_back(config_callback{
         .id = callback_id,
@@ -166,6 +176,31 @@ cluster_config_manager::config_callback_registration cluster_config_manager::reg
     // The handle's constructor is noexcept, so nothing past the push_back can fail and
     // leave an entry without an owner.
     return config_callback_registration(*this, callback_id);
+}
+
+// Requests a full pass: the cache reload on shard 0 and a callback sweep on every shard.
+// That is more than the one new entry needs, but a late registration is rare and this
+// reuses the only path that runs callbacks, so no second delivery path has to be
+// serialized against the refresh fiber.
+void cluster_config_manager::request_refresh_from_this_shard(std::string_view config_name) {
+    if (this_shard_id() == 0) {
+        request_refresh();
+        return;
+    }
+    // Hop to shard 0 in the background, under this shard's gate so stop() joins the hop
+    // before sharded<>::stop() can destroy the shard 0 instance. After stop() the request
+    // is dropped: nothing would be delivered anyway.
+    if (_gate.is_closed()) {
+        return;
+    }
+    (void)with_gate(_gate, [this] {
+        return _owner.invoke_on(0, [] (cluster_config_manager& manager) {
+            manager.request_refresh();
+        });
+    }).handle_exception([config_name = sstring(config_name)] (std::exception_ptr ep) {
+        cluster_config_logger.warn("Failed to request a cluster config refresh for a new '{}' callback,"
+                " it is delivered on the next config change: {}", config_name, ep);
+    });
 }
 
 void cluster_config_manager::request_refresh() {
@@ -292,16 +327,17 @@ future<> cluster_config_manager::run_config_callbacks() {
         utils::on_internal_error("cluster config callback pass started while a previous pass is still running");
     }
     _callbacks_in_progress = true;
+    _callback_pass_started = true;
     auto cleanup_callbacks = seastar::defer([this] noexcept {
         _callbacks_in_progress = false;
         sweep_unregistered_callbacks();
     });
 
-    // Callbacks registered while this pass runs are appended past callback_count and get
-    // their first delivery on the next pass. The vector never shrinks during a pass:
-    // unregistration only clears the registered flag and the sweep waits for the pass to end.
-    const auto callback_count = _config_callbacks.size();
-    for (size_t callback_idx = 0; callback_idx < callback_count; ++callback_idx) {
+    // The size is re-read on every iteration: callbacks registered while this pass runs are
+    // appended at the end and delivered by this same pass. The vector never shrinks during
+    // a pass: unregistration only clears the registered flag and the sweep waits for the
+    // pass to end.
+    for (size_t callback_idx = 0; callback_idx < _config_callbacks.size(); ++callback_idx) {
         if (!_config_callbacks[callback_idx].registered) {
             continue;
         }
