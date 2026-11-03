@@ -5,6 +5,7 @@
    AWS Images </reference/aws-images>
    Azure Images </reference/azure-images>
    GCP Images </reference/gcp-images>
+   OCI Images </reference/oci-images>
    Configuration Parameters </reference/configuration-parameters>
    Glossary </reference/glossary>
    Limits </reference/limits>

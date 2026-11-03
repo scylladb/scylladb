@@ -5,11 +5,12 @@ Reference
 .. scylladb_include_flag:: reference-toc.rst
 
 
-* ScyllaDB images for AWS, Azure, and GCP.
+* ScyllaDB images for AWS, Azure, GCP, and OCI.
 
   * :doc:`AWS Images </reference/aws-images>`
   * :doc:`Azure Images </reference/azure-images>`
   * :doc:`GCP Images </reference/gcp-images>`
+  * :doc:`OCI Images </reference/oci-images>`
 * :doc:`Configuration Parameters </reference/configuration-parameters>` - ScyllaDB properties configurable in the ``scylla.yaml`` configuration file.
 * :doc:`Glossary </reference/glossary>` - ScyllaDB-related terms and definitions.
 * :doc:`Limits </reference/limits>`
