@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <type_traits>
 #include <concepts>
+#include <bit>
 #include "version.hh"
 #include "encoding_stats.hh"
 #include "types_fwd.hh"
@@ -540,6 +541,40 @@ struct sstable_enabled_features {
     }
 };
 
+// Scylla-specific features that change how an sstable must be read.
+// Unlike sstable_feature, a reader must refuse to open an sstable that uses
+// a feature it doesn't know, because it would misread the sstable.
+// Bit numbers are found on disk, so they do matter.
+// Only a version for which supports_incompatible_features() is true may set
+// these bits. Older Scylla versions skip the IncompatibleFeatures entry, so
+// they would misread the sstable instead of refusing it.
+enum class sstable_incompatible_feature : uint32_t {
+    End = 0,
+};
+
+// Scylla-specific incompatible features used by a particular sstable.
+// Feature `f` is bit `f % 64` of `words[f / 64]`.
+struct sstable_incompatible_features {
+    disk_array<uint32_t, uint64_t> words;
+
+    // Returns the numbers of the set bits that this version of Scylla doesn't know.
+    std::vector<uint64_t> unknown() const {
+        std::vector<uint64_t> result;
+        for (size_t i = 0; i < words.elements.size(); ++i) {
+            for (uint64_t w = words.elements[i]; w; w &= w - 1) {
+                uint64_t f = i * 64 + std::countr_zero(w);
+                if (f >= uint64_t(sstable_incompatible_feature::End)) {
+                    result.push_back(f);
+                }
+            }
+        }
+        return result;
+    }
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(words); }
+};
+
 // Numbers are found on disk, so they do matter. Also, setting their sizes of
 // that of an uint32_t is a bit wasteful, but it simplifies the code a lot
 // since we can now still use a strongly typed enum without introducing a
@@ -566,6 +601,7 @@ enum class scylla_metadata_type : uint32_t {
     ComponentsDigests = 12,
     LargeDataRecords = 13,
     ScrubTime = 14,
+    IncompatibleFeatures = 15,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -717,7 +753,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ComponentsDigests, components_digests>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataRecords, large_data_records>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScrubTime, scrub_time_type>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScrubTime, scrub_time_type>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::IncompatibleFeatures, sstable_incompatible_features>
             > data;
     std::optional<uint32_t> digest;
 
@@ -777,6 +814,9 @@ struct scylla_metadata {
     void set_scrub_time(db_clock::time_point timestamp) {
         std::chrono::milliseconds since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(timestamp.time_since_epoch());
         data.set<scylla_metadata_type::ScrubTime>(scrub_time_type(since_epoch.count()));
+    }
+    const sstable_incompatible_features* get_incompatible_features() const {
+        return data.get<scylla_metadata_type::IncompatibleFeatures, sstable_incompatible_features>();
     }
 };
 
