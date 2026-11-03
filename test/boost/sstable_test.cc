@@ -1361,6 +1361,51 @@ SEASTAR_TEST_CASE(test_digest_validation_scylla) {
     return test_component_digest_validation(component_type::Scylla, sstable::version_types::me, "Scylla digest mismatch");
 }
 
+// Formats that support incompatible features always write an empty
+// IncompatibleFeatures entry to Scylla.db. Older formats don't write it.
+// Loading an sstable that uses an unknown incompatible feature must fail.
+SEASTAR_TEST_CASE(test_incompatible_features) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+
+        for (auto version : writable_sstable_versions) {
+            testlog.info("version={}", version);
+            auto sst = make_sstable_containing(env.make_sstable(schema, version), muts).get();
+            auto* features = sstables::test(sst)._scylla_metadata()->get_incompatible_features();
+            BOOST_REQUIRE_EQUAL(bool(features), supports_incompatible_features(version));
+            if (features) {
+                BOOST_REQUIRE(features->words.elements.empty());
+            }
+        }
+
+        auto sst = make_sstable_containing(env.make_sstable(schema, sstable_version_types::mu), muts).get();
+        auto toc_path = fmt::to_string(sst->toc_filename());
+        auto entry_desc = sstables::parse_path(toc_path, schema->ks_name(), schema->cf_name()).value();
+        auto dir_path = std::filesystem::path(toc_path).parent_path().string();
+
+        // Set feature 100, which this version of Scylla doesn't know.
+        sstables::test(sst).remove_component(component_type::Scylla).get();
+        sst->write_component_with_metadata_and_modifier(component_type::Scylla, [&] (sstable&) {
+            sstable_incompatible_features features;
+            features.words.elements = {0, uint64_t(1) << 36};
+            sstables::test(sst)._scylla_metadata()->data.set<scylla_metadata_type::IncompatibleFeatures>(std::move(features));
+        });
+        sst = nullptr;
+
+        auto sst_reopened = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+        BOOST_REQUIRE_EXCEPTION(sst_reopened->load(schema->get_sharder()).get(), std::runtime_error,
+            exception_predicate::message_contains("uses incompatible features unknown to this version of Scylla: 100"));
+    });
+}
+
 // Changes one byte in each page of a file.
 static void corrupt_every_page(sstring path) {
     auto f = open_file_dma(path, open_flags::rw).get();
