@@ -1,7 +1,9 @@
 # Copyright (C) 2025-present ScyllaDB
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+from cassandra import ConsistencyLevel
 from cassandra.policies import WhiteListRoundRobinPolicy
+from cassandra.query import SimpleStatement
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables, Column, IntType
 from test.pylib.rest_client import inject_error_one_shot
@@ -184,3 +186,33 @@ async def test_long_query_timeout_without_failure_erm(request, manager: ScyllaCl
 
     res = await query_future
     assert res[0][0] == num_rows
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_read_with_failed_extra_target_releases_erm(manager: ScyllaClusterManager):
+    """
+    Test verifies that a read which reached its consistency level although one
+    of its targets failed doesn't block ERM until its timeout.
+
+    With speculative_retry = 'ALWAYS', a QUORUM read with RF=3 sends requests
+    to all three replicas, so it succeeds when one of them fails. The read
+    executor used to wait until the read's timeout for a response from the
+    failed replica, holding its ERM and so blocking topology changes, which
+    wait for all older token metadata versions to be released.
+    Reproduces SCYLLADB-6015.
+    """
+    servers = await manager.servers_add(3, config={"rf_rack_valid_keyspaces": False})
+    cql = await manager.get_cql_exclusive(servers[0])
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int) WITH speculative_retry = 'ALWAYS'")
+    await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (0, 0)", consistency_level=ConsistencyLevel.ALL))
+
+    logger.info("Make one replica fail the read")
+    await manager.api.enable_injection(servers[1].ip_addr, 'storage_proxy::handle_read', one_shot=True,
+                                       parameters={'cf_name': 't', 'what': 'throw'})
+    query_timeout = 600
+    rows = await cql.run_async(SimpleStatement(f"SELECT * FROM ks.t WHERE pk = 0 USING TIMEOUT {query_timeout}s",
+                                               consistency_level=ConsistencyLevel.QUORUM), timeout=2*query_timeout)
+    assert [(r.pk, r.v) for r in rows] == [(0, 0)]
+
+    logger.info("Add a new node - ERM should not be blocked")
+    await asyncio.wait_for(manager.server_add(config={"rf_rack_valid_keyspaces": False}), timeout=query_timeout/4)

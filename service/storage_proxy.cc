@@ -5090,10 +5090,26 @@ private:
     api::timestamp_type _last_modified = api::missing_timestamp;
     size_t _target_count_for_cl; // _target_count_for_cl < _targets_count if CL=LOCAL and RRD.GLOBAL
     exceptions::replica_failure_map _failed_replicas; // replicas counted in _failed
+    size_t _errors = 0; // targets which failed, in any DC (unlike _failed)
+    bool _completed = false; // _done_promise was resolved
     noncopyable_function<void()> _on_disconnect;
 
     void on_timeout() override {
         fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _block_for, _data_result));
+    }
+    // The read is done when every target has responded or, once the consistency
+    // level is reached, has either responded or failed. A target which failed will
+    // never respond, so waiting for it would hold the executor, and with it its
+    // effective replication map, until the timeout - an hour for an internal read
+    // which doesn't set one. A token metadata version held by that map blocks every
+    // topology change's global barrier.
+    void maybe_complete() {
+        if (!_completed && response_count() + _errors == _targets_count && (_errors == 0 || _cl_reported)) {
+            _completed = true;
+            _timeout.cancel();
+            _on_disconnect = {};
+            _done_promise.set_value(bo::success());
+        }
     }
     void on_failure(exceptions::coordinator_exception_container&& ex) override {
         if (!_cl_reported) {
@@ -5171,13 +5187,10 @@ private:
                 _cl_promise.set_value(digest_read_result{std::move(_data_result), digests_match()});
             }
         }
-        if (is_completed()) {
-            _timeout.cancel();
-            _on_disconnect = {};
-            _done_promise.set_value(bo::success());
-        }
+        maybe_complete();
     }
     void on_error(locator::host_id ep, error_kind kind, exceptions::request_failure_reason reason) override {
+        _errors++;
         if (waiting_for(ep)) {
             _failed++;
             _failed_replicas.add(ep, reason);
@@ -5205,7 +5218,9 @@ private:
                 fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result, std::move(_failed_replicas)));
                 break;
             }
+            return;
         }
+        maybe_complete();
     }
 
 public:
@@ -5222,7 +5237,7 @@ public:
         _targets_count += targets_count;
     }
     bool is_completed() {
-        return response_count() == _targets_count;
+        return _completed || response_count() == _targets_count;
     }
     api::timestamp_type last_modified() const {
         return _last_modified;
