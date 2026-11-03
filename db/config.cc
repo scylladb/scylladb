@@ -1203,6 +1203,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Timeout for CQL server requests on shutdown. After this timeout the server will shutdown all connections.")
     , group0_raft_op_timeout_in_ms(this, "group0_raft_op_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 60000,
             "The time in milliseconds that group0 allows a Raft operation to complete.")
+    , strongly_consistent_tables_no_leader_timeout_in_seconds(this, "strongly_consistent_tables_no_leader_timeout_in_seconds", liveness::LiveUpdate, value_status::Used, 60,
+            "How long a tablet of a strongly consistent table may have no Raft leader before its replicas fail writes and QUORUM/LOCAL_QUORUM reads at once with an Unavailable error. "
+            "They fail only while fewer than a quorum of the tablet's replicas are alive. Before this time passes, or while a quorum is alive, such requests wait for a leader until they time out. "
+            "0 fails them as soon as the leader is lost. Reads at ONE/LOCAL_ONE need no leader and are not affected.")
     /**
     * @Group Inter-node settings
     */

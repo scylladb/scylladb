@@ -178,6 +178,13 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         condition_variable leader_info_cond = condition_variable();
         future<> leader_info_updater = make_ready_future<>();
 
+        // Since when this replica has known no leader of the group. Unset while it
+        // knows one. Kept by track_no_leader().
+        std::optional<lowres_clock::time_point> no_leader_since;
+        future<> no_leader_tracker = make_ready_future<>();
+        // Raft's failure detector, the one the server uses. Set with `server`.
+        shared_ptr<raft::failure_detector> failure_detector;
+
         // Aborts the migration RPC running on the group. The next one aborts it: the
         // coordinator retries a failed attempt on every replica, and the retry supersedes
         // the calls of the previous attempt that are still running.
@@ -287,6 +294,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // Guards against a ping-pong of the leadership: withdraws the priority members of a
     // group for a while once this replica has gained its leadership too often.
     static void maybe_reset_priority_members(raft_group_state& state, raft::group_id gid);
+
+    // Keeps state.no_leader_since up to date until the group's server is aborted.
+    future<> track_no_leader(raft_group_state& state, raft::group_id gid);
 
     void init_messaging_service();
 
@@ -443,6 +453,16 @@ public:
     struct ok {};
     using begin_read_result = std::variant<ok, raft::not_a_leader, need_wait_for_leader>;
     begin_read_result begin_read(abort_source&);
+
+    // How many voters an election needs, and how many of them are alive.
+    struct voters_count {
+        int32_t quorum;
+        int32_t alive;
+    };
+    // Set when this replica has known no leader of the group for longer than `limit` and
+    // raft's failure detector sees fewer than a quorum of the voters alive, so no leader
+    // can be elected; nullopt otherwise.
+    std::optional<voters_count> lost_quorum(lowres_clock::duration limit) const;
 };
 
 } // namespace service::strong_consistency
