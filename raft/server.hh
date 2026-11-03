@@ -98,7 +98,9 @@ public:
         std::optional<leaseguard_configuration> leaseguard;
         // Servers to prefer as leader, best first. The first one which can vote and
         // is alive campaigns before everybody else and normally wins; a bias, not a
-        // guarantee. Replaced by set_priority_members(). Empty => ordinary Raft.
+        // guarantee. A leader hands the leadership over to a server ahead of it on
+        // the list once that one can take over. Replaced by set_priority_members().
+        // Empty => ordinary Raft.
         std::vector<server_id> priority_members;
     };
 

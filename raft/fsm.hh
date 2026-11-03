@@ -163,8 +163,10 @@ struct fsm_config {
     // Servers to prefer as leader, best first. The first one which can vote and is
     // alive gets the earliest election timeout slot - unless its own clock is unusable
     // while leases are on - and everybody else randomizes after it. A bias, not a
-    // guarantee. Read whenever the election timer is armed, and replaced by
-    // fsm::set_priority_members(). Empty => ordinary Raft.
+    // guarantee. A leader hands the leadership over to a server ahead of it on the
+    // list once that one can take over. Read whenever the election timer is armed or
+    // the leader ticks, and replaced by fsm::set_priority_members(). Empty =>
+    // ordinary Raft.
     std::vector<server_id> priority_members;
 };
 
@@ -202,6 +204,9 @@ struct leader {
     // contains a time point in the future the transfer will be aborted at
     // unless completes successfully till then.
     std::optional<logical_clock::time_point> stepdown;
+    // No transfer to a priority member is started before this; see
+    // maybe_transfer_leadership().
+    logical_clock::time_point priority_transfer_not_before;
     // If timeout_now was already sent to one of the followers contains the id of the follower
     // it was sent to
     std::optional<server_id> timeout_now_sent;
@@ -448,13 +453,20 @@ private:
     // delta old. When true the leader may serve a linearizable read locally
     // without a quorum round-trip. Precondition: is_leader().
     bool can_serve_lease_read();
-    // LeaseGuard: hand leadership to a replica whose clock still works, if ours
-    // has been unusable long enough and such a replica exists. A no-op unless
-    // leases are enabled. Precondition: is_leader(), not already stepping down.
-    void maybe_transfer_leadership_on_clock_loss();
+    // LeaseGuard: whether our clock has been unusable long enough to hand the
+    // leadership away. Starts the wait when the clock becomes unusable and
+    // cancels it when the clock works again. Precondition: is_leader(), leases
+    // enabled.
+    bool clock_lost();
     // The first of the priority members which can vote and, if `skip_dead`, is not
     // reported dead by the failure detector; nullopt if there is none.
     std::optional<server_id> preferred_leader(bool skip_dead) const;
+    // Hand the leadership over to the first priority member ahead of us which can
+    // vote, is alive and, with leases on, has a working clock, once it holds
+    // everything committed. If our clock is lost, also to one behind us and
+    // without the cooldown, or else to any replica whose clock works.
+    // Precondition: is_leader(), not already stepping down.
+    void maybe_transfer_leadership();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return election_elapsed() >= _randomized_election_timeout;
