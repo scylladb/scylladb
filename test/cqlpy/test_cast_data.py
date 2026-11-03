@@ -219,4 +219,67 @@ def test_cast_double_to_text(cql, table3):
         ftext = list(cql.execute(f"SELECT CAST(db AS text) FROM {table3} WHERE p={p}"))[0][0]
         assert n == float(ftext)
 
+# Test casting a float or a double to the integer types tinyint, smallint,
+# int and bigint, including values that don't fit in the target type,
+# infinities and NaN. There is no inherent reason why such a cast must give
+# the results checked here - some SQL databases fail such a cast instead -
+# but this is what Cassandra does: it converts as Java does (JLS 5.1.3), by
+# truncating the value toward zero to an int (to a long, for bigint), where
+# NaN becomes 0 and values beyond that range saturate to its minimum or
+# maximum; tinyint and smallint then keep the low bits of that int.
+# Scylla always gave the same results as Cassandra when the value, truncated,
+# fits in an int (in a bigint, for bigint), or is negative. For NaN and for
+# larger positive values, Scylla used to give the minimum int or bigint
+# instead (so 0 instead of -1 for tinyint), because converting a value that
+# doesn't fit in the target type is undefined behavior in C++.
+# Reproduces SCYLLADB-4919.
+@pytest.mark.parametrize('column', ['f', 'db'])
+def test_cast_float_to_integer_types(cql, table3, column):
+    int_max = 2**31 - 1
+    int_min = -2**31
+    bigint_max = 2**63 - 1
+    bigint_min = -2**63
+    # Each case is a value and the results of casting it to tinyint,
+    # smallint, int and bigint. These values are exact in both float and
+    # double, except 76571.345, which is truncated to 76571 anyway.
+    cases = [
+        # Values in the range of an int: tinyint and smallint keep their low
+        # bits.
+        (-0.9, 0, 0, 0, 0),
+        (300.5, 44, 300, 300, 300),
+        (-564.0, -52, -564, -564, -564),
+        (76571.345, 27, 11035, 76571, 76571),
+        (-2147483648.0, 0, 0, int_min, int_min),
+        # Values beyond the range of an int saturate to int_max or int_min
+        # before tinyint and smallint keep their low bits, so tinyint and
+        # smallint are -1 or 0.
+        (2147483648.0, -1, -1, int_max, 2147483648),
+        (1e10, -1, -1, int_max, 10000000000),
+        (-1e10, 0, 0, int_min, -10000000000),
+        # Values beyond the range of a bigint saturate too.
+        (9223372036854775808.0, -1, -1, int_max, bigint_max),
+        (-9223372036854775808.0, 0, 0, int_min, bigint_min),
+        (1e30, -1, -1, int_max, bigint_max),
+        ('Infinity', -1, -1, int_max, bigint_max),
+        ('-Infinity', 0, 0, int_min, bigint_min),
+        # NaN becomes 0.
+        ('NaN', 0, 0, 0, 0),
+    ]
+    if column == 'db':
+        # Values near the limits of int and bigint, that only a double can
+        # hold.
+        cases += [
+            (2147483647.9, -1, -1, int_max, int_max),
+            (-2147483648.9, 0, 0, int_min, int_min),
+            (-2147483649.0, 0, 0, int_min, -2147483649),
+            (9223372036854774784.0, -1, -1, int_max, 9223372036854774784),
+            (1e300, -1, -1, int_max, bigint_max),
+        ]
+    p = unique_key_int()
+    for value, tinyint, smallint, int_, bigint in cases:
+        cql.execute(f'INSERT INTO {table3} (p, {column}) VALUES ({p}, {value})')
+        # Check that each cast gives Cassandra's result.
+        assert [(tinyint, smallint, int_, bigint)] == list(cql.execute(
+            f'SELECT CAST({column} AS tinyint), CAST({column} AS smallint), CAST({column} AS int), CAST({column} AS bigint) FROM {table3} WHERE p={p}')), value
+
 # TODO: test casts from more types.
