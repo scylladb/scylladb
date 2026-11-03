@@ -2543,48 +2543,65 @@ verify_legacy_and_rules = pytest.mark.parametrize("rules_mode", [
     pytest.param(True, id="rules"),
 ])
 
+# The composite backend runs the same checks against both the table and syslog sinks.
+covered_by_composite = pytest.mark.tier2
 
+
+@covered_by_composite
 @verify_legacy_and_rules
 async def test_audit_table_noauth(manager: ScyllaClusterManager, rules_mode: bool):
-    """Table backend, no auth, single node — groups all tests that share this config."""
+    """Table backend, no auth, single node."""
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_using_non_existent_keyspace(AuditBackendTable)
     await t._test_audit_keyspace(AuditBackendTable)
     await t._test_audit_keyspace_extra_parameter(AuditBackendTable)
     await t._test_audit_keyspace_many_ks(AuditBackendTable)
     await t._test_audit_keyspace_table_not_exists(AuditBackendTable)
-    await t._test_audit_audit_ks()
-    await t._test_audit_table()
-    await t._test_audit_table_extra_parameter()
-    await t._test_audit_table_audit_keyspaces_empty()
-    await t._test_audit_table_no_ks()
-    await t._test_audit_categories_part1()
     await t._test_audit_categories_part2(AuditBackendTable)
     await t._test_audit_categories_part3(AuditBackendTable)
-    await t._test_categories()
-    await t._test_negative_audit_records_query()
     await t._test_prepare(AuditBackendTable)
     await t._test_batch(AuditBackendTable)
     await t._test_batch_native_protocol(AuditBackendTable)
     await t._test_empty_keyspace_ddl(AuditBackendTable)
 
 
+@verify_legacy_and_rules
+async def test_audit_table_only_noauth(manager: ScyllaClusterManager, rules_mode: bool):
+    """Table backend, no auth, single node — checks that run only against this backend."""
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
+    await t._test_audit_audit_ks()
+    await t._test_audit_table()
+    await t._test_audit_table_extra_parameter()
+    await t._test_audit_table_audit_keyspaces_empty()
+    await t._test_audit_table_no_ks()
+    await t._test_audit_categories_part1()
+    await t._test_categories()
+    await t._test_negative_audit_records_query()
+
+
 # AuditBackendTable, auth (cassandra), rf=1
 
+@covered_by_composite
 @verify_legacy_and_rules
 async def test_audit_table_auth(manager: ScyllaClusterManager, rules_mode: bool):
     """Table backend, auth enabled, single node."""
     t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_user_password_masking(AuditBackendTable)
+    await t._test_role_password_masking(AuditBackendTable)
+    await t._test_permissions(AuditBackendTable)
+
+
+@verify_legacy_and_rules
+async def test_audit_table_only_auth(manager: ScyllaClusterManager, rules_mode: bool):
+    """Table backend, auth enabled, single node — checks that run only against this backend."""
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
     await t._test_negative_audit_records_auth()
     await t._test_negative_audit_records_auth_no_login()
     await t._test_negative_audit_records_admin()
     await t._test_negative_audit_records_dml()
     await t._test_negative_audit_records_dcl()
-    await t._test_role_password_masking(AuditBackendTable)
     await t._test_login()
     await t._test_cassandra_login()
-    await t._test_permissions(AuditBackendTable)
 
 
 # AuditBackendTable, auth (cassandra), rf=3
@@ -2683,6 +2700,7 @@ async def test_audit_maintenance_socket_user_creation(manager: ScyllaClusterMana
 
 # AuditBackendSyslog, no auth, rf=1
 
+@covered_by_composite
 @verify_legacy_and_rules
 async def test_audit_syslog_noauth(manager: ScyllaClusterManager, rules_mode: bool):
     """Syslog backend, no auth, single node."""
@@ -2703,6 +2721,7 @@ async def test_audit_syslog_noauth(manager: ScyllaClusterManager, rules_mode: bo
 
 # AuditBackendSyslog, auth, rf=1
 
+@covered_by_composite
 @verify_legacy_and_rules
 async def test_audit_syslog_auth(manager: ScyllaClusterManager, rules_mode: bool):
     """Syslog backend, auth enabled, single node."""
@@ -2750,10 +2769,10 @@ _composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_
 
 
 @pytest.mark.parametrize("helper_class,config_changer", [
-    pytest.param(AuditBackendTable, CQLAuditTester.AuditSighupConfigChanger, id="table-sighup"),
-    pytest.param(AuditBackendTable, CQLAuditTester.AuditCqlConfigChanger, id="table-cql"),
-    pytest.param(_syslog, CQLAuditTester.AuditSighupConfigChanger, id="syslog-sighup"),
-    pytest.param(_syslog, CQLAuditTester.AuditCqlConfigChanger, id="syslog-cql"),
+    pytest.param(AuditBackendTable, CQLAuditTester.AuditSighupConfigChanger, id="table-sighup", marks=covered_by_composite),
+    pytest.param(AuditBackendTable, CQLAuditTester.AuditCqlConfigChanger, id="table-cql", marks=covered_by_composite),
+    pytest.param(_syslog, CQLAuditTester.AuditSighupConfigChanger, id="syslog-sighup", marks=covered_by_composite),
+    pytest.param(_syslog, CQLAuditTester.AuditCqlConfigChanger, id="syslog-cql", marks=covered_by_composite),
     pytest.param(_composite, CQLAuditTester.AuditSighupConfigChanger, id="composite-sighup"),
     pytest.param(_composite, CQLAuditTester.AuditCqlConfigChanger, id="composite-cql"),
 ])
@@ -2763,10 +2782,10 @@ async def test_config_no_liveupdate(manager: ScyllaClusterManager, helper_class,
 
 
 @pytest.mark.parametrize("helper_class,config_changer", [
-    pytest.param(AuditBackendTable, CQLAuditTester.AuditSighupConfigChanger, id="table-sighup"),
-    pytest.param(AuditBackendTable, CQLAuditTester.AuditCqlConfigChanger, id="table-cql"),
-    pytest.param(_syslog, CQLAuditTester.AuditSighupConfigChanger, id="syslog-sighup"),
-    pytest.param(_syslog, CQLAuditTester.AuditCqlConfigChanger, id="syslog-cql"),
+    pytest.param(AuditBackendTable, CQLAuditTester.AuditSighupConfigChanger, id="table-sighup", marks=covered_by_composite),
+    pytest.param(AuditBackendTable, CQLAuditTester.AuditCqlConfigChanger, id="table-cql", marks=covered_by_composite),
+    pytest.param(_syslog, CQLAuditTester.AuditSighupConfigChanger, id="syslog-sighup", marks=covered_by_composite),
+    pytest.param(_syslog, CQLAuditTester.AuditCqlConfigChanger, id="syslog-cql", marks=covered_by_composite),
     pytest.param(_composite, CQLAuditTester.AuditSighupConfigChanger, id="composite-sighup"),
     pytest.param(_composite, CQLAuditTester.AuditCqlConfigChanger, id="composite-cql"),
 ])
@@ -2776,8 +2795,8 @@ async def test_config_liveupdate(manager: ScyllaClusterManager, helper_class, co
 
 
 @pytest.mark.parametrize("helper_class", [
-    pytest.param(AuditBackendTable, id="table"),
-    pytest.param(_syslog, id="syslog"),
+    pytest.param(AuditBackendTable, id="table", marks=covered_by_composite),
+    pytest.param(_syslog, id="syslog", marks=covered_by_composite),
     pytest.param(_composite, id="composite"),
 ])
 async def test_parallel_syslog_audit(manager: ScyllaClusterManager, helper_class):
