@@ -65,10 +65,15 @@ def test_clearnapshot_tag_and_keyspaces(nodetool):
 
 
 def test_listsnapshots(nodetool):
+    # The creation and expiration times are optional: the expiration time is
+    # reported only for snapshots taken with a ttl, and neither is reported for
+    # snapshots whose manifest does not record them.
     res = nodetool("listsnapshots", expected_requests=[
         expected_request("GET", "/storage_service/snapshots", response=[
-            {"key": "1698236289867", "value": [{"ks": "ks1", "cf": "tbl1", "total": 45056, "live": 0},
-                                               {"ks": "ks1", "cf": "tbl2", "total": 40956, "live": 0}]},
+            {"key": "1698236289867", "value": [{"ks": "ks1", "cf": "tbl1", "total": 45056, "live": 0,
+                                                "created_at": 1698236289, "expires_at": 1698322689},
+                                               {"ks": "ks1", "cf": "tbl2", "total": 40956, "live": 0,
+                                                "created_at": 1698236289}]},
             {"key": "1698236070745", "value": [{"ks": "ks1", "cf": "tbl1", "total": 35056, "live": 0},
                                                {"ks": "ks1", "cf": "tbl2", "total": 20956, "live": 0}]},
             ]),
@@ -77,11 +82,11 @@ def test_listsnapshots(nodetool):
 
     expected_output =\
 """Snapshot Details: 
-Snapshot name Keyspace name Column family name True size Size on disk
-1698236289867 ks1           tbl1               0 bytes   44 KiB      
-1698236289867 ks1           tbl2               0 bytes   40 KiB      
-1698236070745 ks1           tbl1               0 bytes   34.23 KiB   
-1698236070745 ks1           tbl2               0 bytes   20.46 KiB   
+Snapshot name Keyspace name Column family name True size Size on disk Creation time        Expiration time     
+1698236289867 ks1           tbl1               0 bytes   44 KiB       2023-10-25T12:18:09Z 2023-10-26T12:18:09Z
+1698236289867 ks1           tbl2               0 bytes   40 KiB       2023-10-25T12:18:09Z                     
+1698236070745 ks1           tbl1               0 bytes   34.23 KiB                                             
+1698236070745 ks1           tbl2               0 bytes   20.46 KiB                                             
 
 Total TrueDiskSpaceUsed: 923.08 KiB
 
