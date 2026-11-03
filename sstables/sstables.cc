@@ -2704,6 +2704,13 @@ sstable::read_scylla_metadata() noexcept {
             auto computed_digest = co_await compute_component_file_digest(component_type::Scylla);
             validate_component_digest(component_type::Scylla, computed_digest);
 
+            if (auto* f = _components->scylla_metadata->get_incompatible_features()) {
+                if (auto unknown = f->unknown(); !unknown.empty()) {
+                    throw std::runtime_error(fmt::format("SSTable {} uses incompatible features unknown to this version of Scylla: {}",
+                            get_filename(), fmt::join(unknown, ", ")));
+                }
+            }
+
             // If we already know which identifier this sstable is, the metadata
             // we just read must say the same.  On object storage the identifier
             // we opened the sstable by is the one its component objects are
@@ -2758,6 +2765,9 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
     // Note: data.set() wants an rvalue, so we have to make a copy. It's a uint64 anyway.
     _components->scylla_metadata->data.set<scylla_metadata_type::Features>(sstable_enabled_features(_features));
+    if (supports_incompatible_features(_version)) {
+        _components->scylla_metadata->data.set<scylla_metadata_type::IncompatibleFeatures>(sstable_incompatible_features{});
+    }
     _components->scylla_metadata->data.set<scylla_metadata_type::RunIdentifier>(std::move(identifier));
     if (ld_stats) {
         _components->scylla_metadata->data.set<scylla_metadata_type::LargeDataStats>(std::move(*ld_stats));
@@ -3612,6 +3622,12 @@ bool index_holds_physical_positions(sstable_version_types v) {
 // without CompressionInfo.db.
 bool chunk_has_length_framing(sstable_version_types v) {
     return index_holds_physical_positions(v);
+}
+
+// Every Scylla version that can read these formats checks the
+// IncompatibleFeatures entry of Scylla.db. Older Scylla versions skip it.
+bool supports_incompatible_features(sstable_version_types v) {
+    return v >= sstable_version_types::mu;
 }
 
 component_type sstable::component_from_sstring(version_types v, const sstring &s) {

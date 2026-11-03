@@ -1703,6 +1703,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
         case sstables::scylla_metadata_type::LargeDataRecords: return "large_data_records";
         case sstables::scylla_metadata_type::ScrubTime: return "scrub_time";
+        case sstables::scylla_metadata_type::IncompatibleFeatures: return "incompatible_features";
     }
     std::abort();
 }
@@ -1903,6 +1904,14 @@ public:
 
     void operator()(const sstables::scrub_time_type& as) const {
         _writer.Int64(as.timestamp);
+    }
+
+    void operator()(const sstables::sstable_incompatible_features& val) const {
+        _writer.StartArray();
+        for (auto w : val.words.elements) {
+            _writer.Uint64(w);
+        }
+        _writer.EndArray();
     }
 };
 
