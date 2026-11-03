@@ -2220,6 +2220,12 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
             auto gcs = client_state.move_to_other_shard();
             auto gt = tracing::global_trace_state_ptr(trace_state);
             msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version, request_start_timestamp] (cql_server& server) -> future<process_fn_return_type> {
+                // The request runs with this shard's abort source, but its connection
+                // is on the shard it came from, so no connection of this shard waits
+                // for it. Hold the gate, so that shutdown() of this shard waits for the
+                // request, as it does for its own connections, before it aborts them
+                // (SCYLLADB-5405).
+                auto gate_holder = server._gate.try_hold();
                 bytes_ostream linearization_buffer;
                 request_reader in(is, linearization_buffer);
                 auto local_client_state = gcs.get(&server._abort_source);
