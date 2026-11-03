@@ -119,7 +119,7 @@ public:
     rjson::value&& move_request() && { return std::move(_request); }
     future<executor::request_return_type> execute(service::storage_proxy& proxy,
             std::optional<service::cas_shard> cas_shard,
-            service::client_state& client_state,
+            alternator::client_state& client_state,
             tracing::trace_state_ptr trace_state,
             service_permit permit,
             bool needs_read_before_write,

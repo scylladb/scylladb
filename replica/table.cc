@@ -5433,6 +5433,8 @@ table::query(schema_ptr query_schema,
     co_await utils::get_local_injector().inject("replica_query_wait", [&] (auto& handler) -> future<> {
         auto table_name = handler.template get<std::string_view>("table");
         if (table_name && *table_name == _schema->cf_name()) {
+            // Observe only the selected table, rather than every replica query.
+            utils::get_local_injector().inject("replica_query_wait_table_match", [] {});
             tlogger.info("replica_query_wait: waiting");
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5));
         }
