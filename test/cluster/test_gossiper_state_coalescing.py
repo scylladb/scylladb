@@ -1,0 +1,215 @@
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
+"""
+Coalescing pending gossip states must not lose application states.
+
+The gossiper keeps at most one pending state per endpoint and merges every
+arrival into it. Merging, rather than keeping whichever arrival has the
+highest version, is what makes that safe: a node summarises everything it
+knows about a peer as a single max version, and asks other nodes only for
+values above it. A value dropped below that mark is therefore never
+re-requested by anyone and is lost for good -- gossip has no re-delivery
+safety net for it.
+
+This test stalls state application on one node so that arrivals pile up and
+coalesce, churns application states meanwhile, and then checks that the node
+still converges on every peer's own view of itself.
+
+Runtime: ~30s (cluster start ~12s, stall 8s, convergence a few seconds).
+"""
+
+import asyncio
+import logging
+import time
+
+import pytest
+
+from test.pylib.manager_client import ManagerClient
+
+logger = logging.getLogger(__name__)
+
+STALL_INJECTION = "gossiper_stall_apply_state_locally"
+MERGE_FAIL_INJECTION = "merge_endpoint_state_fail"
+# gms::application_state::SCHEMA -- the state the injected merge failure drops.
+SCHEMA = 2
+
+NODES = 4
+# Long enough for many gossip rounds from every peer to pile up behind the
+# stalled applier, so arrivals actually collide in the pending slot.
+STALL_SECONDS = 8
+CONVERGE_TIMEOUT = 90
+
+
+async def endpoint_states(manager: ManagerClient, node_ip: str) -> dict[str, dict[int, int]]:
+    """What `node_ip` currently knows: {peer ip: {application state: version}}."""
+    raw = await manager.api.client.get_json("/failure_detector/endpoints/", host=node_ip)
+    return {
+        eps["addrs"]: {int(a["application_state"]): int(a["version"])
+                       for a in eps.get("application_state", [])}
+        for eps in raw
+    }
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.asyncio
+async def test_gossiper_coalescing_does_not_lose_application_states(manager: ManagerClient) -> None:
+    # gossip=debug so we can confirm the coalescing path was actually taken.
+    servers = await manager.servers_add(NODES, cmdline=['--logger-log-level=gossip=debug'])
+    victim, peers = servers[0], servers[1:]
+    victim_log = await manager.server_open_log(server_id=victim.server_id)
+    log_mark = await victim_log.mark()
+
+    cql = manager.get_cql()
+
+    await manager.api.enable_injection(victim.ip_addr, STALL_INJECTION, one_shot=False)
+    try:
+        await victim_log.wait_for(f"{STALL_INJECTION}: waiting for message", from_mark=log_mark, timeout=60)
+
+        # Churn application states while the victim cannot apply anything, so
+        # the states queued behind the stall carry real values rather than
+        # bare heartbeats. A schema change bumps SCHEMA on every node.
+        await cql.run_async("CREATE KEYSPACE IF NOT EXISTS coalesce_ks WITH replication = "
+                            "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+        deadline = time.time() + STALL_SECONDS
+        i = 0
+        while time.time() < deadline:
+            await cql.run_async(f"CREATE TABLE coalesce_ks.t{i} (pk int PRIMARY KEY, v int)")
+            i += 1
+            await asyncio.sleep(1)
+
+        # The whole point of the test is the coalescing path; fail loudly
+        # rather than silently passing if it was never taken.
+        coalesced = await victim_log.grep("queue_state_apply: coalesced a state of",
+                                          from_mark=log_mark)
+        assert coalesced, ("no gossip state was coalesced on the victim; the test did not "
+                           "exercise the path it is meant to cover")
+
+        # Each peer is authoritative about itself, so its own entry is the
+        # truth the victim has to converge on.
+        expected: dict[str, dict[int, int]] = {}
+        for peer in peers:
+            expected[peer.ip_addr] = (await endpoint_states(manager, peer.ip_addr))[peer.ip_addr]
+    finally:
+        await manager.api.message_injection(victim.ip_addr, STALL_INJECTION)
+        await manager.api.disable_injection(victim.ip_addr, STALL_INJECTION)
+
+    async def behind() -> list[str]:
+        """Application states the victim is still missing or stale on."""
+        seen = await endpoint_states(manager, victim.ip_addr)
+        out = []
+        for peer_ip, want in expected.items():
+            got = seen.get(peer_ip, {})
+            for state, version in want.items():
+                if got.get(state, -1) < version:
+                    out.append(f"{peer_ip} state={state} want>={version} got={got.get(state, 'absent')}")
+        return out
+
+    async def converged() -> None:
+        while await behind():
+            await asyncio.sleep(0.5)
+
+    try:
+        await asyncio.wait_for(converged(), timeout=CONVERGE_TIMEOUT)
+    except asyncio.TimeoutError:
+        pytest.fail("the victim never caught up on application states that were coalesced "
+                    "while its applier was stalled; a value dropped below its advertised max "
+                    "version is never re-delivered (scylladb/scylladb#10967): "
+                    + "; ".join(await behind()))
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.asyncio
+async def test_gossiper_torn_merge_is_not_applied(manager: ManagerClient) -> None:
+    """
+    A merge that fails partway through must not leave a torn state behind.
+
+    merge_endpoint_state() raises the slot's heartbeat before copying the
+    application states. A failed copy leaves the slot advertising a version
+    above values it never got, and peers only send values above that.
+
+    This asserts the drop. Reproducing the loss needs a timing window a
+    cluster test cannot force: while application is stalled the torn slot
+    stays pending, and the next arrival merges the value back in.
+
+    Runtime: ~40s.
+    """
+    servers = await manager.servers_add(NODES, cmdline=['--logger-log-level=gossip=debug'])
+    victim, peers = servers[0], servers[1:]
+    victim_log = await manager.server_open_log(server_id=victim.server_id)
+    log_mark = await victim_log.mark()
+
+    cql = manager.get_cql()
+    table_seq = 0
+
+    async def churn_until(pattern: str) -> None:
+        """Bump application states until `pattern` shows up in the victim's log."""
+        nonlocal table_seq
+        while not await victim_log.grep(pattern, from_mark=log_mark):
+            await cql.run_async(f"CREATE TABLE torn_ks.t{table_seq} (pk int PRIMARY KEY, v int)")
+            table_seq += 1
+            await asyncio.sleep(1)
+
+    await manager.api.enable_injection(victim.ip_addr, STALL_INJECTION, one_shot=False)
+    try:
+        await victim_log.wait_for(f"{STALL_INJECTION}: waiting for message", from_mark=log_mark, timeout=60)
+        await cql.run_async("CREATE KEYSPACE IF NOT EXISTS torn_ks WITH replication = "
+                            "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+
+        # A merge only happens on a collision, so wait for coalescing:
+        # that guarantees a populated slot for the failure to tear.
+        await asyncio.wait_for(
+            churn_until("queue_state_apply: coalesced a state of"), timeout=120)
+
+        # Fail exactly one merge, partway through.
+        await manager.api.enable_injection(victim.ip_addr, MERGE_FAIL_INJECTION, one_shot=True)
+
+        # Match the injected exception's own text, not the generic prefix:
+        # routine transients log that same line and would satisfy the wait
+        # without a merge ever having torn.
+        await asyncio.wait_for(
+            churn_until("injected merge failure"), timeout=120)
+
+        # One torn merge is enough; with the fix the re-delivered slot
+        # would just fail again.
+        await manager.api.disable_injection(victim.ip_addr, MERGE_FAIL_INJECTION)
+
+        # The regression check: without the fix the half-merged slot is
+        # left for the applier to pick up instead of being dropped.
+        dropped = await victim_log.grep(
+            "queue_state_apply: dropped a partially merged state of", from_mark=log_mark)
+        assert dropped, ("a merge failed partway through but the half-merged state was kept: "
+                         "applying it would advertise a max version above application states "
+                         "that were never received, and no peer re-sends those")
+
+        # Each peer is authoritative about itself, so its own SCHEMA version is
+        # the truth the victim has to reach. Snapshot it before releasing the
+        # stall and issue no further DDL, so only re-delivery -- not a later
+        # bump of SCHEMA -- can bring the victim up to date.
+        expected: dict[str, int] = {}
+        for peer in peers:
+            expected[peer.ip_addr] = (await endpoint_states(manager, peer.ip_addr))[peer.ip_addr][SCHEMA]
+    finally:
+        await manager.api.message_injection(victim.ip_addr, STALL_INJECTION)
+        await manager.api.disable_injection(victim.ip_addr, STALL_INJECTION)
+
+    async def behind() -> list[str]:
+        """Peers whose SCHEMA the victim is still missing or stale on."""
+        seen = await endpoint_states(manager, victim.ip_addr)
+        return [f"{peer_ip} SCHEMA want>={version} got={seen.get(peer_ip, {}).get(SCHEMA, 'absent')}"
+                for peer_ip, version in expected.items()
+                if seen.get(peer_ip, {}).get(SCHEMA, -1) < version]
+
+    async def converged() -> None:
+        while await behind():
+            await asyncio.sleep(0.5)
+
+    try:
+        await asyncio.wait_for(converged(), timeout=CONVERGE_TIMEOUT)
+    except asyncio.TimeoutError:
+        pytest.fail("a gossip state whose merge failed partway through was applied torn: the "
+                    "victim advertises a version above application states it never received, "
+                    "so no peer re-sends them: " + "; ".join(await behind()))
