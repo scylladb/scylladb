@@ -7,6 +7,7 @@
  */
 
 #include "coordinator.hh"
+#include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
 #include "raft/raft.hh"
@@ -485,6 +486,41 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     });
 }
 
+std::exception_ptr coordinator::lost_quorum_error(const schema& schema, const operation_ctx& op,
+        db::consistency_level cl) const {
+    const auto leaderless = op.raft_server.leaderless_for();
+    if (!leaderless) {
+        return nullptr;
+    }
+    const auto limit = std::chrono::seconds(_db.get_config().strongly_consistent_tables_leaderless_timeout_in_seconds());
+    if (*leaderless <= limit) {
+        return nullptr;
+    }
+
+    // Electing a leader takes a quorum of the group's voters.
+    const auto config = op.raft_server.server().get_configuration();
+    int32_t voters = 0;
+    int32_t alive_voters = 0;
+    for (const auto& member : config.current) {
+        if (member.can_vote == raft::is_voter::yes) {
+            ++voters;
+            if (_gossiper.is_alive(locator::host_id{member.addr.id.uuid()})) {
+                ++alive_voters;
+            }
+        }
+    }
+    const int32_t quorum = voters / 2 + 1;
+    if (alive_voters >= quorum) {
+        // With a quorum alive, the group may have a leader this replica lost track of.
+        // The request's wait for a leader pings the group and finds it.
+        return nullptr;
+    }
+    return std::make_exception_ptr(exceptions::unavailable_exception(
+            format("Tablet {} of {}.{} has had no raft leader for more than {}s",
+                    op.replicas.tablet_id(), schema.ks_name(), schema.cf_name(), limit.count()),
+            cl, quorum, alive_voters));
+}
+
 coordinator::coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper,
         scheduling_group_key stats_key)
     : _groups_manager(groups_manager)
@@ -496,6 +532,7 @@ coordinator::coordinator(groups_manager& groups_manager, replica::database& db, 
 
 auto coordinator::mutate(schema_ptr schema,
         const dht::token& token,
+        db::consistency_level cl,
         mutation_gen&& mutation_gen,
         timeout_clock::time_point timeout,
         abort_source& as,
@@ -562,7 +599,7 @@ auto coordinator::mutate(schema_ptr schema,
                 "The outcome of this statement is unknown. It may or may not have been applied. "
                 "Retrying the statement may be necessary."));
         } else if (try_catch<exceptions::unavailable_exception>(ex)) {
-            logger.trace("mutate(): no live replica, table {}.{}, token {}", schema->ks_name(), schema->cf_name(), token);
+            logger.trace("mutate(): {}, table {}.{}, token {}", ex, schema->ks_name(), schema->cf_name(), token);
             ++get_stats().write_errors_unavailable;
             return ex;
         } else if (try_catch<replica::no_such_column_family>(ex)) {
@@ -614,6 +651,10 @@ auto coordinator::mutate(schema_ptr schema,
         co_await utils::get_local_injector().inject("sc_coordinator_wait_before_begin_mutate",
             utils::wait_for_message(5min));
 
+        // A write refused here has no entry that can still commit, so the client can retry it.
+        if (auto ex = lost_quorum_error(*schema, *op, cl)) {
+            co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
+        }
         auto disposition = op->raft_server.begin_mutate(aoe.abort_source());
         if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
             const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
@@ -721,6 +762,7 @@ auto coordinator::query(schema_ptr schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         read_type rtype,
+        db::consistency_level cl,
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
         abort_source& as,
@@ -763,7 +805,7 @@ auto coordinator::query(schema_ptr schema,
             ++get_stats().read_errors_timeout;
             return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name()));
         } else if (try_catch<exceptions::unavailable_exception>(ex)) {
-            logger.trace("query(): no live replica, table {}.{}, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
+            logger.trace("query(): {}, table {}.{}, read cmd {}", ex, schema->ks_name(), schema->cf_name(), cmd);
             ++get_stats().read_errors_unavailable;
             return ex;
         } else if (try_catch<replica::no_such_column_family>(ex)) {
@@ -806,6 +848,9 @@ auto coordinator::query(schema_ptr schema,
                 co_await coroutine::return_exception_ptr(filter_error(aoe.abort_source().abort_requested_exception_ptr()));
             }
 
+            if (auto ex = lost_quorum_error(*schema, op, cl)) {
+                co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
+            }
             auto disposition = op.raft_server.begin_read(aoe.abort_source());
             if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
                 const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};

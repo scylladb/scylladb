@@ -184,6 +184,14 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
     return ok{};
 }
 
+auto raft_server::leaderless_for() const -> std::optional<lowres_clock::duration> {
+    // track_leaderless() learns of a new leader a moment after raft does.
+    if (_state.server->current_leader() || !_state.leaderless_since) {
+        return std::nullopt;
+    }
+    return lowres_clock::now() - *_state.leaderless_since;
+}
+
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,
@@ -387,6 +395,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
 
         co_await std::move(state.leader_info_updater);
+        co_await std::move(state.leaderless_tracker);
 
         if (state.metrics) {
             state.metrics->remove_server(*state.server);
@@ -650,6 +659,25 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
     } catch (...) {
         on_internal_error(logger, ::format("leader_info_updater({}, group_id={}): unexpected exception: {}",
             tablet, gid, std::current_exception()));
+    }
+}
+
+future<> groups_manager::track_leaderless(raft_group_state& state, raft::group_id gid) {
+    try {
+        while (true) {
+            if (state.server->current_leader()) {
+                state.leaderless_since = std::nullopt;
+                co_await state.server->wait_for_state_change(nullptr);
+            } else {
+                logger.debug("track_leaderless(group_id={}): no leader known", gid);
+                state.leaderless_since = lowres_clock::now();
+                // Not wait_for_state_change(): a follower learns of a newly elected leader
+                // without a change of its raft state.
+                co_await state.server->wait_for_leader(nullptr);
+            }
+        }
+    } catch (const raft::stopped_error&) {
+        // The server is aborted, because the group is being deleted.
     }
 }
 
@@ -999,6 +1027,7 @@ void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::gr
             state.metrics->add_server(*state.server);
         }
         state.leader_info_updater = leader_info_updater(state, tablet.table, id, range);
+        state.leaderless_tracker = track_leaderless(state, id);
         co_await wait_for_first_leader(tablet, id, state, *g);
 
         // If a restart is already queued behind us, the group isn't started yet; that

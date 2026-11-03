@@ -25,7 +25,9 @@ from test.pylib.util import gather_safely, wait_for
 
 KEYSPACE_OPTS = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
                  " AND tablets = {'initial': 1} AND consistency = 'global'")
-NO_QUORUM_CONFIG = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 3000, 'read_request_timeout_in_ms': 3000}
+# The tests with this config check the wait for a leader, so their requests must not fail fast.
+NO_QUORUM_CONFIG = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 3000, 'read_request_timeout_in_ms': 3000,
+                                     'strongly_consistent_tables_leaderless_timeout_in_seconds': 3600}
 WRITE_ERRORS = 'scylla_strong_consistency_coordinator_write_errors'
 READ_ERRORS = 'scylla_strong_consistency_coordinator_read_errors'
 READ_COUNT = 'scylla_strong_consistency_coordinator_read_latency_count'
@@ -163,9 +165,9 @@ async def test_no_quorum_times_out_and_relaxed_read_answers(manager: ScyllaClust
     driver-facing Scylla bug that a forwarded timeout triggers is kept out of the way
     here (driver retries off) and pinned by its own test.
 
-    Today "replicas alive but no quorum" surfaces as a timeout after the full wait rather
-    than as an immediate Unavailable; failing fast once the quorum is lost is tracked as
-    SCYLLADB-2574. Should the product go that way, the timeout assertions below flip.
+    The requests wait for a leader: NO_QUORUM_CONFIG sets
+    strongly_consistent_tables_leaderless_timeout_in_seconds to an hour, and only after
+    that would they fail at once (see test_no_quorum_fails_fast_after_leaderless_timeout).
     """
     async with sc_table(manager) as (cql, host_of, table, (group_id, leader, followers, non_replica)):
         alive = leader if survivor == "leader" else followers[0]
@@ -238,6 +240,65 @@ async def test_no_quorum_counts_leader_waits(manager: ScyllaClusterManager, scal
                                               scale_timeout, host=host_of[alive])
             await expect_retry_before_timeout(manager, alive, read, ReadTimeout, READ_RETRIES, 'wait_for_leader',
                                               scale_timeout, host=host_of[alive], consistency_level=ConsistencyLevel.QUORUM)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("survivor", ["leader", "follower"])
+async def test_no_quorum_fails_fast_after_leaderless_timeout(manager: ScyllaClusterManager, survivor: str):
+    """
+    Verify that once the only live replica of three has had no raft leader for longer than
+    strongly_consistent_tables_leaderless_timeout_in_seconds, a write and a QUORUM read
+    fail at once with Unavailable instead of waiting out their 10s timeout, both via the
+    survivor and via a non-replica. A CL=ONE read needs no leader and still answers. Once
+    the other replicas are back and a leader is elected, the survivor accepts writes again.
+    """
+    config = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 10000, 'read_request_timeout_in_ms': 10000,
+                               'strongly_consistent_tables_leaderless_timeout_in_seconds': 1}
+    async with sc_table(manager, config) as (cql, host_of, table, (group_id, leader, followers, non_replica)):
+        alive = leader if survivor == "leader" else followers[0]
+        no_retry = FallthroughRetryPolicy()
+        # The write and the read use different levels, to show the error reports the request's own.
+        write = SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES (0, 2)", consistency_level=ConsistencyLevel.LOCAL_QUORUM,
+                                retry_policy=no_retry)
+        quorum_read = SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=ConsistencyLevel.QUORUM,
+                                      retry_policy=no_retry)
+        relaxed_read = SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=ConsistencyLevel.ONE)
+        await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 1)", host=host_of[leader])
+
+        async def expect_refused(query: SimpleStatement, coordinator: Host, consistency: int) -> None:
+            e, elapsed = await expect_error(cql, query, coordinator, Unavailable)
+            assert elapsed < 5.0, f"{query} via {coordinator} took {elapsed:.1f}s to be refused"
+            assert f'message="Tablet 0 of {table} has had no raft leader for more than 1s"' in str(e), str(e)
+            assert e.consistency == consistency, str(e)
+            # A raft quorum of 3 voters is 2, and only the survivor is alive.
+            assert e.required_replicas == 2, str(e)
+            assert e.alive_replicas == 1, str(e)
+
+        # The leader dies last: killed first, it would leave the two followers a quorum to elect one of them.
+        async with down(manager, list(host_of), [s for s in followers + [leader] if s != alive]):
+            # Until the survivor has had no leader for 1s, a request waits for one and times out.
+            probe = SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0 USING TIMEOUT 500ms",
+                                    consistency_level=ConsistencyLevel.QUORUM, retry_policy=no_retry)
+            async def probe_refused() -> bool | None:
+                outcome, _ = await attempt(cql, probe, host_of[alive])
+                return isinstance(outcome, Unavailable) or None
+            await wait_for(probe_refused, time.time() + 30, label=f"{alive} to refuse a QUORUM read with Unavailable")
+
+            # From then on, requests that need the leader are refused at once, also when forwarded.
+            for coordinator in (host_of[alive], host_of[non_replica]):
+                await expect_refused(write, coordinator, ConsistencyLevel.LOCAL_QUORUM)
+                await expect_refused(quorum_read, coordinator, ConsistencyLevel.QUORUM)
+                rows, elapsed = await attempt(cql, relaxed_read, coordinator)
+                assert rows == [1], f"the CL=ONE read via {coordinator} returned {rows!r}"
+                assert elapsed < 1.5, f"the CL=ONE read via {coordinator} took {elapsed:.1f}s"
+
+        # With a leader again, the survivor serves writes. The refused writes left nothing.
+        await wait_for_leader(manager, alive, group_id)
+        rows = await cql.run_async(quorum_read, host=host_of[alive])
+        assert [r.c for r in rows] == [1]
+        await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 3)", host=host_of[alive])
+        rows = await cql.run_async(quorum_read, host=host_of[alive])
+        assert [r.c for r in rows] == [3]
 
 
 @pytest.mark.asyncio

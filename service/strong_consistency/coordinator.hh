@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "db/consistency_level_type.hh"
 #include "locator/tablets.hh"
 #include "mutation/mutation.hh"
 #include "query/query-result.hh"
@@ -101,6 +102,11 @@ private:
         const dht::token& token,
         abort_source& as,
         bool needs_leader);
+    // The Unavailable error for a request that needs the group's leader, when the group has
+    // had no leader for longer than strongly_consistent_tables_leaderless_timeout_in_seconds
+    // and fewer than a quorum of its voters are alive; null otherwise. Such a group is
+    // unlikely to get a leader before the request times out.
+    std::exception_ptr lost_quorum_error(const schema& schema, const operation_ctx& op, db::consistency_level cl) const;
 public:
     coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper,
         scheduling_group_key stats_key);
@@ -117,6 +123,7 @@ public:
     using mutation_gen = noncopyable_function<mutation(api::timestamp_type)>;
     future<value_or_redirect<mutate_result>> mutate(schema_ptr schema,
         const dht::token& token,
+        db::consistency_level cl,
         mutation_gen&& mutation_gen,
         timeout_clock::time_point timeout,
         abort_source& as,
@@ -131,6 +138,7 @@ public:
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         read_type rtype,
+        db::consistency_level cl,
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
         abort_source& as,
