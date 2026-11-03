@@ -1432,8 +1432,10 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
 
     const auto true_size = client.get("/storage_service/snapshots/size/true").GetInt64();
 
-    std::array<std::string, 5> header_row{"Snapshot name", "Keyspace name", "Column family name", "True size", "Size on disk"};
-    std::array<size_t, 5> max_column_length{};
+    constexpr size_t num_columns = 7;
+    std::array<std::string, num_columns> header_row{"Snapshot name", "Keyspace name", "Column family name", "True size", "Size on disk",
+            "Creation time", "Expiration time"};
+    std::array<size_t, num_columns> max_column_length{};
     for (size_t c = 0; c < header_row.size(); ++c) {
         max_column_length[c] = header_row[c].size();
     }
@@ -1460,7 +1462,20 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
         return fmt::format("{} {}", formatted_number, units[i]);
     };
 
-    std::vector<std::array<std::string, 5>> rows;
+    // The server reports the snapshot creation and expiration times in seconds
+    // since the epoch. They are omitted when the server does not know them:
+    // older servers never report them, the creation time is unknown for
+    // snapshots taken before the server started recording it, and the
+    // expiration time is reported only for snapshots taken with a ttl.
+    auto format_time = [] (const rjson::value& snapshot, const char* member) {
+        const auto* value = rjson::find(snapshot, member);
+        if (!value) {
+            return std::string();
+        }
+        return fmt::format("{:%FT%TZ}", std::chrono::sys_seconds(std::chrono::seconds(value->GetInt64())));
+    };
+
+    std::vector<std::array<std::string, num_columns>> rows;
     for (const auto& snapshot_by_name : snapshots.GetArray()) {
         const auto snapshot_name = std::string(rjson::to_string_view(snapshot_by_name.GetObject()["key"]));
         for (const auto& snapshot : snapshot_by_name.GetObject()["value"].GetArray()) {
@@ -1469,7 +1484,9 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
                     std::string(rjson::to_string_view(snapshot["ks"])),
                     std::string(rjson::to_string_view(snapshot["cf"])),
                     format_hr_size(snapshot["live"].GetInt64()),
-                    format_hr_size(snapshot["total"].GetInt64())});
+                    format_hr_size(snapshot["total"].GetInt64()),
+                    format_time(snapshot, "created_at"),
+                    format_time(snapshot, "expires_at")});
 
             for (size_t c = 0; c < rows.back().size(); ++c) {
                 max_column_length[c] = std::max(max_column_length[c], rows.back()[c].size());
@@ -1477,15 +1494,17 @@ void listsnapshots_operation(scylla_rest_client& client, const bpo::variables_ma
         }
     }
 
-    const auto header_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}}\n", max_column_length[0],
-            max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4]);
-    const auto regular_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}}\n", max_column_length[0],
-            max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4]);
+    auto print_row = [&] (const std::array<std::string, num_columns>& r) {
+        for (size_t c = 0; c < num_columns; ++c) {
+            fmt::print(std::cout, "{}{:<{}}", c ? " " : "", r[c], max_column_length[c]);
+        }
+        fmt::print(std::cout, "\n");
+    };
 
     fmt::print(std::cout, "Snapshot Details: \n");
-    fmt::print(std::cout, fmt::runtime(header_row_format.c_str()), header_row[0], header_row[1], header_row[2], header_row[3], header_row[4]);
+    print_row(header_row);
     for (const auto& r : rows) {
-        fmt::print(std::cout, fmt::runtime(regular_row_format.c_str()), r[0], r[1], r[2], r[3], r[4]);
+        print_row(r);
     }
 
     fmt::print(std::cout, "\nTotal TrueDiskSpaceUsed: {}\n\n", format_hr_size(true_size));
