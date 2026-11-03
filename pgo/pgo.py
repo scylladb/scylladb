@@ -674,23 +674,23 @@ async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
             ["write",     250_000, 100],
             ["read",      250_000, 100],
             ["batch_read", 20_000, 100],   # 32 items/request, so fewer ops for a comparable item count
-            ["scan",        1_000, 100],
+            ["scan",        1_000,  10],   # each Scan reads a full 1 MB page: more in flight hit the 10 s Alternator request timeout
             ["write_gsi", 250_000, 100],
             ["batch_write_gsi", 20_000, 32],
             ["write_rmw", 250_000,  32],   # LWT/Paxos: keep in-flight LSA state bounded
         ]
         for workload in workloads:
             # The tool doesn't yet support load balancing, so we run one
-            # process per node. We run them one after another, because each
-            # process deletes and recreates the same table, so concurrent
-            # processes would delete each other's table.
+            # process per node. We run them one after another, because LWT
+            # updates of the same key through different nodes conflict, and
+            # some of write_rmw's would fail.
             for addr in addrs:
                 await run_checked([executable,
                     "perf-alternator",
                     "--smp", "1",
                     "--workload", f"{workload[0]}",
                     "--partitions", "100000",
-                    # we reuse cluster data so don't need to pre-populate
+                    # use the tables and data of populate_alternator()
                     "--prepopulate-partitions", "0",
                     "--operations-per-shard", f"{workload[1]}",
                     "--concurrency", f"{workload[2]}",
@@ -703,7 +703,15 @@ async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
 
 async def populate_alternator(executable: PathLike, workdir: PathLike) -> None:
     async with with_cs_populate(executable=executable, workdir=workdir) as server:
-        pass # this avoids profiling cluster bootstrap code
+        # this also avoids profiling cluster bootstrap code
+        await run_checked([executable,
+            "perf-alternator",
+            "--smp", "1",
+            "--workload", "populate",
+            "--partitions", "100000",
+            *(["--cpuset", CS_CPUSET.get()] if CS_CPUSET.get() else ["--overprovisioned"]),
+            "--remote-host", server,
+        ])
 
 trainers["alternator"] = ("alternator_dataset", train_alternator)
 populators["alternator_dataset"] = populate_alternator
