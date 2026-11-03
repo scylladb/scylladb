@@ -3652,6 +3652,10 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
 }
 
 future<> database::flush_non_system_column_families() {
+    // A tablet stream may wait for the mixed segments to be separated, and close_streams() waits for it.
+    if (_logstor) {
+        _logstor->get_segment_manager().abort_deferred_separation_waiters();
+    }
     auto non_system_cfs = get_tables_metadata().filter([this] (auto uuid_and_cf) {
         auto cf = uuid_and_cf.second;
         auto& ks = cf->schema()->ks_name();

@@ -58,6 +58,11 @@ struct separator_index_update {
 
 using split_target_group = std::function<logstor_group&(log_segment_id, dht::token first_token, dht::token last_token)>;
 
+// Thrown by a separator write to a group that does not take them any more.
+struct separator_closed_error : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 // The separator buffer pool is sized for one buffer per compaction group - the one the group writes
 // into - plus this reserve, which covers the second buffer a group holds while its flush is writing
 // the first one out. It therefore bounds how many groups can be flushing while every other group
@@ -453,7 +458,8 @@ public:
 
     virtual future<> flush_separator_buffer(separator_buffer&, logstor_group&) = 0;
 
-    virtual future<owned_write_buffer> allocate_separator_buffer() = 0;
+    // Fails with abort_requested_exception if `as` is aborted while it waits for a buffer.
+    virtual future<owned_write_buffer> allocate_separator_buffer(abort_source* as) = 0;
 
     virtual void add(logstor_group&) = 0;
     virtual future<> remove(logstor_group&) = 0;
@@ -486,10 +492,12 @@ class logstor_group {
     // Whether the separator may write to this group. The group must be registered with the compaction
     // manager in order for it to be enabled.
     bool _separator_enabled{false};
+    // Aborted when the group stops, for the writes that wait for a flush of it while holding it open.
+    abort_source _background_write_abort;
 
     void switch_active_separator_buffer();
 
-    future<> allocate_active_separator_buffer();
+    future<> allocate_active_separator_buffer(abort_source* as);
 
 protected:
     // `shard_stats` are the shard-wide segment statistics. The set of this group adds its segments
@@ -524,7 +532,14 @@ public:
     }
 
     template <log_record_writer_concept Writer>
-    future<> write_to_separator(Writer, segment_ref, std::optional<segment_sequence>, separator_index_update);
+    future<> write_to_separator(Writer, segment_ref, std::optional<segment_sequence>, separator_index_update,
+            abort_source* as = nullptr);
+
+    // A write passed this waits for a flush of the group only until it is aborted, which the group's
+    // stop does before waiting for the writes to finish.
+    abort_source& background_write_abort() noexcept {
+        return _background_write_abort;
+    }
 
     future<> flush_separator(std::optional<segment_sequence> seq_num = std::nullopt);
 

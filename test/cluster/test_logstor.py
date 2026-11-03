@@ -346,6 +346,218 @@ async def test_start_with_live_data_and_no_more_free_segments_than_the_reserve(m
     cfg = {'logstor_disk_size_in_mb': 4, 'logstor_file_size_in_mb': 1, 'logstor_compaction_trigger_threshold': 0}
     await check_recovery_separates_mixed_data(manager, write, min_flushed=1, extra_cfg=cfg)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("free_target", [13, 20])
+async def test_recovery_mixed_data_spread_over_many_groups(manager: ScyllaClusterManager, free_target: int):
+    """
+    Each mixed segment holds records of many groups, so separating them takes about a free segment per
+    group. Restart with free_target free segments: the node must start, serve and take writes, and free
+    the mixed segments once a truncate leaves them without live data.
+    """
+    tablets = 16
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': 8,
+        'logstor_file_size_in_mb': 1,
+        # Auto compaction could take a free segment, and the test counts them.
+        'logstor_compaction_trigger_threshold': 0,
+        'experimental_features': ['logstor']
+    }
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async def free_segments() -> int:
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        return int(metrics.get("scylla_logstor_sm_free_segments") or 0)
+
+    # Keep every record in mixed segments: no separator flush succeeds before the restart.
+    await manager.api.enable_injection(servers[0].ip_addr, "fail_flush_separator_buffer", one_shot=False)
+
+    async with new_test_keyspace(manager, f"WITH tablets = {{'initial': {tablets}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        # Small records, so that each segment holds records of all the tablets.
+        value_size = 2 * 1024
+        max_writes = 8 * 1024 * 1024 // value_size
+        expected = {}
+        while await free_segments() > free_target:
+            assert len(expected) < max_writes, f"Did not get down to {free_target} free segments in {max_writes} writes"
+            pk = len(expected)
+            v = f"{pk}_" + 'x' * value_size
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{v}')")
+            expected[pk] = v
+        assert await free_segments() == free_target
+
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id, timeout=120)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        for pk, v in expected.items():
+            rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1 and rows[0].v == v, f"Key {pk} wrong after recovery"
+
+        # The segments that compaction and writes need were not used up by the separation.
+        for pk in range(len(expected), len(expected) + 4):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, 'after restart')")
+            rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
+            assert len(rows) == 1 and rows[0].v == 'after restart'
+
+        # Without live data the mixed segments need no segment to be freed.
+        await cql.run_async(f"TRUNCATE {ks}.test")
+        total = 8 * 1024 * 1024 // segment_size
+        async def mostly_free():
+            return True if await free_segments() > total // 2 else None
+        await wait_for(mostly_free, time.time() + 60)
+
+async def restart_leaving_mixed_segments_to_the_deferred_pass(manager: ScyllaClusterManager, servers, injections=()):
+    """
+    Restarts with the injection that makes recovery leave every mixed segment to the pass after start(),
+    which then waits for the injection to be disabled. Returns the cql of the restarted server.
+    """
+    await manager.server_stop_gracefully(servers[0].server_id)
+    startup = [{'name': 'logstor_defer_mixed_separation'}, *injections]
+    await manager.server_update_config(servers[0].server_id, 'error_injections_at_startup', startup)
+    await manager.server_start(servers[0].server_id)
+    cql, _ = await manager.get_ready_cql(servers)
+    return cql
+
+async def write_mixed_data(manager: ScyllaClusterManager, cql, ks, ip_addr, nkeys=40, value_size=40 * 1024):
+    """Writes data that stays in mixed segments, as no separator flush succeeds."""
+    await manager.api.enable_injection(ip_addr, "fail_flush_separator_buffer", one_shot=False)
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+    expected = {pk: f"{pk}_" + 'x' * value_size for pk in range(nkeys)}
+    for pk, v in expected.items():
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{v}')")
+    return expected
+
+async def check_data(cql, ks, expected):
+    for pk, v in expected.items():
+        rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
+        assert len(rows) == 1 and rows[0].v == v, f"Key {pk} wrong"
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_deferred_separation_retries_a_failed_segment(manager: ScyllaClusterManager):
+    """
+    The pass that separates the mixed segments recovery left fails on a record of the first segment
+    it separates. The segment has to be retried, and freed, not given up with the records still in it.
+    """
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    servers = await manager.servers_add(1, cmdline=cmdline, config={'experimental_features': ['logstor']})
+    cql = manager.get_cql()
+    ip = servers[0].ip_addr
+
+    async with new_test_keyspace(manager, "WITH tablets = {'initial': 1}") as ks:
+        expected = await write_mixed_data(manager, cql, ks, ip)
+        cql = await restart_leaving_mixed_segments_to_the_deferred_pass(manager, servers,
+                [{'name': 'logstor_fail_mixed_segment_record', 'one_shot': True}])
+        await check_data(cql, ks, expected)
+
+        log = await manager.server_open_log(servers[0].server_id)
+        await manager.api.disable_injection(ip, 'logstor_defer_mixed_separation')
+        await log.wait_for('Separated the mixed segments left by recovery', timeout=120)
+        assert await log.grep('Separating the mixed segments left by recovery failed, will retry')
+
+        await check_data(cql, ks, expected)
+        metrics = await manager.metrics.query(ip)
+        assert not (metrics.get("scylla_logstor_sm_segment_free_failures") or 0), "A mixed segment was given up"
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_drop_table_while_deferred_separation_waits_for_a_segment(manager: ScyllaClusterManager):
+    """
+    The pass that separates the mixed segments recovery left waits for a segment, as on a full disk,
+    with the compaction group held open. Dropping the table has to stop the group, not wait for it.
+    """
+    cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
+    servers = await manager.servers_add(1, cmdline=cmdline, config={'experimental_features': ['logstor']})
+    cql = manager.get_cql()
+    ip = servers[0].ip_addr
+
+    async with new_test_keyspace(manager, "WITH tablets = {'initial': 1}") as ks:
+        await write_mixed_data(manager, cql, ks, ip)
+        cql = await restart_leaving_mixed_segments_to_the_deferred_pass(manager, servers)
+
+        log = await manager.server_open_log(servers[0].server_id)
+        mark = await log.mark()
+        await manager.api.enable_injection(ip, 'logstor_separator_no_segment', one_shot=False)
+        await manager.api.disable_injection(ip, 'logstor_defer_mixed_separation')
+        await log.wait_for('mixed segments in a round', from_mark=mark, timeout=60)
+        # The flush of the round has started, and waits for a segment.
+        await log.wait_for('Flushing separator buffer', from_mark=mark, timeout=60)
+
+        await asyncio.wait_for(cql.run_async(f"DROP TABLE {ks}.test"), timeout=60)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_stop_with_a_tablet_migration_waiting_for_deferred_separation(manager: ScyllaClusterManager):
+    """
+    A tablet migration waits for the mixed segments recovery left to be separated, as its snapshot has to
+    find the records in segments of the tablet. The wait must not hold up a stop of the node.
+    """
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=2']
+    servers = await manager.servers_add(1, cmdline=cmdline, config={'experimental_features': ['logstor']})
+    cql = manager.get_cql()
+    ip = servers[0].ip_addr
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await write_mixed_data(manager, cql, ks, ip)
+        cql = await restart_leaving_mixed_segments_to_the_deferred_pass(manager, servers)
+
+        replica = await get_tablet_replica(manager, servers[0], ks, 'test', 0)
+        host_id, src_shard = replica[0], replica[1]
+        migration = asyncio.ensure_future(
+                manager.api.move_tablet(ip, ks, "test", host_id, src_shard, host_id, 1 - src_shard, 0))
+        await asyncio.sleep(5)
+        assert not migration.done(), "The migration did not wait for the separation of the mixed segments"
+
+        await asyncio.wait_for(manager.server_stop_gracefully(servers[0].server_id), timeout=120)
+        try:
+            await migration
+        except Exception:
+            pass
+
+        # Left for the keyspace to be dropped.
+        await manager.server_update_config(servers[0].server_id, 'error_injections_at_startup', [])
+        await manager.server_start(servers[0].server_id)
+        await manager.get_ready_cql(servers)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_of_a_split_tablet_waits_for_deferred_separation(manager: ScyllaClusterManager):
+    """
+    The mixed segments recovery left hold records of a tablet that was split since. The migration of a
+    new tablet has to wait for their separation as well: its snapshot misses the records otherwise.
+    """
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=2']
+    servers = await manager.servers_add(1, cmdline=cmdline, config={'experimental_features': ['logstor']})
+    cql = manager.get_cql()
+    ip = servers[0].ip_addr
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        expected = await write_mixed_data(manager, cql, ks, ip)
+        cql = await restart_leaving_mixed_segments_to_the_deferred_pass(manager, servers)
+
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}}")
+        async def split_done():
+            return True if await get_tablet_count(manager, servers[0], ks, 'test') >= 2 else None
+        await wait_for(split_done, time.time() + 120)
+
+        async def move():
+            # The split may still be finishing: the tablet in transition, or its replica not final.
+            while True:
+                host_id, src_shard = (await get_tablet_replica(manager, servers[0], ks, 'test', 0))[:2]
+                try:
+                    return await manager.api.move_tablet(ip, ks, "test", host_id, src_shard, host_id, 1 - src_shard, 0)
+                except Exception as e:
+                    if 'in transition' not in str(e) and 'has no replica' not in str(e):
+                        raise
+                    await asyncio.sleep(0.5)
+        migration = asyncio.ensure_future(move())
+        done, _ = await asyncio.wait([migration], timeout=5)
+        assert not done, "The migration did not wait for the separation of the mixed segments"
+
+        await manager.api.disable_injection(ip, 'logstor_defer_mixed_separation')
+        await asyncio.wait_for(migration, timeout=120)
+        await check_data(cql, ks, expected)
+
 async def test_recovery_with_segment_reuse(manager: ScyllaClusterManager):
     """
     Test recovery after segments have been compacted and reused.

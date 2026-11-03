@@ -154,6 +154,13 @@ public:
     // The index must be cleared first, so that no record of the group is reachable.
     future<> discard_segments(logstor_group&);
 
+    // Waits until no mixed segment that recovery left holds a live record of the group, so that they
+    // are all in segments of it. Fails when the segment manager stops.
+    future<> wait_for_deferred_separation(const logstor_group&);
+
+    // Fails the waits for the separation, which a stop or a drain of the node does not leave to finish.
+    void abort_deferred_separation_waiters() noexcept;
+
     segment_manager_usage get_usage() const noexcept;
 
     future<> await_pending_writes();

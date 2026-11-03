@@ -1801,6 +1801,10 @@ future<utils::chunked_vector<logstor::segment_snapshot>> table::take_logstor_sna
 
     utils::chunked_vector<logstor::segment_snapshot> snp;
     for (auto& sg : storage_groups_for_token_range(tr)) {
+        // A record still in a mixed segment that recovery left is in no segment of its group.
+        for (auto& cg : sg->compaction_groups_immediate()) {
+            co_await _logstor->get_segment_manager().wait_for_deferred_separation(cg->as_logstor_group());
+        }
         co_await sg->flush_separator();
 
         auto deletion_guard = co_await get_sstable_list_permit();
@@ -2014,6 +2018,12 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
 
 logstor::logstor_group& table::get_logstor_group(dht::token token) {
     return compaction_group_for_token(token).as_logstor_group();
+}
+
+std::pair<logstor::logstor_group&, seastar::gate::holder> table::hold_logstor_group(dht::token token) {
+    auto& cg = compaction_group_for_token(token);
+    auto holder = cg.async_gate().hold();
+    return {cg.as_logstor_group(), std::move(holder)};
 }
 
 logstor::logstor_group& table::get_logstor_group(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token) {
@@ -3572,6 +3582,10 @@ future<> compaction_group::stop(sstring reason) noexcept {
     // this group is being stopped, aborting the currently registered task merely lets
     // them start a new one for the next view, and the gate never drains.
     auto closed_gate_fut = _async_gate.close();
+    if (_logstor_state) {
+        // The writes that hold the gate while they wait for a flush of the separator, which needs a segment.
+        _logstor_state->background_write_abort().request_abort();
+    }
     for (auto view : all_views()) {
         co_await _t._compaction_manager.stop_ongoing_compactions(reason, view);
     }

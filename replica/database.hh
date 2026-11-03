@@ -650,6 +650,8 @@ public:
     future<> add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts);
 
     logstor::logstor_group& get_logstor_group(dht::token token);
+    // The logstor group of `token`, with a holder of its compaction group's gate that keeps it from stopping.
+    std::pair<logstor::logstor_group&, seastar::gate::holder> hold_logstor_group(dht::token token);
     logstor::logstor_group& get_logstor_group(logstor::log_segment_id seg_id, dht::token first_token, dht::token last_token);
 
     // Restricted to new sstables produced by external processes such as repair.

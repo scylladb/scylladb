@@ -18,6 +18,7 @@
 #include "replica/logstor/compaction.hh"
 #include "replica/logstor/compaction_policy.hh"
 #include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -27,6 +28,7 @@
 #include <seastar/core/fstream.hh>
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/align.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/loop.hh>
@@ -402,8 +404,9 @@ public:
     float compaction_pressure() const noexcept;
 
     future<> flush_separator_buffer(separator_buffer&, logstor_group&) override;
-    future<owned_write_buffer> allocate_separator_buffer() override;
-    future<> flush_all_separator_buffers(std::optional<segment_sequence>);
+    future<owned_write_buffer> allocate_separator_buffer(abort_source*) override;
+    // Flushes the registered groups, or only those in `only` if given.
+    future<> flush_all_separator_buffers(std::optional<segment_sequence>, const absl::flat_hash_set<const logstor_group*>* only = nullptr);
 
     void add(logstor_group&) override;
 
@@ -645,6 +648,43 @@ struct separator_task {
     utils::phased_barrier::operation write_op;
 };
 
+// A mixed segment that recovery found. The index points into it until its live records are separated.
+struct mixed_segment {
+    log_segment_id id;
+    // Holds the segment from being freed while its separation is retried.
+    segment_ref ref;
+    // The tables with a live record in it when it was scanned, unset until then. Not the groups: a split replaces them.
+    std::optional<std::vector<table_id>> tables;
+
+    explicit mixed_segment(log_segment_id id) noexcept : id(id) {}
+    mixed_segment(mixed_segment&&) noexcept = default;
+    mixed_segment& operator=(mixed_segment&& o) noexcept {
+        if (this != &o) {
+            fail_if_held();
+            id = o.id;
+            ref = std::move(o.ref);
+            tables = std::move(o.tables);
+        }
+        return *this;
+    }
+    ~mixed_segment() {
+        fail_if_held();
+    }
+
+private:
+    // A ref still held was not released by a separation, and the index points into the segment: it must not be freed.
+    void fail_if_held() noexcept {
+        if (!ref.empty()) {
+            ref.set_flush_failure();
+        }
+    }
+};
+
+// Thrown when a live record of a mixed segment belongs to a group that is closing: the segment is retried.
+struct mixed_group_closing : public std::runtime_error {
+    mixed_group_closing() : std::runtime_error("a record of a mixed segment belongs to a group that is closing") {}
+};
+
 class segment_manager_impl {
 
     struct stats {
@@ -721,6 +761,15 @@ class segment_manager_impl {
 
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
 
+    // Mixed segments that recovery could not separate with the free segments it had. The index points
+    // into them, and a pass after start() separates them once there is room.
+    replica::database* _db = nullptr;
+    std::vector<mixed_segment> _deferred_mixed;
+    future<> _deferred_separation{make_ready_future<>()};
+    abort_source _deferred_separation_as;
+    bool _deferred_waiters_aborted = false;
+    seastar::condition_variable _deferred_mixed_changed;
+
     utils::observer<double> _trigger_threshold_observer;
 
 public:
@@ -741,6 +790,14 @@ public:
     // so that a stop need not wait for either. Idempotent.
     void begin_stop() {
         _segment_pool.begin_stop();
+        // The pass holds compaction groups open, which stopping the tables waits for.
+        _deferred_separation_as.request_abort();
+        abort_deferred_separation_waiters();
+    }
+
+    void abort_deferred_separation_waiters() noexcept {
+        _deferred_waiters_aborted = true;
+        _deferred_mixed_changed.broadcast();
     }
 
     future<> write(write_buffer&);
@@ -777,7 +834,16 @@ public:
 
     future<> load_segment(replica::database&, log_segment_id);
     future<> recover_segment(replica::database&, log_segment_id, primary_index::entry_cmp_fn cmp, std::function<void(const segment_info&)> on_segment_info);
-    future<> add_segment_to_compaction_group(replica::database&, segment_descriptor&);
+    // Adds a full segment to its group. A mixed one is separated, or added to `mixed` if given.
+    future<> add_segment_to_compaction_group(replica::database&, segment_descriptor&, std::vector<mixed_segment>* mixed = nullptr);
+    future<> separate_mixed_segment(replica::database&, mixed_segment&);
+    // The sizes of the live records of a mixed segment by their group, and sets its tables.
+    future<std::vector<std::pair<logstor_group*, size_t>>> scan_mixed_segment(replica::database&, mixed_segment&);
+    future<> separate_mixed_segments(replica::database&, std::vector<mixed_segment>&, bool recovering);
+    future<> separate_deferred_mixed_segments();
+
+    // Waits until no mixed segment that the pass after start() has left holds a live record of the group.
+    future<> wait_for_deferred_separation(const logstor_group&);
 
     compaction_manager& get_compaction_manager() noexcept {
         return _compaction_mgr;
@@ -819,8 +885,22 @@ public:
         return _segment_stats;
     }
 
-    future<owned_write_buffer> allocate_separator_buffer() {
-        return _separator_buffer_pool.allocate(_separator_buffer_abort);
+    future<owned_write_buffer> allocate_separator_buffer(abort_source* as) {
+        if (!as) {
+            return _separator_buffer_pool.allocate(_separator_buffer_abort);
+        }
+        return allocate_separator_buffer_abortable(*as);
+    }
+
+    future<owned_write_buffer> allocate_separator_buffer_abortable(abort_source& as) {
+        // The pool takes one abort source: abort it on either of ours.
+        abort_source either;
+        auto sub1 = as.subscribe([&either] () noexcept { either.request_abort(); });
+        auto sub2 = _separator_buffer_abort.subscribe([&either] () noexcept { either.request_abort(); });
+        if (!sub1 || !sub2) {
+            co_return coroutine::exception(std::make_exception_ptr(abort_requested_exception()));
+        }
+        co_return co_await _separator_buffer_pool.allocate(either);
     }
 
     void update_group_count(size_t group_count) {
@@ -1000,8 +1080,8 @@ void compaction_manager_impl::add(logstor_group& cg) {
     _sm.update_group_count(_groups.size());
 }
 
-future<owned_write_buffer> compaction_manager_impl::allocate_separator_buffer() {
-    return _sm.allocate_separator_buffer();
+future<owned_write_buffer> compaction_manager_impl::allocate_separator_buffer(abort_source* as) {
+    return _sm.allocate_separator_buffer(as);
 }
 
 static const segment_manager_config& validated_geometry(const segment_manager_config& config) {
@@ -1213,6 +1293,16 @@ future<> segment_manager_impl::start() {
     // first segment may wait for ever, and the node must still start to serve reads. A write waits for it.
     start_segment_switch();
 
+    if (!_deferred_mixed.empty()) {
+        _deferred_separation = with_scheduling_group(_cfg.separator_sg, [this] {
+            return separate_deferred_mixed_segments();
+        }).handle_exception([] (std::exception_ptr ep) {
+            if (!try_catch<abort_requested_exception>(ep)) {
+                logstor_logger.warn("Separating the mixed segments left by recovery failed: {}", ep);
+            }
+        });
+    }
+
     logstor_logger.info("Segment manager started with base directory {}", _cfg.base_dir.string());
 }
 
@@ -1238,6 +1328,8 @@ future<> segment_manager_impl::stop() {
     // that is waiting for one would hold up the fiber until a flush it cannot trigger completes.
     _separator_buffer_abort.request_abort();
     co_await std::move(_separator_fiber).handle_exception([] (std::exception_ptr) {});
+    co_await std::move(_deferred_separation);
+    _deferred_mixed_changed.broken();
 
     co_await _compaction_mgr.flush_all_separator_buffers(std::nullopt);
 
@@ -2267,9 +2359,15 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
     }
 }
 
-future<> compaction_manager_impl::flush_all_separator_buffers(std::optional<segment_sequence> seq) {
-    co_await coroutine::parallel_for_each(_groups, [seq] (auto& entry) {
-        return entry.first->flush_separator(seq);
+future<> compaction_manager_impl::flush_all_separator_buffers(std::optional<segment_sequence> seq, const absl::flat_hash_set<const logstor_group*>* only) {
+    std::vector<logstor_group*> registered;
+    for (const auto& entry : _groups) {
+        if (!only || only->contains(entry.first)) {
+            registered.push_back(entry.first);
+        }
+    }
+    co_await coroutine::parallel_for_each(registered, [seq] (logstor_group* g) {
+        return g->flush_separator(seq);
     });
 }
 
@@ -2475,6 +2573,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     start_reserve_replenisher();
 
     uint64_t recovered_used_segment_count = 0;
+    std::vector<mixed_segment> mixed;
     if (used_segments.size() > 0) {
         for (auto seg_idx = used_segments.find_first_set(); seg_idx != utils::dynamic_bitset::npos; seg_idx = used_segments.find_next_set(seg_idx)) {
             co_await coroutine::maybe_yield();
@@ -2484,10 +2583,17 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
             if (recovered_used_segment_count % 1000 == 0) {
                 logstor_logger.info("Recovering used segments: {}%", 100 * recovered_used_segment_count / used_segment_count);
             }
-            co_await add_segment_to_compaction_group(db, desc);
+            co_await add_segment_to_compaction_group(db, desc, &mixed);
             recovered_used_segment_count++;
         }
     }
+
+    _db = &db;
+    co_await separate_mixed_segments(db, mixed, true);
+    if (!mixed.empty()) {
+        logstor_logger.warn("Recovery left {} mixed segments to separate once there are enough free segments", mixed.size());
+    }
+    _deferred_mixed = std::move(mixed);
 
     logstor_logger.info("Recovery complete");
 }
@@ -2544,7 +2650,8 @@ void segment_manager::on_free_record(record_location location) noexcept {
     get_impl().on_free_record(location);
 }
 
-future<> segment_manager_impl::add_segment_to_compaction_group(replica::database& db, segment_descriptor& desc) {
+future<> segment_manager_impl::add_segment_to_compaction_group(replica::database& db, segment_descriptor& desc,
+        std::vector<mixed_segment>* mixed) {
     auto seg_id = desc_to_segment_id(desc);
     auto maybe_info = co_await read_segment_info(seg_id);
     if (!maybe_info) {
@@ -2552,12 +2659,15 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
     }
     auto& info = *maybe_info;
 
-    bool need_separator = false;
-
     switch (info.kind) {
     case segment_kind::mixed:
         logstor_logger.debug("Recovering mixed segment {} using separator", seg_id);
-        need_separator = true;
+        if (mixed) {
+            mixed->emplace_back(seg_id);
+        } else {
+            mixed_segment seg(seg_id);
+            co_await separate_mixed_segment(db, seg);
+        }
         break;
     case segment_kind::full:
         auto& full = std::get<segment_info::full>(info.v);
@@ -2570,41 +2680,258 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
         }
         break;
     }
+}
 
-    if (need_separator) {
-        auto seg_ref = make_segment_ref(seg_id);
-        auto write_to_separator_failed = defer([seg_ref] mutable noexcept {
-            seg_ref.set_flush_failure();
+// The live records of a mixed segment, and the group the separator gives each of them to.
+static std::function<logstor_group*(record_location, const record_header&)> live_record_group(replica::database& db) {
+    return [&db] (record_location loc, const record_header& header) -> logstor_group* {
+        try {
+            auto& t = db.find_column_family(header.table);
+            if (t.uses_logstor() && t.logstor_index().is_record_alive(header.index_key(), loc)) {
+                return &t.get_logstor_group(header.index_key().token());
+            }
+        } catch (const replica::no_such_column_family&) {
+        }
+        return nullptr;
+    };
+}
+
+future<> segment_manager_impl::separate_mixed_segment(replica::database& db, mixed_segment& seg) {
+    // Held until the segment is separated, so that a failure can be retried without it being freed.
+    if (seg.ref.empty()) {
+        seg.ref = make_segment_ref(seg.id);
+    }
+    auto group_of = live_record_group(db);
+    co_await for_each_record(seg.id,
+        [&group_of] (record_location prev_loc, const record_header& header) -> want_data {
+            return group_of(prev_loc, header) ? want_data::yes : want_data::no;
+        },
+        [ref = seg.ref, &db] (record_location prev_loc, const record_header& header, log_record_bytes_view record_view) -> future<> {
+            try {
+                utils::get_local_injector().inject("logstor_fail_mixed_segment_record", [] {
+                    throw std::runtime_error("separating a mixed segment record failed by injection");
+                });
+                auto& t = db.find_column_family(header.table);
+                auto key = header.index_key();
+                // Keeps the group from being stopped while its separator takes the record.
+                auto [cg, holder] = t.hold_logstor_group(key.token());
+                auto writer = log_record_bytes_writer(header, record_view);
+
+                // No sequence number: the periodic flushes of old segments would cut the rounds short.
+                co_await cg.write_to_separator(std::move(writer), ref, std::nullopt,
+                    separator_index_update {
+                        .index = &cg.logstor_index(),
+                        .key = key,
+                        .prev_location = prev_loc,
+                    },
+                    &cg.background_write_abort()
+                );
+            } catch (const replica::no_such_column_family&) {
+                // The table and its records are gone.
+            } catch (const gate_closed_exception&) {
+                throw mixed_group_closing();
+            } catch (const abort_requested_exception&) {
+                throw mixed_group_closing();
+            } catch (const separator_closed_error&) {
+                throw mixed_group_closing();
+            }
         });
-        co_await for_each_record(seg_id,
-            [&db] (record_location prev_loc, const record_header& header) -> want_data {
-                try {
-                    auto& t = db.find_column_family(header.table);
-                    return t.uses_logstor() && t.logstor_index().is_record_alive(header.index_key(), prev_loc)
-                            ? want_data::yes : want_data::no;
-                } catch (const replica::no_such_column_family&) {
-                    return want_data::no;
-                }
-            },
-            [seg_ref, &db] (record_location prev_loc, const record_header& header, log_record_bytes_view record_view) -> future<> {
-                try {
-                    auto& t = db.find_column_family(header.table);
-                    auto key = header.index_key();
-                    auto& cg = t.get_logstor_group(key.token());
-                    auto writer = log_record_bytes_writer(header, record_view);
+}
 
-                    co_await cg.write_to_separator(std::move(writer), seg_ref, std::nullopt,
-                        separator_index_update {
-                            .index = &cg.logstor_index(),
-                            .key = key,
-                            .prev_location = prev_loc,
-                        }
-                    );
-                } catch (const replica::no_such_column_family&) {
-                    // ignore
+future<std::vector<std::pair<logstor_group*, size_t>>> segment_manager_impl::scan_mixed_segment(replica::database& db, mixed_segment& seg) {
+    std::vector<std::pair<logstor_group*, size_t>> sizes;
+    std::vector<table_id> tables;
+    auto group_of = live_record_group(db);
+    co_await for_each_record(seg.id,
+        [&] (record_location loc, const record_header& header) -> want_data {
+            if (auto* g = group_of(loc, header)) {
+                sizes.emplace_back(g, align_up(size_t(loc.size), ondisk::record_alignment));
+                tables.push_back(header.table);
+            }
+            return want_data::no;
+        },
+        [] (record_location, const record_header&, log_record_bytes_view) { return make_ready_future<>(); });
+    std::ranges::sort(tables);
+    tables.erase(std::unique(tables.begin(), tables.end()), tables.end());
+    seg.tables = std::move(tables);
+    co_return sizes;
+}
+
+// Separating mixed segments takes about a segment per group before the first is freed, so it is done
+// in rounds that fit the free segments. A segment that no round starting with it fits stays in `segments`.
+future<> segment_manager_impl::separate_mixed_segments(replica::database& db,
+        std::vector<mixed_segment>& segments, bool recovering) {
+    // Recovery may take all free segments, but leaves what compaction and the first write need. After
+    // start() the separator takes only those above the reserve, and leaves writes one of them.
+    auto budget = [this, recovering] () -> size_t {
+        if (utils::get_local_injector().is_enabled("logstor_defer_mixed_separation")) {
+            return 0;
+        }
+        return recovering ? available_segment_count() : available_segment_count(write_source::separator);
+    };
+    const size_t keep_free = recovering ? max_compaction_parallelism + 1 : 1;
+    const size_t usable = _cfg.segment_size - raw_write_buffer::chunk_headers_size(segment_kind::full);
+
+    struct group_packing {
+        size_t full_buffers = 0;
+        size_t fill = 0;
+    };
+    using packing = absl::flat_hash_map<logstor_group*, group_packing>;
+    using record_sizes = std::vector<std::pair<logstor_group*, size_t>>;
+    // After start(), writes share the buffers, and one may hold a partial buffer already.
+    auto taken = [recovering] (const group_packing& gp) {
+        return gp.full_buffers + (gp.fill > 0) + !recovering;
+    };
+    // Packs the records into `round` if its buffers then fit in `free`, with `total` as their count.
+    auto try_add = [&] (packing& round, size_t& total, const record_sizes& sizes, size_t free) {
+        packing touched;
+        size_t before = 0;
+        size_t after = 0;
+        for (const auto& [g, size] : sizes) {
+            auto [it, inserted] = touched.try_emplace(g);
+            if (inserted) {
+                if (auto r = round.find(g); r != round.end()) {
+                    it->second = r->second;
+                    before += taken(r->second);
                 }
-            });
-        write_to_separator_failed.cancel();
+            }
+            auto& gp = it->second;
+            if (gp.fill + size > usable) {
+                ++gp.full_buffers;
+                gp.fill = 0;
+            }
+            gp.fill += size;
+        }
+        for (const auto& [g, gp] : touched) {
+            after += taken(gp);
+        }
+        if (total + after - before > free) {
+            return false;
+        }
+        for (const auto& [g, gp] : touched) {
+            round[g] = gp;
+        }
+        total += after - before;
+        return true;
+    };
+
+    std::vector<mixed_segment> left;
+    size_t i = 0;
+    std::exception_ptr ex;
+    // The segment that did not fit the last round, scanned already.
+    std::optional<std::pair<size_t, record_sizes>> boundary;
+    try {
+        while (i < segments.size() && !_deferred_separation_as.abort_requested()) {
+            const size_t free = budget();
+            packing round;
+            size_t total = 0;
+            size_t end = i;
+            absl::flat_hash_set<const logstor_group*> round_groups;
+            while (end < segments.size()) {
+                record_sizes sizes;
+                if (boundary && boundary->first == end) {
+                    sizes = std::move(boundary->second);
+                    boundary.reset();
+                } else {
+                    sizes = co_await scan_mixed_segment(db, segments[end]);
+                }
+                if (!try_add(round, total, sizes, free)) {
+                    boundary.emplace(end, std::move(sizes));
+                    break;
+                }
+                for (const auto& [g, size] : sizes) {
+                    round_groups.insert(g);
+                }
+                ++end;
+            }
+            if (end == i || total + std::min(free, keep_free) > free + (end - i)) {
+                left.push_back(std::move(segments[i++]));
+                if (!recovering) {
+                    // The later segments wait behind this one: skipping ahead would scan each of them on every retry.
+                    break;
+                }
+                continue;
+            }
+            logstor_logger.debug("Separating {} of {} mixed segments in a round", end - i, segments.size() - i);
+            std::exception_ptr round_ex;
+            bool closing = false;
+            while (i < end) {
+                auto f = co_await coroutine::as_future(separate_mixed_segment(db, segments[i]));
+                if (f.failed()) {
+                    // The segment stays in the list, to be retried.
+                    round_ex = f.get_exception();
+                    closing = bool(try_catch<mixed_group_closing>(round_ex));
+                    break;
+                }
+                // Waiters see the segment as done, and its records hold it until they are written.
+                segments[i].tables.emplace();
+                segments[i].ref = segment_ref();
+                ++i;
+            }
+            // Flushed even after a failure: the buffers hold the segments that were separated.
+            if (recovering || !_deferred_separation_as.abort_requested()) {
+                co_await _compaction_mgr.flush_all_separator_buffers(std::nullopt, &round_groups);
+            }
+            _deferred_mixed_changed.broadcast();
+            if (round_ex) {
+                if (closing && recovering) {
+                    // Recovery cannot wait for the group, the deferred pass retries the segment.
+                    break;
+                }
+                std::rethrow_exception(round_ex);
+            }
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    left.insert(left.end(), std::make_move_iterator(segments.begin() + i), std::make_move_iterator(segments.end()));
+    segments = std::move(left);
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+}
+
+future<> segment_manager_impl::separate_deferred_mixed_segments() {
+    // Scan every segment once, so that only the tables with a record in a leftover one wait for the pass.
+    for (size_t i = 0; i < _deferred_mixed.size() && !_deferred_separation_as.abort_requested(); ++i) {
+        if (!_deferred_mixed[i].tables) {
+            // A failed scan leaves the segment unscanned, which waits for the separation to scan it again.
+            (co_await coroutine::as_future(scan_mixed_segment(*_db, _deferred_mixed[i]))).ignore_ready_future();
+        }
+    }
+    _deferred_mixed_changed.broadcast();
+
+    auto delay = std::chrono::seconds(1);
+    while (true) {
+        auto f = co_await coroutine::as_future(separate_mixed_segments(*_db, _deferred_mixed, false));
+        _deferred_mixed_changed.broadcast();
+        if (f.failed()) {
+            auto ep = f.get_exception();
+            if (try_catch<abort_requested_exception>(ep) || _deferred_separation_as.abort_requested()) {
+                co_return;
+            }
+            logstor_logger.warn("Separating the mixed segments left by recovery failed, will retry: {}", ep);
+        }
+        if (_deferred_mixed.empty()) {
+            break;
+        }
+        // Polls for free segments; a wakeup when segments are freed would save scans.
+        co_await seastar::sleep_abortable(delay, _deferred_separation_as);
+        delay = std::min<std::chrono::seconds>(delay * 2, std::chrono::seconds(10));
+    }
+    logstor_logger.info("Separated the mixed segments left by recovery");
+}
+
+future<> segment_manager_impl::wait_for_deferred_separation(const logstor_group& cg) {
+    // A segment that was not scanned may hold anything.
+    auto holds_records_of_cg = [id = cg.table_id()] (const mixed_segment& seg) {
+        return !seg.tables || std::ranges::find(*seg.tables, id) != seg.tables->end();
+    };
+    while (std::ranges::any_of(_deferred_mixed, holds_records_of_cg)) {
+        if (_deferred_waiters_aborted) {
+            throw abort_requested_exception();
+        }
+        co_await _deferred_mixed_changed.wait();
     }
 }
 
@@ -2703,6 +3030,14 @@ sstring segment_manager::get_segment_file_path(log_segment_id segment_id) const 
 
 future<> segment_manager::discard_segments(logstor_group& cg) {
     return _impl->discard_segments(cg);
+}
+
+void segment_manager::abort_deferred_separation_waiters() noexcept {
+    _impl->abort_deferred_separation_waiters();
+}
+
+future<> segment_manager::wait_for_deferred_separation(const logstor_group& cg) {
+    return _impl->wait_for_deferred_separation(cg);
 }
 
 segment_manager_usage segment_manager::get_usage() const noexcept {
@@ -2863,22 +3198,26 @@ void logstor_group::switch_active_separator_buffer() {
     _separator_flush = shared_future(logstor_compaction_manager().flush_separator_buffer(_flushing_buffer, *this));
 }
 
-future<> logstor_group::allocate_active_separator_buffer() {
-    auto buf = co_await logstor_compaction_manager().allocate_separator_buffer();
+future<> logstor_group::allocate_active_separator_buffer(abort_source* as) {
+    auto buf = co_await logstor_compaction_manager().allocate_separator_buffer(as);
     if (_separator_enabled && !_active_buffer.allocated()) {
         _active_buffer.buf = std::move(buf);
     }
 }
 
 template <log_record_writer_concept Writer>
-future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, separator_index_update after_written) {
+future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, separator_index_update after_written,
+        abort_source* as) {
     while (!_active_buffer.can_fit(writer)) {
         if (!_separator_enabled) {
             break;
         }
+        if (as && as->abort_requested()) {
+            throw abort_requested_exception();
+        }
 
         if (!_active_buffer.allocated()) {
-            co_await allocate_active_separator_buffer();
+            co_await allocate_active_separator_buffer(as);
             continue;
         }
 
@@ -2892,7 +3231,7 @@ future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, s
         }
 
         if (!_separator_flush.available()) {
-            auto f = co_await coroutine::as_future(_separator_flush.get_future());
+            auto f = co_await coroutine::as_future(as ? _separator_flush.get_future(*as) : _separator_flush.get_future());
             f.ignore_ready_future();
             continue;
         }
@@ -2905,15 +3244,15 @@ future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, s
     // than take a record that would never be written out: it stays where it already is, and the caller
     // keeps the segment holding it from being freed - see run_separator_fiber().
     if (!_separator_enabled) {
-        throw std::runtime_error(fmt::format(
+        throw separator_closed_error(fmt::format(
                 "logstor separator write to a closed compaction group of table {}", table_id()));
     }
 
     _active_buffer.write(std::move(seg_ref), segment_seq_num, std::move(writer), std::move(after_written));
 }
 
-template future<> logstor_group::write_to_separator(log_record_writer, segment_ref, std::optional<segment_sequence>, separator_index_update);
-template future<> logstor_group::write_to_separator(log_record_bytes_writer, segment_ref, std::optional<segment_sequence>, separator_index_update);
+template future<> logstor_group::write_to_separator(log_record_writer, segment_ref, std::optional<segment_sequence>, separator_index_update, abort_source*);
+template future<> logstor_group::write_to_separator(log_record_bytes_writer, segment_ref, std::optional<segment_sequence>, separator_index_update, abort_source*);
 
 future<> logstor_group::flush_separator(std::optional<segment_sequence> seq_num) {
     auto should_flush = [seq_num] (separator_buffer& buf) {
