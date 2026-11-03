@@ -1481,6 +1481,11 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
         return rs.current_storage_mode == local_storage_mode;
     };
 
+    const bool forced_vnodes = _db.local().get_config().force_vnodes_for_migrating_tables();
+    auto intended_storage_mode_synchronized = [&] (const replica_state& rs) {
+        return !forced_vnodes || rs.intended_storage_mode != storage_mode::tablets;
+    };
+
     auto synchronized = [&] () {
         auto it = _topology_state_machine._topology.find(raft_server.id());
         if (!it) {
@@ -1493,7 +1498,8 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
             && replica_state.ignore_msb == local_ignore_msb
             && replica_state.release_version == local_release_version
             && replica_state.supported_features == local_supported_features
-            && storage_mode_synchronized(replica_state);
+            && storage_mode_synchronized(replica_state)
+            && intended_storage_mode_synchronized(replica_state);
     };
 
     // We avoid performing a read barrier if we're sure that our metadata stored in topology
@@ -1508,7 +1514,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     // If the persisted flag is true, it tells us that we attempted a metadata change earlier,
     // forcing us to perform a read barrier even when the local state machine tells us we're in sync.
 
-    if (synchronized() && !(co_await _sys_ks.local().get_must_synchronize_topology())) {
+    if (!forced_vnodes && synchronized() && !(co_await _sys_ks.local().get_must_synchronize_topology())) {
         co_return;
     }
 
@@ -1550,6 +1556,10 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
         const auto& rs = _topology_state_machine._topology.find(raft_server.id())->second;
         if (report_storage_mode && rs.intended_storage_mode) {
             node_builder.set("current_storage_mode", local_storage_mode);
+        }
+        if (!intended_storage_mode_synchronized(rs)) {
+            rtlogger.info("force_vnodes_for_migrating_tables is set, marking this node for downgrade to vnodes");
+            node_builder.set("intended_storage_mode", storage_mode::vnodes);
         }
 
         topology_change change{{builder.build()}};

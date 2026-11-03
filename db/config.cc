@@ -1822,9 +1822,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , force_vnodes_for_migrating_tables(this, "force_vnodes_for_migrating_tables", liveness::MustRestart, value_status::Used, false,
         "Load the tables of keyspaces under vnodes-to-tablets migration with vnodes on this node, "
         "ignoring the node's upgrade recorded in system.topology. For recovering a node that cannot "
-        "start because upgrading its tables to tablets fails. Does not change system.topology: once "
-        "the node is up, record the rollback with 'nodetool migrate-to-tablets downgrade' and unset "
-        "this option.")
+        "start because upgrading its tables to tablets fails. Once up, the node marks itself for "
+        "downgrade to vnodes in system.topology; unset this option then.")
     , view_flow_control_delay_limit_in_ms(this, "view_flow_control_delay_limit_in_ms", liveness::LiveUpdate, value_status::Used, 1000,
         "The maximal amount of time that materialized-view update flow control may delay responses "
         "to try to slow down the client and prevent buildup of unfinished view updates. "

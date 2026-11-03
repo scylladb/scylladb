@@ -614,9 +614,8 @@ future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database
                         "'nodetool migrate-to-tablets downgrade' instead.");
             }
             dblog.warn("force_vnodes_for_migrating_tables is set, overriding the intended storage mode recorded in "
-                    "system.topology ('{}'). system.topology is left unchanged: run "
-                    "'nodetool migrate-to-tablets downgrade' against this node once it is up, then unset "
-                    "this option.",
+                    "system.topology ('{}'). The node marks itself for downgrade to vnodes once it is up; "
+                    "unset this option then.",
                     recorded_mode);
             storage_mode = service::storage_mode::vnodes;
         } else if (storage_mode) {
