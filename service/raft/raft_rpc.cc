@@ -225,6 +225,10 @@ future<raft::snapshot_reply> raft_rpc::apply_snapshot(raft::server_id from, raft
     auto holder = _shutdown_gate.hold();
     co_await _sm.transfer_snapshot(from, snp.snp);
     co_await utils::get_local_injector().inject("raft_rpc_apply_snapshot_after_transfer", utils::wait_for_message(std::chrono::seconds(300)));
+    // Lets a test reject a transferred snapshot the way raft rejects an outdated one.
+    if (utils::get_local_injector().enter("raft_reject_transferred_snapshot")) {
+        co_return raft::snapshot_reply{.current_term = snp.current_term, .success = false};
+    }
     // abort() may have run during the transfer. `_client` must not be called after
     // that, and there must be no suspension point between this check and the call.
     if (_shutdown_gate.is_closed()) {
