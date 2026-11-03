@@ -23,6 +23,7 @@
 #include "service/storage_proxy.hh"
 #include "types/map.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/overloaded_functor.hh"
 #include <fmt/format.h>
 
@@ -416,6 +417,7 @@ future<> verify_permission(
             auth::permissions::to_string(permission_to_check),
             schema->ks_name(), schema->cf_name(), username, client_state.get_client_address()));
     }
+    co_await utils::get_local_injector().inject("alternator_timeout_after_permissions", std::chrono::milliseconds(200));
 }
 
 // Similar to verify_permission() above, but for operations which do not

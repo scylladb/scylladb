@@ -171,6 +171,7 @@ public:
     uint64_t write_using_lwt = 0;
     uint64_t shard_bounce_for_lwt = 0;
     uint64_t requests_blocked_memory = 0;
+    uint64_t requests_timed_out_before_execution = 0;
     uint64_t requests_shed = 0;
     uint64_t rcu_half_units_total = 0;
     // wcu can results from put, update, delete and index
