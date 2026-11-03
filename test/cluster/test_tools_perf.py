@@ -10,6 +10,7 @@ import asyncio
 import pytest
 from test import path_to
 from test.pylib.host_registry import HostRegistry
+from test.pylib.internal_types import ServerUpState
 
 logger = logging.getLogger(__name__)
 
@@ -117,13 +118,11 @@ async def test_perf_cql_raw_remote(scylla_path, tmp_path, workload, manager):
 
 @pytest.mark.parametrize("workload", ["read"])
 async def test_perf_alternator_remote(scylla_path, tmp_path, workload, manager):
-    await manager.server_add(cmdline=[
+    server = await manager.server_add(cmdline=[
         "--alternator-port", "8000",
         "--alternator-write-isolation", "only_rmw_uses_lwt"
-    ])
-    servers = await manager.running_servers()
-    await manager.get_ready_cql(servers)
-    host = servers[0].ip_addr
+    ], expected_server_up_state=ServerUpState.SERVING)
+    host = server.ip_addr
     client_cmd = [
         scylla_path, "perf-alternator",
         "--workload", workload,
