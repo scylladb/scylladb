@@ -13,6 +13,9 @@
 # - not just on Alternator, which the test/alternator framework allows to do.
 # So only the minority of tests that do need a bigger cluster should be here.
 
+import http.client
+from contextlib import ExitStack, asynccontextmanager
+
 import pytest
 import asyncio
 import logging
@@ -31,6 +34,8 @@ import threading
 import random
 import re
 
+from test.alternator.util import client_headers, get_signed_request
+from test.cqlpy.vector_store_mock import VectorStoreMock
 from test.cluster.util import get_replication, FeatureConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
@@ -61,6 +66,427 @@ def get_alternator(ip, user='alternator', passwd='secret_pass'):
             retries={"max_attempts": 0},
             read_timeout=300)
     )
+
+
+@asynccontextmanager
+async def held_request_memory(server_ip, count):
+    """Opens `count` requests that announce a 16 MiB body and never send it.
+    Each one holds about 32 MiB of the request memory of the shard."""
+    writers = []
+    try:
+        for _ in range(count):
+            _, writer = await asyncio.wait_for(asyncio.open_connection(server_ip, 8000), timeout=5)
+            writers.append(writer)
+            writer.write(b'POST / HTTP/1.1\r\nHost: localhost\r\n'
+                         b'X-Amz-Target: DynamoDB_20120810.GetItem\r\n'
+                         b'Content-Length: 16777216\r\n\r\n')
+            await asyncio.wait_for(writer.drain(), timeout=5)
+        yield
+    finally:
+        for writer in writers:
+            writer.close()
+        await asyncio.wait_for(asyncio.gather(
+            *(writer.wait_closed() for writer in writers), return_exceptions=True), timeout=5)
+
+
+@asynccontextmanager
+async def vector_search_table(manager, projection):
+    """Yields the server, a client, a table with a 3-dimension vector index, and the vector-store mock."""
+    mock = VectorStoreMock()
+    mock.start('127.0.0.1')
+    with ExitStack() as cleanup:
+        cleanup.callback(mock.stop)
+        [server] = await manager.servers_add(1, config={**alternator_config,
+            'vector_store_primary_uri': f'http://127.0.0.1:{mock.port}'})
+        resource = get_alternator(server.ip_addr)
+        cleanup.callback(resource.meta.client.close)
+        table = resource.create_table(TableName=unique_table_name(), BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{'IndexName': 'vind', 'VectorAttribute': {'AttributeName': 'v'},
+                            'Dimensions': 3, 'DistanceFunction': 'COSINE', 'Projection': {'ProjectionType': projection}}])
+        cleanup.callback(table.delete)
+        yield server, resource.meta.client, table, mock
+
+
+async def test_alternator_request_timeout_waiting_for_memory(manager: ScyllaClusterManager):
+    """A queued memory admission expires and drains its body (#31652)."""
+    server = await manager.server_add(config=alternator_config, cmdline=['--smp', '1', '-m', '1G'])
+    resource = get_alternator(server.ip_addr)
+    table = resource.create_table(TableName=unique_table_name(), BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+    pending = None
+    metric = 'scylla_alternator_requests_blocked_memory'
+    timeout_metric = 'scylla_alternator_requests_timed_out_before_execution'
+    metrics = await manager.metrics.query(server.ip_addr)
+    before = metrics.get(metric) or 0
+    timeouts_before = metrics.get(timeout_metric) or 0
+    connection = http.client.HTTPConnection(server.ip_addr, 8000, timeout=5)
+
+    def post(req):
+        connection.request('POST', '/', body=req.body, headers=req.headers)
+        response = connection.getresponse()
+        return response.status, response.read().decode()
+
+    try:
+        try:
+            # With one 1-GiB shard, four unfinished bodies fill the limiter
+            # and leave a waiter ahead of the small timed request.
+            async with held_request_memory(server.ip_addr, 4):
+                async def waiting_for_memory():
+                    count = (await manager.metrics.query(server.ip_addr)).get(metric) or 0
+                    return True if count > before else None
+
+                await wait_for(waiting_for_memory, deadline=time.time() + 10)
+                payload = json.dumps({'TableName': table.name, 'Key': {'p': {'S': 'memory_timeout'}}})
+                req = get_signed_request(resource, 'GetItem', payload, {'X-Scylla-Timeout': '100ms'})
+                pending = asyncio.create_task(asyncio.to_thread(post, req))
+                status, body = await asyncio.wait_for(asyncio.shield(pending), timeout=10)
+                assert status == 500
+                assert 'timed out before execution' in body
+                original_socket = connection.sock
+                assert original_socket is not None
+                assert (await manager.metrics.query(server.ip_addr)).get(timeout_metric) == timeouts_before + 1
+        finally:
+            # Wait for the timed request only after the held connections close.
+            if pending is not None:
+                await asyncio.wait_for(asyncio.gather(pending, return_exceptions=True), timeout=10)
+        # The timed request's unread body was drained, so reuse its HTTP
+        # connection for a request without a header after releasing memory.
+        req = get_signed_request(resource, 'GetItem', payload)
+        status, _ = await asyncio.to_thread(post, req)
+        assert status == 200
+        assert connection.sock is original_socket
+    finally:
+        connection.close()
+        table.delete()
+        resource.meta.client.close()
+
+
+async def test_alternator_request_timeout_releases_concurrency_slot(manager: ScyllaClusterManager):
+    """A request that times out waiting for memory gives back its concurrency slot (#31652)."""
+    server = await manager.server_add(config={**alternator_config, 'max_concurrent_requests_per_shard': 8},
+        cmdline=['--smp', '1', '-m', '1G'])
+    resource = get_alternator(server.ip_addr)
+    table = resource.create_table(TableName=unique_table_name(), BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+    metric = 'scylla_alternator_requests_blocked_memory'
+    before = (await manager.metrics.query(server.ip_addr)).get(metric) or 0
+    connection = http.client.HTTPConnection(server.ip_addr, 8000, timeout=5)
+    payload = json.dumps({'TableName': table.name, 'Key': {'p': {'S': 'memory_timeout'}}})
+
+    def post():
+        req = get_signed_request(resource, 'GetItem', payload, {'X-Scylla-Timeout': '100ms'})
+        connection.request('POST', '/', body=req.body, headers=req.headers)
+        response = connection.getresponse()
+        return response.status, response.read().decode()
+
+    try:
+        # Three bodies hold the memory, and two waiters without a deadline wait
+        # ahead of the timed requests.
+        async with held_request_memory(server.ip_addr, 5):
+            async def two_waiters():
+                count = (await manager.metrics.query(server.ip_addr)).get(metric) or 0
+                return True if count >= before + 2 else None
+
+            await wait_for(two_waiters, deadline=time.time() + 10)
+            # The held requests use 5 of the 8 slots. More than 3 requests that
+            # time out pass only if each one gives back its slot.
+            for _ in range(8):
+                status, body = await asyncio.to_thread(post)
+                assert status == 500
+                assert 'timed out before execution' in body
+        # After the memory is released, a request is accepted at once.
+        response = await asyncio.to_thread(table.get_item, Key={'p': 'after_timeout'})
+        assert response['ResponseMetadata']['HTTPStatusCode'] == 200
+    finally:
+        connection.close()
+        table.delete()
+        resource.meta.client.close()
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_alternator_recovery_preimage_request_timeout(manager: ScyllaClusterManager):
+    """Recovering an accepted Paxos proposal must retain the HTTP deadline (#31652)."""
+    server = await manager.server_add(config=alternator_config, cmdline=['--smp', '1'])
+    resource = get_alternator(server.ip_addr)
+    table = resource.create_table(TableName=unique_table_name(), BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+        StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'OLD_IMAGE'})
+    pending = None
+    try:
+        table.put_item(Item={'p': 'recovery', 'v': 'original'})
+        # Persist a proposal without learning it. The next conditional write
+        # must finish that proposal before attempting its own update.
+        async with inject_error(manager.api, server.ip_addr, 'paxos_error_after_save_proposal'):
+            with pytest.raises(ClientError, match='InternalServerError'):
+                await asyncio.to_thread(table.put_item, Item={'p': 'recovery', 'v': 'accepted'},
+                    ConditionExpression='attribute_exists(p)')
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        try:
+            async with inject_error(manager.api, server.ip_addr, 'paxos_accept_proposal_wait') as accept:
+                with client_headers(table.meta.client, {'X-Scylla-Timeout': '1s'}):
+                    pending = asyncio.create_task(asyncio.to_thread(table.put_item,
+                        Item={'p': 'recovery', 'v': 'current'}, ConditionExpression='attribute_exists(p)'))
+                    await manager.api.wait_for_injection_enter(server.ip_addr, 'paxos_accept_proposal_wait',
+                        deadline=time.time() + 5)
+                    # Prepare also reads the base row. Hold reads only after
+                    # prepare, while the recovery accept is paused, so the
+                    # blocked read belongs to CDC's recovery preimage.
+                    async with inject_error(manager.api, server.ip_addr, 'replica_query_wait', {'table': table.name}):
+                        await accept.message()
+                        with pytest.raises(ClientError, match='InternalServerError.*([Tt]imeout|timed out)'):
+                            await asyncio.wait_for(asyncio.shield(pending), timeout=5)
+                        await log.wait_for('replica_query_wait: waiting', from_mark=mark, timeout=5)
+        finally:
+            if pending is not None:
+                await asyncio.wait_for(asyncio.gather(pending, return_exceptions=True), timeout=15)
+        # Recovery still works without a header, after the blocked read is
+        # released, and the timed-out request did not propose its own value.
+        result = table.update_item(Key={'p': 'recovery'}, UpdateExpression='SET marker = :v',
+            ExpressionAttributeValues={':v': True}, ReturnValues='ALL_OLD')
+        assert result['Attributes']['v'] == 'accepted'
+    finally:
+        table.delete()
+        resource.meta.client.close()
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize('isolation', ['only_rmw_uses_lwt', 'always_use_lwt', 'unsafe_rmw'])
+@pytest.mark.parametrize('endpoint', ['replica', 'non_replica'])
+async def test_alternator_request_timeout_on_non_replica(manager: ScyllaClusterManager, isolation, endpoint):
+    """The HTTP deadline must survive remote coordination and LWT shard hops (#31652)."""
+    servers = await manager.servers_add(2, config=alternator_config, auto_rack_dc='dc1')
+    cql, _ = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+    resources = [get_alternator(server.ip_addr) for server in servers]
+    try:
+        name = unique_table_name()
+        ks = 'alternator_' + name
+        # With RF=1 and a single tablet, one endpoint is a replica and
+        # the other must coordinate the request on a remote replica.
+        await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = "
+                           "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                           "AND tablets = {'initial': 1}")
+        table = resources[0].create_table(TableName=name,
+            BillingMode='PAY_PER_REQUEST',
+            Tags=[{'Key': 'system:write_isolation', 'Value': isolation},
+                  {'Key': 'system:initial_tablets', 'Value': '1'}],
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+        try:
+            replica_ids = await nodes_with_data(manager, ks, name, servers[0])
+            assert len(replica_ids) == 1
+            [replica] = [server for server in servers
+                         if await manager.get_host_id(server.server_id) in replica_ids]
+            replica_log = await manager.server_open_log(replica.server_id)
+            server = replica if endpoint == 'replica' else next(s for s in servers if s != replica)
+            resource = resources[servers.index(server)]
+            endpoint_table = resource.Table(name)
+            client = endpoint_table.meta.client
+
+            def operations():
+                endpoint_table.get_item(Key={'p': 'timeout'}, ConsistentRead=True)
+                endpoint_table.update_item(Key={'p': 'timeout'}, UpdateExpression='SET a = :v',
+                    ExpressionAttributeValues={':v': 'value'}, ReturnValues='ALL_OLD')
+                client.batch_write_item(RequestItems={name: [
+                    {'PutRequest': {'Item': {'p': str(i)}}} for i in range(8)]})
+
+            # A generous header permits work through either endpoint.
+            with client_headers(client, {'X-Scylla-Timeout': '1m'}):
+                await asyncio.to_thread(operations)
+            reads = [
+                lambda: endpoint_table.get_item(Key={'p': 'timeout'}, ConsistentRead=True),
+                lambda: endpoint_table.query(KeyConditionExpression='p = :p',
+                    ExpressionAttributeValues={':p': 'timeout'}, ConsistentRead=True),
+                lambda: endpoint_table.scan(ConsistentRead=True),
+                lambda: client.batch_get_item(RequestItems={name: {'Keys': [{'p': 'timeout'}], 'ConsistentRead': True}}),
+            ]
+            operations_with_delays = [(operation, replica, 'replica_query_wait', {'table': name}) for operation in reads]
+            writes = [
+                lambda: endpoint_table.put_item(Item={'p': 'timeout', 'a': 'value'}, ReturnValues='ALL_OLD'),
+                lambda: endpoint_table.update_item(Key={'p': 'timeout'}, UpdateExpression='SET a = :v',
+                    ExpressionAttributeValues={':v': 'value'}, ReturnValues='ALL_OLD'),
+                lambda: endpoint_table.delete_item(Key={'p': 'timeout'}, ReturnValues='ALL_OLD'),
+            ]
+            # cas_timeout_after_lock sleeps until the write timeout that cas()
+            # got, plus 100 ms. So it shows that cas() got the header deadline,
+            # not that a Paxos round stops at it: paxos_accept_proposal_wait does.
+            for operation in writes:
+                operations_with_delays.append((operation,
+                    replica if isolation == 'unsafe_rmw' else server,
+                    'replica_query_wait' if isolation == 'unsafe_rmw' else 'cas_timeout_after_lock',
+                    {'table': name} if isolation == 'unsafe_rmw' else {}))
+            if isolation == 'always_use_lwt' or server != replica:
+                # Ordinary writes must be held at a remote replica, while
+                # always-LWT batches can be held at the CAS coordinator.
+                ordinary_writes = [lambda: client.batch_write_item(RequestItems={name: [
+                    {'PutRequest': {'Item': {'p': str(i)}}} for i in range(8)]})]
+                if isolation != 'always_use_lwt':
+                    ordinary_writes += [
+                        lambda: endpoint_table.put_item(Item={'p': 'plain', 'a': 'value'}),
+                        lambda: endpoint_table.update_item(Key={'p': 'plain'}, UpdateExpression='SET a = :v',
+                            ExpressionAttributeValues={':v': 'value'}),
+                        lambda: endpoint_table.delete_item(Key={'p': 'plain'}),
+                    ]
+                for operation in ordinary_writes:
+                    operations_with_delays.append((operation,
+                        server if isolation == 'always_use_lwt' else replica,
+                        'cas_timeout_after_lock' if isolation == 'always_use_lwt' else 'database_apply',
+                        {} if isolation == 'always_use_lwt' else {'ks_name': ks, 'cf_name': name, 'what': 'wait'}))
+            if server != replica and isolation != 'unsafe_rmw':
+                # Hold an accept RPC at the remote Paxos participant, beyond
+                # the coordinator lock covered above. Keep it held until reply.
+                operations_with_delays.extend([
+                    (lambda: endpoint_table.put_item(Item={'p': 'timeout', 'a': 'value'},
+                        ConditionExpression='attribute_exists(p)'), replica, 'paxos_accept_proposal_wait', {}),
+                    (lambda: endpoint_table.update_item(Key={'p': 'timeout'}, UpdateExpression='SET a = :v',
+                        ExpressionAttributeValues={':v': 'value'}, ReturnValues='ALL_OLD'),
+                        replica, 'paxos_accept_proposal_wait', {}),
+                ])
+            for index, (operation, injection_server, injection, parameters) in enumerate(operations_with_delays):
+                mark = await replica_log.mark()
+                pending = None
+                try:
+                    # Delay backend work: a frontend delay cannot verify
+                    # that remote reads or CAS received the deadline.
+                    async with inject_error(manager.api, injection_server.ip_addr, injection, parameters):
+                        with client_headers(client, {'X-Scylla-Timeout': '1s'}):
+                            start = time.monotonic()
+                            pending = asyncio.create_task(asyncio.to_thread(operation))
+                            with pytest.raises(ClientError, match='InternalServerError.*([Tt]imeout|timed out)'):
+                                await asyncio.wait_for(asyncio.shield(pending), timeout=5)
+                            assert time.monotonic() - start < 5, f'operation {index}, held by {injection}'
+                        if injection in ['cas_timeout_after_lock', 'paxos_accept_proposal_wait']:
+                            assert await manager.api.get_injection_enter_count(injection_server.ip_addr, injection) > 0
+                        else:
+                            message = 'replica_query_wait: waiting' if injection == 'replica_query_wait' else 'database_apply: wait'
+                            await replica_log.wait_for(message, from_mark=mark, timeout=5)
+                finally:
+                    if pending is not None:
+                        await asyncio.gather(pending, return_exceptions=True)
+            # Disabling the injections must leave both endpoints usable,
+            # including requests without timeout headers.
+            await asyncio.to_thread(operations)
+        finally:
+            table.delete()
+    finally:
+        for resource in resources:
+            resource.meta.client.close()
+
+
+@pytest.mark.parametrize('timeout', ['0ms', '100ms', '1m'])
+async def test_alternator_search_vectors_request_timeout(manager: ScyllaClusterManager, timeout):
+    """SearchVectors must bound the actual ANN HTTP call, not just dispatch (#31652)."""
+    async with vector_search_table(manager, 'KEYS_ONLY') as (server, client, table, mock):
+        mock.set_next_ann_response(200, json.dumps({'primary_keys': {'p': []}, 'similarity_scores': []}))
+        arguments = {'TableName': table.name, 'IndexName': 'vind', 'SearchVector': [1, 0, 0], 'TopK': 1}
+
+        async def ready():
+            try:
+                return await asyncio.to_thread(client.search_vectors, **arguments)
+            except ClientError:
+                return None
+
+        await wait_for(ready, time.time() + 30)
+        before = len(mock.ann_requests)
+        mock.set_ann_response_delay(0.25)
+        start = time.monotonic()
+        with client_headers(client, {'X-Scylla-Timeout': timeout}):
+            if timeout == '1m':
+                await asyncio.to_thread(client.search_vectors, **arguments)
+            else:
+                with pytest.raises(ClientError, match='InternalServerError.*(timed out|aborted)'):
+                    await asyncio.to_thread(client.search_vectors, **arguments)
+        assert time.monotonic() - start < 5
+        assert len(mock.ann_requests) == before + (0 if timeout == '0ms' else 1)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_alternator_search_vectors_base_read_timeout(manager: ScyllaClusterManager):
+    """SearchVectors must bound the base-table reads after the ANN call (#31652)."""
+    # ProjectionType ALL requires reading the matching items from the base table.
+    async with vector_search_table(manager, 'ALL') as (server, client, table, mock):
+        table.put_item(Item={'p': 'match', 'a': 'value'})
+        mock.set_next_ann_response(200, json.dumps({'primary_keys': {'p': ['match']}, 'similarity_scores': [0.5]}))
+        arguments = {'TableName': table.name, 'IndexName': 'vind', 'SearchVector': [1, 0, 0], 'TopK': 1}
+
+        async def ready():
+            try:
+                return await asyncio.to_thread(client.search_vectors, **arguments)
+            except ClientError:
+                return None
+
+        await wait_for(ready, time.time() + 30)
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        async with inject_error(manager.api, server.ip_addr, 'replica_query_wait', {'table': table.name}):
+            start = time.monotonic()
+            with client_headers(client, {'X-Scylla-Timeout': '1s'}):
+                with pytest.raises(ClientError, match='InternalServerError.*([Tt]imeout|timed out)'):
+                    await asyncio.to_thread(client.search_vectors, **arguments)
+            assert time.monotonic() - start < 5
+            await log.wait_for('replica_query_wait: waiting', from_mark=mark, timeout=5)
+        response = await asyncio.to_thread(client.search_vectors, **arguments)
+        assert [result['Item']['p'] for result in response['SearchResults']] == ['match']
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize('operation', ['UpdateItem', 'BatchWriteItem'])
+async def test_alternator_timeout_after_observed_shard_bounce(manager: ScyllaClusterManager, operation):
+    """Verify the deadline survives an observed executor shard hop (#31652)."""
+    [server] = await manager.servers_add(1, config=alternator_config, cmdline=['--smp', '2'])
+    resource = get_alternator(server.ip_addr)
+    # The BatchWriteItem hop in executor::cas_write() happens only for LWT writes.
+    tags = [{'Key': 'system:write_isolation', 'Value': 'always_use_lwt'}] if operation == 'BatchWriteItem' else []
+    table = resource.create_table(TableName=unique_table_name(), BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}], Tags=tags)
+    try:
+        table.put_item(Item={'p': 'timeout', 'n': 0})
+        metric = 'scylla_alternator_shard_bounce_for_lwt'
+        async with inject_error(manager.api, server.ip_addr, 'cas_timeout_after_lock'):
+            # New connections can enter different HTTP shards. Require a metric
+            # increase on the timed request instead of assuming smp=2 made it hop.
+            for _ in range(32):
+                connection = get_alternator(server.ip_addr)
+                try:
+                    before = (await manager.metrics.query(server.ip_addr)).get(metric) or 0
+                    entered_before = await manager.api.get_injection_enter_count(server.ip_addr, 'cas_timeout_after_lock')
+                    start = time.monotonic()
+                    if operation == 'BatchWriteItem':
+                        write = lambda: connection.meta.client.batch_write_item(RequestItems={table.name: [
+                            {'PutRequest': {'Item': {'p': 'timeout', 'n': 1}}}]})
+                    else:
+                        write = lambda: connection.Table(table.name).update_item(
+                            Key={'p': 'timeout'}, UpdateExpression='ADD n :one',
+                            ExpressionAttributeValues={':one': 1}, ReturnValues='ALL_NEW')
+                    with client_headers(connection.meta.client, {'X-Scylla-Timeout': '1s'}):
+                        with pytest.raises(ClientError, match='InternalServerError.*([Tt]imeout|timed out)'):
+                            await asyncio.to_thread(write)
+                    # The injection sleeps past the request deadline, so a deadline
+                    # lost on the hop would fall back to the global timeout.
+                    assert time.monotonic() - start < 5
+                    after = (await manager.metrics.query(server.ip_addr)).get(metric) or 0
+                    entered_after = await manager.api.get_injection_enter_count(server.ip_addr, 'cas_timeout_after_lock')
+                    # A short deadline can expire before CAS, especially in debug.
+                    # Require both the hop and backend delay on this request.
+                    if after > before and entered_after > entered_before:
+                        break
+                finally:
+                    connection.meta.client.close()
+            else:
+                pytest.fail('No timed request crossed executor shards and entered the CAS timeout injection')
+        assert table.get_item(Key={'p': 'timeout'}, ConsistentRead=True)['Item']['n'] == 0
+    finally:
+        table.delete()
+        resource.meta.client.close()
+
 
 # Alternator convenience function for fetching the entire result set of a
 # query into an array of items.

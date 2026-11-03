@@ -23,6 +23,7 @@
 #include "service/storage_proxy.hh"
 #include "types/map.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/overloaded_functor.hh"
 #include <fmt/format.h>
 
@@ -377,7 +378,7 @@ static void authorization_error(stats& stats, bool enforce_authorization, bool w
 future<> verify_permission(
     bool enforce_authorization,
     bool warn_authorization,
-    const service::client_state& client_state,
+    const alternator::client_state& client_state,
     const schema_ptr& schema,
     auth::permission permission_to_check,
     stats& stats) {
@@ -416,6 +417,23 @@ future<> verify_permission(
             auth::permissions::to_string(permission_to_check),
             schema->ks_name(), schema->cf_name(), username, client_state.get_client_address()));
     }
+    // Test hook: let the deadline pass after the permission checks.
+    co_await utils::get_local_injector().inject("alternator_timeout_after_permissions", test_hook_deadline(client_state));
+}
+
+bool deadline_passed_before(const alternator::client_state& client_state, stats& stats,
+        const tracing::trace_state_ptr& trace_state, std::string_view step) {
+    if (!client_state.request_deadline_passed()) {
+        return false;
+    }
+    ++stats.requests_timed_out_before_execution;
+    tracing::trace(trace_state, "Request deadline expired before {}", step);
+    return true;
+}
+
+db::timeout_clock::time_point test_hook_deadline(const alternator::client_state& client_state) {
+    return client_state.request_deadline().value_or(db::timeout_clock::now() + std::chrono::milliseconds(199))
+            + std::chrono::milliseconds(1);
 }
 
 // Similar to verify_permission() above, but for operations which do not

@@ -289,6 +289,18 @@ def scylla_inject_error(rest_api, err, one_shot=False, parameters={}):
         print("Disabling error injection", err)
         requests.delete(f'{rest_api}/v2/error_injection/injection/{err}')
 
+# Returns how many times the named error injection was entered.
+def injection_enters(rest_api, name):
+    return requests.get(f'{rest_api}/v2/error_injection/injection/{name}/enters', timeout=5).json()
+
+# Holds every replica read of one table. Yields a function that counts the
+# held reads.
+@contextmanager
+def held_replica_reads(rest_api, table_name):
+    with (scylla_inject_error(rest_api, 'replica_query_wait_table_match'),
+          scylla_inject_error(rest_api, 'replica_query_wait', parameters={'table': table_name})):
+        yield lambda: injection_enters(rest_api, 'replica_query_wait_table_match')
+
 # Send a message to the Scylla log. E.g., we can write a message to the log
 # indicating that a test has started, which will make it easier to see which
 # test caused which errors in the log.

@@ -2712,7 +2712,8 @@ future<executor::request_return_type> executor::commit_table_creation(
     co_return rjson::print(std::move(status));
 }
 
-future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
+future<executor::request_return_type> executor::create_table_on_shard0(alternator::client_state&& client_state,
+            tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
             const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     // Audit before the permission check and the rest of validation, so that
     // requests failing them are audited too.
@@ -2878,7 +2879,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         // Materialize the shard-local copy once; every get() creates a whole
         // new client_state.
-        const service::client_state local_client_state = client_state_other_shard.get();
+        const alternator::client_state local_client_state = client_state_other_shard.get();
         auto* stop_as = &e.local()._stop_as;
         schema_ptr schema;
         size_t retries = mm.get_concurrent_ddl_retries();
@@ -3942,13 +3943,30 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
     return m;
 }
 
-// The DynamoDB API doesn't let the client control the server's timeout, so
-// we have a global default_timeout() for Alternator requests. The value of
-// s_default_timeout_ms is overwritten in alternator::controller::start_server()
-// based on the "alternator_timeout_in_ms" configuration parameter.
+// controller::start_server() binds s_default_timeout_in_ms to the live-updatable
+// alternator_timeout_in_ms. default_timeout() starts a new interval on each
+// call. For requests with X-Scylla-Timeout, see request_timeout().
 thread_local utils::updateable_value<uint32_t> executor::s_default_timeout_in_ms{10'000};
 db::timeout_clock::time_point executor::default_timeout() {
     return db::timeout_clock::now() + std::chrono::milliseconds(s_default_timeout_in_ms);
+}
+
+smp_submit_to_options executor::shard_hop_options(const client_state& client_state) const {
+    // The wait in the _ssg queue for the target shard is part of the request.
+    // If this wait times out, the target shard does not run the operation. For
+    // PutItem, UpdateItem and DeleteItem, the caller has already uncounted it
+    // on this shard, so no shard counts it.
+    return smp_submit_to_options(_ssg, client_state.request_deadline().value_or(smp_no_timeout));
+}
+
+// With X-Scylla-Timeout, all steps of a request share one deadline. It starts
+// at the entry of the request handler. Without the header, each call starts a
+// new alternator_timeout_in_ms interval.
+db::timeout_clock::time_point executor::request_timeout(const client_state& client_state) {
+    if (auto deadline = client_state.request_deadline()) {
+        return *deadline;
+    }
+    return default_timeout();
 }
 
 static lw_shared_ptr<query::read_command> previous_item_read_command(service::storage_proxy& proxy,
@@ -4115,7 +4133,7 @@ static executor::request_return_type rmw_operation_return(rjson::value&& attribu
 
 static future<std::variant<std::unique_ptr<rjson::value>, api_error>> get_previous_item(
             service::storage_proxy& proxy,
-            service::client_state& client_state,
+            alternator::client_state& client_state,
             schema_ptr schema,
             const partition_key& pk,
             const clustering_key& ck,
@@ -4129,10 +4147,12 @@ static future<std::variant<std::unique_ptr<rjson::value>, api_error>> get_previo
         service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr = 
                 co_await proxy.query_result(
                     schema, command, to_partition_ranges(*schema, pk), cl,
-                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state));
+                    service::storage_proxy::coordinator_query_options(executor::request_timeout(client_state), std::move(permit), client_state));
         if (!rqr) {
             co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
         }
+        // Test hook: let the deadline pass after the read before the write.
+        co_await utils::get_local_injector().inject("alternator_timeout_after_read", test_hook_deadline(client_state));
         auto previous_item = describe_single_item(schema, command->slice, *selection, *rqr.assume_value().query_result, {}, &item_length);
         if (previous_item) {
             co_return std::make_unique<rjson::value>(std::move(*previous_item));
@@ -4143,7 +4163,7 @@ static future<std::variant<std::unique_ptr<rjson::value>, api_error>> get_previo
 
 static future<std::variant<uint64_t, api_error>> get_previous_item_size(
             service::storage_proxy& proxy,
-            service::client_state& client_state,
+            alternator::client_state& client_state,
             schema_ptr schema,
             const partition_key& pk,
             const clustering_key& ck,
@@ -4158,9 +4178,18 @@ static future<std::variant<uint64_t, api_error>> get_previous_item_size(
     co_return item_length;
 }
 
+// mutate() stores hints for dead replicas without a timeout check. Thus do not
+// start a write after the X-Scylla-Timeout deadline. The deadline can still
+// pass inside mutate(). deadline_passed_before() counts and traces these
+// timeouts, because no storage_proxy counter sees them.
+static bool write_deadline_passed(const alternator::client_state& client_state, stats& global_stats,
+        const tracing::trace_state_ptr& trace_state) {
+    return deadline_passed_before(client_state, global_stats, trace_state, "the write");
+}
+
 future<executor::request_return_type> rmw_operation::execute(service::storage_proxy& proxy,
         std::optional<service::cas_shard> cas_shard,
-        service::client_state& client_state,
+        alternator::client_state& client_state,
         tracing::trace_state_ptr trace_state,
         service_permit permit,
         bool needs_read_before_write,
@@ -4180,8 +4209,11 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         if (_write_isolation == write_isolation::UNSAFE_RMW) {
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
-            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, db::consistency_level::LOCAL_QUORUM, _consumed_capacity._total_bytes).then(
-                    [this, &proxy, &wcu_total, &global_stats, &per_table_stats, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::variant<std::unique_ptr<rjson::value>, api_error> previous_item_result) mutable {
+            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit,
+                    db::consistency_level::LOCAL_QUORUM, _consumed_capacity._total_bytes).then(
+                    [this, &proxy, &client_state, &wcu_total, &global_stats, &per_table_stats,
+                            trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)]
+                    (std::variant<std::unique_ptr<rjson::value>, api_error> previous_item_result) mutable {
                 if (auto error = std::get_if<api_error>(&previous_item_result)) {
                     return make_ready_future<executor::request_return_type>(std::move(*error));
                 }
@@ -4192,7 +4224,13 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
                     per_table_stats.conditional_check_failed++;
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
                 }
-                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
+                // The preceding read may have used up the deadline.
+                if (write_deadline_passed(client_state, global_stats, trace_state)) {
+                    return make_ready_future<executor::request_return_type>(api_error::internal("Alternator request timed out"));
+                }
+                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM,
+                        executor::request_timeout(client_state), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes,
+                        false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
                     return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
                 });
             });
@@ -4200,7 +4238,13 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
         throwing_assert(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
+        // Permission checks can consume the deadline before this plain write.
+        if (write_deadline_passed(client_state, global_stats, trace_state)) {
+            return make_ready_future<executor::request_return_type>(api_error::internal("Alternator request timed out"));
+        }
+        return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM,
+                executor::request_timeout(client_state), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes,
+                false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
             return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
         });
     }
@@ -4208,7 +4252,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     // If we're still here, we need to do this write using LWT:
     global_stats.write_using_lwt++;
     per_table_stats.write_using_lwt++;
-    auto timeout = executor::default_timeout();
+    auto timeout = executor::request_timeout(client_state);
     auto selection = cql3::selection::selection::wildcard(schema());
     auto read_command = needs_read_before_write ?
             previous_item_read_command(proxy, schema(), _ck, selection) :
@@ -4343,11 +4387,11 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
         per_table_stats->api_operations.put_item--; // same, for the per-table counter
         _stats.shard_bounce_for_lwt++;
         per_table_stats->shard_bounce_for_lwt++;
-        co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
+        co_return co_await container().invoke_on(cas_shard->shard(), shard_hop_options(client_state),
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info]
-                                     (service::client_state& client_state) mutable {
+                                     (alternator::client_state& client_state) mutable {
                 //FIXME: Instead of passing empty_service_permit() to the background operation,
                 // the current permit's lifetime should be prolonged, so that it's destructed
                 // only after all background operations are finished as well.
@@ -4458,11 +4502,11 @@ future<executor::request_return_type> executor::delete_item(client_state& client
         per_table_stats->api_operations.delete_item--; // same, for the per-table counter
         _stats.shard_bounce_for_lwt++;
         per_table_stats->shard_bounce_for_lwt++;
-        co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
+        co_return co_await container().invoke_on(cas_shard->shard(), shard_hop_options(client_state),
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info]
-                                     (service::client_state& client_state) mutable {
+                                     (alternator::client_state& client_state) mutable {
                 //FIXME: Instead of passing  empty_service_permit() to the background operation,
                 // the current permit's lifetime should be prolonged, so that it's destructed
                 // only after all background operations are finished as well.
@@ -4527,12 +4571,12 @@ public:
 };
 
 future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, const dht::decorated_key& dk,
-        const std::vector<put_or_delete_item>& mutation_builders, service::client_state& client_state,
+        const std::vector<put_or_delete_item>& mutation_builders, alternator::client_state& client_state,
         tracing::trace_state_ptr trace_state, service_permit permit)
 {
     if (!cas_shard.this_shard()) {
         _stats.shard_bounce_for_lwt++;
-        return container().invoke_on(cas_shard.shard(), _ssg,
+        return container().invoke_on(cas_shard.shard(), shard_hop_options(client_state),
                     [cs = client_state.move_to_other_shard(),
                     &mb = mutation_builders,
                     &dk,
@@ -4543,7 +4587,7 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, co
                     (executor& self) mutable {
             return do_with(cs.get(), [&mb, &dk, ks = std::move(ks), cf = std::move(cf),
                                     trace_state = tracing::trace_state_ptr(gt), &self]
-                                    (service::client_state& client_state) mutable {
+                                    (alternator::client_state& client_state) mutable {
                 auto schema = self._proxy.data_dictionary().find_schema(ks, cf);
                 service::cas_shard cas_shard(*schema, dk.token());
 
@@ -4555,7 +4599,7 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, co
         });
     }
 
-    auto timeout = executor::default_timeout();
+    auto timeout = executor::request_timeout(client_state);
     auto op = std::make_unique<put_or_delete_item_cas_request>(schema, mutation_builders);
     auto* op_ptr = op.get();
     auto cdc_opts = cdc::per_request_options{
@@ -4591,7 +4635,7 @@ struct schema_decorated_key_equal {
 // of these failed mutations rather than fail the whole write (issue #5650).
 future<> executor::do_batch_write(
         std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,
-        service::client_state& client_state,
+        alternator::client_state& client_state,
         tracing::trace_state_ptr trace_state,
         service_permit permit) {
     if (mutation_builders.empty()) {
@@ -4615,9 +4659,14 @@ future<> executor::do_batch_write(
             mutations.push_back(b.second.build(b.first, now));
             any_cdc_enabled |= b.first->cdc_options().enabled();
         }
+        // Permission checks and, with alternator_force_read_before_write, the
+        // item-size reads may have used up the deadline.
+        if (write_deadline_passed(client_state, _stats, trace_state)) {
+            return make_exception_future<>(api_error::internal("Alternator request timed out"));
+        }
         return _proxy.mutate(std::move(mutations),
                 db::consistency_level::LOCAL_QUORUM,
-                executor::default_timeout(),
+                executor::request_timeout(client_state),
                 trace_state,
                 std::move(permit),
                 db::allow_per_partition_rate_limit::yes,
@@ -5659,11 +5708,11 @@ future<executor::request_return_type> executor::update_item(client_state& client
         per_table_stats->api_operations.update_item--; // same, for the per-table counter
         _stats.shard_bounce_for_lwt++;
         per_table_stats->shard_bounce_for_lwt++;
-        co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
+        co_return co_await container().invoke_on(cas_shard->shard(), shard_hop_options(client_state),
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info]
-                                     (service::client_state& client_state) mutable {
+                                     (alternator::client_state& client_state) mutable {
                 //FIXME: Instead of passing empty_service_permit() to the background operation,
                 // the current permit's lifetime should be prolonged, so that it's destructed
                 // only after all background operations are finished as well.

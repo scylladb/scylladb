@@ -36,6 +36,8 @@
 #include "audit/audit.hh"
 #include "utils/managed_bytes.hh"
 #include "exceptions/coordinator_result.hh"
+#include "db/timeout_clock.hh"
+#include "tracing/tracing_fwd.hh"
 
 class index_metadata;
 
@@ -46,6 +48,7 @@ namespace service { class storage_proxy; class client_state; }
 
 namespace alternator {
 class api_error;
+class client_state;
 
 /// The body_writer is used for streaming responses - where the response body
 /// is written in chunks to the output_stream. This allows for efficient
@@ -191,7 +194,16 @@ void verify_all_are_used(const rjson::value* field,
 /// Check CQL's Role-Based Access Control (RBAC) permission (MODIFY,
 /// SELECT, DROP, etc.) on the given table. When permission is denied an
 /// appropriate user-readable api_error::access_denied is thrown.
-future<> verify_permission(bool enforce_authorization, bool warn_authorization, const service::client_state&, const schema_ptr&, auth::permission, stats& stats);
+future<> verify_permission(bool enforce_authorization, bool warn_authorization, const alternator::client_state&, const schema_ptr&, auth::permission, stats& stats);
+
+/// Counts and traces a request whose X-Scylla-Timeout deadline passed before
+/// `step`. Returns false if the request has no deadline, or it has not passed.
+bool deadline_passed_before(const alternator::client_state&, stats& stats,
+        const tracing::trace_state_ptr& trace_state, std::string_view step);
+
+/// The time until which a test hook sleeps to let the request deadline pass:
+/// just after the X-Scylla-Timeout deadline, or 200 ms without a deadline.
+db::timeout_clock::time_point test_hook_deadline(const alternator::client_state&);
 
 /// Similar to verify_permission() above, but just for CREATE operations.
 /// Those do not operate on any specific table, so require permissions on
