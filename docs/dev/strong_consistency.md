@@ -465,6 +465,19 @@ tablet migrated away or its table dropped, will never be replayed. `release_all(
 destroys the handles instead of detaching them, so the use counts drop and the
 segments can be reclaimed (SCYLLADB-3827).
 
+# Requests to a tablet without a leader
+
+Each tablet of a strongly consistent table has a Raft leader, which a quorum of
+the tablet's replicas elects. Writes and reads at `QUORUM` or `LOCAL_QUORUM` go
+through the leader. While a tablet has no leader, for example with two of its
+three replicas down, they wait for one until they time out. Once the tablet has
+had no leader for longer than
+`strongly_consistent_tables_no_leader_timeout_in_seconds` (60 by default) and
+fewer than a quorum of its replicas are alive, they fail at once with an
+`Unavailable` error instead. A write refused this way is not applied, so it is
+safe to retry. Reads at `ONE` or `LOCAL_ONE` need no leader: a live replica
+answers them from its local data, which may be stale.
+
 # Failed writes and driver retries
 
 A strongly consistent write that fails with a timeout, a server error or
