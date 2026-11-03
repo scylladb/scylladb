@@ -430,6 +430,11 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                                     return make_ready_future<bool>(true);
                                 });
                         }).handle_exception([conn](std::exception_ptr ep) {
+                            // The client disconnected before the connection could be inspected,
+                            // e.g. a TCP health check. Like any other client disconnect, don't log it.
+                            if (is_broken_pipe_or_connection_reset(ep)) {
+                                return make_ready_future<bool>(false);
+                            }
                             return seastar::make_exception_future<bool>(std::runtime_error(fmt::format("Inspecting TLS connection failed: {}", ep)));
                         })
                     : make_ready_future<bool>(true)
