@@ -25,6 +25,10 @@ namespace db {
 class system_keyspace;
 }
 
+namespace data_dictionary {
+class keyspace_metadata;
+}
+
 namespace replica {
 class database;
 }
@@ -89,7 +93,11 @@ enum class auto_rf_dc_mode {
 
 auto_rf_dc_mode get_auto_rf_dc_mode(const auto_rf_racks& racks, const seastar::sstring& dc);
 
-auto_rf_racks get_auto_rf_racks(const replica::database& db, const topology& topology);
+// `updated_ks`, if given, stands in for the stored metadata of the keyspace of that
+// name: the replication a keyspace_rf_change is committing in the same group0 command,
+// which `db` does not show yet.
+auto_rf_racks get_auto_rf_racks(const replica::database& db, const topology& topology,
+                                const data_dictionary::keyspace_metadata* updated_ks = nullptr);
 
 // Whether the reconciler's rules say that it gives `rack` of `dc` up in some auto-RF
 // keyspace: the keyspace lists the rack, no non-auto-RF tablets keyspace uses it any

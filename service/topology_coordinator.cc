@@ -24,6 +24,7 @@
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+#include <utility>
 #include <variant>
 
 #include "auth/service.hh"
@@ -193,6 +194,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // Wakes the coordinator fiber up when the earliest backoff expires; it may have no
     // other reason to wake up.
     timer<lowres_clock> _auto_rf_retry_timer{[this] { _topo_sm.event.broadcast(); }};
+    // Set when a keyspace is created or dropped: the next time tablet load balancing
+    // asks whether to yield, evaluate whether auto-RF has a change to make (see
+    // should_preempt_balancing()).
+    bool _auto_rf_reevaluate = false;
 
     // Whether a keyspace_rf_change request is the reconciler's: it sets initiating_host
     // (see schedule_auto_rf_change()), which ALTER KEYSPACE never does.
@@ -1607,7 +1612,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             }
 
                             auto builder = tbuilder_with_request_drop();
-                            maybe_set_needs_auto_rf_change(builder);
+                            // The new replication is in schema_muts above, not in the database yet.
+                            maybe_set_needs_auto_rf_change(builder, ks_md.get());
                             updates.add(builder.build());
                             updates.add(topology_request_tracking_mutation_builder(req_id)
                                                         .done()
@@ -2222,8 +2228,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         rtlogger.info("enabled features: {}", features_to_enable);
     }
 
-    auto_rf_racks get_auto_rf_racks() {
-        return service::get_auto_rf_racks(_db, _topo_sm._topology);
+    // `updated_ks`: see service::get_auto_rf_racks().
+    auto_rf_racks get_auto_rf_racks(const data_dictionary::keyspace_metadata* updated_ks = nullptr) {
+        return service::get_auto_rf_racks(_db, _topo_sm._topology, updated_ks);
     }
 
     // The metadata of an auto-RF keyspace, or null if it does not exist or is on
@@ -2439,20 +2446,28 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     }
 
     // Whether auto-RF has a change to make, regardless of backoff, ongoing changes
-    // and dead nodes.
-    bool auto_rf_change_needed() {
-        const auto racks = get_auto_rf_racks();
+    // and dead nodes. `updated_ks` stands in for the stored metadata of the keyspace
+    // of that name (see service::get_auto_rf_racks()), for a user keyspace and for an
+    // auto-RF keyspace alike.
+    bool auto_rf_change_needed(const data_dictionary::keyspace_metadata* updated_ks = nullptr) {
+        const auto racks = get_auto_rf_racks(updated_ks);
         return std::ranges::any_of(auto_rf_keyspaces(), [&] (const auto& e) {
             auto ks_md = auto_rf_keyspace_metadata(e.first);
-            return ks_md && next_auto_rf_change(*ks_md, e.second, racks);
+            if (!ks_md) {
+                return false;
+            }
+            const auto& md = updated_ks && updated_ks->name() == e.first ? *updated_ks : *ks_md;
+            return next_auto_rf_change(md, e.second, racks).has_value();
         });
     }
 
     // Sets needs_auto_rf_change when auto-RF has a change to make, so that tablet load
     // balancing yields until the reconciler has scheduled it (see
-    // should_preempt_balancing()).
-    void maybe_set_needs_auto_rf_change(topology_mutation_builder& builder) {
-        if (_feature_service.auto_replication_factor && auto_rf_change_needed()) {
+    // should_preempt_balancing()). Called when a keyspace_rf_change completes; where
+    // the same group0 command commits the keyspace's new replication, `updated_ks` is
+    // that replication, which the database does not show yet.
+    void maybe_set_needs_auto_rf_change(topology_mutation_builder& builder, const data_dictionary::keyspace_metadata* updated_ks = nullptr) {
+        if (_feature_service.auto_replication_factor && auto_rf_change_needed(updated_ks)) {
             builder.set_needs_auto_rf_change(true);
         }
     }
@@ -2577,6 +2592,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     // Schedules the next auto-RF change, if any. Returns the guard unless it was consumed.
     future<std::optional<group0_guard>> maybe_schedule_auto_rf_change(group0_guard guard) {
+        // Evaluates the current keyspaces, so balancing need not re-evaluate them.
+        _auto_rf_reevaluate = false;
         // Leaves a due change to the quiesce handler, which schedules it itself. Clears
         // needs_auto_rf_change as if there were nothing to do, so that tablet load
         // balancing is not preempted while the injection is on.
@@ -2863,6 +2880,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                            completion.request_id, completion.ks_name, completion.error, props_str);
         }
         sstring error = completion.error;
+        // The replication this update commits, which the database does not show yet;
+        // null where it changes nothing (the keyspace is gone or the change failed).
+        lw_shared_ptr<data_dictionary::keyspace_metadata> updated_ks;
         if (_db.has_keyspace(completion.ks_name)) {
             auto& ks = _db.find_keyspace(completion.ks_name);
             if (error.empty()) {
@@ -2875,6 +2895,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 for (auto& m: schema_muts) {
                     out.add_small(std::move(m));
                 }
+                updated_ks = std::move(ks_md);
             } else {
                 auto ks_md = make_lw_shared<data_dictionary::keyspace_metadata>(*ks.metadata());
                 ks_md->clear_next_strategy_options();
@@ -2888,7 +2909,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
         topology_mutation_builder builder{guard.write_timestamp()};
         builder.finish_rf_change_migrations(_topo_sm._topology.ongoing_rf_changes, completion.request_id);
-        maybe_set_needs_auto_rf_change(builder);
+        maybe_set_needs_auto_rf_change(builder, updated_ks.get());
         out.emplace_back(builder.build());
 
         if (is_auto_rf_request(completion.ks_name, completion.initiating_host)) {
@@ -4857,6 +4878,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             return std::make_pair(true, std::move(guard));
         }
 
+        // A keyspace was created or dropped since this was last checked; the idle
+        // path sets or clears needs_auto_rf_change once it runs.
+        if (std::exchange(_auto_rf_reevaluate, false) && _feature_service.auto_replication_factor && auto_rf_change_needed()) {
+            return std::make_pair(true, std::move(guard));
+        }
+
         return std::make_pair(false, std::move(guard));
     }
 
@@ -4900,13 +4927,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     // Creating or dropping a keyspace changes which racks are eligible for auto-RF and
     // is a plain schema change, which does not wake the coordinator: wake up so that
-    // the auto-RF reconciler re-evaluates them. Altering a tablets keyspace's
-    // replication is a topology request, handled here, so updates need no listener.
+    // the auto-RF reconciler re-evaluates them, and have tablet load balancing yield
+    // to it if it has a change to make (should_preempt_balancing()). Altering a
+    // tablets keyspace's replication is a topology request, handled here, so updates
+    // need no listener.
     virtual void on_create_keyspace(const sstring& ks_name) override {
+        _auto_rf_reevaluate = true;
         _topo_sm.event.broadcast();
     }
 
     virtual void on_drop_keyspace(const sstring& ks_name) override {
+        _auto_rf_reevaluate = true;
         _topo_sm.event.broadcast();
     }
 
