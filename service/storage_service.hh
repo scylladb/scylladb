@@ -1054,7 +1054,8 @@ public:
     // Waits for a topology request with a given ID to complete and return non empty error string
     // if request completes with an error
     future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true,
-                                                        std::optional<lowres_clock::time_point> deadline = std::nullopt);
+                                                        std::optional<lowres_clock::time_point> deadline = std::nullopt,
+                                                        abort_source* as = nullptr);
 
     // Initiates abort of a topology request with a given ID.
     // May have no effect if the request is not in an abortable state.
@@ -1062,7 +1063,7 @@ public:
     // Must be called on shard 0.
     future<> abort_topology_request(utils::UUID request_id);
 
-    future<> wait_for_topology_not_busy();
+    future<> wait_for_topology_not_busy(abort_source* as = nullptr);
 
     future<> abort_rf_change(utils::UUID request_id);
 
