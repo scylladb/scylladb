@@ -1897,11 +1897,8 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
     log = await manager.server_open_log(server.server_id)
 
     def start_write_and_read(table: str) -> tuple[asyncio.Future, asyncio.Future]:
-        # By default the driver retries a server error on the next host. Without
-        # retries, the requests fail with the error this node returned.
-        no_retry = FallthroughRetryPolicy()
-        write = SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 1)", retry_policy=no_retry)
-        read = SimpleStatement(f"SELECT * FROM {table} WHERE pk = 0", retry_policy=no_retry)
+        write = f"INSERT INTO {table} (pk, v) VALUES (1, 1)"
+        read = f"SELECT * FROM {table} WHERE pk = 0"
         return asyncio.ensure_future(cql.run_async(write)), asyncio.ensure_future(cql.run_async(read))
 
     async def drop_table_and_release(table: str, injections: list[str]) -> None:

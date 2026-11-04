@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 from cassandra.connection import ConnectionShutdown
-from cassandra.protocol import ServerError
+from cassandra.protocol import InvalidRequest, InvalidRequestException, ServerError
 
 from test.cluster.strong_consistency import register_workload as workload_module
 from test.cluster.strong_consistency.outcomes import (
@@ -141,12 +141,17 @@ async def test_a_reset_is_a_window_too(clock):
     assert workload.reset_count == 1
 
 
-def test_a_stale_table_id_arrives_bare_without_retries():
-    """With FallthroughRetryPolicy the server's "can't find a column family"
-    is not wrapped in NoHostAvailable; inside a reset it is still a clean fail."""
-    exc = ServerError(ServerError.error_code, "Can't find a column family with UUID 1234", {})
-    assert is_table_absence_error(exc)
-    assert not is_table_absence_error(ServerError(ServerError.error_code, "something else", {}))
+def _invalid_request(message: str) -> InvalidRequest:
+    return InvalidRequestException(InvalidRequestException.error_code, message, {}).to_exception()
+
+
+def test_a_stale_table_id_is_an_invalid_request():
+    """A prepared statement still tagged with a dropped table's id gets INVALID
+    (SCYLLADB-4655), so its old SERVER_ERROR form is no longer excused."""
+    assert is_table_absence_error(_invalid_request("unconfigured table t"))
+    assert not is_table_absence_error(_invalid_request("something else"))
+    assert not is_table_absence_error(
+        ServerError(ServerError.error_code, "Can't find a column family with UUID 1234", {}))
 
 
 def test_a_forwarded_reprepare_of_a_dropped_table_arrives_bare_without_retries():
@@ -160,12 +165,12 @@ def test_a_forwarded_reprepare_of_a_dropped_table_arrives_bare_without_retries()
         ServerError.error_code, "exceptions::invalid_request_exception (something else)", {}))
 
 
-async def test_a_bare_stale_table_id_is_excused_only_in_a_reset(clock):
+async def test_a_stale_table_id_is_excused_only_in_a_reset(clock):
     workload = _workload()
     clock.now = 10
     async with workload.reset_window():
         clock.now = 20
-    exc = ServerError(ServerError.error_code, "Can't find a column family with UUID 1234", {})
+    exc = _invalid_request("unconfigured table t")
 
     assert tolerate_resets(exc, _ctx(workload, 12, 18)) is Outcome.FAIL
     assert tolerate_resets(exc, _ctx(workload, 30, 40)) is None
