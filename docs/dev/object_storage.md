@@ -471,7 +471,7 @@ An object storage can copy an object only inside one endpoint. So the backup and
 
 The restore recognizes a backup in the unified layout when the backup has the same endpoint, bucket and prefix as the table. The object names of such a backup do not contain the generation. The restore takes the `sstable_id` from `system_distributed.snapshot_sstables`, and the generation, version and format from the `toc_name` of the manifest.
 
-The snapshot can be dropped while the restore runs. So after the restore creates the node reference of a shared SSTable, the restore checks that the snapshot still has its reference `refs/snapshot-{tag}/{generation}`. If not, the restore removes the node reference and the entry, and fails. The components are deleted if no other reference is left.
+The snapshot can be dropped while the restore runs. So after the restore creates the node reference of a shared SSTable, the restore checks that the tag still holds a reference on the SSTable, the plain `refs/snapshot-{tag}/{generation}` of a backup uploaded from a local table or the `refs/snapshot-{tag}/{attempt}/{generation}` of a cluster snapshot attempt. If not, the restore removes the node reference and the entry, and fails. The components are deleted if no other reference is left.
 
 No backup writes the unified layout yet. `/storage_service/backup` and the cluster backup keep the generation in the component names. So today every restore copies.
 
@@ -779,9 +779,9 @@ the target table's sstables are cloned by reference sharing, each node creates i
 ~~~
 bucket:
   scylla-bucket/sstables/3gqe…tor/refs/nodes/aaaa0001/<clone generation>
-      (the clone's node ref, created after verifying that the snapshot
-       reference still exists; the clone is undone if the snapshot vanished
-       mid-restore)
+      (the clone's node ref, created after verifying that the tag still
+       holds a reference on the sstable, plain or attempt-named; the clone
+       is undone if the snapshot vanished mid-restore)
   no components are copied; a backup elsewhere on the same endpoint is
   byte-copied under a fresh sstable id; a backup on another endpoint is rejected
 node-local:
