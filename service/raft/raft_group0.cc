@@ -226,7 +226,10 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
                                                             service::migration_manager& mm, bool enable_sm_immediately,
                                                             lw_shared_ptr<raft::server_stats> server_stats) {
     auto state_machine = std::make_unique<group0_state_machine>(
-            _client, mm, qp.proxy(), ss, _gossiper, _feat, enable_sm_immediately);
+            _client, mm, qp.proxy(), ss, _gossiper, _feat, enable_sm_immediately,
+            [gid, this] (std::exception_ptr e) {
+                abort_server_on_error(gid, fmt::format("state machine error, {:t}", e));
+            });
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id, _rpc_stats);
     // Keep a reference to a specific RPC class.
@@ -236,9 +239,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
     auto* cl = qp.proxy().get_db().local().schema_commitlog();
     auto config = raft::server::configuration {
         .on_background_error = [gid, this](std::exception_ptr e) {
-            // The future will be waited indirectly in raft_group0::abort_and_drain.
-            (void)_raft_gr.abort_server(gid, fmt::format("background error, {:t}", e));
-            _status_for_monitoring = status_for_monitoring::aborted;
+            abort_server_on_error(gid, fmt::format("background error, {:t}", e));
         }
     };
     if (cl) {
@@ -959,6 +960,29 @@ struct sleep_with_exponential_backoff {
         _retry_period = std::min(_retry_period * 2, _max_retry_period);
     }
 };
+
+void raft_group0::abort_server_on_error(raft::group_id gid, sstring reason) {
+    _status_for_monitoring = status_for_monitoring::aborted;
+    if (utils::get_local_injector().is_enabled("delay_group0_abort_on_error") && !_shutdown_gate.is_closed()) {
+        // Lets a test act before the group 0 server is aborted. The gate makes
+        // abort_and_drain() wait for the delayed abort.
+        (void)with_gate(_shutdown_gate, [this, gid, reason = std::move(reason)] () mutable {
+            return delay_abort_server(gid, std::move(reason));
+        });
+        return;
+    }
+    // The future will be waited indirectly in raft_group0::abort_and_drain.
+    (void)_raft_gr.abort_server(gid, std::move(reason));
+}
+
+future<> raft_group0::delay_abort_server(raft::group_id gid, sstring reason) {
+    try {
+        co_await utils::get_local_injector().inject("delay_group0_abort_on_error", utils::wait_for_message(std::chrono::minutes(5)));
+    } catch (...) {
+        group0_log.warn("delay_group0_abort_on_error: {}", std::current_exception());
+    }
+    co_await _raft_gr.abort_server(gid, std::move(reason));
+}
 
 void raft_group0::register_metrics() {
     namespace sm = seastar::metrics;

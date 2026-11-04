@@ -43,6 +43,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/to_string.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include <optional>
 #include "db/config.hh"
 #include "replica/database.hh"
@@ -57,14 +58,24 @@ namespace service {
 static logging::logger slogger("group0_raft_sm");
 
 group0_state_machine::group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-        gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately)
+        gms::gossiper& gossiper, gms::feature_service& feat, bool enable_immediately,
+        noncopyable_function<void(std::exception_ptr)> on_fatal_error)
     : _client(client), _mm(mm), _sp(sp), _ss(ss)
     , _gate("group0_state_machine")
     , _state_id_handler(ss._topology_state_machine, sp.local_db(), gossiper)
     , _feature_service(feat)
     , _in_memory_state_machine_enabled(enable_immediately || utils::get_local_injector().is_enabled("group0_enable_sm_immediately"))
-    , _schema_dependent_state_enabled(enable_immediately) {
+    , _schema_dependent_state_enabled(enable_immediately)
+    , _on_fatal_error(std::move(on_fatal_error)) {
     _state_id_handler.run();
+}
+
+void group0_state_machine::fail() {
+    // Called while the caller holds the read_apply mutex. Once the semaphore is broken
+    // nobody can take the mutex, so no operation can observe the partially applied
+    // state until the node is restarted.
+    _client.read_apply_mutex().broken(std::make_exception_ptr(
+            std::runtime_error("group 0 state machine failed to apply a change, the node must be restarted")));
 }
 
 static mutation extract_history_mutation(utils::chunked_vector<canonical_mutation>& muts, const data_dictionary::database db) {
@@ -419,51 +430,61 @@ future<> group0_state_machine::apply(raft::log_entry_ptr_list commands) {
     group0_state_machine_merger m(co_await _client.get_last_group0_state_id(), std::move(read_apply_mutex_holder),
                                   max_command_size, _sp.data_dictionary());
 
-    for (const auto& entry : commands) {
-        const auto& c = std::get<raft::command>(entry->data);
-        auto is = ser::as_input_stream(c);
-        auto cmd = ser::deserialize(is, std::type_identity<group0_command>{});
+    // `m` holds the read_apply mutex until apply() returns, so it is still held in the catch below.
+    try {
+        for (const auto& entry : commands) {
+            const auto& c = std::get<raft::command>(entry->data);
+            auto is = ser::as_input_stream(c);
+            auto cmd = ser::deserialize(is, std::type_identity<group0_command>{});
 
-#ifndef SCYLLA_BUILD_MODE_RELEASE
-        // Ensure that the schema of the mutations is a group0 schema.
-        // This validation is supposed to be only performed in tests, so it is skipped in the release mode.
-        ensure_group0_schema(cmd, _sp.data_dictionary());
-#endif
+    #ifndef SCYLLA_BUILD_MODE_RELEASE
+            // Ensure that the schema of the mutations is a group0 schema.
+            // This validation is supposed to be only performed in tests, so it is skipped in the release mode.
+            ensure_group0_schema(cmd, _sp.data_dictionary());
+    #endif
 
-        slogger.trace("cmd: prev_state_id: {}, new_state_id: {}, creator_addr: {}, creator_id: {}",
-                cmd.prev_state_id, cmd.new_state_id, cmd.creator_addr, cmd.creator_id);
-        slogger.trace("cmd.history_append: {}", cmd.history_append);
+            slogger.trace("cmd: prev_state_id: {}, new_state_id: {}, creator_addr: {}, creator_id: {}",
+                    cmd.prev_state_id, cmd.new_state_id, cmd.creator_addr, cmd.creator_id);
+            slogger.trace("cmd.history_append: {}", cmd.history_append);
 
-        if (cmd.prev_state_id) {
-            if (*cmd.prev_state_id != m.last_id()) {
-                // This command used obsolete state. Make it a no-op.
-                // BTW. on restart, all commands after last snapshot descriptor become no-ops even when they originally weren't no-ops.
-                // This is because we don't restart from snapshot descriptor, but using current state of the tables so the last state ID
-                // is the one given by the last command.
-                // Similar thing may happen when we pull group0 state in transfer_snapshot - we pull the latest state of remote tables,
-                // not state at the snapshot descriptor.
-                slogger.trace("cmd.prev_state_id ({}) different than last group 0 state ID in history table ({})",
-                        cmd.prev_state_id, m.last_id());
-                continue;
+            if (cmd.prev_state_id) {
+                if (*cmd.prev_state_id != m.last_id()) {
+                    // This command used obsolete state. Make it a no-op.
+                    // BTW. on restart, all commands after last snapshot descriptor become no-ops even when they originally weren't no-ops.
+                    // This is because we don't restart from snapshot descriptor, but using current state of the tables so the last state ID
+                    // is the one given by the last command.
+                    // Similar thing may happen when we pull group0 state in transfer_snapshot - we pull the latest state of remote tables,
+                    // not state at the snapshot descriptor.
+                    slogger.trace("cmd.prev_state_id ({}) different than last group 0 state ID in history table ({})",
+                            cmd.prev_state_id, m.last_id());
+                    continue;
+                }
+            } else {
+                slogger.trace("unconditional modification, cmd.new_state_id: {}", cmd.new_state_id);
             }
-        } else {
-            slogger.trace("unconditional modification, cmd.new_state_id: {}", cmd.new_state_id);
+
+            auto size = m.cmd_size(cmd);
+            if (!m.can_merge(cmd, size)) {
+                co_await merge_and_apply(m);
+            }
+
+            m.add(std::move(cmd), size);
         }
 
-        auto size = m.cmd_size(cmd);
-        if (!m.can_merge(cmd, size)) {
+        if (!m.empty()) {
+            // apply remainder
             co_await merge_and_apply(m);
         }
 
-        m.add(std::move(cmd), size);
+        co_await _state_id_handler.advertise_state_id(m.last_id());
+    } catch (...) {
+        // A failure caused by shutdown is not fatal: the node is stopping, and the
+        // command is applied again after the restart.
+        if (!_abort_source.abort_requested()) {
+            fail();
+        }
+        throw;
     }
-
-    if (!m.empty()) {
-        // apply remainder
-        co_await merge_and_apply(m);
-    }
-
-    co_await _state_id_handler.advertise_state_id(m.last_id());
 }
 
 future<raft::snapshot_id> group0_state_machine::take_snapshot() {
@@ -599,7 +620,16 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(as);
 
     if (_in_memory_state_machine_enabled) {
-        co_await _mm.merge_schema_from(hid, std::move(*cm));
+        try {
+            co_await _mm.merge_schema_from(hid, std::move(*cm));
+        } catch (const db::schema_tables::schema_persisted_but_not_applied&) {
+            // Raft retries a failed snapshot transfer, but the retry finds the schema
+            // already persisted and does not update the in-memory schema. Stop the
+            // group 0 server, as raft does when apply() fails.
+            fail();
+            _on_fatal_error(std::current_exception());
+            throw;
+        }
     } else {
         co_await write_mutations_to_database(_ss, _sp, gms::inet_address{}, std::move(*cm));
     }
