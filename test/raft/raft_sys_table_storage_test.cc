@@ -1364,6 +1364,58 @@ SEASTAR_TEST_CASE(test_groups_remove_seals_up_to_a_seal) {
     });
 }
 
+// Promoting a seal records it and removes it and every older seal, from the row and
+// from memory. An older promotion applied again changes neither, and neither does
+// adding a seal at or below the promoted one again.
+SEASTAR_TEST_CASE(test_groups_promote_a_seal) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+        const std::vector<raft_seal> seals{
+            {.idx = raft::index_t(2), .ts = 20},
+            {.idx = raft::index_t(3), .ts = 30},
+            {.idx = raft::index_t(4), .ts = 40},
+        };
+        const std::vector<raft_seal> expected_seals{seals.back()};
+        const raft_seal expected_promoted = seals[1];
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+        for (const auto& seal : seals) {
+            auto m = make_seal_mutation(gid, test_shard, seal, storage.next_row_timestamp());
+            co_await env.local_db().apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
+            storage.add_seal(seal);
+        }
+
+        auto m = make_promote_seal_mutation(gid, test_shard, seals[1], storage.seals(), storage.next_row_timestamp());
+        co_await env.local_db().apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
+        storage.promote_seal(seals[1]);
+        // The row is written only for a promotion memory accepts; see apply_promote().
+        storage.promote_seal(seals[0]);
+        BOOST_CHECK(storage.seals() == expected_seals);
+        BOOST_CHECK(storage.promoted_seal() == expected_promoted);
+
+        raft_groups_storage restarted(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, dummy_table, {});
+        co_await restarted.load_snapshot_descriptor();
+        BOOST_CHECK(restarted.seals() == expected_seals);
+        BOOST_CHECK(restarted.promoted_seal() == expected_promoted);
+
+        // With no seals left, only the promoted one tells that an older seal is old.
+        restarted.promote_seal(seals[2]);
+        restarted.add_seal(seals[1]);
+        BOOST_CHECK(restarted.seals().empty());
+
+        const auto persisted = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
+        BOOST_CHECK(persisted.seals == expected_seals);
+        BOOST_CHECK(persisted.promoted_seal == expected_promoted);
+    });
+}
+
 // A release leaves the truncations cell alone when the history has not moved. A
 // release rewrites the whole list, and the list grows with every leader change.
 // The cell is independent of the other cells, so skipping it keeps the last value.
