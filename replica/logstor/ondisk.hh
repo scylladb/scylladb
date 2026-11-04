@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <array>
 #include <limits>
 #include <optional>
 #include <span>
@@ -114,18 +115,38 @@ struct segment_header;
 // frames, which are the chunk's body. Chunks are appended to a mixed segment one at a time; a full
 // segment is a single chunk. A write buffer builds a chunk in memory and seals it - pads it and
 // fills in its header - before it is written.
+//
+// The chunk header, 16 bytes a row, little-endian:
+//
+//       0                   4    5    6         8                                       16
+//       +-------------------+----+----+---------+---------------------------------------+
+//    0  |       magic       |ver |kind|  flags  |              segment_seq              |
+//       +-------------------+----+----+---------+---------------------------------------+
+//   16  |    records_size   |      body_crc     |                reserved               |
+//       +-------------------+-------------------+---------------------------------------+
+//   32  |                                    reserved                                   |
+//       +-----------------------------------------------------------+-------------------+
+//   48  |                          reserved                         |        crc        |
+//       +-----------------------------------------------------------+-------------------+
+//
+// The first row holds magic, version, kind, flags and segment_seq. The first row keeps its position
+// in every format version, so that a reader can find the version and the end of a segment in any
+// layout of the other bytes. `crc` covers bytes 0 to 59, and the segment header in a full segment.
 struct chunk_header : fixed_layout {
     uint32_t magic;
-    segment_kind kind;
     uint8_t version;
-    uint16_t reserved;
+    segment_kind kind;
+    // The flags give properties that a chunk can have in a format version. No flag is defined yet.
+    uint16_t flags;
     segment_sequence segment_seq;
     uint32_t records_size; // size of the record frames following the header(s), padding included
     // CRC32 of the chunk's body: the record frames, records_size bytes after the headers. It is what
     // tells a chunk whose header is durable but whose body was only partly written - a crash mid-write
     // over a reused segment - from a whole one.
     uint32_t body_crc;
-    uint32_t reserved2;
+    // The writer sets these bytes to zero. A new field uses part of these bytes, so that the header
+    // keeps its size.
+    std::array<char, 36> reserved;
     // crc is the CRC32 of the fields above it and, in a full segment, of the segment header. crc
     // must stay the last field, because calculate_crc() covers the serialized bytes before crc.
     uint32_t crc;
