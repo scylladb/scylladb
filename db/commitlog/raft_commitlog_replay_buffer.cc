@@ -185,6 +185,8 @@ future<> raft_commitlog_replay_buffer::resolve_group(replica::database& db, cql3
     // entry's apply returns, so if it is here, the drop it is the receipt for happened,
     // and if it is not, no entry after the truncate was applied.
     group.truncate = persisted.truncate;
+    group.schema_changes = std::move(persisted.schema_changes);
+    group.announced_to = persisted.idx;
     for (const auto& truncation : group.truncations) {
         group.cursors[truncation.segment].push_back(raft_buffer_detail::truncation_cursor{
                 .from = truncation.from, .to = truncation.to, .next = truncation.from});
@@ -211,7 +213,8 @@ void raft_commitlog_replay_buffer::note_committed(group_state& group, const raft
 }
 
 future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db::system_keyspace& sys_ks,
-        raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry) {
+        raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry,
+        db::segment_id_type segment) {
     if (!std::holds_alternative<raft::command>(entry->data)) {
         co_return;
     }
@@ -221,6 +224,17 @@ future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db
         logger.debug("group {}: replaying the {} marker", group_id, marker->kind);
         auto m = sc::make_resize_marker_mutation(group_id, this_shard_id(), *marker);
         co_await db.apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
+        co_return;
+    }
+    if (auto* changed = std::get_if<sc::schema_changed>(&cmd.change)) {
+        // Not dropped by the recorded truncate like a write. A write above the truncate
+        // index may still need a schema_changed below it.
+        if (entry->idx > group.announced_to) {
+            logger.debug("group {}: replaying the announcement of schema version {} at {}",
+                    group_id, changed->version, entry->idx);
+            sc::apply_schema_changed(group.schema_changes, *changed, segment);
+            group.announced_to = entry->idx;
+        }
         co_return;
     }
     if (entry->idx <= group.truncate.truncate_index) {
@@ -248,9 +262,10 @@ future<> raft_commitlog_replay_buffer::drain_committed(replica::database& db, db
         raft::group_id group_id, group_state& group) {
     while (!group.buf.empty() && group.buf.front().entry->idx <= group.commit_idx) {
         auto entry = std::move(group.buf.front().entry);
+        const auto segment = group.buf.front().segment;
         group.buf.pop_front();
         note_committed(group, entry);
-        co_await apply_committed(db, sys_ks, group_id, group, entry);
+        co_await apply_committed(db, sys_ks, group_id, group, entry, segment);
         ++group.applied;
         co_await seastar::coroutine::maybe_yield();
     }
@@ -356,7 +371,7 @@ future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::qu
         if (entry->idx <= group.commit_idx) {
             // A copy of a committed entry is identical, so re-applying it is a no-op by timestamp.
             note_committed(group, entry);
-            co_await apply_committed(db, sys_ks, group_id, group, entry);
+            co_await apply_committed(db, sys_ks, group_id, group, entry, segment);
             ++group.applied;
         } else {
             group.buf.push_back(raft_buffer_detail::buffered_entry{.entry = entry, .segment = segment});
@@ -473,7 +488,8 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
         // The recovered floor is a real descriptor: every index at or below
         // commit_idx is committed, and commit_term is the term of the entry there.
         co_await service::strong_consistency::raft_groups_storage::store_descriptor(
-                qp, group_id, this_shard_id(), group.commit_idx, group.commit_term, group.config, group.truncations);
+                qp, group_id, this_shard_id(), group.commit_idx, group.commit_term, group.config, group.truncations,
+                group.schema_changes);
 
         auto& group_data = _per_group_data[group_id];
         if (!group.buf.empty()) {

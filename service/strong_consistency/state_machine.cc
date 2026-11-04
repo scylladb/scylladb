@@ -55,6 +55,11 @@ class state_machine : public raft_state_machine {
 
     abort_source _as;
 
+    // The schema_changed in effect: the last one applied, or, before any is, the one the
+    // group's row persisted at the floor. Loaded when the next one is applied, since the
+    // state machine is created without yielding.
+    std::optional<schema_changed> _announced;
+
 public:
     state_machine(locator::global_tablet_id tablet,
         raft::group_id gid,
@@ -127,6 +132,22 @@ public:
                     // reported applied only below, once the record is durable, so its
                     // segment outlives the record's sync and a crash replays the entry.
                     co_await apply_truncate_command(_db, _tablet, _group_id, command[i]->idx, *tc, record);
+                    _persistence.note_applied(command[i]->idx);
+                    continue;
+                }
+                if (auto* changed = std::get_if<schema_changed>(&cmd.change)) {
+                    if (!_announced) {
+                        _announced = co_await _persistence.load_schema_changed();
+                    }
+                    if (_announced && _announced->version == changed->version) {
+                        // A new term announces the version in effect again, which changes nothing.
+                        _persistence.note_applied(command[i]->idx);
+                        continue;
+                    }
+                    logger.debug("apply(): group {} switches to schema version {}", _group_id, changed->version);
+                    // Before note_applied(), whose release may persist the announcement.
+                    _persistence.note_schema_changed(command[i]->idx, *changed);
+                    _announced = std::move(*changed);
                     _persistence.note_applied(command[i]->idx);
                     continue;
                 }
@@ -232,7 +253,8 @@ public:
         return make_ready_future<>();
     }
 
-    // FIXME: once implemented, the transfer has to carry the group's metadata (resize markers) stored in system.raft_groups
+    // FIXME: once implemented, the transfer has to carry the group's metadata (resize markers,
+    // schema_changes) stored in system.raft_groups
     future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override {
         throw std::runtime_error("transfer_snapshot() not implemented");
     }

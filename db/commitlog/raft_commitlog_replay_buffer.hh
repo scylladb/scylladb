@@ -93,6 +93,13 @@ class raft_commitlog_replay_buffer {
         // The newest configuration at or below commit_idx, and its entry's index.
         raft::configuration config;
         raft::index_t config_idx{0};
+        // The row's schema_changes list, plus the schema_changed entries replayed above
+        // snapshot_idx. Persisted with the new floor.
+        std::vector<service::strong_consistency::schema_changed_record> schema_changes;
+        // The index of the last schema_changed added to `schema_changes`, initially
+        // snapshot_idx. A schema_changed at or below it is already in the list, or is a
+        // copy read again, which must not put an older version back in effect.
+        raft::index_t announced_to{0};
 
         // The uncommitted tail, ascending.
         std::deque<raft_buffer_detail::buffered_entry> buf;
@@ -130,11 +137,13 @@ class raft_commitlog_replay_buffer {
     future<> resolve_group(replica::database& db, cql3::query_processor& qp,
         raft::group_id group_id, group_state& group);
 
-    // Apply one committed command entry: a write to its table's memtable, a resize marker
-    // to the group's row in system.raft_groups, a truncate to the tablet. A write the
-    // recorded truncate dropped is skipped.
+    // Apply one committed command entry, read from `segment`: a write to its table's
+    // memtable, a resize marker to the group's row in system.raft_groups, a truncate to the
+    // tablet, a schema_changed to `group.schema_changes`. A write the recorded truncate
+    // dropped is skipped.
     future<> apply_committed(replica::database& db, db::system_keyspace& sys_ks,
-        raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry);
+        raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry,
+        db::segment_id_type segment);
 
     // Consume the buffered entries the floor has reached.
     future<> drain_committed(replica::database& db, db::system_keyspace& sys_ks,
