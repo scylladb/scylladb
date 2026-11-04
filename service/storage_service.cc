@@ -2024,9 +2024,6 @@ future<> storage_service::stop_transport() {
         seastar::async([this] {
             slogger.info("Stop transport: starts");
 
-            slogger.debug("shutting down migration manager");
-            _migration_manager.invoke_on_all(&service::migration_manager::drain).get();
-
             shutdown_protocol_servers().get();
             slogger.info("Stop transport: shutdown rpc and cql server done");
 
@@ -3102,6 +3099,16 @@ future<> storage_service::do_drain() {
 
     // Need to stop transport before group0, otherwise RPCs may fail with raft_group_not_found.
     co_await stop_transport();
+
+    // apply() of a strongly consistent group can wait for the group0 barrier of the
+    // migration manager. The drain below joins that barrier, and group0 stops later.
+    // A wait that outlives either of them ends in an internal error, so the groups stop
+    // first. Both stop after the transport: the CQL server lets its requests finish
+    // first, and the other nodes see this node as down before its groups go away.
+    co_await _groups_manager.stop_all_shards();
+
+    slogger.debug("shutting down migration manager");
+    co_await _migration_manager.invoke_on_all(&service::migration_manager::drain);
 
     // Cancel write handlers that have pending remote targets so they release
     // their ERMs (and the associated token_metadata versions). Without this,

@@ -1345,10 +1345,6 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClu
             await manager.api.disable_injection(target_server.ip_addr, block_barrier_injection)
 
 
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/SCYLLADB-4459",
-    reason="apply() fails on the group0 barrier joined by the shutdown",
-)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterManager):
     """
@@ -1487,10 +1483,6 @@ async def test_write_resumed_during_shutdown_succeeds(manager: ScyllaClusterMana
     await write
     await stop_task
 
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/SCYLLADB-2423",
-    reason="the write reaches the closed commitlog and the node dies",
-)
 async def test_maintenance_socket_write_after_drain(manager: ScyllaClusterManager):
     """
     A drain stops the transport, the strongly consistent groups and the
