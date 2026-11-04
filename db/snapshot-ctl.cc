@@ -65,10 +65,19 @@ snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::stor
         _delete_expired_snapshots = delete_expired_snapshots();
     }
     ser::snapshot_backup_rpc_verbs::register_backup_snapshot_sstables(&_ms, std::bind_front(&snapshot_ctl::backup_sstables, this));
+
+    ser::snapshot_backup_rpc_verbs::register_store_backup_snapshot_manifest(&_ms, [this](sstring tag, sstring endpoint, sstring bucket, sstring prefix, db::snapshot::manifest_data manifest) {
+        // run under gate, because why not...
+        return with_gate(_ops, [&] {
+            return snapshot::write_backup_manifest(_storage_manager.container().local(), std::move(tag), std::move(endpoint), std::move(bucket), std::move(prefix), std::move(manifest));
+        });
+    });
+
 }
 
 future<> snapshot_ctl::stop() {
     co_await ser::snapshot_backup_rpc_verbs::unregister_backup_snapshot_sstables(&_ms);
+    co_await ser::snapshot_backup_rpc_verbs::unregister_store_backup_snapshot_manifest(&_ms);
     co_await disable_all_operations();
     co_await _task_manager_module->stop();
 }
