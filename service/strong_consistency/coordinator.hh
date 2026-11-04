@@ -11,6 +11,7 @@
 #include "locator/tablets.hh"
 #include "mutation/mutation.hh"
 #include "query/query-result.hh"
+#include "raft/raft.hh"
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/scheduling_specific.hh>
@@ -59,6 +60,7 @@ struct stats {
     uint64_t write_retries_stale_leader = 0;
     uint64_t write_retries_not_a_leader = 0;
     uint64_t write_retries_dropped_entry = 0;
+    uint64_t write_retries_handoff_bounce = 0;
     uint64_t write_node_bounces = 0;
     uint64_t write_shard_bounces = 0;
 
@@ -71,6 +73,7 @@ struct stats {
     uint64_t read_errors_other = 0;
     uint64_t read_retries_wait_for_leader = 0;
     uint64_t read_retries_stale_leader = 0;
+    uint64_t read_retries_handoff_bounce = 0;
     uint64_t read_node_bounces = 0;
     uint64_t read_shard_bounces = 0;
 
@@ -97,11 +100,14 @@ private:
     // it may not run here, which replica it is redirected to: a request needing the
     // leader can go to any replica that could be the leader, a local read only to one
     // that holds the tablet's data.
+    // `handoff_group` overrides the group the token resolves to in the tablet map, which is how
+    // a request is handed off to one of the children of a parent being resized.
     future<value_or_redirect<operation_ctx>> create_operation_ctx(const schema& schema,
         const dht::token& token,
         abort_source& as,
         bool needs_leader,
-        const tracing::trace_state_ptr& trace_state);
+        const tracing::trace_state_ptr& trace_state,
+        std::optional<raft::group_id> handoff_group = std::nullopt);
 public:
     coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper,
         scheduling_group_key stats_key);

@@ -104,6 +104,10 @@ public:
     // Returns the parent of `child_gid`, or nullopt if it is not a child of a resize.
     std::optional<raft::group_id> get_parent_group(raft::group_id child_gid) const;
 
+    // Returns true once the parent's writes are handed off to its children. False if the group
+    // is not being resized at all.
+    bool should_handoff_writes(raft::group_id parent_gid) const;
+
     // Returns the timestamp of the end_resize of `child_gid`'s parent, once that marker has been
     // applied here. Nullopt if the group is not a child of a resize, if its parent
     // has not applied end_resize here yet, or if the parent's state is already gone.

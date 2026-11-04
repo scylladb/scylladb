@@ -436,6 +436,11 @@ machinery is meant to serve a tablet merge, where a child has several parents, h
 neutral name *resize* in the identifiers; merging is not implemented yet and no merge decision
 is emitted for a strongly consistent table.
 
+Two different components are called a coordinator here. The **topology coordinator**
+(`service::topology_coordinator`) is the cluster-wide one which drives the split; the **request
+coordinator** (`service::strong_consistency::coordinator`) is the per-request, replica-side one
+which serves a read or a write. Both are named explicitly wherever the difference matters.
+
 The markers are ordinary entries in the parent's log, so they are replicated and applied in
 log order like any write. They are *not* carried as mutations, though: each marker is recorded
 as a column of the group's own row in `system.raft_groups`, whose partition key contains
@@ -476,3 +481,26 @@ resize recorded on a replica has - the tablet map replacement takes the parent's
 nothing can undo a resize whose replacement ids are already recorded. It then drains in the
 background, joined only by `groups_manager::stop()`; the gates of the raft servers guard any
 access the aborted fiber still makes on its way out.
+
+## Handing the token range over without a gap
+
+**A write must either land in the parent's log or be handed off, with nothing in between.**
+The request coordinator checks the `start_resize` flag immediately before entering `add_entry()`,
+without suspending in between, so a write which saw the flag unset is submitted before the
+flag was set. That relies on `add_entry()` appending entries in the order in which callers
+entered it (the FIFO admission in `raft::server_impl`). A write which observed
+`!start_resize` is therefore appended ahead of the `end_resize` marker, and so ends up in the
+final log of the parent.
+
+A linearizable read checks the flag after its read barrier on the parent, since the barrier may
+be what applies the marker, and only then moves to the child and runs the child's barrier. The
+parent's barrier is needed even when the flag is already set: it is what applies every write the
+parent acknowledged before the hand-off, while the child's barrier covers the child's own entries.
+
+**A handed-off write has to be ordered after everything already committed in the parent.**
+Timestamps are handed out by the leader, so the handed-off writes have to come from the same
+clock as the ones already in the parent's log, which is what co-locating the leaders of the
+children with the parent's achieves. Until they are co-located the child bounces the request
+back to the parent, where the request coordinator retries it, since it has nowhere else to go. On
+top of that, a handed-off write carries the timestamp it got from the parent, and the child's
+clock is advanced past it before a new one is handed out.
