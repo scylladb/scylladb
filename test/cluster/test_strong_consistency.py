@@ -1430,6 +1430,62 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
         assert len(rows) == 1
         assert rows[0].v == 13
 
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_write_resumed_during_shutdown_succeeds(manager: ScyllaClusterManager):
+    """
+    A graceful shutdown lets the requests running on its CQL server finish. A
+    strongly consistent write that resumes while the CQL server stops must
+    succeed: the node's Raft groups stop only after the CQL server. With two
+    replicas, the leader also needs the stopping node's vote to commit it.
+    """
+
+    # One shard, so that the write runs on the shard of its connection. A request
+    # moved to another shard uses the abort source of that shard's CQL server,
+    # which the shutdown requests as soon as that shard has no connections.
+    cmdline = DEFAULT_CMDLINE + ["--smp", "1"]
+    leader_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline,
+                                             property_file={"dc": "dc1", "rack": "rack1"})
+    config = DEFAULT_CONFIG | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    target_server = await manager.server_add(config=config, cmdline=cmdline,
+                                             property_file={"dc": "dc1", "rack": "rack2"})
+
+    cql, [_, target_host] = await manager.get_ready_cql([leader_server, target_server])
+    target_host_id = await manager.get_host_id(target_server.server_id)
+
+    wait_before_acquire_injection = "sc_coordinator_wait_before_acquire_server"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table_name = "my_table"
+        table = f"{ks}.{table_name}"
+
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+
+        group_id = await get_table_raft_group_id(manager, ks, table_name)
+        leader_host_id = await wait_for_leader(manager, leader_server, group_id)
+        assert leader_host_id != target_host_id
+
+        # Hold the write on the target before it takes the target's Raft group.
+        await manager.api.enable_injection(target_server.ip_addr, wait_before_acquire_injection, one_shot=True)
+        log = await manager.server_open_log(target_server.server_id)
+        mark = await log.mark()
+        write = cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 13)",
+                                              retry_policy=FallthroughRetryPolicy()), host=target_host)
+        await manager.api.wait_for_injection_enter(target_server.ip_addr, wait_before_acquire_injection)
+
+        stop_task = asyncio.create_task(manager.server_stop_gracefully(target_server.server_id))
+        try:
+            await log.wait_for("Shutting down native transport server", from_mark=mark)
+        finally:
+            # Resume the write while the CQL server stops, or, if the wait failed,
+            # so that the shutdown does not wait for it.
+            await manager.api.message_injection(target_server.ip_addr, wait_before_acquire_injection)
+
+        await write
+        await stop_task
+
+        await manager.server_start(target_server.server_id)
+        await manager.get_ready_cql([target_server])
+
 async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
     """
     Verify that after a non-replica node learns the leader location via a redirect,
