@@ -83,6 +83,12 @@ public:
      * remote location metadata per datacenter. */
     static constexpr auto SNAPSHOT_REMOTE_LOCATIONS = "snapshot_remote_locations";
 
+    /* This table lists the attempts of each cluster snapshot tag. An attempt's
+     * catalog rows and bucket references live under "{tag}/{attempt}".
+     * There can only be a single committed=true row, and if there is one, all the other attempts are
+     * considered garbage which will get cleaned up. */
+    static constexpr auto SNAPSHOT_ATTEMPTS = "snapshot_attempts";
+
     /* This table is used by the Alternator export to S3 code to store the metadata of each
      * export, keyed by its ARN. The node driving an export writes its progress here, and
      * DescribeExport/ListExports read from it. */
@@ -254,6 +260,20 @@ public:
      * Find a snapshot entry. 
      */
     future<std::optional<snapshot_entry>> get_snapshot(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* The row is written before the attempt's RPCs and committed by the coordinator's
+     * commit step, which writes it with committed = true.*/
+    future<> insert_snapshot_attempt(std::string_view tag, utils::UUID attempt,
+            snapshot_attempt_committed committed = snapshot_attempt_committed::no,
+            db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<std::vector<snapshot_attempt_entry>> get_snapshot_attempts(std::string_view tag,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+    future<> delete_snapshot_attempt(std::string_view tag, utils::UUID attempt,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+    /* Returns the name of the snapshot attempt as written in the catalog tables, i.e. "{tag}/{attempt}"
+       or nullopt when none is committed.*/
+    future<std::optional<sstring>> find_committed_snapshot_name(std::string_view tag,
+            db::consistency_level cl = db::consistency_level::QUORUM);
 
     /**
      * Add backup locations to a snapshot
