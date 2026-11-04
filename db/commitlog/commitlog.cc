@@ -116,6 +116,7 @@ db::commitlog::config db::commitlog::config::from_db_config(const db::config& cf
     c.extensions = &cfg.extensions();
     c.use_o_dsync = cfg.commitlog_use_o_dsync();
     c.allow_going_over_size_limit = false;
+    c.wait_for_replay_cleanup = true;
 
     if (cfg.commitlog_flush_threshold_in_mb() >= 0) {
         c.commitlog_flush_threshold_in_mb = cfg.commitlog_flush_threshold_in_mb();
@@ -345,6 +346,9 @@ public:
     std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
     // Disposed of in order; a file stays at the front until it is gone.
     std::deque<std::pair<named_file, dispose_mode>> _files_to_dispose;
+    // Ids of this shard's segment files from before start that are not
+    // deleted yet. Released live segments wait for them.
+    std::unordered_set<segment_id_type> _replay_ids;
 
     // Segments removed from _segments, by id. A segment's file is filled
     // in when the segment object is destroyed. A file is moved to
@@ -2217,6 +2221,14 @@ future<> db::commitlog::segment_manager::init() {
     _ids = replay_position(this_shard_id(), id).id;
     _low_id = id;
 
+    if (cfg.wait_for_replay_cleanup) {
+        for (auto& d : descs) {
+            if (replay_position(d.id).shard_id() == this_shard_id()) {
+                _replay_ids.insert(d.id);
+            }
+        }
+    }
+
     // always run the timer now, since we need to handle segment pre-alloc etc as well.
     _timer.set_callback(std::bind(&segment_manager::on_timer, this));
     auto delay = this_shard_id() * std::ceil(double(cfg.commitlog_sync_period_in_ms) / this_smp_shard_count());
@@ -2591,7 +2603,9 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
             co_return co_await allocate_segment_ex(std::move(d), std::move(f), flags);
         }
 
-        if (!cfg.allow_going_over_size_limit && max_disk_size != 0 && totals.total_size_on_disk >= max_disk_size) {
+        // Until the segments from before start are deleted, released segments
+        // are not recycled, so there is nothing to wait for.
+        if (!cfg.allow_going_over_size_limit && max_disk_size != 0 && totals.total_size_on_disk >= max_disk_size && _replay_ids.empty()) {
             clogger.debug("Disk usage ({} MB) exceeds maximum ({} MB) - allocation will wait...", totals.total_size_on_disk/(1024*1024), max_disk_size/(1024*1024));
             auto f = _recycled_segments.not_empty();
             if (!f.available()) {
@@ -2773,6 +2787,11 @@ void db::commitlog::segment_manager::discard_unused_segments() noexcept {
             clogger.debug("Segment {} is unused", *s);
             release_segment(*s);
         }
+        if (!tmp.empty() && !_replay_ids.empty()) {
+            static thread_local logger::rate_limit rate_limit(std::chrono::seconds(60));
+            clogger.log(log_level::warn, rate_limit, "Keeping {} unused segments until {} segments from before start are deleted",
+                    _released_segments.size(), _replay_ids.size());
+        }
         if (!_segments.empty()) {
             auto& s = _segments.front();
             if (s->is_still_allocating()) {
@@ -2948,7 +2967,7 @@ void db::commitlog::segment_manager::add_released_file(segment_id_type id, named
 // moved too, but kept on disk.
 void db::commitlog::segment_manager::collect_released_files(bool final) {
     auto oldest_live = _segments.empty() ? std::numeric_limits<segment_id_type>::max() : _segments.front()->_desc.id;
-    while (!_released_segments.empty()) {
+    while (_replay_ids.empty() && !_released_segments.empty()) {
         auto it = _released_segments.begin();
         auto& [id, file] = *it;
         if (!file || id >= oldest_live) {
@@ -3006,6 +3025,18 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
     // be gone.
     if (auto ep = co_await dispose_files()) {
         co_await coroutine::return_exception_ptr(std::move(ep));
+    }
+
+    // A round stops only when the queue is empty or a file fails, so all of
+    // the files are gone now.
+    bool erased = false;
+    for (auto& id : ids) {
+        erased |= id && _replay_ids.erase(*id);
+    }
+    if (erased && _replay_ids.empty()) {
+        clogger.debug("All segments from before start are deleted");
+        // Released live segments waited for them.
+        co_await do_pending_deletes();
     }
 }
 
