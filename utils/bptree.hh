@@ -1642,9 +1642,23 @@ class node final {
         prealloc nodes;
 
         /*
-         * Prepare the nodes for split in advaice, if the node::create will
+         * A full leaf first pushes a key to a sibling when one has room,
+         * which needs no new node and is the common case once the leaves
+         * have filled up. A push leaves the leaf with room, so the loop
+         * below allocates nothing after it, and an insert that throws
+         * leaves the tree as it was.
+         */
+        if (_num_keys == NodeSize) {
+            i = push_to_sibling(i, less);
+        }
+
+        /*
+         * Prepare the nodes for split in advance, if the node::create will
          * start throwing while splitting we'll have troubles "unsplitting"
-         * the nodes back.
+         * the nodes back. A full node above the leaf gets its node here
+         * even when it will push instead of splitting, and it tries the
+         * push in insert_into_full() after the split below, because a
+         * full inner node is much less frequent than a full leaf.
          */
         node* cur = this;
         while (cur->_num_keys == NodeSize) {
