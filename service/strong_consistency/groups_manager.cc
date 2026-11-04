@@ -528,7 +528,7 @@ void groups_manager::init_messaging_service() {
                 throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
             }
             logger.debug("Received a request to wait for the raft groups of table {} to start.", table);
-            co_await _mm.get_group0_barrier().trigger();
+            co_await _mm.get_group0_barrier().trigger(_as);
             co_await container().invoke_on_all([timeout] (groups_manager& gm) {
                 return gm.wait_for_groups_to_start(*timeout);
             });
@@ -826,7 +826,7 @@ future<> groups_manager::handle_migration_rpc(const char* verb, rpc::opt_time_po
     // This node may not have applied the stage the RPC was sent for yet: a strongly
     // consistent migration runs no barrier at some of its stages. Catching up keeps the
     // target shard from refusing an RPC that is current.
-    co_await _mm.get_group0_barrier().trigger();
+    co_await _mm.get_group0_barrier().trigger(_as);
 
     // The explicit object parameter copies the captures into the coroutine frame.
     co_await container().invoke_on(shard, [verb, tablet, group_id, session, stage, deadline, method]
@@ -863,10 +863,12 @@ future<> groups_manager::handle_migration_rpc(const char* verb, rpc::opt_time_po
             }
         }
 
-        // Ends the call at the coordinator's deadline or when the tablet's stage moves on,
-        // whichever comes first. The raft calls of `method` are aborted by it too.
+        // Ends the call at the coordinator's deadline, when the tablet's stage moves on,
+        // or when the manager stops, whichever comes first. The raft calls of `method`
+        // are aborted by it too.
         abort_on_expiry aoe(deadline);
         auto sub = utils::chain_abort_source(aoe.abort_source(), guard.get_abort_source());
+        auto stop_sub = utils::chain_abort_source(aoe.abort_source(), gm._as);
         const auto server = co_await gm.acquire_server(tablet.table, group_id, aoe.abort_source());
 
         // Supersedes the migration RPC still running on the group, if any, before `method`
@@ -1037,6 +1039,7 @@ future<> groups_manager::wait_for_first_leader(global_tablet_id tablet, raft::gr
     // gate, while state.gate may already be a later incarnation's open gate. The server
     // can't be destroyed meanwhile: a deletion runs only after the start that calls this.
     abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
+    const auto stop_sub = utils::chain_abort_source(aoe.abort_source(), _as);
     while (auto holder = g.try_hold()) {
         auto srv = raft_server(state, std::move(*holder));
         auto res = srv.begin_mutate(aoe.abort_source());
@@ -1048,10 +1051,16 @@ future<> groups_manager::wait_for_first_leader(global_tablet_id tablet, raft::gr
                 srv.server().current_leader() ? "its leader state isn't ready yet" : "no leader is known");
         auto f = co_await coroutine::as_future(std::move(w->future));
         if (f.failed()) {
-            const auto conf = srv.server().get_configuration();
-            logger.warn("update(): waiting for leader timed out for tablet {}, group id {}: {}, this replica is {} of "
-                    "the group's configuration {}", tablet, id, f.get_exception(),
-                    conf.contains(srv.server().id()) ? "a member" : "not a member", conf);
+            auto ex = f.get_exception();
+            if (_as.abort_requested()) {
+                logger.debug("update(): stopped waiting for leader for tablet {}, group id {}, the manager is stopping",
+                        tablet, id);
+            } else {
+                const auto conf = srv.server().get_configuration();
+                logger.warn("update(): waiting for leader timed out for tablet {}, group id {}: {}, this replica is {} of "
+                        "the group's configuration {}", tablet, id, ex,
+                        conf.contains(srv.server().id()) ? "a member" : "not a member", conf);
+            }
             co_return;
         }
     }
