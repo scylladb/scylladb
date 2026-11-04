@@ -45,6 +45,14 @@ Launching ScyllaDB on GCP
       
         gcloud compute instances create scylla-node1 --image scylladb-2026-1-11 --image-project scylla-images --local-ssd interface=nvme --local-ssd interface=nvme --local-ssd interface=nvme --local-ssd interface=nvme --machine-type=n1-highmem-8
    
+   Z3 machine types (such as ``z3-highmem-8-highlssd``) and C4 machine types whose names end in
+   ``-lssd`` come with local SSD attached automatically. For those, leave out the ``--local-ssd``
+   options. For example:
+
+   .. code-block:: console
+
+        gcloud compute instances create scylla-node1 --image <ScyllaDB image name> --image-project scylla-images --machine-type=c4-highmem-16-lssd
+
    For more information about GCP image `create` see the `Google Cloud SDK documentation <https://cloud.google.com/sdk/gcloud/reference/compute/images/create>`_.
 
    To customize the ScyllaDB configuration at launch (cluster name, seeds, networking, and more),
