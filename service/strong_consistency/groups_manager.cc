@@ -416,7 +416,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         const auto marker_timestamp = _resize_tracker.max_marker_timestamp(id);
         _resize_tracker.erase_group(id);
         // We erase the persisted state while the group is still in _raft_groups, which is what
-        // stop() waits for.
+        // stop_shard() waits for.
         if (clean_up) {
             try {
                 co_await raft_groups_storage::erase_persisted_state(_qp, id, this_shard_id(), marker_timestamp);
@@ -1162,9 +1162,9 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     // between the column_family_exists check and try_hold below, the gate
     // cannot be closed if the table exists.
     //
-    // Node shutdown also closes gates (groups_manager::stop() closes every gate
+    // Node shutdown also closes gates (groups_manager::stop_all_shards() closes every gate
     // regardless of table existence), but it cannot race with us either: the
-    // strongly consistent coordinator is destroyed before groups_manager::stop()
+    // strongly consistent coordinator is destroyed before groups_manager::stop_all_shards()
     // runs, and the RPC handlers that call this are unregistered on every shard
     // before it; see uninit_messaging_service().
     if (!_db.column_family_exists(table_id)) {
@@ -1296,11 +1296,18 @@ void groups_manager::request_flush(db::cf_id_type id, db::replay_position pos) {
     });
 }
 
-future<> groups_manager::stop() {
+future<> groups_manager::stop_all_shards() {
+    logger.debug("stop_all_shards(): unregistering the RPC handlers on all shards");
+    co_await container().invoke_on_all(&groups_manager::uninit_messaging_service);
+    logger.debug("stop_all_shards(): stopping all shards");
+    co_await container().invoke_on_all(&groups_manager::stop_shard);
+    logger.debug("stop_all_shards(): done");
+}
+
+future<> groups_manager::stop_shard() {
     if (!_started) {
         co_return;
     }
-
     logger.info("stop() enter");
 
     // The segments must survive so replay can recover the log.
@@ -1309,6 +1316,7 @@ future<> groups_manager::stop() {
     while (!_raft_groups.empty()) {
         co_await _raft_groups.begin()->second.server_control_op.get_future();
     }
+    _started = false;
 
     logger.info("stop() completed");
 }

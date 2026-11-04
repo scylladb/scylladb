@@ -3091,7 +3091,7 @@ future<> storage_service::do_drain() {
     //
     // This has to happen before stop_transport() below: the transfer is done with Raft RPCs,
     // which need messaging_service to be up. That is also why it is not a part of
-    // groups_manager::stop(), which runs only after the transport is gone.
+    // groups_manager::stop_all_shards(), which runs only after the transport is gone.
     try {
         co_await _groups_manager.container().invoke_on_all(
                 &strong_consistency::groups_manager::stepdown_leaders);
