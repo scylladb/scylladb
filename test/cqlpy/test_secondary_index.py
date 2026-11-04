@@ -1336,6 +1336,30 @@ def test_index_paging_static_column(cql, test_keyspace):
             # Finally check that altogether, we read the right rows.
             assert sorted(all_rows) == [(p,c) for p in range(5) for c in range(5)]
 
+# A paged query with a LIMIT on an index on a static column, with a page size
+# smaller than the LIMIT, so that the LIMIT must be tracked across pages
+# through the "remaining" field of the paging state. The index view has one
+# row per base partition, so each page reads a whole partition, and the
+# "remaining" field must count base table rows, not index view rows.
+# Reproduces SCYLLADB-6058.
+@pytest.mark.xfail(reason="SCYLLADB-6058")
+def test_static_column_index_with_limit_across_pages(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, s int STATIC, primary key (pk, ck)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, s) VALUES (?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [1, 2, 1])
+        cql.execute(stmt, [2, 1, 1])
+        cql.execute(stmt, [2, 2, 1])
+        cql.execute(stmt, [3, 1, 1])
+        cql.execute(stmt, [3, 2, 1])
+        stmt = SimpleStatement(f'SELECT pk, ck FROM {table} WHERE s = 1 LIMIT 3', fetch_size=1)
+        rows = list(cql.execute(stmt))
+        assert len(rows) == 3
+        # The first partition in token order, then one row of the second one.
+        assert rows[0][0] == rows[1][0] != rows[2][0]
+        assert rows[0][1] != rows[1][1]
+
 # If, in contrast with test_index_paging_match_partition above which indexed
 # a partition key column, we index a clustering key column, paging does work
 # as expected and stops at the right page size. However, as was noted in
