@@ -275,8 +275,7 @@ async def test_storage_type_endpoint_mismatch(manager: ScyllaClusterManager, s3_
     even though the endpoint name itself is known.'''
     objconf = s3_storage.create_endpoint_conf() + gs_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options']}
+           'object_storage_endpoints': objconf}
     await manager.server_add(config=cfg)
 
     cql = manager.get_cql()

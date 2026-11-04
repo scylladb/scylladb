@@ -13,8 +13,6 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace, new_test_table
 from cassandra.protocol import InvalidRequest
 
-DEFAULT_CONFIG = {'experimental_features': ['strongly-consistent-tables']}
-
 SC_KS_OPTS = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
               "AND tablets = {'initial': 1} AND consistency = 'global'")
 
@@ -28,7 +26,7 @@ async def test_counter_table_creation_during_upgrade(manager: ScyllaClusterManag
     consistent error must be the one thrown, not the transient upgrade
     hint.
     """
-    config = DEFAULT_CONFIG | {'error_injections_at_startup': [
+    config = {'error_injections_at_startup': [
         {'name': 'suppress_features', 'value': 'COUNTERS_WITH_TABLETS'}]}
     server = await manager.server_add(config=config)
     cql, _ = await manager.get_ready_cql([server])
@@ -45,8 +43,7 @@ async def test_cell_only_writes_on_sc_logstor_table(manager: ScyllaClusterManage
     tombstone on every mutation. A write without one fails inside raft
     apply and aborts the node.
     """
-    config = {'experimental_features': ['strongly-consistent-tables', 'logstor']}
-    server = await manager.server_add(config=config)
+    server = await manager.server_add()
     cql, _ = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, SC_KS_OPTS) as ks:

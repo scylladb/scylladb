@@ -30,7 +30,6 @@ segment_size = 128 * 1024
 cmdline = ['--logger-log-level', 'load_balancer=debug', '--logger-log-level', 'logstor=debug',
            '--logger-log-level', 'raft_topology=debug', '--smp', '1']
 cfg = {
-    'experimental_features': ['logstor'],
     'tablet_load_stats_refresh_interval_in_seconds': 1,
     # The default clamps every tablet of a test to 51 MiB, so they would all look the same size.
     'minimal_tablet_size_for_balancing': 1024,
@@ -125,7 +124,6 @@ async def test_tablet_split_trigger_by_size(manager: ScyllaClusterManager):
     ]
     cfg = {
         'tablet_load_stats_refresh_interval_in_seconds': 1,
-        'experimental_features': ['logstor'],
     }
     servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
     cql = manager.get_cql()
