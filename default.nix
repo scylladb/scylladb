@@ -105,7 +105,6 @@ in derive ({
       pyudev
       pyyaml
       requests
-      scylla-driver
       setuptools
       tabulate
       urwid
