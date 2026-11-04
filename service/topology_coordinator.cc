@@ -3700,33 +3700,41 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     using send_all_func = std::function<future<>(const std::unordered_set<table_id>& tables, const service::frozen_topology_guard&, utils::UUID request_id)>;
     using before_finalize_func = std::function<future<>()>;
 
-    // Sends `send` to every host holding a replica of a tablet of `tables`, in parallel, once it
-    // has checked that all of them are alive. Nodes excluded from tablet operations are left out.
-    future<> send_to_tablet_replica_hosts(const std::unordered_set<table_id>& tables, desc_func desc, std::function<future<>(locator::host_id)> send) {
-        // Collect the IDs of the hosts with replicas, but ignore excluded nodes
-        std::unordered_set<locator::host_id> replica_hosts;
+    // Hosts that hold a tablet replica of one of `tables`, excluded nodes left
+    // out.
+    future<std::unordered_set<locator::host_id>> tablet_replica_hosts(const std::unordered_set<table_id>& tables) {
         // Pinned: a group0 write applied while for_each_tablet() yields, such as DROP TABLE,
         // would replace the token metadata and leave tmap dangling.
-        auto tm = get_token_metadata_ptr();
-        for (auto table_id : tables) {
-            const locator::tablet_map& tmap = tm->tablets().get_tablet_map(table_id);
-            co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
-                for (const locator::tablet_replica& replica: tinfo.replicas) {
+        const auto tmptr = get_token_metadata_ptr();
+        std::unordered_set<locator::host_id> hosts;
+        for (const auto& id : tables) {
+            const locator::tablet_map& tmap = tmptr->tablets().get_tablet_map(id);
+            co_await tmap.for_each_tablet([&] (locator::tablet_id, const locator::tablet_info& tinfo) {
+                for (const locator::tablet_replica& replica : tinfo.replicas) {
                     if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
-                        replica_hosts.insert(replica.host);
+                        hosts.insert(replica.host);
                     }
                 }
                 return make_ready_future<>();
             });
         }
+        co_return hosts;
+    }
 
-        // Check if all the nodes with replicas are alive
-        for (const locator::host_id& replica_host: replica_hosts) {
-            if (!_gossiper.is_alive(replica_host)) {
-                throw std::runtime_error(::format("Cannot perform {} because host {} is down", desc(), replica_host));
+    // Throws if one of `hosts` is down. `what` names the operation in the error.
+    void check_hosts_alive(const std::unordered_set<locator::host_id>& hosts, std::string_view what) const {
+        for (const locator::host_id& host : hosts) {
+            if (!_gossiper.is_alive(host)) {
+                throw std::runtime_error(fmt::format("Cannot perform {} because host {} is down", what, host));
             }
         }
+    }
 
+    // Sends `send` to every host holding a replica of a tablet of `tables`, in parallel, once it
+    // has checked that all of them are alive. Nodes excluded from tablet operations are left out.
+    future<> send_to_tablet_replica_hosts(const std::unordered_set<table_id>& tables, desc_func desc, std::function<future<>(locator::host_id)> send) {
+        const auto replica_hosts = co_await tablet_replica_hosts(tables);
+        check_hosts_alive(replica_hosts, desc());
         co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
             co_await send(host_id);
         });
