@@ -1114,10 +1114,11 @@ public:
     int64_t calculate_tablet_count() const;
     // Routing info to attach to the response of a single-partition request for `token`
     // that landed on `original_shard`, or that carried `block` as the client's view of
-    // the tablet map. Empty if the client routed correctly, and always empty while the
+    // the tablet map (an empty block requests an unconditional V2 refresh).
+    // Empty if the client routed correctly, and always empty while the
     // keyspace's migration to tablets is not finalized.
     std::optional<locator::tablet_routing_info> tablet_routing_info_for(dht::token token, unsigned original_shard) const;
-    std::optional<locator::tablet_routing_info_v2> tablet_routing_info_v2_for(dht::token token, locator::tablet_version_block block) const;
+    std::optional<locator::tablet_routing_info_v2> tablet_routing_info_v2_for(dht::token token, std::optional<locator::tablet_version_block> block) const;
 private:
     shared_ptr<db::large_data_guardrail_base> make_large_data_guardrail() const;
     void update_tombstone_gc_rf_one();

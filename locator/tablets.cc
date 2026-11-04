@@ -27,6 +27,8 @@
 #include <flat_set>
 #include <iterator>
 #include <chrono>
+#include <unordered_map>
+#include <utility>
 
 #include <fmt/ranges.h>
 
@@ -289,6 +291,7 @@ tablet_info::tablet_info(const tablet_info& o)
     , repair_task_info(o.repair_task_info ? std::make_unique<tablet_task_info>(*o.repair_task_info) : nullptr)
     , migration_task_info(o.migration_task_info ? std::make_unique<tablet_task_info>(*o.migration_task_info) : nullptr)
     , sstables_repaired_at(o.sstables_repaired_at)
+    , _routing_version(o._routing_version)
 {}
 
 tablet_info& tablet_info::operator=(const tablet_info& o) {
@@ -298,8 +301,24 @@ tablet_info& tablet_info::operator=(const tablet_info& o) {
         repair_task_info = o.repair_task_info ? std::make_unique<tablet_task_info>(*o.repair_task_info) : nullptr;
         migration_task_info = o.migration_task_info ? std::make_unique<tablet_task_info>(*o.migration_task_info) : nullptr;
         sstables_repaired_at = o.sstables_repaired_at;
+        _routing_version = o._routing_version;
     }
     return *this;
+}
+
+tablet_version tablet_info::empty_routing_version() noexcept {
+    // A new map exposes empty placements until set_tablet() installs replicas.
+    static const auto version = internal::hash_replica_list({});
+    return version;
+}
+
+void tablet_info::update_routing_version() {
+    // Metadata installation is synchronous. Reuse sorting storage for RF>3
+    // rather than allocating a replica copy for every tablet in a snapshot.
+    static thread_local tablet_replica_set sorted;
+    sorted = replicas;
+    std::ranges::sort(sorted);
+    _routing_version = internal::hash_replica_list(sorted);
 }
 
 bool tablet_info::operator==(const tablet_info& o) const {
@@ -723,6 +742,10 @@ const tablet_info& tablet_map::get_tablet_info(tablet_id id) const {
     return _tablets[size_t(id)];
 }
 
+tablet_version tablet_map::get_tablet_routing_version(tablet_id id) const {
+    return get_tablet_info(id)._routing_version;
+}
+
 tablet_id tablet_map::get_tablet_id(token t) const {
     return _tablet_ids.get_tablet_id(t);
 }
@@ -854,11 +877,13 @@ const utils::chunked_vector<dht::raw_token>& tablet_map::get_sorted_raw_tokens()
 
 void tablet_map::set_tablet(tablet_id id, tablet_info info) {
     check_tablet_id(id);
+    info.update_routing_version();
     _tablets[size_t(id)] = std::move(info);
 }
 
 void tablet_map::emplace_tablet(tablet_id id, dht::token last_token, tablet_info info) {
     check_tablet_id(id);
+    info.update_routing_version();
     _tablet_ids.push_back(last_token, id);
     _tablets[size_t(id)] = std::move(info);
 }
@@ -1792,27 +1817,19 @@ public:
         return make_tablet_routing_info();
     }
 
-    std::optional<tablet_routing_info_v2> check_tablet_version(const token& search_token, tablet_version_block block) const override {
+    std::optional<tablet_routing_info_v2> check_tablet_version(const token& search_token, std::optional<tablet_version_block> block) const override {
         const auto& tablet_map = get_tablet_map();
         const auto tid = tablet_map.get_tablet_id(search_token);
-        const auto& tablet_info = tablet_map.get_tablet_info(tid);
-
-        tablet_replica_set prepared_replicas = prepare_replicas_for_ec_tablet_version(tablet_info.replicas);
-        const auto tablet_version = internal::hash_replica_list(prepared_replicas);
-
-        if (compare_tablet_version_block(tablet_version, block)) [[likely]] {
+        const auto version = tablet_map.get_tablet_routing_version(tid);
+        if (block && compare_tablet_version_block(version, *block)) [[likely]] {
             return std::nullopt;
         }
-
-        const dht::token first_token = (tid == tablet_map.first_tablet())
-                ? dht::minimum_token()
+        const auto first = tid == tablet_map.first_tablet() ? dht::minimum_token()
                 : tablet_map.get_last_token(tablet_id(size_t(tid) - 1));
-        const dht::token last_token = tablet_map.get_last_token(tid);
-
         return tablet_routing_info_v2 {
-            .tablet_replicas = std::move(prepared_replicas),
-            .token_range = std::make_pair(first_token, last_token),
-            .hash = tablet_version
+            .tablet_replicas = prepare_replicas_for_ec_tablet_version(tablet_map.get_tablet_info(tid).replicas),
+            .token_range = {first, tablet_map.get_last_token(tid)},
+            .hash = version,
         };
     }
 

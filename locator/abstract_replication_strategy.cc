@@ -138,7 +138,7 @@ std::optional<tablet_routing_info> vnode_effective_replication_map::check_locali
     return {};
 }
 
-std::optional<tablet_routing_info_v2> vnode_effective_replication_map::check_tablet_version(const token&, tablet_version_block) const {
+std::optional<tablet_routing_info_v2> vnode_effective_replication_map::check_tablet_version(const token&, std::optional<tablet_version_block>) const {
     return {};
 }
 

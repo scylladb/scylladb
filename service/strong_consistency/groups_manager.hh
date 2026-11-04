@@ -17,9 +17,12 @@
 #include "service/topology_guard.hh"
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
+#include "db/timeout_clock.hh"
 #include "utils/hash.hh"
 
 #include <seastar/util/noncopyable_function.hh>
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/gate.hh>
 
 #include <source_location>
 
@@ -42,6 +45,7 @@ class raft_groups_storage;
 
 class raft_server;
 class raft_resize_tracker;
+class replica_set_view;
 
 /// A cache of leader locations for raft groups where this node is not a replica.
 /// Populated by the CQL transport layer after a redirect reveals the actual leader.
@@ -188,6 +192,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     abort_source _as;
 
     tablet_group_leader_cache _leader_cache;
+    gate _routing_info_gate;
+    // Bound completed response retention and underlying work when advisory
+    // collection is slow. Busy callers skip metadata rather than queue.
+    semaphore _routing_info_slots{32};
 
     // Keeps the flush handler registered. The handler forwards each round's
     // position to every group; see raft_commitlog::closed_up_to().
@@ -262,6 +270,18 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     future<bool> truncate_tablet_group(raft::group_id gid, utils::UUID request_id,
             service::frozen_topology_guard frozen_guard);
 
+    // Metadata only: no data reads, barriers, group startup waits or messages
+    // to other nodes.
+    std::optional<locator::tablet_routing_info_v2> local_tablet_routing_info(
+            const locator::tablet_map& map, locator::tablet_id tid, replica_set_view serving,
+            std::optional<locator::tablet_version_block> block);
+    // `shard` serves only a replica on this shard; `node` may also hop to the
+    // replica's shard on this node or use this shard's leader cache.
+    enum class routing_info_scope { shard, node };
+    future<std::optional<locator::tablet_routing_info_v2>> collect_tablet_routing_info(
+            table_id table, dht::token token, std::optional<locator::tablet_version_block> block,
+            db::timeout_clock::time_point timeout, routing_info_scope scope, semaphore_units<> slots = {});
+
     future<> leader_info_updater(raft_group_state& state, table_id table, raft::group_id gid,
         dht::token_range range);
 
@@ -330,6 +350,14 @@ public:
 
     // The raft_server instance is used to submit write commands and perform read_barrier() before reads.
     future<raft_server> acquire_server(table_id table_id, raft::group_id group_id, abort_source& as);
+
+    /// Obtain current SC V2 metadata from this node's state, without contacting
+    /// other nodes. A replica uses its group's current leader; a non-replica uses
+    /// the leader cached after a CQL redirect, if any.
+    /// An empty block forces refresh. Unavailable advisory metadata returns nullopt.
+    future<std::optional<locator::tablet_routing_info_v2>> get_tablet_routing_info(
+            table_id table, dht::token token, std::optional<locator::tablet_version_block> block,
+            db::timeout_clock::time_point timeout);
 
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.
