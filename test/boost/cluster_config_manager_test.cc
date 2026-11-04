@@ -92,7 +92,7 @@ void with_config_callback(cql_test_env& e, std::shared_ptr<callback_recorder> re
     auto& mgr = e.cluster_config_manager();
     auto registration = mgr.local().register_config_callback(
         "auto_repair_enabled",
-        [rec] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+        [rec] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
             if (value) {
                 rec->applies.emplace_back(ctx.keyspace_name.value_or(""), ctx.table_name.value_or(""), *value);
             } else {
@@ -347,7 +347,7 @@ SEASTAR_TEST_CASE(test_callback_node_oriented_option_fires_for_local_node) {
         bool ctx_is_local_node = false;
         auto registration = mgr.local().register_config_callback(
             "test_node_only_option",
-            [&] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+            [&] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
                 ++invocations;
                 last_value = std::move(value);
                 ctx_is_local_node = ctx.dc_name == dc && ctx.rack_name == rack && ctx.node_uuid == node_uuid
@@ -799,7 +799,7 @@ SEASTAR_TEST_CASE(test_callback_registered_on_all_shards_fires_on_all_shards) {
         mgr.invoke_on_all([&applies, &registrations] (db::cluster_config_manager& manager) {
             registrations.local() = manager.register_config_callback(
                 "auto_repair_enabled",
-                [&applies] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                [&applies] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
                     if (ctx.keyspace_name == "ks_ms" && ctx.table_name == "t1" && value && *value == "true") {
                         applies.local()++;
                     }
@@ -837,7 +837,7 @@ SEASTAR_TEST_CASE(test_callback_registered_on_shard0_fires_only_on_shard0) {
         // Register on shard 0 only.
         auto registration = mgr.local().register_config_callback(
             "auto_repair_enabled",
-            [&applies] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+            [&applies] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
                 if (ctx.keyspace_name == "ks_s0" && ctx.table_name == "t1" && value && *value == "true") {
                     applies.local()++;
                 }
@@ -869,7 +869,7 @@ SEASTAR_TEST_CASE(test_callback_is_unregistered_when_registration_is_destroyed) 
         {
             auto registration = mgr.local().register_config_callback(
                 "auto_repair_enabled",
-                [&applies] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                [&applies] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
                     if (ctx.keyspace_name == "ks_rg" && ctx.table_name == "t1" && value) {
                         applies++;
                     }
@@ -906,7 +906,7 @@ SEASTAR_TEST_CASE(test_callback_registration_move_transfers_unregistration) {
             {
                 auto registration = mgr.local().register_config_callback(
                     "auto_repair_enabled",
-                    [&applies] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                    [&applies] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
                         if (ctx.keyspace_name == "ks_mvreg" && ctx.table_name == "t1" && value) {
                             ++applies;
                         }
@@ -954,14 +954,14 @@ SEASTAR_TEST_CASE(test_callback_unregistered_during_invocation_is_swept_safely) 
         // destroys B's registration while the pass is still in progress.
         auto a_registration = mgr.local().register_config_callback(
             "auto_repair_enabled",
-            [&] (const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
+            [&] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
                 ++a_invocations;
                 b_registration->reset();
                 return make_ready_future<>();
             });
         *b_registration = mgr.local().register_config_callback(
             "auto_repair_enabled",
-            [&] (const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
+            [&] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
                 ++b_invocations;
                 return make_ready_future<>();
             });
@@ -1086,7 +1086,7 @@ SEASTAR_TEST_CASE(test_callback_registered_after_ready_gets_initial_delivery) {
         auto rec = std::make_shared<callback_recorder>();
         auto registration = mgr.local().register_config_callback(
             "auto_repair_enabled",
-            [rec] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+            [rec] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
                 if (value) {
                     rec->applies.emplace_back(ctx.keyspace_name.value_or(""), ctx.table_name.value_or(""), *value);
                 }
@@ -1126,7 +1126,7 @@ SEASTAR_TEST_CASE(test_callback_registered_after_ready_on_other_shard_gets_initi
         mgr.invoke_on(shard, [&applies, &registrations] (db::cluster_config_manager& manager) {
             registrations.local() = manager.register_config_callback(
                 "auto_repair_enabled",
-                [&applies] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                [&applies] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
                     if (ctx.keyspace_name == "ks_late_shard" && ctx.table_name == "t1" && value && *value == "true") {
                         applies.local()++;
                     }
@@ -1157,11 +1157,11 @@ SEASTAR_TEST_CASE(test_callback_registered_during_pass_gets_initial_delivery) {
         // B from inside that pass.
         auto a_registration = mgr.local().register_config_callback(
             "auto_repair_enabled",
-            [&mgr, b_registration, b_values] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring>) {
+            [&mgr, b_registration, b_values] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring>) {
                 if (ctx.keyspace_name == "ks_mid" && ctx.table_name == "t1" && !*b_registration) {
                     *b_registration = mgr.local().register_config_callback(
                         "auto_repair_enabled",
-                        [b_values] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                        [b_values] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
                             if (ctx.keyspace_name == "ks_mid" && ctx.table_name == "t1") {
                                 b_values->push_back(std::move(value));
                             }
@@ -1191,18 +1191,18 @@ SEASTAR_TEST_CASE(test_callback_owning_another_registration_is_swept_safely) {
         e.execute_cql("ALTER TABLE ks_own.t1 WITH auto_repair_enabled = true").get();
 
         auto& mgr = e.cluster_config_manager();
-        auto noop = [] (const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
+        auto noop = [] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
             return make_ready_future<>();
         };
 
         auto b_token = std::make_shared<int>(0);
         auto b_registration = std::make_shared<db::cluster_config_manager::config_callback_registration>(
-            mgr.local().register_config_callback("auto_repair_enabled", [b_token, noop] (const auto& ctx, auto value) {
-                return noop(ctx, std::move(value));
+            mgr.local().register_config_callback("auto_repair_enabled", [b_token, noop] (const auto& opt, const auto& ctx, auto value) {
+                return noop(opt, ctx, std::move(value));
             }));
         auto a_registration = mgr.local().register_config_callback("auto_repair_enabled",
-            [b_registration = std::exchange(b_registration, nullptr), noop] (const auto& ctx, auto value) {
-                return noop(ctx, std::move(value));
+            [b_registration = std::exchange(b_registration, nullptr), noop] (const auto& opt, const auto& ctx, auto value) {
+                return noop(opt, ctx, std::move(value));
             });
         // No pass is running after refresh() returns, so the unregistration below sweeps at once.
         mgr.local().refresh().get();
@@ -1211,7 +1211,7 @@ SEASTAR_TEST_CASE(test_callback_owning_another_registration_is_swept_safely) {
 
         std::optional<sstring> c_value;
         auto c_registration = mgr.local().register_config_callback("auto_repair_enabled",
-            [&c_value] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+            [&c_value] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
                 if (ctx.keyspace_name == "ks_own" && ctx.table_name == "t1") {
                     c_value = std::move(value);
                 }
@@ -1229,15 +1229,15 @@ SEASTAR_TEST_CASE(test_callback_owning_another_registration_is_swept_safely) {
 SEASTAR_TEST_CASE(test_callback_owning_registrations_is_destroyed_on_stop) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto& mgr = e.cluster_config_manager();
-        auto noop = [] (const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
+        auto noop = [] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
             return make_ready_future<>();
         };
 
         auto owned = std::make_shared<std::vector<db::cluster_config_manager::config_callback_registration>>();
         owned->push_back(mgr.local().register_config_callback("auto_repair_enabled", noop));
         owned->push_back(mgr.local().register_config_callback("auto_repair_enabled",
-            [owned, noop] (const auto& ctx, auto value) {
-                return noop(ctx, std::move(value));
+            [owned, noop] (const auto& opt, const auto& ctx, auto value) {
+                return noop(opt, ctx, std::move(value));
             }));
         mgr.local().refresh().get();
     });
@@ -1253,7 +1253,7 @@ struct blocking_callback {
     bool returned = false;
 
     db::cluster_config_manager::config_callback_function make(sstring ks) {
-        return [this, ks = std::move(ks)] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring>) -> future<> {
+        return [this, ks = std::move(ks)] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring>) -> future<> {
             if (ctx.keyspace_name != ks || ctx.table_name != "t1") {
                 return make_ready_future<>();
             }
@@ -1310,7 +1310,7 @@ SEASTAR_TEST_CASE(test_registration_stop_does_not_wait_for_other_callbacks) {
         e.execute_cql("ALTER TABLE ks_stop2.t1 WITH auto_repair_enabled = true").get();
 
         auto& mgr = e.cluster_config_manager();
-        auto noop = [] (const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
+        auto noop = [] (const db::cluster_config_registry::option&, const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
             return make_ready_future<>();
         };
         auto idle_registration = mgr.local().register_config_callback("auto_repair_enabled", noop);
