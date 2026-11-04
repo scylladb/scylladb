@@ -2233,7 +2233,6 @@ async def test_drop_table_during_backup(manager: ScyllaClusterManager, object_st
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
            'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300,
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
@@ -2286,7 +2285,6 @@ async def test_backup_after_schema_dropped(manager: ScyllaClusterManager, object
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
            'object_storage_endpoints': objconf,
-           'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300,
            }
     cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']

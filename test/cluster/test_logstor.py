@@ -43,8 +43,7 @@ async def test_config_option_consistency(manager: ScyllaClusterManager):
 
 async def test_parallel_writes(manager: ScyllaClusterManager):
     cmdline = ['--logger-log-level', 'logstor=debug']
-    cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    await manager.servers_add(1, cmdline=cmdline)
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "") as ks:
@@ -64,8 +63,7 @@ async def test_parallel_big_writes(manager: ScyllaClusterManager):
     Perform multiple writes in parallel with large values and validate to test segment switching.
     """
     cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
-    cfg = {'experimental_features': ['logstor']}
-    await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    await manager.servers_add(1, cmdline=cmdline)
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "") as ks:
@@ -100,8 +98,7 @@ async def test_write_failure_retires_active_segment(manager: ScyllaClusterManage
     """
     inj = 'logstor_fail_segment_write'
     cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
-    cfg = {'experimental_features': ['logstor']}
-    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    servers = await manager.servers_add(1, cmdline=cmdline)
     cql = manager.get_cql()
 
     server_log = await manager.server_open_log(servers[0].server_id)
@@ -166,8 +163,7 @@ async def test_recovery_basic(manager: ScyllaClusterManager, fail_separator_flus
     6. Performs additional writes and reads to verify system continues functioning
     """
     cmdline = ['--logger-log-level', 'logstor=trace']
-    cfg = {'experimental_features': ['logstor']}
-    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    servers = await manager.servers_add(1, cmdline=cmdline)
     cql = manager.get_cql()
 
     if fail_separator_flush:
@@ -257,7 +253,6 @@ async def test_recovery_with_segment_reuse(manager: ScyllaClusterManager):
     cfg = {
         'logstor_disk_size_in_mb': disk_size_mb,
         'logstor_file_size_in_mb': file_size_mb,
-        'experimental_features': ['logstor']
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
@@ -322,7 +317,6 @@ async def test_grow_logstor_disk_size(manager: ScyllaClusterManager):
         'logstor_disk_size_in_mb': old_disk_size_mb,
         'logstor_file_size_in_mb': file_size_mb,
         'logstor_format_on_startup': True,
-        'experimental_features': ['logstor'],
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
@@ -369,7 +363,6 @@ async def test_shrink_logstor_disk_size_no_data(manager: ScyllaClusterManager):
         'logstor_disk_size_in_mb': old_disk_size_mb,
         'logstor_file_size_in_mb': file_size_mb,
         'logstor_format_on_startup': True,
-        'experimental_features': ['logstor'],
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
@@ -413,7 +406,6 @@ async def test_shrink_logstor_disk_size_dead_data(manager: ScyllaClusterManager)
         'logstor_disk_size_in_mb': old_disk_size_mb,
         'logstor_file_size_in_mb': file_size_mb,
         'logstor_format_on_startup': True,
-        'experimental_features': ['logstor'],
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
@@ -475,7 +467,6 @@ async def test_shrink_logstor_disk_size_live_data(manager: ScyllaClusterManager)
         'logstor_disk_size_in_mb': old_disk_size_mb,
         'logstor_file_size_in_mb': file_size_mb,
         'logstor_format_on_startup': True,
-        'experimental_features': ['logstor'],
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
@@ -527,7 +518,6 @@ async def test_space_accounting_metrics(manager: ScyllaClusterManager):
     cfg = {
         'logstor_disk_size_in_mb': disk_size_mb,
         'logstor_file_size_in_mb': file_size_mb,
-        'experimental_features': ['logstor']
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     server = servers[0]
@@ -631,7 +621,6 @@ async def test_table_disk_space_metrics(manager: ScyllaClusterManager):
     cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
     cfg = {
         'enable_keyspace_column_family_metrics': True,
-        'experimental_features': ['logstor']
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     server = servers[0]
@@ -775,8 +764,7 @@ async def test_compaction(manager: ScyllaClusterManager):
     Test log compaction by creating dead data and verifying space reclamation.
     """
     cmdline = ['--logger-log-level', 'logstor=trace', '--smp=1']
-    cfg = {'experimental_features': ['logstor']}
-    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    servers = await manager.servers_add(1, cmdline=cmdline)
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
@@ -817,8 +805,7 @@ async def test_drop_table(manager: ScyllaClusterManager):
     Test that DROP TABLE works properly with logstor tables.
     """
     cmdline = ['--logger-log-level', 'logstor=trace']
-    cfg = {'experimental_features': ['logstor']}
-    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    servers = await manager.servers_add(1, cmdline=cmdline)
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH tablets={'initial': 4}") as ks:
@@ -889,7 +876,6 @@ async def test_table_removal_during_logstor_compaction(manager: ScyllaClusterMan
     """
     cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'debug_error_injection=debug', '--smp=1']
     cfg = {
-        'experimental_features': ['logstor'],
         'logstor_disk_size_in_mb': 8,
         'logstor_file_size_in_mb': 8,
     }
@@ -960,7 +946,6 @@ async def test_trigger_separator_flush(manager: ScyllaClusterManager):
     cfg = {
         'logstor_disk_size_in_mb': disk_size_mb,
         'logstor_file_size_in_mb': file_size_mb,
-        'experimental_features': ['logstor']
     }
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
@@ -1002,7 +987,6 @@ async def test_tablet_split_trigger_by_size(manager: ScyllaClusterManager):
     ]
     cfg = {
         'tablet_load_stats_refresh_interval_in_seconds': 1,
-        'experimental_features': ['logstor'],
     }
     servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
     cql = manager.get_cql()
@@ -1046,7 +1030,6 @@ async def test_tablet_split_and_merge(manager: ScyllaClusterManager):
     ]
     cfg = {
         'tablet_load_stats_refresh_interval_in_seconds': 1,
-        'experimental_features': ['logstor']
     }
     servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
 
@@ -1102,8 +1085,7 @@ async def test_tablet_migration(manager: ScyllaClusterManager):
     Test tablet migration
     """
     cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'stream_blob=trace','--smp=1']
-    cfg = {'experimental_features': ['logstor']}
-    s1 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+    s1 = await manager.server_add(cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack1"})
     servers = [s1]
     cql, hosts = await manager.get_ready_cql(servers)
 
@@ -1117,7 +1099,7 @@ async def test_tablet_migration(manager: ScyllaClusterManager):
         for i in range(nrows):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{i}_{value}')")
 
-        s2 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+        s2 = await manager.server_add(cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack1"})
         servers.append(s2)
         cql, hosts = await manager.get_ready_cql(servers)
 
@@ -1137,8 +1119,7 @@ async def test_tablet_intranode_migration(manager: ScyllaClusterManager):
     Test tablet intranode migration
     """
     cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'stream_blob=trace','--smp=2']
-    cfg = {'experimental_features': ['logstor']}
-    s1 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+    s1 = await manager.server_add(cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack1"})
     servers = [s1]
     cql, _ = await manager.get_ready_cql(servers)
 
@@ -1188,8 +1169,7 @@ async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
     8. Verifies all data is correct on the destination after migration
     """
     cmdline = ['--logger-log-level', 'logstor=trace', '--logger-log-level', 'stream_blob=trace', '--smp=2']
-    cfg = {'experimental_features': ['logstor']}
-    s1 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+    s1 = await manager.server_add(cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack1"})
     servers = [s1]
     cql, _ = await manager.get_ready_cql(servers)
 
@@ -1264,8 +1244,7 @@ async def test_cache(manager: ScyllaClusterManager):
     Verify the logstor mutation cache works correctly.
     """
     cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
-    cfg = {'experimental_features': ['logstor']}
-    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    servers = await manager.servers_add(1, cmdline=cmdline)
     cql = manager.get_cql()
 
     async def cache_metrics():

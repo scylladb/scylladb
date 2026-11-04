@@ -6,14 +6,18 @@
 
 """Cluster and keyspace setup for strongly-consistent tests.
 
-Forgetting any of the three things an SC test needs — the experimental feature
-on every node, ``consistency = 'global'`` on the keyspace, tablets rather than
-vnodes — fails *silently*: what comes up is a perfectly good
-eventually-consistent keyspace, and the test keeps passing while testing
-something else.  Hence one definition of each here, and *what* makes a keyspace
-strongly consistent taken from
+Forgetting either of the two things an SC test needs — ``consistency =
+'global'`` on the keyspace, tablets rather than vnodes — fails *silently*:
+what comes up is a perfectly good eventually-consistent keyspace, and the test
+keeps passing while testing something else.  Hence one definition of each
+here, and *what* makes a keyspace strongly consistent taken from
 :class:`~test.cluster.util.FeatureConfigurations` rather than spelled out
-again, so that the two cannot drift.
+again, so that the two cannot drift.  The experimental feature itself is on
+for every server started on the version under test, with all the others (see
+``make_scylla_conf()`` in ``test/pylib/scylla_server.py``), unless its test
+sets an ``experimental_features`` list of its own, which replaces the default
+one.  A server started on an older version and switched to the current one
+keeps the older version's config, so it runs without it.
 """
 
 from __future__ import annotations
@@ -72,12 +76,6 @@ async def boot_sc_cluster(
     ``config`` and ``cmdline`` are the test's own additions, on top of what
     :data:`SC_FEATURE` requires and :data:`SC_CMDLINE`.  Returns
     ``(servers, cql)``.
-
-    A test may pass its own ``experimental_features`` or
-    ``error_injections_at_startup``: list-valued keys are unioned with the
-    feature's own, not overwritten, so asking for one feature cannot silently
-    drop strongly-consistent-tables and turn this into an eventually-consistent
-    test.
     """
     logger.info("Bootstrapping cluster of %d nodes", num_nodes)
     servers = await manager.servers_add(
