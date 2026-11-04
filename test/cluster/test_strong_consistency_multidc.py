@@ -30,7 +30,7 @@ from cassandra.policies import FallthroughRetryPolicy
 from cassandra.pool import Host
 from cassandra.query import PreparedStatement
 
-from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, get_table_raft_group_id, wait_for_leader
+from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, get_table_raft_group_id, wait_for_leader
 from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
 from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import read_barrier
@@ -62,7 +62,7 @@ class Node(NamedTuple):
     host_id: str
 
 
-async def two_dc_cluster(manager: ScyllaClusterManager, extra_dc2: int = 0, config: dict = DEFAULT_CONFIG) -> tuple[Session, list[Node], list[Node]]:
+async def two_dc_cluster(manager: ScyllaClusterManager, extra_dc2: int = 0, config: dict | None = None) -> tuple[Session, list[Node], list[Node]]:
     """Start three nodes in dc1 and 2 + extra_dc2 in dc2 and return the session with the nodes of each DC.
     Every node is a rack of its own, except the extra dc2 nodes, which share the last dc2 rack:
     rf_rack_valid_keyspaces wants the RF of a DC to equal its number of racks, so with 2 replicas in
@@ -260,7 +260,7 @@ async def test_majority_dc_loss(manager: ScyllaClusterManager):
     elect and time out. Then dc1 is started again, and after a read barrier on a dc2 node QUORUM
     reads there must return the ten keys and none of the two failed writes.
     """
-    config = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 5000, 'read_request_timeout_in_ms': 5000}
+    config = {'write_request_timeout_in_ms': 5000, 'read_request_timeout_in_ms': 5000}
     cql, dc1, dc2 = await two_dc_cluster(manager, config=config)
     async with new_test_keyspace(manager, KS_OPTS) as ks, new_test_table(manager, ks, SCHEMA) as table:
         group_id, _ = await group_led_by(manager, dc1[0], dc1 + dc2, ks, table)
