@@ -10,6 +10,7 @@
 
 #include "cdc/cdc_options.hh"
 #include "cdc/log.hh"
+#include "dht/token.hh"
 #include "seastarx.hh"
 #include "service/paxos/cas_request.hh"
 #include "service/cas_shard.hh"
@@ -70,6 +71,10 @@ protected:
     schema_ptr _schema;
     partition_key _pk = partition_key::make_empty();
     clustering_key _ck = clustering_key::make_empty();
+    // Filled by CAS shard selection, by execute() after apply() calculates the
+    // partition token, or lazily by partition_token(). A raw token's
+    // disengaged state costs no separate optional flag.
+    dht::raw_token _partition_token;
     write_isolation _write_isolation;
     mutable wcu_consumed_capacity_counter _consumed_capacity;
     // All RMW operations can have a ReturnValues parameter from the following
@@ -115,6 +120,8 @@ public:
     virtual ~rmw_operation() = default;
     const wcu_consumed_capacity_counter& consumed_capacity() const noexcept { return _consumed_capacity; }
     schema_ptr schema() const { return _schema; }
+    /// Reuse the execution token, or calculate it for an early SC metadata lookup.
+    dht::token partition_token();
     const rjson::value& request() const { return _request; }
     rjson::value&& move_request() && { return std::move(_request); }
     future<executor::request_return_type> execute(service::storage_proxy& proxy,

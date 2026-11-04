@@ -69,6 +69,7 @@ class server;
 class controller : public protocol_server {
     sharded<gms::gossiper>& _gossiper;
     sharded<service::storage_proxy>& _proxy;
+    sharded<service::storage_service>& _ss;
     sharded<sstables::dictionary_service>& _dicts;
     sharded<service::migration_manager>& _mm;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
@@ -90,6 +91,7 @@ public:
     controller(
         sharded<gms::gossiper>& gossiper,
         sharded<service::storage_proxy>& proxy,
+        sharded<service::storage_service>& ss,
         sharded<sstables::dictionary_service>& dicts,
         sharded<service::migration_manager>& mm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,

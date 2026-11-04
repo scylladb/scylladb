@@ -96,9 +96,8 @@ inline std::vector<std::string_view> split(std::string_view text, char separator
 static void handle_CORS(const request& req, reply& rep, bool preflight) {
     if (!req.get_header("origin").empty()) {
         rep.add_header("Access-Control-Allow-Origin", "*");
-        // This is the list that DynamoDB returns for expose headers. I am
-        // not sure why not just return "*" here, what's the risk?
-        rep.add_header("Access-Control-Expose-Headers", "x-amzn-RequestId,x-amzn-ErrorType,x-amzn-ErrorMessage,Date");
+        // Expose the DynamoDB response headers and Scylla tablet routing hints.
+        rep.add_header("Access-Control-Expose-Headers", "x-amzn-RequestId,x-amzn-ErrorType,x-amzn-ErrorMessage,Date,X-Scylla-Tablet-Info");
         if (preflight) {
             sstring s = req.get_header("Access-Control-Request-Headers");
             if (!s.empty()) {
@@ -145,6 +144,9 @@ public:
          return seastar::futurize_invoke(_handle, std::move(req)).then_wrapped(
             [this, rep = std::move(rep), accept_encoding=std::move(accept_encoding)](future<executor::request_return_type> resf) mutable {
              auto res = !resf.failed() ? resf.get() : convert_exception_ptr_to_api_error(resf.get_exception());
+             if (!res.is_error() && res.routing_info) {
+                 add_tablet_routing_header(*rep, *res.routing_info);
+             }
              return std::visit(overloaded_functor {
                 [&] (std::string&& str) {
                     return _response_compressor.generate_reply(std::move(rep), std::move(accept_encoding),
@@ -158,7 +160,7 @@ public:
                     generate_error_reply(*rep, err);
                     return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
                 }
-             }, std::move(res));
+             }, std::move(res.response));
          });
     }) { }
 
@@ -897,7 +899,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         );
         auto ret = ret_fut.failed() ? convert_exception_ptr_to_api_error(ret_fut.get_exception()) : ret_fut.get();
         if (audit_info) {
-            bool has_error = std::holds_alternative<api_error>(ret);
+            bool has_error = ret.is_error();
             co_await audit::inspect(*audit_info, client_state, has_error);
         }
         co_return ret;
@@ -998,16 +1000,32 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
             return e.update_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
         {"PutItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
-            return e.put_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
+            auto routing = parse_tablet_routing_request(*req);
+            if (!routing) {
+                return make_ready_future<executor::request_return_type>(std::move(routing.error()));
+            }
+            return e.put_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info, *routing);
         }},
         {"UpdateItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
-            return e.update_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
+            auto routing = parse_tablet_routing_request(*req);
+            if (!routing) {
+                return make_ready_future<executor::request_return_type>(std::move(routing.error()));
+            }
+            return e.update_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info, *routing);
         }},
         {"GetItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
-            return e.get_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
+            auto routing = parse_tablet_routing_request(*req);
+            if (!routing) {
+                return make_ready_future<executor::request_return_type>(std::move(routing.error()));
+            }
+            return e.get_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info, *routing);
         }},
         {"DeleteItem", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
-            return e.delete_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
+            auto routing = parse_tablet_routing_request(*req);
+            if (!routing) {
+                return make_ready_future<executor::request_return_type>(std::move(routing.error()));
+            }
+            return e.delete_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info, *routing);
         }},
         {"ListTables", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.list_tables(client_state, std::move(permit), std::move(json_request), audit_info);
@@ -1025,7 +1043,11 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
             return e.batch_get_item(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
         {"Query", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
-            return e.query(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
+            auto routing = parse_tablet_routing_request(*req);
+            if (!routing) {
+                return make_ready_future<executor::request_return_type>(std::move(routing.error()));
+            }
+            return e.query(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info, *routing);
         }},
         {"SearchVectors", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.search_vectors(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
