@@ -322,6 +322,7 @@ def run_scylla_cmd(pid, dir):
         '--experimental-features=udf',
         '--experimental-features=views-with-tablets',
         '--experimental-features=logstor',
+        '--experimental-features=strongly-consistent-tables',
         '--enable-tablets=true',
         '--enable-user-defined-functions', '1',
         # Views with tablets refuse to work if this option is not on :-(
@@ -423,6 +424,8 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--logstor-file-size-in-mb=4')
     if major < [2026,4]:
         cmd.remove('--logstor-sparse-files=true')
+        # Before 2026.4 the feature turns tablet balancing off in the whole cluster.
+        cmd.remove('--experimental-features=strongly-consistent-tables')
     return (cmd, env)
 
 # Get a Cluster object to connect to CQL at the given IP address (and with

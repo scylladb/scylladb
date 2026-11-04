@@ -241,8 +241,8 @@ async def trigger_tablet_merge(manager, servers, logs):
     await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
     await inject_error_off(manager, "tablet_force_tablet_count_decrease", servers)
 
-async def prepare_cluster_for_incremental_repair(manager, nr_keys = 100 , cmdline = [], tablets = 8):
-    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, nr_keys=nr_keys, cmdline=cmdline, tablets=tablets)
+async def prepare_cluster_for_incremental_repair(manager, nr_keys = 100 , cmdline = [], tablets = 8, config = None):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, nr_keys=nr_keys, cmdline=cmdline, tablets=tablets, config=config)
     repaired_keys = set(range(0, nr_keys))
     unrepaired_keys = set()
     current_key = nr_keys
@@ -756,7 +756,10 @@ async def do_test_tablet_incremental_repair_merge_error(manager, error):
     nr_keys = 100
     # Make sure no data commit log replay after force server stop
     cmdline = ['--enable-commitlog', '0']
-    servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await prepare_cluster_for_incremental_repair(manager, nr_keys, cmdline)
+    # Strongly consistent tables refuse to start without the commitlog, so run without
+    # experimental features.
+    config = {'experimental_features': []}
+    servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await prepare_cluster_for_incremental_repair(manager, nr_keys, cmdline, config=config)
 
     # First repair
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental') # sstables_repaired_at 1
@@ -1405,7 +1408,7 @@ async def test_incremental_repair_race_window_promotes_unrepaired_data(manager: 
 #    lower timestamp but is visible.
 # ----------------------------------------------------------------------------
 
-async def _setup_tombstone_gc_cluster(manager, *, tablets=2, extra_cmdline=None):
+async def _setup_tombstone_gc_cluster(manager, *, tablets=2, extra_cmdline=None, config=None):
     """Create a 3-node cluster with a tombstone_gc=repair table and return
     (servers, cql, hosts, ks, table_id, logs).
 
@@ -1419,7 +1422,7 @@ async def _setup_tombstone_gc_cluster(manager, *, tablets=2, extra_cmdline=None)
     # These tests enable hinted handoff and materialized views, which make debug-mode
     # concurrent bootstrap occasionally exceed the topology timeout before the test starts.
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(
-        manager, nr_keys=0, cmdline=cmdline, tablets=tablets,
+        manager, nr_keys=0, cmdline=cmdline, tablets=tablets, config=config,
         disable_flush_cache_time=True, sequential_server_add=True)
     # Lower propagation_delay to 0 so gc_before = repair_time, making tombstones
     # GC-eligible immediately after a successful repair rather than 1h later.
@@ -1531,8 +1534,11 @@ async def test_tombstone_gc_no_resurrection_repair_completing_mid_compaction(man
     # gc_before is also capped by commitlog::min_gc_time(): the segment holding the DELETE stays
     # active, so its time for the table -- the time of the DELETE -- becomes gc_before, and T is
     # never GC-eligible. Run without a commitlog so gc_before is decided by repair_time alone.
+    # Strongly consistent tables refuse to start without the commitlog, so run without
+    # experimental features.
     servers, cql, hosts, ks, table_id, logs = await _setup_tombstone_gc_cluster(
-        manager, tablets=1, extra_cmdline=['--logger-log-level', 'compaction=debug', '--enable-commitlog', '0'])
+        manager, tablets=1, extra_cmdline=['--logger-log-level', 'compaction=debug', '--enable-commitlog', '0'],
+        config={'experimental_features': []})
     await cql.run_async(
         f"ALTER TABLE {ks}.test WITH compaction = {{'class': 'IncrementalCompactionStrategy', 'min_threshold': 2}}")
     # The minor compaction is started by hand, once everything is in place.
