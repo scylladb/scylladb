@@ -79,6 +79,11 @@ add_perf_test(perf_cql_parser
   LIBRARIES
     cql3)
 add_perf_test(perf_hash)
+add_perf_test(perf_tablet_routing
+  LIBRARIES
+    alternator
+    scylla_locator
+    service)
 add_perf_test(perf_idl
   LIBRARIES
     idl)
