@@ -1656,6 +1656,23 @@ raft::log_entry_ptr make_mutation_entry(const schema_ptr& schema, raft::term_t t
             .term = term, .idx = idx, .data = std::move(cmd)});
 }
 
+// The oldest group0 schema version, reached by any node that has one.
+const table_schema_version reached_group0_version{utils::UUID_gen::min_time_UUID()};
+
+// The schema_changed the leader appends ahead of the first write of `schema`'s version.
+service::strong_consistency::schema_changed make_schema_changed(const schema_ptr& schema,
+        table_schema_version group0_version = reached_group0_version) {
+    return {.version = schema->version(), .mapping = schema->get_column_mapping(), .group0_schema_version = group0_version};
+}
+
+raft::log_entry_ptr make_schema_changed_entry(const schema_ptr& schema, raft::term_t term, raft::index_t idx,
+        table_schema_version group0_version = reached_group0_version) {
+    raft::command cmd;
+    ser::serialize(cmd, service::strong_consistency::raft_command{.change = make_schema_changed(schema, group0_version)});
+    return make_lw_shared<raft::log_entry>(raft::log_entry{
+            .term = term, .idx = idx, .data = std::move(cmd)});
+}
+
 } // anonymous namespace
 
 // Replay persists a floor of commit_idx, so every index at or below it has to have been
@@ -1686,7 +1703,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
             for (auto i = first; i <= last; i = i + raft::index_t{1}) {
                 batch.push_back(make_dummy_entry(raft::term_t(1), i));
             }
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+            buffer.add_batch(env.local_db(), env.local_qp(),
                     gid, segment, commit_idx, batch).get();
         };
         const auto run_in_term = [&](raft::group_id gid, raft::term_t term, raft::index_t first,
@@ -1696,7 +1713,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
             for (auto i = first; i <= last; i = i + raft::index_t{1}) {
                 batch.push_back(make_dummy_entry(term, i));
             }
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+            buffer.add_batch(env.local_db(), env.local_qp(),
                     gid, segment, commit_idx, batch).get();
         };
         const auto refuses_with = [](db::raft_commitlog_replay_buffer& buffer, cql_test_env& env,
@@ -1813,7 +1830,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
                 for (auto i = first; i <= last; i = i + raft::index_t{1}) {
                     entries.push_back(make_dummy_entry(term, i));
                 }
-                buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                buffer.add_batch(env.local_db(), env.local_qp(),
                         gid, segment, commit_idx, entries).get();
             };
             batch(raft::term_t(1), raft::index_t(1), raft::index_t(2), raft::index_t(0), 1);
@@ -1845,7 +1862,7 @@ SEASTAR_TEST_CASE(test_the_damage_override_does_not_start_a_node_over_a_gap) {
             for (auto i = first; i <= last; i = i + raft::index_t{1}) {
                 batch.push_back(make_dummy_entry(raft::term_t(1), i));
             }
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+            buffer.add_batch(env.local_db(), env.local_qp(),
                     gid, segment, commit_idx, batch).get();
         };
 
@@ -1889,7 +1906,7 @@ SEASTAR_TEST_CASE(test_a_refused_replay_leaves_the_row_untouched) {
             for (auto i = first; i <= last; i = i + raft::index_t{1}) {
                 batch.push_back(make_dummy_entry(raft::term_t(1), i));
             }
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+            buffer.add_batch(env.local_db(), env.local_qp(),
                     gid, segment, commit_idx, batch).get();
         };
         const auto refuses_with = [&](db::raft_commitlog_replay_buffer& buffer,
@@ -1958,7 +1975,7 @@ struct damaged_segment_fixture {
         const auto batch = std::vector<raft::log_entry_ptr>{
             make_dummy_entry(raft::term_t(1), raft::index_t(6)),
         };
-        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+        buffer.add_batch(env.local_db(), env.local_qp(),
                 gid, 2, raft::index_t(5), batch).get();
     }
 };
@@ -2119,7 +2136,7 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_local_replica) {
                 locator::tablet_replica_set{{locator::host_id{utils::UUID_gen::get_time_UUID()}, 0}}).get();
 
         db::raft_commitlog_replay_buffer buffer;
-        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+        buffer.add_batch(env.local_db(), env.local_qp(),
                 gid, 1, raft::index_t(0), batch).get();
         buffer.finish_replay(env.local_db(), env.local_qp()).get();
         drop_sc_tablet_metadata(env, table).get();
@@ -2134,7 +2151,7 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_local_replica) {
                 locator::tablet_replica_set{{my_id, this_shard_id()}}).get();
 
         db::raft_commitlog_replay_buffer owned_buffer;
-        owned_buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+        owned_buffer.add_batch(env.local_db(), env.local_qp(),
                 gid, 1, raft::index_t(0), batch).get();
         owned_buffer.finish_replay(env.local_db(), env.local_qp()).get();
 
@@ -2163,7 +2180,7 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_persisted_state) {
                 env.local_qp(), gid, this_shard_id()).get().exists);
 
         db::raft_commitlog_replay_buffer buffer;
-        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+        buffer.add_batch(env.local_db(), env.local_qp(),
                 gid, 1, raft::index_t(0), std::vector<raft::log_entry_ptr>{
                     make_dummy_entry(raft::term_t(1), raft::index_t(1)),
                     make_dummy_entry(raft::term_t(1), raft::index_t(2)),
@@ -2206,7 +2223,7 @@ SEASTAR_TEST_CASE(test_second_replay_recovers_the_rewritten_tail) {
         const auto replay = [&] (const std::vector<replayed_batch>& batches) {
             db::raft_commitlog_replay_buffer buffer;
             for (const auto& batch : batches) {
-                buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                buffer.add_batch(env.local_db(), env.local_qp(),
                         gid, batch.segment, batch.commit_idx, batch.entries).get();
             }
             buffer.finish_replay(env.local_db(), env.local_qp()).get();
@@ -2358,7 +2375,7 @@ SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) 
         const auto replay = [&] (const std::vector<replayed_batch>& batches) {
             db::raft_commitlog_replay_buffer buffer;
             for (const auto& batch : batches) {
-                buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                buffer.add_batch(env.local_db(), env.local_qp(),
                         gid, batch.segment, batch.commit_idx, batch.entries).get();
             }
             buffer.finish_replay(env.local_db(), env.local_qp()).get();
@@ -2390,10 +2407,11 @@ SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) 
 
         // The row bootstrap() writes before the group's first batch. Replay discards a
         // group this shard persists nothing about, so without it there is nothing to
-        // recover here.
+        // recover here. It lists the schema_changed the entries were written under, as a
+        // release would have.
         service::strong_consistency::raft_groups_storage::store_descriptor(
                 env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
-                raft::configuration{}, {}).get();
+                raft::configuration{}, {}, {{make_schema_changed(schema), seg_term1}}).get();
 
         // First pass. Correct either way; it is here for the record it leaves behind.
         const auto first = replay(old_segments());
@@ -2438,13 +2456,13 @@ SEASTAR_TEST_CASE(test_replay_persists_the_committed_configuration) {
 
         db::raft_commitlog_replay_buffer buffer;
         // 1..3 are committed, so the configuration at 2 is the one raft agreed on.
-        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+        buffer.add_batch(env.local_db(), env.local_qp(),
                 gid, 1, raft::index_t(3),
                 std::vector<raft::log_entry_ptr>{
                         make_dummy_entry(raft::term_t(1), raft::index_t(1)),
                         committed_config,
                         make_dummy_entry(raft::term_t(1), raft::index_t(3))}).get();
-        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+        buffer.add_batch(env.local_db(), env.local_qp(),
                 gid, 2, raft::index_t(3),
                 std::vector<raft::log_entry_ptr>{
                         make_dummy_entry(raft::term_t(1), raft::index_t(4)),
@@ -2484,7 +2502,7 @@ SEASTAR_TEST_CASE(test_replay_keeps_the_floors_configuration_over_an_older_copy)
         const auto older_config = make_config_entry(raft::term_t(1), raft::index_t(5));
         const auto add = [&](db::segment_id_type segment, raft::index_t commit_idx,
                 std::vector<raft::log_entry_ptr> entries, db::raft_commitlog_replay_buffer& buffer) {
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+            buffer.add_batch(env.local_db(), env.local_qp(),
                     gid, segment, commit_idx, entries).get();
         };
 
@@ -2528,7 +2546,7 @@ SEASTAR_TEST_CASE(test_replay_takes_the_commit_term_from_the_entry_at_the_floor)
 
         const auto add = [&](db::segment_id_type segment, raft::index_t commit_idx,
                 std::vector<raft::log_entry_ptr> entries, db::raft_commitlog_replay_buffer& buffer) {
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+            buffer.add_batch(env.local_db(), env.local_qp(),
                     gid, segment, commit_idx, entries).get();
         };
 
@@ -2586,10 +2604,10 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
 
         auto entry = make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = raft::term_t(1),
-            .idx = raft::index_t(1),
+            .idx = raft::index_t(2),
             .data = std::move(cmd)
         });
-        raft::log_entry_ptr_list entries{entry};
+        raft::log_entry_ptr_list entries{make_schema_changed_entry(schema, raft::term_t(1), raft::index_t(1)), entry};
 
         // do_with_cql_env's own commitlog already registered the "commitlog" metrics.
         commitlog::config cl_cfg;
@@ -2752,8 +2770,8 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
         co_await env.db().invoke_on(replicas.front().shard, [&env, table] (replica::database& db) {
             return seastar::async([&env, &db, table] {
                 const auto schema = db.find_schema(table);
-                // 3 raft log entries, each writing its own partition.
-                raft::log_entry_ptr_list entries;
+                // 3 raft log entries, each writing its own partition, under one schema_changed.
+                raft::log_entry_ptr_list entries{make_schema_changed_entry(schema, raft::term_t(1), raft::index_t(1))};
                 for (int pk = 1; pk <= 3; ++pk) {
                     mutation m(schema, partition_key::from_singular(*schema, pk));
                     m.set_cell(clustering_key::make_empty(), "c", data_value(pk), api::new_timestamp());
@@ -2762,7 +2780,7 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
                             .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
                     entries.push_back(make_lw_shared<raft::log_entry>(raft::log_entry{
                         .term = raft::term_t(1),
-                        .idx = raft::index_t(pk),
+                        .idx = raft::index_t(pk + 1),
                         .data = std::move(cmd)
                     }));
                 }
