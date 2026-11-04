@@ -531,6 +531,25 @@ std::optional<raft_server> groups_manager::try_acquire_server(raft::group_id gro
     return try_acquire_server(group_id, it->second);
 }
 
+future<> groups_manager::retire_resized_group(raft::group_id id) {
+    logger.info("retire_resized_group(): group id {}: waiting until no request can resolve it", id);
+    const shared_future<> stale_versions(_db.get_shared_token_metadata().stale_versions_in_use());
+    auto f = co_await coroutine::as_future(stale_versions.get_future(_retirements_as));
+    if (f.failed()) {
+        // stop() deletes every group itself.
+        f.ignore_ready_future();
+        co_return;
+    }
+    auto it = _raft_groups.find(id);
+    if (it != _raft_groups.end() && !it->second.has_tablet) {
+        // The parent is gone for good: its resize replaced it, or its table was dropped. A
+        // shutdown never gets here: stop() aborts the wait above and deletes every group, keeping
+        // what they persisted.
+        logger.debug("Deleting raft group {} because a resize replaced it or its table was dropped.", id);
+        schedule_raft_group_deletion(id, it->second, log_disposition::release, true);
+    }
+}
+
 static table_metrics::reporting table_metrics_reporting(const db::config& cfg) {
     if (cfg.enable_keyspace_column_family_metrics()) {
         return table_metrics::reporting::per_shard;
@@ -557,14 +576,22 @@ void groups_manager::schedule_raft_groups_deletion(bool all, log_disposition dis
         const auto next = std::next(it);
         auto& [group_id, group_state] = *it;
         if (all || !group_state.has_tablet) {
-            if (!group_state.gate->is_closed()) {
-                logger.debug("Deleting raft group {} because {}.", group_id,
-                        all ? "the node is shutting down" : "its tablet left this shard, a resize replaced it, or its table was dropped");
+            if (!all && _resize_tracker.is_resizing(group_id)) {
+                if (!group_state.retiring && !_retirements.is_closed()) {
+                    logger.debug("Deferring the deletion of raft group {}, which a resize replaced or whose table "
+                            "was dropped, until no request can resolve it.", group_id);
+                    group_state.retiring = true;
+                    (void)try_with_gate(_retirements, [this, group_id] {
+                        return retire_resized_group(group_id);
+                    });
+                }
+            } else {
+                if (!group_state.gate->is_closed()) {
+                    logger.debug("Deleting raft group {} because {}.", group_id,
+                            all ? "the node is shutting down" : "its tablet left this shard or its table was dropped");
+                }
+                schedule_raft_group_deletion(group_id, group_state, disposition);
             }
-            // A resizing parent which the tablet map dropped is gone for good: its resize replaced
-            // it, or its table was dropped. A shutdown keeps what it persisted, which a restart in
-            // the middle of the resize needs.
-            schedule_raft_group_deletion(group_id, group_state, disposition, !all && _resize_tracker.is_resizing(group_id));
         }
         it = next;
     }
@@ -1646,6 +1673,7 @@ future<> groups_manager::stop() {
 
     logger.info("stop() enter");
 
+    _retirements_as.request_abort();
     // The segments must survive so replay can recover the log.
     schedule_raft_groups_deletion(true, log_disposition::keep);
 
@@ -1656,6 +1684,7 @@ future<> groups_manager::stop() {
     // Joined after the raft servers are gone: the fibers were aborted when they were detached
     // and exit on their own, this only makes sure none of them outlives the manager.
     co_await std::exchange(_draining_colocators, make_ready_future<>());
+    co_await _retirements.close();
 
     logger.info("stop() completed");
 }
