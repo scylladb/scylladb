@@ -3695,6 +3695,34 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     using desc_func = std::function<std::string()>;
     using before_finalize_func = std::function<future<>()>;
 
+    // Hosts that hold a tablet replica of one of `tables`, excluded nodes left
+    // out.
+    future<std::unordered_set<locator::host_id>> tablet_replica_hosts(const std::unordered_set<table_id>& tables) {
+        const auto tmptr = get_token_metadata_ptr();
+        std::unordered_set<locator::host_id> hosts;
+        for (const auto& id : tables) {
+            const locator::tablet_map& tmap = tmptr->tablets().get_tablet_map(id);
+            co_await tmap.for_each_tablet([&] (locator::tablet_id, const locator::tablet_info& tinfo) {
+                for (const locator::tablet_replica& replica : tinfo.replicas) {
+                    if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
+                        hosts.insert(replica.host);
+                    }
+                }
+                return make_ready_future<>();
+            });
+        }
+        co_return hosts;
+    }
+
+    // Throws if one of `hosts` is down. `what` names the operation in the error.
+    void check_hosts_alive(const std::unordered_set<locator::host_id>& hosts, std::string_view what) const {
+        for (const locator::host_id& host : hosts) {
+            if (!_gossiper.is_alive(host)) {
+                throw std::runtime_error(fmt::format("Cannot perform {} because host {} is down", what, host));
+            }
+        }
+    }
+
     // `bf` runs after the operation's session is cleared
     // and with the group0 guard RELEASED, so its I/O does not stall
     // group0 operations on this node. Nothing serializes coordinators while
@@ -3724,31 +3752,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 error = e.what();
             }
             if (!tables.empty()) {
-                // Collect the IDs of the hosts with replicas, but ignore excluded nodes
-                std::unordered_set<locator::host_id> replica_hosts;
-                for (auto table_id : tables) {
-                    const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
-                    co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
-                        for (const locator::tablet_replica& replica: tinfo.replicas) {
-                            if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
-                                replica_hosts.insert(replica.host);
-                            }
-                        }
-                        return make_ready_future<>();
-                    });
-                }
+                const auto replica_hosts = co_await tablet_replica_hosts(tables);
 
                 // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
                 release_guard(std::move(guard));
 
                 co_await utils::get_local_injector().inject(fmt::format("{}_table_wait", what), utils::wait_for_message(std::chrono::minutes(2)));
 
-                // Check if all the nodes with replicas are alive
-                for (const locator::host_id& replica_host: replica_hosts) {
-                    if (!_gossiper.is_alive(replica_host)) {
-                        throw std::runtime_error(::format("Cannot perform {} because host {} is down", desc(), replica_host));
-                    }
-                }
+                check_hosts_alive(replica_hosts, desc());
 
                 // The guard was released above, so we may have been deposed since. Don't
                 // touch the replicas if this operation is no longer the current one.
