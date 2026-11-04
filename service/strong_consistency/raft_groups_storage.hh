@@ -54,8 +54,8 @@ struct truncate_record {
     utils::UUID last_truncate_request_id;
     // The log index of the truncate entry. The commitlog replay skips the entries below it.
     raft::index_t truncate_index = raft::index_t(0);
-    // The write timestamp of the record's cells, from this node's clock like every other
-    // cell of the row; the next record is stamped above it.
+    // At least the write timestamp of the record's cells, and of every other write to the
+    // row, including its erase; the next record is stamped above it.
     api::timestamp_type written_at = api::min_timestamp;
 };
 
@@ -68,14 +68,19 @@ struct raft_seal {
 };
 
 // Builds the mutation which records `seal` in the system.raft_groups row of the
-// group `gid` hosted on `shard`. `ts` is the write timestamp: this node's clock,
-// like the rest of the row, so that erase_persisted_state() beats it. The seal's
-// own timestamp is only a value.
+// group `gid` hosted on `shard`. `ts` is the write timestamp, above every earlier
+// write to the row (see raft_groups_storage::_last_row_timestamp). The seal's own
+// timestamp is only a value.
 mutation make_seal_mutation(raft::group_id gid, shard_id shard, const raft_seal& seal, api::timestamp_type ts);
 
 // Builds the mutation which removes `seals` from the system.raft_groups row of the
 // group `gid` hosted on `shard`, written at `ts`.
 mutation make_remove_seals_mutation(raft::group_id gid, shard_id shard, std::span<const raft_seal> seals, api::timestamp_type ts);
+
+// Builds the mutation which makes `seal` the promoted seal of the group `gid` hosted
+// on `shard`, and removes it and every older one of `seals`, written at `ts`.
+mutation make_promote_seal_mutation(raft::group_id gid, shard_id shard, const raft_seal& seal,
+        std::span<const raft_seal> seals, api::timestamp_type ts);
 
 // Ask table `id` to flush, in the background. `pos` only decides whether the
 // table skips the request.
@@ -109,8 +114,9 @@ class raft_groups_storage : public raft::persistence {
     // The configuration the last release persisted, so that a record carrying
     // no configuration of its own re-persists it.
     raft::configuration _snapshot_config;
-    // Timestamp of the last descriptor mutation, kept strictly increasing so two
-    // releases in one reactor task cannot tie.
+    // Timestamp of the last write to the group's row, kept strictly increasing so two
+    // releases in one reactor task cannot tie. Starts from the row's newest write, so
+    // that a write after a restart with the clock stepped back still wins.
     api::timestamp_type _last_row_timestamp = api::min_timestamp;
     // Per group, so one group's failing descriptor write cannot hide another's.
     logging::logger::rate_limit _descriptor_write_rate_limit{std::chrono::seconds(10)};
@@ -119,6 +125,7 @@ class raft_groups_storage : public raft::persistence {
     std::vector<truncation_record> _persisted_truncations;
     // Oldest first.
     std::vector<raft_seal> _seals;
+    std::optional<raft_seal> _promoted_seal;
 
     // The future of the currently executing (or already finished) write operation.
     //
@@ -173,14 +180,21 @@ public:
     // The timestamp of the next write to the group's row; see _last_row_timestamp.
     api::timestamp_type next_row_timestamp();
 
-    // Adds the seal if it is newer than the last one, so that adding the same seal
-    // twice keeps one copy. Only in memory: make_seal_mutation() writes the row.
+    // Adds the seal if it is newer than the last one and than the promoted one, so that
+    // adding the same seal twice keeps one copy and a promoted seal stays out. Only in
+    // memory: make_seal_mutation() writes the row.
     void add_seal(raft_seal seal);
     // Removes the seal and every older one. Only in memory:
     // make_remove_seals_mutation() writes the row.
     void remove_seals(const raft_seal& seal);
     const std::vector<raft_seal>& seals() const noexcept {
         return _seals;
+    }
+    // Makes the seal the promoted one if it is newer than the current one, and removes
+    // it and every older seal. Only in memory: make_promote_seal_mutation() writes the row.
+    void promote_seal(const raft_seal& seal);
+    const std::optional<raft_seal>& promoted_seal() const noexcept {
+        return _promoted_seal;
     }
 
     // Everything one group's row holds, as commitlog replay needs to read it.
@@ -193,6 +207,9 @@ public:
         truncate_record truncate;
         // Oldest first.
         std::vector<raft_seal> seals;
+        std::optional<raft_seal> promoted_seal;
+        // The newest write to the columns the group writes at this node's clock.
+        api::timestamp_type row_timestamp = api::min_timestamp;
     };
 
     // The statics below read and write a group's row without a raft_groups_storage,
@@ -208,7 +225,7 @@ public:
         raft::group_id gid, shard_id shard);
 
     // Deletes the group's row, which is everything this shard persists about it: term and
-    // vote, the snapshot descriptor, the truncation history and the seals.
+    // vote, the snapshot descriptor, the truncation history, the seals and the promoted seal.
     //
     // Called when a replica leaves the group, so that a tablet migrated back to this shard
     // later rejoins with no history of its previous membership. Without it the replica
@@ -219,12 +236,12 @@ public:
     // is the absence of the row this erases - see raft_commitlog_replay_buffer and
     // groups_manager::start_raft_group().
     //
-    // The raft_groups row is deleted above both this node's clock and the highest timestamp of the
-    // resize markers in that row (`max_marker_timestamp`). The markers are stamped by the leader's
-    // clock, which may be ahead of this node's. Passing `max_marker_timestamp` may put the
-    // tombstone above this node's clock, so that it also hides the row which a later bootstrap of
-    // the group on this shard writes. Only a group that is never bootstrapped here again, such as
-    // a resized parent, may pass it.
+    // The raft_groups row is deleted above this node's clock, the row's own writes, and the highest
+    // timestamp of the resize markers in that row (`max_marker_timestamp`). The markers are stamped
+    // by the leader's clock, and the row's writes by a counter, so either may be ahead of this
+    // node's clock. A later bootstrap of the group on this shard writes above the tombstone, but
+    // a resize marker of the returning group, stamped by its leader's clock, may still fall below
+    // it until this node's clock catches up.
     static future<> erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
             api::timestamp_type max_marker_timestamp = api::min_timestamp);
 
