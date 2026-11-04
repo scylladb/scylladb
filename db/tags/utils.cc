@@ -14,6 +14,7 @@
 #include "service/storage_proxy.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "utils/assert.hh"
 
 static logging::logger tlogger("tags");
 
@@ -39,11 +40,11 @@ std::optional<std::string> find_tag(const schema& s, const sstring& tag) {
 }
 
 future<> modify_tags(service::migration_manager& mm, sstring ks, sstring cf,
-                     std::function<void(std::map<sstring, sstring>&)> modify) {
-    co_await mm.container().invoke_on(0, [ks = std::move(ks), cf = std::move(cf), modify = std::move(modify)] (service::migration_manager& mm) -> future<> {
+                     std::function<void(std::map<sstring, sstring>&)> modify, abort_source& as) {
+    SCYLLA_ASSERT(this_shard_id() == 0);
         size_t retries = mm.get_concurrent_ddl_retries();
         for (;;) {
-            auto group0_guard = co_await mm.start_group0_operation();
+            auto group0_guard = co_await mm.start_group0_operation(std::nullopt, &as);
             // After getting the schema-modification lock, we need to read the
             // table's *current* schema - it might have changed before we got
             // the lock, by some concurrent modification. If the table is gone,
@@ -63,7 +64,7 @@ future<> modify_tags(service::migration_manager& mm, sstring ks, sstring cf,
             auto m = co_await service::prepare_column_family_update_announcement(mm.get_storage_proxy(),
                 builder.build(), std::vector<view_ptr>(), group0_guard.write_timestamp());
             try {
-                co_await mm.announce(std::move(m), std::move(group0_guard), format("Modify tags for {} table", cf));
+                co_await mm.announce(std::move(m), std::move(group0_guard), format("Modify tags for {} table", cf), std::nullopt, &as);
                 break;
             }  catch (const service::group0_concurrent_modification& ex) {
                 tlogger.info("Failed to modify tags for table {} due to concurrent schema modifications. {}.",
@@ -74,7 +75,6 @@ future<> modify_tags(service::migration_manager& mm, sstring ks, sstring cf,
                 throw;
             }
         }
-    });
 }
 
 }
