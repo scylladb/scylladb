@@ -201,7 +201,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
                         "ThrottlingException",
                         "ThrottledException",
                         "Throttling",
-                        "SlowDownException",
+                        "SlowDownException",    
                         "SlowDown",
                         "RequestTimeTooSkewedException",
                         "RequestTimeTooSkewed",
