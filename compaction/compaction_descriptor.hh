@@ -19,6 +19,8 @@
 #include "enum_set.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "utils/chunked_vector.hh"
+#include "tombstone_gc.hh"
+#include "schema/schema_fwd.hh"
 
 namespace compaction {
 
@@ -255,6 +257,30 @@ struct compaction_descriptor {
     // log, there is currently no way to check if the key exists; only the minimum
     // timestamp comparison, similar to memtables, is performed.
     bool gc_check_only_compacting_sstables = false;
+
+    // If set to true, gc will not check the memtables to collect tombstones, see
+    // compaction_group_view::skip_memtable_for_tombstone_gc(). It is up to the caller to set
+    // it, from the same view of the table its sstable set for tombstone gc was selected with,
+    // so the two cannot disagree if the table's tombstone_gc mode changes in the meantime.
+    bool skip_memtable_for_tombstone_gc = false;
+
+    // The schema the compaction runs with, the table's current one if null. A caller that sets
+    // skip_memtable_for_tombstone_gc has to set it from the same view of the table too: gc_before
+    // is decided by the schema's tombstone_gc mode, so a compaction which picks up a schema with
+    // another mode would purge tombstones without consulting the data that mode requires it to.
+    schema_ptr schema;
+
+    // The gc state the compaction decides tombstone collection with. It is up to the caller to
+    // provide it, usually the table's (compaction_group_view::get_tombstone_gc_state()); the
+    // default collects no tombstones.
+    //
+    // A compaction that ignores some of the data outside the compacting sstables -- because of
+    // gc_check_only_compacting_sstables or skip_memtable_for_tombstone_gc -- is given a snapshot,
+    // taken before all_sstables_snapshot. Ignoring that data is only safe for tombstones that were
+    // already GC-eligible when the snapshot was taken. With a live gc state, a repair completing
+    // mid-compaction could make more tombstones GC-eligible, including ones that shadow data the
+    // compaction ignores.
+    tombstone_gc_state gc_state = tombstone_gc_state::no_gc();
 
     compaction_descriptor() = default;
 
