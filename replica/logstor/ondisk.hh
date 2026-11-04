@@ -12,6 +12,8 @@
 #include <optional>
 #include <span>
 
+#include <seastar/core/simple-stream.hh>
+
 #include "dht/token.hh"
 #include "dht/decorated_key.hh"
 #include "keys/keys.hh"
@@ -161,6 +163,9 @@ static constexpr size_t chunk_header_size = fixed_size<chunk_header>;
 static constexpr size_t segment_header_size = fixed_size<segment_header>;
 static constexpr size_t record_frame_header_size = fixed_size<record_frame_header>;
 static constexpr size_t record_header_fixed_size = fixed_size<record_header_fixed>;
+// min_record_frame_size is the size of the smallest record frame, which holds a
+// record_frame_header and a record header with an empty key.
+static constexpr size_t min_record_frame_size = record_frame_header_size + record_header_fixed_size;
 
 static_assert(chunk_header_size % record_alignment == 0, "Chunk header size must be aligned by record_alignment");
 static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
@@ -192,7 +197,7 @@ inline bool validate_record_frame_header(const record_frame_header& frame_header
 }
 
 // Out of line so that the formatting and the throw stay out of the inlined read path.
-[[noreturn]] void throw_invalid_record_frame(const record_frame_header& frame_header, size_t frame_size);
+[[noreturn]] void throw_invalid_record_frame(std::span<const char> frame);
 
 constexpr size_t record_header_size(size_t key_size) noexcept {
     return record_header_fixed_size + key_size;
@@ -200,6 +205,10 @@ constexpr size_t record_header_size(size_t key_size) noexcept {
 
 inline size_t record_header_size(const record_header& h) noexcept {
     return record_header_size(h.key.key().representation().size());
+}
+
+constexpr size_t record_header_size(const record_frame_header& frame_header) noexcept {
+    return record_header_size(frame_header.key_size);
 }
 
 template <typename Output>
@@ -214,23 +223,19 @@ void write_record_header(Output& out, const record_header& h) {
     }
 }
 
-// key_size comes from the record_frame_header that precedes the record header on disk.
-template <typename Input>
-record_header read_record_header(Input& in, uint32_t key_size) {
+// Reads the record header that fills all of `header`, which holds the fixed part and then the
+// partition key. Throws std::out_of_range if `header` is shorter than the fixed part.
+inline record_header read_record_header(bytes_view header) {
+    seastar::simple_memory_input_stream in(reinterpret_cast<const char*>(header.data()), header.size());
     auto fixed = ser::serializer<record_header_fixed>::read(in);
-    managed_bytes key(managed_bytes::initialized_later(), key_size);
-    for (bytes_mutable_view frag : fragment_range(managed_bytes_mutable_view(key))) {
-        in.read(reinterpret_cast<char*>(frag.data()), frag.size());
-    }
     return record_header{
-        .key = dht::decorated_key(fixed.token, partition_key::from_bytes(std::move(key))),
+        .key = dht::decorated_key(fixed.token, partition_key::from_bytes(header.substr(record_header_fixed_size))),
         .timestamp = fixed.timestamp,
         .table = fixed.table,
     };
 }
 
-// A record frame, as write_record_frame() writes it and read_record_frame() and
-// try_read_record_frame() read it:
+// A record frame, as write_record_frame() writes it and parse_record_frame() reads it:
 //
 //   +-----------------------+-------------------+------------------+
 //   |  record_frame_header  |   record_header   |   record value   |
@@ -275,21 +280,44 @@ void write_record_frame(Output& out, log_record_bytes_view record_view) {
     out.write(reinterpret_cast<const char*>(record_view.value.data()), record_view.value.size());
 }
 
-template <typename Input>
-log_record read_record_frame(Input& in) {
-    auto frame_header = ser::serializer<record_frame_header>::read(in);
-    const size_t header_size = record_header_size(frame_header.key_size);
-
-    if (!validate_record_frame_header(frame_header) || header_size + frame_header.value_size != in.size()) [[unlikely]] {
-        throw_invalid_record_frame(frame_header, record_frame_header_size + in.size());
+// Reads the record frame at the start of `in`, without its padding, and returns the bytes of its
+// record header and record value, which point into `in`. Returns nullopt, and leaves `in` as it
+// was, if the frame header is invalid or the frame does not fit in `in`.
+//
+// This function checks the sizes in the frame header before it uses them, because the chunk CRC
+// shows only that the bytes did not change after the write, and not that the writer wrote correct
+// sizes.
+inline std::optional<log_record_bytes_view> parse_record_frame(seastar::simple_memory_input_stream& in) {
+    if (in.size() < min_record_frame_size) {
+        return std::nullopt;
     }
+    auto rest = in;
+    auto frame_header = ser::serializer<record_frame_header>::read(rest);
+    if (!validate_record_frame_header(frame_header)
+            || size_t(frame_header.key_size) + frame_header.value_size > in.size() - min_record_frame_size) {
+        return std::nullopt;
+    }
+    auto header = rest.read_substream(record_header_size(frame_header));
+    auto value = rest.read_substream(frame_header.value_size);
+    in = rest;
+    return log_record_bytes_view{
+        .header = bytes_view(reinterpret_cast<const int8_t*>(header.begin()), header.size()),
+        .value = bytes_view(reinterpret_cast<const int8_t*>(value.begin()), value.size()),
+    };
+}
 
-    auto header_stream = in.read_substream(header_size);
-    auto value_stream = in.read_substream(frame_header.value_size);
-
+// Reads a record frame that fills all of `in`, as a record_location gives it. Throws, and leaves
+// `in` as it was, if the frame is invalid or does not fill all of `in`.
+inline log_record read_record_frame(seastar::simple_memory_input_stream& in) {
+    auto rest = in;
+    auto bytes = parse_record_frame(rest);
+    if (!bytes || rest.size() != 0) [[unlikely]] {
+        throw_invalid_record_frame(std::span(in.begin(), in.size()));
+    }
+    in = rest;
     return log_record {
-        .header = read_record_header(header_stream, frame_header.key_size),
-        .value = record_value(bytes_view(reinterpret_cast<const int8_t*>(value_stream.begin()), value_stream.size())),
+        .header = read_record_header(bytes->header),
+        .value = record_value(bytes->value),
     };
 }
 
@@ -300,35 +328,16 @@ struct parsed_record_frame {
     log_record_bytes_view bytes;
 };
 
-// Reads the record frame at the start of `in`, without its padding. `in` can hold more after the
-// frame, such as the next frames of a chunk body. Returns nullopt if the frame header is invalid or
-// the frame does not fit in what is left of `in`.
-template <typename Input>
-std::optional<parsed_record_frame> try_read_record_frame(Input& in) {
-    // The sizes a frame claims are checked against what is left of `in` before they are trusted,
-    // as the body CRC only says the bytes are the ones written, not that the writer was right.
-    if (in.size() < record_frame_header_size) {
-        return std::nullopt;
-    }
-    auto frame_header = ser::serializer<record_frame_header>::read(in);
-    const size_t header_size = record_header_size(frame_header.key_size);
-
-    if (!validate_record_frame_header(frame_header) || header_size + frame_header.value_size > in.size()) {
-        return std::nullopt;
-    }
-
-    auto header_stream = in.read_substream(header_size);
-    auto value_stream = in.read_substream(frame_header.value_size);
-    // Taken before read_record_header() consumes the stream.
-    const auto header_bytes = bytes_view(reinterpret_cast<const int8_t*>(header_stream.begin()), header_size);
-
-    return parsed_record_frame{
-        .header = read_record_header(header_stream, frame_header.key_size),
-        .bytes = {
-            .header = header_bytes,
-            .value = bytes_view(reinterpret_cast<const int8_t*>(value_stream.begin()), value_stream.size()),
-        },
-    };
+// Reads the record frame at the start of `in` as parse_record_frame() does, and also reads the
+// record header in the frame. `in` can hold more bytes after the frame, such as the next frames of
+// a chunk body.
+inline std::optional<parsed_record_frame> try_read_record_frame(seastar::simple_memory_input_stream& in) {
+    return parse_record_frame(in).transform([] (const log_record_bytes_view& bytes) {
+        return parsed_record_frame{
+            .header = read_record_header(bytes.header),
+            .bytes = bytes,
+        };
+    });
 }
 
 } // namespace replica::logstor::ondisk
