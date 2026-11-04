@@ -722,6 +722,7 @@ scylla_tests = set([
 ]) | ldap_tests
 
 perf_tests = set([
+    'test/perf/perf_tablet_routing',
     'test/perf/perf_mutation_readers',
     'test/perf/perf_checksum',
     'test/perf/perf_mutation_fragment',
