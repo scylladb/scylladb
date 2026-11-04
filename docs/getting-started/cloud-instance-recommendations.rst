@@ -379,7 +379,8 @@ C4 machine series
 
 The ScyllaDB GCE image supports all of the C4 machine series:
 `C4, C4A, and C4D <https://cloud.google.com/compute/docs/general-purpose-machines#c4_series>`_.
-C4A is Arm-based (Google Axion), so it needs the arm64 ScyllaDB GCE image.
+C4A is Arm-based (Google Axion), so it needs the arm64 ScyllaDB GCE image;
+see :doc:`GCP Images </reference/gcp-images>`.
 
 ScyllaDB needs local SSDs, so use the ``-lssd`` machine types
 (for example, ``c4-standard-8-lssd``, ``c4a-highmem-16-lssd``, or ``c4d-highmem-32-lssd``),
