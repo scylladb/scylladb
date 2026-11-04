@@ -14,7 +14,8 @@ from test.cluster.util import reconnect_driver, wait_for_config_map_value, wait_
     CLUSTER_CONFIGS_QUERY, KEYSPACE_CONFIGS_QUERY, TABLE_CONFIGS_QUERY
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
-from test.pylib.scylla_server import ScyllaVersionDescription, get_current_version_description
+from test.pylib.scylla_server import EXPERIMENTAL_FEATURES_IN_ALL_VERSIONS, ScyllaVersionDescription, \
+    get_current_version_description
 from test.pylib.util import wait_for, wait_for_feature
 
 
@@ -25,7 +26,9 @@ def get_old_scylla_version(scylla_binary: Path, fallback: ScyllaVersionDescripti
     scylla_binary = Path(scylla_binary)
     old_scylla_binary = scylla_binary.with_name("scylla.no.cluster.config")
     if old_scylla_binary.exists():
-        return old_scylla_binary, ScyllaVersionDescription(path=str(old_scylla_binary), config={}, argv=[])
+        # Like the 2026.1 fallback, the old binary may predate features of the default list.
+        config = {'experimental_features': list(EXPERIMENTAL_FEATURES_IN_ALL_VERSIONS)}
+        return old_scylla_binary, ScyllaVersionDescription(path=str(old_scylla_binary), config=config, argv=[])
 
     return Path(fallback.path), fallback
 
