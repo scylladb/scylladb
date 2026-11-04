@@ -141,9 +141,9 @@ void flip_byte(temporary_buffer<char>& buf, size_t offset) {
     buf.get_write()[offset] ^= char(0x1);
 }
 
-// Rewrites the chunk header at the start of `buf` with `version` and a matching CRC, so that the
-// chunk has the header that a release of that format version writes.
-void set_chunk_version(temporary_buffer<char>& buf, uint8_t version) {
+// Rewrites the chunk header at the start of `buf` with `change` applied and a matching CRC, so that
+// the chunk has the header that a release which sets those fields writes.
+void rewrite_chunk_header(temporary_buffer<char>& buf, std::function<void(ondisk::chunk_header&)> change) {
     auto in = seastar::simple_memory_input_stream(buf.get(), ondisk::chunk_header_size);
     auto ch = ser::deserialize(in, std::type_identity<ondisk::chunk_header>{});
     std::optional<ondisk::segment_header> sh;
@@ -151,7 +151,7 @@ void set_chunk_version(temporary_buffer<char>& buf, uint8_t version) {
         auto sh_in = seastar::simple_memory_input_stream(buf.get() + ondisk::chunk_header_size, ondisk::segment_header_size);
         sh = ser::deserialize(sh_in, std::type_identity<ondisk::segment_header>{});
     }
-    ch.version = version;
+    change(ch);
     ch.crc = ch.calculate_crc(sh);
     auto out = seastar::simple_memory_output_stream(buf.get_write(), ondisk::chunk_header_size);
     ser::serialize(out, ch);
@@ -1907,31 +1907,55 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
     assert_that(to_mutation(seen_records[1], schema)).is_equal_to(expected1);
 }
 
-// A chunk with a format version that this code does not read fails read_chunk_info(), the segment
-// scan and the streamed rewriter, because the chunk is from another release and recovery must not
-// free the segment as empty.
-SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_fails_on_a_chunk_of_another_format_version) {
+// Requires that read_chunk_info(), the segment scan and the streamed rewriter all fail with an error
+// that contains `expected` on a segment whose chunk header has `change` applied, because the chunk
+// is from another release and recovery must not free the segment as empty.
+void require_segment_read_fails(std::function<void(ondisk::chunk_header&)> change, const sstring& expected) {
     auto schema = make_kv_schema();
 
     raw_write_buffer wb(64 * 1024, segment_kind::mixed);
     wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(71))));
     wb.seal(segment_sequence{81}, std::nullopt, ondisk::block_alignment);
 
-    for (uint8_t version : {uint8_t(ondisk::min_read_version - 1), uint8_t(ondisk::current_version + 1)}) {
-        auto serialized = copy_chunk(wb.chunk());
-        set_chunk_version(serialized, version);
+    auto serialized = copy_chunk(wb.chunk());
+    rewrite_chunk_header(serialized, std::move(change));
 
-        const auto names_the_version = exception_predicate::message_contains("has format version");
-        BOOST_REQUIRE_EXCEPTION(read_chunk_info_from_bytes(serialized), std::runtime_error, names_the_version);
-        BOOST_REQUIRE_EXCEPTION(scan_buffer_records(serialized, log_segment_id{7}), std::runtime_error, names_the_version);
-        BOOST_REQUIRE_EXCEPTION(rewrite_streamed_segment(log_segment_id{9}, segment_sequence{91}, std::span(&serialized, 1)),
-                std::runtime_error, names_the_version);
-    }
+    const auto contains_expected = exception_predicate::message_contains(expected);
+    BOOST_REQUIRE_EXCEPTION(read_chunk_info_from_bytes(serialized), std::runtime_error, contains_expected);
+    BOOST_REQUIRE_EXCEPTION(scan_buffer_records(serialized, log_segment_id{7}), std::runtime_error, contains_expected);
+    BOOST_REQUIRE_EXCEPTION(rewrite_streamed_segment(log_segment_id{9}, segment_sequence{91}, std::span(&serialized, 1)),
+            std::runtime_error, contains_expected);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_fails_on_a_chunk_of_another_format_version) {
+    require_segment_read_fails([] (ondisk::chunk_header& ch) { ch.version = ondisk::min_read_version - 1; }, "has format version");
+    require_segment_read_fails([] (ondisk::chunk_header& ch) { ch.version = ondisk::current_version + 1; }, "has format version");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_fails_on_a_chunk_with_an_unknown_flag) {
+    require_segment_read_fails([] (ondisk::chunk_header& ch) { ch.flags = ~ondisk::known_chunk_flags; }, "has flags");
+}
+
+// A flag that a bit flip set fails the CRC check, so the scan ends as it does for other corruption,
+// and does not fail as it does for a flag from another release.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_a_corrupt_flag) {
+    auto schema = make_kv_schema();
+
+    raw_write_buffer wb(64 * 1024, segment_kind::mixed);
+    wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(71))));
+    wb.seal(segment_sequence{81}, std::nullopt, ondisk::block_alignment);
+
+    auto serialized = copy_chunk(wb.chunk());
+    // flags is the 16-bit field at offset 6 of the chunk header.
+    flip_byte(serialized, 6);
+
+    BOOST_REQUIRE(!read_chunk_info_from_bytes(serialized));
+    BOOST_REQUIRE(scan_buffer_records(serialized, log_segment_id{7}).empty());
 }
 
 // After its first chunk, a reused segment still holds the chunks of an earlier use of the segment,
-// and those chunks can have a format version that this code does not read. The scan checks
-// segment_seq before the version, so it ends at such a chunk and does not fail.
+// and those chunks can have a format version or flags that this code does not read. The scan checks
+// segment_seq before the version and the flags, so it ends at such a chunk and does not fail.
 SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_a_stale_chunk_of_another_format_version) {
     auto schema = make_kv_schema();
 
@@ -1947,7 +1971,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_a_stale_chunk_of_ano
 
     auto serialized0 = copy_chunk(wb0.chunk());
     auto serialized1 = copy_chunk(wb1.chunk());
-    set_chunk_version(serialized1, ondisk::current_version + 1);
+    rewrite_chunk_header(serialized1, [] (ondisk::chunk_header& ch) {
+        ch.version = ondisk::current_version + 1;
+        ch.flags = ~ondisk::known_chunk_flags;
+    });
 
     auto segment = concat_chunks({&serialized0, &serialized1});
     const auto segment_size = segment.size();
