@@ -1642,18 +1642,26 @@ cql_test_config sc_replay_config_starting_on_damage() {
 // A COMMAND entry carrying one real mutation, encoded as the coordinator does: a
 // raft_command holding a frozen_mutation in raft::command. Dummies do not work
 // for the stale-copy test below: dropped or applied, a dummy leaves no trace.
-raft::log_entry_ptr make_mutation_entry(const schema_ptr& schema, raft::term_t term, raft::index_t idx,
-        int32_t pk, int32_t v, api::timestamp_type ts) {
+mutation make_row(const schema_ptr& schema, int32_t pk, int32_t v, api::timestamp_type ts,
+        clustering_key ck = clustering_key::make_empty()) {
     mutation m(schema, partition_key::from_single_value(*schema, int32_type->decompose(pk)));
-    const auto ck = clustering_key::make_empty();
     m.set_clustered_cell(ck, to_bytes("v"), data_value(v), ts);
     // A row marker, as an INSERT writes one, so the row exists in its own right.
     m.partition().clustered_row(*schema, ck).apply(row_marker(ts));
+    return m;
+}
+
+raft::log_entry_ptr make_mutation_entry(const mutation& m, raft::term_t term, raft::index_t idx) {
     raft::command cmd;
     ser::serialize(cmd, service::strong_consistency::raft_command{
             .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
     return make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = term, .idx = idx, .data = std::move(cmd)});
+}
+
+raft::log_entry_ptr make_mutation_entry(const schema_ptr& schema, raft::term_t term, raft::index_t idx,
+        int32_t pk, int32_t v, api::timestamp_type ts, clustering_key ck = clustering_key::make_empty()) {
+    return make_mutation_entry(make_row(schema, pk, v, ts, std::move(ck)), term, idx);
 }
 
 // The oldest group0 schema version, reached by any node that has one.
@@ -2436,7 +2444,7 @@ SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) 
 
 // Test: replay persists the configuration a committed entry carried (SCYLLADB-3842).
 //
-// The configuration reaches the row through note_committed(), so a replica that restarts
+// The configuration reaches the row through note_applied(), so a replica that restarts
 // after a membership change comes back on the membership raft committed, not the one the
 // row was last written with. A configuration above the commit index is not committed, so
 // it waits in the recovered tail.
@@ -2559,7 +2567,7 @@ SEASTAR_TEST_CASE(test_replay_takes_the_commit_term_from_the_entry_at_the_floor)
                 make_dummy_entry(raft::term_t(3), raft::index_t(10))}, buffer);
         // A later segment still holds the copy of 7 that term 2 wrote. The batch before it
         // was applied as read, never buffered, so the dedupe against the buffered tail
-        // does not run. The copy reaches note_committed().
+        // does not run. The copy reaches note_applied().
         add(2, raft::index_t(10), {make_dummy_entry(raft::term_t(2), raft::index_t(7))}, buffer);
         buffer.finish_replay(env.local_db(), env.local_qp()).get();
 
@@ -2808,6 +2816,346 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
             });
         });
     }, std::move(db_cfg_ptr));
+}
+
+// Test: replay applies writes under the schema_changed before them, lists the announced
+// versions in the row with the floor, and resolves the writes of later passes by that list
+// (SCYLLADB-6021, SCYLLADB-4094).
+SEASTAR_TEST_CASE(test_replay_applies_writes_under_the_announced_schema) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        env.execute_cql("create table ks.d (pk int primary key, v int)").get();
+        const auto schema = env.local_db().find_schema("ks", "d");
+        auto& table = env.local_db().find_column_family(schema->id());
+        const auto replicas = locator::tablet_replica_set{
+                {env.local_db().get_token_metadata().get_my_id(), this_shard_id()}};
+        const auto gid = make_group_id();
+        set_sc_tablet_metadata(env, schema->id(), gid, replicas).get();
+        // The row bootstrap() writes, with no schema_changed yet.
+        service::strong_consistency::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                raft::configuration{}, {}).get();
+
+        const auto term = raft::term_t{1};
+        constexpr api::timestamp_type ts = 1000;
+        constexpr db::segment_id_type segment = 1;
+        const auto write = [&] (int idx, int pk) {
+            return make_mutation_entry(schema, term, raft::index_t(idx), pk, 100 + pk, ts);
+        };
+        const auto add_batch = [&] (db::raft_commitlog_replay_buffer& buffer, raft::group_id group,
+                std::vector<raft::log_entry_ptr> entries, raft::index_t commit_idx) {
+            buffer.add_batch(env.local_db(), env.local_qp(),
+                    group, segment, commit_idx, entries).get();
+        };
+        const auto replay = [&] (std::vector<raft::log_entry_ptr> entries, raft::index_t commit_idx) {
+            db::raft_commitlog_replay_buffer buffer;
+            add_batch(buffer, gid, std::move(entries), commit_idx);
+            buffer.finish_replay(env.local_db(), env.local_qp()).get();
+            buffer.stop().get();
+        };
+        const auto require_throws = [&] (raft::group_id group, raft::log_entry_ptr entry) {
+            seastar::testing::scoped_no_abort_on_internal_error no_abort;
+            db::raft_commitlog_replay_buffer buffer;
+            BOOST_REQUIRE_THROW(add_batch(buffer, group, {entry}, entry->idx), std::runtime_error);
+            buffer.stop().get();
+        };
+        const auto persisted_schemas = [&] {
+            return service::strong_consistency::raft_groups_storage::load_descriptor(
+                    env.local_qp(), gid, this_shard_id()).get().schema_changes;
+        };
+        const auto persisted_versions = [&] {
+            std::vector<table_schema_version> versions;
+            for (const auto& record : persisted_schemas()) {
+                versions.push_back(record.change.version);
+            }
+            return versions;
+        };
+        const auto require_rows = [&] (std::vector<int> pks) {
+            std::vector<std::vector<bytes_opt>> rows;
+            for (int pk : pks) {
+                rows.push_back({int32_type->decompose(pk), int32_type->decompose(100 + pk)});
+            }
+            assert_that(env.execute_cql("select pk, v from ks.d").get())
+                    .is_rows().with_rows_ignore_order(rows);
+        };
+
+        // Nothing announced, in the log or in the row, so the write cannot be applied.
+        require_throws(gid, write(1, 1));
+        BOOST_REQUIRE(persisted_schemas().empty());
+
+        // The announcement ahead of the writes governs them, and goes to the row with the floor.
+        replay({make_schema_changed_entry(schema, term, raft::index_t(1)), write(2, 1), write(3, 2)},
+                raft::index_t(3));
+        require_rows({1, 2});
+        const auto announced = persisted_schemas();
+        BOOST_REQUIRE_EQUAL(announced.size(), 1u);
+        BOOST_REQUIRE(announced[0].change.version == schema->version());
+        BOOST_REQUIRE(announced[0].change.mapping == schema->get_column_mapping());
+        BOOST_REQUIRE(announced[0].change.group0_schema_version == reached_group0_version);
+        BOOST_REQUIRE_EQUAL(announced[0].segment, segment);
+
+        // A later pass starts above the floor, with the version from the row alone. The
+        // version in effect announced again, as a new term does, changes nothing.
+        replay({make_schema_changed_entry(schema, term, raft::index_t(4)), write(5, 3)}, raft::index_t(5));
+        require_rows({1, 2, 3});
+        BOOST_REQUIRE(persisted_versions() == std::vector{schema->version()});
+
+        // A write of a version no announcement covers.
+        env.execute_cql("alter table ks.d add w int").get();
+        const auto altered = env.local_db().find_schema("ks", "d");
+        const auto altered_write = [&] (int idx, int pk) {
+            return make_mutation_entry(altered, term, raft::index_t(idx), pk, 100 + pk, ts);
+        };
+        require_throws(gid, altered_write(6, 4));
+        require_rows({1, 2, 3});
+
+        // The switch to the new version and a write under it go through with no flush. The
+        // row keeps the old version for the writes the segments still hold.
+        const auto switches_before = table.get_stats().memtable_switch_count;
+        replay({make_schema_changed_entry(altered, term, raft::index_t(6)), altered_write(7, 5)}, raft::index_t(7));
+        require_rows({1, 2, 3, 5});
+        BOOST_REQUIRE(persisted_versions() == (std::vector{schema->version(), altered->version()}));
+        BOOST_REQUIRE_EQUAL(table.get_stats().memtable_switch_count, switches_before);
+
+        // A write below the floor, from an older segment that outlived the one holding its
+        // own schema_changed, applies under its own version.
+        replay({write(4, 4)}, raft::index_t(7));
+        require_rows({1, 2, 3, 4, 5});
+
+        // The old announcement from such a segment does not put the old version back in
+        // effect, so a write under the new one still resolves after it.
+        replay({make_schema_changed_entry(schema, term, raft::index_t(1)), altered_write(8, 6)}, raft::index_t(8));
+        require_rows({1, 2, 3, 4, 5, 6});
+        BOOST_REQUIRE(persisted_versions() == (std::vector{schema->version(), altered->version()}));
+
+        // The leader announces the old version again for writes still in flight after the
+        // ALTER, which moves it to the end.
+        replay({make_schema_changed_entry(schema, term, raft::index_t(9)), write(10, 7)}, raft::index_t(10));
+        require_rows({1, 2, 3, 4, 5, 6, 7});
+        BOOST_REQUIRE(persisted_versions() == (std::vector{altered->version(), schema->version()}));
+        BOOST_REQUIRE_EQUAL(table.get_stats().memtable_switch_count, switches_before);
+
+        // Another group, whose row no longer lists the old version. A write of it below the
+        // floor is in a segment the commitlog already dropped, and was flushed. Above the
+        // floor, no announcement covers it.
+        const auto pruned = make_group_id();
+        set_sc_tablet_metadata(env, schema->id(), pruned, replicas).get();
+        service::strong_consistency::raft_groups_storage::store_descriptor(
+                env.local_qp(), pruned, this_shard_id(), raft::index_t(2), term, raft::configuration{}, {},
+                {{make_schema_changed(altered), segment}}).get();
+        {
+            db::raft_commitlog_replay_buffer buffer;
+            add_batch(buffer, pruned, {write(2, 8)}, raft::index_t(2));
+            buffer.finish_replay(env.local_db(), env.local_qp()).get();
+            buffer.stop().get();
+        }
+        require_rows({1, 2, 3, 4, 5, 6, 7});
+        require_throws(pruned, write(3, 9));
+    }, sc_replay_config());
+}
+
+// Test: strongly_consistent_tables_start_on_damaged_commitlog starts the node past a write
+// above the floor that no schema_changed announced, and skips that write.
+SEASTAR_TEST_CASE(test_replay_skips_an_unannounced_write_when_the_override_is_set) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        env.execute_cql("create table ks.d (pk int primary key, v int)").get();
+        const auto schema = env.local_db().find_schema("ks", "d");
+        const auto gid = make_group_id();
+        set_sc_tablet_metadata(env, schema->id(), gid,
+                locator::tablet_replica_set{
+                        {env.local_db().get_token_metadata().get_my_id(), this_shard_id()}}).get();
+        service::strong_consistency::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                raft::configuration{}, {}).get();
+
+        const auto term = raft::term_t{1};
+        constexpr api::timestamp_type ts = 1000;
+        db::raft_commitlog_replay_buffer buffer;
+        buffer.add_batch(env.local_db(), env.local_qp(), gid, 1, raft::index_t(3),
+                {make_mutation_entry(schema, term, raft::index_t(1), 1, 101, ts),
+                 make_schema_changed_entry(schema, term, raft::index_t(2)),
+                 make_mutation_entry(schema, term, raft::index_t(3), 2, 102, ts)}).get();
+        buffer.finish_replay(env.local_db(), env.local_qp()).get();
+
+        assert_that(env.execute_cql("select pk, v from ks.d").get())
+                .is_rows().with_rows({{int32_type->decompose(2), int32_type->decompose(102)}});
+        BOOST_REQUIRE_EQUAL(service::strong_consistency::raft_groups_storage::load_descriptor(
+                env.local_qp(), gid, this_shard_id()).get().idx, raft::index_t(3));
+        BOOST_REQUIRE(buffer.take_replayed_group_entries(gid).entries.empty());
+        buffer.stop().get();
+    }, sc_replay_config_starting_on_damage());
+}
+
+// Test: replay leaves a write to the state machine when its schema_changed has a group0
+// schema version the node has not reached, since the version may be newer than the
+// table's. The floor stops at the entry before, the tail from the write up goes back to
+// the log, and the next replay does the same. At or below the loaded floor such a write
+// is applied, since the state machine applied it before the crash.
+SEASTAR_TEST_CASE(test_replay_leaves_a_write_announced_ahead_of_the_schema_to_the_state_machine) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        env.execute_cql("create table ks.u (pk int primary key, v int)").get();
+        const auto old = env.local_db().find_schema("ks", "u");
+        env.execute_cql("alter table ks.u add c int").get();
+        const auto altered = env.local_db().find_schema("ks", "u");
+        const table_schema_version ahead{utils::UUID_gen::get_time_UUID(
+                std::chrono::system_clock::now() + std::chrono::hours(1))};
+        const auto replicas = locator::tablet_replica_set{
+                {env.local_db().get_token_metadata().get_my_id(), this_shard_id()}};
+        const auto gid = make_group_id();
+        set_sc_tablet_metadata(env, old->id(), gid, replicas).get();
+        service::strong_consistency::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                raft::configuration{}, {}).get();
+
+        constexpr api::timestamp_type ts = 1000;
+        const auto term1 = raft::term_t{1};
+        const auto term2 = raft::term_t{2};
+        db::raft_commitlog_replay_buffer buffer;
+        const auto add_batch = [&] (std::vector<raft::log_entry_ptr> entries, raft::index_t commit_idx) {
+            buffer.add_batch(env.local_db(), env.local_qp(),
+                    gid, 1, commit_idx, entries).get();
+        };
+        add_batch({make_schema_changed_entry(old, term1, raft::index_t(1)),
+                make_mutation_entry(old, term1, raft::index_t(2), 1, 101, ts),
+                make_schema_changed_entry(altered, term2, raft::index_t(3), ahead),
+                make_mutation_entry(altered, term2, raft::index_t(4), 2, 102, ts)}, raft::index_t(4));
+        add_batch({make_mutation_entry(altered, term2, raft::index_t(5), 3, 103, ts)}, raft::index_t(5));
+        buffer.finish_replay(env.local_db(), env.local_qp()).get();
+
+        assert_that(env.execute_cql("select pk, v from ks.u").get())
+                .is_rows().with_rows({{int32_type->decompose(1), int32_type->decompose(101)}});
+        const auto persisted = service::strong_consistency::raft_groups_storage::load_descriptor(
+                env.local_qp(), gid, this_shard_id()).get();
+        BOOST_REQUIRE_EQUAL(persisted.idx, raft::index_t(3));
+        BOOST_REQUIRE_EQUAL(persisted.term, term2);
+        const auto& announced = persisted.schema_changes;
+        BOOST_REQUIRE_EQUAL(announced.size(), 2u);
+        BOOST_REQUIRE(announced[0].change.version == old->version());
+        BOOST_REQUIRE(announced[1].change.version == altered->version());
+        BOOST_REQUIRE(announced[1].change.group0_schema_version == ahead);
+        auto data = buffer.take_replayed_group_entries(gid);
+        BOOST_REQUIRE_EQUAL(data.entries.size(), 2u);
+        BOOST_REQUIRE_EQUAL(data.entries.front()->idx, raft::index_t(4));
+        BOOST_REQUIRE_EQUAL(data.entries.back()->idx, raft::index_t(5));
+        buffer.stop().get();
+
+        db::raft_commitlog_replay_buffer again;
+        again.add_batch(env.local_db(), env.local_qp(), gid, 2, raft::index_t(5),
+                {make_mutation_entry(altered, term2, raft::index_t(4), 2, 102, ts),
+                 make_mutation_entry(altered, term2, raft::index_t(5), 3, 103, ts)}).get();
+        again.finish_replay(env.local_db(), env.local_qp()).get();
+        assert_that(env.execute_cql("select pk, v from ks.u").get())
+                .is_rows().with_rows({{int32_type->decompose(1), int32_type->decompose(101)}});
+        BOOST_REQUIRE_EQUAL(service::strong_consistency::raft_groups_storage::load_descriptor(
+                env.local_qp(), gid, this_shard_id()).get().idx, raft::index_t(3));
+        BOOST_REQUIRE_EQUAL(again.take_replayed_group_entries(gid).entries.size(), 2u);
+        again.stop().get();
+
+        // Another group, whose row lists the version at `ahead`, as if announced again
+        // after the write at 2 was applied.
+        const auto floored = make_group_id();
+        set_sc_tablet_metadata(env, old->id(), floored, replicas).get();
+        service::strong_consistency::raft_groups_storage::store_descriptor(
+                env.local_qp(), floored, this_shard_id(), raft::index_t(2), term2, raft::configuration{}, {},
+                {{make_schema_changed(altered, ahead), 1}}).get();
+        db::raft_commitlog_replay_buffer below_floor;
+        below_floor.add_batch(env.local_db(), env.local_qp(), floored, 3, raft::index_t(2),
+                {make_mutation_entry(altered, term2, raft::index_t(2), 4, 104, ts)}).get();
+        below_floor.finish_replay(env.local_db(), env.local_qp()).get();
+        assert_that(env.execute_cql("select pk, v from ks.u where pk = 4").get())
+                .is_rows().with_rows({{int32_type->decompose(4), int32_type->decompose(104)}});
+        below_floor.stop().get();
+    }, sc_replay_config());
+}
+
+// Test: replay applies a write whose mapping names a column the table has with the same
+// type but another kind, static against regular, because the column was dropped and added
+// back since. The node has reached the announcement, so the version is the older one, and the
+// write converts by the mapping.
+SEASTAR_TEST_CASE(test_replay_applies_a_write_naming_a_column_of_another_kind) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future<>();
+#else
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        env.execute_cql("create table ks.k (pk int, ck int, v int, c int static, primary key (pk, ck))").get();
+        const auto with_static_c = env.local_db().find_schema("ks", "k");
+        env.execute_cql("alter table ks.k drop c").get();
+        env.execute_cql("alter table ks.k add c int").get();
+        const auto gid = make_group_id();
+        set_sc_tablet_metadata(env, with_static_c->id(), gid,
+                locator::tablet_replica_set{
+                        {env.local_db().get_token_metadata().get_my_id(), this_shard_id()}}).get();
+        service::strong_consistency::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                raft::configuration{}, {}).get();
+        scoped_error_injection unknown_version{"schema_registry_ignore_version",
+                {{"value", fmt::format("{}", with_static_c->version().uuid())}}};
+
+        const auto term = raft::term_t{1};
+        const auto ck = clustering_key::from_single_value(*with_static_c, int32_type->decompose(1));
+        // Newer than the drop, so only the kind tells the static c from the regular one.
+        const auto ts = api::new_timestamp();
+        auto m = make_row(with_static_c, 1, 101, ts, ck);
+        m.set_static_cell(to_bytes("c"), data_value(7), ts);
+        db::raft_commitlog_replay_buffer buffer;
+        buffer.add_batch(env.local_db(), env.local_qp(), gid, 1, raft::index_t(2),
+                {make_schema_changed_entry(with_static_c, term, raft::index_t(1)),
+                 make_mutation_entry(m, term, raft::index_t(2))}).get();
+        buffer.finish_replay(env.local_db(), env.local_qp()).get();
+
+        assert_that(env.execute_cql("select pk, v, c from ks.k").get())
+                .is_rows().with_rows({{int32_type->decompose(1), int32_type->decompose(101), std::nullopt}});
+        BOOST_REQUIRE_EQUAL(service::strong_consistency::raft_groups_storage::load_descriptor(
+                env.local_qp(), gid, this_shard_id()).get().idx, raft::index_t(2));
+        BOOST_REQUIRE(buffer.take_replayed_group_entries(gid).entries.empty());
+        buffer.stop().get();
+    }, sc_replay_config());
+#endif
+}
+
+// Test: replay applies a write whose mapping names a column the table dropped, at or
+// below the loaded floor and above it. The node has reached the announcement, so the
+// version is from before the drop, not one that added the column back.
+SEASTAR_TEST_CASE(test_replay_applies_a_write_naming_a_dropped_column) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future<>();
+#else
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        env.execute_cql("create table ks.f (pk int primary key, v int, c int)").get();
+        const auto with_c = env.local_db().find_schema("ks", "f");
+        env.execute_cql("alter table ks.f drop c").get();
+        const auto gid = make_group_id();
+        set_sc_tablet_metadata(env, with_c->id(), gid,
+                locator::tablet_replica_set{
+                        {env.local_db().get_token_metadata().get_my_id(), this_shard_id()}}).get();
+        // The write at 2 was applied before the crash, under the announcement at 1.
+        const auto term = raft::term_t{1};
+        service::strong_consistency::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(2), term, raft::configuration{}, {},
+                {{make_schema_changed(with_c), 1}}).get();
+        scoped_error_injection unknown_version{"schema_registry_ignore_version",
+                {{"value", fmt::format("{}", with_c->version().uuid())}}};
+
+        const auto write_with_c = [&] (int idx, int pk) {
+            auto m = make_row(with_c, pk, 100 + pk, 1000);
+            m.set_clustered_cell(clustering_key::make_empty(), to_bytes("c"), data_value(pk), 1000);
+            return make_mutation_entry(m, term, raft::index_t(idx));
+        };
+        db::raft_commitlog_replay_buffer buffer;
+        buffer.add_batch(env.local_db(), env.local_qp(), gid, 1, raft::index_t(3),
+                {make_schema_changed_entry(with_c, term, raft::index_t(1)), write_with_c(2, 1), write_with_c(3, 2)}).get();
+        buffer.finish_replay(env.local_db(), env.local_qp()).get();
+
+        assert_that(env.execute_cql("select pk, v from ks.f").get())
+                .is_rows().with_rows_ignore_order({{int32_type->decompose(1), int32_type->decompose(101)},
+                        {int32_type->decompose(2), int32_type->decompose(102)}});
+        BOOST_REQUIRE_EQUAL(service::strong_consistency::raft_groups_storage::load_descriptor(
+                env.local_qp(), gid, this_shard_id()).get().idx, raft::index_t(3));
+        BOOST_REQUIRE(buffer.take_replayed_group_entries(gid).entries.empty());
+        buffer.stop().get();
+    }, sc_replay_config());
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()
