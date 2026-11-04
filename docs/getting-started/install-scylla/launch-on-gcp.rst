@@ -26,6 +26,8 @@ Launching ScyllaDB on GCP
       :exclude: rc,dev
       :only_latest:
 
+   For Arm-based machine types, such as C4A, use the arm64 image (its name ends in ``-aarch64``).
+
 #. Launch a ScyllaDB instance on GCP with ``gcloud`` using the information from the previous step. Use the following syntax:
 
    .. code-block:: console
@@ -52,6 +54,12 @@ Launching ScyllaDB on GCP
    .. code-block:: console
 
         gcloud compute instances create scylla-node1 --image <ScyllaDB image name> --image-project scylla-images --machine-type=c4-highmem-16-lssd
+
+   C4A is Arm-based, so it needs the arm64 image. For example:
+
+   .. code-block:: console
+
+        gcloud compute instances create scylla-node1 --image <ScyllaDB arm64 image name> --image-project scylla-images --machine-type=c4a-highmem-16-lssd
 
    For more information about GCP image `create` see the `Google Cloud SDK documentation <https://cloud.google.com/sdk/gcloud/reference/compute/images/create>`_.
 
