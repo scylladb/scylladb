@@ -266,8 +266,12 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message>> actually_do_execute(query_processor& qp,
             service::query_state& state, const query_options& options) const;
 
-    lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
-            const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options, uint32_t internal_page_size) const;
+    // The rows the query may still return before this page: the remaining count
+    // of the paging state the page resumes from, or the limit on the first page.
+    static uint64_t remaining_rows_before_page(const query_options& options, const query::read_command& cmd);
+
+    lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(uint64_t remaining_from_prev_page, lw_shared_ptr<const service::pager::paging_state> paging_state,
+            const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const;
 
     future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>> find_index_partition_ranges(query_processor& qp,
                                                                     service::query_state& state,

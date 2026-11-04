@@ -981,7 +981,7 @@ view_indexed_table_select_statement::process_base_query_results(
     if (paging_state) {
         // The plan was recorded where the state was built, by the scan of the
         // index view, and survives the rewriting below. See #18992.
-        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
+        paging_state = generate_view_paging_state_from_base_query_results(remaining_rows_before_page(options, *cmd), paging_state, results, state, options);
         _selection->get_result_metadata()->maybe_set_paging_state(std::move(paging_state));
     }
     return process_results(std::move(results), std::move(cmd), options, now);
@@ -1172,8 +1172,13 @@ bytes view_indexed_table_select_statement::compute_idx_token(const partition_key
     return cdef.get_computation().compute_value(*_schema, key);
 }
 
-lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
-        const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options, uint32_t internal_page_size) const {
+uint64_t view_indexed_table_select_statement::remaining_rows_before_page(const query_options& options, const query::read_command& cmd) {
+    auto old_paging_state = options.get_paging_state();
+    return old_paging_state ? old_paging_state->get_remaining() : cmd.get_row_limit();
+}
+
+lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_statement::generate_view_paging_state_from_base_query_results(uint64_t remaining_from_prev_page, lw_shared_ptr<const service::pager::paging_state> paging_state,
+        const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const {
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
     if (!cdef) {
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
@@ -1219,8 +1224,15 @@ lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_stat
         return paging_state;
     }
 
+    // Clamp the remaining rows of the new paging state at 0, in case the base
+    // table read returned more rows than the remaining rows of the query.
+    // This happens in a paged query with a LIMIT on a static column index:
+    // the base table read fetches a whole partition for each index view row,
+    // and nothing caps it at the remaining rows. The query then ends after
+    // this page, which may still exceed the LIMIT.
+    const uint64_t rows = *results->row_count();
     auto paging_state_copy = make_lw_shared<service::pager::paging_state>(service::pager::paging_state(*paging_state));
-    paging_state_copy->set_remaining(internal_page_size);
+    paging_state_copy->set_remaining(rows < remaining_from_prev_page ? remaining_from_prev_page - rows : 0);
     paging_state_copy->set_partition_key(std::move(index_pk));
     paging_state_copy->set_clustering_key(std::move(index_ck));
     return paging_state_copy;
@@ -1313,9 +1325,9 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
         auto internal_page_size = qp.get_cql_config().select_internal_page_size.get();
         internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_page_size));
         do {
-            auto consume_results = [this, &builder, &options, &internal_options, &state, internal_page_size] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
+            auto consume_results = [this, &builder, &options, &internal_options, &state] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
                 if (paging_state) {
-                    paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
+                    paging_state = generate_view_paging_state_from_base_query_results(remaining_rows_before_page(options, *cmd), paging_state, results, state, options);
                 }
                 internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state));
                 if (needs_post_filtering()) {
