@@ -14,10 +14,12 @@ from test.cluster.util import ensure_raft_group_leader_on, get_topology_coordina
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
-from cassandra.policies import FallthroughRetryPolicy
+from cassandra.connection import UnixSocketEndPoint
+from cassandra.policies import FallthroughRetryPolicy, WhiteListRoundRobinPolicy
 from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
+from test.pylib.driver_utils import safe_shutting_down
 from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
 
 import asyncio
@@ -1484,6 +1486,41 @@ async def test_write_resumed_during_shutdown_succeeds(manager: ScyllaClusterMana
 
     await write
     await stop_task
+
+@pytest.mark.skip_bug(
+    link="https://scylladb.atlassian.net/browse/SCYLLADB-2423",
+    reason="the write reaches the closed commitlog and the node dies",
+)
+async def test_maintenance_socket_write_after_drain(manager: ScyllaClusterManager):
+    """
+    A drain stops the transport, the strongly consistent groups and the
+    database, but the CQL server of the maintenance socket keeps running.
+    A strongly consistent write that comes through it must fail with a
+    timeout, and the node must stay up.
+
+    Reproduces SCYLLADB-2423.
+    """
+
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql = manager.get_cql()
+
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'")
+    table = f"{ks}.my_table"
+    await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+
+    await manager.api.drain(server.ip_addr)
+
+    socket_endpoint = UnixSocketEndPoint(await manager.server_get_maintenance_socket_path(server.server_id))
+    maintenance_cluster = manager.con_gen([socket_endpoint],
+                                          load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]))
+    with safe_shutting_down(maintenance_cluster):
+        maintenance_cql = maintenance_cluster.connect()
+        insert = SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 13)",
+                                 consistency_level=ConsistencyLevel.QUORUM, retry_policy=FallthroughRetryPolicy())
+        with pytest.raises(WriteTimeout):
+            await maintenance_cql.run_async(insert)
+
+    assert await manager.server_is_alive(server.server_id), "the node died after the refused write"
 
 async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
     """
