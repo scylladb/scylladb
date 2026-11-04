@@ -3253,13 +3253,17 @@ future<> storage_service::reset_cleanup_needed() {
 }
 
 future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry,
-                                                                     std::optional<lowres_clock::time_point> deadline) {
+                                                                     std::optional<lowres_clock::time_point> deadline,
+                                                                     abort_source* as) {
     // Lets a test delay the caller between submitting the request and its first
     // read of system.topology_requests.
     co_await utils::get_local_injector().inject("topology_request_pause_before_wait",
             utils::wait_for_message(std::chrono::minutes(5)));
+    abort_source wait_as;
+    const auto group0_sub = utils::chain_abort_source(wait_as, _group0_as);
+    const auto caller_sub = utils::chain_abort_source(wait_as, as);
     co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(),
-            _group0->client(), _group0_as, id, require_entry, deadline);
+            _group0->client(), wait_as, id, require_entry, deadline);
 }
 
 future<> storage_service::abort_topology_request(utils::UUID request_id) {
@@ -3268,13 +3272,16 @@ future<> storage_service::abort_topology_request(utils::UUID request_id) {
     });
 }
 
-future<> storage_service::wait_for_topology_not_busy() {
+future<> storage_service::wait_for_topology_not_busy(abort_source* as) {
     // Must be called on shard 0: the topology state machine is only loaded and signalled there.
     SCYLLA_ASSERT(this_shard_id() == 0);
     // Observe the locally applied state. Re-reading through a group0 guard on each wakeup would
     // advance past the idle moment, which is only milliseconds wide while the coordinator retries
     // a failed rebuild.
-    co_await _topology_state_machine.await_not_busy();
+    abort_source wait_as;
+    const auto group0_sub = utils::chain_abort_source(wait_as, _group0_as);
+    const auto caller_sub = utils::chain_abort_source(wait_as, as);
+    co_await _topology_state_machine.await_not_busy(wait_as);
 }
 
 future<> storage_service::alter_table_with_tablet_hints(table_id tid,
@@ -6791,7 +6798,7 @@ future<> storage_service::do_await_topology_quiesced() {
                         request_id, error, attempts, elapsed_s());
         }
         // Wait locally for topology to settle before resubmitting.
-        co_await _topology_state_machine.await_not_busy();
+        co_await _topology_state_machine.await_not_busy(_group0_as);
         co_await _topology_state_machine.event.when([this] {
             return get_token_metadata_ptr()->tablets().is_idle();
         });
@@ -6813,7 +6820,7 @@ future<> storage_service::await_topology_quiesced() {
             || !_feature_service.topology_global_request_queue) {
         // Old behavior — fallback for mixed-version clusters.
         co_await _group0->group0_server().read_barrier(&_group0_as);
-        co_await _topology_state_machine.await_not_busy();
+        co_await _topology_state_machine.await_not_busy(_group0_as);
         co_return;
     }
 

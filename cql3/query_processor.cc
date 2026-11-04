@@ -611,7 +611,8 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
     size_t retries = remote_.get().mm.get_concurrent_ddl_retries();
     while (true)  {
         try {
-            auto guard = co_await remote_.get().mm.start_group0_operation();
+            auto guard = co_await remote_.get().mm.start_group0_operation(std::nullopt,
+                    query_state.get_client_state().get_abort_source_ptr());
             co_return co_await fn(query_state, statement, options, std::move(guard));
         } catch (const service::group0_concurrent_modification& ex) {
             log.warn("Failed to execute statement \"{}\" due to guard conflict.{}.",
@@ -1233,7 +1234,8 @@ query_processor::execute_schema_statement(const statements::schema_altering_stat
     co_return result;
 }
 
-future<> query_processor::announce_schema_statement(const statements::schema_altering_statement& stmt, service::group0_batch& mc) {
+future<> query_processor::announce_schema_statement(const statements::schema_altering_statement& stmt, service::group0_batch& mc,
+        abort_source* as) {
     auto description = format("CQL DDL statement: \"{}\"", stmt.raw_cql_statement.linearize());
     auto [remote_, holder] = remote();
     auto [m, guard] = co_await std::move(mc).extract();
@@ -1243,19 +1245,19 @@ future<> query_processor::announce_schema_statement(const statements::schema_alt
     auto alter_ks_stmt_ptr = dynamic_cast<const statements::alter_keyspace_statement*>(&stmt);
     if (alter_ks_stmt_ptr && alter_ks_stmt_ptr->changes_tablets(*this)) {
         auto request_id = guard.new_group0_state_id();
-        co_await remote_.get().mm.announce<service::topology_change>(std::move(m), std::move(guard), description);
+        co_await remote_.get().mm.announce<service::topology_change>(std::move(m), std::move(guard), description, std::nullopt, as);
         // TODO: eliminate timeout from alter ks statement on the cqlsh/driver side
-        auto error = co_await remote_.get().ss.wait_for_topology_request_completion(request_id);
+        auto error = co_await remote_.get().ss.wait_for_topology_request_completion(request_id, true, std::nullopt, as);
         if (!error.empty()) {
             // The request failed. Any tablet work it may have left running is not waited on
             // here; a following topology request simply queues behind it.
             log.error("CQL statement \"{}\" with topology request_id \"{}\" failed with error: \"{}\"", stmt.raw_cql_statement.linearize(), request_id, error);
             throw exceptions::request_execution_exception(exceptions::exception_code::INVALID, error);
         }
-        co_await remote_.get().ss.wait_for_topology_not_busy();
+        co_await remote_.get().ss.wait_for_topology_not_busy(as);
         co_return;
     }
-    co_await remote_.get().mm.announce(std::move(m), std::move(guard), description);
+    co_await remote_.get().mm.announce(std::move(m), std::move(guard), description, std::nullopt, as);
 }
 
 future<> query_processor::wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout) {

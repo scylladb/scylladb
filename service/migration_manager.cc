@@ -31,6 +31,7 @@
 #include "db/view/view_building_state.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/assert.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/error_injection.hh"
 #include "gms/gossiper.hh"
 #include "view_info.hh"
@@ -987,7 +988,7 @@ future<utils::chunked_vector<mutation>> prepare_view_drop_announcement(storage_p
 }
 
 template<typename mutation_type>
-future<> migration_manager::announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard guard, std::string_view description, std::optional<raft_timeout> timeout) {
+future<> migration_manager::announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard guard, std::string_view description, std::optional<raft_timeout> timeout, abort_source* as) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(std::move(schema), schema_features);
@@ -998,7 +999,10 @@ future<> migration_manager::announce_with_raft(utils::chunked_vector<mutation> s
         },
         guard, std::move(description));
 
-    return _group0_client.add_entry(std::move(group0_cmd), std::move(guard), _as, timeout.value_or(raft_timeout{}));
+    abort_source op_as;
+    const auto mm_sub = utils::chain_abort_source(op_as, _as);
+    const auto caller_sub = utils::chain_abort_source(op_as, as);
+    co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), op_as, timeout.value_or(raft_timeout{}));
 }
 
 static mutation make_group0_schema_version_mutation(const data_dictionary::database db, const group0_guard& guard) {
@@ -1037,24 +1041,27 @@ static void add_committed_by_group0_flag(utils::chunked_vector<mutation>& schema
 
 // Returns a future on the local application of the schema
 template<typename mutation_type>
-future<> migration_manager::announce(utils::chunked_vector<mutation> schema, group0_guard guard, std::string_view description, std::optional<raft_timeout> timeout) {
+future<> migration_manager::announce(utils::chunked_vector<mutation> schema, group0_guard guard, std::string_view description, std::optional<raft_timeout> timeout, abort_source* as) {
     schema.push_back(make_group0_schema_version_mutation(_storage_proxy.data_dictionary(), guard));
     add_committed_by_group0_flag(schema, guard);
-    return announce_with_raft<mutation_type>(std::move(schema), std::move(guard), std::move(description), std::move(timeout));
+    return announce_with_raft<mutation_type>(std::move(schema), std::move(guard), std::move(description), std::move(timeout), as);
 }
 template
-future<> migration_manager::announce_with_raft<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
+future<> migration_manager::announce_with_raft<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout, abort_source* as);
 template
-future<> migration_manager::announce_with_raft<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
+future<> migration_manager::announce_with_raft<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout, abort_source* as);
 
 template
-future<> migration_manager::announce<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
+future<> migration_manager::announce<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt, abort_source* as = nullptr);
 template
-future<> migration_manager::announce<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
+future<> migration_manager::announce<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt, abort_source* as = nullptr);
 
-future<group0_guard> migration_manager::start_group0_operation(std::optional<raft_timeout> timeout) {
+future<group0_guard> migration_manager::start_group0_operation(std::optional<raft_timeout> timeout, abort_source* as) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    return _group0_client.start_operation(_as, timeout.value_or(raft_timeout{}));
+    abort_source op_as;
+    const auto mm_sub = utils::chain_abort_source(op_as, _as);
+    const auto caller_sub = utils::chain_abort_source(op_as, as);
+    co_return co_await _group0_client.start_operation(op_as, timeout.value_or(raft_timeout{}));
 }
 
 static thread_local std::default_random_engine random_engine{std::random_device{}()};

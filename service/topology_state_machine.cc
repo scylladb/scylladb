@@ -256,8 +256,10 @@ storage_mode storage_mode_from_string(const sstring& s) {
     throw std::runtime_error(fmt::format("cannot map name {} to storage_mode", s));
 }
 
-future<> topology_state_machine::await_not_busy() {
+future<> topology_state_machine::await_not_busy(abort_source& as) {
+    const auto wake_up = as.subscribe([this] () noexcept { event.broadcast(); });
     while (_topology.is_busy()) {
+        as.check();
         co_await event.wait();
     }
 }
@@ -284,6 +286,7 @@ future<sstring> topology_state_machine::wait_for_request_completion(db::system_k
         on_internal_error(tsmlogger, "wait_for_request_completion() must run on shard 0");
     }
     tsmlogger.debug("Start waiting for topology request completion (request id {})", id);
+    const auto wake_up = as.subscribe([this] () noexcept { event.broadcast(); });
     while (true) {
         auto c = reload_count;
         auto [done, error] = co_await sys_ks.get_topology_request_state(id, require_entry);
@@ -299,6 +302,7 @@ future<sstring> topology_state_machine::wait_for_request_completion(db::system_k
             tsmlogger.debug("Request with id {} is completed with status: {}", id, error.empty() ? sstring("success") : error);
             co_return error;
         }
+        as.check();
         // Checked after reading the state, so that a request done by the deadline is reported as done.
         if (deadline && lowres_clock::now() >= *deadline) {
             throw seastar::timed_out_error{};
