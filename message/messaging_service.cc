@@ -1185,24 +1185,12 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return true;
         }
 
-        // #9653 - if our idea of dc for bind address differs from our official endpoint address,
-        // we cannot trust downgrading. We need to ensure either (local) bind address is same as
-        // broadcast or that the dc info we get for it is the same.
-        if (broadcast_address != laddr && !is_same_dc(laddr)) {
-            return true;
-        }
         // if cross-rack tls, check rack.
         if (opt == type::dc) {
             return false;
         }
 
-        if (!is_same_rack(id.addr)) {
-            return true;
-        }
-
-        // See above: We need to ensure either (local) bind address is same as
-        // broadcast or that the rack info we get for it is the same.
-        return broadcast_address != laddr && !is_same_rack(laddr);
+        return !is_same_rack(id.addr);
     };
     auto must_encrypt = [&] {
         if (_cfg.encrypt == encrypt_what::none) {
@@ -1214,7 +1202,15 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return true;
         }
 
-        return must_helper(_cfg.encrypt);
+        if (must_helper(_cfg.encrypt)) {
+            return true;
+        }
+
+        // #9653 - if our idea of dc/rack for bind address differs from our official endpoint
+        // address, we cannot trust downgrading. Compression needs no such check: the peer
+        // filters only plaintext connections by their source address.
+        return broadcast_address != laddr
+                && (!is_same_dc(laddr) || (_cfg.encrypt == encrypt_what::rack && !is_same_rack(laddr)));
     }();
 
     auto must_compress = [&] {
