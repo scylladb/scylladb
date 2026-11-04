@@ -355,6 +355,18 @@ namespace detail {
 
 raft_command deserialize_raft_command(const raft::log_entry_ptr& entry) {
     const auto& cmd = std::get<raft::command>(entry->data);
+    // The variant deserializer returns the default alternative, a start_resize marker,
+    // for an index with no alternative. Such an index comes from a newer version's command.
+    // raft_command is a non-final IDL struct, so a u32 size frame precedes the index.
+    auto header = ser::as_input_stream(cmd);
+    ser::deserialize(header, std::type_identity<ser::size_type>());
+    const auto kind = ser::deserialize(header, std::type_identity<uint8_t>());
+    constexpr size_t known_kinds = std::variant_size_v<decltype(raft_command::change)>;
+    if (kind >= known_kinds) {
+        throw unknown_raft_command_error(fmt::format(
+                "raft entry {} holds a command of kind {}, but this version knows only kinds below {}. "
+                "A newer version wrote it.", entry->idx, kind, known_kinds));
+    }
     auto is = ser::as_input_stream(cmd);
     return ser::deserialize(is, std::type_identity<raft_command>());
 }

@@ -13,6 +13,7 @@
 
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/on_internal_error.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
@@ -52,6 +53,9 @@
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft_storage.dist.impl.hh"
 #include "mutation/mutation.hh"
+#include "schema/schema_builder.hh"
+#include "transport/messages/result_message.hh"
+#include "utils/exceptions.hh"
 
 // A seam into raft_commitlog_replay_buffer's parked records: finish_replay()
 // needs a database, a query processor and tablet metadata.
@@ -2807,6 +2811,140 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
                 const auto writes_before = db.get_stats().total_writes;
                 state_machine->apply(entries).get();
                 BOOST_REQUIRE_EQUAL(db.get_stats().total_writes - writes_before, 3);
+            });
+        });
+    }, std::move(db_cfg_ptr));
+}
+
+namespace {
+
+// A COMMAND entry whose raft_command::change index is `kind`, laid out as the IDL
+// writes a raft_command: the struct's size frame, the variant index, the alternative.
+raft::log_entry_ptr make_command_entry_of_kind(raft::term_t term, raft::index_t idx, uint8_t kind) {
+    const auto payload = to_bytes("a command of a newer version");
+    raft::command cmd;
+    ser::serialize(cmd, ser::size_type(sizeof(ser::size_type) + sizeof(kind) + payload.size()));
+    ser::serialize(cmd, kind);
+    cmd.write(payload);
+    return make_lw_shared<raft::log_entry>(raft::log_entry{
+            .term = term, .idx = idx, .data = std::move(cmd)});
+}
+
+// Asserts that no start_resize marker reached the group's row in system.raft_groups.
+void require_no_start_resize(cql_test_env& env, raft::group_id gid) {
+    auto rows = env.execute_cql(seastar::format(
+            "SELECT start_resize FROM system.raft_groups WHERE shard = {} AND group_id = {}",
+            this_shard_id(), gid.id)).get();
+    assert_that(rows).is_rows();
+    const auto& rs = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(rows)->rs().result_set();
+    for (const auto& row : rs.rows()) {
+        BOOST_REQUIRE(!row[0]);
+    }
+}
+
+} // anonymous namespace
+
+// Test: a command kind this version does not know is refused. The variant deserializer
+// returns the default alternative for an unknown index, which is a start_resize marker,
+// so without the check a newer version's command would be applied as a start_resize marker.
+SEASTAR_THREAD_TEST_CASE(test_deserialize_refuses_an_unknown_command_kind) {
+    namespace sc = service::strong_consistency;
+    constexpr auto known_kinds = std::variant_size_v<decltype(sc::raft_command::change)>;
+    const auto entry = make_command_entry_of_kind(raft::term_t(1), raft::index_t(1), known_kinds);
+    BOOST_REQUIRE_THROW(sc::detail::deserialize_raft_command(entry), sc::unknown_raft_command_error);
+
+    // The known kinds still decode, so the check reads the index from the right byte.
+    raft::command marker_cmd;
+    ser::serialize(marker_cmd, sc::raft_command{.change = sc::resize_marker{
+            .kind = sc::resize_marker_kind::end_resize, .timestamp = 42}});
+    const auto marker = sc::detail::deserialize_raft_command(make_lw_shared<raft::log_entry>(
+            raft::log_entry{.term = raft::term_t(1), .idx = raft::index_t(2), .data = std::move(marker_cmd)}));
+    BOOST_REQUIRE(std::get<sc::resize_marker>(marker.change).kind == sc::resize_marker_kind::end_resize);
+    BOOST_REQUIRE_EQUAL(std::get<sc::resize_marker>(marker.change).timestamp, 42);
+
+    auto schema = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("v", int32_type)
+            .build();
+    const auto write = sc::detail::deserialize_raft_command(
+            make_mutation_entry(schema, raft::term_t(1), raft::index_t(3), 1, 7, 100));
+    BOOST_REQUIRE(std::holds_alternative<sc::write_mutation>(write.change));
+}
+
+// Test: replay refuses a committed command of an unknown kind instead of applying it,
+// and the group's row gets no start_resize marker.
+SEASTAR_TEST_CASE(test_replay_refuses_an_unknown_command_kind) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        namespace sc = service::strong_consistency;
+        const auto table = table_id(utils::UUID_gen::get_time_UUID());
+        const auto my_id = env.local_db().get_token_metadata().get_my_id();
+        const auto gid = make_group_id();
+        sc::raft_groups_storage::store_descriptor(
+                env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                raft::configuration{}, {}).get();
+        set_sc_tablet_metadata(env, table, gid,
+                locator::tablet_replica_set{{my_id, this_shard_id()}}).get();
+
+        constexpr auto known_kinds = std::variant_size_v<decltype(sc::raft_command::change)>;
+        db::raft_commitlog_replay_buffer buffer;
+        auto stop_buffer = defer([&] noexcept { buffer.stop().get(); });
+        BOOST_REQUIRE_THROW(buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+                gid, 1, raft::index_t(1),
+                std::vector<raft::log_entry_ptr>{
+                        make_command_entry_of_kind(raft::term_t(1), raft::index_t(1), known_kinds)}).get(),
+                sc::unknown_raft_command_error);
+        require_no_start_resize(env, gid);
+    }, sc_replay_config());
+}
+
+// Test: state_machine::apply() fails on a command of an unknown kind instead of
+// applying it, and the group's row gets no start_resize marker.
+SEASTAR_TEST_CASE(test_apply_refuses_an_unknown_command_kind) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+
+    return do_with_cql_env([] (cql_test_env& env) -> future<> {
+        namespace sc = service::strong_consistency;
+        co_await env.get_storage_service().local().set_tablet_balancing_enabled(false);
+        co_await env.execute_cql("CREATE KEYSPACE test_ks WITH replication = {'class': 'NetworkTopologyStrategy', "
+                "'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'");
+        co_await env.execute_cql("CREATE TABLE test_ks.tbl (pk int PRIMARY KEY, c int)");
+
+        const auto table = env.local_db().find_schema("test_ks", "tbl")->id();
+        const auto& replicas = env.local_token_metadata_ptr()->tablets()
+                .get_tablet_map(table)
+                .get_tablet_info(locator::tablet_id(0))
+                .replicas;
+        BOOST_REQUIRE_EQUAL(replicas.size(), 1);
+
+        co_await env.db().invoke_on(replicas.front().shard, [&env, table] (replica::database& db) {
+            return seastar::async([&env, &db, table] {
+                constexpr auto known_kinds = std::variant_size_v<decltype(sc::raft_command::change)>;
+                raft::log_entry_ptr_list entries;
+                entries.push_back(make_command_entry_of_kind(raft::term_t(1), raft::index_t(1), known_kinds));
+
+                // apply() pins the commitlog segment of each entry in the storage, so store the entries first.
+                const auto gid = make_group_id();
+                sc::raft_groups_storage storage(
+                        env.qp().local(), db, gid, raft::server_id::create_random_id(),
+                        this_shard_id(), *db.commitlog(), table,
+                        sc::replayed_data_per_group{});
+                auto stop_storage = defer([&] noexcept { storage.abort().get(); });
+                storage.store_log_entries(entries).get();
+
+                sc::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                auto state_machine = sc::make_state_machine(
+                        locator::global_tablet_id{table, locator::tablet_id(0)}, gid, db,
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
+                        make_lw_shared<sc::state_machine_stats>());
+                auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
+
+                auto f = state_machine->apply(entries);
+                f.wait();
+                BOOST_REQUIRE(f.failed());
+                auto ex = f.get_exception();
+                BOOST_REQUIRE(try_catch_nested<sc::unknown_raft_command_error>(ex));
+                require_no_start_resize(env, gid);
             });
         });
     }, std::move(db_cfg_ptr));
