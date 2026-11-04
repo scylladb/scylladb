@@ -24,6 +24,7 @@ import pytest
 from test.pylib.skip_types import skip_env
 
 from .. import cql_frames
+from ..rest_api import tablet_balancing_disabled
 from ..util import new_test_table, paging_plan_rederivations
 
 
@@ -48,6 +49,15 @@ def connect(request, host, scylla_only):
     def open_connection(negotiate: bool = True):
         return cql_frames.connection(host, port, {EXTENSION: ""} if negotiate else {})
     return open_connection
+
+
+# The version of a tablet changes when the tablet migrates, and a split or a
+# merge changes the tablets of a table. The tests compare the responses of
+# several requests, so they keep the tablets as they are.
+@pytest.fixture(scope="module", autouse=True)
+def no_tablet_balancing(cql, scylla_only):
+    with tablet_balancing_disabled(cql):
+        yield
 
 
 # The tablets-routing-v2 payload: a tuple (first token: bigint, last token:
