@@ -52,6 +52,7 @@ ScyllaDB supports the following CPUs:
 * Apple M1 and M2
 * Ampere Altra
 * AWS Graviton, Graviton2, Graviton3
+* Google Axion
 
 
 In terms of the number of cores, any number will work since ScyllaDB scales up with the number of cores. 
