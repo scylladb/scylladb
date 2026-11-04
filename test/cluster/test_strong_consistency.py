@@ -15,7 +15,6 @@ from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import FallthroughRetryPolicy
-from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
 from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
@@ -1077,7 +1076,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
     immediately (no in-flight ops). On the leader, the raft server is aborted
     as part of group deletion (SCYLLADB-2080 fix), causing the paused
     operations to fail with raft::stopped_error which the coordinator converts
-    to "no such column family" / "unconfigured table".
+    to "unconfigured table".
 
     We also verify that new reads/writes after the drop are rejected
     immediately.
@@ -1160,9 +1159,9 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
         # FallthroughRetryPolicy prevents a driver retry from replacing ServerError
         # with InvalidRequest from a new request.
         # Use a timeout to detect the old buggy behavior (write stuck forever).
-        missing_table_error = r"[Uu]nconfigured table|[Cc]an't find a column family|[Nn]o such column family"
+        missing_table_error = f"unconfigured table {table_name}"
         try:
-            with pytest.raises((InvalidRequest, ServerError), match=missing_table_error):
+            with pytest.raises(InvalidRequest, match=missing_table_error):
                 await asyncio.wait_for(asyncio.shield(write_fut), timeout=15)
         except asyncio.TimeoutError:
             cql.cluster.shutdown()
@@ -1172,7 +1171,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
                         "be reached because the follower's raft group was already destroyed. "
                         "The leader should abort the raft server to unblock the write.")
 
-        with pytest.raises((InvalidRequest, ServerError), match=missing_table_error):
+        with pytest.raises(InvalidRequest, match=missing_table_error):
             await read_fut
 
 
@@ -1911,7 +1910,6 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
         # Case 1: the table is gone before the requests get their raft server.
         await cql.run_async(f"CREATE TABLE {ks}.tbl1 (pk int PRIMARY KEY, v int)")
         await cql.run_async(f"INSERT INTO {ks}.tbl1 (pk, v) VALUES (0, 0)")
-        table_id = await manager.get_table_id(ks, "tbl1")
         write_errors_before = await write_errors()
         read_errors_before = await read_errors()
 
@@ -1925,9 +1923,9 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
         await drop_table_and_release(f"{ks}.tbl1", [injection])
 
         # Both fail, and each is counted once as table_dropped.
-        with pytest.raises(ServerError, match=f"Can't find a column family with UUID {table_id}"):
+        with pytest.raises(InvalidRequest, match="unconfigured table tbl1"):
             await write
-        with pytest.raises(ServerError, match=f"Can't find a column family with UUID {table_id}"):
+        with pytest.raises(InvalidRequest, match="unconfigured table tbl1"):
             await read
         assert await write_errors() - write_errors_before == 1
         assert await read_errors() - read_errors_before == 1
@@ -1951,9 +1949,9 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
         await drop_table_and_release(f"{ks}.tbl2", [write_injection, read_injection])
 
         # Both fail, and each is counted once as table_dropped.
-        with pytest.raises(ServerError, match=f"Can't find a column family tbl2 in keyspace {ks}"):
+        with pytest.raises(InvalidRequest, match="unconfigured table tbl2"):
             await write
-        with pytest.raises(ServerError, match=f"Can't find a column family tbl2 in keyspace {ks}"):
+        with pytest.raises(InvalidRequest, match="unconfigured table tbl2"):
             await read
         assert await write_errors() - write_errors_before == 1
         assert await read_errors() - read_errors_before == 1
