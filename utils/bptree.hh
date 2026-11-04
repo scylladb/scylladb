@@ -1393,7 +1393,13 @@ class node final {
         destroy(*this);
     }
 
-    void insert_into_full(kid_index idx, Key k, node_or_data nd, Less less, prealloc& nodes) noexcept {
+    /*
+     * Makes room in a full node for a new key at idx by pushing an
+     * existing key to a sibling that has room, and returns the index for
+     * the new key afterwards. The node is still full on return when no
+     * sibling could take a key, and the caller splits it then.
+     */
+    kid_index push_to_sibling(kid_index idx, Less less) noexcept {
         if (!is_root()) {
             node& p = *_parent;
             kid_index i = p.index_for(_keys[0].v, less);
@@ -1430,6 +1436,13 @@ class node final {
                     right->grab_from_left(*this, p._keys[i]);
                 }
             }
+        }
+
+        return idx;
+    }
+
+    void insert_into_full(kid_index idx, Key k, node_or_data nd, Less less, prealloc& nodes) noexcept {
+        idx = push_to_sibling(idx, less);
 
             if (_num_keys < NodeSize) {
                 do_insert(idx, std::move(k), nd, less);
@@ -1438,10 +1451,10 @@ class node final {
             }
 
             /*
-             * We can only get here if both ->can_push_to() checks above
-             * had failed. In this case -- go ahead and split this.
+             * We can only get here if both ->can_push_to() checks in
+             * push_to_sibling() had failed. In this case -- go ahead
+             * and split this.
              */
-        }
 
         split_and_insert(idx, std::move(k), nd, less, nodes);
     }
