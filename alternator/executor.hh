@@ -20,6 +20,7 @@
 #include "service/client_state.hh"
 #include "service_permit.hh"
 #include "db/timeout_clock.hh"
+#include "timeout_config.hh"
 #include "db/config.hh"
 
 #include "alternator/error.hh"
@@ -174,7 +175,16 @@ public:
     future<> start();
     future<> stop();
 
+    // alternator_timeout_in_ms, for the work that the service level timeout
+    // does not bound: control-plane operations, the key lookup before the
+    // login, and the TTL and export scans.
     static db::timeout_clock::time_point default_timeout();
+    // The timeout of a read or a write of items: the service level timeout
+    // of the request's role, or alternator_timeout_in_ms.
+    static db::timeout_clock::time_point request_timeout(const client_state& client_state);
+    // The timeouts of a request's client_state before its service level
+    // applies: alternator_timeout_in_ms for all types of operation.
+    static timeout_config default_timeout_config();
 private:
     static thread_local utils::updateable_value<uint32_t> s_default_timeout_in_ms;
     friend class rmw_operation;

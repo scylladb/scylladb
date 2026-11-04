@@ -224,6 +224,12 @@ ATTACH SERVICE_LEVEL oltp TO bob;
 ```
 Note that `alternator_enforce_authorization` has to be enabled in ScyllaDB configuration.
 
+A service level can also set a `timeout`. It replaces `alternator_timeout_in_ms`
+for each read and write of items by the role: GetItem, BatchGetItem, Query, Scan,
+GetRecords, SearchVectors, PutItem, UpdateItem, DeleteItem and BatchWriteItem.
+Schema and other control-plane operations ignore it. A request that times out
+fails with InternalServerError, which AWS SDKs retry by default.
+
 See [Authorization](##Authorization) section to learn more about roles and authorization.
 See [Workload Prioritization](../features/workload-prioritization)
 to read about Workload Prioritization in detail.

@@ -3776,9 +3776,22 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
 // we have a global default_timeout() for Alternator requests. The value of
 // s_default_timeout_ms is overwritten in alternator::controller::start_server()
 // based on the "alternator_timeout_in_ms" configuration parameter.
+// The reads and writes of items use request_timeout() instead, because the
+// role's service level can replace this timeout.
 thread_local utils::updateable_value<uint32_t> executor::s_default_timeout_in_ms{10'000};
 db::timeout_clock::time_point executor::default_timeout() {
     return db::timeout_clock::now() + std::chrono::milliseconds(s_default_timeout_in_ms);
+}
+
+timeout_config executor::default_timeout_config() {
+    const db::timeout_clock::duration t = std::chrono::milliseconds(s_default_timeout_in_ms);
+    return {t, t, t, t, t, t, t};
+}
+
+db::timeout_clock::time_point executor::request_timeout(const client_state& client_state) {
+    // default_timeout_config() and the service level give all the timeouts
+    // the same value, so any one of them is correct.
+    return db::timeout_clock::now() + client_state.get_timeout_config().write_timeout;
 }
 
 static lw_shared_ptr<query::read_command> previous_item_read_command(service::storage_proxy& proxy,
@@ -3959,7 +3972,7 @@ static future<std::variant<std::unique_ptr<rjson::value>, api_error>> get_previo
         service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr = 
                 co_await proxy.query_result(
                     schema, command, to_partition_ranges(*schema, pk), cl,
-                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state));
+                    service::storage_proxy::coordinator_query_options(executor::request_timeout(client_state), std::move(permit), client_state));
         if (!rqr) {
             co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
         }
@@ -4011,7 +4024,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, db::consistency_level::LOCAL_QUORUM, _consumed_capacity._total_bytes).then(
-                    [this, &proxy, &wcu_total, &global_stats, &per_table_stats, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::variant<std::unique_ptr<rjson::value>, api_error> previous_item_result) mutable {
+                    [this, &proxy, &client_state, &wcu_total, &global_stats, &per_table_stats, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::variant<std::unique_ptr<rjson::value>, api_error> previous_item_result) mutable {
                 if (auto error = std::get_if<api_error>(&previous_item_result)) {
                     return make_ready_future<executor::request_return_type>(std::move(*error));
                 }
@@ -4022,7 +4035,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
                     per_table_stats.conditional_check_failed++;
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
                 }
-                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
+                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::request_timeout(client_state), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
                     return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
                 });
             });
@@ -4030,7 +4043,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
         throwing_assert(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
+        return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::request_timeout(client_state), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
             return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
         });
     }
@@ -4038,7 +4051,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     // If we're still here, we need to do this write using LWT:
     global_stats.write_using_lwt++;
     per_table_stats.write_using_lwt++;
-    auto timeout = executor::default_timeout();
+    auto timeout = executor::request_timeout(client_state);
     auto selection = cql3::selection::selection::wildcard(schema());
     auto read_command = needs_read_before_write ?
             previous_item_read_command(proxy, schema(), _ck, selection) :
@@ -4385,7 +4398,7 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, co
         });
     }
 
-    auto timeout = executor::default_timeout();
+    auto timeout = executor::request_timeout(client_state);
     auto op = std::make_unique<put_or_delete_item_cas_request>(schema, mutation_builders);
     auto* op_ptr = op.get();
     auto cdc_opts = cdc::per_request_options{
@@ -4447,7 +4460,7 @@ future<> executor::do_batch_write(
         }
         return _proxy.mutate(std::move(mutations),
                 db::consistency_level::LOCAL_QUORUM,
-                executor::default_timeout(),
+                executor::request_timeout(client_state),
                 trace_state,
                 std::move(permit),
                 db::allow_per_partition_rate_limit::yes,
