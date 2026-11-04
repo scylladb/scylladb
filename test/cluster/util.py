@@ -110,19 +110,21 @@ class FeatureConfig:
 
 
 class FeatureConfigurations(Enum):
+    # Servers of the version under test run with every experimental feature
+    # (see make_scylla_conf()), so only the keyspace and the table have to ask
+    # for strong consistency and logstor.
     EVENTUAL_CONSISTENCY = FeatureConfig()
     STRONG_CONSISTENCY = FeatureConfig(
         ks_opts=" WITH consistency = 'global'",
-        cluster_cfg={"experimental_features": ["strongly-consistent-tables"]},
     )
     LOGSTOR_EVENTUAL_CONSISTENCY = FeatureConfig(
         table_opts=" WITH storage_engine = 'logstor'",
-        cluster_cfg={"experimental_features": ["logstor"], "logstor_disk_size_in_mb":20, "logstor_file_size_in_mb":1},
+        cluster_cfg={"logstor_disk_size_in_mb":20, "logstor_file_size_in_mb":1},
     )
     LOGSTOR_STRONG_CONSISTENCY = FeatureConfig(
         ks_opts=" WITH consistency = 'global'",
         table_opts=" WITH storage_engine = 'logstor'",
-        cluster_cfg={"experimental_features": ["logstor", "strongly-consistent-tables"],  "logstor_disk_size_in_mb":20, "logstor_file_size_in_mb":1},
+        cluster_cfg={"logstor_disk_size_in_mb":20, "logstor_file_size_in_mb":1},
     )
 
     def with_marks(self, *marks):

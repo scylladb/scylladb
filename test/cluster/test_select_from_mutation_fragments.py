@@ -49,7 +49,7 @@ async def test_strongly_consistent_table_dump_is_local(manager: ScyllaClusterMan
     returns no rows and forwards nothing, unlike a regular read at ONE,
     which it forwards to a replica. Two nodes and RF=1 give one of each.
     """
-    servers = await manager.servers_add(2, config={'experimental_features': ['strongly-consistent-tables']}, auto_rack_dc="dc1")
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = [str(await manager.get_host_id(s.server_id)) for s in servers]
 

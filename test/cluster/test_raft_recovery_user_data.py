@@ -228,13 +228,11 @@ async def test_raft_recovery_user_data_sc(manager: ScyllaClusterManager):
     test_minority_dc_loss in test_strong_consistency_multidc.py covers a raft group of a strongly consistent tablet
     losing its replicas in a dc.
     """
-    cfg = {'experimental_features': ['strongly-consistent-tables']}
-
     # Add servers to dc2 first, so 3 out of 5 group 0 voters will be there.
     logging.info('Adding servers that will be killed to dc2')
-    dead_servers = await manager.servers_add(3, config=cfg, auto_rack_dc='dc2')
+    dead_servers = await manager.servers_add(3, auto_rack_dc='dc2')
     logging.info('Adding servers that will survive majority loss to dc1')
-    live_servers = await manager.servers_add(3, config=cfg, auto_rack_dc='dc1')
+    live_servers = await manager.servers_add(3, auto_rack_dc='dc1')
     logging.info(f'Servers to survive majority loss: {live_servers}, servers to be killed: {dead_servers}')
 
     cql, _ = await manager.get_ready_cql(live_servers + dead_servers)
@@ -331,7 +329,7 @@ async def test_raft_recovery_user_data_sc(manager: ScyllaClusterManager):
 
     async def replace_server(i, being_replaced):
         replace_cfg = ReplaceConfig(replaced_id=being_replaced.server_id, reuse_ip_addr=False, use_host_id=True)
-        return await manager.server_add(replace_cfg=replace_cfg, config=cfg,
+        return await manager.server_add(replace_cfg=replace_cfg,
                                         property_file={'dc': 'dc2', 'rack': f'rack{i + 1}'})
 
     logging.info(f'Replacing {dead_servers} concurrently')
