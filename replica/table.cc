@@ -4544,14 +4544,18 @@ future<> local_snapshot_writer::write_schema_as_cql(cql3::description schema_des
 
 // Runs the orchestration code on an arbitrary shard to balance the load.
 future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts, snapshot_callback ssc) {
+    // A cluster snapshot attempt is named "{tag}/{attempt}" in the catalog.
+    // The snapshot directory and the per-node manifest keep the user tag,
+    // the catalog rows written through `ssc` keep the attempt name.
+    const sstring dir_name(db::snapshot_user_tag(name));
     auto writer = std::visit(overloaded_functor{
-        [&name, &opts] (const data_dictionary::storage_options::local& loc) -> std::unique_ptr<snapshot_writer> {
+        [&dir_name, &opts] (const data_dictionary::storage_options::local& loc) -> std::unique_ptr<snapshot_writer> {
             if (loc.dir.empty()) {
                 // virtual tables don't have initialized local storage
                 return nullptr;
             }
 
-            return std::make_unique<local_snapshot_writer>(loc.dir, name, opts);
+            return std::make_unique<local_snapshot_writer>(loc.dir, dir_name, opts);
         },
         [&] (const data_dictionary::storage_options::s3&) -> std::unique_ptr<snapshot_writer> {
             auto s = table_shards->schema();
@@ -4588,7 +4592,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         co_await smp::invoke_on_all([&] -> future<> {
             auto& t = *table_shards;
             auto [tables, permit] = co_await t.snapshot_sstables();
-            auto sstables_metadata = co_await t.get_sstables_manager().take_snapshot(tables, name);
+            auto sstables_metadata = co_await t.get_sstables_manager().take_snapshot(tables, dir_name);
             sstable_sets[this_shard_id()] = make_foreign(std::make_unique<utils::chunked_vector<sstables::sstable_snapshot_metadata>>(std::move(sstables_metadata)));
             holds[this_shard_id()] = make_foreign(std::make_unique<std::vector<sstables::shared_sstable>>(std::move(tables)));
             // The list permit is dropped here. The shared_sstable references
@@ -4637,7 +4641,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                 }
             }
         }
-        co_await writer->write_manifest(topology, sstable_sets, tablets, name, opts, s,
+        co_await writer->write_manifest(topology, sstable_sets, tablets, dir_name, opts, s,
                                         tablet_count, tablet_layout).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
@@ -4685,10 +4689,10 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         co_await writer->sync();
 
         if (opts.expires_at) {
-            tlogger.info("snapshot {}: scheduled to expire at {}", name, opts.expires_at.value());
-            co_await sharded_db.invoke_on(0, [when = *opts.expires_at, ks_name = s->ks_name(), table_name = s->cf_name(), name] (database& db) {
+            tlogger.info("snapshot {}: scheduled to expire at {}", dir_name, opts.expires_at.value());
+            co_await sharded_db.invoke_on(0, [when = *opts.expires_at, ks_name = s->ks_name(), table_name = s->cf_name(), dir_name] (database& db) {
                 if (auto snap_ctl_ptr = db.get_snapshot_ctl_ptr()) {
-                    snap_ctl_ptr->schedule_expiration(when, ks_name, table_name, name);
+                    snap_ctl_ptr->schedule_expiration(when, ks_name, table_name, dir_name);
                 }
             });
         }
