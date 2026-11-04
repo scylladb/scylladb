@@ -34,6 +34,7 @@
 #include "gms/inet_address_serializer.hh"
 
 #include "locator/tablets.hh"
+#include "locator/token_metadata.hh"
 #include "mutation/mutation.hh"
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/raft_resize_tracker.hh"
@@ -1930,6 +1931,92 @@ SEASTAR_TEST_CASE(test_groups_dropped_table_batch_is_reported_as_applied) {
 
         const auto released = co_await raft_groups_storage::load_descriptor(qp, gid, test_shard);
         BOOST_CHECK_EQUAL(released.idx, batch.back()->idx);
+    });
+}
+
+// A schema_changed that switches the version flushes the tablet before its release names
+// the new announcement in the row, with the index of its entry, so that replay can skip
+// the writes below that index as flushed. A first announcement, and one of the version
+// already in effect, flush nothing.
+SEASTAR_TEST_CASE(test_groups_schema_switch_flushes_the_tablet_before_the_row_names_it) {
+    return do_with_cql_env_small_segments([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        co_await env.execute_cql("CREATE TABLE ks.sc_switch (pk int PRIMARY KEY, v int)");
+        const auto schema = env.local_db().find_schema("ks", "sc_switch");
+        auto& table = env.local_db().find_column_family(schema->id());
+
+        raft_groups_storage storage(qp, env.local_db(), gid, raft::server_id::create_random_id(), test_shard,
+                cl, schema->id(), {});
+        raft::config_member srv{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes};
+        co_await storage.bootstrap(raft::configuration({srv}), false);
+
+        service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+        auto state_machine = service::strong_consistency::make_state_machine(
+                locator::global_tablet_id{.table = schema->id(), .tablet = locator::tablet_id(0)},
+                gid, env.local_db(), env.migration_manager().local(),
+                env.get_system_keyspace().local(), storage, resize_tracker,
+                make_lw_shared<service::strong_consistency::state_machine_stats>());
+
+        // Committed and closed before the apply, so that the apply releases the record.
+        const auto apply = [&] (std::vector<raft::log_entry_ptr> batch) -> future<> {
+            co_await storage.store_log_entries(batch);
+            co_await storage.store_commit_idx(batch.back()->idx);
+            storage.mark_segment_closed(db::replay_position(
+                    std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max()));
+            co_await state_machine->apply(std::move(batch));
+        };
+        const auto announced_idx = [&] () -> future<raft::index_t> {
+            const auto announced = (co_await raft_groups_storage::load_descriptor(qp, gid, test_shard)).schema_change;
+            BOOST_REQUIRE(announced);
+            co_return announced->first;
+        };
+
+        // The first announcement: no write under an earlier version to flush.
+        const auto switches_before = table.get_stats().memtable_switch_count;
+        co_await apply({
+            make_schema_changed_entry(schema, raft::term_t(1), raft::index_t(1)),
+            make_mutation_entry(schema, raft::term_t(1), raft::index_t(2), 0, 13),
+        });
+        BOOST_CHECK_EQUAL(table.get_stats().memtable_switch_count, switches_before);
+        BOOST_CHECK_EQUAL(co_await announced_idx(), raft::index_t(1));
+
+        // The version in effect announced again, as a new term does: nothing to flush, and
+        // the row keeps index 1, so the unflushed write at 2 does not fall below it.
+        co_await apply({make_schema_changed_entry(schema, raft::term_t(2), raft::index_t(3))});
+        BOOST_CHECK_EQUAL(table.get_stats().memtable_switch_count, switches_before);
+        BOOST_CHECK_EQUAL(co_await announced_idx(), raft::index_t(1));
+
+        // A new version: the write at 2 reaches an sstable before the row names index 4.
+        co_await env.execute_cql("ALTER TABLE ks.sc_switch ADD w int");
+        const auto altered = env.local_db().find_schema("ks", "sc_switch");
+        // The flush finds the group's tablet in the table's tablet map, which names the
+        // groups of a strongly consistent table. Dropped right after: this table is not one.
+        const auto set_tablet_map = [&] (bool present) -> future<> {
+            co_await locator::shared_token_metadata::mutate_on_all_shards(env.shared_token_metadata(),
+                    [table = schema->id(), gid, present] (locator::token_metadata& tm) -> future<> {
+                locator::tablet_metadata tmeta = co_await tm.tablets().copy();
+                if (present) {
+                    locator::tablet_map tmap(1, true /* with_raft_info */);
+                    const auto tid = *tmap.tablet_ids().begin();
+                    tmap.set_tablet(tid, locator::tablet_info{locator::tablet_replica_set{{tm.get_my_id(), test_shard}}});
+                    tmap.set_tablet_raft_info(tid, locator::tablet_raft_info{gid});
+                    tmeta.set_tablet_map(table, std::move(tmap));
+                } else {
+                    tmeta.drop_tablet_map(table);
+                }
+                tm.set_tablets(std::move(tmeta));
+            });
+        };
+        co_await set_tablet_map(true);
+        co_await apply({make_schema_changed_entry(altered, raft::term_t(2), raft::index_t(4))});
+        co_await set_tablet_map(false);
+        BOOST_CHECK_EQUAL(table.get_stats().memtable_switch_count, switches_before + 1);
+        BOOST_CHECK_EQUAL(co_await announced_idx(), raft::index_t(4));
+        const auto announced = (co_await raft_groups_storage::load_descriptor(qp, gid, test_shard)).schema_change;
+        BOOST_CHECK(announced->second.version == altered->version());
     });
 }
 
