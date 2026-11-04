@@ -9,11 +9,13 @@
 #include "groups_manager.hh"
 
 #include "locator/tablets.hh"
+#include "locator/tablet_replication_strategy.hh"
 #include "raft/raft.hh"
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 #include "service/strong_consistency/raft_resize_tracker.hh"
+#include "service/strong_consistency/serving_set.hh"
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "service/raft/raft_rpc.hh"
@@ -519,6 +521,103 @@ future<> groups_manager::cleanup_group(global_tablet_id tablet, raft::group_id g
         }
     }
     co_await raft_groups_storage::erase_persisted_state(_qp, group_id, this_shard_id());
+}
+
+std::optional<locator::tablet_routing_info_v2> groups_manager::local_tablet_routing_info(
+        const locator::tablet_map& map, locator::tablet_id tid, replica_set_view serving,
+        std::optional<locator::tablet_version_block> block) {
+    if (!map.has_raft_info()) {
+        return std::nullopt;
+    }
+    const auto it = _raft_groups.find(map.get_tablet_raft_info(tid).group_id);
+    if (it == _raft_groups.end() || !it->second.gate) {
+        return std::nullopt;
+    }
+    auto server = try_acquire_server(it->second);
+    if (!server) {
+        return std::nullopt;
+    }
+    const auto leader = server->server().current_leader();
+    if (!leader || !serving.find_replica(locator::host_id(leader.uuid()))) {
+        return std::nullopt;
+    }
+    bool unavailable = false;
+    utils::get_local_injector().inject("sc_tablet_routing_info_unavailable", [&] { unavailable = true; });
+    if (unavailable) {
+        return std::nullopt;
+    }
+    return make_tablet_routing_info_v2(map, tid, serving, locator::host_id(leader.uuid()), block);
+}
+
+future<std::optional<locator::tablet_routing_info_v2>> groups_manager::collect_tablet_routing_info(
+        table_id table, dht::token token, std::optional<locator::tablet_version_block> block,
+        db::timeout_clock::time_point timeout, routing_info_scope scope, semaphore_units<> slots) {
+    if (timeout <= db::timeout_clock::now() || !_features.strongly_consistent_tables || !_db.column_family_exists(table)) {
+        return make_ready_future<std::optional<locator::tablet_routing_info_v2>>();
+    }
+    auto& cf = _db.find_column_family(table);
+    const auto ks = cf.as_data_dictionary().keyspace();
+    if (!cf.uses_tablets() || !ks || !ks->uses_tablets()) {
+        return make_ready_future<std::optional<locator::tablet_routing_info_v2>>();
+    }
+    const auto erm = cf.get_effective_replication_map();
+    const auto* rs = erm->get_replication_strategy().maybe_as_tablet_aware();
+    if (!rs || rs->get_consistency() != data_dictionary::consistency_config_option::global) {
+        return make_ready_future<std::optional<locator::tablet_routing_info_v2>>();
+    }
+    const auto& maps = erm->get_token_metadata().tablets();
+    if (!maps.has_tablet_map(table)) {
+        return make_ready_future<std::optional<locator::tablet_routing_info_v2>>();
+    }
+    const auto& map = maps.get_tablet_map(table);
+    const auto tid = map.get_tablet_id(token);
+    const auto serving = serving_replicas(map.get_tablet_info(tid), map.get_tablet_transition_info(tid));
+    const auto local = serving.find_replica(erm->get_token_metadata().get_my_id());
+    if (!local) {
+        // A non-replica knows the leader only from a CQL redirect handled on
+        // this shard. Without it, omit the hint rather than ask another node.
+        if (scope == routing_info_scope::shard || !map.has_raft_info()) {
+            return make_ready_future<std::optional<locator::tablet_routing_info_v2>>();
+        }
+        const auto leader = _leader_cache.get(map.get_tablet_raft_info(tid).group_id);
+        if (!leader || !serving.find_replica(*leader)) {
+            return make_ready_future<std::optional<locator::tablet_routing_info_v2>>();
+        }
+        return make_ready_future<std::optional<locator::tablet_routing_info_v2>>(
+                make_tablet_routing_info_v2(map, tid, serving, *leader, block));
+    }
+    if (local->shard == this_shard_id()) {
+        return make_ready_future<std::optional<locator::tablet_routing_info_v2>>(
+                local_tablet_routing_info(map, tid, serving, block));
+    }
+    if (scope == routing_info_scope::shard || local->shard >= this_smp().shard_count()) {
+        return make_ready_future<std::optional<locator::tablet_routing_info_v2>>();
+    }
+    // The target validates its own current snapshot. A changed owner suppresses
+    // the hint instead of starting another hop, and no views survive this hop.
+    return container().invoke_on(local->shard, [table, token, block, timeout] (groups_manager& gm) {
+        return gm.collect_tablet_routing_info(table, token, block, timeout, routing_info_scope::shard);
+    }).finally([slots = std::move(slots)] () mutable {
+        slots.return_all();
+    });
+}
+
+future<std::optional<locator::tablet_routing_info_v2>> groups_manager::get_tablet_routing_info(
+        table_id table, dht::token token, std::optional<locator::tablet_version_block> block,
+        db::timeout_clock::time_point timeout) {
+    return with_gate(_routing_info_gate, [this, table, token, block, timeout] {
+        auto slots = try_get_units(_routing_info_slots, 1);
+        if (!slots) {
+            return make_ready_future<std::optional<locator::tablet_routing_info_v2>>();
+        }
+        return utils::get_local_injector().inject("sc_tablet_routing_info_admission_pause",
+                utils::wait_for_message(std::chrono::seconds(30))).then(
+                [this, table, token, block, timeout, slots = std::move(*slots)] () mutable {
+            return collect_tablet_routing_info(table, token, block, timeout, routing_info_scope::node, std::move(slots));
+        }).finally([] {
+            utils::get_local_injector().inject("sc_tablet_routing_info_completed", [] {});
+        });
+    });
 }
 
 void groups_manager::init_messaging_service() {
@@ -1297,6 +1396,7 @@ void groups_manager::request_flush(db::cf_id_type id, db::replay_position pos) {
 }
 
 future<> groups_manager::stop() {
+    co_await _routing_info_gate.close();
     if (!_started) {
         co_return;
     }

@@ -208,6 +208,13 @@ struct tablet_info {
     tablet_info& operator=(tablet_info&&) noexcept = default;
 
     bool operator==(const tablet_info&) const;
+private:
+    friend class tablet_map;
+    // Prepared by tablet_map when placement is installed, before the map is
+    // shared between shards. Copies retain the hash; tablet_map::set_tablet()
+    // and emplace_tablet() recompute it. Valid only for installed tablets.
+    tablet_version _routing_version{internal::hash_replica_list({})};
+    void update_routing_version();
 };
 
 /// Reft-related information for strongly-consistent tablets.
@@ -728,6 +735,9 @@ public:
     /// Returns tablet_info associated with a given tablet.
     /// The given id must belong to this instance.
     const tablet_info& get_tablet_info(tablet_id) const;
+
+    /// Hash of the sorted EC replicas, prepared when placement is installed.
+    tablet_version get_tablet_routing_version(tablet_id) const;
 
     /// Returns a pointer to tablet_transition_info associated with a given tablet.
     /// If there is no transition for a given tablet, returns nullptr.
