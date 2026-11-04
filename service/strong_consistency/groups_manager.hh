@@ -11,6 +11,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
 #include "locator/tablet_metadata_guard.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/strong_consistency/table_metrics.hh"
@@ -196,6 +197,14 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
         // Populated only when this node thinks it's a tablet raft group leader.
         std::optional<leader_info> leader_info = std::nullopt;
+        // A floor under the timestamps a leader of this group on this node hands out. update()
+        // raises it to the end_resize timestamp of the group this one replaced once the group
+        // serves a tablet of its own, and raft_server::advance_leader_timestamp() raises it too. It
+        // outlives leader_info so that a term whose leader_info is populated after a raise starts
+        // above the floor too. While the group is still a child, the other floor, the end_resize
+        // timestamp of the group it replaces, lives in the resize tracker.
+        api::timestamp_type min_leader_timestamp = api::min_timestamp;
+
         condition_variable leader_info_cond = condition_variable();
         future<> leader_info_updater = make_ready_future<>();
 
@@ -242,6 +251,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // detached and exit on their own; the drain is only joined by stop(), so that no fiber
     // outlives the manager.
     future<> _draining_colocators = make_ready_future<>();
+
+    // The lowest timestamp a leader of group `gid`, whose state is `state`, may hand out next on
+    // this node: the higher of `state.min_leader_timestamp` and the end_resize timestamp of the
+    // group `gid` replaces, if this replica has applied it. Used when a leader's clock is seeded
+    // and for every write it gives a timestamp to.
+    static api::timestamp_type leader_timestamp_floor(raft::group_id gid, const raft_group_state& state, const raft_resize_tracker& resize_tracker);
 
     // Should be called on the shard that hosts the Raft group. Returns the group's state machine,
     // owned by the raft server it started.
@@ -301,7 +316,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     // Handle to the group's server, or nullopt if the group is being deleted
     // or (re)started. Unlike acquire_server(), doesn't wait for a start.
-    static std::optional<raft_server> try_acquire_server(raft_group_state& state);
+    std::optional<raft_server> try_acquire_server(raft::group_id gid, raft_group_state& state);
 
     // try_acquire_server() for a group named by id: nullopt also if the group is not hosted here.
     std::optional<raft_server> try_acquire_server(raft::group_id group_id);
@@ -474,11 +489,13 @@ class raft_server {
 private:
     groups_manager::raft_group_state& _state;
     gate::holder _holder;
+    raft::group_id _gid;
+    raft_resize_tracker& _resize_tracker;
 
     friend class groups_manager;
 
 public:
-    raft_server(groups_manager::raft_group_state& state, gate::holder holder);
+    raft_server(raft::group_id gid, groups_manager::raft_group_state& state, gate::holder holder, raft_resize_tracker& resize_tracker);
 
     raft::server& server() const {
         return *_state.server;
@@ -505,6 +522,7 @@ public:
     struct ok {};
     using begin_read_result = std::variant<ok, raft::not_a_leader, need_wait_for_leader>;
     begin_read_result begin_read(abort_source&);
+    void advance_leader_timestamp(api::timestamp_type ts);
 };
 
 } // namespace service::strong_consistency

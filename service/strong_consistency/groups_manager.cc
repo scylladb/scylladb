@@ -102,9 +102,11 @@ public:
     }
 };
 
-raft_server::raft_server(groups_manager::raft_group_state& state, gate::holder holder)
+raft_server::raft_server(raft::group_id gid, groups_manager::raft_group_state& state, gate::holder holder, raft_resize_tracker& resize_tracker)
     : _state(state)
     , _holder(std::move(holder))
+    , _gid(gid)
+    , _resize_tracker(resize_tracker)
 {
 }
 
@@ -169,7 +171,8 @@ auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
         // so callers wait on leader_info_cond until their own deadline fires.
         return need_wait_for_leader{wait_with_abort_source(_state.leader_info_cond, as)};
     }
-    const auto new_ts = std::max(leader_clock_now(), _state.leader_info->last_timestamp + 1);
+    const auto new_ts = std::max({leader_clock_now(), _state.leader_info->last_timestamp + 1,
+            groups_manager::leader_timestamp_floor(_gid, _state, _resize_tracker) + 1});
     _state.leader_info->last_timestamp = new_ts;
     return timestamp_with_term{new_ts, term};
 }
@@ -186,6 +189,22 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
         return raft::not_a_leader{leader};
     }
     return ok{};
+}
+
+void raft_server::advance_leader_timestamp(api::timestamp_type ts) {
+    _state.min_leader_timestamp = std::max(_state.min_leader_timestamp, ts);
+    if (_state.leader_info) {
+        _state.leader_info->last_timestamp = std::max(_state.leader_info->last_timestamp, ts);
+    }
+}
+
+api::timestamp_type groups_manager::leader_timestamp_floor(raft::group_id gid, const raft_group_state& state, const raft_resize_tracker& resize_tracker) {
+    // The end_resize timestamp of the group this one replaces, if it is known here yet, is above
+    // every write in that group's log, and every write of this group has to sort after those. A
+    // leader's clock may have been seeded before end_resize was applied here, so we consult it on
+    // every write.
+    return std::max(state.min_leader_timestamp,
+            resize_tracker.parent_end_resize_timestamp(gid).value_or(api::min_timestamp));
 }
 
 groups_manager::groups_manager(netw::messaging_service& ms, 
@@ -493,14 +512,14 @@ void groups_manager::chain_control_op(raft_group_state& state, raft::group_id id
     });
 }
 
-std::optional<raft_server> groups_manager::try_acquire_server(raft_group_state& state) {
+std::optional<raft_server> groups_manager::try_acquire_server(raft::group_id gid, raft_group_state& state) {
     // No preemption between the checks, see raft_group_state.
     auto h = state.gate->try_hold();
     if (!h || !state.server_control_op.available()) {
         return std::nullopt;
     }
     SCYLLA_ASSERT(state.server);
-    return raft_server(state, std::move(*h));
+    return raft_server(gid, state, std::move(*h), _resize_tracker);
 }
 
 std::optional<raft_server> groups_manager::try_acquire_server(raft::group_id group_id) {
@@ -508,7 +527,7 @@ std::optional<raft_server> groups_manager::try_acquire_server(raft::group_id gro
     if (it == _raft_groups.end()) {
         return std::nullopt;
     }
-    return try_acquire_server(it->second);
+    return try_acquire_server(group_id, it->second);
 }
 
 static table_metrics::reporting table_metrics_reporting(const db::config& cfg) {
@@ -686,9 +705,12 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
                     state.leader_info_cond.broadcast();
                     co_return;
                 }
+                // The floor covers what the stored data cannot: for a group created by a resize,
+                // writes of the group it replaces which are not applied here yet, whose
+                // timestamps every write of this group has to exceed.
                 state.leader_info = leader_info {
                     .term = current_term,
-                    .last_timestamp = *last_timestamp
+                    .last_timestamp = std::max(*last_timestamp, leader_timestamp_floor(gid, state, _resize_tracker))
                 };
                 logger.debug("leader_info_updater({}, group_id={}): read_barrier() completed, "
                     "new leader term {}, last_timestamp {}",
@@ -1106,7 +1128,7 @@ future<> groups_manager::wait_for_first_leader(global_tablet_id tablet, raft::gr
     // which drives the split that would block wait_for_groups_to_start().
     abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
     while (auto holder = g.try_hold()) {
-        auto srv = raft_server(state, std::move(*holder));
+        auto srv = raft_server(id, state, std::move(*holder), _resize_tracker);
         std::optional<future<>> wait;
         if (parent_gid) {
             auto res = srv.begin_read(aoe.abort_source());
@@ -1190,6 +1212,17 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             // another in which this group is the parent.
             if (_resize_tracker.get_parent_group(id)) {
                 logger.debug("update(): group {} is no longer a child, dropping its mapping", id);
+                // The parent's end_resize floor goes with the mapping, so we keep it in the group's
+                // own state. The parent's state is still here: its teardown is only scheduled
+                // below. Only a replica the finalization did not wait for - one being excluded -
+                // may lack end_resize; it leads nothing for long, so we only warn.
+                if (const auto floor = _resize_tracker.parent_end_resize_timestamp(id)) {
+                    auto& child_state = _raft_groups[id];
+                    child_state.min_leader_timestamp = std::max(child_state.min_leader_timestamp, *floor);
+                } else {
+                    logger.warn("update(): group {} stops being a child of a resize whose end_resize "
+                            "this replica has not applied", id);
+                }
                 _resize_tracker.erase_group(id);
             }
 
@@ -1266,8 +1299,8 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     }
     // Holder and future are taken atomically, so the future completes with the
     // start that created this gate, whose server the holder protects.
-    return state.server_control_op.get_future(as).then([&state, h = std::move(*h)] mutable {
-        return raft_server(state, std::move(h));
+    return state.server_control_op.get_future(as).then([this, group_id, &state, h = std::move(*h)] mutable {
+        return raft_server(group_id, state, std::move(h), _resize_tracker);
     });
 }
 
@@ -1548,7 +1581,7 @@ future<> groups_manager::stepdown_leaders() {
         auto& [gid, state] = entry;
 
         // The handle also pins the entry: its erase waits for the gate.
-        const auto srv = try_acquire_server(state);
+        const auto srv = try_acquire_server(gid, state);
         if (!srv || !srv->server().is_leader()) {
             co_return;
         }
