@@ -288,7 +288,7 @@ them are otherwise easy to confuse:
 
 **Record Header** (`record_header`):
 
-Written by `ondisk::write_record_header()`. The fixed fields come first, at constant offsets, and the partition key is the only variable part.
+Written by `ondisk::write_record_header()`. The fixed fields come first, at constant offsets, as `ondisk::record_header_fixed`, and the partition key is the only variable part.
 
 | Offset | Size       | Field       | Description |
 |--------|------------|-------------|-------------|

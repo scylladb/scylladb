@@ -39,9 +39,9 @@ namespace replica::logstor::ondisk {
 // type, update the expected bytes there.
 //
 // The record header does not have a fixed size, because it holds the partition key.
-// write_record_header() and read_record_header(), at the end of this file, write and read the
-// record header, and record_frame_header holds the key size, so that the reader can find the end of
-// the record header.
+// write_record_header() writes record_header_fixed and then the key, and read_record_header()
+// reads them. record_frame_header holds the key size, so that the reader can find the end of the
+// record header.
 //
 // The record value that follows the header also has a variable size, record_frame_header holds
 // that size too, and encode_record_value() and decode_record_value() define the encoding of the
@@ -91,6 +91,10 @@ struct field<utils::UUID> {
 template <>
 struct field<table_id> : projected_field<utils::UUID, &table_id::uuid> {};
 
+// api::timestamp_type is an alias, so it cannot have its own field<>, and fixed_serializer encodes
+// it as int64_t.
+static_assert(std::is_same_v<api::timestamp_type, int64_t>, "The timestamp must be of the on-disk type");
+
 struct segment_header;
 
 // A segment holds one or more chunks, each starting at a block_alignment boundary and padded to
@@ -135,10 +139,27 @@ struct record_frame_header : fixed_layout {
     bool operator==(const record_frame_header& other) const noexcept = default;
 };
 
+// A record header starts with the token, the timestamp and the table id, as four little-endian
+// 64-bit words. The partition key follows them, in key_size bytes of its internal representation:
+//
+//   0         8             16                    32                  32 + key_size
+//   +---------+-------------+---------------------+-------------------+
+//   |  token  |  timestamp  |      table id       |   partition key   |
+//   +---------+-------------+---------------------+-------------------+
+//
+// The fixed fields come first so that they are at constant offsets. The key is the only variable
+// part, and the record_frame_header before the record header holds the key size.
+struct record_header_fixed : fixed_layout {
+    dht::token token;
+    api::timestamp_type timestamp;
+    table_id table;
+};
+
 // These constants are the on-disk sizes, which fixed_size calculates from the fields of each type.
 static constexpr size_t chunk_header_size = fixed_size<chunk_header>;
 static constexpr size_t segment_header_size = fixed_size<segment_header>;
 static constexpr size_t record_frame_header_size = fixed_size<record_frame_header>;
+static constexpr size_t record_header_fixed_size = fixed_size<record_header_fixed>;
 
 static_assert(chunk_header_size % record_alignment == 0, "Chunk header size must be aligned by record_alignment");
 static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
@@ -172,21 +193,6 @@ inline bool validate_record_frame_header(const record_frame_header& frame_header
 // Out of line so that the formatting and the throw stay out of the inlined read path.
 [[noreturn]] void throw_invalid_record_frame(const record_frame_header& frame_header, size_t frame_size);
 
-// The record header is the token, the timestamp and the table id as four little-endian 64-bit
-// words, followed by the partition key in its internal representation:
-//
-//   0         8             16                    32                  32 + key_size
-//   +---------+-------------+---------------------+-------------------+
-//   |  token  |  timestamp  |  table id msb, lsb  |   partition key   |
-//   +---------+-------------+---------------------+-------------------+
-//
-// The fixed fields come first so that they are at constant offsets; the key is the only variable
-// part, and its size is stored in the record_frame_header ahead of the record header.
-static constexpr size_t record_header_fixed_size =
-    sizeof(int64_t)                 // token
-    + sizeof(api::timestamp_type)   // timestamp
-    + 2 * sizeof(int64_t);          // table id
-
 constexpr size_t record_header_size(size_t key_size) noexcept {
     return record_header_fixed_size + key_size;
 }
@@ -197,10 +203,11 @@ inline size_t record_header_size(const record_header& h) noexcept {
 
 template <typename Output>
 void write_record_header(Output& out, const record_header& h) {
-    ser::serializer<int64_t>::write(out, h.key.token().raw());
-    ser::serializer<api::timestamp_type>::write(out, h.timestamp);
-    ser::serializer<int64_t>::write(out, h.table.uuid().get_most_significant_bits());
-    ser::serializer<int64_t>::write(out, h.table.uuid().get_least_significant_bits());
+    ser::serializer<record_header_fixed>::write(out, record_header_fixed {
+        .token = h.key.token(),
+        .timestamp = h.timestamp,
+        .table = h.table,
+    });
     for (bytes_view frag : fragment_range(managed_bytes_view(h.key.key().representation()))) {
         out.write(reinterpret_cast<const char*>(frag.data()), frag.size());
     }
@@ -209,18 +216,15 @@ void write_record_header(Output& out, const record_header& h) {
 // key_size comes from the record_frame_header that precedes the record header on disk.
 template <typename Input>
 record_header read_record_header(Input& in, uint32_t key_size) {
-    auto token = dht::token::from_int64(ser::serializer<int64_t>::read(in));
-    auto timestamp = ser::serializer<api::timestamp_type>::read(in);
-    auto msb = ser::serializer<int64_t>::read(in);
-    auto lsb = ser::serializer<int64_t>::read(in);
+    auto fixed = ser::serializer<record_header_fixed>::read(in);
     managed_bytes key(managed_bytes::initialized_later(), key_size);
     for (bytes_mutable_view frag : fragment_range(managed_bytes_mutable_view(key))) {
         in.read(reinterpret_cast<char*>(frag.data()), frag.size());
     }
     return record_header{
-        .key = dht::decorated_key(token, partition_key::from_bytes(std::move(key))),
-        .timestamp = timestamp,
-        .table = table_id(utils::UUID(msb, lsb)),
+        .key = dht::decorated_key(fixed.token, partition_key::from_bytes(std::move(key))),
+        .timestamp = fixed.timestamp,
+        .table = fixed.table,
     };
 }
 
