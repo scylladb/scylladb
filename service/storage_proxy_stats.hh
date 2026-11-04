@@ -184,11 +184,13 @@ struct stats : public write_stats {
     split_stats data_read_attempts;
     split_stats data_read_completed;
     split_stats data_read_errors;
+    split_stats data_read_cancelled;
 
     // Digest read attempts
     split_stats digest_read_attempts;
     split_stats digest_read_completed;
     split_stats digest_read_errors;
+    split_stats digest_read_cancelled;
 
     // Mutation data read attempts
     split_stats mutation_data_read_attempts;
