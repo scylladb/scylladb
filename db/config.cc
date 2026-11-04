@@ -1680,6 +1680,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "because it partitions the vector index.")
     , alternator_timeout_in_ms(this, "alternator_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "The server-side timeout for completing Alternator API requests.")
+    , alternator_tablet_routing_wait_timeout_in_ms(this, "alternator_tablet_routing_wait_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 50,
+        "Maximum additional wait in milliseconds for strongly consistent tablet routing metadata after an Alternator data operation succeeds. "
+        "Zero includes only metadata that is already available. The metadata backend deadline is at most one second.")
     , alternator_ttl_period_in_seconds(this, "alternator_ttl_period_in_seconds", value_status::Used,
         60*60*24,
         "The default period for Alternator's expiration scan. Alternator attempts to scan every table within that period.")

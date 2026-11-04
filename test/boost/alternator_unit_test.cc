@@ -1679,6 +1679,41 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_routing_header_allocation_failure) {
     }
 }
 
+BOOST_AUTO_TEST_CASE(test_request_result_without_routing_is_compact) {
+    using result_type = alternator::executor::request_return_type;
+    using response_type = decltype(result_type::response);
+    // Clients without the extension should pay only for the nullable metadata
+    // handle, including in ready futures and coroutine result storage.
+    BOOST_REQUIRE_LE(sizeof(result_type), sizeof(response_type) + sizeof(void*));
+    BOOST_REQUIRE_LE(sizeof(future<result_type>), sizeof(future<response_type>) + sizeof(void*));
+
+    const auto before = memory::stats().mallocs();
+    auto ready = make_ready_future<result_type>(std::string("{}"));
+    auto result = ready.get();
+    const auto after = memory::stats().mallocs();
+    BOOST_REQUIRE_EQUAL(before, after);
+    BOOST_REQUIRE(!result.routing_info);
+    BOOST_REQUIRE(!result.is_error());
+    BOOST_REQUIRE_EQUAL(std::get<std::string>(result.response), "{}");
+}
+
+BOOST_AUTO_TEST_CASE(test_request_error_clears_tablet_routing) {
+    alternator::executor::request_return_type result = std::string("{}");
+    result.routing_info = std::make_unique<alternator::tablet_routing_response>();
+    result.routing_info->info.hash = locator::tablet_version{123};
+    result.routing_info->mode = alternator::tablet_routing_mode::strong;
+    auto* metadata = result.routing_info.get();
+    BOOST_REQUIRE(!result.is_error());
+    auto moved = std::move(result);
+    BOOST_REQUIRE(!result.routing_info);
+    BOOST_REQUIRE_EQUAL(moved.routing_info.get(), metadata);
+    BOOST_REQUIRE_EQUAL(moved.routing_info->info.hash.value(), 123);
+    BOOST_REQUIRE(moved.routing_info->mode == alternator::tablet_routing_mode::strong);
+    moved = alternator::api_error::validation("invalid");
+    BOOST_REQUIRE(moved.is_error());
+    BOOST_REQUIRE(!moved.routing_info);
+}
+
 BOOST_AUTO_TEST_CASE(test_tablet_header_lookup_without_allocations) {
     seastar::http::request request;
     request._headers.emplace("Host", "localhost");
