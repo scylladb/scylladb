@@ -50,7 +50,8 @@ what a restart resumes from, even though the group had usually committed further
 its last release.
 
 The row also holds the resize markers (`start_resize`, `end_resize`) of a parent group
-being replaced by a tablet split or merge.
+being replaced by a tablet split or merge, and the `schema_changes` list of the versions
+announced at or below `snapshot_idx`, see "Schema versions in the log" below.
 
 The table is marked `wait_for_sync_to_commitlog`, because votes and the initial
 descriptor are written by CQL and must be durable before the write that depends
@@ -373,7 +374,9 @@ Commitlog replayer (startup)
 
 Raft replay is a single pass. Nothing is collected and sorted afterwards; each batch is
 processed as it is read, which is what bounds how much is buffered: at most a group's
-uncommitted window, rather than everything the surviving segments hold.
+uncommitted window, rather than everything the surviving segments hold. The exception is
+a write whose `schema_changed` is ahead of the node's group0 schema version, which is buffered
+together with the committed entries above it, see "Schema versions in the log".
 
 Startup first replays the same segments restricted to the system tables, so
 `system.raft_groups` holds its final row when `resolve_group()` reads it: the floor and
@@ -435,7 +438,9 @@ persist a claim about entries that never did. A copy a truncation superseded doe
 not extend the run: nothing applies it, so counting it would cover an index whose
 current copy went down with a lost segment. A supersede also takes back the indexes
 it pops out of the buffer, which an earlier batch had already counted, so the run
-falls back to just below the batch that superseded them.
+falls back to just below the batch that superseded them. When replay leaves a write to
+the state machine, the floor is the entry before that write instead, and the committed
+entries above it are checked with the tail, which has to be unbroken.
 
 A segment the replay could not read in full refuses the boot too, once this shard hosts
 a strongly consistent group. The index checks above catch a gap they can see, and a lost
@@ -543,6 +548,82 @@ the schema yet. Every replica applies every entry, so `apply_latency` counts eac
 every replica, except the committed entries a node applies from its commitlog when it
 starts.
 
+# Schema versions in the log
+
+A replica may apply a write after its table has moved to a newer schema than the one the
+coordinator built the write with, so it has to upgrade the write. The column mapping for the
+upgrade comes from the group's own log.
+
+In each term, before the first write of a schema version, the leader appends a `schema_changed`
+entry with the version, its column mapping and the leader's group0 schema version. The log
+reads `[schema_changed[v1], write, write, schema_changed[v2], write, ...]`, and a write is
+applied under the closest `schema_changed` before it. `state_machine::apply()` checks that the
+write's `frozen_mutation` carries the announced version. A new term starts with no announced
+version, so the leader announces again before the term's first write, even a version that is
+already in effect.
+
+The leader appends a write only after the `schema_changed` of its version is committed, and
+appends no write while one is on its way. The two are separate entries, and the
+`schema_changed` can fail to reach the log while the term goes on, e.g. when a leadership
+transfer starts while it is being added and is then cancelled. A write sent right behind it
+would then have no `schema_changed` of its version before it, and no replica could apply it.
+So the first write of a version in a term waits for one more commit.
+
+A column mapping that does not fit in `raft_max_command_size` (100 KiB) cannot be announced,
+and writes to such a table fail with an invalid request error.
+
+A replica resolves an announced version once. It uses the schema registry's schema of that
+version if it has one, and otherwise its own table schema, upgrading the writes with the
+announced mapping. That upgrade is right only for a version older than the table's, since a
+newer one may have added back a column the table dropped, and converting its writes would lose
+their cells. Table schema versions are timeuuids from the clock of the node that ran the
+`ALTER TABLE`, so they do not tell which is older, but the group0 schema version
+(`group0_schema_version` in `system.scylla_local`) does. It is the group0 state id of the last
+schema change, persisted in the same commitlog batch as the schema. The leader reads it after it
+got the schema the write is built with, so the announced group0 schema version is no older than
+the change that made the version. If the version is already in the group's list, as when it is
+announced again in a new term or after interleaved writes of another version, the leader reuses
+the group0 schema version stored there. That one is valid too and may be older, so fewer
+followers need a group0 barrier.
+
+The state machine applies a write only after the node's group0 schema version has reached the
+announced one, and runs a group0 barrier if it has not (SCYLLADB-2479). The table's schema lags
+the group0 schema version while a change is being applied, so an unknown version whose mapping
+does not match the table's columns, with their kinds and types, takes the barrier too.
+
+Commitlog replay cannot run the barrier, so it compares the announced group0 schema version with
+the one on disk. If the node has reached it, the version is no newer than the table's, and replay
+upgrades the writes by the mapping, dropped columns included. If not, replay leaves the write and
+every entry above it in the log for the state machine, and the `snapshot_idx` it persists stops
+at the entry before. A write at or below the loaded `snapshot_idx` skips the comparison, so
+`snapshot_idx` never moves back. The state machine applied that write before the crash, after the
+node had durably reached a group0 schema version that had the write's version.
+
+The group's row in `system.raft_groups` lists the versions announced at or below `snapshot_idx`
+in `schema_changes`, ordered by their last announcement, so the one in effect is last. Entries
+above `snapshot_idx` are applied again after a restart under the last version of the list, so a
+release adds the `schema_changed` entries of its record only together with the new
+`snapshot_idx`. A snapshot transfer, once implemented, has to carry the list under the same rule.
+
+Replay also applies the committed entries below `snapshot_idx` that surviving segments still
+hold, and the segment with their `schema_changed` may already be gone. So the list keeps every
+version whose writes a segment still in the commitlog may hold, and replay looks each write up
+by its version. Writes of the old and the new version interleave while requests started before
+an `ALTER TABLE` are in flight on the leader, so a version announced again moves to the end of
+the list. Each entry records the group's newest segment at the version's last announcement, and
+the writes of a version are in segments up to the one the next entry records. An entry is
+dropped once the commitlog no longer holds the next entry's segment, like the truncation records
+(`count_stale_schema_changes()`). The version in effect is never dropped. The segment file is
+removed in the background a moment later, so after a crash in between, replay may read a write
+below `snapshot_idx` whose version is no longer listed. That write was flushed, and replay skips
+it (SCYLLADB-4094). Above `snapshot_idx` such a write is a bug and refuses the boot. The state
+machine would fail on it too, so `strongly_consistent_tables_start_on_damaged_commitlog` skips
+it instead, and the replica loses the write.
+
+Replay adds a `schema_changed` to the list only if its index is above `snapshot_idx` and above
+the last one it added. The list already holds the entries at or below `snapshot_idx`, and a copy
+of an older `schema_changed` read again would put its version back in effect.
+
 # Tablet split
 
 A strongly consistent tablet keeps its data in a Raft group of its own, so splitting one is
@@ -565,8 +646,8 @@ log order like any write. They are *not* carried as mutations, though: each mark
 as a column of the group's own row in `system.raft_groups`, whose partition key contains
 the shard hosting the group, and replicas may host the same group on different shards. A single
 mutation could therefore not serve all of them, so `raft_command` is a variant
-(`write_mutation`, `resize_marker`) and every replica builds its own mutation when it applies
-the entry. The marker carries the timestamp of its cell, taken by the leader which appended it,
+(`write_mutation`, `resize_marker`, `schema_changed`) and every replica builds its own mutation
+when it applies the entry. The marker carries the timestamp of its cell, taken by the leader which appended it,
 so every replica and every replay writes the same cell. The kind of resize in progress comes from
 the tablet metadata, not from the markers.
 
