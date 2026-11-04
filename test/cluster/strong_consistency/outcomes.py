@@ -38,7 +38,6 @@ claim, for the windows the test opened with
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Callable, Optional
@@ -103,10 +102,7 @@ ExceptionPolicy = Callable[[BaseException, FailureContext], Optional[Outcome]]
 # the server can produce for an absent table.  They are what the stress runs
 # have actually seen; widen them when a run fails on one that is missing.
 def is_table_absence_invalid_request(exc: InvalidRequest) -> bool:
-    return _is_table_absence_message(str(exc).lower())
-
-
-def _is_table_absence_message(msg: str) -> bool:
+    msg = str(exc).lower()
     return (
         "unconfigured table" in msg
         or "does not exist" in msg
@@ -117,27 +113,10 @@ def _is_table_absence_message(msg: str) -> bool:
 
 
 def is_table_absence_error(exc: BaseException) -> bool:
-    """Return True if the exception indicates the table is absent (dropped/recreated).
-
-    One kind of them is a SERVER_ERROR: a forwarded request whose
-    statement the target has to prepare again.  The target's "unconfigured
-    table" or "keyspace does not exist" comes back through the prepare RPC as
-    a remote error, and the forwarding node returns it as a SERVER_ERROR whose
-    message is the exception's type and its message.
-    """
+    """Return True if the exception indicates the table is absent (dropped/recreated)."""
     if isinstance(exc, InvalidRequest):
         return is_table_absence_invalid_request(exc)
-    if isinstance(exc, ServerError):
-        msg = str(exc).lower()
-        return (_FORWARDED_INVALID_REQUEST.search(msg) is not None
-                and _is_table_absence_message(msg))
     return False
-
-
-# The type of a remote invalid_request_exception, or of one of its subclasses
-# (keyspace_not_defined_exception), as the forwarding node prints it.
-_FORWARDED_INVALID_REQUEST = re.compile(
-    r"exceptions::(invalid_request|keyspace_not_defined)_exception \(")
 
 
 # The node that executes the request found too few live replicas and refused it
