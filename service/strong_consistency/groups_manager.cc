@@ -1061,6 +1061,10 @@ void groups_manager::update(token_metadata_ptr new_tm) {
     if (!_features.strongly_consistent_tables) {
         return;
     }
+    if (_as.abort_requested()) {
+        logger.debug("update(): ignoring token metadata version {}, the manager is stopping", new_tm->get_version());
+        return;
+    }
 
     if (!_started) {
         _pending_tm = new_tm;
@@ -1163,10 +1167,12 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     // cannot be closed if the table exists.
     //
     // Node shutdown also closes gates (groups_manager::stop_all_shards() closes every gate
-    // regardless of table existence), but it cannot race with us either: the
-    // strongly consistent coordinator is destroyed before groups_manager::stop_all_shards()
-    // runs, and the RPC handlers that call this are unregistered on every shard
-    // before it; see uninit_messaging_service().
+    // regardless of table existence), but it requests _as on every shard before it closes
+    // any gate. A request that comes after that, for example through the maintenance
+    // socket, is refused here. There is no scheduling point from here to try_hold() either.
+    if (_as.abort_requested()) {
+        return make_exception_future<raft_server>(_as.abort_requested_exception_ptr());
+    }
     if (!_db.column_family_exists(table_id)) {
         return make_exception_future<raft_server>(
             replica::no_such_column_family(table_id));
@@ -1297,6 +1303,9 @@ void groups_manager::request_flush(db::cf_id_type id, db::replay_position pos) {
 }
 
 future<> groups_manager::stop_all_shards() {
+    co_await container().invoke_on_all([] (groups_manager& gm) {
+        gm._as.request_abort();
+    });
     logger.debug("stop_all_shards(): unregistering the RPC handlers on all shards");
     co_await container().invoke_on_all(&groups_manager::uninit_messaging_service);
     logger.debug("stop_all_shards(): stopping all shards");

@@ -183,6 +183,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     boost::intrusive::list<raft_group_state, boost::intrusive::constant_time_size<false>> _starting_groups;
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
+    // Requested on every shard by stop_all_shards() before it does anything else.
+    abort_source _as;
 
     tablet_group_leader_cache _leader_cache;
 
