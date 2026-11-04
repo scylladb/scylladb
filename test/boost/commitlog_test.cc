@@ -449,6 +449,33 @@ SEASTAR_TEST_CASE(test_commitlog_retries_failed_delete_in_order) {
     });
 }
 
+// Each shard's segments are deleted by one shard.
+SEASTAR_TEST_CASE(test_commitlog_split_segments_for_delete) {
+    std::vector<sstring> paths;
+    std::unordered_map<sstring, unsigned> origin;
+    for (unsigned shard : {3, 0, 2, 1, 0, 3, 2, 1}) {
+        auto id = replay_position(shard, 1000 + paths.size()).id;
+        paths.push_back("/dir/" + commitlog::descriptor(id, commitlog::descriptor::FILENAME_PREFIX).filename());
+        origin[paths.back()] = shard;
+    }
+    paths.push_back("/dir/not-a-segment");
+
+    for (unsigned shards : {1, 2, 4, 5}) {
+        auto groups = commitlog::split_segments_for_delete(paths, shards);
+        BOOST_REQUIRE_EQUAL(groups.size(), shards);
+        size_t total = 0;
+        for (unsigned g = 0; g < shards; ++g) {
+            total += groups[g].size();
+            for (auto& p : groups[g]) {
+                auto it = origin.find(p);
+                BOOST_REQUIRE_EQUAL(it == origin.end() ? 0 : it->second % shards, g);
+            }
+        }
+        BOOST_REQUIRE_EQUAL(total, paths.size());
+    }
+    co_return;
+}
+
 // Replayed segments passed to delete_segments() must be deleted in id order.
 SEASTAR_TEST_CASE(test_commitlog_delete_replayed_segments_in_order) {
     auto ep = std::make_unique<record_deletes_extension>();
