@@ -1444,17 +1444,17 @@ class node final {
     void insert_into_full(kid_index idx, Key k, node_or_data nd, Less less, prealloc& nodes) noexcept {
         idx = push_to_sibling(idx, less);
 
-            if (_num_keys < NodeSize) {
-                do_insert(idx, std::move(k), nd, less);
-                nodes.drain();
-                return;
-            }
+        if (_num_keys < NodeSize) {
+            do_insert(idx, std::move(k), nd, less);
+            nodes.drain();
+            return;
+        }
 
-            /*
-             * We can only get here if both ->can_push_to() checks in
-             * push_to_sibling() had failed. In this case -- go ahead
-             * and split this.
-             */
+        /*
+         * We can only get here if both ->can_push_to() checks in
+         * push_to_sibling() had failed. In this case -- go ahead
+         * and split this.
+         */
 
         split_and_insert(idx, std::move(k), nd, less, nodes);
     }
