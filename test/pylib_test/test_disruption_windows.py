@@ -154,15 +154,15 @@ def test_a_stale_table_id_is_an_invalid_request():
         ServerError(ServerError.error_code, "Can't find a column family with UUID 1234", {}))
 
 
-def test_a_forwarded_reprepare_of_a_dropped_table_arrives_bare_without_retries():
+def test_a_forwarded_reprepare_of_a_dropped_table_is_an_invalid_request():
     """A forwarded request whose target must prepare the statement again gets
-    the target's "unconfigured table" back as a SERVER_ERROR (seen in the
-    schema-changes test once retries were off)."""
-    for message in ("exceptions::invalid_request_exception (unconfigured table main)",
-                    "exceptions::keyspace_not_defined_exception (Keyspace ks does not exist)"):
-        assert is_table_absence_error(ServerError(ServerError.error_code, message, {}))
-    assert not is_table_absence_error(ServerError(
-        ServerError.error_code, "exceptions::invalid_request_exception (something else)", {}))
+    the target's own INVALID (SCYLLADB-5549), so its old SERVER_ERROR form is
+    no longer excused."""
+    for target_error, message in (("invalid_request_exception", "unconfigured table main"),
+                                  ("keyspace_not_defined_exception", "Keyspace ks does not exist")):
+        assert is_table_absence_error(_invalid_request(message))
+        assert not is_table_absence_error(ServerError(
+            ServerError.error_code, f"exceptions::{target_error} ({message})", {}))
 
 
 async def test_a_stale_table_id_is_excused_only_in_a_reset(clock):
