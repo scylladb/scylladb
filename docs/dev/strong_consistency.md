@@ -504,3 +504,11 @@ children with the parent's achieves. Until they are co-located the child bounces
 back to the parent, where the request coordinator retries it, since it has nowhere else to go. On
 top of that, a handed-off write carries the timestamp it got from the parent, and the child's
 clock is advanced past it before a new one is handed out.
+
+**A request which resolved the parent is never left without it.** A request pins the token
+metadata it resolved its group from, and may reach the parent after the finalization has taken the
+parent out of the tablet map. The parent's deletion therefore waits until every token metadata
+version older than the one which took it away is released
+(`groups_manager::retire_resized_group()`), and until then the parent hands such a request off
+like any other. The wait is local: a request on another node which forwards to the parent's node
+is resolved there against that node's current map, which names the child.

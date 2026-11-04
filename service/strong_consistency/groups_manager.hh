@@ -215,6 +215,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
         // Set on a parent for as long as it is being resized on this replica.
         std::unique_ptr<resize_colocation_state> resize_colocation;
+
+        // Set on a parent which a finalized resize took out of the tablet map, while its deletion
+        // waits for the requests which may still resolve it.
+        bool retiring = false;
     };
 
     netw::messaging_service& _ms;
@@ -251,6 +255,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // detached and exit on their own; the drain is only joined by stop(), so that no fiber
     // outlives the manager.
     future<> _draining_colocators = make_ready_future<>();
+
+    // The fibers of retire_resized_group(). stop() aborts their waits and joins them.
+    gate _retirements;
+    abort_source _retirements_as;
 
     // The lowest timestamp a leader of group `gid`, whose state is `state`, may hand out next on
     // this node: the higher of `state.min_leader_timestamp` and the end_resize timestamp of the
@@ -364,6 +372,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // colocator of an earlier resize of the same parent is detached first.
     void start_leader_colocator(raft_group_state& state, locator::global_tablet_id tablet,
         raft::group_id parent_gid, std::vector<raft::group_id> new_gids);
+
+    // Deletes `id`, a parent which a finalized resize took out of the tablet map, once no request
+    // can still resolve it. A request pins the token metadata it resolved its group from, so we wait
+    // until every version older than the current one is released. Until then a request which reaches
+    // the parent is handed off to a child like any other. Runs in the background.
+    future<> retire_resized_group(raft::group_id id);
 
     // Detaches the group's colocation state and aborts its fiber, parking both in
     // _draining_colocators. Called as soon as this replica learns that the resize the colocator was
