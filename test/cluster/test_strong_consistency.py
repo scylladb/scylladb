@@ -1958,6 +1958,43 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_prepared_write_across_table_recreation(manager: ScyllaClusterManager):
+    """
+    Regression test for SCYLLADB-4655: a prepared write in flight while its table is
+    dropped and created again fails with INVALID rather than SERVER_ERROR, so the
+    driver returns it without retrying. The failed write leaves no row in the new
+    table, and the next execution of the same prepared statement writes to it.
+    """
+    [server] = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        create_table = f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY, v int)"
+        await cql.run_async(create_table)
+        insert = cql.prepare(f"INSERT INTO {ks}.tbl (pk, v) VALUES (?, ?)")
+
+        logger.info("Pausing a prepared write before it gets its raft server")
+        injection = "sc_coordinator_wait_before_acquire_server"
+        await manager.api.enable_injection(server.ip_addr, injection, one_shot=False)
+        write = asyncio.ensure_future(cql.run_async(insert, [1, 1]))
+        await manager.api.wait_for_injection_enter(server.ip_addr, injection)
+
+        logger.info("Recreating the table and releasing the write")
+        await cql.run_async(f"DROP TABLE {ks}.tbl")
+        await cql.run_async(create_table)
+        await manager.api.message_injection(server.ip_addr, injection)
+        await manager.api.disable_injection(server.ip_addr, injection)
+        with pytest.raises(InvalidRequest, match="unconfigured table tbl"):
+            await write
+
+        logger.info("Executing the same prepared write again")
+        await cql.run_async(insert, [2, 2])
+        assert not await cql.run_async(f"SELECT v FROM {ks}.tbl WHERE pk = 1")
+        rows = await cql.run_async(f"SELECT v FROM {ks}.tbl WHERE pk = 2")
+        assert [row.v for row in rows] == [2]
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_foreground_requests_metrics(manager: ScyllaClusterManager):
     """
     Verify that a write and a read are counted in foreground_writes and foreground_reads
