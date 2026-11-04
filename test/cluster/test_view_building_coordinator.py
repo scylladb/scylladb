@@ -825,7 +825,7 @@ async def test_file_streaming(manager: ManagerClient):
 #   but the map stays the same, so one sstable won't be processed
 #   because last token after tablet merge = last token of tablet2 before merge
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
+async def test_staging_sstables_with_tablet_merge(manager: ManagerClient, scale_timeout):
     node_count = 2
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -833,7 +833,8 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
     ], config={
         'tablet_load_stats_refresh_interval_in_seconds': 1,
     })
-    cql, hosts = await manager.get_ready_cql(servers)
+    cql, hosts = await manager.get_ready_cql(servers, timeout=scale_timeout(60),
+                                             see_others_interval=scale_timeout(45))
     await manager.disable_tablet_balancing()
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND tablets = {{'enabled': true}}") as ks:
@@ -847,7 +848,7 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
 
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab "
                         "WHERE key IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, key)")
-        await wait_for_view(cql, 'mv', node_count)
+        await wait_for_view(cql, 'mv', node_count, timeout=scale_timeout(120))
         assert await get_tablet_count(manager, servers[0], ks, "tab") == 2
 
         # Flush on node0
@@ -863,7 +864,7 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
         await manager.server_start(servers[0].server_id)
 
         # Assert that node0 has no data for base table and MV
-        hosts = await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30)
+        hosts = await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + scale_timeout(30))
         await manager.server_stop_gracefully(servers[1].server_id)
         await assert_row_count_on_host(cql, hosts[0], ks, "tab", 0)
         await assert_row_count_on_host(cql, hosts[0], ks, "mv", 0)
@@ -874,8 +875,8 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
         s0_mark = await s0_log.mark()
         await manager.api.enable_injection(servers[0].ip_addr, "view_update_generator_consume_staging_sstable", one_shot=False)
         await manager.api.repair(servers[0].ip_addr, ks, "tab")
-        await s0_log.wait_for(f"Processing {ks} failed for table tab", from_mark=s0_mark, timeout=60)
-        await s0_log.wait_for(f"Finished user-requested repair for tablet keyspace={ks}", from_mark=s0_mark, timeout=60)
+        await s0_log.wait_for(f"Processing {ks} failed for table tab", from_mark=s0_mark, timeout=scale_timeout(60))
+        await s0_log.wait_for(f"Finished user-requested repair for tablet keyspace={ks}", from_mark=s0_mark, timeout=scale_timeout(60))
 
         await manager.server_stop_gracefully(servers[1].server_id)
         await assert_row_count_on_host(cql, hosts[0], ks, "tab", 1000)
@@ -916,14 +917,14 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
         await manager.enable_tablet_balancing()
         assert await get_tablet_count(manager, servers[0], ks, "tab") == 2
         await cql.run_async(f"ALTER TABLE {ks}.tab WITH tablets = {{'min_tablet_count': 1}}")
-        await wait_for(lambda: tablet_count_is(1), time.time() + 60)
+        await wait_for(lambda: tablet_count_is(1), time.time() + scale_timeout(60))
 
         await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, "view_building_coordinator_skip_main_loop") for s in servers + [new_server]))
         # The test fails here because of no support for tablet migration for staging sstables stored in view_building_worker. (#1)
-        await s3_log.wait_for(f"Processed {ks}.tab:", from_mark=s3_mark, timeout=60)
+        await s3_log.wait_for(f"Processed {ks}.tab:", from_mark=s3_mark, timeout=scale_timeout(60))
         await asyncio.sleep(1)
 
-        new_hosts = await wait_for_cql_and_get_hosts(cql, [new_server], time.time() + 30)
+        new_hosts = await wait_for_cql_and_get_hosts(cql, [new_server], time.time() + scale_timeout(30))
         await asyncio.gather(*(manager.server_stop_gracefully(s.server_id) for s in servers))
         await assert_row_count_on_host(cql, new_hosts[0], ks, "tab", 1000)
         await manager.server_start(servers[0].server_id)

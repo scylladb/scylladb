@@ -151,7 +151,9 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
     }
 
     tasks::tmlogger.info("tablet_virtual_task: wait until tablet operation is finished");
-    co_await utils::get_local_injector().inject("tablet_virtual_task_wait", utils::wait_for_message(60s));
+    // Tests pass a timeout scaled to the build mode, in seconds.
+    auto wait_timeout = std::chrono::seconds(utils::get_local_injector().inject_parameter<int64_t>("tablet_virtual_task_wait", "timeout").value_or(60));
+    co_await utils::get_local_injector().inject("tablet_virtual_task_wait", utils::wait_for_message(wait_timeout));
 
     auto task_finished = [&] () -> future<bool> {
         auto tmptr = _ss.get_token_metadata_ptr();
