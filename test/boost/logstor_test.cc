@@ -633,8 +633,53 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_frame_invalid_header) {
     }
 }
 
-// Checks that the record header encoding round-trips, including a key longer than the inline size of
-// managed_bytes, and that its size is the fixed part plus the key.
+// Checks that ondisk::parse_record_frame() reads a frame at the start of a longer buffer, as a scan
+// of a chunk does, and that a frame which does not fit or has an invalid header leaves the stream as
+// it was.
+SEASTAR_THREAD_TEST_CASE(test_logstor_parse_record_frame) {
+    auto schema = make_kv_schema();
+    auto record = make_log_record(schema, "pk0", "a-value-of-some-length", api::timestamp_type(1));
+    auto frame = serialize_record_frame(record);
+    const auto frame_size = frame.size();
+    frame.resize(frame_size + ondisk::record_alignment);
+
+    seastar::simple_memory_input_stream in(frame.data(), frame.size());
+    auto bytes = ondisk::parse_record_frame(in);
+    BOOST_REQUIRE(bytes);
+    BOOST_REQUIRE_EQUAL(in.size(), ondisk::record_alignment);
+    BOOST_REQUIRE_EQUAL(ondisk::record_frame_size(bytes->header.size(), bytes->value.size()), frame_size);
+    BOOST_REQUIRE(ondisk::read_record_header(bytes->header) == record.header);
+    BOOST_REQUIRE(record_value(bytes->value) == record.value);
+
+    seastar::simple_memory_input_stream short_in(frame.data(), frame_size - 1);
+    BOOST_REQUIRE(!ondisk::parse_record_frame(short_in));
+    BOOST_REQUIRE_EQUAL(short_in.size(), frame_size - 1);
+
+    auto parses_with_header = [] (std::vector<char> buf, ondisk::record_frame_header h) {
+        seastar::simple_memory_output_stream out(buf.data(), ondisk::record_frame_header_size);
+        ser::serializer<ondisk::record_frame_header>::write(out, h);
+        seastar::simple_memory_input_stream in(buf.data(), buf.size());
+        if (ondisk::parse_record_frame(in)) {
+            return true;
+        }
+        BOOST_REQUIRE_EQUAL(in.size(), buf.size());
+        return false;
+    };
+
+    // A scan finds a zero value_size in the zero-filled end of a torn chunk.
+    const auto key_size = uint32_t(record.header.key.key().representation().size());
+    BOOST_REQUIRE(!parses_with_header(frame, {.key_size = key_size, .value_size = 0}));
+
+    // The key bound applies even when the frame fits in the buffer.
+    std::vector<char> large(ondisk::min_record_frame_size + ondisk::max_key_size + 2);
+    BOOST_REQUIRE(parses_with_header(large, {.key_size = ondisk::max_key_size, .value_size = 2}));
+    BOOST_REQUIRE(!parses_with_header(large, {.key_size = ondisk::max_key_size + 1, .value_size = 1}));
+}
+
+// Checks that read_record_header() returns the record header that write_record_header() wrote,
+// also with a key that is longer than the inline size of managed_bytes, that the header size is the
+// fixed part plus the key, and that read_record_header() rejects a header that is shorter than its
+// fixed part.
 SEASTAR_THREAD_TEST_CASE(test_logstor_record_header_round_trip) {
     auto schema = make_kv_schema();
     auto m = make_kv_mutation(schema, sstring(100, 'k'), "v");
@@ -659,12 +704,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_header_round_trip) {
     ondisk::write_record_header(out, header);
     BOOST_REQUIRE_EQUAL(out.size(), 0u);
 
-    seastar::simple_memory_input_stream in(buf.data(), buf.size());
-    auto read_back = ondisk::read_record_header(in, key_size);
-    BOOST_REQUIRE_EQUAL(in.size(), 0u);
+    const bytes_view header_bytes(reinterpret_cast<const int8_t*>(buf.data()), buf.size());
+    auto read_back = ondisk::read_record_header(header_bytes);
     BOOST_REQUIRE(read_back == header);
     BOOST_REQUIRE(read_back.key.equal(*schema, header.key));
     BOOST_REQUIRE(read_back.index_key() == header.index_key());
+
+    BOOST_REQUIRE_THROW(ondisk::read_record_header(header_bytes.substr(0, ondisk::record_header_fixed_size - 1)), std::out_of_range);
 }
 
 // Checks that the index key hashes the internal representation of the partition key and keeps its token.

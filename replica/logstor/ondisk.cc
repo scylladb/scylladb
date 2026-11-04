@@ -89,9 +89,14 @@ uint32_t calculate_body_crc(std::span<const char> body) {
     return c.get();
 }
 
-void throw_invalid_record_frame(const record_frame_header& frame_header, size_t frame_size) {
+void throw_invalid_record_frame(std::span<const char> frame) {
+    if (frame.size() < record_frame_header_size) {
+        throw std::runtime_error(fmt::format("Invalid record frame: {} bytes, shorter than its header", frame.size()));
+    }
+    seastar::simple_memory_input_stream in(frame.data(), frame.size());
+    auto frame_header = ser::serializer<record_frame_header>::read(in);
     throw std::runtime_error(fmt::format("Invalid record frame: key_size {} and value_size {} in a frame of {} bytes",
-            frame_header.key_size, frame_header.value_size, frame_size));
+            frame_header.key_size, frame_header.value_size, frame.size()));
 }
 
 } // namespace replica::logstor::ondisk
