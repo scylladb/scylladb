@@ -282,6 +282,12 @@ storage_service::storage_service(abort_source& abort_source,
     _migration_manager.local().plug_storage_service(*this);
 }
 
+future<std::optional<locator::tablet_routing_info_v2>> storage_service::strongly_consistent_tablet_routing_info(
+        table_id table, dht::token token, std::optional<locator::tablet_version_block> block,
+        db::timeout_clock::time_point timeout) {
+    return _groups_manager.get_tablet_routing_info(table, token, block, timeout);
+}
+
 storage_service::~storage_service() = default;
 
 auth::cache& storage_service::auth_cache() noexcept {

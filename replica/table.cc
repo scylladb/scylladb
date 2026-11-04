@@ -1053,7 +1053,7 @@ std::optional<locator::tablet_routing_info> table::tablet_routing_info_for(dht::
     return _erm->check_locality(token, original_shard);
 }
 
-std::optional<locator::tablet_routing_info_v2> table::tablet_routing_info_v2_for(dht::token token, locator::tablet_version_block block) const {
+std::optional<locator::tablet_routing_info_v2> table::tablet_routing_info_v2_for(dht::token token, std::optional<locator::tablet_version_block> block) const {
     if (!may_publish_tablet_routing_info(*this)) {
         return std::nullopt;
     }
