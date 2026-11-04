@@ -458,7 +458,18 @@ async def test_draining_hints(manager: ManagerClient):
     This test verifies that all hints are drained when a node is being decommissioned.
     """
 
+<<<<<<< HEAD
     s1, s2, _ = await manager.servers_add(3)
+||||||| parent of 748c56cdfe (test/cluster: refresh tablet load stats often in test_draining_hints)
+    s1, s2, s3 = await manager.servers_add(3, auto_rack_dc="dc")
+
+=======
+    # The topology coordinator may move to s2 when it restarts. Its first load
+    # stats are then incomplete, and the load balancer won't drain s1 before
+    # the next refresh, which by default comes after the decommission times out.
+    s1, s2, s3 = await manager.servers_add(3, config={'tablet_load_stats_refresh_interval_in_seconds': 1}, auto_rack_dc="dc")
+
+>>>>>>> 748c56cdfe (test/cluster: refresh tablet load stats often in test_draining_hints)
     cql = manager.get_cql()
 
     await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")
