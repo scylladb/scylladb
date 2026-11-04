@@ -2572,6 +2572,20 @@ async def test_cluster_snapshot_backup_several_nodes_per_rack(manager: ScyllaClu
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup, object_storage, 'gothel'),
                                         object_storage, True, True, topology)
 
+@pytest.mark.parametrize("topology", [
+        topo(rf = 1, nodes = 4, racks = 2, dcs = 2),
+        topo(rf = 2, nodes = 4, racks = 1, dcs = 2),
+        topo(rf = 3, nodes = 6, racks = 3, dcs = 2),
+    ])
+@pytest.mark.asyncio
+async def test_cluster_snapshot_backup_multi_dc(manager: ScyllaClusterManager, object_storage, topology):
+    """
+    Tests a cluster snapshot is backed up in full with a homogenous multi dc cluster
+    """
+#    topology = topo(rf = 3, nodes = 6, racks = 3, dcs = 2)
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup, object_storage, 'bamse'),
+                                        object_storage, True, True, topology)
+
 
 async def run_cluster_backup_clear_and_restore(object_storage, topology, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
     """
