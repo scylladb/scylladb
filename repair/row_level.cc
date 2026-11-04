@@ -1352,61 +1352,11 @@ private:
             return std::make_pair(locator::global_tablet_id{tid, id}, tinfo.sstables_repaired_at);
         });
         bool full = is_incremental_repair_using_all_sstables();
-        // Consider this:
-        // 1) n1 is the topology coordinator
-        // 2) n1 schedules and executes a tablet repair with session id s1 for a tablet on n3 an n4.
-        // 3) n3 and n4 take and store the lock in _rs._repair_compaction_locks[s1]
-        // 4) n1 steps down before it executes locator::tablet_transition_stage::end_repair
-        // 5) n2 becomes the new topology coordinator
-        // 6) n2 runs locator::tablet_transition_stage::repair again
-        // 7) n3 and n4 try to take the lock again and hang since the lock is already taken
-        // To avoid the deadlock, we can throw in step 7 so that n2 will
-        // proceed to the end_repair stage and release the lock. After that,
-        // the scheduler could schedule the tablet repair again.
-        std::optional<replica::compaction_reenablers_and_lock_holders> reenablers_and_holders;
-        if (!_for_tablet_rebuild) {
-            if (_rs._repair_compaction_locks.contains(gid)) {
-                auto msg = fmt::format("Tablet repair session={} table={} is in progress", _frozen_topology_guard, tid);
-                rlogger.info("{}", msg);
-                throw std::runtime_error(msg);
-            }
-
-            co_await utils::get_local_injector().inject("incremental_repair_prepare_wait", utils::wait_for_message(10min));
-            rlogger.debug("Disabling compaction for range={} for incremental repair", _range);
-            reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
-            for (auto& lock_holder : reenablers_and_holders->lock_holders) {
-                _rs._repair_compaction_locks[gid].push_back(std::move(lock_holder));
-            }
-        }
-        auto sstables = co_await table.take_storage_snapshot(_range);
-        _incremental_repair_meta.sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(_schema));
+        auto captured = co_await _rs.capture_sstables_for_incremental_repair(table, gid, _range, sstables_repaired_at, full, _for_tablet_rebuild, _frozen_topology_guard);
+        _incremental_repair_meta.sst_set = std::move(captured.sst_set);
         _incremental_repair_meta.sstables_repaired_at = sstables_repaired_at;
-        for (auto& snap : sstables) {
-            co_await coroutine::maybe_yield();
-            auto& sst = snap.sst;
-            auto bytes_on_disk = sst->bytes_on_disk();
-            if (!full && repair::is_repaired(sstables_repaired_at, sst)) {
-                rlogger.info("Skipped adding sst={} repaired_at={} sstables_repaired_at={} being_repaired={} session_id={} for incremental repair",
-                    sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, _frozen_topology_guard);
-                _metrics.inc_sst_skipped_bytes += bytes_on_disk;
-            } else {
-                if (!_for_tablet_rebuild) {
-                    sst->mark_as_being_repaired(_frozen_topology_guard);
-                }
-                rlogger.info("Added sst={} repaired_at={} sstables_repaired_at={} being_repaired={} session_id={} for_tablet_rebuild={} for incremental repair",
-                    sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, _frozen_topology_guard, _for_tablet_rebuild);
-                _incremental_repair_meta.sst_set->insert(sst);
-                _metrics.inc_sst_read_bytes += bytes_on_disk;
-            }
-        }
-        // Note: It is safe to re-enable compaction again because all
-        // sstables particiating the repair have been marked as
-        // being_repaired which will be ignored by the new unrepaired
-        // compaction.
-        if (reenablers_and_holders) {
-            reenablers_and_holders->cres.clear();
-            rlogger.info("Re-enabled compaction for range={} for incremental repair", _range);
-        }
+        _metrics.inc_sst_skipped_bytes += captured.skipped_bytes;
+        _metrics.inc_sst_read_bytes += captured.read_bytes;
 
         co_await utils::get_local_injector().inject("wait_after_prepare_sstables_for_incremental_repair", utils::wait_for_message(5min));
     }
@@ -2362,81 +2312,31 @@ public:
         }
 
         auto& table = _db.local().find_column_family(_schema->id());
-        int64_t repaired_at = _incremental_repair_meta.sstables_repaired_at + 1;
 
-        // Keep the new sstables marked as being_repaired until repair_update_compaction_ctrl
-        // is called (after sstables_repaired_at is committed to Raft). This is an additional
-        // in-memory guard; the classifier itself also protects these sstables via the
-        // repaired_at > sstables_repaired_at check.
-        auto modifier = [repaired_at, session = _frozen_topology_guard] (sstables::sstable& new_sst) {
-            new_sst.update_repaired_at(repaired_at);
-            new_sst.mark_as_being_repaired(session);
-        };
-
-        // Build the candidate set of sstables we want to mark as repaired.
-        // The actual capture of these sstables (and the membership check
-        // against each view's main sstable set) is delegated to
-        // perform_component_rewrite, which captures them while compaction is
-        // disabled on the target view.  That way:
-        //   - every captured sstable is provably in the view's compaction
-        //     group at capture time (no cross-CG routing mismatch), and
-        //   - no concurrent compaction (split bypass, regular minor compaction,
-        //     etc.) can move the inputs to a different CG mid-rewrite.
-        //
-        // Sstables which are already repaired (included by full mode) are left
-        // alone. Bumping their repaired_at would take them out of the repaired
-        // set until sstables_repaired_at is committed, or indefinitely if the
-        // repair fails, allowing repaired compaction to purge a tombstone that
-        // shadows their data.
-        std::unordered_set<sstables::shared_sstable> repair_set;
-        auto add_sstable = [&] (const sstables::shared_sstable& sst) {
-            if (sst->should_update_repaired_at(repaired_at) && !repair::is_repaired(_incremental_repair_meta.sstables_repaired_at, sst)) {
-                rlogger.info("Marking sstable={} repaired_at={} being_repaired={} for incremental repair",
-                             sst->toc_filename(), repaired_at, sst->being_repaired);
-                repair_set.insert(sst);
-            }
-        };
-
+        // The candidates: the sstables captured at the start, and the ones the
+        // repair wrote. The rewrite picks the ones that need it.
+        std::vector<sstables::shared_sstable> candidates;
         if (_incremental_repair_meta.sst_set) {
-            _incremental_repair_meta.sst_set->for_each_sstable(add_sstable);
+            _incremental_repair_meta.sst_set->for_each_sstable([&] (const sstables::shared_sstable& sst) {
+                candidates.push_back(sst);
+            });
         }
+        candidates.insert(candidates.end(), sstables.begin(), sstables.end());
 
-        for (auto& sst : sstables) {
-            add_sstable(sst);
-        }
-
-        if (repair_set.empty()) {
-            co_return;
-        }
-
-        auto filter = [&repair_set] (const sstables::shared_sstable& sst) {
-            return repair_set.contains(sst);
-        };
-
-        co_await utils::get_local_injector().inject("repair_before_component_rewrite",
-                utils::wait_for_message(5min));
-
-        // Rewrite the matching sstables across every compaction group of every
-        // storage group covering the repair range, using the filter-based
-        // perform_component_rewrite which captures sstables while compaction
-        // is disabled on the target view.
-        auto rewritten_sstables = co_await table.perform_component_rewrite(
-                _range, tasks::make_empty_task_info(), filter,
-                sstables::component_type::Statistics, modifier);
-        // FIXME: indent.
-            // remove the old sstables from incremental repair meta and add the new ones
-            for (auto& ss : rewritten_sstables) {
-                bool erased = _incremental_repair_meta.sst_set->erase(ss.first);
-                if (erased) {
-                    _incremental_repair_meta.sst_set->insert(ss.second);
-                }
-
-                auto it = sstables.find(ss.first);
-                if (it != sstables.end()) {
-                    sstables.erase(it);
-                    sstables.insert(ss.second);
-                }
+        auto rewritten_sstables = co_await _rs.rewrite_sstables_repaired_at(table, _range, candidates, _incremental_repair_meta.sstables_repaired_at, _frozen_topology_guard);
+        // remove the old sstables from incremental repair meta and add the new ones
+        for (auto& ss : rewritten_sstables) {
+            bool erased = _incremental_repair_meta.sst_set->erase(ss.first);
+            if (erased) {
+                _incremental_repair_meta.sst_set->insert(ss.second);
             }
+
+            auto it = sstables.find(ss.first);
+            if (it != sstables.end()) {
+                sstables.erase(it);
+                sstables.insert(ss.second);
+            }
+        }
     }
 };
 
@@ -2976,6 +2876,132 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
             req.repair_uuid, from, updated, _flush_hints_batchlog_time, cache_time, duration);
     repair_flush_hints_batchlog_response resp{ .flush_time = _flush_hints_batchlog_time };
     co_return resp;
+}
+
+// The first half of a tablet's incremental repair, shared by the row-level
+// repair and the single-replica shortcut: with the tablet's compaction paused,
+// its sstables are snapshotted (which flushes the memtable), and the unrepaired
+// ones (all of them in full mode) are collected, marked as being repaired, so
+// that the unrepaired compaction leaves them alone until the coordinator's
+// end_repair stage clears the mark through repair_update_compaction_ctrl.
+// The compaction locks taken are kept in _repair_compaction_locks until then.
+// A repair for a tablet rebuild takes no locks and marks nothing.
+future<repair_service::incremental_repair_capture> repair_service::capture_sstables_for_incremental_repair(replica::table& table,
+        locator::global_tablet_id gid, dht::token_range range, int64_t sstables_repaired_at, bool full, bool for_tablet_rebuild,
+        service::frozen_topology_guard topo_guard) {
+    // Consider this:
+    // 1) n1 is the topology coordinator
+    // 2) n1 schedules and executes a tablet repair with session id s1 for a tablet on n3 an n4.
+    // 3) n3 and n4 take and store the lock in _rs._repair_compaction_locks[s1]
+    // 4) n1 steps down before it executes locator::tablet_transition_stage::end_repair
+    // 5) n2 becomes the new topology coordinator
+    // 6) n2 runs locator::tablet_transition_stage::repair again
+    // 7) n3 and n4 try to take the lock again and hang since the lock is already taken
+    // To avoid the deadlock, we can throw in step 7 so that n2 will
+    // proceed to the end_repair stage and release the lock. After that,
+    // the scheduler could schedule the tablet repair again.
+    std::optional<replica::compaction_reenablers_and_lock_holders> reenablers_and_holders;
+    if (!for_tablet_rebuild) {
+        if (_repair_compaction_locks.contains(gid)) {
+            auto msg = fmt::format("Tablet repair session={} table={} is in progress", topo_guard, gid.table);
+            rlogger.info("{}", msg);
+            throw std::runtime_error(msg);
+        }
+
+        co_await utils::get_local_injector().inject("incremental_repair_prepare_wait", utils::wait_for_message(10min));
+        rlogger.debug("Disabling compaction for range={} for incremental repair", range);
+        reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(get_db().local(), topo_guard, range);
+        for (auto& lock_holder : reenablers_and_holders->lock_holders) {
+            _repair_compaction_locks[gid].push_back(std::move(lock_holder));
+        }
+    }
+    incremental_repair_capture captured;
+    captured.sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(table.schema()));
+    auto sstables = co_await table.take_storage_snapshot(range);
+    for (auto& snap : sstables) {
+        co_await coroutine::maybe_yield();
+        auto& sst = snap.sst;
+        auto bytes_on_disk = sst->bytes_on_disk();
+        if (!full && repair::is_repaired(sstables_repaired_at, sst)) {
+            rlogger.info("Skipped adding sst={} repaired_at={} sstables_repaired_at={} being_repaired={} session_id={} for incremental repair",
+                sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, topo_guard);
+            captured.skipped_bytes += bytes_on_disk;
+        } else {
+            if (!for_tablet_rebuild) {
+                sst->mark_as_being_repaired(topo_guard);
+            }
+            rlogger.info("Added sst={} repaired_at={} sstables_repaired_at={} being_repaired={} session_id={} for_tablet_rebuild={} for incremental repair",
+                sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, topo_guard, for_tablet_rebuild);
+            captured.sst_set->insert(sst);
+            captured.read_bytes += bytes_on_disk;
+        }
+    }
+    // Note: It is safe to re-enable compaction again because all
+    // sstables particiating the repair have been marked as
+    // being_repaired which will be ignored by the new unrepaired
+    // compaction.
+    if (reenablers_and_holders) {
+        reenablers_and_holders->cres.clear();
+        rlogger.info("Re-enabled compaction for range={} for incremental repair", range);
+    }
+    co_return captured;
+}
+
+// The second half: marks the candidates which are not repaired yet as repaired
+// at sstables_repaired_at + 1, by rewriting their Statistics, and keeps them
+// marked as being repaired. Returns the replacement of each rewritten sstable.
+future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> repair_service::rewrite_sstables_repaired_at(replica::table& table,
+        dht::token_range range, const std::vector<sstables::shared_sstable>& candidates, int64_t sstables_repaired_at,
+        service::frozen_topology_guard topo_guard) {
+    const int64_t repaired_at = sstables_repaired_at + 1;
+    // Sstables which are already repaired (captured by full mode) are left
+    // alone. Bumping their repaired_at would take them out of the repaired
+    // set until sstables_repaired_at is committed, or indefinitely if the
+    // repair fails, allowing repaired compaction to purge a tombstone that
+    // shadows their data.
+    std::unordered_set<sstables::shared_sstable> repair_set;
+    for (auto& sst : candidates) {
+        if (sst->should_update_repaired_at(repaired_at) && !repair::is_repaired(sstables_repaired_at, sst)) {
+            rlogger.info("Marking sstable={} repaired_at={} being_repaired={} for incremental repair",
+                         sst->toc_filename(), repaired_at, sst->being_repaired);
+            repair_set.insert(sst);
+        }
+    }
+    if (repair_set.empty()) {
+        co_return std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>{};
+    }
+    co_await utils::get_local_injector().inject("repair_before_component_rewrite", utils::wait_for_message(5min));
+    // Keep the new sstables marked as being_repaired until repair_update_compaction_ctrl
+    // is called (after sstables_repaired_at is committed to Raft). This is an additional
+    // in-memory guard; the classifier itself also protects these sstables via the
+    // repaired_at > sstables_repaired_at check.
+    auto modifier = [repaired_at, topo_guard] (sstables::sstable& new_sst) {
+        new_sst.update_repaired_at(repaired_at);
+        new_sst.mark_as_being_repaired(topo_guard);
+    };
+    auto filter = [&repair_set] (const sstables::shared_sstable& sst) {
+        return repair_set.contains(sst);
+    };
+    // Rewrite the matching sstables across every compaction group of every
+    // storage group covering the repair range, using the filter-based
+    // perform_component_rewrite which captures sstables while compaction is
+    // disabled on the target view. That way every captured sstable is in the
+    // view's compaction group at capture time, and no concurrent compaction
+    // can move the inputs to a different group mid-rewrite.
+    co_return co_await table.perform_component_rewrite(range, tasks::make_empty_task_info(), filter, sstables::component_type::Statistics, modifier);
+}
+
+// The incremental repair of a tablet with a single replica: both halves, back
+// to back, with nothing to synchronize in between.
+future<> repair_service::promote_single_replica_tablet_sstables(locator::global_tablet_id gid, dht::token_range range, int64_t sstables_repaired_at, bool full,
+        service::frozen_topology_guard topo_guard) {
+    auto& table = get_db().local().find_column_family(gid.table);
+    auto captured = co_await capture_sstables_for_incremental_repair(table, gid, range, sstables_repaired_at, full, false, topo_guard);
+    std::vector<sstables::shared_sstable> candidates;
+    captured.sst_set->for_each_sstable([&] (const sstables::shared_sstable& sst) {
+        candidates.push_back(sst);
+    });
+    co_await rewrite_sstables_repaired_at(table, range, candidates, sstables_repaired_at, topo_guard);
 }
 
 future<> repair_service::init_ms_handlers() {
@@ -4117,6 +4143,75 @@ repair_service::update_history(tasks::task_id repair_id, table_id table_id, dht:
             co_return std::nullopt;
         }
     });
+}
+
+future<bool> repair_service::repair_single_replica_range(shard_repair_state& rstate, sstring cf_name, table_id table_id, dht::token_range range,
+        const std::vector<locator::host_id>& followers, gc_clock::time_point flush_time) {
+    // Only for regular repairs: node operations (also using the small table
+    // optimization) have to sync the data to the new replicas.
+    if (rstate.reason() != streaming::stream_reason::repair) {
+        co_return false;
+    }
+    auto erm = rstate.get_erm();
+    auto my_host_id = erm->get_topology().my_host_id();
+    // The nodes to record the repair history on.
+    std::vector<locator::host_id> nodes;
+    if (rstate.small_table_optimization) {
+        const auto& tm = erm->get_token_metadata();
+        const auto& token_owners = tm.get_normal_token_owners();
+        std::unordered_set<locator::host_id> participants(followers.begin(), followers.end());
+        participants.insert(my_host_id);
+        if (participants != token_owners) {
+            co_return false;
+        }
+        for (const auto& token : tm.sorted_tokens()) {
+            co_await coroutine::maybe_yield();
+            if (erm->get_natural_replicas(token).size() != 1) {
+                co_return false;
+            }
+        }
+        nodes = participants | std::ranges::to<std::vector>();
+    } else {
+        if (!followers.empty()) {
+            co_return false;
+        }
+        auto end_token = range.end() ? range.end()->value() : dht::maximum_token();
+        auto replicas = erm->get_natural_replicas(end_token);
+        if (replicas.size() != 1 || replicas.front() != my_host_id) {
+            co_return false;
+        }
+        nodes.push_back(my_host_id);
+    }
+
+    rlogger.debug("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, status=skipped_single_replica, hints_batchlog_flushed={}, flush_time={}",
+            rstate.global_repair_id.uuid(), rstate.ranges_index, rstate.ranges_size(), rstate.get_keyspace(), cf_name, range, rstate.hints_batchlog_flushed, flush_time);
+
+    if (!rstate.hints_batchlog_flushed) {
+        // Recording the repair time is all this repair does, so without the
+        // flush it has failed, unlike a row-level repair, which has still
+        // synchronized the data (see row_level_repair::update_system_repair_table()).
+        if (rstate.needs_flush_before_repair) {
+            rstate.nr_failed_ranges++;
+            rlogger.warn("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, status=failed_single_replica: hints and batchlog were not flushed",
+                    rstate.global_repair_id.uuid(), rstate.ranges_index, rstate.ranges_size(), rstate.get_keyspace(), cf_name, range);
+        }
+        co_return true;
+    }
+
+    auto repair_time_opt = co_await update_history(rstate.global_repair_id.uuid(), table_id, range, flush_time, false);
+    if (!repair_time_opt) {
+        co_return true;
+    }
+    repair_update_system_table_request req{rstate.global_repair_id.uuid(), table_id, rstate.get_keyspace(), std::move(cf_name), range, *repair_time_opt};
+    co_await coroutine::parallel_for_each(nodes, [&rstate, &req] (locator::host_id node) -> future<> {
+        try {
+            co_await ser::repair_rpc_verbs::send_repair_update_system_table(&rstate.messaging.local(), node, req);
+            rlogger.debug("repair[{}]: Finished to update system.repair_history table of node {}", rstate.global_repair_id.uuid(), node);
+        } catch (...) {
+            rlogger.warn("repair[{}]: Failed to update system.repair_history table of node {}: {:t}", rstate.global_repair_id.uuid(), node, std::current_exception());
+        }
+    });
+    co_return true;
 }
 
 future<> repair_service::cleanup_history(tasks::task_id repair_id) {

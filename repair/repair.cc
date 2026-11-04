@@ -455,27 +455,25 @@ static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
 }
 
 
-future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints(repair_uniq_id id,
+future<repair_service::flush_hints_result> repair_service::flush_hints(repair_uniq_id id,
         sstring keyspace, std::vector<sstring> cfs,
-        std::unordered_set<locator::host_id> ignore_nodes) {
+        std::unordered_set<locator::host_id> ignore_nodes, bool force) {
     auto& db = get_db().local();
     auto uuid = id.uuid();
-    bool needs_flush_before_repair = false;
+    flush_hints_result res;
     if (db.features().tombstone_gc_options) {
         for (auto& table: cfs) {
             if (const auto* cf = find_column_family_if_exists(db, keyspace, table)) {
                 auto s = cf->schema();
                 const auto& options = s->tombstone_gc_options();
                 if (options.mode() == tombstone_gc_mode::repair) {
-                    needs_flush_before_repair = true;
+                    res.needed = true;
                 }
             }
         }
     }
 
-    gc_clock::time_point flush_time;
-    bool hints_batchlog_flushed = false;
-    if (needs_flush_before_repair) {
+    if (res.needed || force) {
         auto waiting_nodes = db.get_token_metadata().get_topology().get_all_host_ids();
         std::erase_if(waiting_nodes, [&] (const auto& addr) {
             return ignore_nodes.contains(addr);
@@ -506,7 +504,7 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
             if (!nodes_down.empty()) {
                 rlogger.warn("repair[{}]: Skipped sending repair_flush_hints_batchlog due to nodes_down={}, continue to run repair",
                         uuid, nodes_down);
-                co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
+                co_return res;
             }
             co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (locator::host_id node) -> future<> {
                 rlogger.debug("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
@@ -529,18 +527,18 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
             });
             if (!times.empty()) {
                 auto it = std::min_element(times.begin(), times.end());
-                flush_time = *it;
+                res.flush_time = *it;
             }
-            hints_batchlog_flushed = true;
+            res.flushed = true;
             auto duration = std::chrono::duration<float>(gc_clock::now() - start_time);
-            rlogger.debug("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, flush_time, duration);
+            rlogger.debug("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, res.flush_time, duration);
         } catch (...) {
             rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog failed, continue to run repair", uuid);
         }
     } else {
         rlogger.debug("repair[{}]: Skipped sending repair_flush_hints_batchlog", uuid);
     }
-    co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
+    co_return res;
 }
 
 
@@ -794,6 +792,7 @@ shard_repair_state::shard_repair_state(repair_service& repair,
         std::unordered_set<locator::host_id> ignore_nodes_,
         std::unordered_map<dht::token_range, repair_neighbors> neighbors_,
         streaming::stream_reason reason_,
+        bool needs_flush_before_repair,
         bool hints_batchlog_flushed,
         bool small_table_optimization,
         std::optional<int> ranges_parallelism,
@@ -815,6 +814,7 @@ shard_repair_state::shard_repair_state(repair_service& repair,
     , hosts(std::move(hosts_))
     , ignore_nodes(std::move(ignore_nodes_))
     , neighbors(std::move(neighbors_))
+    , needs_flush_before_repair(needs_flush_before_repair)
     , hints_batchlog_flushed(std::move(hints_batchlog_flushed))
     , small_table_optimization(small_table_optimization)
     , small_table_optimization_ranges_reduced_factor(small_table_optimization_ranges_reduced_factor_)
@@ -927,6 +927,9 @@ future<> repair_service::repair_range(shard_repair_state& rstate, const dht::tok
             co_return;
         }
         neighbors.swap(live_neighbors);
+    }
+    if ((neighbors.empty() || rstate.small_table_optimization) && co_await repair_single_replica_range(rstate, table.name, table.id, range, neighbors, flush_time)) {
+        co_return;
     }
     if (neighbors.empty()) {
         auto status = "skipped_no_followers";
@@ -1559,7 +1562,10 @@ future<> repair_service::run_user_requested_repair(
         } else {
             participants = get_hosts_participating_in_repair(_gossiper.local(), germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
-        auto [_, hints_batchlog_flushed, flush_time] = flush_hints(id, keyspace, cfs, ignore_nodes).get();
+        auto flush = flush_hints(id, keyspace, cfs, ignore_nodes, false).get();
+        auto needs_flush_before_repair = flush.needed;
+        auto hints_batchlog_flushed = flush.flushed;
+        auto flush_time = flush.flush_time;
 
         std::vector<future<>> repair_results;
         repair_results.reserve(this_smp_shard_count());
@@ -1605,12 +1611,12 @@ future<> repair_service::run_user_requested_repair(
         task_as.check();
 
         for (auto shard : std::views::iota(0u, this_smp_shard_count())) {
-            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, flush_time, ranges_parallelism, small_table_optimization,
+            auto f = container().invoke_on(shard, [keyspace, table_ids, id, ranges, needs_flush_before_repair, hints_batchlog_flushed, flush_time, ranges_parallelism, small_table_optimization,
                     data_centers, hosts, ignore_nodes, task_data, germs] (repair_service& local_repair) mutable -> future<> {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
                 auto rstate = make_lw_shared<shard_repair_state>(local_repair, std::move(keyspace),
                         germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::unordered_map<dht::token_range, repair_neighbors>{}, streaming::stream_reason::repair, hints_batchlog_flushed, small_table_optimization, ranges_parallelism,
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::unordered_map<dht::token_range, repair_neighbors>{}, streaming::stream_reason::repair, needs_flush_before_repair, hints_batchlog_flushed, small_table_optimization, ranges_parallelism,
                         service::default_session_id);
                 auto task = co_await local_repair._repair_module->start_shard_repair_task(task_data, std::move(rstate), flush_time);
                 co_await task->done();
@@ -1823,7 +1829,7 @@ future<> repair_service::run_data_sync_repair(
                     auto flush_time = gc_clock::time_point();
                     auto rstate = make_lw_shared<shard_repair_state>(local_repair, std::move(keyspace),
                             germs->get().shared_from_this(), std::move(group_ranges), std::move(table_ids),
-                            id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::move(group_neighbors), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism,
+                            id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::move(group_neighbors), reason, false, hints_batchlog_flushed, small_table_optimization, ranges_parallelism,
                             frozen_topology_guard, tablet_repair_sched_info{}, ranges_reduced_factor);
                     auto task = co_await local_repair._repair_module->start_shard_repair_task(task_data, std::move(rstate), flush_time);
                     co_await task->done();
@@ -2585,7 +2591,17 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
         }
     }
 
-    if (nodes.empty() || !master_shard_id) {
+    // Single-replica tablet (e.g. RF=1): there is nothing to synchronize, but
+    // hints and batchlog still have to be flushed, so the returned flush time can
+    // be recorded as the tablet's repair time, allowing repair-mode tombstone gc
+    // to purge tombstones written before the flush. In incremental mode the
+    // tablet's sstables are promoted to repaired too, as a row-level repair does:
+    // a compaction of the repaired set checks only the repaired sstables for data
+    // a tombstone shadows, which is safe only if everything delivered up to the
+    // flush is repaired before the repair time is committed.
+    const bool single_replica = !rebuild_replicas && replicas.size() == 1 && master_shard_id && hosts_filter.empty() && dcs_filter.empty();
+
+    if (!single_replica && (nodes.empty() || !master_shard_id)) {
         rlogger.info("repair[{}]: Skipped tablet repair for table={}.{} range={} replicas={} global_tablet_id={} hosts_filter={} dcs_filter={}",
                 id.uuid(), keyspace_name, table_name, range, replicas, gid, hosts_filter, dcs_filter);
         auto flush_time = gc_clock::time_point();
@@ -2597,7 +2613,9 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     auto start = std::chrono::steady_clock::now();
     bool sched_by_scheduler = true;
     tablet_repair_sched_info sched_info{sched_by_scheduler, stage == locator::tablet_transition_stage::rebuild_repair, incremental_mode};
-    task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
+    if (!single_replica) {
+        task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
+    }
 
     gc_clock::time_point flush_time = gc_clock::time_point();
     bool should_flush_and_flush_failed = false;
@@ -2609,10 +2627,16 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
                 .set_parent_info(global_tablet_repair_task_info)
                 .set_is_abortable(tasks::is_abortable::yes)
                 .set_is_user_task(tasks::is_user_task::yes)
-                .set_workload_fn([metas_size = task_metas.size()] () { return make_ready_future<std::optional<double>>(metas_size); });
-    auto task = co_await std::move(task_builder).build([module = _repair_module, id, keyspace_name, table_names, metas = std::move(task_metas), ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, sched_info = std::move(sched_info), skip_flush = rebuild_replicas.has_value()] (tasks::task_manager::task::impl& self) mutable -> future<> {
+                .set_workload_fn([metas_size = task_metas.empty() ? 1 : task_metas.size()] () { return make_ready_future<std::optional<double>>(metas_size); });
+    auto task = co_await std::move(task_builder).build([module = _repair_module, id, gid, keyspace_name, table_names, metas = std::move(task_metas), ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, sched_info = std::move(sched_info), skip_flush = rebuild_replicas.has_value(),
+            single_replica, range, shard = master_shard_id.value_or(0), sstables_repaired_at = info.sstables_repaired_at, incremental_mode] (tasks::task_manager::task::impl& self) mutable -> future<> {
         auto& rs = module->get_repair_service();
-        auto res = co_await rs.run_tablet_repair(std::move(keyspace_name), std::move(table_names), std::move(metas), std::move(ranges_parallelism), topo_guard, skip_flush, std::move(sched_info), streaming::stream_reason::repair, self.info(), id);
+        tablet_repair_result res;
+        if (single_replica) {
+            res = co_await rs.repair_single_replica_tablet(id, gid, std::move(keyspace_name), std::move(table_names), range, shard, sstables_repaired_at, incremental_mode, topo_guard);
+        } else {
+            res = co_await rs.run_tablet_repair(std::move(keyspace_name), std::move(table_names), std::move(metas), std::move(ranges_parallelism), topo_guard, skip_flush, std::move(sched_info), streaming::stream_reason::repair, self.info(), id);
+        }
         flush_time = res.flush_time;
         should_flush_and_flush_failed = res.should_flush_and_flush_failed;
     });
@@ -2631,6 +2655,41 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     rlogger.info("repair[{}]: Finished tablet repair for table={}.{} range={} duration={} replicas={} global_tablet_id={} flush_time={}",
             id.uuid(), keyspace_name, table_name, range, duration, replicas, gid, flush_time);
     co_return flush_time;
+}
+
+// The repair of a tablet with a single replica, see repair_tablet(). Runs
+// through the repair module like run_tablet_repair(), so that it is waited for
+// on shutdown and can be aborted.
+future<repair_service::tablet_repair_result> repair_service::repair_single_replica_tablet(repair_uniq_id id, locator::global_tablet_id gid,
+        sstring keyspace, std::vector<sstring> tables, dht::token_range range, shard_id shard, int64_t sstables_repaired_at,
+        locator::tablet_repair_incremental_mode incremental_mode, service::frozen_topology_guard topo_guard) {
+    tablet_repair_result res;
+    rlogger.debug("repair[{}]: Repair single-replica tablet {} keyspace={} tables={} status=started", id.uuid(), gid, keyspace, tables);
+    co_await _repair_module->run(id, [&] {
+        // This runs inside a seastar thread
+        auto check_aborted = [&] {
+            if (_repair_module->is_aborted(id.uuid(), this_shard_id()).get()) {
+                throw abort_requested_exception();
+            }
+        };
+        auto flush = flush_hints(id, keyspace, tables, {}, true).get();
+        res.flush_time = flush.flush_time;
+        // Without a flush there is no repair time to record, whatever the gc mode, see run_tablet_repair()
+        res.should_flush_and_flush_failed = !flush.flushed;
+        if (res.should_flush_and_flush_failed) {
+            return;
+        }
+        check_aborted();
+        // Promoting the sstables takes the same cluster feature as the row-level incremental repair does.
+        if (get_db().local().features().tablet_incremental_repair && incremental_mode != locator::tablet_repair_incremental_mode::disabled) {
+            const bool full = incremental_mode == locator::tablet_repair_incremental_mode::full;
+            container().invoke_on(shard, [gid, range, sstables_repaired_at, full, topo_guard] (repair_service& rs) {
+                return rs.promote_single_replica_tablet_sstables(gid, range, sstables_repaired_at, full, topo_guard);
+            }).get();
+            check_aborted();
+        }
+    });
+    co_return res;
 }
 
 future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
@@ -2741,13 +2800,16 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                     co_await seastar::sleep(std::chrono::milliseconds(*delay));
                 }
                 if (!skip_flush) {
-                    std::tie(needs_flush_before_repair, hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
+                    auto flush = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes, true);
+                    needs_flush_before_repair = flush.needed;
+                    hints_batchlog_flushed = flush.flushed;
+                    flush_time = flush.flush_time;
                 }
                 bool small_table_optimization = false;
 
                 auto rstate = make_lw_shared<shard_repair_state>(rs,
                         m.keyspace_name, nullptr, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
-                        std::move(ignore_nodes), std::move(neighbors), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, topo_guard, sched_info);
+                        std::move(ignore_nodes), std::move(neighbors), reason, needs_flush_before_repair, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, topo_guard, sched_info);
                 auto task = co_await rs._repair_module->start_shard_repair_task(parent_data, std::move(rstate), flush_time);
                 auto res = co_await coroutine::as_future(task->done());
                 if (res.failed()) {
@@ -2766,7 +2828,9 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                     }
                 }
                 shard_flush_time = shard_flush_time == gc_clock::time_point() ? flush_time : std::min(shard_flush_time, flush_time);
-                flush_failed = flush_failed || (needs_flush_before_repair && !hints_batchlog_flushed);
+                // A tablet repair records its flush time as the repair time, whatever the gc mode
+                // of the table: without a flush, there is no repair time to record.
+                flush_failed = flush_failed || (!skip_flush && !hints_batchlog_flushed);
             }
             if (error) {
                 co_await coroutine::return_exception_ptr(std::move(error));

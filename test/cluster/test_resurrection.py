@@ -46,7 +46,7 @@ async def test_resurrection_while_file_streaming(manager: ScyllaClusterManager):
 
     cql = manager.get_cql()
     await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH gc_grace_seconds = 0;")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {'mode': 'immediate'};")
 
     # select source and destination replica
     src_replica = await get_tablet_replica(manager, servers[0], 'test', 'test', 0)
