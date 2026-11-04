@@ -76,6 +76,13 @@ struct schema_changed {
     table_schema_version group0_schema_version;
 };
 
+// Whether a node at group0 schema version `local` (nullopt: none yet) has applied the
+// schema change `announced` names.
+bool group0_schema_version_reached(std::optional<table_schema_version> local, table_schema_version announced);
+
+// The node's group0 schema version, read from system.scylla_local.
+future<std::optional<table_schema_version>> load_group0_schema_version(cql3::query_processor& qp);
+
 // A schema_changed with the index of its entry, as the row persists it.
 using indexed_schema_changed = std::pair<raft::index_t, schema_changed>;
 

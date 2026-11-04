@@ -553,6 +553,20 @@ future<> raft_groups_storage::store_descriptor(cql3::query_processor& qp, raft::
             cql3::query_processor::cache_internal::yes);
 }
 
+bool group0_schema_version_reached(std::optional<table_schema_version> local, table_schema_version announced) {
+    return local && utils::UUID_gen::micros_timestamp(local->uuid()) >= utils::UUID_gen::micros_timestamp(announced.uuid());
+}
+
+future<std::optional<table_schema_version>> load_group0_schema_version(cql3::query_processor& qp) {
+    static const auto load_cql = format("SELECT value FROM system.{} WHERE key = 'group0_schema_version'",
+            db::system_keyspace::SCYLLA_LOCAL);
+    auto result = co_await qp.execute_internal(load_cql, cql3::query_processor::cache_internal::yes);
+    if (result->empty() || !result->one().has("value")) {
+        co_return std::nullopt;
+    }
+    co_return table_schema_version(utils::UUID(result->one().get_as<sstring>("value")));
+}
+
 future<> raft_groups_storage::execute_with_linearization_point(std::function<future<>()> f) {
     promise<> task_promise;
     auto pending_fut = std::exchange(_pending_op_fut, task_promise.get_future());
