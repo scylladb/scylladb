@@ -153,7 +153,7 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
     }
 
     tasks::tmlogger.info("tablet_virtual_task: wait until tablet operation is finished");
-    co_await utils::get_local_injector().inject("tablet_virtual_task_wait", utils::wait_for_message(60s));
+    co_await utils::get_local_injector().inject("tablet_virtual_task_wait", utils::wait_for_message(3min));
 
     auto task_finished = [&] () -> future<bool> {
         auto tmptr = _ss.get_token_metadata_ptr();

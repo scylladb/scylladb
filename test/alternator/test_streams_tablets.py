@@ -61,7 +61,9 @@ def get_tablet_count_for_base_table_of_table(rest_api, cql, keyspace_name: str, 
 # modify tablet count for given cdc_log table and wait until the change is applied
 # this calls alter table with new `min_tablet_count`, which requires additional scylla options to work reliably
 # (--tablet-load-stats-refresh-interval-in-seconds=1 and --tablets-initial-scale-factor=1)
-def set_tablet_count_and_wait(rest_api, cql, ks, table_name, cdc_log_table_name, expected_tablet_count, timeout=10):
+# Each split takes longer as the table grows, and on slow hosts (aarch64 dev) the
+# last steps take more than 10s, so the default timeout is generous.
+def set_tablet_count_and_wait(rest_api, cql, ks, table_name, cdc_log_table_name, expected_tablet_count, timeout=60):
     assert_number_of_streams_is_equal_to_number_of_tablets(rest_api, cql, ks, table_name, cdc_log_table_name)
     cql.execute(f"ALTER TABLE \"{ks}\".\"{cdc_log_table_name}\" WITH tablets = {{'min_tablet_count': {expected_tablet_count}}};")
     start = time.time()
@@ -102,7 +104,7 @@ def iterate_over_describe_stream(dynamodbstreams, arn, end_ts, filter_shard_id=N
 #  - wait for expected number of stream shards to be created
 #  - build parent map (shard -> parent) and children map (shard -> list of children) between stream shards
 #  - call the callback with the data
-def run_parent_children_relationship_test(dynamodb, dynamodbstreams, rest_api, cql, tablet_multipliers, callback, timeout=10):
+def run_parent_children_relationship_test(dynamodb, dynamodbstreams, rest_api, cql, tablet_multipliers, callback, timeout=60):
     with create_stream_test_table(dynamodb, StreamViewType='NEW_AND_OLD_IMAGES', Tags=TABLET_TAGS) as table:
         (arn, label) = wait_for_active_stream(dynamodbstreams, table)
 
@@ -143,7 +145,7 @@ def run_parent_children_relationship_test(dynamodb, dynamodbstreams, rest_api, c
         # Poll DescribeStream until all expected stream shards have appeared,
         # building a shard_id -> parent_shard_id map (shard_parents_map) and
         # collecting root shard IDs (shards with no parent).
-        end_ts = time.time() + 30
+        end_ts = time.time() + max(30, timeout)
         root_shard_ids = []
         shard_parents_map = {}
         while time.time() < end_ts:
