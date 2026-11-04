@@ -40,6 +40,14 @@ seastar::file create_noop_file();
  */
 seastar::data_sink create_memory_sink(std::vector<seastar::temporary_buffer<char>>&);
 
+class bytes_ostream;
+
+/**
+ * Creates a data sink which will forward all data
+ * sent to it into the destination bytes_ostream.
+ */
+seastar::data_sink create_memory_sink(bytes_ostream&);
+
 /**
  * Creates a data source that will read data sequentially
  * from the source vector buffers.
