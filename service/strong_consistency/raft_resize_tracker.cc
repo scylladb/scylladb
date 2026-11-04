@@ -142,6 +142,18 @@ std::optional<raft::group_id> raft_resize_tracker::get_parent_group(raft::group_
     return std::nullopt;
 }
 
+std::optional<api::timestamp_type> raft_resize_tracker::parent_end_resize_timestamp(raft::group_id child_gid) const {
+    const auto parent_gid = get_parent_group(child_gid);
+    if (!parent_gid) {
+        return std::nullopt;
+    }
+    const auto it = _resize_states.find(*parent_gid);
+    if (it == _resize_states.end() || !it->second.end_resize) {
+        return std::nullopt;
+    }
+    return it->second.end_resize_timestamp;
+}
+
 void raft_resize_tracker::register_child(raft::group_id parent_gid, tablet_state_machine& child) {
     auto it = _resize_states.find(parent_gid);
     if (it == _resize_states.end()) {
