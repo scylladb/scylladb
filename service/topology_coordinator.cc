@@ -3754,9 +3754,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
         const utils::UUID& global_request_id = _topo_sm._topology.global_request_id.value();
         std::optional<sstring> error;
+        bool has_session = false;
         // We should perform TRUNCATE only if the session is still valid. It could be cleared if a previous truncate
         // handler performed the truncate and cleared the session, but crashed before finalizing the request
         if (_topo_sm._topology.session) {
+            has_session = true;
             // Read the session under the guard. Once it's released below, a new coordinator
             // may install a session of its own, and sending the RPC with someone else's
             // session would execute this operation outside of the scope its guard bounds.
@@ -3821,7 +3823,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
         guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
 
-        if (bf) {
+        if (bf && has_session && !error) {
             co_await bf();
         }
 
@@ -4229,12 +4231,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         gc_clock::time_point t;
         std::optional<gc_clock::time_point> expiry;
         auto desc = [&] {
-            return fmt::format("SNAPSHOT on tables {}", ids);
+            return fmt::format("SNAPSHOT ({}) on tables {}", tag, ids);
         };
 
         co_await handle_topology_ordered_op(std::move(guard)
             , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
                 tag = *topology_requests_entry.snapshot_tag;
+                // refuse to run a snapshot with an empty tag.
+                // this could also block a broken retry of a failed op.
+                if (tag.empty()) {
+                    throw std::logic_error("Snapshot name must not be empty");
+                }
                 skip_flush = topology_requests_entry.snapshot_skip_flush;
                 t = gc_clock::from_time_t(db_clock::to_time_t(topology_requests_entry.start_time));
                 if (topology_requests_entry.snapshot_expiry) {
@@ -4248,7 +4255,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     ids.emplace_back(id);
                     tables.emplace_back(table);
                 }
-                rtlogger.info("Performing SNAPSHOT TABLES for {}", ids);
+                rtlogger.info("Performing SNAPSHOT TABLES for {}, {}", tag, ids);
                 return *topology_requests_entry.snapshot_table_ids;
             }
             , [&](const std::unordered_set<table_id>& tables, const service::frozen_topology_guard& frozen_guard, utils::UUID) {
@@ -4260,11 +4267,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             , "snapshot"
             , [&]() -> future<> {
                 db::snapshot_table_helper sth(_sys_ks.query_processor());
-                co_await sth.insert_snapshot_info(tag
-                    , db_clock::from_time_t(gc_clock::to_time_t(t))
-                    , db_clock::from_time_t(gc_clock::to_time_t(expiry.value_or({})))
-                    , tables
-                );
+                try {
+                    co_await sth.insert_snapshot_info(tag
+                        , db_clock::from_time_t(gc_clock::to_time_t(t))
+                        , db_clock::from_time_t(gc_clock::to_time_t(expiry.value_or({})))
+                        , tables
+                    );
+                } catch (...) {
+                    rtlogger.warn("Error updating snapshot {} tables: {}", tag, std::current_exception());
+                    throw;
+                }
             }
         );
     }
