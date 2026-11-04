@@ -622,6 +622,96 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
 // point for when to switch from a rapidjson array to a chunked_vector.
 static constexpr int max_items_for_rapidjson_array = 256;
 
+// restrict_to_attrs() trims an item, which was read with more attributes
+// than were asked for (for example, the full base table row), down to
+// exactly what attrs asks for, honoring nested ProjectionExpression
+// sub-paths (e.g. "a.b") via hierarchy_filter().
+static void restrict_to_attrs(rjson::value& item, const attrs_to_get& attrs) {
+    for (const auto& [attr_name, subpath] : attrs) {
+        if (!subpath.has_value()) {
+            if (rjson::value* toplevel = rjson::find(item, attr_name)) {
+                if (!hierarchy_filter(*toplevel, subpath)) {
+                    rjson::remove_member(item, attr_name);
+                }
+            }
+        }
+    }
+    std::vector<std::string> to_remove;
+    for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
+        std::string key(it->name.GetString(), it->name.GetStringLength());
+        if (!attrs.contains(key)) {
+            to_remove.push_back(std::move(key));
+        }
+    }
+    for (const auto& key : to_remove) {
+        rjson::remove_member(item, key);
+    }
+}
+
+// The primary key of a base-table item to read with read_items_from_base_table().
+struct base_table_key {
+    dht::decorated_key partition;
+    // Ignored if the base table has no clustering key.
+    clustering_key clustering;
+};
+
+// read_items_from_base_table() reads from the base table the full items
+// whose keys were found in an index that doesn't hold all their attributes,
+// such as a vector index. For each keys[i], in order, it
+// calls item_callback(i, item, item_bytes), where item is the item restricted
+// to attrs_to_get (or nullopt if the base table has no item with this key),
+// and item_bytes is the item's size. item_callback may return
+// stop_iteration::yes to skip reading the remaining keys. If a read fails,
+// its error is returned and the remaining keys are not read.
+// FIXME: this reads the items one at a time, sequentially, which is very
+// inefficient. We should read them in parallel or in batches, while still
+// calling item_callback in the order of the keys.
+static future<std::optional<api_error>> read_items_from_base_table(
+        service::storage_proxy& proxy,
+        schema_ptr base_schema,
+        std::vector<base_table_key> keys,
+        const std::optional<attrs_to_get>& attrs_to_get,
+        db::consistency_level cl,
+        db::timeout_clock::time_point timeout,
+        service::client_state& client_state,
+        tracing::trace_state_ptr trace_state,
+        service_permit permit,
+        noncopyable_function<stop_iteration(size_t i, std::optional<rjson::value> item, uint64_t item_bytes)> item_callback) {
+    auto selection = cql3::selection::selection::wildcard(base_schema);
+    auto regular_columns = base_schema->regular_columns()
+            | std::views::transform(&column_definition::id)
+            | std::ranges::to<query::column_id_vector>();
+    for (size_t i = 0; i < keys.size(); ++i) {
+        std::vector<query::clustering_range> bounds{
+                base_schema->clustering_key_size() > 0
+                    ? query::clustering_range::make_singular(std::move(keys[i].clustering))
+                    : query::clustering_range::make_open_ended_both_sides()};
+        auto partition_slice = query::partition_slice(std::move(bounds), {},
+                regular_columns, selection->get_query_options());
+        auto max_result_size = proxy.get_max_result_size(partition_slice);
+        auto command = ::make_lw_shared<query::read_command>(
+                base_schema->id(), base_schema->version(), std::move(partition_slice),
+                max_result_size, query::tombstone_limit(proxy.get_tombstone_limit()));
+        service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
+                co_await proxy.query_result(base_schema, command,
+                        {dht::partition_range(std::move(keys[i].partition))}, cl,
+                        service::storage_proxy::coordinator_query_options(
+                                timeout, permit, client_state, trace_state));
+        if (!rqr) {
+            co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
+        }
+        auto qr = std::move(rqr).assume_value();
+        uint64_t item_bytes = 0;
+        auto item = describe_single_item(base_schema, command->slice,
+                *selection, *qr.query_result, attrs_to_get, &item_bytes);
+        if (item_callback(i, std::move(item), item_bytes) == stop_iteration::yes) {
+            break;
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return std::nullopt;
+}
+
 static future<executor::request_return_type> do_query(service::storage_proxy& proxy,
         schema_ptr table_schema,
         const rjson::value* exclusive_start_key,
@@ -2409,7 +2499,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     // just the attributes either of them actually references, instead of
     // always asking the vector store for everything it has. The current code
     // is correct - the extra attributes just get discarded afterward by
-    // restrict_to_attrs (see below) - but wastes vector store work
+    // restrict_to_attrs() - but wastes vector store work
     // when the real request is narrow than the full projected set.
     std::vector<std::string> vs_return_columns;
     if (fast_path) {
@@ -2483,37 +2573,9 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     if (!pkeys_result.has_value()) {
         co_return api_error_from_vector_store_error(pkeys_result.error());
     }
-    const std::vector<vector_search::primary_key>& pkeys = pkeys_result.value();
+    std::vector<vector_search::primary_key>& pkeys = pkeys_result.value();
     _stats.vector_search.items_from_vs += pkeys.size();
     per_table_stats->vector_search.items_from_vs += pkeys.size();
-
-    // restrict_to_attrs() trims item (already fetched more broadly than may
-    // have been asked for - either the full base table row, or every
-    // attribute vector_store_attrs makes available) down to exactly what
-    // attrs asks for, honoring nested ProjectionExpression sub-paths (e.g.
-    // "a.b") via hierarchy_filter(). Shared by the fast path below and the
-    // base-table slow path further down.
-    auto restrict_to_attrs = [&] (rjson::value& item, const alternator::attrs_to_get& attrs) {
-        for (const auto& [attr_name, subpath] : attrs) {
-            if (!subpath.has_value()) {
-                if (rjson::value* toplevel = rjson::find(item, attr_name)) {
-                    if (!hierarchy_filter(*toplevel, subpath)) {
-                        rjson::remove_member(item, attr_name);
-                    }
-                }
-            }
-        }
-        std::vector<std::string> to_remove;
-        for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
-            std::string key(it->name.GetString(), it->name.GetStringLength());
-            if (!attrs.contains(key)) {
-                to_remove.push_back(std::move(key));
-            }
-        }
-        for (const auto& key : to_remove) {
-            rjson::remove_member(item, key);
-        }
-    };
 
     // fast_path: skip fetching from the base table entirely, and build items
     // directly from the key columns returned by the vector store plus
@@ -2592,86 +2654,66 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     // When a filter is present, we always fetch the full item so that all
     // attributes are available for filter evaluation, regardless of the
     // projection required for the final response.
-    auto selection = cql3::selection::selection::wildcard(base_schema);
-    auto regular_columns = base_schema->regular_columns()
-            | std::views::transform(&column_definition::id)
-            | std::ranges::to<query::column_id_vector>();
-    auto attrs_to_get = ::make_shared<const std::optional<alternator::attrs_to_get>>(
-        flt ? std::nullopt : std::move(attrs_to_get_opt));
+    std::optional<alternator::attrs_to_get> attrs_to_get =
+            flt ? std::nullopt : std::move(attrs_to_get_opt);
 
     rjson::value search_results = rjson::empty_array();
 
-    // Query each primary key individually, in the order returned by the
+    // Read the items from the base table, in the order returned by the
     // vector store, to preserve vector-distance ordering in the response.
-    // FIXME: this query, one item at a time sequentially, is very inefficient.
-    // do this more efficiently with a batched read that preserves ordering.
     _stats.vector_search.items_from_base_table += pkeys.size();
     per_table_stats->vector_search.items_from_base_table += pkeys.size();
-    for (const auto& pkey : pkeys) {
-        std::vector<query::clustering_range> bounds{
-                base_schema->clustering_key_size() > 0
-                    ? query::clustering_range::make_singular(pkey.clustering)
-                    : query::clustering_range::make_open_ended_both_sides()};
-        auto partition_slice = query::partition_slice(std::move(bounds), {},
-                regular_columns, selection->get_query_options());
-        auto command = ::make_lw_shared<query::read_command>(
-                base_schema->id(), base_schema->version(), partition_slice,
-                _proxy.get_max_result_size(partition_slice),
-                query::tombstone_limit(_proxy.get_tombstone_limit()));
-        service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
-                co_await _proxy.query_result(base_schema, command,
-                        {dht::partition_range(pkey.partition)},
-                        // Note we use LOCAL_QUORUM (ConsistentRead=true) to
-                        // ensure the base-table read doesn't pick up stale
-                        // data. This is not currently configurable -
-                        // SearchVectors doesn't have a ConsistentRead option.
-                        db::consistency_level::LOCAL_QUORUM,
-                        service::storage_proxy::coordinator_query_options(
-                                timeout, permit, client_state, trace_state));
-        if (!rqr) {
-            co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
-        }
-        auto qr = std::move(rqr).assume_value();
-        auto opt_item = describe_single_item(base_schema, partition_slice,
-                *selection, *qr.query_result, *attrs_to_get);
+    std::vector<base_table_key> base_keys;
+    base_keys.reserve(pkeys.size());
+    for (auto& pkey : pkeys) {
+        base_keys.emplace_back(std::move(pkey.partition), std::move(pkey.clustering));
+    }
+    auto err = co_await read_items_from_base_table(_proxy, base_schema, std::move(base_keys), attrs_to_get,
+            // Note we use LOCAL_QUORUM (ConsistentRead=true) to ensure the
+            // base-table read doesn't pick up stale data. This is not
+            // currently configurable - SearchVectors doesn't have a
+            // ConsistentRead option.
+            db::consistency_level::LOCAL_QUORUM,
+            timeout, client_state, trace_state, permit,
+            [&] (size_t i, std::optional<rjson::value> opt_item, uint64_t) {
         if (opt_item && (!flt || flt.check(*opt_item))) {
-            rjson::value item;
-            {
-                // If a filter caused us to fall through here instead of
-                // taking the fast-path early-exit above, attrs_to_get was
-                // overridden to fetch the full item (so the filter had every
-                // attribute available to check), and the projection this
-                // request actually asked for (attrs_to_get_opt) was never
-                // applied - apply it now, via the same restrict_to_attrs
-                // used by the fast path above. When there was no filter,
-                // attrs_to_get already equals attrs_to_get_opt, so opt_item
-                // is already correctly restricted and this is a no-op.
-                if (flt && attrs_to_get_opt) {
-                    restrict_to_attrs(*opt_item, *attrs_to_get_opt);
-                }
-                if (!has_explicit_attrs) {
-                    // Whenever there was no explicit ProjectionExpression,
-                    // the vector attribute itself is never included by
-                    // default - regardless of BaseRead -
-                    // matching DynamoDB's documented SearchVectors behavior
-                    // ("Vector data is large, and you typically don't need
-                    // it in the response... To include the vector
-                    // attribute, request it with a ProjectionExpression.").
-                    // It can still always be requested explicitly. When
-                    // attrs_to_get_opt is engaged (i.e. vector_store_attrs,
-                    // for ProjectionType=KEYS_ONLY/INCLUDE) it never includes
-                    // it anyway, so this is a no-op - it was never there to
-                    // begin with, or was already dropped by the
-                    // attrs_to_get_opt filtering above.
-                    rjson::remove_member(*opt_item, vector_attribute_name);
-                }
-                item = std::move(*opt_item);
+            // If a filter caused us to fall through here instead of
+            // taking the fast-path early-exit above, attrs_to_get was
+            // overridden to fetch the full item (so the filter had every
+            // attribute available to check), and the projection this
+            // request actually asked for (attrs_to_get_opt) was never
+            // applied - apply it now, via the same restrict_to_attrs
+            // used by the fast path above. When there was no filter,
+            // attrs_to_get already equals attrs_to_get_opt, so opt_item
+            // is already correctly restricted and this is a no-op.
+            if (flt && attrs_to_get_opt) {
+                restrict_to_attrs(*opt_item, *attrs_to_get_opt);
+            }
+            if (!has_explicit_attrs) {
+                // Whenever there was no explicit ProjectionExpression,
+                // the vector attribute itself is never included by
+                // default - regardless of BaseRead -
+                // matching DynamoDB's documented SearchVectors behavior
+                // ("Vector data is large, and you typically don't need
+                // it in the response... To include the vector
+                // attribute, request it with a ProjectionExpression.").
+                // It can still always be requested explicitly. When
+                // attrs_to_get_opt is engaged (i.e. vector_store_attrs,
+                // for ProjectionType=KEYS_ONLY/INCLUDE) it never includes
+                // it anyway, so this is a no-op - it was never there to
+                // begin with, or was already dropped by the
+                // attrs_to_get_opt filtering above.
+                rjson::remove_member(*opt_item, vector_attribute_name);
             }
             rjson::value entry = rjson::empty_object();
-            rjson::add(entry, "Item", std::move(item));
-            rjson::add(entry, "Score", similarity_to_json(score_from_similarity(pkey.similarity)));
+            rjson::add(entry, "Item", std::move(*opt_item));
+            rjson::add(entry, "Score", similarity_to_json(score_from_similarity(pkeys[i].similarity)));
             rjson::push_back(search_results, std::move(entry));
         }
+        return stop_iteration::no;
+    });
+    if (err) {
+        co_return std::move(*err);
     }
 
     auto count = static_cast<int>(search_results.Size());
