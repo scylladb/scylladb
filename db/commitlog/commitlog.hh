@@ -313,6 +313,13 @@ public:
      */
     future<> delete_segments(std::vector<sstring>) const;
 
+    /**
+     * Splits segment paths into one group per shard, for delete_segments().
+     * All segments written by one shard land in the same group, so that one
+     * shard deletes them in order. Names that do not parse go to group 0.
+     */
+    static std::vector<std::vector<sstring>> split_segments_for_delete(std::vector<sstring> paths, unsigned shards);
+
     uint64_t get_total_size() const;
     uint64_t get_buffer_size() const;
     uint64_t get_completed_tasks() const;

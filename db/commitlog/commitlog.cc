@@ -4250,6 +4250,20 @@ future<> db::commitlog::delete_segments(std::vector<sstring> files) const {
     return _segment_manager->delete_segments(std::move(files));
 }
 
+std::vector<std::vector<sstring>> db::commitlog::split_segments_for_delete(std::vector<sstring> paths, unsigned shards) {
+    std::vector<std::vector<sstring>> groups(shards);
+    for (auto& path : paths) {
+        unsigned shard = 0;
+        try {
+            shard = replay_position(descriptor(path).id).shard_id() % shards;
+        } catch (...) {
+            // not a segment name: group 0
+        }
+        groups[shard].push_back(std::move(path));
+    }
+    return groups;
+}
+
 future<> db::commitlog::rename_segment(sstring from, sstring to, const db::extensions* exts) {
     const auto file_exts = exts ? exts->commitlog_file_extensions() : std::vector<commitlog_file_extension*>{};
 
