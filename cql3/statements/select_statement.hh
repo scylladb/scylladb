@@ -288,8 +288,7 @@ private:
             service::query_state& state,
             const query_options& options,
             gc_clock::time_point now,
-            lw_shared_ptr<const service::pager::paging_state> paging_state,
-            uint32_t internal_page_size) const;
+            lw_shared_ptr<const service::pager::paging_state> paging_state) const;
 
     lw_shared_ptr<query::read_command>
     prepare_command_for_base_query(query_processor& qp, const query_options& options, service::query_state& state, gc_clock::time_point now,

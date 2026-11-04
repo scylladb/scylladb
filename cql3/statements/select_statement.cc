@@ -829,9 +829,9 @@ view_indexed_table_select_statement::execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(qp, std::move(partition_ranges), state, options, now, paging_state).then(wrap_result_to_error_message(
-            [this, &state, &options, now, paging_state = std::move(paging_state), internal_page_size = qp.get_cql_config().select_internal_page_size.get()] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd) {
+            [this, &state, &options, now, paging_state = std::move(paging_state)] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd) {
         auto&& [result, cmd] = result_and_cmd;
-        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state), internal_page_size);
+        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state));
     }));
 }
 
@@ -909,9 +909,9 @@ view_indexed_table_select_statement::execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(qp, std::move(primary_keys), state, options, now, paging_state).then(wrap_result_to_error_message(
-            [this, &state, &options, now, paging_state = std::move(paging_state), internal_page_size = qp.get_cql_config().select_internal_page_size.get()] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd){
+            [this, &state, &options, now, paging_state = std::move(paging_state)] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd){
         auto&& [result, cmd] = result_and_cmd;
-        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state), internal_page_size);
+        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state));
     }));
 }
 
@@ -975,8 +975,7 @@ view_indexed_table_select_statement::process_base_query_results(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        lw_shared_ptr<const service::pager::paging_state> paging_state,
-        uint32_t internal_page_size) const
+        lw_shared_ptr<const service::pager::paging_state> paging_state) const
 {
     if (paging_state) {
         // The plan was recorded where the state was built, by the scan of the
