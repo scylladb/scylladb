@@ -25,6 +25,8 @@
 #include "service/strong_consistency/raft_resize_tracker.hh"
 #include "utils/latency.hh"
 
+#include <algorithm>
+
 using namespace std::chrono_literals;
 
 namespace service::strong_consistency {
@@ -54,6 +56,31 @@ class state_machine : public raft_state_machine {
     lw_shared_ptr<state_machine_stats> _stats;
 
     abort_source _as;
+
+    // The schema_changed in effect: the last one applied, or, before any is, the one the
+    // group's row persisted at the floor. Loaded when the next one is applied, since the
+    // state machine is created without yielding.
+    std::optional<schema_changed> _announced;
+
+    // The tablet holding the group's data now. A split child starts under its parent's id
+    // and keeps running after the finalization moves its data to a tablet of its own:
+    // found by scanning the map once, and remembered.
+    locator::tablet_id current_tablet() {
+        // Committed together with the table's storage groups, so the two agree.
+        const auto tm = _db.get_shared_token_metadata().get();
+        const auto& tablet_map = tm->tablets().get_tablet_map(_tablet.table);
+        const auto serves = [&] (locator::tablet_id tid) {
+            return tablet_map.get_tablet_raft_info(tid).group_id == _group_id;
+        };
+        if (_tablet.tablet.value() >= tablet_map.tablet_count() || !serves(_tablet.tablet)) {
+            const auto ids = tablet_map.tablet_ids();
+            // None of its own yet: the data is still in the parent's storage group.
+            if (const auto it = std::ranges::find_if(ids, serves); it != ids.end()) {
+                _tablet.tablet = *it;
+            }
+        }
+        return _tablet.tablet;
+    }
 
 public:
     state_machine(locator::global_tablet_id tablet,
@@ -127,6 +154,38 @@ public:
                     // reported applied only below, once the record is durable, so its
                     // segment outlives the record's sync and a crash replays the entry.
                     co_await apply_truncate_command(_db, _tablet, _group_id, command[i]->idx, *tc, record);
+                    _persistence.note_applied(command[i]->idx);
+                    continue;
+                }
+                if (auto* changed = std::get_if<schema_changed>(&cmd.change)) {
+                    if (!_announced) {
+                        _announced = co_await _persistence.load_schema_changed();
+                    }
+                    if (_announced && _announced->version == changed->version) {
+                        // A new term announces the version in effect again. The row keeps the
+                        // earlier index: moving it would put the writes since then, still in
+                        // a memtable, below it, and replay skips what is below as flushed.
+                        _persistence.note_applied(command[i]->idx);
+                        continue;
+                    }
+                    logger.debug("apply(): group {} switches to schema version {}", _group_id, changed->version);
+                    if (_announced) {
+                        // The writes made under the previous version reach sstables before the
+                        // row can name this one. A segment goes away once its writes are flushed,
+                        // so the one holding the previous schema_changed may be gone while a later
+                        // segment still holds writes announced under it, below the floor. Replay
+                        // has only the row's announcement for those, and skips the writes below
+                        // its index; this flush is what makes the skip safe. Before note_applied():
+                        // the row is written by the release this entry gates.
+                        auto& table = _db.find_column_family(_tablet.table);
+                        const auto tid = current_tablet();
+                        logger.debug("apply(): group {} flushes tablet {} before switching to schema version {}",
+                            _group_id, tid, changed->version);
+                        co_await table.flush_tablet(tid);
+                    }
+                    // Before note_applied(): the release it may trigger persists the announcement.
+                    _persistence.note_schema_changed(command[i]->idx, *changed);
+                    _announced = std::move(*changed);
                     _persistence.note_applied(command[i]->idx);
                     continue;
                 }
@@ -232,7 +291,10 @@ public:
         return make_ready_future<>();
     }
 
-    // FIXME: once implemented, the transfer has to carry the group's metadata (resize markers) stored in system.raft_groups
+    // FIXME: once implemented, the transfer has to carry the group's metadata stored in
+    // system.raft_groups: the resize markers, and the schema_changed in effect at the
+    // snapshot's index - that one and not a newer one, since the entries above the index
+    // are applied under it.
     future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override {
         throw std::runtime_error("transfer_snapshot() not implemented");
     }

@@ -185,6 +185,7 @@ future<> raft_commitlog_replay_buffer::resolve_group(replica::database& db, cql3
     // entry's apply returns, so if it is here, the drop it is the receipt for happened,
     // and if it is not, no entry after the truncate was applied.
     group.truncate = persisted.truncate;
+    group.announced = std::move(persisted.schema_change);
     for (const auto& truncation : group.truncations) {
         group.cursors[truncation.segment].push_back(raft_buffer_detail::truncation_cursor{
                 .from = truncation.from, .to = truncation.to, .next = truncation.from});
@@ -223,12 +224,35 @@ future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db
         co_await db.apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
         co_return;
     }
+    if (auto* changed = std::get_if<sc::schema_changed>(&cmd.change)) {
+        // Not data, so the recorded truncate drops nothing of it: the writes above the
+        // truncate may be announced by a schema_changed below it.
+        if (group.announced && (entry->idx <= group.announced->first
+                || group.announced->second.version == changed->version)) {
+            // Below the row's announcement, from a segment that outlived the one holding
+            // the newer one, or the version in effect announced again by a new term: the
+            // index stays, as the state machine keeps it, so no unflushed write falls below it.
+            co_return;
+        }
+        logger.debug("group {}: replaying the switch to schema version {}", group_id, changed->version);
+        // The writes replayed under the announcement being replaced sit in a memtable;
+        // finish_replay() flushes them before the row names this index.
+        group.announcement_replaced = group.announced.has_value();
+        group.announced.emplace(entry->idx, std::move(*changed));
+        co_return;
+    }
     if (entry->idx <= group.truncate.truncate_index) {
         // Dropped by the recorded truncate. Applying it would bring the data back.
         ++group.dropped_by_truncate;
         co_return;
     }
     if (auto* write = std::get_if<sc::write_mutation>(&cmd.change)) {
+        if (group.announced && entry->idx < group.announced->first) {
+            // Flushed before the row named the announcement there.
+            logger.debug("group {}: the write at index {} is below the announcement at {}, already flushed",
+                    group_id, entry->idx, group.announced->first);
+            co_return;
+        }
         if (!_schemas) {
             _schemas.emplace(db, sys_ks);
         }
@@ -470,10 +494,17 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
         if (!group.known) {
             continue;
         }
+        if (group.announcement_replaced) {
+            // Replay skips the writes below the row's announcement as flushed, so they
+            // must be, before the row names it: the memtables are flushed only after
+            // this returns, and a crash in between would lose them on the next replay.
+            co_await db.find_column_family(group.tablet.table).flush_tablet(group.tablet.tablet);
+        }
         // The recovered floor is a real descriptor: every index at or below
         // commit_idx is committed, and commit_term is the term of the entry there.
         co_await service::strong_consistency::raft_groups_storage::store_descriptor(
-                qp, group_id, this_shard_id(), group.commit_idx, group.commit_term, group.config, group.truncations);
+                qp, group_id, this_shard_id(), group.commit_idx, group.commit_term, group.config, group.truncations,
+                group.announced);
 
         auto& group_data = _per_group_data[group_id];
         if (!group.buf.empty()) {
