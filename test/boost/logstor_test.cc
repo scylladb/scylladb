@@ -14,6 +14,7 @@
 #include <functional>
 #include <stdexcept>
 #include <map>
+#include <numeric>
 #include <ranges>
 #include <span>
 #include <vector>
@@ -493,17 +494,21 @@ void check_ondisk_layout(const char* name, const T& value, std::string_view expe
 SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_layout) {
     auto table = table_id(utils::UUID(int64_t(0x1122334455667788), int64_t(0x99aabbccddeeff00)));
 
+    std::array<char, 36> reserved;
+    std::iota(reserved.begin(), reserved.end(), char(0x40));
+
     check_ondisk_layout("chunk_header", ondisk::chunk_header {
         .magic = ondisk::chunk_header_magic,
-        .kind = segment_kind::full,
         .version = ondisk::current_version,
-        .reserved = 0x1234,
+        .kind = segment_kind::full,
+        .flags = 0x1234,
         .segment_seq = segment_sequence{0x0102030405060708},
         .records_size = 0xdeadbeef,
         .body_crc = 0x0badf00d,
-        .reserved2 = 0x5eed1e55,
+        .reserved = reserved,
         .crc = 0xfeedface,
-    }, "4253474c" "02" "01" "3412" "0807060504030201" "efbeadde" "0df0ad0b" "551eed5e" "cefaedfe");
+    }, "4253474c" "01" "02" "3412" "0807060504030201" "efbeadde" "0df0ad0b"
+       "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60616263" "cefaedfe");
 
     check_ondisk_layout("segment_header", ondisk::segment_header {
         .table = table,
@@ -533,22 +538,22 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_layout) {
     // The CRC covers the chunk header fields before `crc`, and the segment header in a full segment.
     auto ch = ondisk::chunk_header {
         .magic = ondisk::chunk_header_magic,
-        .kind = segment_kind::mixed,
         .version = ondisk::current_version,
-        .reserved = 0x1234,
+        .kind = segment_kind::mixed,
+        .flags = 0x1234,
         .segment_seq = segment_sequence{0x0102030405060708},
         .records_size = 0xdeadbeef,
         .body_crc = 0x0badf00d,
-        .reserved2 = 0x5eed1e55,
+        .reserved = reserved,
         .crc = 0xfeedface,
     };
-    BOOST_REQUIRE_EQUAL(ch.calculate_crc(std::nullopt), 0x0b6d50fbu);
+    BOOST_REQUIRE_EQUAL(ch.calculate_crc(std::nullopt), 0xfea1ab1fu);
     ch.kind = segment_kind::full;
     BOOST_REQUIRE_EQUAL(ch.calculate_crc(ondisk::segment_header {
         .table = table,
         .first_token = dht::token::from_int64(-0x0123456789abcdef),
         .last_token = dht::token::from_int64(0x7fffffffffffffff),
-    }), 0x8bb2fd66u);
+    }), 0x410e62ddu);
 }
 
 // Serializes a record frame and returns its bytes, checking that the frame took exactly the size
