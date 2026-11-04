@@ -57,6 +57,8 @@ static constexpr uint8_t current_version = 1;
 // version from min_read_version to current_version. To remove the read path of an old version,
 // increase min_read_version.
 static constexpr uint8_t min_read_version = 1;
+// known_chunk_flags holds the chunk header flags that this code defines.
+static constexpr uint16_t known_chunk_flags = 0;
 static constexpr uint32_t chunk_header_magic = 0x4c475342;
 
 // max_key_size is the size of the largest partition key that a record can hold. CQL limits the
@@ -215,6 +217,13 @@ bool validate_chunk_header_fields(const chunk_header& ch);
 // Whether the headers at the start of a chunk are the ones this code wrote: the chunk header fields
 // are valid, a segment header is there exactly in a full segment, and the CRC matches.
 bool validate_chunk_headers(const chunk_header& ch, const std::optional<segment_header>& sh);
+
+// Returns the flags of `ch` that are not in known_chunk_flags. A chunk with such a flag is from a
+// release that this code cannot read, and it does not mark the end of the segment, so recovery must
+// fail and not handle the segment as empty.
+inline uint16_t unknown_chunk_flags(const chunk_header& ch) noexcept {
+    return ch.flags & ~known_chunk_flags;
+}
 
 // The CRC a chunk header carries in body_crc, over the chunk's body.
 uint32_t calculate_body_crc(std::span<const char> body);
