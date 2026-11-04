@@ -658,6 +658,9 @@ auto coordinator::mutate(schema_ptr schema,
     op = &get<operation_ctx>(op_result);
     table_stats = op->raft_server.table_stats();
 
+    // Read only if this write has to announce its schema version.
+    std::optional<table_schema_version> group0_schema_version;
+
     while (true) {
         // `disposition` below is local to one iteration, so the pointer into
         // it must not survive into the next one.
@@ -728,6 +731,59 @@ auto coordinator::mutate(schema_ptr schema,
         }
 
         ts_with_term = &get<raft_server::timestamp_with_term>(disposition);
+
+        if (op->raft_server.schema_announcement_running() || !op->raft_server.schema_announced(schema->version())) {
+            // The write is appended only once the schema_changed of its version is
+            // committed and is the last one sent: an announcement and a write are separate
+            // entries, and the first may fail to reach the log alone, with the term going
+            // on. While one is on its way no write is appended either, of any version: it
+            // would land behind an announcement its sender did not know of.
+            if (!op->raft_server.schema_announcement_running()) {
+                if (!group0_schema_version) {
+                    // Read after `schema` was taken, so no older than the change that made
+                    // it. A suspension, so begin again.
+                    auto f = co_await coroutine::as_future(_groups_manager.group0_schema_version());
+                    if (f.failed()) {
+                        co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+                    }
+                    group0_schema_version = f.get();
+                    continue;
+                }
+                logger.debug("mutate(): announcing schema version {} of table {}.{}, {}",
+                    schema->version(), schema->ks_name(), schema->cf_name(), state_fmt);
+                raft::command announce_cmd;
+                ser::serialize(announce_cmd, raft_command{.change = schema_changed{
+                    .version = schema->version(),
+                    .mapping = schema->get_column_mapping(),
+                    .group0_schema_version = *group0_schema_version,
+                }});
+                if (const auto limit = op->raft_server.server().max_command_size(); announce_cmd.size() > limit) {
+                    logger.debug("mutate(): the column mapping of table {}.{} is {} bytes, over the limit of {}",
+                        schema->ks_name(), schema->cf_name(), announce_cmd.size(), limit);
+                    count_error([] (auto& s) { ++s.write_errors_other; });
+                    co_await coroutine::return_exception_ptr(std::make_exception_ptr(exceptions::invalid_request_exception(fmt::format(
+                        "The schema of table {}.{} has too many columns for a strongly consistent write: its column "
+                        "mapping is {} bytes, over the raft command limit of {} bytes", schema->ks_name(), schema->cf_name(),
+                        announce_cmd.size(), limit))));
+                }
+                // No suspension since begin_mutate(): the entry lands in this term.
+                op->raft_server.announce_schema(schema->version(), std::move(announce_cmd));
+            }
+            tracing::trace(trace_state, "Waiting for a schema version to be announced to raft group {}", op->replicas.group_id());
+            auto announced = co_await coroutine::as_future(op->raft_server.wait_for_schema_announcement(aoe.abort_source()));
+            if (announced.failed()) {
+                auto ex = std::move(announced).get_exception();
+                // Nothing of the write was sent, so it starts over, unless the server is
+                // stopped; the request's own abort is observed where the loop begins.
+                if (try_catch<raft::stopped_error>(ex)) {
+                    co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
+                }
+                logger.debug("mutate(): the announcement of schema version {} of table {}.{} did not go through: {}",
+                    schema->version(), schema->ks_name(), schema->cf_name(), ex);
+            }
+            // With a new timestamp.
+            continue;
+        }
 
         // Nothing between begin_mutate() above and add_entry() below may
         // suspend this coroutine, not even a co_await on a ready future

@@ -1578,15 +1578,36 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
         leader_host_id = await wait_for_leader(manager, leader_server, group_id)
         assert leader_host_id != target_host_id
 
+        # The leader commits the schema_changed announcing the write's version before it
+        # sends the write, so the target applies the two separately. The apply to pause is
+        # the write's, the one that resolves the schema: hold the write on the leader,
+        # between the two entries, until the target has applied the announcement.
+        write_injection = "sc_coordinator_wait_before_begin_mutate"
+        drop_append_entries_injection = "raft_drop_incoming_append_entries_for_specified_group"
+        log = await manager.server_open_log(target_server.server_id)
+        leader_log = await manager.server_open_log(leader_server.server_id)
+        mark, leader_mark = await log.mark(), await leader_log.mark()
+
+        # With two replicas the announcement is not committed until the target gets it.
+        await manager.api.enable_injection(target_server.ip_addr, drop_append_entries_injection, one_shot=False,
+                                           parameters={"value": group_id})
+        write = asyncio.ensure_future(cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=leader_host))
+        await leader_log.wait_for(r"mutate\(\): announcing schema version", from_mark=leader_mark, timeout=60)
+
+        # The write begins again once the announcement is committed, and waits here.
+        await manager.api.enable_injection(leader_server.ip_addr, write_injection, one_shot=True)
+        await manager.api.disable_injection(target_server.ip_addr, drop_append_entries_injection)
+        await log.wait_for(rf"apply\(\): group {group_id} switches to schema version", from_mark=mark, timeout=60)
+        await manager.api.wait_for_injection_enter(leader_server.ip_addr, write_injection)
+
         await gather_safely(*[
             manager.api.enable_injection(target_server.ip_addr, wait_before_apply_injection, one_shot=True),
             manager.api.enable_injection(target_server.ip_addr, "sc_state_machine_return_empty_schema", one_shot=True)
         ])
 
-        log = await manager.server_open_log(target_server.server_id)
-
         # We won't wait for the follower to apply the state, so we can await this right away.
-        await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=leader_host)
+        await manager.api.message_injection(leader_server.ip_addr, write_injection)
+        await write
 
         await manager.api.wait_for_injection_enter(target_server.ip_addr, wait_before_apply_injection)
         mark = await log.mark()
