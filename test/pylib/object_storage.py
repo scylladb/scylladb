@@ -17,11 +17,13 @@ import os
 import re
 import sys
 import uuid
+import time
 from collections.abc import Awaitable, Callable
 from operator import attrgetter
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
+from urllib.parse import urlparse
 
 import boto3
 import pytest
@@ -30,7 +32,7 @@ import requests
 from test.pylib.dockerized_service import DockerizedServer
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3mock_server import S3MockServer, create_bucket, create_conf
-
+from test.pylib.s3_proxy import S3ProxyServer, NoErrorPolicyHandler
 
 type StorageKind = Literal["s3", "gs"]
 type Storage = S3Server | GSFront
@@ -131,6 +133,19 @@ class S3Server:
     async def stop(self):
         pass
 
+    async def create_proxy(self):
+        proxy = S3ProxyServer(self.ip, 0, self.address, max_retries=3, seed=int(time.time()), logger=logging.getLogger('s3-proxy'), policies=NoErrorPolicyHandler())
+
+        class ProxyS3Server(S3Server):
+            async def __aenter__(self):
+                await proxy.start()
+                return self
+
+            async def __aexit__(self, exception_type, exception_value, exception_traceback):
+                await proxy.stop()
+
+        addr = proxy.server.socket.getsockname()
+        return ProxyS3Server(self.tempdir, addr[0], addr[1], self.acc_key, self.secret_key, self.region, self.bucket_name)
 
 # Keep the old name as an alias for backward compatibility
 S3_Server = S3Server
@@ -225,6 +240,19 @@ class GSFront:
 
     async def stop(self):
         pass
+
+    async def create_proxy(self):
+        url = urlparse(self.endpoint)
+        validator, validator_port = await start_gcs_upload_validator(url.hostname, url.port, None)
+
+        class ProxyGSServer(GSFront):
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exception_type, exception_value, exception_traceback):
+                await stop_gcs_upload_validator(validator)
+
+        return ProxyGSServer(f'{url.scheme}://127.0.0.1:{validator_port}', self.bucket_name, self.credentials_file)
 
 
 VALIDATOR_PORT_RE = re.compile(r"Starting GCS upload validator on \('[^']+', (\d+)\)")
