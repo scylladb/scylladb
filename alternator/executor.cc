@@ -3618,17 +3618,10 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     bool should_audit = _audit.local_is_initialized() && _audit.local().will_log(audit::statement_category::DML);
     mutation_builders.reserve(request_items.MemberCount());
     per_table_wcu.reserve(request_items.MemberCount());
-    // Per-table batch-item totals and histograms must only count items that
-    // passed validation and authorization (issue #31260), so the counts are
-    // recorded here and applied next to the global counters below, after all
-    // fallible checks. The operation counter records the attempt as-is.
-    std::vector<std::pair<lw_shared_ptr<stats>, size_t>> per_table_batch_sizes;
-    per_table_batch_sizes.reserve(request_items.MemberCount());
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         schema_ptr schema = get_table_from_batch_request(_proxy, it);
         lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(schema));
         per_table_stats->api_operations.batch_write_item++;
-        per_table_batch_sizes.emplace_back(std::make_pair(per_table_stats, it->value.Size()));
         tracing::add_alternator_table_name(trace_state, schema->cf_name());
         if (should_audit) {
             if (_audit.local().will_log(audit::statement_category::DML, schema->ks_name(), schema->cf_name())) {
@@ -3732,7 +3725,10 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     // and the previous item's size.
     for (const auto& w : per_table_wcu) {
         total_wcu = 0;
-        // The following loop goes over all items from the same table
+        size_t batch_size = 0;
+        // The following loop goes over all items from the same table.
+        // This loop runs only after validation, authorization, and
+        // read-before-write, so rejected requests are not counted (issue #31260).
         while(pos < mutation_builders.size() && w.second->id() == mutation_builders[pos].first->id()) {
             uint64_t item_size = mutation_builders[pos].second.length_in_bytes();
             size_t wcu = wcu_consumed_capacity_counter::get_units(item_size ? item_size : 1);
@@ -3746,7 +3742,10 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             }
             w.first->operation_sizes.batch_write_item_op_size_kb.add(bytes_to_kb_ceil(item_size));
             pos++;
+            batch_size++;
         }
+        w.first->api_operations.batch_write_item_batch_total += batch_size;
+        w.first->api_operations.batch_write_item_histogram.add(batch_size);
         if (should_add_wcu) {
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "TableName", rjson::from_string(w.second->cf_name()));
@@ -3758,10 +3757,6 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     _stats.wcu_total[stats::DELETE_ITEM] += wcu_delete_units;
     _stats.api_operations.batch_write_item_batch_total += total_items;
     _stats.api_operations.batch_write_item_histogram.add(total_items);
-    for (const auto& [table_stats, batch_size] : per_table_batch_sizes) {
-        table_stats->api_operations.batch_write_item_batch_total += batch_size;
-        table_stats->api_operations.batch_write_item_histogram.add(batch_size);
-    }
     co_await do_batch_write(std::move(mutation_builders), client_state, trace_state, std::move(permit));
     // FIXME: Issue #5650: If we failed writing some of the updates,
     // need to return a list of these failed updates in UnprocessedItems

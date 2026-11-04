@@ -340,8 +340,8 @@ def test_table_batch_write_item_not_counted_on_validation_error(test_table_s, me
     p = random_string()
     item = {'p': p, 'a': 'hi'}
     with check_table_increases_operation(metrics, ['BatchWriteItem'], test_table_s.name, expected_value=1), \
-            check_table_increases_operation(metrics, ['BatchWriteItem'], test_table_s.name,
-                    metric_name='scylla_alternator_table_batch_item_count', expected_value=0), \
+            check_increases_metric_exact(metrics, 'scylla_alternator_table_batch_item_count',
+                    [[0, {'op': 'BatchWriteItem', 'cf': test_table_s.name}]]), \
             check_increases_metric_exact(metrics, 'scylla_alternator_table_batch_item_count_histogram_bucket',
                     [[0, {'op': 'BatchWriteItem', 'le': '2.000000', 'cf': test_table_s.name}],
                      [0, {'op': 'BatchWriteItem', 'le': '3.000000', 'cf': test_table_s.name}]]):
@@ -359,8 +359,11 @@ def test_table_batch_write_item_not_counted_on_authorization_error(dynamodb, cql
                 with new_role(cql) as (role, key):
                     with new_dynamodb(dynamodb, role, key) as d:
                         with check_table_increases_operation(metrics, ['BatchWriteItem'], test_table_s.name, expected_value=1), \
-                                check_table_increases_operation(metrics, ['BatchWriteItem'], test_table_s.name,
-                                        metric_name='scylla_alternator_table_batch_item_count', expected_value=0):
+                                check_increases_metric_exact(metrics, 'scylla_alternator_table_batch_item_count',
+                                        [[0, {'op': 'BatchWriteItem', 'cf': test_table_s.name}]]), \
+                                check_increases_metric_exact(metrics, 'scylla_alternator_table_batch_item_count_histogram_bucket',
+                                        [[0, {'op': 'BatchWriteItem', 'le': '2.000000', 'cf': test_table_s.name}],
+                                         [0, {'op': 'BatchWriteItem', 'le': '3.000000', 'cf': test_table_s.name}]]):
                             with pytest.raises(ClientError, match='AccessDeniedException'):
                                 d.meta.client.batch_write_item(RequestItems = {
                                     test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
