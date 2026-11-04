@@ -113,6 +113,16 @@ std::vector<raft_seal> read_seals(const cql3::untyped_result_set_row& row) {
     }) | std::ranges::to<std::vector>();
 }
 
+std::optional<raft_seal> read_promoted_seal(const cql3::untyped_result_set_row& row) {
+    if (!row.has("promoted_seal")) {
+        return std::nullopt;
+    }
+    const auto type = db::system_keyspace::raft_groups()->get_column_definition("promoted_seal")->type;
+    const auto fields = value_cast<tuple_type_impl::native_type>(type->deserialize(row.get_view("promoted_seal")));
+    return raft_seal{.idx = raft::index_t(value_cast<int64_t>(fields[0])),
+            .ts = api::timestamp_type(value_cast<int64_t>(fields[1]))};
+}
+
 mutation make_seals_mutation(raft::group_id gid, shard_id shard, collection_mutation seals) {
     auto s = db::system_keyspace::raft_groups();
     auto pk = partition_key::from_exploded(*s, {
@@ -142,6 +152,19 @@ mutation make_remove_seals_mutation(raft::group_id gid, shard_id shard, std::spa
                 atomic_cell::make_dead(ts, deleted_at));
     }
     return make_seals_mutation(gid, shard, std::move(writer).finish());
+}
+
+mutation make_promote_seal_mutation(raft::group_id gid, shard_id shard, const raft_seal& seal,
+        std::span<const raft_seal> seals, api::timestamp_type ts) {
+    // The seals are ordered by index.
+    const auto newer = std::ranges::upper_bound(seals, seal.idx, {}, &raft_seal::idx);
+    auto m = make_remove_seals_mutation(gid, shard, std::span(seals.begin(), newer), ts);
+    const auto& def = *m.schema()->get_column_definition("promoted_seal");
+    const auto value = make_tuple_value(def.type, tuple_type_impl::native_type{
+            data_value(int64_t(seal.idx.value())), data_value(int64_t(seal.ts))});
+    m.set_clustered_cell(clustering_key::make_empty(), def,
+            atomic_cell::make_live(*def.type, ts, def.type->decompose(value)));
+    return m;
 }
 
 raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, replica::database& db, raft::group_id gid,
@@ -265,7 +288,7 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
     // The whole descriptor is in the group's own row: one read, and the index,
     // the term and the configuration were always written together.
     static const auto load_cql = format(
-            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations, seals FROM system.{} "
+            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations, seals, promoted_seal FROM system.{} "
             "WHERE shard = ? AND group_id = ? LIMIT 1",
             db::system_keyspace::RAFT_GROUPS);
     ::shared_ptr<cql3::untyped_result_set> result = co_await _qp.execute_internal(load_cql,
@@ -297,6 +320,7 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
         _raft_commitlog.seed_truncations(_persisted_truncations);
     }
     _seals = read_seals(row);
+    _promoted_seal = read_promoted_seal(row);
     _commit_index = std::max(_commit_index, snap.idx);
     _apply_index = std::max(_apply_index, snap.idx);
     rgslog.debug("loaded descriptor for group_id={}: idx={}, term={}, truncations={}",
@@ -361,6 +385,9 @@ void raft_groups_storage::release_all() {
 }
 
 void raft_groups_storage::add_seal(raft_seal seal) {
+    if (_promoted_seal && seal.idx <= _promoted_seal->idx) {
+        return;
+    }
     if (_seals.empty() || seal.idx > _seals.back().idx) {
         _seals.push_back(seal);
     }
@@ -368,6 +395,14 @@ void raft_groups_storage::add_seal(raft_seal seal) {
 
 void raft_groups_storage::remove_seals(const raft_seal& seal) {
     std::erase_if(_seals, [&] (const raft_seal& s) { return s.idx <= seal.idx; });
+}
+
+void raft_groups_storage::promote_seal(const raft_seal& seal) {
+    if (_promoted_seal && seal.idx <= _promoted_seal->idx) {
+        return;
+    }
+    remove_seals(seal);
+    _promoted_seal = seal;
 }
 
 void raft_groups_storage::mark_segment_closed(db::replay_position pos) {
@@ -503,7 +538,7 @@ void raft_groups_storage::write_descriptor_and_purge_stale_truncations(segment_r
 future<raft_groups_storage::persisted_descriptor> raft_groups_storage::load_descriptor(
         cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
     static const auto load_cql = format(
-            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations, seals, "
+            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations, seals, promoted_seal, "
             "truncated_at, last_truncate_request_id, truncate_index, WRITETIME(truncate_index) AS written_at FROM system.{} "
             "WHERE shard = ? AND group_id = ? LIMIT 1",
             db::system_keyspace::RAFT_GROUPS);
@@ -528,6 +563,7 @@ future<raft_groups_storage::persisted_descriptor> raft_groups_storage::load_desc
     ret.truncate.truncate_index = raft::index_t(row.get_or<int64_t>("truncate_index", ret.truncate.truncate_index.value()));
     ret.truncate.written_at = row.get_or<int64_t>("written_at", ret.truncate.written_at);
     ret.seals = read_seals(row);
+    ret.promoted_seal = read_promoted_seal(row);
     co_return ret;
 }
 
