@@ -2357,62 +2357,92 @@ async def do_test_snapshot_on_all_nodes(manager: ScyllaClusterManager,
                 #todo: clear snapshot
                 pass
 
-async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+async def do_run_cluster_backup(object_storages: map, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
     """
     Helper to run a cluster backup
     """
+
+    dcs = { s.datacenter for s in servers }
+    read_cl = ConsistencyLevel.LOCAL_QUORUM
+    if len(dcs) > 1:
+        read_cl = ConsistencyLevel.QUORUM
+
     cql = manager.get_cql()
     s = servers[0]
 
-    backup_tid = await manager.api.backup_cluster_snapshot(s.ip_addr, ks, snapshot_name, s.datacenter, 
-                                                           object_storage.address, object_storage.bucket_name,
-                                                           prefix, tables = [cf])
+    backup_tid = await manager.api.backup_cluster_snapshot_to_locations(s.ip_addr, ks, snapshot_name, [
+        {
+            "datacenter": dc,
+            "endpoint": o.address,
+            "bucket": o.bucket_name,
+            "prefix": prefix
+        } for dc, (o, prefix) in object_storages.items()
+    ], tables = [cf])
 
     backup_status = await manager.api.wait_task(s.ip_addr, backup_tid)
     assert backup_status is not None and backup_status.get('state') == 'done', "Cluster backup failed"
 
-    snap = list(cql.execute(f"SELECT * FROM system_distributed.snapshots WHERE name = '{snapshot_name}'"))
+    snap = list(cql.execute(SimpleStatement(f"SELECT * FROM system_distributed.snapshots WHERE name = '{snapshot_name}'"
+                                            , consistency_level=read_cl)))
     assert len(snap) == 1
 
-    table_id = await manager.get_table_or_view_id(ks, cf)
+    manifests = []
+    for object_storage, prefix in set(object_storages.values()):
+        dcs = { dc for dc, (o, _) in object_storages.items() if o == object_storage }
+        objects = set(os.path.basename(o.key) for o in
+                      object_storage.get_resource().Bucket(object_storage.bucket_name).
+                      objects.filter(Prefix=f"{prefix}/sstables"))
 
-    objects = set(os.path.basename(o.key) for o in
-                  object_storage.get_resource().Bucket(object_storage.bucket_name).
-                  objects.filter(Prefix=f"{prefix}/sstables"))
+        manifest_obj = object_storage.get_resource().Bucket(object_storage.bucket_name).Object(f"{prefix}/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json").get()
+        manifest = json.load(manifest_obj['Body'])
 
-    manifest_obj = object_storage.get_resource().Bucket(object_storage.bucket_name).Object(f"{prefix}/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json").get()
-    manifest = json.load(manifest_obj['Body'])
+        manifest_sstables = [sst['toc_name'] for sst in manifest['sstables']]
 
-    manifest_sstables = [sst['toc_name'] for sst in manifest['sstables']]
+        # every sstable the manifest names must have made it into the bucket
+        missing = [sst for sst in manifest['sstables'] if sst['toc_name'] not in objects]
+        assert not missing, f"manifest references sstables that were not uploaded: {[(sst['node'], sst['toc_name']) for sst in missing]}"
 
-    # every sstable the manifest names must have made it into the bucket
-    missing = [sst for sst in manifest['sstables'] if sst['toc_name'] not in objects]
-    assert not missing, f"manifest references sstables that were not uploaded: {[(sst['node'], sst['toc_name']) for sst in missing]}"
+        for dc in dcs:
+            locations = list(cql.execute(SimpleStatement(
+                f"SELECT * FROM system_distributed.snapshot_remote_locations WHERE snapshot_name = '{snapshot_name}' AND datacenter = '{dc}'"
+                , consistency_level=read_cl)))
+            assert len(locations) == 1
+            assert locations[0].state >= 3
+            assert locations[0].endpoint == object_storage.address
+            assert locations[0].bucket == object_storage.bucket_name
+            assert locations[0].prefix == prefix
 
-    for ss in servers:
-        locations = list(cql.execute(f"SELECT * FROM system_distributed.snapshot_remote_locations WHERE snapshot_name = '{snapshot_name}' AND datacenter = '{s.datacenter}'"))
-        assert len(locations) == 1
-        assert locations[0].state >= 3
-        assert locations[0].endpoint == object_storage.address
-        assert locations[0].bucket == object_storage.bucket_name
-        assert locations[0].prefix == prefix
+        for ss in servers:
+            if not ss.datacenter in dcs:
+                continue
 
-        sstables = list(cql.execute(f"""
-                    SELECT * FROM system_distributed.snapshot_sstables WHERE 
-                    snapshot_name = '{snapshot_name}' AND \"keyspace\" = '{ks}' AND
-                    \"table\" = '{cf}' AND datacenter = '{ss.datacenter}' AND
-                    rack = '{ss.rack}'
-                    """))
+            sstables = list(cql.execute(SimpleStatement(f"""
+                        SELECT * FROM system_distributed.snapshot_sstables WHERE 
+                        snapshot_name = '{snapshot_name}' AND \"keyspace\" = '{ks}' AND
+                        \"table\" = '{cf}' AND datacenter = '{ss.datacenter}' AND
+                        rack = '{ss.rack}'
+                        """, consistency_level=read_cl)))
 
-        for sstable in sstables:
-            assert (not sstable.toc_name in manifest_sstables) or sstable.state >= 3, \
-                    f"{sstable.toc_name} of node {sstable.node} is in the manifest, but was not backed up (state {sstable.state})"
+            for sstable in sstables:
+                assert (not sstable.toc_name in manifest_sstables) or sstable.state >= 3, \
+                        f"{sstable.toc_name} of node {sstable.node} is in the manifest, but was not backed up (state {sstable.state})"
 
-        for sstable in sstables:
-            assert sstable.state < 3 or sstable.toc_name in objects
-            assert sstable.state < 3 or sstable.toc_name in manifest_sstables
+            for sstable in sstables:
+                assert sstable.state < 3 or sstable.toc_name in objects
+                assert sstable.state < 3 or sstable.toc_name in manifest_sstables
 
-    return manifest
+        manifests.append(manifest)
+
+    return manifests
+
+async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    """
+    Helper to run a cluster backup
+    """
+    s = servers[0]
+    manifests = await do_run_cluster_backup({ s.datacenter: (object_storage, prefix) for s in servers }, manager, snapshot_name, ks, cf, servers)
+    assert len(manifests) == 1
+    return manifests[0]
 
 @pytest.mark.asyncio
 async def test_cluster_snapshot_backup(manager: ScyllaClusterManager, object_storage):
