@@ -431,6 +431,8 @@ public:
         std::optional<sstring> snapshot_tag;
         std::optional<db_clock::time_point> snapshot_expiry;
         bool snapshot_skip_flush;
+        // The attempt whose RPCs the coordinator sent last; see db/snapshot_types.hh.
+        std::optional<utils::UUID> snapshot_attempt;
         std::optional<sstring> finalize_migration_ks_name;
         std::optional<sstring> prepare_migration_ks_name;
         // The tables which had no tablet map when the request was made, each with the
