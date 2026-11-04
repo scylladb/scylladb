@@ -25,10 +25,117 @@
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include <fmt/format.h>
+#include <seastar/http/request.hh>
+#include <seastar/http/reply.hh>
 
 namespace alternator {
 
 extern logging::logger elogger; // from executor.cc
+
+std::expected<optional_tablet_routing_request, api_error> parse_tablet_routing_request(const seastar::http::request& request) {
+    // The pinned Seastar header map hashes a copy of an owning sstring. Scanning
+    // views avoids both that allocation and the temporary long header name.
+    // HTTP limits the combined header size, and most names differ in length.
+    constexpr std::string_view name = "x-scylla-tablet-version";
+    constexpr std::string_view short_name = "x-scylla-t-v";
+    const auto matches = [] (std::string_view key, std::string_view expected) {
+        return key.size() == expected.size() && std::ranges::equal(key, expected, [] (char actual, char expected) {
+            return (actual >= 'A' && actual <= 'Z' ? actual + ('a' - 'A') : actual) == expected;
+        });
+    };
+    std::optional<std::string_view> header;
+    std::optional<std::string_view> short_header;
+    for (const auto& [key, value] : request._headers) {
+        if (matches(key, name)) {
+            header = std::string_view(value);
+        } else if (matches(key, short_name)) {
+            short_header = std::string_view(value);
+        }
+    }
+    auto parsed = parse_tablet_routing_request(header ? header : short_header);
+    if (!parsed || !header || !short_header) {
+        return parsed;
+    }
+    auto short_parsed = parse_tablet_routing_request(short_header);
+    if (!short_parsed) {
+        return short_parsed;
+    }
+    if (parsed->has_value() != short_parsed->has_value() ||
+            (*parsed && (**parsed).block != (**short_parsed).block)) {
+        return std::unexpected(api_error::validation("X-Scylla-Tablet-Version and X-Scylla-T-V specify conflicting routing requests"));
+    }
+    return parsed;
+}
+
+std::expected<optional_tablet_routing_request, api_error> parse_tablet_routing_request(std::optional<std::string_view> header) {
+    if (!header) {
+        return std::nullopt;
+    }
+    auto value = *header;
+    const auto first = value.find_first_not_of(" \t");
+    if (first == std::string_view::npos) {
+        return std::unexpected(api_error::validation("Empty Alternator tablet version"));
+    }
+    value = value.substr(first, value.find_last_not_of(" \t") - first + 1);
+    const auto colon = value.find(':');
+    if (colon == std::string_view::npos || colon == 0 ||
+            !std::ranges::all_of(value.substr(0, colon), [] (char c) { return c >= '0' && c <= '9'; })) {
+        return std::unexpected(api_error::validation("Alternator tablet version must start with an unsigned decimal protocol number and ':'"));
+    }
+    // Compare decimal strings to support future protocol numbers without overflow.
+    auto protocol = value.substr(0, colon);
+    protocol.remove_prefix(std::min(protocol.find_first_not_of('0'), protocol.size()));
+    if (protocol != "2") {
+        return std::nullopt;
+    }
+    value.remove_prefix(colon + 1);
+    if (value == "-") {
+        return tablet_routing_request{std::nullopt};
+    }
+    const auto hex = [] (char c) -> int {
+        if (c >= '0' && c <= '9') {
+            return c - '0';
+        }
+        if (c >= 'a' && c <= 'f') {
+            return c - 'a' + 10;
+        }
+        if (c >= 'A' && c <= 'F') {
+            return c - 'A' + 10;
+        }
+        return -1;
+    };
+    if (value.size() != 2 || hex(value[0]) < 0 || hex(value[1]) < 0) {
+        return std::unexpected(api_error::validation("Alternator tablet version protocol 2 requires '-' or exactly two hexadecimal digits"));
+    }
+    return tablet_routing_request{locator::tablet_version_block{(hex(value[0]) << 4) | hex(value[1])}};
+}
+
+sstring format_tablet_routing_info(const tablet_routing_response& response) {
+    const auto& info = response.info;
+    // Common replication factors fit in the buffer's inline storage. Reserve
+    // once for larger sets, including the widest token and shard numbers.
+    fmt::memory_buffer header;
+    header.reserve(128 + 48 * info.tablet_replicas.size());
+    fmt::format_to(std::back_inserter(header), "2;start={};end={};version={:016x};mode={};replicas=\"",
+        dht::token::to_int64(info.token_range.first), dht::token::to_int64(info.token_range.second), info.hash.value(),
+        response.mode == tablet_routing_mode::strong ? "strong" : "regular");
+    bool first = true;
+    for (const auto& replica : info.tablet_replicas) {
+        fmt::format_to(std::back_inserter(header), "{}{}/{}", first ? "" : " ", replica.host, replica.shard);
+        first = false;
+    }
+    header.push_back('"');
+    return sstring(header.data(), header.size());
+}
+
+void add_tablet_routing_header(seastar::http::reply& reply, const tablet_routing_response& response) {
+    try {
+        reply._headers.insert_or_assign(sstring(tablet_info_header), format_tablet_routing_info(response));
+    } catch (...) {
+        // Header allocation is advisory too; the data operation has completed.
+        elogger.trace("Tablet routing header omitted: {}", std::current_exception());
+    }
+}
 
 std::optional<int> get_int_attribute(const rjson::value& value, std::string_view attribute_name) {
     const rjson::value* attribute_value = rjson::find(value, attribute_name);

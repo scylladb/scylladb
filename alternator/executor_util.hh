@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <expected>
 #include <map>
 #include <optional>
 #include <set>
@@ -36,6 +37,8 @@
 #include "audit/audit.hh"
 #include "utils/managed_bytes.hh"
 #include "exceptions/coordinator_result.hh"
+#include "locator/tablet_types.hh"
+#include "alternator/error.hh"
 
 class index_metadata;
 
@@ -43,9 +46,39 @@ namespace query { class partition_slice; class result; }
 namespace cql3::selection { class selection; }
 namespace data_dictionary { class database; }
 namespace service { class storage_proxy; class client_state; }
+namespace seastar::http { struct request; class reply; }
 
 namespace alternator {
-class api_error;
+inline constexpr char tablet_version_header[] = "X-Scylla-Tablet-Version";
+inline constexpr char tablet_version_short_header[] = "X-Scylla-T-V";
+inline constexpr char tablet_info_header[] = "X-Scylla-Tablet-Info";
+
+struct tablet_routing_request {
+    std::optional<locator::tablet_version_block> block;
+};
+
+// An empty outer optional disables routing. An empty block forces a refresh.
+using optional_tablet_routing_request = std::optional<tablet_routing_request>;
+
+enum class tablet_routing_mode { regular, strong };
+
+struct tablet_routing_response {
+    locator::tablet_routing_info_v2 info;
+    tablet_routing_mode mode = tablet_routing_mode::regular;
+};
+
+/// Parse the optional HTTP header, preserving the distinction between absent and empty.
+std::expected<optional_tablet_routing_request, api_error> parse_tablet_routing_request(std::optional<std::string_view> header);
+
+/// Look up either request-header name without allocating for names or values.
+/// When both aliases are present they must specify the same routing request.
+std::expected<optional_tablet_routing_request, api_error> parse_tablet_routing_request(const seastar::http::request& request);
+
+/// Format shared V2 metadata without changing replica order or resolving addresses.
+sstring format_tablet_routing_info(const tablet_routing_response& response);
+
+/// Attach the HTTP representation of a routing refresh to a successful reply.
+void add_tablet_routing_header(seastar::http::reply& reply, const tablet_routing_response& response);
 
 /// The body_writer is used for streaming responses - where the response body
 /// is written in chunks to the output_stream. This allows for efficient
