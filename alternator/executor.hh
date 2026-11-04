@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include <seastar/core/future.hh>
 #include "dht/i_partitioner_fwd.hh"
 #include "audit/audit.hh"
@@ -127,7 +129,19 @@ public:
     // is written in chunks to the output_stream. This allows for efficient
     // handling of large responses without needing to allocate a large buffer
     // in memory.
-    using request_return_type = std::variant<std::string, body_writer, api_error>;
+    struct request_return_type {
+        std::variant<std::string, body_writer, api_error> response;
+        // Most responses carry no hint. Keep their futures and coroutine frames
+        // small, allocating metadata only when a refresh is actually returned.
+        std::unique_ptr<tablet_routing_response> routing_info;
+
+        request_return_type() = default;
+        request_return_type(std::string body) : response(std::move(body)) {}
+        request_return_type(body_writer writer) : response(std::move(writer)) {}
+        request_return_type(api_error error) : response(std::move(error)) {}
+
+        bool is_error() const { return std::holds_alternative<api_error>(response); }
+    };
     stats _stats;
     // The metric_groups object holds this stat object's metrics registered
     // as long as the stats object is alive.
@@ -152,16 +166,16 @@ public:
     future<request_return_type> describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> delete_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> update_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
-    future<request_return_type> put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
-    future<request_return_type> get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
-    future<request_return_type> delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
-    future<request_return_type> update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info, optional_tablet_routing_request routing_request);
+    future<request_return_type> get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info, optional_tablet_routing_request routing_request);
+    future<request_return_type> delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info, optional_tablet_routing_request routing_request);
+    future<request_return_type> update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info, optional_tablet_routing_request routing_request);
     future<request_return_type> list_tables(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> scan(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> describe_endpoints(client_state& client_state, service_permit permit, rjson::value request, std::string host_header, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> batch_write_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> batch_get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
-    future<request_return_type> query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info, optional_tablet_routing_request routing_request);
     future<request_return_type> search_vectors(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> tag_resource(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> untag_resource(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
@@ -184,6 +198,13 @@ public:
 private:
     static thread_local utils::updateable_value<uint32_t> s_default_timeout_in_ms;
     friend class rmw_operation;
+
+    // Ordinary hints are synchronous; SC hints may need one cross-shard hop.
+    bool needs_sc_tablet_routing_info(const schema_ptr& schema, optional_tablet_routing_request request) const;
+    using tablet_routing_future = future<std::unique_ptr<tablet_routing_response>>;
+    tablet_routing_future start_sc_tablet_routing_info(schema_ptr schema, dht::token token, tablet_routing_request request);
+    future<request_return_type> add_tablet_routing_info(request_return_type result, schema_ptr schema,
+            dht::token token, optional_tablet_routing_request request, tablet_routing_future sc_info);
 
     // Helper to set up auditing for an Alternator operation. Checks whether
     // the operation should be audited (via will_log()) and if so, allocates

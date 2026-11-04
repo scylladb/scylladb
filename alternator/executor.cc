@@ -9,6 +9,7 @@
 #include <cmath>
 #include <fmt/ranges.h>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/core/with_timeout.hh>
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
 #include "alternator/consumed_capacity.hh"
@@ -4060,7 +4061,15 @@ std::optional<service::cas_shard> rmw_operation::shard_for_execute(bool needs_re
     // If we're still here, cas() *will* be called by execute(), so let's
     // find the appropriate shard to run it on:
     const auto token = dht::get_token(*_schema, _pk);
+    _partition_token = dht::raw_token(token);
     return service::cas_shard(*_schema, token);
+}
+
+dht::token rmw_operation::partition_token() {
+    if (!_partition_token) {
+        _partition_token = dht::raw_token(dht::get_token(*_schema, _pk));
+    }
+    return dht::token(_partition_token);
 }
 
 // Build the return value from the different RMW operations (UpdateItem,
@@ -4155,6 +4164,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
                     per_table_stats.conditional_check_failed++;
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
                 }
+                _partition_token = dht::raw_token(m->token());
                 return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
                     return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
                 });
@@ -4163,6 +4173,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
         throwing_assert(m); // !needs_read_before_write, so apply() did not check a condition
+        _partition_token = dht::raw_token(m->token());
         return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
             return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
         });
@@ -4176,7 +4187,8 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     auto read_command = needs_read_before_write ?
             previous_item_read_command(proxy, schema(), _ck, selection) :
             nullptr;
-    return proxy.cas(schema(), std::move(*cas_shard), *this, read_command, to_partition_ranges(*schema(), _pk),
+    return proxy.cas(schema(), std::move(*cas_shard), *this, read_command,
+            to_partition_ranges(dht::decorated_key(partition_token(), _pk)),
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout, true, std::move(cdc_opts)).then([this, read_command, &wcu_total, &global_stats, &per_table_stats] (service::storage_proxy::cas_result cas_result) mutable {
         if (!cas_result.is_applied) {
@@ -4276,7 +4288,91 @@ public:
     virtual ~put_item_operation() = default;
 };
 
-future<executor::request_return_type> executor::put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+bool executor::needs_sc_tablet_routing_info(const schema_ptr& schema, optional_tablet_routing_request request) const {
+    if (!request) {
+        return false;
+    }
+    const auto* table = schema->maybe_table();
+    if (!table || !table->uses_tablets()) {
+        return false;
+    }
+    const auto ks = table->as_data_dictionary().keyspace();
+    return ks && ks->uses_tablets() && ks->metadata()->consistency_option() == data_dictionary::consistency_config_option::global;
+}
+
+executor::tablet_routing_future executor::start_sc_tablet_routing_info(schema_ptr schema,
+        dht::token token, tablet_routing_request request) {
+    // Collect alongside the data operation, after validation and authorization.
+    // Consume all failures here, including when the data operation fails and
+    // its caller discards this future without waiting for the advisory lookup.
+    const auto timeout = std::min(default_timeout(), db::timeout_clock::now() + 1s);
+    return futurize_invoke([&] {
+        return with_timeout(timeout, _ss.strongly_consistent_tablet_routing_info(schema->id(), token, request.block, timeout));
+    }).then_wrapped([] (future<std::optional<locator::tablet_routing_info_v2>> pending) -> std::unique_ptr<tablet_routing_response> {
+        try {
+            auto info = pending.get();
+            return info ? std::make_unique<tablet_routing_response>(std::move(*info), tablet_routing_mode::strong) : nullptr;
+        } catch (...) {
+            elogger.trace("SC tablet routing lookup omitted: {}", std::current_exception());
+            return nullptr;
+        }
+    });
+}
+
+future<executor::request_return_type> executor::add_tablet_routing_info(request_return_type result, schema_ptr schema,
+        dht::token token, optional_tablet_routing_request request, tablet_routing_future sc_info) {
+    const auto finish = [&] { return make_ready_future<request_return_type>(std::move(result)); };
+    if (!request || result.is_error()) {
+        return finish();
+    }
+    // The table may have been dropped while the operation ran.
+    auto* table = schema->maybe_table();
+    if (!table) {
+        return finish();
+    }
+    const auto ks = table->as_data_dictionary().keyspace();
+    const auto consistency = ks ? ks->metadata()->consistency_option().value_or(data_dictionary::consistency_config_option::eventual)
+                                : data_dictionary::consistency_config_option::eventual;
+    if (consistency == data_dictionary::consistency_config_option::eventual) {
+        try {
+            utils::get_local_injector().inject("alternator_tablet_routing_info_bad_alloc", [] { throw std::bad_alloc(); });
+            if (auto info = table->tablet_routing_info_v2_for(token, request->block)) {
+                result.routing_info = std::make_unique<tablet_routing_response>(std::move(*info), tablet_routing_mode::regular);
+            }
+        } catch (...) {
+            elogger.trace("Tablet routing lookup omitted: {}", std::current_exception());
+        }
+        return finish();
+    }
+    // An advisory lookup can outlast a successful data operation. Keep its
+    // backend deadline and admission intact, but bound the completed response's
+    // additional wait independently. Ready hints need no timer or allocation.
+    const auto wait = std::chrono::milliseconds(_proxy.data_dictionary().get_config().alternator_tablet_routing_wait_timeout_in_ms());
+    if (wait == 0ms && !sc_info.available()) {
+        (void)std::move(sc_info).then_wrapped([] (tablet_routing_future pending) {
+            pending.ignore_ready_future();
+        });
+        return finish();
+    }
+    return futurize_invoke([wait, sc_info = std::move(sc_info)] () mutable {
+        utils::get_local_injector().inject("alternator_tablet_routing_wait_bad_alloc", [] { throw std::bad_alloc(); });
+        return with_timeout(db::timeout_clock::now() + wait, std::move(sc_info));
+    }).then_wrapped([this, schema = std::move(schema), request, result = std::move(result)] (tablet_routing_future pending) mutable {
+        try {
+            auto info = pending.get();
+            // A lookup collected before data execution may race with DROP or a
+            // consistency change. Only successful, still eligible responses use it.
+            if (info && needs_sc_tablet_routing_info(schema, request)) {
+                result.routing_info = std::move(info);
+            }
+        } catch (...) {
+            elogger.trace("SC tablet routing wait omitted: {}", std::current_exception());
+        }
+        return std::move(result);
+    });
+}
+
+future<executor::request_return_type> executor::put_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info, optional_tablet_routing_request routing_request) {
     _stats.api_operations.put_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("put_item {}", request);
@@ -4307,16 +4403,22 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
         _stats.shard_bounce_for_lwt++;
         per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
+                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info, routing_request]
                 (executor& e) mutable {
-            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info]
+            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info, routing_request]
                                      (service::client_state& client_state) mutable {
                 //FIXME: Instead of passing empty_service_permit() to the background operation,
                 // the current permit's lifetime should be prolonged, so that it's destructed
                 // only after all background operations are finished as well.
-                return e.put_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info);
+                return e.put_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info, routing_request);
             });
         });
+    }
+    // Start the advisory lookup first: nothing may throw between starting the
+    // write, which references this frame, and awaiting it.
+    auto sc_info = make_ready_future<std::unique_ptr<tablet_routing_response>>();
+    if (needs_sc_tablet_routing_info(op->schema(), routing_request)) {
+        sc_info = start_sc_tablet_routing_info(op->schema(), op->partition_token(), *routing_request);
     }
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
@@ -4325,6 +4427,12 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     _stats.wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     per_table_stats->api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    if (routing_request && !res.is_error()) {
+        auto schema = op->schema();
+        const auto token = op->partition_token();
+        op = nullptr;
+        co_return co_await add_tablet_routing_info(std::move(res), std::move(schema), token, routing_request, std::move(sc_info));
+    }
     co_return res;
 }
 
@@ -4391,7 +4499,7 @@ public:
     virtual ~delete_item_operation() = default;
 };
 
-future<executor::request_return_type> executor::delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+future<executor::request_return_type> executor::delete_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info, optional_tablet_routing_request routing_request) {
     _stats.api_operations.delete_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("delete_item {}", request);
@@ -4422,16 +4530,22 @@ future<executor::request_return_type> executor::delete_item(client_state& client
         _stats.shard_bounce_for_lwt++;
         per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
+                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info, routing_request]
                 (executor& e) mutable {
-            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info]
+            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info, routing_request]
                                      (service::client_state& client_state) mutable {
                 //FIXME: Instead of passing  empty_service_permit() to the background operation,
                 // the current permit's lifetime should be prolonged, so that it's destructed
                 // only after all background operations are finished as well.
-                return e.delete_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info);
+                return e.delete_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info, routing_request);
             });
         });
+    }
+    // Start the advisory lookup first: nothing may throw between starting the
+    // write, which references this frame, and awaiting it.
+    auto sc_info = make_ready_future<std::unique_ptr<tablet_routing_response>>();
+    if (needs_sc_tablet_routing_info(op->schema(), routing_request)) {
+        sc_info = start_sc_tablet_routing_info(op->schema(), op->partition_token(), *routing_request);
     }
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
@@ -4442,6 +4556,12 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     _stats.wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     per_table_stats->api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    if (routing_request && !res.is_error()) {
+        auto schema = op->schema();
+        const auto token = op->partition_token();
+        op = nullptr;
+        co_return co_await add_tablet_routing_info(std::move(res), std::move(schema), token, routing_request, std::move(sc_info));
+    }
     co_return res;
 }
 
@@ -5592,7 +5712,7 @@ std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::valu
     return m;
 }
 
-future<executor::request_return_type> executor::update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+future<executor::request_return_type> executor::update_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info, optional_tablet_routing_request routing_request) {
     _stats.api_operations.update_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("update_item {}", request);
@@ -5623,16 +5743,22 @@ future<executor::request_return_type> executor::update_item(client_state& client
         _stats.shard_bounce_for_lwt++;
         per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(cas_shard->shard(), _ssg,
-                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info]
+                [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit), &audit_info, routing_request]
                 (executor& e) mutable {
-            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info]
+            return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt), &audit_info, routing_request]
                                      (service::client_state& client_state) mutable {
                 //FIXME: Instead of passing empty_service_permit() to the background operation,
                 // the current permit's lifetime should be prolonged, so that it's destructed
                 // only after all background operations are finished as well.
-                return e.update_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info);
+                return e.update_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info, routing_request);
             });
         });
+    }
+    // Start the advisory lookup first: nothing may throw between starting the
+    // write, which references this frame, and awaiting it.
+    auto sc_info = make_ready_future<std::unique_ptr<tablet_routing_response>>();
+    if (needs_sc_tablet_routing_info(op->schema(), routing_request)) {
+        sc_info = start_sc_tablet_routing_info(op->schema(), op->partition_token(), *routing_request);
     }
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
@@ -5641,6 +5767,12 @@ future<executor::request_return_type> executor::update_item(client_state& client
     _stats.wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     per_table_stats->api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    if (routing_request && !res.is_error()) {
+        auto schema = op->schema();
+        const auto token = op->partition_token();
+        op = nullptr;
+        co_return co_await add_tablet_routing_info(std::move(res), std::move(schema), token, routing_request, std::move(sc_info));
+    }
     co_return res;
 }
 
