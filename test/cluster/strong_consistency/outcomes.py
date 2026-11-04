@@ -119,12 +119,8 @@ def _is_table_absence_message(msg: str) -> bool:
 def is_table_absence_error(exc: BaseException) -> bool:
     """Return True if the exception indicates the table is absent (dropped/recreated).
 
-    Two kinds of them are a SERVER_ERROR.  "Can't find a column family" is
-    one: a prepared statement still tagged with the dropped table's UUID,
-    which is a legitimate thing for a client to send after a DROP+RECREATE
-    (TODO(SCYLLADB-4655): drop it once the server reports an unknown table id
-    as a regular InvalidRequest).  The other is a forwarded request whose
-    statement the target has to prepare again: the target's "unconfigured
+    One kind of them is a SERVER_ERROR: a forwarded request whose
+    statement the target has to prepare again.  The target's "unconfigured
     table" or "keyspace does not exist" comes back through the prepare RPC as
     a remote error, and the forwarding node returns it as a SERVER_ERROR whose
     message is the exception's type and its message.
@@ -133,9 +129,8 @@ def is_table_absence_error(exc: BaseException) -> bool:
         return is_table_absence_invalid_request(exc)
     if isinstance(exc, ServerError):
         msg = str(exc).lower()
-        return "can't find a column family" in msg or (
-            _FORWARDED_INVALID_REQUEST.search(msg) is not None
-            and _is_table_absence_message(msg))
+        return (_FORWARDED_INVALID_REQUEST.search(msg) is not None
+                and _is_table_absence_message(msg))
     return False
 
 
