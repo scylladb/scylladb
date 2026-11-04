@@ -9,10 +9,14 @@
 #include "replica/database.hh"
 #include "streaming/table_check.hh"
 #include "service/migration_manager.hh"
+#include "utils/error_injection.hh"
 
 namespace streaming {
 
 future<table_dropped> table_sync_and_check(replica::database& db, service::migration_manager& mm, const table_id& uuid) {
+    co_await utils::get_local_injector().inject("table_sync_and_check_fail", [] {
+        return std::make_exception_ptr(std::runtime_error("table_sync_and_check_fail injection"));
+    });
     // Trigger read barrier to synchronize schema.
     co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
 

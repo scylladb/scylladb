@@ -236,9 +236,21 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     }
                     status = -1;
                     // The status code -2 means error and the table is dropped
-                    if (db.local_is_initialized() && mm.local_is_initialized() && co_await table_sync_and_check(db.local(), mm.local(), cf_id)) {
-                        level = seastar::log_level::debug;
-                        status = -2;
+                    try {
+                        if (db.local_is_initialized() && mm.local_is_initialized() && co_await table_sync_and_check(db.local(), mm.local(), cf_id)) {
+                            level = seastar::log_level::debug;
+                            status = -2;
+                        }
+                    } catch (...) {
+                        // The check needs a group0 barrier, which fails once the node
+                        // is shutting down (raft::stopped_error). Letting it escape
+                        // would skip the log line below and report the stream failure,
+                        // whatever its level, as an error in the respond phase. Treat
+                        // the table as present instead and fail the stream as usual,
+                        // reporting the failure of the check together with that of
+                        // the stream, also when the stream was aborted.
+                        ex = std::make_exception_ptr(nested_exception(std::current_exception(), std::move(ex)));
+                        aborted = false;
                     }
                     // formattable(), not a plain "{}": ex is routinely a
                     // seastar::nested_exception (see the try_catch above), and only
