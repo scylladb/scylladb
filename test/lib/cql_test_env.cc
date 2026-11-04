@@ -1199,6 +1199,11 @@ private:
                 _ss.local().wait_for_group0_stop().get();
             });
 
+            // The strongly consistent groups stop before group0, as in storage_service::do_drain().
+            auto stop_sc_groups = defer_verbose_shutdown("strongly consistent groups", [this] {
+                _groups_manager.local().stop_all_shards().get();
+            });
+
             if (!group0_service.maintenance_mode() && _sys_ks.local().bootstrap_complete()) {
                 group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
                 if (group0_service.joined_group0()) {
