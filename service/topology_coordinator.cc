@@ -4448,7 +4448,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         gc_clock::time_point t;
         std::optional<gc_clock::time_point> expiry;
         auto desc = [&] {
-            return fmt::format("SNAPSHOT on tables {}", ids);
+            return fmt::format("SNAPSHOT ({}) on tables {}", attempt_name, ids);
         };
 
         const utils::UUID global_request_id = _topo_sm._topology.global_request_id.value();
@@ -4526,6 +4526,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
         co_await handle_topology_ordered_op(std::move(guard)
             , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
+                auto tag = topology_requests_entry.snapshot_tag;
+                // refuse to run a snapshot with an empty tag.
+                // this could also block a broken retry of a failed op.
+                if (!tag || tag->empty()) {
+                    throw std::logic_error("Snapshot name must not be empty");
+                }
                 if (prepare_error) {
                     throw std::runtime_error(*prepare_error);
                 }
@@ -4535,7 +4541,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 if (!topology_requests_entry.snapshot_attempt) {
                     throw std::runtime_error(fmt::format("SNAPSHOT request {} has no attempt", topology_requests_entry.id));
                 }
-                attempt_name = db::make_snapshot_attempt_name(*topology_requests_entry.snapshot_tag, *topology_requests_entry.snapshot_attempt);
+                attempt_name = db::make_snapshot_attempt_name(*tag, *topology_requests_entry.snapshot_attempt);
                 skip_flush = topology_requests_entry.snapshot_skip_flush;
                 t = gc_clock::from_time_t(db_clock::to_time_t(topology_requests_entry.start_time));
                 if (topology_requests_entry.snapshot_expiry) {
