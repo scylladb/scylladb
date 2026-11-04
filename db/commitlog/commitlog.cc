@@ -60,6 +60,7 @@
 #include "utils/disk-error-handler.hh"
 #include "utils/labels.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 
 static logging::logger clogger("commitlog");
 
@@ -3037,24 +3038,28 @@ struct fmt::formatter<file_to_dispose_t> {
 };
 
 future<> db::commitlog::segment_manager::do_pending_deletes() {
-    collect_released_files(false);
-    auto ftd = std::exchange(_files_to_dispose, {});
-
-    if (ftd.empty()) {
-        co_return;
-    }
-
     promise<> deleting_done;
     auto pending_deletes = std::exchange(_pending_deletes, deleting_done.get_future());
 
     co_await std::move(pending_deletes);
+
+    // Take the files only after the previous round is done: files it
+    // could not delete are queued back ahead of everything newer.
+    collect_released_files(false);
+    auto ftd = std::exchange(_files_to_dispose, {});
+
+    if (ftd.empty()) {
+        deleting_done.set_value();
+        co_return;
+    }
 
     std::exception_ptr recycle_error;
     auto exts = cfg.extensions;
 
     clogger.debug("Discarding segments {}", ftd);
 
-    for (auto& [f, mode] : ftd) {
+    for (auto it = ftd.begin(); it != ftd.end(); ++it) {
+        auto& [f, mode] = *it;
         // `f.remove_file()` resets known_size to 0, so remember the size here,
         // in order to subtract it from total_size_on_disk accurately.
         auto size = f.known_size();
@@ -3062,12 +3067,16 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
             if (f) {
                 co_await f.close();
             }
+        } catch (...) {
+            clogger.warn("Could not close segment {}: {:t}", f.name(), std::current_exception());
+        }
 
-            // retain the file (replay...)
-            if (mode == dispose_mode::Keep) {
-                continue;
-            }
+        // retain the file (replay...)
+        if (mode == dispose_mode::Keep) {
+            continue;
+        }
 
+        try {
             if (exts && !exts->commitlog_file_extensions().empty()) {
                 for (auto& ext : exts->commitlog_file_extensions()) {
                     co_await ext->before_delete(f.name());
@@ -3099,16 +3108,27 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
 
             clogger.debug("Deleting segment file {}", f.name());
             // last resort.
-            co_await f.remove_file();
+            try {
+                co_await f.remove_file();
+            } catch (...) {
+                if (!is_system_error_errno(ENOENT)) {
+                    throw;
+                }
+                clogger.warn("Segment {} is already gone", f.name());
+            }
             // make the removal durable before disposing of any newer segment.
             co_await seastar::sync_directory(cfg.commit_log_location);
         } catch (...) {
-            clogger.error("Could not delete segment {}: {:t}", f.name(), std::current_exception());
+            // Newer segments may not go before this one. Retry all of them,
+            // in order, on the next round.
+            clogger.error("Could not delete segment {}, will retry: {:t}", f.name(), std::current_exception());
+            std::vector<std::pair<named_file, dispose_mode>> retry(std::make_move_iterator(it), std::make_move_iterator(ftd.end()));
+            for (auto& e : _files_to_dispose) {
+                retry.emplace_back(std::move(e));
+            }
+            _files_to_dispose = std::move(retry);
+            break;
         }
-        // if we get here, we either successfully deleted the file,
-        // or had such an exception that we consider the file dead
-        // anyway. In either case we _remove_ the file size from
-        // footprint, because it is no longer our problem.
         totals.total_size_on_disk -= size;
     }
 
