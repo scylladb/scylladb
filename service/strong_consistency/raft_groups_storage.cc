@@ -19,11 +19,14 @@
 
 #include "serializer.hh"
 #include "idl/raft_storage.dist.hh"
+#include "idl/mutation.dist.hh"
 #include "serializer_impl.hh"
 #include "idl/raft_storage.dist.impl.hh"
+#include "idl/mutation.dist.impl.hh"
 
 #include "cql3/query_processor.hh"
 
+#include <algorithm>
 #include <seastar/core/coroutine.hh>
 
 namespace service::strong_consistency {
@@ -44,6 +47,19 @@ bytes serialize_config(const raft::configuration& config) {
 raft::configuration deserialize_config(const bytes& blob) {
     auto in = ser::as_input_stream(blob);
     return ser::deserialize(in, std::type_identity<raft::configuration>());
+}
+
+// The same for the column mapping in a schema_changes element, with the serializer the
+// schema_changed log entries use (idl/mutation.idl.hh).
+bytes serialize_column_mapping(const column_mapping& mapping) {
+    bytes_ostream out;
+    ser::serialize(out, mapping);
+    return bytes(out.linearize());
+}
+
+column_mapping deserialize_column_mapping(const bytes& blob) {
+    auto in = ser::as_input_stream(blob);
+    return ser::deserialize(in, std::type_identity<column_mapping>());
 }
 
 // The element type of truncations_type(); make_tablet_raft_groups_schema() spells
@@ -92,7 +108,74 @@ std::vector<truncation_record> deserialize_truncations(const managed_bytes_view&
     return ret;
 }
 
+// The element type of schema_changes_type(): (version, column_mapping, group0_schema_version,
+// segment). make_tablet_raft_groups_schema() spells the same tuple for the column.
+data_type schema_changed_tuple_type() {
+    static thread_local const data_type type =
+            tuple_type_impl::get_instance({uuid_type, bytes_type, uuid_type, long_type});
+    return type;
+}
+
+// Frozen, like truncations_type(), so a release sets the whole list as one cell.
+data_type schema_changes_type() {
+    static thread_local const data_type type =
+            list_type_impl::get_instance(schema_changed_tuple_type(), false);
+    return type;
+}
+
+data_value serialize_schema_changes(const std::vector<schema_changed_record>& records) {
+    const auto element = schema_changed_tuple_type();
+    std::vector<data_value> values;
+    values.reserve(records.size());
+    for (const auto& record : records) {
+        values.push_back(make_tuple_value(element, tuple_type_impl::native_type{
+                data_value(record.change.version.uuid()),
+                data_value(serialize_column_mapping(record.change.mapping)),
+                data_value(record.change.group0_schema_version.uuid()),
+                data_value(int64_t(record.segment))}));
+    }
+    return make_list_value(schema_changes_type(), std::move(values));
+}
+
+std::vector<schema_changed_record> deserialize_schema_changes(const managed_bytes_view& blob) {
+    std::vector<schema_changed_record> ret;
+    const auto list = value_cast<list_type_impl::native_type>(schema_changes_type()->deserialize(blob));
+    ret.reserve(list.size());
+    for (const auto& element : list) {
+        const auto& fields = value_cast<tuple_type_impl::native_type>(element);
+        ret.push_back(schema_changed_record{
+                .change = schema_changed{
+                        .version = table_schema_version(value_cast<utils::UUID>(fields[0])),
+                        .mapping = deserialize_column_mapping(value_cast<bytes>(fields[1])),
+                        .group0_schema_version = table_schema_version(value_cast<utils::UUID>(fields[2]))},
+                .segment = db::segment_id_type(value_cast<int64_t>(fields[3]))});
+    }
+    return ret;
+}
+
 } // namespace
+
+void apply_schema_changed(std::vector<schema_changed_record>& records, const schema_changed& change,
+        db::segment_id_type segment) {
+    if (!records.empty() && records.back().change.version == change.version) {
+        return;
+    }
+    // Versions interleave while writes built before an ALTER TABLE are in flight, so a
+    // version announced again moves to the end, as the one in effect.
+    std::erase_if(records, [&] (const schema_changed_record& r) { return r.change.version == change.version; });
+    records.push_back(schema_changed_record{.change = change, .segment = segment});
+}
+
+size_t count_stale_schema_changes(const std::vector<schema_changed_record>& records,
+        db::segment_id_type oldest_segment) {
+    // The writes of records[i]'s version are in segments up to records[i + 1].segment.
+    // A stale record after a live one is not counted, and a later release drops it.
+    size_t stale = 0;
+    while (stale + 1 < records.size() && records[stale + 1].segment < oldest_segment) {
+        ++stale;
+    }
+    return stale;
+}
 
 raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, replica::database& db, raft::group_id gid,
         raft::server_id server_id, shard_id shard, db::commitlog& commit_log, table_id target_table_id,
@@ -215,7 +298,7 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
     // The whole descriptor is in the group's own row: one read, and the index,
     // the term and the configuration were always written together.
     static const auto load_cql = format(
-            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations FROM system.{} "
+            "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations, schema_changes FROM system.{} "
             "WHERE shard = ? AND group_id = ? LIMIT 1",
             db::system_keyspace::RAFT_GROUPS);
     ::shared_ptr<cql3::untyped_result_set> result = co_await _qp.execute_internal(load_cql,
@@ -245,6 +328,9 @@ future<raft::snapshot_descriptor> raft_groups_storage::load_snapshot_descriptor(
         // The row already holds this, so the first release need not rewrite it.
         _persisted_truncations = deserialize_truncations(row.get_view("truncations"));
         _raft_commitlog.seed_truncations(_persisted_truncations);
+    }
+    if (row.has("schema_changes")) {
+        _persisted_schema_changes = deserialize_schema_changes(row.get_view("schema_changes"));
     }
     _commit_index = std::max(_commit_index, snap.idx);
     _apply_index = std::max(_apply_index, snap.idx);
@@ -290,6 +376,11 @@ db::rp_handle raft_groups_storage::pin_raft_groups_for_apply(raft::index_t idx) 
 void raft_groups_storage::note_applied(raft::index_t idx) {
     _apply_index = std::max(_apply_index, idx);
     maybe_release();
+}
+
+void raft_groups_storage::note_schema_changed(raft::index_t idx, const schema_changed& change) {
+    // The record holding `idx` is not released before note_applied(idx), so it is queued.
+    _applied_schema_changes.push_back({idx, schema_changed_record{.change = change, .segment = _raft_commitlog.newest_segment()}});
 }
 
 void raft_groups_storage::release_all() {
@@ -402,6 +493,24 @@ void raft_groups_storage::write_descriptor_and_purge_stale_truncations(segment_r
     if (rewrite_truncations) {
         m.set_clustered_cell(ckey, "truncations", serialize_truncations(truncations), ts);
     }
+    // Add the schema_changed entries at or below the new snapshot_idx to the list. Entries
+    // above it are applied again after a restart under the last version of the list, so
+    // their announcements must wait. Like the truncations, the cell is rewritten only when
+    // the list changes, and the queue and the list are trimmed once the mutation landed.
+    const auto schema_changes_covered = std::ranges::find_if(_applied_schema_changes,
+            [&record] (const auto& change) { return change.idx > record.max_index; }) - _applied_schema_changes.begin();
+    const auto oldest_segment = _raft_commitlog.oldest_listed_segment();
+    std::optional<std::vector<schema_changed_record>> schema_changes;
+    if (schema_changes_covered > 0 || count_stale_schema_changes(_persisted_schema_changes, oldest_segment) > 0) {
+        schema_changes = _persisted_schema_changes;
+        for (size_t i = 0; i < size_t(schema_changes_covered); ++i) {
+            const auto& applied = _applied_schema_changes[i].record;
+            apply_schema_changed(*schema_changes, applied.change, applied.segment);
+        }
+        schema_changes->erase(schema_changes->begin(),
+                schema_changes->begin() + count_stale_schema_changes(*schema_changes, oldest_segment));
+        m.set_clustered_cell(ckey, "schema_changes", serialize_schema_changes(*schema_changes), ts);
+    }
 
     m.partition().clustered_row(*schema, ckey).apply(row_marker(ts));
 
@@ -430,6 +539,10 @@ void raft_groups_storage::write_descriptor_and_purge_stale_truncations(segment_r
     if (rewrite_truncations) {
         _persisted_truncations = truncations;
     }
+    if (schema_changes) {
+        _persisted_schema_changes = std::move(*schema_changes);
+    }
+    _applied_schema_changes.erase(_applied_schema_changes.begin(), _applied_schema_changes.begin() + schema_changes_covered);
     rgslog.debug("released record for group_id={}: segment={}, snapshot=({}, {}), truncations={}{}",
             _group_id, record.segment(), record.max_index, record.max_term(), truncations.size(),
             rewrite_truncations ? "" : " (unchanged, not rewritten)");
@@ -439,7 +552,8 @@ future<raft_groups_storage::persisted_descriptor> raft_groups_storage::load_desc
         cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
     static const auto load_cql = format(
             "SELECT snapshot_idx, snapshot_term, snapshot_config, truncations, "
-            "truncated_at, last_truncate_request_id, truncate_index, WRITETIME(truncate_index) AS written_at FROM system.{} "
+            "truncated_at, last_truncate_request_id, truncate_index, WRITETIME(truncate_index) AS written_at, "
+            "schema_changes FROM system.{} "
             "WHERE shard = ? AND group_id = ? LIMIT 1",
             db::system_keyspace::RAFT_GROUPS);
     auto result = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id},
@@ -462,12 +576,23 @@ future<raft_groups_storage::persisted_descriptor> raft_groups_storage::load_desc
     ret.truncate.last_truncate_request_id = row.get_or<utils::UUID>("last_truncate_request_id", ret.truncate.last_truncate_request_id);
     ret.truncate.truncate_index = raft::index_t(row.get_or<int64_t>("truncate_index", ret.truncate.truncate_index.value()));
     ret.truncate.written_at = row.get_or<int64_t>("written_at", ret.truncate.written_at);
+    if (row.has("schema_changes")) {
+        ret.schema_changes = deserialize_schema_changes(row.get_view("schema_changes"));
+    }
     co_return ret;
+}
+
+future<std::optional<schema_changed>> raft_groups_storage::load_schema_changed() {
+    auto loaded = (co_await load_descriptor(_qp, _group_id, _shard)).schema_changes;
+    if (loaded.empty()) {
+        co_return std::nullopt;
+    }
+    co_return std::move(loaded.back().change);
 }
 
 future<> raft_groups_storage::store_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
         raft::index_t idx, raft::term_t term, const raft::configuration& config,
-        const std::vector<truncation_record>& truncations) {
+        const std::vector<truncation_record>& truncations, const std::vector<schema_changed_record>& schema_changes) {
     // Only advance: an earlier run or replay may have persisted a value at or beyond
     // this index. An equal index is a no-op even when replay computed truncation
     // records of its own. Replay derives those records from the segments it reads: a
@@ -483,12 +608,18 @@ future<> raft_groups_storage::store_descriptor(cql3::query_processor& qp, raft::
         co_return;
     }
     static const auto store_cql = format(
-            "INSERT INTO system.{} (shard, group_id, snapshot_idx, snapshot_term, snapshot_config, truncations) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO system.{} (shard, group_id, snapshot_idx, snapshot_term, snapshot_config, truncations, "
+            "schema_changes) VALUES (?, ?, ?, ?, ?, ?, ?)",
             db::system_keyspace::RAFT_GROUPS);
+    // Unset leaves the row's list alone.
+    data_value_or_unset changes = unset_value{};
+    if (!schema_changes.empty()) {
+        changes = serialize_schema_changes(schema_changes);
+    }
     co_await qp.execute_internal(store_cql,
             {int16_t(shard), gid.id, int64_t(idx.value()), int64_t(term.value()),
-             data_value(serialize_config(config)), serialize_truncations(truncations)},
+             data_value(serialize_config(config)), serialize_truncations(truncations),
+             changes},
             cql3::query_processor::cache_internal::yes);
 }
 

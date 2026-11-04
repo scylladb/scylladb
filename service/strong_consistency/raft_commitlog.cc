@@ -329,8 +329,15 @@ void raft_commitlog::pop_released() {
     _commitlog_segment_queue.pop_front();
 }
 
+db::segment_id_type raft_commitlog::newest_segment() const {
+    if (_commitlog_segment_queue.empty()) {
+        on_internal_error(logger, fmt::format("group_id={}: no record to take the newest segment from", _group_id));
+    }
+    return _commitlog_segment_queue.back().segment();
+}
+
 void raft_commitlog::purge_stale_truncations() {
-    const db::segment_id_type oldest_segment = _commit_log.min_position().id;
+    const db::segment_id_type oldest_segment = oldest_listed_segment();
     // The list is not sorted by segment (see _truncations), so a stale record can
     // sit after a live one.
     std::erase_if(_truncations, [oldest_segment](const truncation_record& t) {

@@ -255,6 +255,14 @@ public:
         return _truncations;
     }
 
+    // The segment of the newest record. No entry this group has stored is in a later
+    // one. Aborts if there is no record.
+    db::segment_id_type newest_segment() const;
+    // The oldest segment the commitlog still lists.
+    db::segment_id_type oldest_listed_segment() const {
+        return _commit_log.min_position().id;
+    }
+
     // Give up every reference this group holds, for good: for a group destroyed
     // deliberately, whose log nothing will ever replay. Call only after the raft
     // server has been aborted.
