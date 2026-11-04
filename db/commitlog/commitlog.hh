@@ -118,6 +118,10 @@ public:
         bool warn_about_segments_left_on_disk_after_shutdown = true;
         bool allow_going_over_size_limit = false;
         bool allow_fragmented_entries = false;
+        // Segment files of this shard found on disk at start are deleted by
+        // replay cleanup (delete_segments()). Live segments are not deleted
+        // or recycled before them.
+        bool wait_for_replay_cleanup = false;
 
         // The base segment ID to use.
         // The segment IDs of newly allocated segments will be issued sequentially

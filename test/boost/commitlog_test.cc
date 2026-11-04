@@ -320,6 +320,17 @@ struct record_deletes_extension : public db::commitlog_file_extension {
     }
 };
 
+future<std::vector<sstring>> create_fake_segments(sstring dir, std::vector<segment_id_type> ids) {
+    std::vector<sstring> files;
+    for (auto id : ids) {
+        files.push_back(dir + "/" + commitlog::descriptor(id, commitlog::descriptor::FILENAME_PREFIX).filename());
+        auto f = co_await open_file_dma(files.back(), open_flags::wo | open_flags::create);
+        co_await f.truncate(4096);
+        co_await f.close();
+    }
+    co_return files;
+}
+
 // Writes until the log has `n` segments, makes them all deletable, and
 // returns their names.
 future<std::vector<sstring>> release_segments(commitlog& log, size_t n) {
@@ -397,14 +408,8 @@ future<> retries_failed_delete_in_order(commitlog& log, record_deletes_extension
 }
 
 future<> delete_replayed_segments_in_order(commitlog& log, record_deletes_extension& ex) {
-    std::vector<sstring> files;
-    // Ids well above those of the live segments.
-    for (segment_id_type id : {1005, 1003, 1009, 1001, 1007}) {
-        files.push_back(log.active_config().commit_log_location + "/" + commitlog::descriptor(id, commitlog::descriptor::FILENAME_PREFIX).filename());
-        auto f = co_await open_file_dma(files.back(), open_flags::wo | open_flags::create);
-        co_await f.truncate(4096);
-        co_await f.close();
-    }
+    // Ids below those of the live segments.
+    auto files = co_await create_fake_segments(log.active_config().commit_log_location, {1005, 1003, 1009, 1001, 1007});
 
     co_await log.delete_segments(files);
 
@@ -447,6 +452,49 @@ SEASTAR_TEST_CASE(test_commitlog_retries_failed_delete_in_order) {
     co_await cl_test(cfg, [&ex] (commitlog& log) {
         return retries_failed_delete_in_order(log, ex);
     });
+}
+
+// Live segments are not deleted before the segments of this shard found on
+// disk at start, and those are deleted in id order first.
+SEASTAR_TEST_CASE(test_commitlog_live_segments_wait_for_replay_cleanup) {
+    auto ep = std::make_unique<record_deletes_extension>();
+    auto& ex = *ep;
+    db::extensions myexts;
+    myexts.add_commitlog_file_extension("record_deletes", std::move(ep));
+
+    tmpdir tmp;
+    commitlog::config cfg;
+    cfg.commit_log_location = tmp.path().string();
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.extensions = &myexts;
+    cfg.wait_for_replay_cleanup = true;
+
+    // Segments from a previous run of this shard.
+    auto old_ids = std::vector<segment_id_type>{1003, 1001};
+    for (auto& id : old_ids) {
+        id = replay_position(this_shard_id(), id).id;
+    }
+    auto old_files = co_await create_fake_segments(cfg.commit_log_location, old_ids);
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    std::exception_ptr ep2;
+    try {
+        auto names = co_await release_segments(log, 3);
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE(ex.deleted.empty());
+
+        co_await log.delete_segments(old_files);
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE_EQUAL(ex.deleted.size(), old_files.size() + names.size());
+        BOOST_REQUIRE(std::ranges::is_sorted(segment_ids(ex.deleted)));
+    } catch (...) {
+        ep2 = std::current_exception();
+    }
+    co_await log.shutdown();
+    co_await log.clear();
+    if (ep2) {
+        std::rethrow_exception(ep2);
+    }
 }
 
 // Each shard's segments are deleted by one shard.
