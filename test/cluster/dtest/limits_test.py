@@ -94,7 +94,7 @@ class TestLimits(Tester):
 
     def test_max_key_length(self):
         cluster = self.prepare()
-        cluster.populate(1).start()
+        cluster.populate(1).start(wait_for_binary_proto=True)
         node = cluster.nodelist()[0]
 
         session = self.patient_cql_connection(node)
@@ -153,7 +153,7 @@ class TestLimits(Tester):
 
     def test_max_column_value_size(self):
         cluster = self.prepare()
-        cluster.populate(1).start()
+        cluster.populate(1).start(wait_for_binary_proto=True)
         node = cluster.nodelist()[0]
 
         session = self.patient_cql_connection(node)
@@ -196,7 +196,7 @@ class TestLimits(Tester):
 
     def test_max_tuple(self):
         cluster = self.prepare()
-        cluster.populate(1).start()
+        cluster.populate(1).start(wait_for_binary_proto=True)
         node = cluster.nodelist()[0]
 
         session = self.patient_cql_connection(node)
@@ -236,7 +236,7 @@ class TestLimits(Tester):
 
     def test_max_batch_size(self):
         cluster = self.prepare()
-        cluster.populate(1).start()
+        cluster.populate(1).start(wait_for_binary_proto=True)
         node = cluster.nodelist()[0]
 
         session = self.patient_cql_connection(node)
@@ -281,7 +281,7 @@ class TestLimits(Tester):
             skip_env("client times out in debug mode")
         cluster = self.prepare()
         cluster.set_configuration_options(values={"query_tombstone_page_limit": 9999999, "batch_size_warn_threshold_in_kb": 1024 * 1024, "batch_size_fail_threshold_in_kb": 1024 * 1024, "commitlog_segment_size_in_mb": 64})
-        cluster.populate(1).start(jvm_args=["--smp", "1", "--memory", "2G", "--logger-log-level", "lsa-timing=debug"])
+        cluster.populate(1).start(wait_for_binary_proto=True, jvm_args=["--smp", "1", "--memory", "2G", "--logger-log-level", "lsa-timing=debug"])
         node = cluster.nodelist()[0]
 
         session = self.patient_cql_connection(node)
