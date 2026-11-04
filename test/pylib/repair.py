@@ -66,13 +66,12 @@ async def load_tablet_repair_task_infos(cql, host, table_id):
 
 async def create_table_insert_data_for_repair(manager, rf=3, tablets=8, fast_stats_refresh=True, nr_keys=256,
                                               disable_flush_cache_time=False, cmdline=None,
-                                              sequential_server_add=False) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
+                                              sequential_server_add=False, config=None) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
     assert rf <= 3, "A keyspace with RF > 3 will be RF-rack-invalid if there are fewer racks than the RF"
 
+    config = dict(config or {})
     if fast_stats_refresh:
-        config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
-    else:
-        config = {}
+        config.update({'tablet_load_stats_refresh_interval_in_seconds': 1})
     if disable_flush_cache_time:
         config.update({'repair_hints_batchlog_flush_cache_time_in_ms': 0})
     property_files = [{"dc": "dc1", "rack": f"r{i % rf}"} for i in range(3)]

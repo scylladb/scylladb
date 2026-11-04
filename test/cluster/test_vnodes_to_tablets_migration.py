@@ -285,6 +285,9 @@ async def tablet_routing_published(cql, server: ServerInfo, ks: str, table: str,
 
     Read off the response payload: the driver's tablet cache is dropped whenever it rebuilds its
     schema, so a negative there is ambiguous. Per statement, so that one site cannot cover for the other.
+
+    Needs a TABLETS_ROUTING_V1 connection: on a V2 one the coordinator attaches routing info only
+    when the client's tablet version is stale, so the servers must not offer V2.
     """
     host = cql.cluster.metadata.get_host(server.ip_addr)
     assert host is not None, f"{server.ip_addr} is not in the driver's metadata"
@@ -292,10 +295,16 @@ async def tablet_routing_published(cql, server: ServerInfo, ks: str, table: str,
     # Older drivers keep the negotiated feature on the control connection.
     if hasattr(control_connection, '_tablets_routing_v1'):
         tablets_routing_v1 = control_connection._tablets_routing_v1
+        tablets_routing_v2 = False
     else:
-        tablets_routing_v1 = control_connection._connection.features.tablets_routing_v1
-    assert tablets_routing_v1, \
-        "Driver did not negotiate the TABLETS_ROUTING_V1 protocol extension"
+        features = control_connection._connection.features
+        # Both record what the server offered; newer drivers negotiate V2 whenever it is
+        # offered, and a V2 connection never gets the V1 payload checked below.
+        tablets_routing_v1 = features.tablets_routing_v1
+        tablets_routing_v2 = getattr(features, 'tablets_routing_v2', False)
+    assert tablets_routing_v1, "Driver did not negotiate the TABLETS_ROUTING_V1 protocol extension"
+    assert not tablets_routing_v2, \
+        "Driver negotiated TABLETS_ROUTING_V2: start the servers without strongly-consistent-tables"
 
     # The partition key must be a bind variable; see _may_use_token_aware_routing.
     statements = {
@@ -2101,7 +2110,8 @@ async def test_no_tablet_routing_before_finalization(manager: ScyllaClusterManag
 
     The LWT site is not covered: the first LWT creates a <table>$paxos table, which has no
     tablet map and makes finalization refuse (SCYLLADB-1158). Nor is TABLETS_ROUTING_V2: the
-    server offers it only with strongly-consistent tables, and the Python driver lacks it.
+    servers run without experimental features, strongly-consistent-tables among them, so that
+    they do not offer it and the driver negotiates V1.
     """
     num_nodes = 2
     num_shards = 2
@@ -2109,7 +2119,8 @@ async def test_no_tablet_routing_before_finalization(manager: ScyllaClusterManag
     num_keys = 64
 
     logger.info(f"Starting {num_nodes} nodes with {num_shards} shards each")
-    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node,
+           'experimental_features': []}
     servers = [await manager.server_add(cmdline=['--smp', str(num_shards)],
                                         property_file={"dc": "dc1", "rack": f"rack{i}"},
                                         config=cfg)

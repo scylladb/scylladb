@@ -80,9 +80,20 @@ def make_scylla_conf(mode: str, host_addr: str, seed_addrs: List[str], cluster_n
 
         # Allow testing experimental features. Following issue #9467, we need
         # to add here specific experimental features as they are introduced.
+        # Every test runs with all of them, so that a feature which changes the
+        # node even when unused (strongly-consistent-tables switches the
+        # commitlog format, for one) is tested by the whole suite. A test
+        # which needs a feature off sets its own list, usually an empty one.
+        # Older versions, which lack some of the features, override this list
+        # in their ScyllaVersionDescription.
         'enable_user_defined_functions': True,
         'experimental_features': ['udf',
-                                  'views-with-tablets'],
+                                  'views-with-tablets',
+                                  'logstor',
+                                  'strongly-consistent-tables'],
+        # Logstor refuses to start without a disk size.
+        'logstor_disk_size_in_mb': 8,
+        'logstor_file_size_in_mb': 4,
 
         'skip_wait_for_gossip_to_settle': 0,
         'shutdown_announce_in_ms': 0,
@@ -190,6 +201,15 @@ def get_current_version_description(path: str) -> ScyllaVersionDescription:
     )
 
 
+# The experimental features which every version taking part in the tests can
+# run with. A version older than the current one sets this list instead of the
+# default one, so only features which all such versions have, and which don't
+# change their behaviour there, belong here. Not here: strongly-consistent-tables
+# (2025.1 lacks it, and before 2026.4 it turns tablet balancing off in the
+# whole cluster) and logstor (appeared in 2026.2).
+EXPERIMENTAL_FEATURES_IN_ALL_VERSIONS = ('udf', 'views-with-tablets')
+
+
 async def get_scylla_2025_1_executable(build_mode: str) -> str:
     is_debug = build_mode == 'debug' or build_mode == 'sanitize'
     package = "debug" if is_debug else ""
@@ -199,13 +219,14 @@ async def get_scylla_2025_1_executable(build_mode: str) -> str:
 
 async def get_scylla_2025_1_description(build_mode: str) -> ScyllaVersionDescription:
     # Note: 2025.1 is the oldest version which participates in upgrade tests in test.py,
-    # so the added version-specific config is naturally empty.
+    # so the added version-specific config holds only what the newer versions
+    # added to the base config and 2025.1 can't take.
     #
     # SCYLLA_CMDLINE_OPTIONS is the 2025.1 baseline, and newer versions add their
     # own version-specific config.
     return ScyllaVersionDescription(
         path=str(await get_scylla_2025_1_executable(build_mode)),
-        config={},
+        config={'experimental_features': list(EXPERIMENTAL_FEATURES_IN_ALL_VERSIONS)},
         argv=[],
     )
 
@@ -220,7 +241,7 @@ async def get_scylla_2026_1_executable(build_mode: str) -> str:
 async def get_scylla_2026_1_description(build_mode: str) -> ScyllaVersionDescription:
     return ScyllaVersionDescription(
         path=str(await get_scylla_2026_1_executable(build_mode)),
-        config={},
+        config={'experimental_features': list(EXPERIMENTAL_FEATURES_IN_ALL_VERSIONS)},
         argv=[],
     )
 
