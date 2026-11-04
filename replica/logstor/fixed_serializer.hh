@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <array>
 #include <concepts>
 #include <functional>
 #include <type_traits>
@@ -41,6 +42,26 @@ struct field<T> {
     [[gnu::always_inline]]
     static T read(Input& in) {
         return ser::deserialize_integral<T>(in);
+    }
+};
+
+// This specialization writes the bytes unchanged. The format uses it for reserved space.
+template <size_t N>
+struct field<std::array<char, N>> {
+    static constexpr size_t size = N;
+
+    template <typename Output>
+    [[gnu::always_inline]]
+    static void write(Output& out, const std::array<char, N>& v) {
+        out.write(v.data(), N);
+    }
+
+    template <typename Input>
+    [[gnu::always_inline]]
+    static std::array<char, N> read(Input& in) {
+        std::array<char, N> v;
+        in.read(v.data(), N);
+        return v;
     }
 };
 
