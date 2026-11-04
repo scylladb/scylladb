@@ -1441,11 +1441,11 @@ class node final {
     }
 
     void insert_into_full(kid_index idx, Key k, node_or_data nd, Less less, prealloc& nodes) noexcept {
-            if (try_push_to_sibling(idx, less)) {
-                do_insert(idx, std::move(k), nd, less);
-                nodes.drain();
-                return;
-            }
+        if (try_push_to_sibling(idx, less)) {
+            do_insert(idx, std::move(k), nd, less);
+            nodes.drain();
+            return;
+        }
 
         split_and_insert(idx, std::move(k), nd, less, nodes);
     }
