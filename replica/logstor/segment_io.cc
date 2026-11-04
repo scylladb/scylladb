@@ -31,17 +31,20 @@ struct chunk_headers {
 // the chunk is from an earlier use of the segment (its segment_seq is not `expected_seq`), or if
 // the headers are invalid.
 //
-// Throws std::runtime_error at a chunk with a format version that this code does not read. Such a
-// chunk is from another release and does not mark the end of the segment, so recovery must not
-// handle the segment as empty.
+// Throws std::runtime_error at a chunk with a format version that this code does not read or with
+// an unknown flag. Such a chunk is from another release and does not mark the end of the segment,
+// so recovery must not handle the segment as empty.
 //
-// The function checks segment_seq before the version, so that the chunks of an earlier use of the
-// segment end the scan and do not fail it.
+// The function checks segment_seq before the version and the flags, so that the chunks of an
+// earlier use of the segment end the scan and do not fail it.
 //
 // The function checks the version before the CRC, because a chunk of another format version can
 // have another header layout and another CRC, so this code cannot check the CRC of such a chunk. As
 // a result, a bit flip in the version byte makes this function throw, and does not end the scan as
 // other corruption does.
+//
+// The function checks the flags after the CRC, which covers them, so that a flag that a bit flip
+// set ends the scan as other corruption does.
 future<std::optional<chunk_headers>> read_chunk_headers(segment_reader& reader, log_segment_id segment_id,
         std::optional<segment_sequence> expected_seq) {
     const auto position = reader.position();
@@ -67,6 +70,10 @@ future<std::optional<chunk_headers>> read_chunk_headers(segment_reader& reader, 
 
     if (!ondisk::validate_chunk_headers(*ch, sh)) {
         co_return std::nullopt;
+    }
+    if (const auto unknown = ondisk::unknown_chunk_flags(*ch)) {
+        throw std::runtime_error(fmt::format("Chunk at offset {} of {} has flags {:#x} that this release does not define",
+                position, segment_id, unknown));
     }
     co_return chunk_headers{*ch, sh};
 }
@@ -292,6 +299,9 @@ void streamed_segment_rewriter::rewrite_chunk_header() {
     }
     if (!ondisk::validate_chunk_headers(ch, sh)) {
         throw std::runtime_error("Invalid streamed logstor chunk headers");
+    }
+    if (const auto unknown = ondisk::unknown_chunk_flags(ch)) {
+        throw std::runtime_error(fmt::format("Streamed logstor chunk has flags {:#x} that this release does not define", unknown));
     }
 
     logstor_logger.trace("Rewriting chunk header for segment {} seq {} with seq {}", _target_segment, ch.segment_seq, _target_seq);

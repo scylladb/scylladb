@@ -39,8 +39,8 @@ struct segment_info {
 
 // Returns the segment info of the chunk at the start of `in`, or nullopt if its headers are not
 // valid. This function does not read the chunk body, so only a segment_scanner can find a torn
-// chunk. Throws std::runtime_error if the chunk has a format version that this code does not read.
-// `segment_id` is the segment that `in` reads, and the error message names it.
+// chunk. Throws std::runtime_error if the chunk has a format version that this code does not read
+// or an unknown flag. `segment_id` is the segment that `in` reads, and the error message names it.
 future<std::optional<segment_info>> read_chunk_info(seastar::input_stream<char>& in, log_segment_id segment_id);
 
 // Reads a segment through its input stream, and keeps the position in the segment of what it
@@ -179,8 +179,8 @@ private:
 //     records, and then continues at the next chunk.
 //   - At the only chunk of a full segment, the scan returns the chunk and then stops.
 //   - At a chunk that has the segment_seq of the segment and a format version that this code does
-//     not read, next_chunk() throws std::runtime_error. Such a chunk is from another release and
-//     does not mark the end of the segment.
+//     not read or an unknown flag, next_chunk() throws std::runtime_error. Such a chunk is from
+//     another release and does not mark the end of the segment.
 class segment_scanner {
 public:
     segment_scanner(seastar::input_stream<char>& in, log_segment_id segment_id, size_t segment_size);
