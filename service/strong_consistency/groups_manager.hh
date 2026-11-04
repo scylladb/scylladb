@@ -127,6 +127,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
         // The last timestamp used for mutations in this term.
         api::timestamp_type last_timestamp;
+
+        // The schema version the last schema_changed appended in this term announced, if
+        // any. A write is appended only under an announced version; a new term starts with
+        // none, so its first write announces again.
+        std::optional<table_schema_version> announced_schema;
     };
 
     // A group can be deleted and started again while its entry exists (the
@@ -412,6 +417,17 @@ public:
     };
     using begin_mutate_result = std::variant<timestamp_with_term, raft::not_a_leader, need_wait_for_leader>;
     begin_mutate_result begin_mutate(abort_source&);
+
+    // Whether a write built with `version` needs a schema_changed appended ahead of it in
+    // the current term, and the record that one was. Both are valid only right after
+    // begin_mutate() returned a timestamp, with no suspension since: the leader's term
+    // is what the announcement belongs to.
+    bool needs_schema_announcement(table_schema_version version) const {
+        return _state.leader_info->announced_schema != version;
+    }
+    void note_schema_announced(table_schema_version version) {
+        _state.leader_info->announced_schema = version;
+    }
 
     // Possible results:
     //   ok - this node is the leader, proceed with read_barrier() locally

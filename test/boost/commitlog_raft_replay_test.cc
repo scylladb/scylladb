@@ -1656,6 +1656,18 @@ raft::log_entry_ptr make_mutation_entry(const schema_ptr& schema, raft::term_t t
             .term = term, .idx = idx, .data = std::move(cmd)});
 }
 
+// The schema_changed the leader appends ahead of the first write of `schema`'s version.
+service::strong_consistency::schema_changed make_schema_changed(const schema_ptr& schema) {
+    return {.version = schema->version(), .mapping = schema->get_column_mapping()};
+}
+
+raft::log_entry_ptr make_schema_changed_entry(const schema_ptr& schema, raft::term_t term, raft::index_t idx) {
+    raft::command cmd;
+    ser::serialize(cmd, service::strong_consistency::raft_command{.change = make_schema_changed(schema)});
+    return make_lw_shared<raft::log_entry>(raft::log_entry{
+            .term = term, .idx = idx, .data = std::move(cmd)});
+}
+
 } // anonymous namespace
 
 // Replay persists a floor of commit_idx, so every index at or below it has to have been
@@ -2390,10 +2402,11 @@ SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) 
 
         // The row bootstrap() writes before the group's first batch. Replay discards a
         // group this shard persists nothing about, so without it there is nothing to
-        // recover here.
+        // recover here. With the schema_changed the entries were written under, as a
+        // release below the floor would have left it.
         service::strong_consistency::raft_groups_storage::store_descriptor(
                 env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
-                raft::configuration{}, {}).get();
+                raft::configuration{}, {}, std::pair(raft::index_t(0), make_schema_changed(schema))).get();
 
         // First pass. Correct either way; it is here for the record it leaves behind.
         const auto first = replay(old_segments());
@@ -2586,10 +2599,10 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
 
         auto entry = make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = raft::term_t(1),
-            .idx = raft::index_t(1),
+            .idx = raft::index_t(2),
             .data = std::move(cmd)
         });
-        raft::log_entry_ptr_list entries{entry};
+        raft::log_entry_ptr_list entries{make_schema_changed_entry(schema, raft::term_t(1), raft::index_t(1)), entry};
 
         // do_with_cql_env's own commitlog already registered the "commitlog" metrics.
         commitlog::config cl_cfg;
@@ -2772,8 +2785,8 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
         co_await env.db().invoke_on(replicas.front().shard, [&env, table] (replica::database& db) {
             return seastar::async([&env, &db, table] {
                 const auto schema = db.find_schema(table);
-                // 3 raft log entries, each writing its own partition.
-                raft::log_entry_ptr_list entries;
+                // 3 raft log entries, each writing its own partition, under one schema_changed.
+                raft::log_entry_ptr_list entries{make_schema_changed_entry(schema, raft::term_t(1), raft::index_t(1))};
                 for (int pk = 1; pk <= 3; ++pk) {
                     mutation m(schema, partition_key::from_singular(*schema, pk));
                     m.set_cell(clustering_key::make_empty(), "c", data_value(pk), api::new_timestamp());
@@ -2782,7 +2795,7 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
                             .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
                     entries.push_back(make_lw_shared<raft::log_entry>(raft::log_entry{
                         .term = raft::term_t(1),
-                        .idx = raft::index_t(pk),
+                        .idx = raft::index_t(pk + 1),
                         .data = std::move(cmd)
                     }));
                 }

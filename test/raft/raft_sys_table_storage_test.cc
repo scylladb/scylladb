@@ -246,6 +246,16 @@ static raft::log_entry_ptr make_mutation_entry(const schema_ptr& s, raft::term_t
             raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
 }
 
+// The schema_changed the leader appends ahead of the first write of `s`'s version.
+static raft::log_entry_ptr make_schema_changed_entry(const schema_ptr& s, raft::term_t term, raft::index_t idx) {
+    raft::command cmd;
+    ser::serialize(cmd, service::strong_consistency::raft_command{
+            .change = service::strong_consistency::schema_changed{
+                    .version = s->version(), .mapping = s->get_column_mapping()}});
+    return make_lw_shared<raft::log_entry>(
+            raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
+}
+
 // Do everything a record waits for before it can be released: commit, apply, close.
 static future<> release_everything(raft_groups_storage& storage,
         const std::vector<raft::log_entry_ptr>& entries) {
@@ -1899,7 +1909,8 @@ SEASTAR_TEST_CASE(test_groups_dropped_table_batch_is_reported_as_applied) {
                 make_lw_shared<service::strong_consistency::state_machine_stats>());
 
         std::vector<raft::log_entry_ptr> batch = {
-            make_mutation_entry(schema, raft::term_t(1), raft::index_t(1), 0, 13),
+            make_schema_changed_entry(schema, raft::term_t(1), raft::index_t(1)),
+            make_mutation_entry(schema, raft::term_t(1), raft::index_t(2), 0, 13),
         };
         co_await storage.store_log_entries(batch);
         co_await storage.store_commit_idx(batch.back()->idx);

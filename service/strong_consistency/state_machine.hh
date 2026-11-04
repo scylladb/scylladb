@@ -16,7 +16,6 @@
 #include <variant>
 #include "locator/tablets.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
-#include "utils/loading_cache.hh"
 #include "utils/estimated_histogram.hh"
 #include "utils/UUID.hh"
 
@@ -72,10 +71,16 @@ struct truncate_command {
     utils::UUID request_id;
 };
 
+// A schema_changed (see raft_groups_storage.hh) announces the schema version the writes
+// appended after it, up to the next schema_changed, were built with. The leader appends one
+// before the first write of a version it has not announced in its term, so the log reads
+// [schema_changed[v1], write, write, schema_changed[v2], write, ...]. Its mapping lets a
+// replica upgrade those writes to its own, newer, schema without consulting
+// system.scylla_table_schema_history, whose rows expire.
 struct raft_command {
     // Note: needs to be default-constructible to use with ser::deserialize, which is why the
     // marker, and not the write, comes first.
-    std::variant<resize_marker, write_mutation, truncate_command> change;
+    std::variant<resize_marker, write_mutation, truncate_command, schema_changed> change;
 };
 
 // Builds the mutation which records `marker` in the system.raft_groups row of the group `gid`
@@ -97,41 +102,46 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
 future<> apply_truncate_command(replica::database& db, locator::global_tablet_id tablet, raft::group_id gid,
         raft::index_t idx, const truncate_command& tc, truncate_record& record);
 
-// Resolves schemas for frozen mutations and upgrades them to the current schema if needed.
+// Resolves the schema to apply writes with, from the schema_changed the leader announced
+// them under, and upgrades them to it if needed.
 //
-// One instance is meant to serve a batch of mutations: schemas resolved for a given
-// schema version are remembered, so mutations sharing a version are resolved only once.
+// A version is resolved once per instance: the state machine keeps one for as long as an
+// announcement stands, commitlog replay one for the whole replay.
 class schema_store {
-    using column_mappings_cache = utils::loading_cache<table_schema_version, column_mapping>;
-    // Schema to apply a mutation with, plus the column mapping needed to upgrade
-    // the mutation to that schema. The mapping is null when the mutation was
-    // written with exactly that schema and thus needs no upgrade.
-    using schema_entry = std::pair<schema_ptr, column_mappings_cache::value_ptr>;
-
-    // Cache of column mappings, shared by all instances on this shard, so that
-    // `system.scylla_table_schema_history` isn't queried for the same version repeatedly.
-    static thread_local column_mappings_cache _column_mapping_cache;
+    // Schema to apply a write with, plus the column mapping needed to upgrade the
+    // write to that schema. The mapping is disengaged when the announced version is
+    // known locally, so the write needs no upgrade.
+    struct schema_entry {
+        schema_ptr schema;
+        std::optional<column_mapping> mapping;
+    };
 
     replica::database& _db;
-    db::system_keyspace& _sys_ks;
-    // Called as a last resort when a schema version cannot be resolved locally.
-    // During normal operation this triggers a group0 barrier to wait for schema
-    // propagation; during commitlog replay it is null, since group0 isn't started yet.
+    // Called when the announced version is unknown locally: either the replica is
+    // behind on group0 and the version is newer than its table's, or the version is
+    // older and the mapping must be used. The barrier tells the two apart: after it
+    // the table is at least as new as the leader's was. During commitlog replay it is
+    // null, since group0 isn't started yet.
     std::function<future<>()> _barrier_trigger;
 
-    // Resolved schemas, keyed by the schema version found in the mutations.
+    // Resolved schemas, keyed by the announced version.
     std::unordered_map<table_schema_version, schema_entry> _schema_mappings;
 
-    future<schema_entry> get_schema(table_id table, table_schema_version schema_version);
+    future<schema_entry> get_schema(table_id table, const schema_changed& announced);
 
 public:
-    schema_store(replica::database& db, db::system_keyspace& sys_ks,
-        std::function<future<>()> barrier_trigger = nullptr);
+    schema_store(replica::database& db, std::function<future<>()> barrier_trigger = nullptr);
 
-    // Returns the schema that `m` should be applied with. If `m` was written with an
-    // older schema, it is upgraded in place to the returned schema, using the column
-    // mapping fetched from `system.scylla_table_schema_history`.
-    future<schema_ptr> resolve_and_upgrade(frozen_mutation& m);
+    // Forget the resolved versions, once a new announcement supersedes them.
+    void clear() {
+        _schema_mappings.clear();
+    }
+
+    // Returns the schema that `m`, announced under `announced`, should be applied with;
+    // `m` has to carry the announced version.
+    // If that version is older than the table's schema, `m` is upgraded in place to the
+    // returned schema using the announced column mapping.
+    future<schema_ptr> resolve_and_upgrade(table_id table, const schema_changed& announced, frozen_mutation& m);
 };
 
 namespace detail {

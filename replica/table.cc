@@ -6150,6 +6150,16 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
     co_await cleanup_compaction_groups(sys_ks, tid, sg);
 }
 
+future<> table::flush_tablet(locator::tablet_id tid) {
+    if (_pending_flushes_phaser.is_closed()) {
+        co_return;
+    }
+    auto op = _pending_flushes_phaser.start();
+    if (auto* sg = _sg_manager->maybe_storage_group_for_id(_schema, tid.value())) {
+        co_await flush_compaction_groups(*sg);
+    }
+}
+
 future<> table::cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
     auto holder = async_gate().hold();
     auto& sg = storage_group_for_id(tid.value());
