@@ -75,7 +75,7 @@ struct truncate_command {
 struct raft_command {
     // Note: needs to be default-constructible to use with ser::deserialize, which is why the
     // marker, and not the write, comes first.
-    std::variant<resize_marker, write_mutation, truncate_command> change;
+    std::variant<resize_marker, write_mutation, truncate_command, schema_changed> change;
 };
 
 // Builds the mutation which records `marker` in the system.raft_groups row of the group `gid`
