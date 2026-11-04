@@ -74,6 +74,9 @@ raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
     if (header_size < ondisk::record_header_fixed_size) {
         on_internal_error(logstor_logger, fmt::format("Record header size {} is below its fixed size {}", header_size, ondisk::record_header_fixed_size));
     }
+    if (const size_t key_size = header_size - ondisk::record_header_fixed_size; key_size > ondisk::max_key_size) {
+        on_internal_error(logstor_logger, fmt::format("Partition key size {} exceeds the maximum {}", key_size, ondisk::max_key_size));
+    }
 
     const auto record_size = header_size + value_size;
     if (!can_fit(record_size)) {
@@ -687,6 +690,11 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
     if (writer.record_size() > max_size) [[unlikely]] {
         return make_exception_future<buffered_write_result>(std::runtime_error(
                 fmt::format("Write size {} exceeds the maximum record size {}", writer.record_size(), max_size)));
+    }
+    const size_t key_size = writer.header_size() - ondisk::record_header_fixed_size;
+    if (key_size > ondisk::max_key_size) [[unlikely]] {
+        return make_exception_future<buffered_write_result>(std::runtime_error(
+                fmt::format("Partition key size {} exceeds the maximum {}", key_size, ondisk::max_key_size)));
     }
 
     // fast path - if there are no queued writes and there is space in the current head buffer or the next, advance the

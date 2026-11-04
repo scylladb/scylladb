@@ -238,7 +238,7 @@ is durable but whose body was only partly written.
 
 A record frame holds one record and has these parts, in this order:
 
-- the **frame header**, which gives the sizes of the parts that follow.
+- the **frame header**, which gives the sizes of the parts that follow and the flags of the record.
 - the **record header**, which holds the token, the timestamp, the table and the partition key.
 - the **record value**, which is the encoded partition. The value also holds the schema version
   that the record was written under and the column mapping of that version, so that logstor can

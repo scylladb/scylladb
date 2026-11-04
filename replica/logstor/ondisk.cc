@@ -99,4 +99,8 @@ void throw_invalid_record_frame(std::span<const char> frame) {
             frame_header.key_size, frame_header.value_size, frame.size()));
 }
 
+void throw_unknown_record_flags(uint16_t unknown) {
+    throw std::runtime_error(fmt::format("Record frame has unknown flags {:#x}", unknown));
+}
+
 } // namespace replica::logstor::ondisk

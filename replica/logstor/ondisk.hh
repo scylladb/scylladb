@@ -60,11 +60,13 @@ static constexpr uint8_t current_version = 1;
 static constexpr uint8_t min_read_version = 1;
 // known_chunk_flags holds the chunk header flags that this code defines.
 static constexpr uint16_t known_chunk_flags = 0;
+// known_record_flags holds the record frame header flags that this code defines.
+static constexpr uint16_t known_record_flags = 0;
 static constexpr uint32_t chunk_header_magic = 0x4c475342;
 
 // max_key_size is the size of the largest partition key that a record can hold. CQL limits the
-// serialized key to this size (see validation::max_key_size), so a larger key_size can only come
-// from corruption.
+// serialized key to this size (see validation::max_key_size), and the record frame header holds the
+// key size in 16 bits.
 static constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
 
 // segment_kind is the kind of the segment that holds a chunk, as the chunk header records it.
@@ -170,12 +172,28 @@ struct segment_header : fixed_layout {
 // A record is stored on disk as a record frame: this header, the record header it sizes,
 // and the record value, followed by padding to record_alignment. The frame header is what a
 // record_location points at, and it is the only fixed-size part of a frame.
+//
+// The record frame header, little-endian:
+//
+//   0          2         4                     8
+//   +----------+---------+---------------------+
+//   | key_size |  flags  |     value_size      |
+//   +----------+---------+---------------------+
 struct record_frame_header : fixed_layout {
-    uint32_t key_size;   // size of the partition key inside the record_header that follows
+    // key_size is the size of the partition key in the record_header that follows. 16 bits are
+    // enough for max_key_size.
+    uint16_t key_size;
+    // flags gives properties of the record. No flag is defined yet. When write_record_frame()
+    // copies a record as bytes, it writes the frame header again from the sizes, so it drops the
+    // flags. Before a flag is defined, the byte-copy path must also copy the flags.
+    uint16_t flags;
     uint32_t value_size; // size of the record value that follows the record_header
 
     bool operator==(const record_frame_header& other) const noexcept = default;
 };
+
+static_assert(max_key_size == std::numeric_limits<decltype(record_frame_header::key_size)>::max(),
+        "record_frame_header::key_size must hold every key size up to max_key_size");
 
 // A record header starts with the token, the timestamp and the table id, as four little-endian
 // 64-bit words. The partition key follows them, in key_size bytes of its internal representation:
@@ -236,15 +254,24 @@ inline bool validate_chunk_body(const chunk_header& ch, std::span<const char> bo
 
 inline bool validate_record_frame_header(const record_frame_header& frame_header) noexcept {
     // A record always carries an encoded value, so a zero value_size cannot come from a record
-    // this code wrote. It is what a scan sees in the zero-filled tail of a torn
-    // buffer, and rejecting it stops the scan there instead of walking the tail as a run of
-    // zero-length records. The key bound rejects a corrupt header before its key_size is
-    // trusted to size a read or an allocation.
-    return frame_header.value_size != 0 && frame_header.key_size <= max_key_size;
+    // this code wrote. A scan finds a zero value_size in the zero-filled end of a torn chunk, and
+    // this check stops the scan there, so that the scan does not read the end as a run of
+    // zero-length records.
+    return frame_header.value_size != 0;
 }
 
-// Out of line so that the formatting and the throw stay out of the inlined read path.
+// Returns the flags of `frame_header` that are not in known_record_flags. A record with such a flag
+// is from a release that this code cannot read, so a read or a scan must fail. A scan must not stop
+// at that record as at the end of the chunk's frames, because the scan would then lose the records
+// after that record.
+inline uint16_t unknown_record_flags(const record_frame_header& frame_header) noexcept {
+    return frame_header.flags & ~known_record_flags;
+}
+
+// These functions are out of line, so that the formatting and the throw are not in the inlined read
+// path.
 [[noreturn]] void throw_invalid_record_frame(std::span<const char> frame);
+[[noreturn]] void throw_unknown_record_flags(uint16_t unknown);
 
 constexpr size_t record_header_size(size_t key_size) noexcept {
     return record_header_fixed_size + key_size;
@@ -284,12 +311,12 @@ inline record_header read_record_header(bytes_view header) {
 
 // A record frame, as write_record_frame() writes it and parse_record_frame() reads it:
 //
-//   +-----------------------+-------------------+------------------+
-//   |  record_frame_header  |   record_header   |   record value   |
-//   |  key_size value_size  |                   |                  |
-//   +-----------------------+-------------------+------------------+
-//   |<------ 8 bytes ------>|<-- header_size -->|<-- value_size -->|
-//   |<------------------------ frame_size ------------------------>|
+//   0              8                    8 + header_size      frame_size
+//   +--------------+--------------------+--------------------+.............+
+//   | frame header |   record header    |    record value    |   padding   :
+//   +--------------+--------------------+--------------------+.............+
+//   |<- 8 bytes -->|<-- header_size --->|<--- value_size --->|
+//   |<--------------------- frame_size --------------------->|
 //
 // A record_location points at the start of the frame. The write buffer pads each frame to
 // record_alignment after its frame_size bytes.
@@ -307,7 +334,8 @@ template <typename Output>
 void write_record_frame(Output& out, const record_header& header, const record_value& value) {
     const size_t header_size = record_header_size(header);
     ser::serializer<record_frame_header>::write(out, record_frame_header {
-        .key_size = static_cast<uint32_t>(header_size - record_header_fixed_size),
+        .key_size = static_cast<uint16_t>(header_size - record_header_fixed_size),
+        .flags = 0,
         .value_size = static_cast<uint32_t>(value.size()),
     });
     write_record_header(out, header);
@@ -319,8 +347,10 @@ void write_record_frame(Output& out, const record_header& header, const record_v
 // The same frame for a record whose header and value are already serialized.
 template <typename Output>
 void write_record_frame(Output& out, log_record_bytes_view record_view) {
+    static_assert(known_record_flags == 0, "A copied record must carry its flags before a record flag is defined");
     ser::serializer<record_frame_header>::write(out, record_frame_header {
-        .key_size = static_cast<uint32_t>(record_view.header.size() - record_header_fixed_size),
+        .key_size = static_cast<uint16_t>(record_view.header.size() - record_header_fixed_size),
+        .flags = 0,
         .value_size = static_cast<uint32_t>(record_view.value.size()),
     });
     out.write(reinterpret_cast<const char*>(record_view.header.data()), record_view.header.size());
@@ -334,6 +364,10 @@ void write_record_frame(Output& out, log_record_bytes_view record_view) {
 // This function checks the sizes in the frame header before it uses them, because the chunk CRC
 // shows only that the bytes did not change after the write, and not that the writer wrote correct
 // sizes.
+//
+// Throws std::runtime_error at a frame with an unknown flag (see unknown_record_flags()). The
+// function checks the flags after the sizes, so that bytes that are not a frame do not cause the
+// unknown-flag error.
 inline std::optional<log_record_bytes_view> parse_record_frame(seastar::simple_memory_input_stream& in) {
     if (in.size() < min_record_frame_size) {
         return std::nullopt;
@@ -343,6 +377,9 @@ inline std::optional<log_record_bytes_view> parse_record_frame(seastar::simple_m
     if (!validate_record_frame_header(frame_header)
             || size_t(frame_header.key_size) + frame_header.value_size > in.size() - min_record_frame_size) {
         return std::nullopt;
+    }
+    if (const auto unknown = unknown_record_flags(frame_header)) [[unlikely]] {
+        throw_unknown_record_flags(unknown);
     }
     auto header = rest.read_substream(record_header_size(frame_header));
     auto value = rest.read_substream(frame_header.value_size);
