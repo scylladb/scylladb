@@ -671,7 +671,10 @@ async def test_draining_hints(manager: ScyllaClusterManager):
     This test verifies that all hints are drained when a node is being decommissioned.
     """
     # s1 and s2 share a rack, so s2 takes over s1's replicas when s1 leaves.
-    s1, s2, s3 = await manager.servers_add(3, property_file=[
+    # The topology coordinator may move to s2 when it restarts. Its first load
+    # stats are then incomplete, and the load balancer won't drain s1 before
+    # the next refresh, which by default comes after the decommission times out.
+    s1, s2, s3 = await manager.servers_add(3, config={'tablet_load_stats_refresh_interval_in_seconds': 1}, property_file=[
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack2"},
