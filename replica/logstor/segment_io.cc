@@ -8,6 +8,8 @@
 
 #include "replica/logstor/segment_io.hh"
 
+#include <exception>
+
 #include <seastar/core/align.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/simple-stream.hh>
@@ -138,12 +140,17 @@ void chunk_records::iterator::read_next() {
     }
     const size_t records_size = _chunk->record_bytes().size();
     const size_t record_offset = _chunk->_body_position + (records_size - _records.size());
-    auto record = ondisk::try_read_record_frame(_records);
+    const auto segment_id = _chunk->_segment_id;
+    std::optional<ondisk::parsed_record_frame> record;
+    try {
+        record = ondisk::try_read_record_frame(_records);
+    } catch (const std::runtime_error&) {
+        std::throw_with_nested(std::runtime_error(fmt::format("Cannot read the record at offset {} of {}", record_offset, segment_id)));
+    }
     if (!record) {
         return;
     }
 
-    const auto segment_id = _chunk->_segment_id;
     logstor_logger.trace("Found record of size {} bytes in {}",
                         record->bytes.header.size() + record->bytes.value.size(), segment_id);
 

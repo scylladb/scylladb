@@ -19,6 +19,7 @@
 #include <span>
 #include <vector>
 #include <fmt/format.h>
+#include <seastar/core/byteorder.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/core/semaphore.hh>
@@ -74,8 +75,7 @@ primary_index_key make_index_key(const schema&, const dht::decorated_key& dk) {
     return primary_index_key{dk};
 }
 
-mutation make_kv_mutation(schema_ptr schema, sstring pk, sstring value, api::timestamp_type ts = api::min_timestamp) {
-    auto key = partition_key::from_single_value(*schema, serialized(pk));
+mutation make_kv_mutation(schema_ptr schema, const partition_key& key, sstring value, api::timestamp_type ts = api::min_timestamp) {
     auto dk = dht::decorate_key(*schema, key);
     mutation m(schema, dk);
     auto& row = m.partition().clustered_row(*schema, clustering_key::make_empty());
@@ -83,6 +83,11 @@ mutation make_kv_mutation(schema_ptr schema, sstring pk, sstring value, api::tim
     const auto& v_def = *schema->get_column_definition("v");
     row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, ts, serialized(value)));
     return m;
+}
+
+mutation make_kv_mutation(schema_ptr schema, sstring pk, sstring value, api::timestamp_type ts = api::min_timestamp) {
+    auto key = partition_key::from_single_value(*schema, serialized(pk));
+    return make_kv_mutation(std::move(schema), key, std::move(value), ts);
 }
 
 log_record make_log_record(schema_ptr schema, sstring pk, sstring value, api::timestamp_type ts = api::min_timestamp) {
@@ -517,9 +522,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_layout) {
     }, "8877665544332211" "00ffeeddccbbaa99" "1132547698badcfe" "ffffffffffffff7f");
 
     check_ondisk_layout("record_frame_header", ondisk::record_frame_header {
-        .key_size = 0x0a0b0c0d,
+        .key_size = 0x0a0b,
+        .flags = 0x0c0d,
         .value_size = 0xcafebabe,
-    }, "0d0c0b0a" "bebafeca");
+    }, "0b0a" "0d0c" "bebafeca");
 
     BOOST_TEST_CONTEXT("record_header") {
         const record_header header {
@@ -622,7 +628,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_frame_invalid_header) {
     auto record = make_log_record(schema, "pk0", "a-value-of-some-length", api::timestamp_type(1));
     const auto frame = serialize_record_frame(record);
     const ondisk::record_frame_header good {
-        .key_size = uint32_t(record.header.key.key().representation().size()),
+        .key_size = uint16_t(record.header.key.key().representation().size()),
         .value_size = uint32_t(record.value.size()),
     };
 
@@ -641,7 +647,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_frame_invalid_header) {
     BOOST_REQUIRE_THROW(read_with_header(h), std::runtime_error);
 
     h = good;
-    h.key_size = ondisk::max_key_size + 1;
+    h.flags = ~ondisk::known_record_flags;
     BOOST_REQUIRE_THROW(read_with_header(h), std::runtime_error);
 
     for (int delta : {-1, 1}) {
@@ -656,8 +662,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_frame_invalid_header) {
 }
 
 // Checks that ondisk::parse_record_frame() reads a frame at the start of a longer buffer, as a scan
-// of a chunk does, and that a frame which does not fit or has an invalid header leaves the stream as
-// it was.
+// of a chunk does, that a frame which does not fit or has an invalid header leaves the stream as it
+// was, and that a frame with an unknown flag throws.
 SEASTAR_THREAD_TEST_CASE(test_logstor_parse_record_frame) {
     auto schema = make_kv_schema();
     auto record = make_log_record(schema, "pk0", "a-value-of-some-length", api::timestamp_type(1));
@@ -689,13 +695,21 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_parse_record_frame) {
     };
 
     // A scan finds a zero value_size in the zero-filled end of a torn chunk.
-    const auto key_size = uint32_t(record.header.key.key().representation().size());
+    const auto key_size = uint16_t(record.header.key.key().representation().size());
+    const auto value_size = uint32_t(record.value.size());
     BOOST_REQUIRE(!parses_with_header(frame, {.key_size = key_size, .value_size = 0}));
 
-    // The key bound applies even when the frame fits in the buffer.
+    // This is the largest key size that the frame header can hold.
     std::vector<char> large(ondisk::min_record_frame_size + ondisk::max_key_size + 2);
     BOOST_REQUIRE(parses_with_header(large, {.key_size = ondisk::max_key_size, .value_size = 2}));
-    BOOST_REQUIRE(!parses_with_header(large, {.key_size = ondisk::max_key_size + 1, .value_size = 1}));
+
+    // A frame with an unknown flag throws, so that a scan does not stop there as at the end of the
+    // frames.
+    BOOST_REQUIRE_THROW(parses_with_header(frame, {.key_size = key_size, .flags = uint16_t(~ondisk::known_record_flags), .value_size = value_size}),
+            std::runtime_error);
+    // Bytes that are not a valid frame do not cause the unknown-flag error, whatever their flags
+    // field holds.
+    BOOST_REQUIRE(!parses_with_header(frame, {.key_size = key_size, .flags = uint16_t(~ondisk::known_record_flags), .value_size = 0}));
 }
 
 // Checks that read_record_header() returns the record header that write_record_header() wrote,
@@ -1024,6 +1038,39 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_accepts_record_at_max_record_
     wb.seal(segment_sequence{29}, std::nullopt, ondisk::block_alignment);
 
     BOOST_REQUIRE_EQUAL(wb.chunk().size(), ondisk::block_alignment);
+}
+
+// The record frame header holds the key size in 16 bits, so a write with a larger key fails, and the
+// largest key that fits is written and read back.
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_rejects_a_key_over_the_frame_key_size) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    test_recovery_catalog no_tables;
+    ls.do_recovery(no_tables).get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_logstor_group cg(schema, ls);
+
+    // CQL already limits a key that is built from its column value to max_key_size, so the test
+    // builds the larger key from its serialized form, which is a 16-bit big-endian value size
+    // followed by the value.
+    bytes over(bytes::initialized_later(), ondisk::max_key_size + 1);
+    const uint16_t over_value_size = over.size() - sizeof(uint16_t);
+    seastar::write_be<uint16_t>(reinterpret_cast<char*>(over.data()), over_value_size);
+    std::fill(over.begin() + sizeof(uint16_t), over.end(), int8_t('k'));
+    auto too_large = make_kv_mutation(schema, partition_key::from_bytes(over), "v");
+    BOOST_REQUIRE_THROW(ls.write(too_large, write_target(&cg, {}), db::no_timeout).get(), std::runtime_error);
+
+    auto largest = make_kv_mutation(schema, sstring(ondisk::max_key_size - sizeof(uint16_t), 'k'), "v");
+    BOOST_REQUIRE_EQUAL(largest.key().representation().size(), ondisk::max_key_size);
+    ls.write(largest, write_target(&cg, {}), db::no_timeout).get();
+    auto actual = read_mutation(ls, schema, cg.logstor_index(), largest.decorated_key(), schema->full_slice()).get();
+    BOOST_REQUIRE(actual);
+    assert_that(*actual).is_equal_to(largest);
 }
 
 // A record written to a mixed segment is rewritten by the separator into a full segment of its
@@ -1701,7 +1748,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_chunks_report_readable_
 SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
     auto schema = make_kv_schema();
 
-    auto scan_with_corrupt_key_size = [&] (uint32_t key_size) {
+    auto scan_with_corrupt_key_size = [&] (uint16_t key_size) {
         raw_write_buffer wb0(64 * 1024, segment_kind::mixed);
         raw_write_buffer wb1(64 * 1024, segment_kind::mixed);
         wb0.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(31))));
@@ -1713,7 +1760,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
         auto serialized0 = copy_chunk(wb0.chunk());
         auto serialized1 = copy_chunk(wb1.chunk());
         // The first record_frame_header of the first chunk follows the chunk header; key_size is its first field.
-        seastar::simple_memory_output_stream out(serialized0.get_write() + ondisk::chunk_header_size, sizeof(uint32_t));
+        seastar::simple_memory_output_stream out(serialized0.get_write() + ondisk::chunk_header_size, sizeof(uint16_t));
         ser::serialize(out, key_size);
         // The corruption is in the records, which is what the body CRC would catch first.
         reseal_chunk_crcs(serialized0);
@@ -1733,15 +1780,40 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
         return seen;
     };
 
-    // Above the partition key size cap: rejected by validate_record_frame_header().
-    auto seen = scan_with_corrupt_key_size(ondisk::max_key_size + 1);
+    // The size check rejects a frame that ends after the end of the chunk.
+    auto seen = scan_with_corrupt_key_size(ondisk::max_key_size);
     BOOST_REQUIRE_EQUAL(seen.size(), 1u);
     BOOST_REQUIRE_EQUAL(seen[0], api::timestamp_type(33));
+}
 
-    // Within the cap but past the end of the chunk: rejected by the size check.
-    seen = scan_with_corrupt_key_size(ondisk::max_key_size);
-    BOOST_REQUIRE_EQUAL(seen.size(), 1u);
-    BOOST_REQUIRE_EQUAL(seen[0], api::timestamp_type(33));
+// A record frame with an unknown flag in a chunk whose CRCs match is from another release, so the
+// scan fails and does not stop there as at the end of the chunk's frames. The error names the
+// segment and the offset of the record, and it holds the flag error as the nested exception.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_fails_on_a_record_with_an_unknown_flag) {
+    auto schema = make_kv_schema();
+
+    raw_write_buffer wb(64 * 1024, segment_kind::mixed);
+    wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(31))));
+    wb.append(log_record_writer(make_log_record(schema, "pk1", "value1", api::timestamp_type(32))));
+    wb.seal(segment_sequence{29}, std::nullopt, ondisk::block_alignment);
+
+    auto serialized = copy_chunk(wb.chunk());
+    // The first record_frame_header follows the chunk header; flags is its second field.
+    seastar::simple_memory_output_stream out(serialized.get_write() + ondisk::chunk_header_size + sizeof(uint16_t), sizeof(uint16_t));
+    ser::serialize(out, uint16_t(~ondisk::known_record_flags));
+    reseal_chunk_crcs(serialized);
+
+    const auto names_the_record_and_the_flags = [] (const std::runtime_error& e) {
+        const auto expected = fmt::format("Cannot read the record at offset {} of segment(5)", ondisk::chunk_header_size);
+        BOOST_REQUIRE_EQUAL(std::string_view(e.what()), expected);
+        try {
+            std::rethrow_if_nested(e);
+        } catch (const std::runtime_error& nested) {
+            return std::string_view(nested.what()).contains("unknown flags");
+        }
+        return false;
+    };
+    BOOST_REQUIRE_EXCEPTION(scan_buffer_records(serialized, log_segment_id{5}), std::runtime_error, names_the_record_and_the_flags);
 }
 
 // Checks that the segment scan reads all records from the chunk of a full segment with varying serialized sizes.

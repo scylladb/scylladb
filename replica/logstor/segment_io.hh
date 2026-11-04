@@ -97,7 +97,8 @@ struct chunk_record : ondisk::parsed_record_frame {
 class scanned_chunk;
 
 // The records of a chunk body, in order. The range ends at the first record frame that does not
-// parse.
+// parse. An increment of the iterator throws std::runtime_error at a record with an unknown flag,
+// as parse_record_frame() does.
 class chunk_records {
 public:
     class iterator {
