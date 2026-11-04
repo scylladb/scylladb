@@ -189,6 +189,7 @@ future<> controller::stop_server() {
         if (!_ssg) {
             return;
         }
+        _executor.invoke_on_all(&executor::request_stop).get();
         _server.stop().get();
         _executor.stop().get();
         _listen_addresses.clear();
