@@ -6,7 +6,8 @@
 
 import asyncio
 import random
-from typing import Optional
+import time
+from typing import Any, Optional
 import pytest
 
 from test.pylib.internal_types import ServerInfo
@@ -21,9 +22,13 @@ from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.tasks.task_manager_types import TaskStatus, TaskStats
 from test.cluster.tasks import extra_scylla_cmdline_options
 
-async def enable_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
+async def enable_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str, parameters: Optional[dict[str, Any]] = None):
     for server in servers:
-        await manager.api.enable_injection(server.ip_addr, injection, False)
+        await manager.api.enable_injection(server.ip_addr, injection, False, parameters or {})
+
+def tablet_virtual_task_wait_params(scale_timeout) -> dict[str, Any]:
+    # The wait must end before the 300s REST client timeout of wait_for_task.
+    return {"timeout": int(scale_timeout(90))}
 
 async def disable_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
     for server in servers:
@@ -97,7 +102,7 @@ async def test_tablet_repair_task(manager: ManagerClient):
     await asyncio.gather(repair_task(), check_and_abort_repair_task(manager, tm, servers, module_name, ks))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_repair_wait_with_table_drop(manager: ManagerClient):
+async def test_tablet_repair_wait_with_table_drop(manager: ManagerClient, scale_timeout):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     injection = "tablet_virtual_task_wait"
@@ -120,14 +125,14 @@ async def test_tablet_repair_wait_with_table_drop(manager: ManagerClient):
     assert task.table == "test"
     assert task.state in ["created", "running"]
 
-    await enable_injection(manager, [servers[0]], injection)
+    await enable_injection(manager, [servers[0]], injection, tablet_virtual_task_wait_params(scale_timeout))
 
     async def wait_for_task():
         status_wait = await tm.wait_for_task(servers[0].ip_addr, task.task_id)
         assert status_wait.state == "done"
 
     async def drop_table():
-        await manager.api.wait_for_injection_enter(servers[0].ip_addr, injection)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, injection, deadline=time.time() + scale_timeout(60))
         await disable_injection(manager, servers, "repair_tablet_fail_on_rpc_call")
         await manager.get_cql().run_async(f"DROP TABLE {ks}.test")
         await manager.api.message_injection(servers[0].ip_addr, injection)
@@ -191,7 +196,7 @@ async def test_tablet_repair_task_list(manager: ManagerClient):
     await asyncio.gather(run_repair(0, "test"), run_repair(1, "test2"), run_repair(2, "test3"), check_repair_task_list(tm, servers, module_name, ks))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablet_repair_wait(manager: ManagerClient):
+async def test_tablet_repair_wait(manager: ManagerClient, scale_timeout):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
 
@@ -209,7 +214,7 @@ async def test_tablet_repair_wait(manager: ManagerClient):
     mark = await log.mark()
 
     async def wait_for_task():
-        await enable_injection(manager, servers, "tablet_virtual_task_wait")
+        await enable_injection(manager, servers, "tablet_virtual_task_wait", tablet_virtual_task_wait_params(scale_timeout))
         status_wait = await tm.wait_for_task(servers[0].ip_addr, task.task_id)
 
     async def merge_tablets():
