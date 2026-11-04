@@ -1053,8 +1053,10 @@ private:
                 std::ref(_db), std::ref(_mm), std::ref(_sys_ks), std::ref(_feature_service), std::ref(_gossiper),
                 std::ref(_raft_replay_buffer), std::ref(_raft_resize_tracker)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] {
-                _groups_manager.local().stop_all_shards().get();
                 _groups_manager.stop().get();
+            });
+            auto early_stop_sc_groups = defer_verbose_shutdown("strongly consistent groups", [this] {
+                _groups_manager.local().stop_all_shards().get();
             });
 
             _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper), sc_coordinator_stats_key).get();
@@ -1198,6 +1200,12 @@ private:
             auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in storage service", [this] {
                 _ss.local().wait_for_group0_stop().get();
             });
+
+            // The strongly consistent groups stop before group0, as in storage_service::do_drain().
+            auto stop_sc_groups = defer_verbose_shutdown("strongly consistent groups", [this] {
+                _groups_manager.local().stop_all_shards().get();
+            });
+            early_stop_sc_groups.cancel();
 
             if (!group0_service.maintenance_mode() && _sys_ks.local().bootstrap_complete()) {
                 group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
