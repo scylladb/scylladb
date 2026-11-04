@@ -156,6 +156,9 @@ future<> cluster_config_manager::wait_until_ready() {
 }
 
 cluster_config_manager::config_callback_registration cluster_config_manager::register_config_callback(sstring config_name, config_callback_function on_change) {
+    if (!db::cluster_config_registry::find(config_name)) {
+        utils::on_internal_error(format("register_config_callback() called for '{}', which is not a registered cluster config option", config_name));
+    }
     // A registration made before this shard's first pass is delivered by that pass, and one
     // made while a pass runs here is picked up by it (the pass re-reads the vector size).
     // One made between passes would otherwise get nothing until the next config write, so
@@ -347,8 +350,13 @@ future<> cluster_config_manager::run_config_callbacks() {
         // register_config_callback() can push_back and reallocate the vector, moving the
         // stored closure away.
         auto on_change = _config_callbacks[callback_idx].on_change;
+        // Registration checks the option exists; it can only be gone if a test removed the
+        // options it injected.
         const auto* opt = db::cluster_config_registry::find(config_name);
-        const bool table_oriented = opt && db::cluster_config_registry::is_table_oriented(*opt);
+        if (!opt) {
+            continue;
+        }
+        const bool table_oriented = db::cluster_config_registry::is_table_oriented(*opt);
 
         // A table-oriented option resolves per table (table -> keyspace -> cluster), so
         // there is one target per table; a node-oriented one has the local node as its
@@ -394,7 +402,7 @@ future<> cluster_config_manager::run_config_callbacks() {
             // be idempotent.
             const auto& last_pushed = _config_callbacks[callback_idx].last_pushed;
             if (auto it = last_pushed.find(target); it == last_pushed.end() || it->second != resolved) {
-                co_await on_change(ctx, resolved);
+                co_await on_change(*opt, ctx, resolved);
             }
             pushed_this_pass.emplace(std::move(target), std::move(resolved));
         }

@@ -2053,11 +2053,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 scrub_period_registrations.stop().get();
             });
 
-            const auto& scrub_period_opt = *db::cluster_config_registry::find(db::cluster_config_registry::option_name::auto_scrub_period_seconds);
-            cluster_config_manager.invoke_on_all([&db, &scrub_period_opt] (db::cluster_config_manager& ccm) {
+            cluster_config_manager.invoke_on_all([&db] (db::cluster_config_manager& ccm) {
                 scrub_period_registrations.local() = ccm.register_config_callback(
-                        sstring(scrub_period_opt.name),
-                        [&db, &scrub_period_opt] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                        sstring(db::cluster_config_registry::option_name::auto_scrub_period_seconds),
+                        [&db] (const db::cluster_config_registry::option& scrub_period_opt, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
                     const auto& tables = db.local().get_tables_metadata();
                     auto id = tables.get_table_id_if_exists({*ctx.keyspace_name, *ctx.table_name});
                     if (!id) {
