@@ -4237,9 +4237,40 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         );
     }
 
+    // Called from handle_snapshot_tables before the RPCs are sent out. Writes
+    // the snapshot's schema rows, so a failed round leaves residue that is
+    // enumerable by name.
+    future<> prepare_snapshot_tables(const db::system_keyspace::topology_requests_entry& entry, db::snapshot_table_helper& sth) {
+        const auto& tag = *entry.snapshot_tag;
+        std::vector<lw_shared_ptr<replica::table>> tables;
+        for (auto& id : *entry.snapshot_table_ids) {
+            if (auto table = _db.get_tables_metadata().get_table_if_exists(id)) {
+                tables.emplace_back(std::move(table));
+            }
+        }
+        co_await sth.insert_snapshot_schema_rows(tag, tables);
+    }
+
+    // Writes the marker in the snapshots table, the commit of the snapshot.
+    future<std::optional<sstring>> commit_snapshot(const db::system_keyspace::topology_requests_entry& entry, db::snapshot_table_helper& sth) {
+        const auto& tag = *entry.snapshot_tag;
+        for (const auto& id : *entry.snapshot_table_ids) {
+            if (!_db.get_tables_metadata().get_table_if_exists(id)) {
+                co_return fmt::format("Cannot commit snapshot '{}': table {} was dropped during the operation", tag, id);
+            }
+        }
+
+        // The snapshots row is the commit marker, it goes last.
+        co_await sth.insert_snapshot(db::snapshot_entry{
+            .name = std::string(tag),
+            .created_at = entry.start_time,
+            .expires_at = entry.snapshot_expiry.value_or(db_clock::time_point{}),
+        });
+        co_return std::nullopt;
+    }
+
     future<> handle_snapshot_tables(group0_guard guard) {
         utils::chunked_vector<table_id> ids;
-        std::vector<lw_shared_ptr<replica::table>> tables;
         sstring tag;
         bool skip_flush;
         gc_clock::time_point t;
@@ -4248,8 +4279,54 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             return fmt::format("SNAPSHOT on tables {}", ids);
         };
 
+        const utils::UUID global_request_id = _topo_sm._topology.global_request_id.value();
+        const auto topo_entry = co_await _sys_ks.get_topology_request_entry(global_request_id);
+        // Read the session under the guard: the prepare step must run only
+        // before the RPCs
+        const bool session_active = bool(_topo_sm._topology.session);
+        // A prepare failure must fail the request, not the coordinator fiber
+        std::optional<sstring> prepare_error;
+        if (session_active && topo_entry.snapshot_tag && topo_entry.snapshot_table_ids) {
+            release_guard(std::move(guard));
+            db::snapshot_table_helper sth(_sys_ks.query_processor());
+            try {
+                if ((co_await sth.get_snapshot(*topo_entry.snapshot_tag)).has_value()) {
+                    throw std::invalid_argument(fmt::format("Cannot take snapshot '{}': a snapshot with this tag already exists in the snapshot catalog",
+                            *topo_entry.snapshot_tag));
+                }
+            } catch (term_changed_error&) {
+                throw;
+            } catch (raft::request_aborted&) {
+                throw;
+            } catch (seastar::abort_requested_exception&) {
+                throw;
+            } catch (...) {
+                prepare_error = fmt::format("{}", std::current_exception());
+            }
+            if (!prepare_error) {
+                try {
+                    co_await prepare_snapshot_tables(topo_entry, sth);
+                } catch (term_changed_error&) {
+                    throw;
+                } catch (raft::request_aborted&) {
+                    throw;
+                } catch (seastar::abort_requested_exception&) {
+                    throw;
+                } catch (...) {
+                    prepare_error = fmt::format("{}", std::current_exception());
+                }
+            }
+            guard = co_await start_operation();
+        }
+
         co_await handle_topology_ordered_op(std::move(guard)
             , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
+                if (prepare_error) {
+                    throw std::runtime_error(*prepare_error);
+                }
+                if (!topology_requests_entry.snapshot_tag || !topology_requests_entry.snapshot_table_ids) {
+                    throw std::runtime_error(fmt::format("SNAPSHOT request {} has no tag or table ids", topology_requests_entry.id));
+                }
                 tag = *topology_requests_entry.snapshot_tag;
                 skip_flush = topology_requests_entry.snapshot_skip_flush;
                 t = gc_clock::from_time_t(db_clock::to_time_t(topology_requests_entry.start_time));
@@ -4262,7 +4339,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         throw std::invalid_argument(fmt::format("Cannot SNAPSHOT table with UUID {} because it does not exist.", id));
                     }
                     ids.emplace_back(id);
-                    tables.emplace_back(table);
                 }
                 rtlogger.info("Performing SNAPSHOT TABLES for {}", ids);
                 return *topology_requests_entry.snapshot_table_ids;
@@ -4274,13 +4350,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
             , desc
             , "snapshot"
-            , [&]() -> future<> {
+            , [this, global_request_id]() -> future<> {
+                // Commit the snapshot named in the request entry. Uses the
+                // persisted entry, not session locals: after a coordinator
+                // failover this step re-runs with an empty session, and a
+                // failed request also reaches it.
+                auto entry = co_await _sys_ks.get_topology_request_entry(global_request_id);
+                if (!entry.snapshot_tag || !entry.snapshot_table_ids) {
+                    throw std::runtime_error(fmt::format("SNAPSHOT request {} has no tag or table ids", entry.id));
+                }
+                const auto& tag = *entry.snapshot_tag;
                 db::snapshot_table_helper sth(_sys_ks.query_processor());
-                co_await sth.insert_snapshot_info(tag
-                    , db_clock::from_time_t(gc_clock::to_time_t(t))
-                    , db_clock::from_time_t(gc_clock::to_time_t(expiry.value_or({})))
-                    , tables
-                );
+
+                // The snapshots row is the commit marker. Only this step writes it.
+                bool committed = (co_await sth.get_snapshot(tag)).has_value();
+                std::optional<sstring> failure;
+                if (!entry.error.empty()) {
+                    rtlogger.warn("SNAPSHOT request {} failed ({}); not writing the snapshot commit marker", entry.id, entry.error);
+                } else if (!committed) {
+                    failure = co_await commit_snapshot(entry, sth);
+                }
+                if (failure) {
+                    throw std::runtime_error(*failure);
+                }
             }
         );
     }
