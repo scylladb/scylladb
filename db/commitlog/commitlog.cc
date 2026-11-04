@@ -13,6 +13,7 @@
 #include <malloc.h>
 #include <boost/regex.hpp>
 #include <filesystem>
+#include <deque>
 #include <list>
 #include <map>
 #include <unordered_map>
@@ -37,6 +38,7 @@
 #include <seastar/core/queue.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/net/byteorder.hh>
@@ -60,6 +62,7 @@
 #include "utils/disk-error-handler.hh"
 #include "utils/labels.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 
 static logging::logger clogger("commitlog");
 
@@ -340,7 +343,8 @@ public:
     };
 
     std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
-    std::vector<std::pair<named_file, dispose_mode>> _files_to_dispose;
+    // Disposed of in order; a file stays at the front until it is gone.
+    std::deque<std::pair<named_file, dispose_mode>> _files_to_dispose;
 
     // Segments removed from _segments, by id. A segment's file is filled
     // in when the segment object is destroyed. A file is moved to
@@ -494,6 +498,9 @@ public:
     void add_released_file(segment_id_type, named_file, dispose_mode) noexcept;
     void collect_released_files(bool final);
 
+    // Disposes of the queued files in order. Returns the error of a file that
+    // could not be deleted; it and the newer files stay queued.
+    future<std::exception_ptr> dispose_files();
     future<> do_pending_deletes();
     future<> delete_segments(std::vector<sstring>);
 
@@ -659,7 +666,18 @@ auto db::commitlog::segment_manager::named_file::allocate(uint64_t position, uin
 }
 
 auto db::commitlog::segment_manager::named_file::remove_file() noexcept {
-    return make_awaiter(seastar::remove_file(name()), [this] {
+    // A file that is already gone counts as removed.
+    auto f = seastar::remove_file(name()).handle_exception([this] (std::exception_ptr ep) {
+        try {
+            std::rethrow_exception(std::move(ep));
+        } catch (...) {
+            if (!is_system_error_errno(ENOENT)) {
+                throw;
+            }
+        }
+        clogger.warn("Segment {} is already gone", name());
+    });
+    return make_awaiter(std::move(f), [this] {
         _known_size = 0;
     });
 }
@@ -2984,7 +3002,11 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
         totals.total_size_on_disk += size;
         _files_to_dispose.emplace_back(std::move(f), dispose_mode::Delete);
     }
-    co_return co_await do_pending_deletes();
+    // The caller drops the truncation records after this, so the files must
+    // be gone.
+    if (auto ep = co_await dispose_files()) {
+        co_await coroutine::return_exception_ptr(std::move(ep));
+    }
 }
 
 void db::commitlog::segment_manager::abort_recycled_list(std::exception_ptr ep) {
@@ -3039,92 +3061,120 @@ struct fmt::formatter<file_to_dispose_t> {
     }
 };
 
-future<> db::commitlog::segment_manager::do_pending_deletes() {
-    collect_released_files(false);
-    auto ftd = std::exchange(_files_to_dispose, {});
-
-    if (ftd.empty()) {
-        co_return;
-    }
-
+future<std::exception_ptr> db::commitlog::segment_manager::dispose_files() {
     promise<> deleting_done;
     auto pending_deletes = std::exchange(_pending_deletes, deleting_done.get_future());
 
     co_await std::move(pending_deletes);
 
-    std::exception_ptr recycle_error;
-    auto exts = cfg.extensions;
+    std::exception_ptr delete_error;
+    {
+        auto done = defer([&deleting_done] () noexcept {
+            deleting_done.set_value();
+        });
 
-    clogger.debug("Discarding segments {}", ftd);
+        collect_released_files(false);
 
-    for (auto& [f, mode] : ftd) {
-        // `f.remove_file()` resets known_size to 0, so remember the size here,
-        // in order to subtract it from total_size_on_disk accurately.
-        auto size = f.known_size();
-        try {
-            if (f) {
-                co_await f.close();
+        if (_files_to_dispose.empty()) {
+            co_return nullptr;
+        }
+
+        std::exception_ptr recycle_error;
+        auto exts = cfg.extensions;
+
+        clogger.debug("Discarding segments {}", _files_to_dispose);
+
+        while (!_files_to_dispose.empty()) {
+            // Stays valid across the waits below: files are only appended
+            // meanwhile. Shutdown may change the mode to ForceDelete.
+            auto& [f, mode] = _files_to_dispose.front();
+            // `f.remove_file()` resets known_size to 0, so remember the size here,
+            // in order to subtract it from total_size_on_disk accurately.
+            auto size = f.known_size();
+            try {
+                if (f) {
+                    co_await f.close();
+                }
+            } catch (...) {
+                clogger.warn("Could not close segment {}: {:t}", f.name(), std::current_exception());
             }
 
             // retain the file (replay...)
             if (mode == dispose_mode::Keep) {
+                _files_to_dispose.pop_front();
                 continue;
             }
 
-            if (exts && !exts->commitlog_file_extensions().empty()) {
-                for (auto& ext : exts->commitlog_file_extensions()) {
-                    co_await ext->before_delete(f.name());
+            try {
+                if (exts && !exts->commitlog_file_extensions().empty()) {
+                    for (auto& ext : exts->commitlog_file_extensions()) {
+                        co_await ext->before_delete(f.name());
+                    }
                 }
-            }
 
-            auto usage = totals.total_size_on_disk;
-            auto next_usage = usage - size;
+                auto usage = totals.total_size_on_disk;
+                auto next_usage = usage - size;
 
-            if (next_usage <= max_disk_size && mode != dispose_mode::ForceDelete) {
-                descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
-                auto dst = this->filename(d);
+                if (next_usage <= max_disk_size && mode != dispose_mode::ForceDelete) {
+                    descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
+                    auto dst = this->filename(d);
 
-                clogger.debug("Recycling segment file {} -> {}", f.name(), dst);
-                // must rename the file since we must ensure the
-                // data is not replayed. Changing the name will
-                // cause header ID to be invalid in the file -> ignored
-                try {
-                    co_await f.rename(dst);
-                    auto b = _recycled_segments.push(std::move(f));
-                    SCYLLA_ASSERT(b); // we set this to max_size_t so...
-                    continue;
-                } catch (...) {
-                    clogger.error("Could not recycle segment {}: {:t}", f.name(), std::current_exception());
-                    recycle_error = std::current_exception();
-                    // fallthrough
+                    clogger.debug("Recycling segment file {} -> {}", f.name(), dst);
+                    // must rename the file since we must ensure the
+                    // data is not replayed. Changing the name will
+                    // cause header ID to be invalid in the file -> ignored
+                    try {
+                        co_await f.rename(dst);
+                        auto b = _recycled_segments.push(std::move(f));
+                        SCYLLA_ASSERT(b); // we set this to max_size_t so...
+                        _files_to_dispose.pop_front();
+                        continue;
+                    } catch (...) {
+                        clogger.error("Could not recycle segment {}: {:t}", f.name(), std::current_exception());
+                        recycle_error = std::current_exception();
+                        // fallthrough
+                    }
                 }
-            }
 
-            clogger.debug("Deleting segment file {}", f.name());
-            // last resort.
-            co_await f.remove_file();
-            // make the removal durable before disposing of any newer segment.
-            co_await seastar::sync_directory(cfg.commit_log_location);
-        } catch (...) {
-            clogger.error("Could not delete segment {}: {:t}", f.name(), std::current_exception());
+                clogger.debug("Deleting segment file {}", f.name());
+                // last resort.
+                co_await f.remove_file();
+                totals.total_size_on_disk -= size;
+                // make the removal durable before disposing of any newer segment.
+                co_await seastar::sync_directory(cfg.commit_log_location);
+            } catch (...) {
+                // Newer segments may not go before this one, so all of them
+                // stay queued.
+                clogger.error("Could not delete segment {}, will retry: {:t}", f.name(), std::current_exception());
+                delete_error = std::current_exception();
+                break;
+            }
+            _files_to_dispose.pop_front();
         }
-        // if we get here, we either successfully deleted the file,
-        // or had such an exception that we consider the file dead
-        // anyway. In either case we _remove_ the file size from
-        // footprint, because it is no longer our problem.
-        totals.total_size_on_disk -= size;
+
+        // #8376 - if we had an error in recycling (disk rename?), and no elements
+        // are available, we could have waiters hoping they will get segments.
+        // abort the queue (wakes up any existing waiters - futures), and let them
+        // retry. Since we did deletions instead, disk footprint should allow
+        // for new allocs at least. Or more likely, everything is broken, but
+        // we will at least make more noise.
+        if (recycle_error && _recycled_segments.empty()) {
+            abort_recycled_list(recycle_error);
+        }
     }
 
-    // #8376 - if we had an error in recycling (disk rename?), and no elements
-    // are available, we could have waiters hoping they will get segments.
-    // abort the queue (wakes up any existing waiters - futures), and let them
-    // retry. Since we did deletions instead, disk footprint should allow
-    // for new allocs at least. Or more likely, everything is broken, but
-    // we will at least make more noise.
-    if (recycle_error && _recycled_segments.empty()) {
-        abort_recycled_list(recycle_error);
+    co_return delete_error;
+}
+
+future<> db::commitlog::segment_manager::do_pending_deletes() {
+    if (auto ep = co_await dispose_files()) {
+        // Isolates the node on an I/O error. The files stay queued for the
+        // next round.
+        try {
+            commit_error_handler(std::move(ep));
+        } catch (...) {
+        }
     }
-    deleting_done.set_value();
 }
 
 future<> db::commitlog::segment_manager::orphan_all() {

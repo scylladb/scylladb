@@ -52,6 +52,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "utils/checked-file-impl.hh"
+#include "utils/disk-error-handler.hh"
 #include "idl/commitlog.dist.impl.hh"
 #include "locator/abstract_replication_strategy.hh"
 
@@ -293,11 +294,22 @@ namespace {
 
 struct record_deletes_extension : public db::commitlog_file_extension {
     std::vector<std::string> deleted;
+    // Number of before_delete() calls to fail with an I/O error.
+    int fail = 0;
+    // When set, the next before_delete() waits for it first.
+    std::optional<shared_future<>> hold;
 
     seastar::future<seastar::file> wrap_file(const seastar::sstring& filename, seastar::file f, seastar::open_flags flags) override {
         co_return f;
     }
     seastar::future<> before_delete(const seastar::sstring& filename) override {
+        if (auto h = std::exchange(hold, std::nullopt)) {
+            co_await h->get_future();
+        }
+        if (fail > 0) {
+            --fail;
+            throw std::system_error(EIO, std::system_category(), "injected before_delete failure");
+        }
         deleted.emplace_back(filename);
         co_return;
     }
@@ -308,6 +320,24 @@ struct record_deletes_extension : public db::commitlog_file_extension {
         co_return;
     }
 };
+
+// Writes until the log has `n` segments, makes them all deletable, and
+// returns their names.
+future<std::vector<sstring>> release_segments(commitlog& log, size_t n) {
+    sstring data(100 * 1024, 'x');
+    auto uuid = make_table_id();
+    rp_set rps;
+    while (log.get_active_segment_names().size() < n) {
+        rps.put(co_await log.add_mutation(uuid, data.size(), db::commitlog::force_sync::no, [&] (db::commitlog::output& dst) {
+            dst.write(data.data(), data.size());
+        }));
+    }
+    co_await log.force_new_active_segment();
+    co_await log.sync_all_segments();
+    auto names = log.get_active_segment_names();
+    log.discard_completed_segments(uuid, rps);
+    co_return std::vector<sstring>(names.begin(), names.end());
+}
 
 std::vector<segment_id_type> segment_ids(const std::vector<std::string>& names) {
     return names | std::views::transform([] (const std::string& name) {
@@ -346,6 +376,41 @@ future<> deletes_segments_in_order(commitlog& log, record_deletes_extension& ex)
     BOOST_REQUIRE(std::ranges::is_sorted(segment_ids(ex.deleted)));
 }
 
+future<> retries_failed_delete_in_order(commitlog& log, record_deletes_extension& ex) {
+    int errors = 0;
+    bs2::scoped_connection c = commit_error.connect([&errors] { ++errors; });
+
+    // The first delete waits until newer segments are released as well,
+    // then fails.
+    promise<> unblock;
+    ex.hold = unblock.get_future();
+    ex.fail = 1;
+    auto names = co_await release_segments(log, 3);
+    auto newer = co_await release_segments(log, 3);
+    names.insert(names.end(), newer.begin(), newer.end());
+    unblock.set_value();
+
+    // The timer retries the failed oldest segment.
+    for (int i = 0; i < 1000 && ex.deleted.size() < names.size(); ++i) {
+        co_await seastar::sleep(std::chrono::milliseconds(10));
+        co_await log.wait_for_pending_deletes();
+    }
+    BOOST_REQUIRE_EQUAL(ex.fail, 0);
+    BOOST_REQUIRE_EQUAL(errors, 1);
+    BOOST_REQUIRE_EQUAL(ex.deleted.size(), names.size());
+    BOOST_REQUIRE(std::ranges::is_sorted(segment_ids(ex.deleted)));
+}
+
+future<> delete_segments_fails_on_failed_delete(commitlog& log, record_deletes_extension& ex) {
+    auto files = co_await create_fake_segments(log.active_config().commit_log_location, {1001, 1003, 1005});
+
+    ex.fail = 1;
+    auto f = co_await coroutine::as_future(log.delete_segments(files));
+    BOOST_REQUIRE(f.failed());
+    f.ignore_ready_future();
+    BOOST_REQUIRE(ex.deleted.empty());
+}
+
 future<> delete_replayed_segments_in_order(commitlog& log, record_deletes_extension& ex) {
     std::vector<sstring> files;
     // Ids well above those of the live segments.
@@ -378,6 +443,41 @@ SEASTAR_TEST_CASE(test_commitlog_deletes_segments_in_order) {
 
     co_await cl_test(cfg, [&ex] (commitlog& log) {
         return deletes_segments_in_order(log, ex);
+    });
+}
+
+// A segment that fails to be deleted is reported as a commitlog I/O error and
+// retried, and no newer segment is deleted before it.
+SEASTAR_TEST_CASE(test_commitlog_retries_failed_delete_in_order) {
+    auto ep = std::make_unique<record_deletes_extension>();
+    auto& ex = *ep;
+    db::extensions myexts;
+    myexts.add_commitlog_file_extension("record_deletes", std::move(ep));
+
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.extensions = &myexts;
+
+    co_await cl_test(cfg, [&ex] (commitlog& log) {
+        return retries_failed_delete_in_order(log, ex);
+    });
+}
+
+// A failed delete of a replayed segment fails delete_segments(), and no newer
+// segment is deleted.
+SEASTAR_TEST_CASE(test_commitlog_delete_segments_fails_on_failed_delete) {
+    auto ep = std::make_unique<record_deletes_extension>();
+    auto& ex = *ep;
+    db::extensions myexts;
+    myexts.add_commitlog_file_extension("record_deletes", std::move(ep));
+
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.extensions = &myexts;
+
+    co_await cl_test(cfg, [&ex] (commitlog& log) {
+        return delete_segments_fails_on_failed_delete(log, ex);
     });
 }
 
