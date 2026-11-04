@@ -26,6 +26,7 @@ from test.pylib.util import unique_name, wait_all, wait_for_view
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from cassandra import ReadFailure
 from cassandra.cluster import ConsistencyLevel
+from cassandra.query import SimpleStatement
 from collections import Counter, defaultdict
 from test.pylib.util import wait_for
 from test.pylib.rest_client import HTTPError
@@ -3084,3 +3085,39 @@ async def test_restore_tablets_fails_when_the_snapshot_does_not_hold_the_compone
             refs = sstable_refs(object_storage, sid)
             assert not any(r.startswith('nodes/') for r in refs), f'The failed restore left node references of sstable {sid}: {sorted(refs)}'
         assert_objects_intact(crafted, bucket_objects(object_storage), 'the failed restore')
+
+
+async def test_backup_to_per_dc_endpoints(manager: ScyllaClusterManager, object_storage):
+    """
+    Helper for tests of topology operation snapshot.
+    """
+    cmdline = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=debug:sstable=debug:http=debug:api=info:storage_proxy=trace:table=debug' ]
+    servers_1 = await manager.servers_add(3, cmdline=cmdline, config={
+        'object_storage_endpoints': object_storage.create_endpoint_conf()
+    }, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack2"},
+        {"dc": "dc1", "rack": "rack3"},
+    ])
+
+    async with await object_storage.create_proxy() as proxy:
+        servers_2 = await manager.servers_add(3, cmdline=cmdline, config={
+            'object_storage_endpoints': proxy.create_endpoint_conf()
+        }, property_file=[
+            {"dc": "dc2", "rack": "rack1"},
+            {"dc": "dc2", "rack": "rack2"},
+            {"dc": "dc2", "rack": "rack3"},
+        ])
+
+        snapshot_name = unique_name('snap_')
+
+        async with new_test_keyspace(manager, "WITH REPLICATION = { 'replication_factor' : 3 } AND tablets = {'initial': 20 }") as ks:
+            async with new_test_table(manager, ks, "pk text primary key, value int", "") as tbl:
+                cf = tbl.split('.')[1]
+                cql = manager.get_cql()
+                insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+                insert_stmt.consistency_level = ConsistencyLevel.ALL
+                await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(100)))
+                await manager.api.take_cluster_snapshot(servers_1[0].ip_addr, ks, tag=snapshot_name, tables=[cf])
+                manifests = await do_run_cluster_backup({ 'dc1': (object_storage, 'tomtetroll'), 'dc2': (proxy, 'bollhav') }, manager, snapshot_name, ks, cf, servers_1 + servers_2)
+                assert len(manifests) == 2
