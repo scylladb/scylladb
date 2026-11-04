@@ -590,6 +590,20 @@ future<std::optional<schema_changed>> raft_groups_storage::load_schema_changed()
     co_return std::move(loaded.back().change);
 }
 
+std::optional<table_schema_version> raft_groups_storage::listed_group0_schema_version(table_schema_version version) const {
+    for (const auto& applied : _applied_schema_changes | std::views::reverse) {
+        if (applied.record.change.version == version) {
+            return applied.record.change.group0_schema_version;
+        }
+    }
+    const auto listed = std::ranges::find_if(_persisted_schema_changes,
+            [&] (const schema_changed_record& r) { return r.change.version == version; });
+    if (listed == _persisted_schema_changes.end()) {
+        return std::nullopt;
+    }
+    return listed->change.group0_schema_version;
+}
+
 future<> raft_groups_storage::store_descriptor(cql3::query_processor& qp, raft::group_id gid, shard_id shard,
         raft::index_t idx, raft::term_t term, const raft::configuration& config,
         const std::vector<truncation_record>& truncations, const std::vector<schema_changed_record>& schema_changes) {

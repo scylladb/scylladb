@@ -186,6 +186,10 @@ public:
     // snapshot_idx, or nullopt if the list is empty.
     future<std::optional<schema_changed>> load_schema_changed();
 
+    // The group0 schema version of the last applied announcement of `version`, from the
+    // entries not yet in the row and the row's list, or nullopt if neither has it.
+    std::optional<table_schema_version> listed_group0_schema_version(table_schema_version version) const;
+
     // Give up every segment reference this group holds, for a group being destroyed
     // deliberately; see raft_commitlog::release_all().
     void release_all();
