@@ -10,6 +10,7 @@
 #include <seastar/core/format.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_all.hh>
+#include <seastar/core/on_internal_error.hh>
 #include "utils/allocation_strategy.hh"
 #include "db/system_keyspace.hh"
 #include "db/large_data_handler.hh"
@@ -144,7 +145,12 @@ void large_data_record_index::register_sstable(sstables::shared_sstable sst) {
     if (!records_opt) {
         return;
     }
+    bool already_linked = false;
     for (auto& rec : records_opt->elements) {
+        if (rec._index_hook.is_linked()) [[unlikely]] {
+            already_linked = true;
+            continue;
+        }
         switch (rec.type) {
         case sstables::large_data_type::partition_size:
         case sstables::large_data_type::rows_in_partition:
@@ -159,6 +165,10 @@ void large_data_record_index::register_sstable(sstables::shared_sstable sst) {
         default:
             break;
         }
+    }
+    if (already_linked) [[unlikely]] {
+        large_data_logger.error("Skipped records of sstable {} that are already linked into a large data index", sst->get_filename());
+        on_internal_error_noexcept(large_data_logger, "large_data_record_index::register_sstable(): record already linked");
     }
 }
 

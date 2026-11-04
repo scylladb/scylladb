@@ -8,15 +8,29 @@
 
 #include <boost/test/unit_test.hpp>
 #include <deque>
+#include <seastar/util/defer.hh>
 #undef SEASTAR_TESTING_MAIN
+#include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include "db/config.hh"
 #include "db/large_data_handler.hh"
+#include "dht/i_partitioner.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "replica/database.hh"
 #include "mutation/mutation.hh"
 #include "mutation/atomic_cell.hh"
 #include "mutation/collection_mutation.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
 #include "types/set.hh"
+#include "test/lib/cql_test_env.hh"
+#include "test/lib/eventually.hh"
+#include "test/lib/exception_utils.hh"
+#include "test/lib/log.hh"
+#include "test/lib/sstable_utils.hh"
+#include "compaction/compaction_group_view.hh"
+#include "tasks/types.hh"
+#include "utils/error_injection.hh"
 
 using sstables::large_data_record;
 using sstables::large_data_type;
@@ -673,6 +687,223 @@ SEASTAR_THREAD_TEST_CASE(test_coordinator_soft_limit_hard_limit_still_throws) {
     auto m = make_mutation_with_cell(s, MB + 1);
     BOOST_REQUIRE_THROW(g.check_coordinator(*m.schema(), m.partition(), m.key(), nullptr),
             exceptions::invalid_request_exception);
+}
+
+// ---------------------------------------------------------------------------
+// Linking large data records into the guardrail's index
+// ---------------------------------------------------------------------------
+//
+// A large_data_record has a single intrusive hook, so it can be linked into one
+// index, once. A schema change used to create a new guardrail and link every
+// record into its index while records could still be linked: into the old
+// guardrail, which in-flight writes keep alive (path a), or into the new index
+// itself, by a flush that had already published its sstable but registered it
+// only after the cache update (path b). And a compaction that handed back its
+// input sstables unchanged registered them again (path c). Boost's safe-hook
+// assert() then aborted the node; in builds with NDEBUG the indexes were
+// silently corrupted.
+
+namespace {
+
+// Partitions with more than 5 rows get a record, and writes into partitions
+// with more than 10 recorded rows are rejected.
+cql_test_config row_count_guardrail_config() {
+    auto cfg = make_shared<db::config>();
+    cfg->compaction_rows_count_warning_threshold.set(5);
+    cfg->rows_count_fail_threshold.set(10);
+    return cql_test_config(std::move(cfg));
+}
+
+constexpr int large_partition_rows = 20;
+
+replica::table& test_table(cql_test_env& e) {
+    return e.local_db().find_column_family("ks", "t");
+}
+
+void create_test_table(cql_test_env& e, bool guardrails_enabled) {
+    e.execute_cql(fmt::format("CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH large_data_guardrails_enabled = {}",
+            guardrails_enabled)).get();
+}
+
+// A partition key of ks.t owned by this shard, so that the partition's records,
+// the held guardrail and the paused flush are all on the shard running the test.
+int32_t local_partition_key(cql_test_env& e) {
+    auto& t = test_table(e);
+    auto s = t.schema();
+    auto erm = t.get_effective_replication_map();
+    for (int32_t pk = 0;; ++pk) {
+        auto key = partition_key::from_single_value(*s, int32_type->decompose(pk));
+        if (erm->shard_for_reads(*s, dht::get_token(*s, key)) == this_shard_id()) {
+            return pk;
+        }
+    }
+}
+
+void insert_large_partition(cql_test_env& e, int32_t pk) {
+    for (int ck = 0; ck < large_partition_rows; ++ck) {
+        e.execute_cql(fmt::format("INSERT INTO ks.t (pk, ck, v) VALUES ({}, {}, 0)", pk, ck)).get();
+    }
+}
+
+// Fails unless the guardrail rejects a write into the partition, i.e. unless the
+// index holds the partition's record.
+void require_write_rejected(cql_test_env& e, int32_t pk) {
+    BOOST_REQUIRE_EXCEPTION(
+            e.execute_cql(fmt::format("INSERT INTO ks.t (pk, ck, v) VALUES ({}, {}, 0)", pk, large_partition_rows)).get(),
+            std::exception, exception_predicate::message_contains("exceeds hard limit"));
+}
+
+// Creates ks.t with the guardrail enabled and one flushed partition over the
+// hard limit, and returns that partition's key.
+int32_t create_table_with_large_partition(cql_test_env& e) {
+    create_test_table(e, true);
+    const auto pk = local_partition_key(e);
+    insert_large_partition(e, pk);
+    test_table(e).flush().get();
+    require_write_rejected(e, pk);
+    return pk;
+}
+
+} // anonymous namespace
+
+// Path (a): a schema change while a write holds the table's guardrail, as
+// database::do_apply() does across the commitlog append and storage_proxy::cas()
+// across the Paxos round.
+SEASTAR_TEST_CASE(test_alter_table_while_guardrail_is_held) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto pk = create_table_with_large_partition(e);
+
+        auto held = test_table(e).get_large_data_guardrail();
+        e.execute_cql("ALTER TABLE ks.t WITH comment = 'altered'").get();
+        // The records stay indexed. Skipping the records that are still linked
+        // into the held guardrail would avoid the abort but admit this write.
+        require_write_rejected(e, pk);
+    }, row_count_guardrail_config());
+}
+
+// Path (a) across a disable and a re-enable: the guardrail that is still held
+// must not keep records linked once it is no longer the table's guardrail.
+SEASTAR_TEST_CASE(test_toggle_guardrail_while_guardrail_is_held) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto pk = create_table_with_large_partition(e);
+
+        auto held = test_table(e).get_large_data_guardrail();
+        e.execute_cql("ALTER TABLE ks.t WITH large_data_guardrails_enabled = false").get();
+        e.execute_cql("ALTER TABLE ks.t WITH large_data_guardrails_enabled = true").get();
+        require_write_rejected(e, pk);
+
+        held = nullptr;
+        require_write_rejected(e, pk);
+    }, row_count_guardrail_config());
+}
+
+namespace {
+
+// Path (b): a schema change while a flush has published its sstable in the
+// table's sstable set (in the cache update) but has not finished. The sstable
+// must end up registered in the guardrail's index exactly once.
+future<> do_test_alter_table_during_flush(bool guardrails_enabled_before) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipping test: requires error injection (dev or debug build)");
+    return make_ready_future<>();
+#else
+    return do_with_cql_env_thread([guardrails_enabled_before] (cql_test_env& e) {
+        create_test_table(e, guardrails_enabled_before);
+        const auto pk = local_partition_key(e);
+        insert_large_partition(e, pk);
+
+        // Pauses the flush right after the cache update, which has added the
+        // new sstable to the table's sstable set.
+        constexpr auto injection = "replica_post_flush_after_update_cache";
+        auto& injector = utils::get_local_injector();
+        injector.enable(injection, false, {{"table_name", "ks.t"}});
+        auto flushed = test_table(e).flush();
+        {
+            // Disabling the injection releases the flush, also when a check fails.
+            auto release_flush = defer([&] () noexcept {
+                injector.disable(injection);
+                flushed.wait();
+            });
+            BOOST_REQUIRE(eventually_true([&] { return injector.waiters(injection) > 0; }));
+
+            e.execute_cql("ALTER TABLE ks.t WITH large_data_guardrails_enabled = true AND comment = 'altered'").get();
+        }
+        flushed.get();
+        require_write_rejected(e, pk);
+    }, row_count_guardrail_config());
+#endif
+}
+
+} // anonymous namespace
+
+SEASTAR_TEST_CASE(test_enable_guardrail_during_flush) {
+    return do_test_alter_table_during_flush(false);
+}
+
+SEASTAR_TEST_CASE(test_alter_table_during_flush) {
+    return do_test_alter_table_during_flush(true);
+}
+
+namespace {
+
+size_t maintenance_sstable_count(replica::table& t) {
+    size_t count = 0;
+    t.parallel_foreach_compaction_group_view([&count] (compaction::compaction_group_view& view) -> future<> {
+        count += (co_await view.maintenance_sstable_set())->size();
+    }).get();
+    return count;
+}
+
+} // anonymous namespace
+
+// Path (c): an off-strategy compaction moves sstables that need no reshape from
+// the maintenance set to the main set as they are, handing them back as its
+// outputs (a tablet split does the same with sstables that need no split).
+// They are registered with the guardrail already, and must not be registered
+// again.
+SEASTAR_TEST_CASE(test_offstrategy_integration_keeps_guardrail_records) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        create_test_table(e, true);
+        const auto pk = local_partition_key(e);
+        auto& t = test_table(e);
+        auto s = t.schema();
+        mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(pk)));
+        for (int32_t ck = 0; ck < large_partition_rows; ++ck) {
+            m.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(ck)), to_bytes("v"), data_value(int32_t(0)), api::new_timestamp());
+        }
+        auto sst = make_sstable_containing(t.make_sstable(), {m}).get();
+        t.add_sstable_and_update_cache(sst, sstables::offstrategy::yes).get();
+        BOOST_REQUIRE_EQUAL(maintenance_sstable_count(t), 1);
+        require_write_rejected(e, pk);
+
+        t.perform_offstrategy_compaction(tasks::task_info{}).get();
+        // Integrated into the main set as is, not rewritten by a reshape.
+        BOOST_REQUIRE_EQUAL(maintenance_sstable_count(t), 0);
+        BOOST_REQUIRE(t.get_sstables()->contains(sst));
+        require_write_rejected(e, pk);
+    }, row_count_guardrail_config());
+}
+
+// The outputs of a regular compaction are registered: two sstables with half of
+// the partition each have no record over the limit, their compaction output has.
+SEASTAR_TEST_CASE(test_compaction_output_is_registered_with_guardrail) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        create_test_table(e, true);
+        const auto pk = local_partition_key(e);
+        auto& t = test_table(e);
+        for (int ck = 0; ck < large_partition_rows; ++ck) {
+            e.execute_cql(fmt::format("INSERT INTO ks.t (pk, ck, v) VALUES ({}, {}, 0)", pk, ck)).get();
+            if (ck == large_partition_rows / 2 - 1) {
+                t.flush().get();
+            }
+        }
+        t.flush().get();
+        // Admitted: no single sstable has more rows in the partition than the limit.
+        e.execute_cql(fmt::format("INSERT INTO ks.t (pk, ck, v) VALUES ({}, {}, 0)", pk, large_partition_rows)).get();
+
+        t.compact_all_sstables(tasks::task_info{}).get();
+        require_write_rejected(e, pk);
+    }, row_count_guardrail_config());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

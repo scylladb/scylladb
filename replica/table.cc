@@ -1888,6 +1888,7 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
         for (auto& sst : ssts) {
             add_sstable(cg, sst);
             update_stats_for_new_sstable(sst);
+            _large_data_guardrail->register_sstable(sst);
         }
         m->mark_flushed(std::move(new_ssts_ms));
         try_trigger_compaction(cg);
@@ -2204,11 +2205,6 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             return update_cache(cg, old, newtabs);
         });
 
-        for (const auto& sst : newtabs) {
-            _large_data_guardrail->register_sstable(sst);
-        }
-        _large_data_guardrail->on_flush();
-
         co_await utils::get_local_injector().inject("replica_post_flush_after_update_cache", [this] (auto& handler) -> future<> {
             const auto this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
             if (this_table_name == handler.get("table_name")) {
@@ -2218,6 +2214,8 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
                 tlogger.info("error injection handler replica_post_flush_after_update_cache: resuming flush for table {}", this_table_name);
             }
         });
+
+        _large_data_guardrail->on_flush();
 
         cg.memtables()->erase(old);
         tlogger.debug("Memtable for {}.{} replaced, into {} sstables", old->schema()->ks_name(), old->schema()->cf_name(), newtabs.size());
@@ -2428,8 +2426,7 @@ void table::rebuild_statistics() {
 }
 
 void table::rebuild_large_data_index() {
-    auto& sstables = *get_sstables();
-    _large_data_guardrail->rebuild(sstables);
+    _large_data_guardrail->rebuild(*get_sstables());
 }
 
 future<table::sstable_list_permit>
@@ -2635,10 +2632,17 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
             std::optional<lw_shared_ptr<sstables::sstable_set>> new_maintenance_sstables;
         };
         std::unordered_map<compaction_group*, replacement_desc> _cg_desc;
+        std::vector<sstables::shared_sstable> _sstables_to_register;
     public:
         explicit sstable_list_updater(compaction_group& cg, table::sstable_list_builder& builder, compaction::compaction_completion_desc& d)
             : _t(cg._t), _cg(cg), _builder(builder), _desc(d) {}
         virtual future<> prepare() override {
+            std::unordered_set<sstables::shared_sstable> inputs(_desc.old_sstables.begin(), _desc.old_sstables.end());
+            for (auto& sst : _desc.new_sstables) {
+                if (!inputs.contains(sst)) {
+                    _sstables_to_register.push_back(sst);
+                }
+            }
             // Segregate output sstables according to their owner compaction group.
             // If not in splitting mode, then all output sstables will belong to the same group.
             for (auto& sst : _desc.new_sstables) {
@@ -2701,6 +2705,15 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
             for (auto& [cg, d] : _cg_desc) {
                 cg->backlog_tracker_adjust_charges(d.main_sstable_set_builder_result.removed_sstables, d.desc.new_sstables);
             }
+            // _desc.new_gc_sstables are deliberately left out. They hold only data this
+            // compaction is dropping, they exist just long enough to keep a crash from
+            // resurrecting it, and they are released by the same compaction that
+            // created them. Their large-partition, large-row and large-collection
+            // records describe garbage, so feeding them to the guardrail would report
+            // limit violations for data that is on its way out.
+            for (auto& sst : _sstables_to_register) {
+                _t._large_data_guardrail->register_sstable(sst);
+            }
         }
         static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder& builder, compaction::compaction_completion_desc& d) {
             return std::make_unique<sstable_list_updater>(cg, builder, d);
@@ -2717,15 +2730,6 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
     cache.refresh_snapshot();
 
     _t.rebuild_statistics();
-    // desc.new_gc_sstables are deliberately left out. They hold only data this
-    // compaction is dropping, they exist just long enough to keep a crash from
-    // resurrecting it, and they are released by the same compaction that
-    // created them. Their large-partition, large-row and large-collection
-    // records describe garbage, so feeding them to the guardrail would report
-    // limit violations for data that is on its way out.
-    for (auto& sst : desc.new_sstables) {
-        _t._large_data_guardrail->register_sstable(sst);
-    }
 
     co_await builder.delete_sstables_atomically(unused_sstables_for_deletion(std::move(desc)));
 }
@@ -4974,12 +4978,15 @@ db::commitlog* table::commitlog() const {
     return _commitlog;
 }
 
+static bool large_data_guardrail_enabled(const schema& s) {
+    return s.large_data_guardrails_enabled()
+        && !is_internal_keyspace(s.ks_name())
+        && !s.is_view()
+        && !cdc::is_log_name(s.cf_name());
+}
+
 shared_ptr<db::large_data_guardrail_base> table::make_large_data_guardrail() const {
-    bool enabled = _schema->large_data_guardrails_enabled()
-        && !is_internal_keyspace(_schema->ks_name())
-        && !_schema->is_view()
-        && !cdc::is_log_name(_schema->cf_name());
-    if (enabled) {
+    if (large_data_guardrail_enabled(*_schema)) {
         return make_shared<db::large_data_guardrail>(_config.guardrail_config);
     }
     return db::noop_large_data_guardrail::instance();
@@ -5005,8 +5012,12 @@ void table::set_schema(schema_ptr s) {
     if (_logstor_index) {
         _logstor_index->set_schema(s);
     }
+    const bool large_data_guardrail_toggled = large_data_guardrail_enabled(*s) != large_data_guardrail_enabled(*_schema);
     _schema = std::move(s);
-    _large_data_guardrail = make_large_data_guardrail();
+    if (large_data_guardrail_toggled) {
+        _large_data_guardrail->rebuild({});
+        _large_data_guardrail = make_large_data_guardrail();
+    }
     _large_data_guardrail->rebuild(*get_sstables());
 
     for (auto&& v : _views) {
