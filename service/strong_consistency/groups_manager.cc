@@ -1305,6 +1305,29 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     });
 }
 
+bool groups_manager::should_handoff_writes(raft::group_id group_id) const {
+    return _resize_tracker.should_handoff_writes(group_id);
+}
+
+std::optional<raft::group_id> groups_manager::group_for_handoff(schema_ptr s, const dht::token& token) const {
+    const auto& tablet_map = s->table().get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(s->id());
+    if (!tablet_map.has_raft_info()) {
+        on_internal_error(logger, format("group_for_handoff: table {} does not have raft info", s->id()));
+    }
+    const auto tablet_id = tablet_map.get_tablet_id(token);
+    if (!tablet_map.has_raft_resize_info(tablet_id)) {
+        logger.debug("group_for_handoff: tablet {} of table {} is not resizing any more", tablet_id, s->id());
+        return std::nullopt;
+    }
+    // get_raft_split_child_group_ids() only answers for a split. A merge never gets here: no merge
+    // decision is emitted for a strongly consistent table, see tablet_allocator_impl's
+    // process_table().
+    // The left child owns the tokens up to and including the split token, the right one the
+    // rest, as in token_range_of_group().
+    const auto [left, right] = tablet_map.get_raft_split_child_group_ids(tablet_id);
+    return token <= tablet_map.get_split_token(tablet_id) ? left : right;
+}
+
 void groups_manager::notify_leader_change(raft::group_id gid) {
     // A child is watched through its parent, so that a single colocation state covers a whole
     // resize.

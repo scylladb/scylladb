@@ -142,6 +142,11 @@ std::optional<raft::group_id> raft_resize_tracker::get_parent_group(raft::group_
     return std::nullopt;
 }
 
+bool raft_resize_tracker::should_handoff_writes(raft::group_id parent_gid) const {
+    auto it = _resize_states.find(parent_gid);
+    return it != _resize_states.end() && it->second.start_resize;
+}
+
 std::optional<api::timestamp_type> raft_resize_tracker::parent_end_resize_timestamp(raft::group_id child_gid) const {
     const auto parent_gid = get_parent_group(child_gid);
     if (!parent_gid) {
