@@ -35,6 +35,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
+#include <algorithm>
 #include <optional>
 #include <vector>
 #include "service/raft/raft_group0_client.hh"
@@ -209,6 +210,22 @@ schema_ptr snapshot_nodes() {
     return schema;
 }
 
+schema_ptr snapshot_attempts() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_ATTEMPTS);
+        return schema_builder(this_smp_shard_count(), system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_ATTEMPTS, std::make_optional(id))
+                // User tag of the snapshot
+                .with_column("tag", utf8_type, column_kind::partition_key)
+                // Attempt id; the attempt's rows and references live under "{tag}/{attempt}"
+                .with_column("attempt", uuid_type, column_kind::clustering_key)
+                // True once the attempt sealed the tag
+                .with_column("committed", boolean_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
 schema_ptr snapshot_sstables() {
     static thread_local auto schema = [] {
         auto id = generate_legacy_id(system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES);
@@ -369,6 +386,7 @@ static std::vector<schema_ptr> ensured_tables() {
         snapshot_tablets(),
         snapshot_nodes(),
         snapshot_sstables(),
+        snapshot_attempts(),
         snapshot_remote_locations(),
         alternator_export_to_s3_exports(),
         alternator_export_to_s3_client_tokens(),
@@ -384,6 +402,7 @@ std::vector<schema_ptr> system_distributed_keyspace::all_distributed_tables() {
         snapshot_tablets(),
         snapshot_nodes(),
         snapshot_sstables(),
+        snapshot_attempts(),
         alternator_export_to_s3_exports(),
         alternator_export_to_s3_client_tokens(),
     };
@@ -874,6 +893,43 @@ future<std::optional<snapshot_entry>> snapshot_table_helper::get_snapshot(std::s
         }
     );
     co_return res;
+}
+
+future<> snapshot_table_helper::insert_snapshot_attempt(std::string_view tag, utils::UUID attempt, snapshot_attempt_committed committed, db::consistency_level cl) {
+    static const sstring query = format("INSERT INTO {}.{} (tag, attempt, committed) VALUES (?, ?, ?)",
+            system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_ATTEMPTS);
+    co_await _qp.execute_internal(query, cl, internal_distributed_query_state(),
+            { sstring(tag), attempt, bool(committed) }, cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<std::vector<snapshot_attempt_entry>> snapshot_table_helper::get_snapshot_attempts(std::string_view tag, db::consistency_level cl) {
+    static const sstring query = format("SELECT attempt, committed FROM {}.{} WHERE tag = ?",
+            system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_ATTEMPTS);
+    std::vector<snapshot_attempt_entry> res;
+    co_await _qp.query_internal(query, cl, { sstring(tag) }, 100, [&] (const cql3::untyped_result_set_row& row) {
+        res.push_back(snapshot_attempt_entry{
+            .attempt = row.get_as<utils::UUID>("attempt"),
+            .committed = row.get_or<bool>("committed", false),
+        });
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+    co_return res;
+}
+
+future<> snapshot_table_helper::delete_snapshot_attempt(std::string_view tag, utils::UUID attempt, db::consistency_level cl) {
+    static const sstring query = format("DELETE FROM {}.{} WHERE tag = ? AND attempt = ?",
+            system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_ATTEMPTS);
+    co_await _qp.execute_internal(query, cl, internal_distributed_query_state(),
+            { sstring(tag), attempt }, cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<std::optional<sstring>> snapshot_table_helper::find_committed_snapshot_name(std::string_view tag, db::consistency_level cl) {
+    const auto attempts = co_await get_snapshot_attempts(tag, cl);
+    const auto committed = std::ranges::find_if(attempts, &snapshot_attempt_entry::committed);
+    if (committed == attempts.end()) {
+        co_return std::nullopt;
+    }
+    co_return make_snapshot_attempt_name(tag, committed->attempt);
 }
 
 static constexpr size_t snapshot_max_parallel = 10;
