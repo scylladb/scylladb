@@ -247,7 +247,12 @@ void assure_sufficient_live_nodes(
     case consistency_level::EACH_QUORUM:
         // need is 0 when no datacenter the schema lists holds a replica of the tablet, as after a rack-list
         // change moves every replica to datacenters the schema does not list yet. No ack would count then.
+        // need is also 0 for a keyspace with replication factor 0 in every datacenter.
         if (need == 0) {
+            if (erm.get_schema_replication_factor() == 0) {
+                throw exceptions::unavailable_exception(format("Cannot achieve consistency level {} with replication factor 0. "
+                              "Ensure the keyspace is replicated to at least one datacenter.", cl), cl, need, 0);
+            }
             throw exceptions::unavailable_exception(format("Cannot achieve consistency level {}: no datacenter the keyspace replicates to "
                           "has a replica. Retry later if the keyspace replication factor changes.", cl), cl, need, 0);
         }
