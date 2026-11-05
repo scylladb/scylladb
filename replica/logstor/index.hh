@@ -205,6 +205,15 @@ public:
         std::optional<dht::token> _last_token;
         bool _exhausted = false;
 
+        dht::token_range unread_range() const {
+            if (!_last_token) {
+                return _range;
+            }
+            return dht::token_range(
+                    dht::token_range::bound(*_last_token, false),
+                    _range.end());
+        }
+
     public:
         // A contiguous chunk of index entries returned by `next_batch()`.
         //
@@ -237,22 +246,8 @@ public:
             , _range(std::move(range)) {
         }
 
-        dht::token_range unread_range() const {
-            if (!_last_token) {
-                return _range;
-            }
-            return dht::token_range(
-                    dht::token_range::bound(*_last_token, false),
-                    _range.end());
-        }
-
         bool exhausted() const noexcept {
             return _exhausted;
-        }
-
-        void reset() noexcept {
-            _last_token.reset();
-            _exhausted = false;
         }
 
         std::optional<batch> next_batch(size_t max_entries) {
