@@ -360,14 +360,10 @@ private:
 
     auto make_entry_disposer() noexcept {
         return [this] (primary_index_entry* e) noexcept {
-            with_allocator(standard_allocator(), [this, e] () noexcept {
-                if (e->_cached_entry) {
-                    try {
-                        _cache_tracker->evict(*e);
-                    } catch (...) {}
-                }
-                space_accounting_on_record_freed(e->_e.location);
-            });
+            if (e->_cached_entry) {
+                _cache_tracker->evict(*e);
+            }
+            space_accounting_on_record_freed(e->_e.location);
             on_index_entry_erased(*e);
         };
     }
