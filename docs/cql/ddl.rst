@@ -338,6 +338,18 @@ consistency is guaranteed for operations going to all DCs. Note that
 `local` or `global` consistencies are guaranteed only for requests that
 are going to the same partition.
 
+A strongly consistent write that times out may still have been committed,
+or may be committed later, even after the application's later writes, so
+the driver must not retry it on its own: a second attempt can apply the
+write twice. Run strongly consistent writes with a retry policy that never
+retries (for example ``FallthroughRetryPolicy``) and retry in the
+application only writes that are safe to apply twice, at any later time. A
+plain overwrite is safe to apply twice only if nothing, not even the same
+client, later overwrites or deletes what it wrote. Timeouts report the
+consistency level of the original request, so a retry policy that retries
+at the reported level keeps it. Do not use a retry policy that lowers the
+consistency level.
+
 .. _use-statement:        
         
 USE

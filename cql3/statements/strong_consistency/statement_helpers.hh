@@ -22,6 +22,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
     const locator::tablet_replica& target,
     db::timeout_clock::time_point timeout,
     bool is_write,
+    db::consistency_level cl,
     service::strong_consistency::stats& stats,
     locator::host_id_or_exception_callback on_forwarding_finished = {});
 
