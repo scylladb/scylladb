@@ -2786,6 +2786,7 @@ future<> compaction_group::splice_sstable_runs() noexcept {
                 | std::views::transform([] (const sstables::frozen_sstable_run& run) { return std::pair(run->run_identifier(), run->all().size()); })
                 | std::ranges::to<std::unordered_map>();
         std::unordered_map<sstables::shared_sstable, sstables::run_id> new_run_ids;
+        std::vector<compaction::compaction_group_view*> spliced_views;
         // Sstables of different views are never compacted together, so there's no point in splicing across views.
         for (auto* view : all_views()) {
             auto runs = co_await cm.get_candidate_runs(*view);
@@ -2794,6 +2795,10 @@ future<> compaction_group::splice_sstable_runs() noexcept {
             std::erase_if(runs, [&main_run_sizes] (const sstables::frozen_sstable_run& run_in_view) {
                 auto it = main_run_sizes.find(run_in_view->run_identifier());
                 return it == main_run_sizes.end() || run_in_view->all().size() != it->second;
+            });
+            // The run identifier is stored in the Scylla component, which old sstables may lack.
+            std::erase_if(runs, [] (const sstables::frozen_sstable_run& run) {
+                return !std::ranges::all_of(run->all(), std::mem_fn(&sstables::sstable::has_scylla_component));
             });
             auto runs_to_splice = _t._compaction_strategy.get_runs_to_splice(std::move(runs));
             for (auto& group : runs_to_splice) {
@@ -2806,6 +2811,12 @@ future<> compaction_group::splice_sstable_runs() noexcept {
                         new_run_ids.emplace(sst, run_id);
                     }
                 }
+            }
+            // Compaction is always disabled on the repairing view. Its sstables get their run
+            // identifier written once repair moves them to another view, since marking them as
+            // repaired rewrites their Statistics component, which writes the Scylla one too.
+            if (!runs_to_splice.empty() && !is_repairing_view(view)) {
+                spliced_views.push_back(view);
             }
         }
         if (new_run_ids.empty()) {
@@ -2842,6 +2853,13 @@ future<> compaction_group::splice_sstable_runs() noexcept {
         backlog_tracker_adjust_charges(spliced_sstables, spliced_sstables);
         tlogger.debug("Spliced {} sstables in compaction group {} of {}.{}",
                 spliced_sstables.size(), group_id(), schema()->ks_name(), schema()->cf_name());
+
+        // The spliced runs survive a restart without being written to disk, as the runs are spliced
+        // again on boot. Writing them keeps the disk consistent with memory, e.g. for tools and restores
+        // from backup, and saves splicing them again on every boot.
+        for (auto* view : spliced_views) {
+            cm.schedule_run_identifier_write(*view);
+        }
     } catch (...) {
         tlogger.warn("Failed to splice sstable runs in compaction group {} of {}.{}: {}. Ignored.",
                 group_id(), schema()->ks_name(), schema()->cf_name(), std::current_exception());

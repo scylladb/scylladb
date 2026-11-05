@@ -42,6 +42,7 @@
 #include "test/lib/eventually.hh"
 #include "test/lib/log.hh"
 #include "test/lib/permutations.hh"
+#include "utils/error_injection.hh"
 
 namespace fs = std::filesystem;
 
@@ -1206,9 +1207,10 @@ SEASTAR_TEST_CASE(ics_runs_to_splice_test) {
     });
 }
 
-// Splicing is tested with real sstables, whose sizes are set by the size of their values. That's
-// way below ICS's default min_sstable_size, so it's set to 0, for ICS to tell the runs apart by
-// size. With min_threshold=2, any two runs of similar size get compacted together.
+// Spliced run identifiers are written to disk, so splicing is tested with real sstables, whose
+// sizes are set by the size of their values. That's way below ICS's default min_sstable_size, so it's set to 0,
+// for ICS to tell the runs apart by size. With min_threshold=2, any two runs of similar size get
+// compacted together.
 static schema_ptr make_ics_schema_for_splicing(const char* name) {
     auto builder = schema_builder(this_smp_shard_count(), "tests", name)
             .with_column("id", utf8_type, column_kind::partition_key)
@@ -1251,15 +1253,29 @@ static std::unordered_set<shared_sstable> to_set(const frozen_sstable_run& run) 
     return run->all() | std::ranges::to<std::unordered_set>();
 }
 
+// Returns the sstables of the table whose run identifier isn't written to disk yet.
+static std::unordered_set<shared_sstable> sstables_with_unpersisted_run_identifier(table_for_tests& cf) {
+    return *cf->get_sstables()
+            | std::views::filter(std::mem_fn(&sstable::has_unpersisted_run_identifier))
+            | std::ranges::to<std::unordered_set>();
+}
+
+// Waits until the compaction manager writes the run identifiers of all sstables of the table to disk.
+static void wait_for_run_identifier_write(table_for_tests& cf) {
+    REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sstables_with_unpersisted_run_identifier(cf).size(); }, 0);
+}
+
 // Checks that compaction_group::splice_sstable_runs() gives the halves of a merged tablet a
-// common run identifier in the main set, so that ICS stops picking them for compaction. A run
-// overlapping with both halves is left alone, and splicing again changes nothing.
+// common run identifier in the main set, so that ICS stops picking them for compaction, and
+// that the compaction manager then writes the identifier to disk. A run overlapping with both
+// halves is left alone, and splicing again changes nothing.
 SEASTAR_TEST_CASE(ics_splice_sstable_runs_test) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = make_ics_schema_for_splicing("ics_splice_sstable_runs_test");
         auto cf = env.make_table_for_tests(s);
         auto close_cf = deferred_stop(cf);
         // Keeps ICS from compacting the runs, so that the test can check which runs it would pick.
+        // That doesn't stop the run identifiers from being written.
         cf->disable_auto_compaction().get();
         auto& cs = cf->get_compaction_strategy();
         auto control = make_strategy_control_for_test(false);
@@ -1303,16 +1319,41 @@ SEASTAR_TEST_CASE(ics_splice_sstable_runs_test) {
             return to_set(*spliced);
         };
 
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+        // Keeps the run identifiers from being written until the splice in memory is checked.
+        utils::get_local_injector().enable("run_identifier_write_pause", true);
+#endif
+
         cf->splice_sstable_runs().get();
 
-        // Splicing in memory keeps the sstables. Those of the other run are known by the new
-        // run identifier, which isn't on disk.
-        auto spliced_sstables = to_set(naming_run);
-        spliced_sstables.insert(renamed_sstables.begin(), renamed_sstables.end());
-        BOOST_REQUIRE(check_runs() == spliced_sstables);
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+        {
+            // Splicing in memory keeps the sstables. Those of the other run are known by the new
+            // run identifier, which isn't on disk yet.
+            auto spliced_sstables = to_set(naming_run);
+            spliced_sstables.insert(renamed_sstables.begin(), renamed_sstables.end());
+            BOOST_REQUIRE(check_runs() == spliced_sstables);
+            BOOST_REQUIRE(sstables_with_unpersisted_run_identifier(cf) == renamed_sstables);
+            for (auto& sst : renamed_sstables) {
+                BOOST_REQUIRE_EQUAL(sst->run_identifier(), spliced_run_id);
+                BOOST_REQUIRE_NE(env.reusable_sst(sst).get()->run_identifier(), spliced_run_id);
+            }
+            utils::get_local_injector().receive_message("run_identifier_write_pause");
+        }
+#endif
+
+        wait_for_run_identifier_write(cf);
+        // The sstables of the run naming the spliced run are left as they are. Those of the other
+        // run are rewritten, so they're new sstables, and the run identifier is stored on disk.
+        auto spliced_sstables = check_runs();
+        for (auto& sst : naming_run->all()) {
+            BOOST_REQUIRE(spliced_sstables.contains(sst));
+        }
         for (auto& sst : renamed_sstables) {
-            BOOST_REQUIRE_EQUAL(sst->run_identifier(), spliced_run_id);
-            BOOST_REQUIRE_NE(env.reusable_sst(sst).get()->run_identifier(), spliced_run_id);
+            BOOST_REQUIRE(!spliced_sstables.contains(sst));
+        }
+        for (auto& sst : spliced_sstables) {
+            BOOST_REQUIRE_EQUAL(env.reusable_sst(sst).get()->run_identifier(), spliced_run_id);
         }
 
         // The spliced run is twice the size of the remaining one, so they're no longer compacted together.
@@ -1323,6 +1364,92 @@ SEASTAR_TEST_CASE(ics_splice_sstable_runs_test) {
         cf->splice_sstable_runs().get();
         BOOST_REQUIRE_EQUAL(main_runs().size(), 2);
         BOOST_REQUIRE(*cf->get_sstables() == sstables_before);
+        BOOST_REQUIRE(sstables_with_unpersisted_run_identifier(cf).empty());
+    });
+}
+
+// Checks that run identifiers aren't written to disk while compaction is disabled on the view,
+// e.g. by repair, and that they're written once it's enabled again.
+SEASTAR_TEST_CASE(ics_run_identifier_write_waits_for_compaction_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_ics_schema_for_splicing("ics_run_identifier_write_waits_for_compaction_test");
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        cf->disable_auto_compaction().get();
+        auto keys = tests::generate_partition_keys(8, s);
+        constexpr size_t value_size = 1024;
+        auto left = make_real_run(env, s, keys, 0, 4, 2, value_size);
+        auto right = make_real_run(env, s, keys, 4, 8, 2, value_size);
+        for (auto& run : {left, right}) {
+            for (auto& sst : run->all()) {
+                column_family_test(cf).add_sstable(sst).get();
+            }
+        }
+        auto spliced_run_id = spliced_run_identifier({left, right});
+        auto renamed_sstables = to_set(spliced_run_id == left->run_identifier() ? right : left);
+
+        auto& cm = cf->get_compaction_manager();
+        std::vector<compaction::compaction_reenabler> reenablers;
+        cf->parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& view) -> future<> {
+            reenablers.push_back(co_await cm.stop_and_disable_compaction("test", view));
+        }).get();
+        cf->splice_sstable_runs().get();
+        BOOST_REQUIRE(sstables_with_unpersisted_run_identifier(cf) == renamed_sstables);
+        // The task finds compaction disabled, and puts the view back without writing anything.
+        auto& view = cf->try_get_compaction_group_view_with_static_sharding();
+        REQUIRE_EVENTUALLY_EQUAL<bool>([&] { return env.test_compaction_manager().is_run_identifier_write_parked(view); }, true);
+        BOOST_REQUIRE(sstables_with_unpersisted_run_identifier(cf) == renamed_sstables);
+
+        reenablers.clear();
+        wait_for_run_identifier_write(cf);
+        for (auto& sst : *cf->get_sstables()) {
+            BOOST_REQUIRE(!renamed_sstables.contains(sst));
+            BOOST_REQUIRE_EQUAL(env.reusable_sst(sst).get()->run_identifier(), spliced_run_id);
+        }
+    });
+}
+
+// Checks that run identifiers are written after the task writing them was stopped while
+// waiting for regular compaction to finish selecting, once the periodic compaction submission
+// comes, and not right away.
+SEASTAR_TEST_CASE(ics_run_identifier_write_resumes_after_stop_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_ics_schema_for_splicing("ics_run_identifier_write_resumes_after_stop_test");
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        cf->disable_auto_compaction().get();
+        auto keys = tests::generate_partition_keys(8, s);
+        constexpr size_t value_size = 1024;
+        auto left = make_real_run(env, s, keys, 0, 4, 2, value_size);
+        auto right = make_real_run(env, s, keys, 4, 8, 2, value_size);
+        for (auto& run : {left, right}) {
+            for (auto& sst : run->all()) {
+                column_family_test(cf).add_sstable(sst).get();
+            }
+        }
+        auto spliced_run_id = spliced_run_identifier({left, right});
+        auto renamed_sstables = to_set(spliced_run_id == left->run_identifier() ? right : left);
+
+        auto& cm = cf->get_compaction_manager();
+        auto& view = cf->try_get_compaction_group_view_with_static_sharding();
+        auto& sem = env.test_compaction_manager().get_compaction_state().at(&view).run_identifier_write_sem;
+        // As if a regular compaction were selecting.
+        auto units = get_units(sem, 1).get();
+        cf->splice_sstable_runs().get();
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sem.waiters(); }, 1);
+        cm.stop_ongoing_compactions("test", &view, compaction::compaction_type_set::of<compaction::compaction_type::RewriteComponent>()).get();
+        units.return_all();
+
+        // A stopped task puts the view back without signalling the fiber, so it isn't restarted
+        // right away.
+        REQUIRE_EVENTUALLY_EQUAL<bool>([&] { return env.test_compaction_manager().is_run_identifier_write_parked(view); }, true);
+        BOOST_REQUIRE(sstables_with_unpersisted_run_identifier(cf) == renamed_sstables);
+
+        env.test_compaction_manager().trigger_compaction_submission_timer();
+        wait_for_run_identifier_write(cf);
+        for (auto& sst : *cf->get_sstables()) {
+            BOOST_REQUIRE_EQUAL(env.reusable_sst(sst).get()->run_identifier(), spliced_run_id);
+        }
     });
 }
 

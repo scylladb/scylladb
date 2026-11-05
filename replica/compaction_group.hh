@@ -242,9 +242,10 @@ public:
     // Splices disjoint runs of the main set which the compaction strategy would otherwise
     // compact together for no gain (see compaction_strategy::get_runs_to_splice()), by giving
     // their sstables a common run identifier. That's done in memory, with the main set replaced
-    // by one which holds the spliced runs.
-    // Runs which compaction cannot pick at the moment, and runs with sstables in more than one
-    // view, are left alone.
+    // by one which holds the spliced runs. The compaction manager then writes the new run
+    // identifiers to disk in the background (see compaction_manager::schedule_run_identifier_write()).
+    // Runs which compaction cannot pick at the moment, runs with sstables in more than one view,
+    // and runs with sstables which have no Scylla component, are left alone.
     // Compaction should be disabled on the group while this runs. Otherwise, a compaction which
     // starts meanwhile may still compact the runs being spliced together. Failures are logged
     // and ignored, since splicing is just an optimization.

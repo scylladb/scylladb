@@ -5,7 +5,10 @@
 #
 
 import asyncio
+import hashlib
 import logging
+import os
+from collections import Counter
 
 import pytest
 
@@ -32,9 +35,26 @@ CONFIG = {'compaction_enforce_min_threshold': True}
 RESHAPE_LOG = "found SSTables that need reshape"
 
 
-async def sstable_generations(manager: ScyllaClusterManager, server, ks: str, table: str) -> set[str]:
-    info = await manager.api.get_sstable_info(server.ip_addr, ks, table)
-    return {sst['generation'] for shard in info for sst in shard['sstables']}
+async def data_file_digests(manager: ScyllaClusterManager, server, ks: str, table: str, tag: str) -> Counter[str]:
+    """
+    Returns the SHA-256 digests of the Data components of the table's SSTables.
+
+    Unlike the SSTables' generations, these are kept when another component is
+    rewritten, e.g. the Scylla component when the run identifiers of the runs
+    spliced on boot are written to disk. The SSTables are read from a snapshot,
+    so that they can't be deleted meanwhile by such a rewrite.
+    """
+    await manager.api.take_snapshot(server.ip_addr, ks, tag, [table])
+    workdir = await manager.server_get_workdir(server.server_id)
+    ks_dir = os.path.join(workdir, "data", ks)
+    [table_dir] = [d for d in os.listdir(ks_dir) if d.startswith(f"{table}-")]
+    snapshot_dir = os.path.join(ks_dir, table_dir, "snapshots", tag)
+    digests = Counter()
+    for name in os.listdir(snapshot_dir):
+        if name.endswith("-Data.db"):
+            with open(os.path.join(snapshot_dir, name), "rb") as f:
+                digests[hashlib.sha256(f.read()).hexdigest()] += 1
+    return digests
 
 
 @pytest.mark.parametrize("in_strategy", [True, False])
@@ -78,7 +98,7 @@ async def test_size_tiered_layout_across_restart(manager: ScyllaClusterManager, 
             for _ in range(MAX_THRESHOLD + 1):
                 await write_sstable(1)
 
-        before = await sstable_generations(manager, server, ks, "t")
+        before = await data_file_digests(manager, server, ks, "t", "before")
         assert before, "expected the flushes to have produced SSTables"
 
         log = await manager.server_open_log(server.server_id)
@@ -87,12 +107,12 @@ async def test_size_tiered_layout_across_restart(manager: ScyllaClusterManager, 
         await manager.server_restart(server.server_id)
         await manager.driver_connect(server=server)
 
-        after = await sstable_generations(manager, server, ks, "t")
+        after = await data_file_digests(manager, server, ks, "t", "after")
         reshaped = await log.grep(RESHAPE_LOG, from_mark=mark)
         if in_strategy:
             assert not reshaped, f"restart reshaped an in-strategy size-tiered layout: {reshaped}"
             assert after == before, \
-                f"restart rewrote an in-strategy size-tiered layout: {before} -> {after}"
+                f"restart rewrote the data of an in-strategy size-tiered layout: {before} -> {after}"
         else:
             # The off-strategy case shows the boot-time reshape does fire here,
             # so the assertions above aren't passing for want of a mechanism.

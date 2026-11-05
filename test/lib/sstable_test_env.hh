@@ -111,6 +111,12 @@ public:
     std::unordered_set<compaction::compaction_group_view*>& get_awaiting_automatic_scrub() {
         return _cm._awaiting_automatic_scrub;
     }
+
+    // Returns true if the run identifier write fiber waits for a signal, with none pending, and
+    // `t` is queued: a task for `t` ran, didn't write all run identifiers, and nothing restarted it.
+    bool is_run_identifier_write_parked(compaction::compaction_group_view& t) {
+        return _cm._run_identifier_write_reevaluation.has_waiters() && _cm._awaiting_run_identifier_write.contains(&t);
+    }
 };
 
 struct test_env_config {

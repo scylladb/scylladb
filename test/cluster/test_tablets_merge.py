@@ -817,20 +817,24 @@ async def merge_tablets(manager: ScyllaClusterManager, server: ServerInfo, ks: s
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.parametrize("splice", ["spliced", "skipped"])
+@pytest.mark.parametrize("splice", ["written", "in_memory", "skipped"])
 async def test_ics_runs_are_spliced_after_merge(manager: ScyllaClusterManager, storage_config: FeatureConfig, splice: str):
     """
     Each of two sibling tablets holds a single ICS run, so after they're merged, the merged
     tablet holds two disjoint runs of similar size. Compacting them together would just
     rewrite them, so they're expected to be spliced into one run instead.
-    The runs are spliced in memory right after the merge, and again on every boot.
-    - spliced: the runs are spliced after the merge, and again after the restart.
+    The runs are spliced in memory right after the merge, and their new run identifiers
+    are written to disk in the background.
+    - written: the run identifiers are written before the restart, so the runs are still
+      spliced after it, without splicing them again.
+    - in_memory: the run identifiers aren't written, as if the node stopped before writing
+      them. Then the runs are spliced again on the next boot.
     - skipped: the merge leaves the runs unspliced, as if the node stopped between merging
       the tablets and splicing their runs. Then they're spliced on the next boot.
     Reproduces SCYLLADB-3584.
     """
     cfg = storage_config.get_cluster_cfg({'enable_tablets': True, 'tablet_load_stats_refresh_interval_in_seconds': 1})
-    cmdline = ['--smp', '1', '--logger-log-level', 'table=debug']
+    cmdline = ['--smp', '1', '--logger-log-level', 'table=debug', '--logger-log-level', 'compaction_manager=debug']
     server = await manager.server_add(cmdline=cmdline, config=cfg)
     await manager.disable_tablet_balancing()
 
@@ -842,6 +846,8 @@ async def test_ics_runs_are_spliced_after_merge(manager: ScyllaClusterManager, s
 
         log = await manager.server_open_log(server.server_id)
         mark = await log.mark()
+        if splice == "in_memory":
+            await inject_error_on(manager, "skip_run_identifier_write", [server])
         if splice == "skipped":
             await inject_error_on(manager, "skip_splice_sstable_runs_after_merge", [server])
         await merge_tablets(manager, server, ks)
@@ -851,13 +857,20 @@ async def test_ics_runs_are_spliced_after_merge(manager: ScyllaClusterManager, s
         else:
             await log.wait_for(f'Spliced .* of {ks}.test', from_mark=mark)
             assert await get_pending_compactions(manager, server, ks) == 0
+        if splice == "written":
+            await log.wait_for(f'Wrote run identifiers of [0-9]+ sstables of {ks}.test', from_mark=mark)
+        else:
+            assert await log.grep(f'Wrote run identifiers of [0-9]+ sstables of {ks}.test', from_mark=mark) == []
 
         mark = await log.mark()
         # Error injections don't survive the restart.
         await manager.server_restart(server.server_id)
         await reconnect_driver(manager)
-        assert len(await log.grep(f'Spliced .* of {ks}.test', from_mark=mark)) == 1
+        spliced_on_boot = await log.grep(f'Spliced .* of {ks}.test', from_mark=mark)
+        assert len(spliced_on_boot) == (0 if splice == "written" else 1)
         assert await get_pending_compactions(manager, server, ks) == 0
+        if splice != "written":
+            await log.wait_for(f'Wrote run identifiers of [0-9]+ sstables of {ks}.test', from_mark=mark)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
