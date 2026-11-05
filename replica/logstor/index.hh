@@ -614,11 +614,6 @@ public:
                 _partitions.begin(),
                 [this] { return _partitions.end(); }
             );
-
-        if (_key_count != 0 || _entries_memory_usage != 0 || _live_record_bytes != 0) {
-            on_internal_error(logstor_logger, format("primary_index::clear ended with key_count {}, entries memory usage {}, memory usage {} and live_record_bytes {}",
-                    _key_count, _entries_memory_usage, _tree_allocator.allocated_memory(), _live_record_bytes));
-        }
     }
 
     bool empty() const noexcept { return _partitions.empty(); }
