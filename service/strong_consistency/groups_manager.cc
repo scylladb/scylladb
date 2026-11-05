@@ -486,7 +486,9 @@ void groups_manager::maybe_reset_priority_members(raft_group_state& state, raft:
     if (gains.size() <= max_leadership_gains || state.priority_members_hold.armed()) {
         return;
     }
-    const auto hold = priority_members_hold;
+    const auto hold = utils::get_local_injector().inject_parameter<int64_t>("sc_priority_members_hold_ms")
+            .transform([] (int64_t ms) { return lowres_clock::duration(std::chrono::milliseconds(ms)); })
+            .value_or(priority_members_hold);
     logger.warn("group {}: this replica gained the leadership {} times within {}s, ignoring the preferred leaders for {}s",
             gid, gains.size(), std::chrono::duration_cast<std::chrono::seconds>(leadership_gains_window).count(),
             std::chrono::duration_cast<std::chrono::seconds>(hold).count());
@@ -1342,6 +1344,9 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             auto priority_members = preferred_leaders(*preferred_rack,
                     serving_replicas(tablet_map.get_tablet_info(tid), tablet_map.get_tablet_transition_info(tid)),
                     new_tm->get_topology());
+            if (const auto host = utils::get_local_injector().inject_parameter<std::string_view>("sc_preferred_leader_override")) {
+                priority_members = {raft::server_id(utils::UUID(*host))};
+            }
             const auto old_priority_members = std::exchange(state.priority_members, std::move(priority_members));
             // Start the server, unless it is started or starting already and not being
             // deleted. A new server gets the list on its start; a started or starting one
