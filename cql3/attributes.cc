@@ -115,6 +115,10 @@ db::timeout_clock::duration attributes::get_timeout(const query_options& options
         throw exceptions::invalid_request_exception("Timeout value cannot be null");
     }
     cql_duration duration = timeout.view().deserialize<cql_duration>(*duration_type);
+    return timeout_from_duration(duration);
+}
+
+db::timeout_clock::duration timeout_from_duration(const cql_duration& duration) {
     if (duration.months || duration.days) {
         throw exceptions::invalid_request_exception("Timeout values cannot be expressed in days/months");
     }
