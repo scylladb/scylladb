@@ -1096,26 +1096,34 @@ void tablet_map::mark_dc_counts_dirty(tablet_id id) {
     }
 }
 
-static tablet_dc_counts count_replicas_per_dc(const tablet_replica_set& replicas, const topology& topo, tablet_dc_dictionary& dcs) {
+host_dc_resolver::host_dc_resolver(const topology& topo)
+    // Like topology::get_datacenter(), falls back to the configured location of this node.
+    : _dc_of([&topo] (host_id host) -> const sstring* {
+        if (const auto* node = topo.find_node(host)) {
+            return &node->dc_rack().dc;
+        }
+        return topo.is_me(host) ? &topo.get_datacenter() : nullptr;
+    })
+{}
+
+static tablet_dc_counts count_replicas_per_dc(const tablet_replica_set& replicas, const host_dc_resolver& dc_of, tablet_dc_dictionary& dcs) {
     tablet_dc_counts counts;
     for (const auto& r : replicas) {
-        // Like topology::get_datacenter(), falls back to the configured location of this node.
-        const auto* node = topo.find_node(r.host);
-        if (!node && !topo.is_me(r.host)) {
+        const auto* dc = dc_of(r.host);
+        if (!dc) {
             tablet_logger.debug("Datacenter of tablet replica {} is unknown: host not in topology", r);
             counts.unknown = true;
             continue;
         }
-        const auto& dc = node ? node->dc_rack().dc : topo.get_datacenter();
-        if (!counts.add_replica(dcs.index_of_or_add(dc))) {
+        if (!counts.add_replica(dcs.index_of_or_add(*dc))) {
             on_internal_error(tablet_logger, format("More than {} replicas of a tablet in datacenter {}, out of {} replicas",
-                    std::numeric_limits<tablet_dc_counts_vector::value_type>::max(), dc, replicas.size()));
+                    std::numeric_limits<tablet_dc_counts_vector::value_type>::max(), *dc, replicas.size()));
         }
     }
     return counts;
 }
 
-future<size_t> tablet_map::update_dc_counts(const topology& topo, tablet_dc_dictionary& dcs) {
+future<size_t> tablet_map::update_dc_counts(host_dc_resolver dc_of, tablet_dc_dictionary& dcs) {
     // A tablet changed during a yield after its recompute is appended to the list, so this
     // loop recomputes it too. The list is cleared only after the last tablet, so a throw
     // leaves has_dirty_dc_counts() true instead of serving stale counts.
@@ -1123,10 +1131,10 @@ future<size_t> tablet_map::update_dc_counts(const topology& topo, tablet_dc_dict
     for (size_t i = 0; i < _dc.dirty.size(); ++i) {
         auto id = _dc.dirty[i];
         auto& counts = _dc.counts[id.value()];
-        counts = count_replicas_per_dc(_tablets[id.value()].replicas, topo, dcs);
+        counts = count_replicas_per_dc(_tablets[id.value()].replicas, dc_of, dcs);
         bool is_unknown = counts.unknown;
         if (auto* trinfo = get_tablet_transition_info(id)) {
-            auto [it, _] = _dc.transitions.insert_or_assign(id, count_replicas_per_dc(trinfo->next, topo, dcs));
+            auto [it, _] = _dc.transitions.insert_or_assign(id, count_replicas_per_dc(trinfo->next, dc_of, dcs));
             is_unknown |= it->second.unknown;
         } else {
             _dc.transitions.erase(id);
