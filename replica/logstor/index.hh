@@ -82,10 +82,6 @@ public:
         return *this;
     }
 
-    size_t memory_usage() const noexcept {
-        return sizeof(primary_index_entry);
-    }
-
     bool is_head() const noexcept { return _flags._head; }
     void set_head(bool v) noexcept { _flags._head = v; }
     bool is_tail() const noexcept { return _flags._tail; }
@@ -316,7 +312,6 @@ private:
     counting_allocation_strategy _tree_allocator{standard_allocator(), logstor_logger};
     tree_type _entries;
     size_t _key_count = 0;
-    size_t _entries_memory_usage = 0;
     // Bytes of the records this index points at.
     uint64_t _live_record_bytes = 0;
 
@@ -333,16 +328,6 @@ private:
 
     // Currently we support a single subscriber for space accounting which is the segment manager.
     space_accounting_subscriber& _space_accounting;
-
-    void on_index_entry_inserted(const primary_index_entry& e) noexcept {
-        _entries_memory_usage += e.memory_usage();
-        ++_key_count;
-    }
-
-    void on_index_entry_erased(const primary_index_entry& e) noexcept {
-        _entries_memory_usage -= e.memory_usage();
-        --_key_count;
-    }
 
     void space_accounting_on_record_added(record_location location) noexcept {
         _space_accounting.on_add_record(location);
@@ -364,7 +349,7 @@ private:
                 _cache_tracker->evict(*e);
             }
             space_accounting_on_record_freed(e->_e.location);
-            on_index_entry_erased(*e);
+            --_key_count;
         };
     }
 
@@ -566,7 +551,7 @@ public:
             return _entries.emplace_before(i, key.raw_token().value, hint, key, std::move(new_entry));
         });
         space_accounting_on_record_added(it->_e.location);
-        on_index_entry_inserted(*it);
+        ++_key_count;
         return {insert_result::inserted, std::nullopt};
     }
 
@@ -615,8 +600,8 @@ public:
 
     bool empty() const noexcept { return _entries.empty(); }
     size_t get_key_count() const noexcept { return _key_count; }
-    // The entries alone, without the B+tree.
-    size_t get_entries_memory_usage() const noexcept { return _entries_memory_usage; }
+    // Returns the memory of the entries alone, without the nodes of the B+tree.
+    size_t get_entries_memory_usage() const noexcept { return _key_count * sizeof(primary_index_entry); }
     // Everything the index holds, the B+tree's nodes and buckets included.
     size_t get_memory_usage() const noexcept { return _tree_allocator.allocated_memory(); }
     uint64_t get_live_record_bytes() const noexcept { return _live_record_bytes; }
