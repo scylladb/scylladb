@@ -23,9 +23,10 @@ class audit_stdout_storage_helper : public storage_helper {
     shared_ptr<stdout_stream> _stream;
     shared_ptr<stdout_record_batcher> _batcher;
 public:
-    // `path` stands in for the standard output, and a write fails once its
-    // record waits longer than `write_timeout`.
-    explicit audit_stdout_storage_helper(sstring path = "/dev/stdout", std::chrono::milliseconds write_timeout = std::chrono::seconds(5));
+    // `path` stands in for the standard output. A write fails once its record waits longer than `write_timeout`,
+    // or at once if other records of its shard wait and leave too little of `max_unwritten_memory` for it.
+    explicit audit_stdout_storage_helper(sstring path = "/dev/stdout", std::chrono::milliseconds write_timeout = std::chrono::seconds(5),
+                                         size_t max_unwritten_memory = 4 * 1024 * 1024);
     virtual ~audit_stdout_storage_helper();
     virtual future<> start(const db::config& cfg) override;
     virtual future<> stop() override;

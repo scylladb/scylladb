@@ -10,12 +10,15 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <filesystem>
+#include <limits>
 #include <sys/sysmacros.h>
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/semaphore.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/with_timeout.hh>
@@ -128,6 +131,7 @@ class record_batch {
     std::vector<temporary_buffer<char>> _chunks;
     size_t _chunk_free = 0;
     utils::chunked_vector<std::string_view> _data;
+    semaphore_units<> _units;
 
     void add(std::string_view data) {
         if (!_data.empty() && _data.back().data() + _data.back().size() == data.data()) {
@@ -142,13 +146,14 @@ public:
         size_t chunk_free;
         size_t data;
         size_t last_data_size;
+        size_t units;
     };
 
     position mark() const noexcept {
-        return {_chunks.size(), _chunk_free, _data.size(), _data.empty() ? 0 : _data.back().size()};
+        return {_chunks.size(), _chunk_free, _data.size(), _data.empty() ? 0 : _data.back().size(), _units.count()};
     }
 
-    // Drops everything appended after `pos`.
+    // Drops everything appended after `pos`, and returns the units held since.
     void truncate(const position& pos) noexcept {
         _chunks.erase(_chunks.begin() + pos.chunks, _chunks.end());
         _chunk_free = pos.chunk_free;
@@ -157,6 +162,9 @@ public:
         }
         if (!_data.empty()) {
             _data.back() = std::string_view(_data.back().data(), pos.last_data_size);
+        }
+        if (_units.count() > pos.units) {
+            _units.return_units(_units.count() - pos.units);
         }
     }
 
@@ -184,6 +192,14 @@ public:
         }
     }
 
+    void hold(semaphore_units<> units) noexcept {
+        if (_units.count() == 0) {
+            _units = std::move(units);
+        } else {
+            _units.adopt(std::move(units));
+        }
+    }
+
     bool empty() const noexcept {
         return _data.empty();
     }
@@ -203,13 +219,19 @@ struct stdout_stream {
             throw audit_exception("Stdout audit backend is not started");
         }
         try {
-            std::vector<temporary_buffer<char>> buffers;
-            buffers.reserve(batch.data().size());
-            for (std::string_view data : batch.data()) {
-                // a non-owning buffer: the batch outlives the put below
-                buffers.emplace_back(const_cast<char*>(data.data()), data.size(), deleter());
+            const auto& data = batch.data();
+            // At most IOV_MAX buffers per put: not every reactor backend splits a longer
+            // writev, and no write builds a large array of buffers.
+            for (size_t start = 0; start < data.size(); start += IOV_MAX) {
+                auto end = std::min<size_t>(data.size(), start + IOV_MAX);
+                std::vector<temporary_buffer<char>> buffers;
+                buffers.reserve(end - start);
+                for (size_t i = start; i < end; ++i) {
+                    // a non-owning buffer: the batch outlives the put below
+                    buffers.emplace_back(const_cast<char*>(data[i].data()), data[i].size(), deleter());
+                }
+                co_await sink->put(std::move(buffers));
             }
-            co_await sink->put(std::move(buffers));
         } catch (...) {
             auto error_msg = seastar::format("Stdout audit backend failed (writing to {} resulted in {}).", path, std::current_exception());
             logger.error("{}", error_msg);
@@ -226,6 +248,10 @@ public:
     using flush_func = noncopyable_function<future<>(const record_batch&)>;
 private:
     std::chrono::milliseconds _timeout;
+    size_t _max_unwritten_memory;
+    // Units are bytes, which a record of this shard holds from when it is copied
+    // until it is written. Declared before _pending, whose units return to it.
+    semaphore _unwritten_memory;
     flush_func _flush;
     record_batch _pending;
     // Engaged whenever _pending is not empty.
@@ -255,46 +281,64 @@ private:
     }
 
     future<> append(auto&& add, lowres_clock::time_point timeout) {
-        if (!_pending_flushed) {
-            _pending_flushed.emplace();
-        }
-        auto flushed = _pending_flushed->get_shared_future(timeout);
         auto pending_mark = _pending.mark();
         try {
             add(_pending);
+            if (!_pending_flushed) {
+                _pending_flushed.emplace();
+            }
+            auto flushed = _pending_flushed->get_shared_future(timeout);
             if (!_flushing) {
                 _flush_loop = flush_loop();
             }
+            return flushed;
         } catch (...) {
-            // drop a partly copied record, or the views of a batch the caller frees on failure
+            // drop what was appended: a rejected or partly built record, or the
+            // views of a batch that the caller frees on failure
             _pending.truncate(pending_mark);
             throw;
         }
-        return flushed;
     }
 public:
-    stdout_record_batcher(std::chrono::milliseconds timeout, flush_func flush)
+    stdout_record_batcher(std::chrono::milliseconds timeout, size_t max_unwritten_memory, flush_func flush)
         : _timeout(timeout)
+        , _max_unwritten_memory(max_unwritten_memory)
+        , _unwritten_memory(max_unwritten_memory)
         , _flush(std::move(flush))
     {}
 
-    // Appends the pieces that `build` passes to its argument as one record. Fails once the record
-    // waits longer than the timeout, or at once while the flush in progress has taken that long.
+    // Appends the pieces that `build` passes to its argument as one record. Fails at the timeout, or at
+    // once while the flush in progress has taken that long or this shard has no room for the record.
     future<> write_record(auto&& build) {
         auto now = lowres_clock::now();
         if (_flushing && now - _flush_started > _timeout) {
             return make_exception_future<>(audit_exception(seastar::format(
                     "Stdout audit backend has not finished a write for over {}", _timeout)));
         }
-        auto add = [&build] (record_batch& pending) {
-            build([&pending] (std::string_view piece) {
+        auto add = [this, &build] (record_batch& pending) {
+            size_t available = _unwritten_memory.available_units();
+            // a record longer than the limit fits once no other record waits
+            size_t room = available == _max_unwritten_memory ? std::numeric_limits<size_t>::max() : available;
+            size_t size = 0;
+            build([this, &pending, &size, available, room] (std::string_view piece) {
+                size += piece.size();
+                if (size > room) {
+                    throw audit_exception(seastar::format(
+                            "Stdout audit backend has no room for the record: {} of at most {} bytes of records are waiting to be written",
+                            _max_unwritten_memory - available, _max_unwritten_memory));
+                }
                 pending.append(piece);
             });
+            pending.hold(consume_units(_unwritten_memory, std::min(size, _max_unwritten_memory)));
         };
-        return append(add, now + _timeout).handle_exception_type([timeout = _timeout] (const timed_out_error&) {
-            return make_exception_future<>(audit_exception(seastar::format(
-                    "Stdout audit backend did not write the record within {}", timeout)));
-        });
+        try {
+            return append(add, now + _timeout).handle_exception_type([timeout = _timeout] (const timed_out_error&) {
+                return make_exception_future<>(audit_exception(seastar::format(
+                        "Stdout audit backend did not write the record within {}", timeout)));
+            });
+        } catch (...) {
+            return current_exception_as_future();
+        }
     }
 
     // Resolves once the records of `batch` are flushed. Waits without a
@@ -427,9 +471,9 @@ void put_record(auto&& put,
 
 }
 
-audit_stdout_storage_helper::audit_stdout_storage_helper(sstring path, std::chrono::milliseconds write_timeout)
+audit_stdout_storage_helper::audit_stdout_storage_helper(sstring path, std::chrono::milliseconds write_timeout, size_t max_unwritten_memory)
     : _stream(seastar::make_shared<stdout_stream>(std::move(path)))
-    , _batcher(seastar::make_shared<stdout_record_batcher>(write_timeout, [stream = _stream] (const record_batch& batch) {
+    , _batcher(seastar::make_shared<stdout_record_batcher>(write_timeout, max_unwritten_memory, [stream = _stream] (const record_batch& batch) {
         return this_shard_id() == 0 ? stream->write(batch) : forward_to_shard0(batch);
     }))
 {}
