@@ -10,6 +10,7 @@
 
 #include "writer_node.hh"
 #include "bti_node_type.hh"
+#include <functional>
 #include "sstables/file_writer.hh"
 
 namespace sstables::trie {
@@ -28,6 +29,7 @@ sink_offset max_offset_from_child(const writer_node& x, sink_pos pos);
 class bti_node_sink {
     sstables::file_writer& _w;
     size_t _page_size;
+    std::function<void(uint64_t pos, uint32_t mark)> _mark_observer;
     constexpr static size_t max_page_size = 64 * 1024;
 public:
     bti_node_sink(sstables::file_writer& w, size_t page_size);
@@ -111,6 +113,17 @@ public:
     // Returns the position reported by the underlying `file_writer`.
     sink_pos pos() const;
     sstables::file_writer& file_writer();
+    // Called by the trie writer before it writes a node at the given
+    // position, whose subtree has a key with the given (nonzero) mark (see
+    // trie_writer::add()). Tells the observer, if there is one.
+    void note_mark(sink_pos pos, uint32_t mark) {
+        if (_mark_observer) {
+            _mark_observer(pos.value, mark);
+        }
+    }
+    void set_mark_observer(std::function<void(uint64_t pos, uint32_t mark)> observer) {
+        _mark_observer = std::move(observer);
+    }
 };
 static_assert(trie_writer_sink<bti_node_sink>);
 
