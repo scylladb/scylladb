@@ -188,7 +188,6 @@ public:
 
 private:
     using iterator = typename tree_type::iterator;
-    using const_iterator = typename tree_type::const_iterator;
 
 public:
 
@@ -314,12 +313,12 @@ public:
 
             while (current != end) {
                 auto token = current->key().token();
-                auto token_end = _index->upper_bound(token);
-                if (_range.end() && _range.end()->value() == token) {
-                    token_end = end;
+                auto token_end = current;
+                size_t token_entry_count = 0;
+                while (token_end != end && token_end->key().token() == token) {
+                    ++token_end;
+                    ++token_entry_count;
                 }
-
-                auto token_entry_count = size_t(std::distance(current, token_end));
                 if (next.entry_count != 0 && next.entry_count + token_entry_count > max_entries) {
                     break;
                 }
@@ -414,10 +413,6 @@ private:
 
     index_read_guard start_read() const {
         return index_read_guard(_reads_phaser.start());
-    }
-
-    const_iterator upper_bound(dht::token token) const {
-        return _entries.upper_bound(token.raw(), primary_index_key_cmp{});
     }
 
 public:
