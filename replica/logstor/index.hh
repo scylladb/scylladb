@@ -57,7 +57,7 @@ public:
 
     ~primary_index_entry() {
         if (_cached_entry) {
-            on_internal_error(logstor_logger, "primary_index_entry destroyed while having a cache entry");
+            on_fatal_internal_error(logstor_logger, "primary_index_entry destroyed while having a cache entry");
         }
     }
 
@@ -73,7 +73,7 @@ public:
             return *this;
         }
         if (_cached_entry) {
-            on_internal_error(logstor_logger, "primary_index_entry move-assignment overwrote a live cached entry");
+            on_fatal_internal_error(logstor_logger, "primary_index_entry move-assignment overwrote a live cached entry");
         }
         _key = std::move(other._key);
         _e = std::move(other._e);
