@@ -577,3 +577,114 @@ applied by commitlog replay rather than by `state_machine::apply()`, so nothing 
 the markers. The state is created when the replica learns of the resize, from the tablet
 metadata or from the markers after a restart, and dropped by the teardown of the parent's Raft
 server.
+
+# Leader placement
+
+Reads and writes for a strongly consistent tablet go through the leader of its Raft group,
+so the leader's location decides how many network hops a request takes. A caller can give
+Raft a list of preferred leaders. Raft then biases elections towards them, bootstraps a
+fresh group on the first of them, and moves the leadership back to them when it ends up
+elsewhere.
+
+## Preferred replicas
+
+`fsm_config::priority_members` (`server::configuration::priority_members` for a
+`raft::server`) lists the preferred leaders, best first. The preferred leader is the first
+of them that can vote in the current configuration and is alive (`fsm::preferred_leader()`).
+`fsm::reset_election_timeout()` gives it a reserved slot, one tick after
+`ELECTION_TIMEOUT`, and every other server picks a random slot after it. So the preferred
+leader starts its campaign first and, alone in its slot, cannot split the vote. This is a
+bias, not a guarantee: election timers run independently on each node, and a slow node can
+still lose. A preferred leader whose clock is unusable while leases are on gives up its slot
+and the fast bootstrap. It could serve no lease reads, and the group would move the
+leadership away from it again.
+
+Only the first preferred leader gets a slot. The rest of the list is used by the handover
+described below.
+
+The caller must give all replicas of a group the same list. If they disagree about the first
+entry, two servers take the reserved slot and split the vote. If they disagree about the
+order, the leadership may bounce between servers.
+
+A short disagreement, such as a replica whose view of the topology lags a little, costs
+one bounce if it ends by the new leader's first tick: that is when the new leader acts on
+its list, and by then the lists usually agree again. A lasting one is stopped by `groups_manager`: a replica which gains the leadership
+of a group more than three times within a minute withdraws the group's list for five
+minutes, and so keeps the leadership, since without a list it hands nothing over. The list
+is pushed again when the hold ends.
+
+The caller replaces the list with `set_priority_members()` when its view changes. A
+follower draws its slot when its election countdown starts, so the slot reflects the
+current list and which servers are alive. A leader reads the list on every tick.
+
+## The preferred rack
+
+`preferred_leaders()` in `groups_manager.cc` computes the list for tablet groups. If the keyspace
+sets `preferred_rack` (see the `preferred_rack` option in the CQL documentation), the list
+holds the tablet's replicas in that rack.
+
+During a migration the list is computed from the replicas which may serve the tablet at
+the migration's stage, so while the leaving and the pending replica are both members,
+both are listed if they are in the rack. Raft takes the first of them which can vote and is alive.
+
+`groups_manager::update()` recomputes the list on every token metadata change and passes
+it to the group's server when it changes, so migrations, topology changes and an altered
+`preferred_rack` are picked up without restarting the group. Keyspaces without a preferred
+rack have empty lists, and Raft spreads the leadership over all replicas as usual.
+
+## Bootstrapping a fresh group
+
+A fresh group skips the first election timeout: `raft::server` starts one member as a
+candidate right away (`fsm_config::fast_bootstrap_seed`). If the group has a preferred
+leader, that member is the preferred leader, so the group doesn't have to hand the
+leadership over later.
+
+## Handing the leadership over
+
+Elections happen only while a group has no leader. A follower that sees a live leader
+keeps resetting its election timer (`has_stable_leader()` in `fsm::tick()`), so a healthy
+leader keeps the leadership indefinitely. If the group elected a leader outside the
+preferred rack, because the replica there was down, behind, or slower to campaign, the
+reserved slot alone would never fix that.
+
+So the leader moves the leadership itself. On every tick, and whenever the caller
+replaces the list, `fsm::maybe_transfer_leadership()` asks `fsm::handover_target()`
+whether to hand over and to whom. A server can take over if it:
+
+- can vote,
+- is alive according to the failure detector,
+- has a working clock (`clock_ok` in its progress), when leases are on.
+
+With a working clock, the leader considers only the best such server ahead of it on the
+list. If the first preferred server is down, the leadership goes to the next one on the
+list. When the first one comes back, the leader hands the leadership to it, without the
+caller changing the list.
+
+A transfer blocks the group's writes until the target has the whole log, so it starts
+only once the target keeps up: it has acked everything the leader had a tick ago. A
+follower that sustains the write rate passes this on every tick, however much faster
+another follower is, and once the transfer freezes the log it acks the rest within
+about a tick. A follower more than a tick behind, such as one catching up after a
+restart, fails it. If the best server lags, the leader waits for it rather than move
+the leadership to a worse one and then again.
+
+The leader transfers the leadership to the chosen server, and only to it. No other
+server gets `timeout_now`, so if the target cannot take over, the group keeps its
+current leader. The transfer gives up after `ELECTION_TIMEOUT`, and the next attempt
+comes only after `transfer_retry_backoff`, since every attempt blocks the writes. A new
+leader gets no such grace: it hands over on its first tick if a server ahead of it keeps
+up.
+
+A leader whose clock has been unusable for `clock_stepdown_delta_multiple` deltas, while
+leases are on, cannot hold a lease, so it doesn't wait for the best server. It hands the
+leadership to the first server on the list that can take over and keeps up, even one
+ranked below itself, and to any other such server if no list member keeps up. If nobody
+keeps up it starts no transfer and asks again on the next tick.
+
+A stepdown without a target, on shutdown or when the leader is no longer a voter, waits
+for nobody: `timeout_now` goes to the first voter that has acked the whole log. Among the
+voters that have acked it when the stepdown starts, one with a working clock comes
+first, then the one the list ranks best.
+
+If `stepdown()` is called while a handover is in progress, for example on shutdown, the
+stepdown replaces the handover and uses its own target and timeout.
