@@ -137,6 +137,9 @@ public:
     const std::map<sstring, sstring>& preferred_rack() const noexcept {
         return _preferred_rack;
     }
+    void set_preferred_rack(std::map<sstring, sstring> preferred_rack) {
+        _preferred_rack = std::move(preferred_rack);
+    }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() {
         return _storage_options;
     }
