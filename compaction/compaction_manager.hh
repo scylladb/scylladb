@@ -527,6 +527,10 @@ public:
     // Total size of the sstables that compaction would consider for a compaction group.
     future<uint64_t> get_candidates_size(compaction::compaction_group_view& t) const;
 
+    // Runs that compaction would consider for a compaction group, i.e. all but the ones with
+    // sstables being compacted, or being written by an ongoing compaction.
+    future<std::vector<sstables::frozen_sstable_run>> get_candidate_runs(compaction::compaction_group_view& t) const;
+
     double backlog() {
         return _backlog_manager.backlog();
     }

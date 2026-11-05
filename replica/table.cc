@@ -1714,6 +1714,15 @@ compaction_group& table::compaction_group_for_logstor_segment(logstor::log_segme
     return _sg_manager->compaction_group_for_logstor_segment(seg_id, first_token, last_token);
 }
 
+future<> table::splice_sstable_runs() {
+    // The groups are spliced one at a time, which bounds the memory used for gathering their runs.
+    co_await _sg_manager->for_each_storage_group_gently([] (storage_group& sg) -> future<> {
+        for (auto& cg : sg.compaction_groups_immediate()) {
+            co_await cg->splice_sstable_runs();
+        }
+    });
+}
+
 future<> table::parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) {
     co_await _sg_manager->parallel_foreach_storage_group([&] (storage_group& sg) -> future<> {
         co_await utils::get_local_injector().inject("foreach_compaction_group_wait", [this, &sg] (auto& handler) -> future<> {
@@ -2747,6 +2756,93 @@ compaction_group::merge_logstor_segments_from(compaction_group& group) {
     }
     auto permit = co_await _t.get_sstable_list_permit();
     co_await logstor_segments().merge(group.logstor_segments());
+}
+
+future<> compaction_group::splice_sstable_runs() noexcept {
+    if (!_t._compaction_strategy.may_splice_runs()) {
+        co_return;
+    }
+    // Callers, like the merge completion fiber, may hold only the gate of the storage group,
+    // which doesn't keep this group from being stopped meanwhile.
+    auto holder = try_hold_gate(_async_gate);
+    if (!holder) {
+        co_return;
+    }
+    try {
+        auto& cm = get_compaction_manager();
+        // Held from picking the runs until the main set with the spliced runs is in place, since
+        // everything else which replaces the main set, like memtable flushes and compaction, holds
+        // it too. Otherwise, the new main set, built from the current one, would miss the sstables
+        // added meanwhile. The sstables picked can't be replaced meanwhile either, so a run can't
+        // end up spliced partially.
+        auto permit = co_await _t.get_sstable_list_permit();
+        // The strategy checks the runs it picks for overlaps only within a view. That check covers
+        // the whole runs only if all their sstables are in the view, so runs which also have sstables
+        // in other views, e.g. when only some of them are repaired, are left alone.
+        auto main_run_sizes = main_sstables()->all_sstable_runs()
+                | std::views::transform([] (const sstables::frozen_sstable_run& run) { return std::pair(run->run_identifier(), run->all().size()); })
+                | std::ranges::to<std::unordered_map>();
+        std::unordered_map<sstables::shared_sstable, sstables::run_id> new_run_ids;
+        // Sstables of different views are never compacted together, so there's no point in splicing across views.
+        for (auto* view : all_views()) {
+            auto runs = co_await cm.get_candidate_runs(*view);
+            // A view holds a subset of the sstables of the main set, so a run has fewer sstables in a view
+            // than in the main set exactly when some of them are in other views.
+            std::erase_if(runs, [&main_run_sizes] (const sstables::frozen_sstable_run& run_in_view) {
+                auto it = main_run_sizes.find(run_in_view->run_identifier());
+                return it == main_run_sizes.end() || run_in_view->all().size() != it->second;
+            });
+            auto runs_to_splice = _t._compaction_strategy.get_runs_to_splice(std::move(runs));
+            for (auto& group : runs_to_splice) {
+                auto run_id = group.front()->run_identifier();
+                tlogger.debug("Splicing sstable runs [{}] into run {} in compaction group {} of {}.{}",
+                        fmt::join(group | std::views::transform(std::mem_fn(&sstables::sstable_run::run_identifier)), ", "),
+                        run_id, group_id(), schema()->ks_name(), schema()->cf_name());
+                for (auto& run : group | std::views::drop(1)) {
+                    for (auto& sst : run->all()) {
+                        new_run_ids.emplace(sst, run_id);
+                    }
+                }
+            }
+        }
+        if (new_run_ids.empty()) {
+            co_return;
+        }
+
+        // Sstable sets index runs by run identifier, so an sstable's run identifier mustn't change
+        // while it's in a set which is going to be modified. The sstables are given their new run
+        // identifier only once the permit keeps the current main set from being modified, and then
+        // inserted into a new main set. Older versions of the main set, still held e.g. by reads,
+        // keep indexing the sstables by their old run identifier. That's fine, as they're only read.
+        std::vector<std::pair<sstables::shared_sstable, sstables::run_id>> old_run_ids;
+        old_run_ids.reserve(new_run_ids.size());
+        for (auto& [sst, run_id] : new_run_ids) {
+            old_run_ids.emplace_back(sst, sst->run_identifier());
+            sst->set_in_memory_run_identifier(run_id);
+        }
+        // The current main set wasn't modified, so restoring the old run identifiers leaves it consistent.
+        auto restore_run_ids = defer([&old_run_ids] () noexcept {
+            for (auto& [sst, run_id] : old_run_ids) {
+                sst->set_in_memory_run_identifier(run_id);
+            }
+        });
+        auto new_main_sstables = make_lw_shared<sstables::sstable_set>(make_main_sstable_set());
+        co_await main_sstables()->for_each_sstable_gently([&new_main_sstables] (const sstables::shared_sstable& sst) {
+            new_main_sstables->insert(sst);
+        });
+        restore_run_ids.cancel();
+        set_main_sstables(std::move(new_main_sstables));
+        _t.refresh_compound_sstable_set();
+        _t.get_row_cache().refresh_snapshot();
+        // The sstables stay the same, but the backlog tracker of ICS depends on how they're grouped into runs.
+        auto spliced_sstables = new_run_ids | std::views::keys | std::ranges::to<std::vector>();
+        backlog_tracker_adjust_charges(spliced_sstables, spliced_sstables);
+        tlogger.debug("Spliced {} sstables in compaction group {} of {}.{}",
+                spliced_sstables.size(), group_id(), schema()->ks_name(), schema()->cf_name());
+    } catch (...) {
+        tlogger.warn("Failed to splice sstable runs in compaction group {} of {}.{}: {}. Ignored.",
+                group_id(), schema()->ks_name(), schema()->cf_name(), std::current_exception());
+    }
 }
 
 future<>
