@@ -25,6 +25,8 @@
 #include "db/system_keyspace.hh"
 #include "service/topology_state_machine.hh"
 #include "idl/strong_consistency/groups_manager.dist.hh"
+#include "idl/strong_consistency/state_machine.dist.hh"
+#include "idl/strong_consistency/state_machine.dist.impl.hh"
 #include "utils/error_injection.hh"
 #include "utils/on_internal_error.hh"
 #include <seastar/core/lowres_clock.hh>
@@ -1437,6 +1439,47 @@ future<groups_manager::colocation_status> groups_manager::colocate_leaders(
     co_return child_unavailable ? colocation_status::child_unavailable : status;
 }
 
+// Test-only: appends `kind` to the log of the group served by `parent` if this node leads it, and
+// waits until it is applied here.
+static future<> append_resize_marker(raft_server& parent, raft::group_id parent_gid, resize_marker_kind kind,
+        abort_source& as) {
+    // Only the parent's leader gives the marker its timestamp, from the clock its writes take
+    // theirs from.
+    auto disposition = parent.begin_mutate(as);
+    const auto* ts = get_if<raft_server::timestamp_with_term>(&disposition);
+    if (!ts) {
+        co_return;
+    }
+    raft::command raft_cmd;
+    ser::serialize(raft_cmd, raft_command{.change = resize_marker{.kind = kind, .timestamp = ts->timestamp}});
+    logger.info("append_resize_marker: appending {} to raft group {}", kind, parent_gid);
+    co_await parent.server().add_entry(std::move(raft_cmd), raft::wait_type::committed, &as);
+    // We wait until the marker is applied, so that a write which found start_resize not yet
+    // applied is appended before end_resize.
+    co_await parent.server().read_barrier(&as);
+}
+
+// Test-only: while the sc_inject_resize_markers injection is enabled, appends start_resize to the
+// log of `parent_gid` on the first message to the injection and end_resize on the second, so that a
+// test can hold a resize between the two. Called by the colocator with the leaders co-located.
+static future<> inject_resize_markers(raft::group_id parent_gid, abort_source& as,
+        noncopyable_function<std::optional<raft_server>()> acquire_parent) {
+    static constexpr std::string_view injection = "sc_inject_resize_markers";
+    co_await utils::get_local_injector().inject(injection, [&] (auto& handler) -> future<> {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+        for (const auto kind : {resize_marker_kind::start_resize, resize_marker_kind::end_resize}) {
+            co_await handler.wait_for_message(deadline, &as);
+            // Disabling the injection releases the wait without a message.
+            if (!utils::get_local_injector().is_enabled(injection)) {
+                co_return;
+            }
+            if (auto parent = acquire_parent()) {
+                co_await append_resize_marker(*parent, parent_gid, kind, as);
+            }
+        }
+    });
+}
+
 future<> groups_manager::leader_colocator(resize_colocation_state& colocation, raft::group_id parent_gid) {
     // `colocation` is the state this fiber is stored in, and outlives it. It is passed directly
     // rather than found through the group's raft_group_state, which points at nothing, or at a
@@ -1494,6 +1537,10 @@ future<> groups_manager::leader_colocator(resize_colocation_state& colocation, r
                 co_await sleep_abortable(10ms, as);
                 continue;
             case colocation_status::colocated:
+                co_await inject_resize_markers(parent_gid, as, [this, parent_gid] {
+                    return try_acquire_server(parent_gid);
+                });
+                break;
             case colocation_status::awaiting_leader_change:
                 break;
             }
