@@ -1231,6 +1231,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "leap seconds through the kernel or by a step (chrony's leapsecmode system, the default, or step; "
             "not slew or ignore), and all nodes to use the same kind of time sources, all leap-smearing or none.\n"
             "\tclockbound: derive the clock bound from the AWS ClockBound daemon (via shared memory). "
+            "The daemon ships in the scylla-clockbound package; it disciplines the clock itself, so "
+            "enabling clockbound.service stops chronyd or ntpd. `cbctl status` shows what it reports. "
             "The node fails to start if the ClockBound shared-memory segment is missing or unreadable, "
             "i.e. the clockbound daemon has never run on this host. If the daemon stops, leases fall back "
             "to quorum reads once its clock status is no longer synchronized or free-running.\n"

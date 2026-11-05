@@ -790,6 +790,8 @@ tests = scylla_tests | perf_tests | perf_standalone_tests | raft_tests | vector_
 
 other = set([
     'iotune',
+    'clockbound',
+    'cbctl',
 ])
 
 all_artifacts = apps | cpp_apps | tests | other | wasms
@@ -2751,10 +2753,12 @@ if os.path.exists(kmipc_lib):
     libs += f' {kmipc_lib}'
     user_cflags += f' -I{kmipc_dir}/include -DHAVE_KMIP'
 
-# AWS ClockBound bounded-clock backend. Its C client library (libclockbound.a)
-# is built from the clock-bound git submodule (the clock-bound-ffi workspace
-# member) via the clockbound_lib ninja rule, and linked into any binary that
-# includes the backend. The backend uses the plain C interface in
+# AWS ClockBound bounded-clock backend. The clock-bound git submodule yields
+# the C client library (libclockbound.a, the clock-bound-ffi workspace member)
+# via the clockbound_lib ninja rule, linked into any binary that includes the
+# backend, and the clockbound daemon and its cbctl tool (the clock-bound
+# package's binaries, behind its `daemon` feature) via the clockbound_bin rule,
+# packaged as scylla-clockbound. The backend uses the plain C interface in
 # clock-bound/clock-bound-ffi/include/clockbound.h.
 user_cflags += ' -Iclock-bound/clock-bound-ffi/include'
 
@@ -2778,7 +2782,15 @@ def clockbound_lib(mode):
     # target directory, and the dep-info names that exact archive path as its
     # target. Linking the archive where cargo puts it keeps the depfile's target
     # equal to the build statement's output, which is what ninja requires.
-    return f'$builddir/{mode}/clockbound/release/libclockbound'
+    return f'$builddir/{mode}/clock-bound/release/libclockbound'
+
+
+clockbound_bins = ['clockbound', 'cbctl']
+
+
+def clockbound_bin(mode, name):
+    # A clock-bound binary and its dep-info file, laid out the same way.
+    return f'$builddir/{mode}/clock-bound/release/{name}'
 
 cpp_jwt_encryption_sources = [
     'ent/encryption/azure_host.cc',
@@ -3068,10 +3080,17 @@ def write_build_file(f,
             ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_libs=fmt_libs, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
         f.write(textwrap.dedent('''\
             rule clockbound_lib.{mode}
-              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --release {lib_cargo_config} --manifest-path=clock-bound/Cargo.toml -p clock-bound-ffi --target-dir=$builddir/{mode}/clockbound $
+              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --release {lib_cargo_config} --manifest-path=clock-bound/Cargo.toml -p clock-bound-ffi --target-dir=$builddir/{mode}/clock-bound $
                         && touch $out
               description = CLOCKBOUND_LIB $out
-            ''').format(mode=mode, rustc_wrapper=rustc_wrapper, lib_cargo_config=clockbound_lib_cargo_config))
+            # The binaries are built by cargo runs of their own: enabling the
+            # `daemon` feature in the run that builds the library would compile
+            # the library with the daemon's dependencies in it.
+            rule clockbound_bin.{mode}
+              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --release {cargo_config} --manifest-path=clock-bound/Cargo.toml -p clock-bound --features daemon --bin $bin --target-dir=$builddir/{mode}/clock-bound $
+                        && touch $out
+              description = CLOCKBOUND_BIN $out
+            ''').format(mode=mode, rustc_wrapper=rustc_wrapper, lib_cargo_config=clockbound_lib_cargo_config, cargo_config=clockbound_cargo_config))
         f.write(
             'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
@@ -3299,6 +3318,15 @@ def write_build_file(f,
         clockbound = clockbound_lib(mode)
         f.write('build {lib}.a: clockbound_lib.{mode} clock-bound/Cargo.lock clock-bound/Cargo.toml'
                 ' clock-bound/clock-bound-ffi/Cargo.toml\n  depfile={lib}.d\n'.format(lib=clockbound, mode=mode))
+        for name in clockbound_bins:
+            path = clockbound_bin(mode, name)
+            f.write('build {path}: clockbound_bin.{mode} clock-bound/Cargo.lock clock-bound/Cargo.toml'
+                    ' clock-bound/clock-bound/Cargo.toml\n  bin = {name}\n  depfile={path}.d\n'.format(path=path, name=name, mode=mode))
+            f.write(textwrap.dedent(f'''\
+                build $builddir/{mode}/{name}: copy {path}
+                build $builddir/{mode}/{name}.stripped: strip $builddir/{mode}/{name}
+                build $builddir/{mode}/{name}.debug: phony $builddir/{mode}/{name}.stripped
+                '''))
         for grammar in antlr3_grammars:
             outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
             f.write('build {}: antlr3.{} {}\n  stem = {}\n'.format(outs, mode, grammar.source,
@@ -3369,9 +3397,9 @@ def write_build_file(f,
             include_scylla_and_iotune_stripped = ''
             include_scylla_and_iotune_debug = ''
         else:
-            include_scylla_and_iotune = f'$builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/{mode}/patchelf'
-            include_scylla_and_iotune_stripped = f'$builddir/{mode}/scylla.stripped $builddir/{mode}/iotune.stripped $builddir/{mode}/patchelf.stripped'
-            include_scylla_and_iotune_debug = f'$builddir/{mode}/scylla.debug $builddir/{mode}/iotune.debug'
+            include_scylla_and_iotune = f'$builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/{mode}/patchelf $builddir/{mode}/clockbound $builddir/{mode}/cbctl'
+            include_scylla_and_iotune_stripped = f'$builddir/{mode}/scylla.stripped $builddir/{mode}/iotune.stripped $builddir/{mode}/patchelf.stripped $builddir/{mode}/clockbound.stripped $builddir/{mode}/cbctl.stripped'
+            include_scylla_and_iotune_debug = f'$builddir/{mode}/scylla.debug $builddir/{mode}/iotune.debug $builddir/{mode}/clockbound.debug $builddir/{mode}/cbctl.debug'
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unstripped-{scylla_version}-{scylla_release}.{arch}.tar.gz: package {include_scylla_and_iotune} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian | always\n')
         f.write(f'  mode = {mode}\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz: stripped_package {include_scylla_and_iotune_stripped} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian | always\n')

@@ -109,6 +109,28 @@ set_target_properties(Rust::clockbound PROPERTIES
   IMPORTED_LOCATION "${clockbound_library}"
   INTERFACE_INCLUDE_DIRECTORIES "${clockbound_src_dir}/clock-bound-ffi/include")
 
+# The clockbound daemon and its cbctl tool, from the same workspace, packaged
+# as scylla-clockbound (see dist/CMakeLists.txt). They are built by cargo runs
+# of their own: enabling the `daemon` feature in the run that builds the
+# library would compile the library with the daemon's dependencies in it.
+foreach(bin clockbound cbctl)
+  add_custom_command(
+    OUTPUT ${clockbound_target_dir}/release/${bin}
+    COMMAND ${CMAKE_COMMAND} -E env --unset=CARGO_BUILD_DEP_INFO_BASEDIR ${RUSTC_WRAPPER_ENV} ${CARGO} build --locked --release ${clockbound_cargo_config} --manifest-path=${clockbound_src_dir}/Cargo.toml -p clock-bound --features daemon --bin ${bin} --target-dir=${clockbound_target_dir}
+    DEPENDS
+      ${clockbound_src_dir}/Cargo.lock
+      ${clockbound_src_dir}/Cargo.toml
+      ${clockbound_src_dir}/clock-bound/Cargo.toml
+    DEPFILE ${clockbound_target_dir}/release/${bin}.d
+    WORKING_DIRECTORY ${clockbound_src_dir}
+    COMMENT "Building clock-bound binary: ${bin}"
+    VERBATIM)
+endforeach()
+add_custom_target(clockbound-daemon
+  DEPENDS
+    ${clockbound_target_dir}/release/clockbound
+    ${clockbound_target_dir}/release/cbctl)
+
 set(binding_gen_build_dir "${scylla_gen_build_dir}/rust")
 
 set(cxx_header "${binding_gen_build_dir}/cxx.h")

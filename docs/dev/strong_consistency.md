@@ -444,7 +444,12 @@ created by `groups_manager` when leases are enabled, and shares it among its gro
   used while the daemon reports SYNCHRONIZED or FREE_RUNNING (no fresh time source for 60 s,
   with the bound widening at the daemon's maximum drift rate) and rejected while it reports
   UNKNOWN or DISRUPTED. The daemon can sync from public AWS time servers, so it also works
-  outside AWS, but it replaces chrony or ntpd on the host. The node fails to start if the
+  outside AWS, but it replaces chrony or ntpd on the host. It ships in the `scylla-clockbound`
+  package together with the upstream `clockbound.service`, `cbctl` (`cbctl status` shows what
+  the daemon reports) and `configure_phc`, upstream's one-off tool that enables the ENA PTP
+  clock on EC2. Enabling the service stops chronyd or ntpd. The daemon reads
+  `/etc/clockbound.toml`; the package installs an empty one, which means the built-in
+  defaults. The node fails to start if the
   daemon's shared-memory segment is missing or unreadable, i.e. the daemon has never run on
   the host. The daemon leaves the segment behind when it stops, so a stopped daemon is
   detected at runtime through its status, like one that stops while the node runs. This is
@@ -477,8 +482,9 @@ All options require a restart.
   for up to Δ.
 - `strongly_consistent_raft_leader_lease_clock_source` (default `adjtimex`): `adjtimex` or
   `clockbound`. The default is `adjtimex` because it works with the NTP daemon every
-  distribution ships, while `clockbound` requires the ClockBound daemon to be installed and
-  running. Production deployments should run the ClockBound daemon and select `clockbound`.
+  distribution ships, while `clockbound` requires the ClockBound daemon (the
+  `scylla-clockbound` package) to be installed and running. Production deployments should
+  run the ClockBound daemon and select `clockbound`.
 
 ## Persistence
 

@@ -137,6 +137,13 @@ executables_scylla = [
                 '{}/iotune'.format(args.build_dir),
                 '{}/patchelf'.format(args.build_dir),
                 ]
+# The clockbound daemon and cbctl go under their own prefix, clockbound/, so
+# the scylla-server package's globs over bin/ and libexec/ leave them to
+# scylla-clockbound (see install.sh).
+executables_clockbound = [
+                '{}/clockbound'.format(args.build_dir),
+                '{}/cbctl'.format(args.build_dir),
+                ]
 executables_distrocmd = [
                 '/usr/bin/lscpu',
                 '/usr/bin/gawk',
@@ -148,11 +155,13 @@ executables_distrocmd = [
                 '/usr/bin/hwloc-calc',
                 '/usr/bin/lsblk']
 
-executables = executables_scylla + executables_distrocmd
+executables = executables_scylla + executables_distrocmd + executables_clockbound
 
 if args.print_libexec:
-    for exec in executables:
+    for exec in executables_scylla + executables_distrocmd:
         print(f'libexec/{os.path.basename(exec)}')
+    for exec in executables_clockbound:
+        print(f'clockbound/libexec/{os.path.basename(exec)}')
     sys.exit(0)
 
 output = args.dest
@@ -199,6 +208,16 @@ for exe in executables_scylla:
 for exe in executables_distrocmd:
     basename = os.path.basename(exe)
     fix_executable(ar, exe, f'libexec/{basename}')
+for exe in executables_clockbound:
+    basename = os.path.basename(exe)
+    if not args.stripped:
+        fix_executable(ar, exe, f'clockbound/libexec/{basename}')
+    else:
+        fix_executable(ar, f'{exe}.stripped', f'clockbound/libexec/{basename}')
+# The daemon's service file, logrotate rules, example configuration and PHC
+# setup script, as the submodule ships them.
+for asset in ['clockbound.service', 'clockbound.logrotate', 'example-config.toml', 'configure_phc']:
+    ar.reloc_add(f'clock-bound/clock-bound/assets/{asset}', arcname=f'clockbound/{asset}')
 
 for lib, libfile in libs.items():
     m = magic.detect_from_filename(libfile)

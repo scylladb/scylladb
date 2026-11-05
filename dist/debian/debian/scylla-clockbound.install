@@ -1,0 +1,7 @@
+usr/bin/clockbound
+usr/bin/cbctl
+usr/sbin/configure_phc
+usr/lib/systemd/system/clockbound.service
+etc/clockbound.toml
+etc/logrotate.d/clockbound
+opt/scylladb/clockbound/*

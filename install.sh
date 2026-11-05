@@ -140,12 +140,15 @@ patchelf() {
 
 adjust_bin() {
     local bin="$1"
+    # The directory holding libexec/ and bin/; the libraries stay under
+    # $prefix/libreloc.
+    local dir="${2:-$prefix}"
     # We could add --set-rpath too, but then debugedit (called by rpmbuild) barfs
     # on the result. So use LD_LIBRARY_PATH in the thunk, below.
     patchelf \
 	--set-interpreter "$prefix/libreloc/ld.so" \
-	"$root/$prefix/libexec/$bin"
-    cat > "$root/$prefix/bin/$bin" <<EOF
+	"$root/$dir/libexec/$bin"
+    cat > "$root/$dir/bin/$bin" <<EOF
 #!/bin/bash -e
 [[ -z "\$LD_PRELOAD" ]] || { echo "\$0: not compatible with LD_PRELOAD" >&2; exit 110; }
 export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-$prefix/libreloc/gnutls.config}"
@@ -153,9 +156,9 @@ export LD_LIBRARY_PATH="$prefix/libreloc"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:+$UBSAN_OPTIONS:}suppressions=$prefix/libexec/ubsan-suppressions.supp"
 export LSAN_OPTIONS="${LSAN_OPTIONS:+$LSAN_OPTIONS:}suppressions=$prefix/libexec/lsan-suppressions.supp"
 ${p11_trust_paths:+export SCYLLA_P11_TRUST_PATHS="$p11_trust_paths"}
-exec -a "\$0" "$prefix/libexec/$bin" "\$@"
+exec -a "\$0" "$dir/libexec/$bin" "\$@"
 EOF
-    chmod 755 "$root/$prefix/bin/$bin"
+    chmod 755 "$root/$dir/bin/$bin"
 }
 
 relocate_python3() {
@@ -436,6 +439,16 @@ done
 install -m644 ubsan-suppressions.supp -Dt "$rprefix/libexec"
 install -m644 lsan-suppressions.supp -Dt "$rprefix/libexec"
 
+# scylla-clockbound: the ClockBound daemon and cbctl under their own prefix, so
+# the scylla-server package's globs over bin/ and libexec/ leave them alone.
+install -d -m755 "$rprefix/clockbound/bin" "$rprefix/clockbound/libexec"
+for bin in clockbound cbctl; do
+    install -m755 clockbound/libexec/$bin -Dt "$rprefix/clockbound/libexec"
+    adjust_bin $bin "$prefix/clockbound"
+done
+install -m755 clockbound/configure_phc -Dt "$rprefix/clockbound"
+install -m644 clockbound/example-config.toml -Dt "$rprefix/clockbound"
+
 install -d -m755 "$rdoc"/scylla
 install -m644 README.md -Dt "$rdoc"/scylla/
 install -m644 NOTICE.txt -Dt "$rdoc"/scylla/
@@ -537,10 +550,29 @@ EOS
     ln -srf "$rprefix/bin/scyllatop" "$rusr/bin/scyllatop"
     ln -srf "$rprefix/bin/scylla-tablets" "$rusr/bin/scylla-tablets"
     ln -srf "$rprefix/bin/nodetool" "$rusr/bin/nodetool"
+    ln -srf "$rprefix/clockbound/bin/clockbound" "$rusr/bin/clockbound"
+    ln -srf "$rprefix/clockbound/bin/cbctl" "$rusr/bin/cbctl"
     install -d -m755 "$rusr"/sbin
     for i in $SBINFILES; do
         ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
     done
+    # configure_phc is upstream's one-off tool that enables the ENA PTP clock.
+    ln -srf "$rprefix/clockbound/configure_phc" "$rusr/sbin/configure_phc"
+    # clockbound.service runs /usr/bin/clockbound -c /etc/clockbound.toml, and
+    # the daemon refuses to start without the file. An empty one means the
+    # built-in defaults.
+    if [ ! -f "$retc"/clockbound.toml ]; then
+        cat << EOS > "$retc"/clockbound.toml
+# ClockBound daemon configuration, read by clockbound.service at startup.
+# Empty means the built-in defaults: sources are auto-detected and the log
+# streams are off. See $prefix/clockbound/example-config.toml.
+EOS
+        chmod 644 "$retc"/clockbound.toml
+    fi
+    install -m644 clockbound/clockbound.logrotate -D "$retc"/logrotate.d/clockbound
+    if ! $without_systemd; then
+        install -m644 clockbound/clockbound.service -Dt "$rsystemd"
+    fi
 
     # we need keep /usr/lib/scylla directory to support upgrade/downgrade
     # without error, so we need to create symlink for each script on the
