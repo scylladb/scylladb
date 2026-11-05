@@ -133,9 +133,6 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             if (new_rs->is_per_table() != ks.get_replication_strategy().is_per_table()) {
                 throw exceptions::invalid_request_exception(format("Cannot alter replication strategy vnode/tablets flavor"));
             }
-            if (new_ks->consistency_option() && new_ks->consistency_option() != ks.metadata()->consistency_option()) {
-                throw exceptions::invalid_request_exception(format("Cannot alter consistency option"));
-            }
         } catch (const std::runtime_error& e) {
             throw exceptions::invalid_request_exception(e.what());
         }
