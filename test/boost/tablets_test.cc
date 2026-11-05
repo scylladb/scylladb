@@ -92,7 +92,7 @@ static api::timestamp_type current_timestamp(cql_test_env& e) {
 static
 tablet_metadata verify_tablet_metadata_persistence(cql_test_env& env, const tablet_metadata& tm, api::timestamp_type& ts) {
     save_tablet_metadata(env.local_db(), tm, ts++).get();
-    auto tm2 = read_tablet_metadata(env.local_qp()).get();
+    auto tm2 = read_tablet_metadata(env.local_qp(), env.local_db().get_token_metadata().get_topology()).get();
     BOOST_REQUIRE_EQUAL(tm, tm2);
     return tm2;
 }
@@ -110,9 +110,9 @@ void verify_tablet_metadata_update(cql_test_env& env, tablet_metadata& tm, utils
         update_tablet_metadata_change_hint(hint, mut);
     }
 
-    update_tablet_metadata(db, env.local_qp(), tm, hint).get();
+    update_tablet_metadata(db, env.local_qp(), tm, hint, db.get_token_metadata().get_topology()).get();
 
-    auto tm_reload = read_tablet_metadata(env.local_qp()).get();
+    auto tm_reload = read_tablet_metadata(env.local_qp(), env.local_db().get_token_metadata().get_topology()).get();
     BOOST_REQUIRE_EQUAL(tm, tm_reload);
 }
 
@@ -373,7 +373,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
         auto ts = current_timestamp(e);
 
         {
-            tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+            tablet_metadata tm = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
 
             // Add table1
             {
@@ -923,7 +923,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
         auto ts = current_timestamp(e);
 
         {
-            tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+            tablet_metadata tm = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
 
             // Add table1
             {
@@ -961,7 +961,7 @@ SEASTAR_TEST_CASE(test_read_required_hosts) {
         auto h2 = host_id(utils::UUID_gen::get_time_UUID());
         auto h3 = host_id(utils::UUID_gen::get_time_UUID());
 
-        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+        tablet_metadata tm = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
 
         auto ts = current_timestamp(e);
         verify_tablet_metadata_persistence(e, tm, ts);
@@ -1038,7 +1038,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
         testlog.trace("table1: {}", table1);
         testlog.trace("table2: {}", table2);
 
-        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+        tablet_metadata tm = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
         auto ts = current_timestamp(e);
 
         // Add table1
@@ -1259,7 +1259,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
         testlog.trace("table1: {}", table1);
         testlog.trace("table2: {}", table2);
 
-        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+        tablet_metadata tm = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
         auto ts = current_timestamp(e);
 
         auto check_hint = [&] (locator::tablet_metadata_change_hint& incremental_hint, utils::chunked_vector<canonical_mutation>& muts, mutation new_mut,
@@ -1324,7 +1324,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
                 check_hint(hint, muts, builder.build(), make_hint({{table1, tokens}}));
             }
         }
-        tm = read_tablet_metadata(e.local_qp()).get();
+        tm = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
 
         // Deletions (and static rows) should generate a partition hint.
         // Furthermore, if the partition had any row hints before, those should
@@ -1373,7 +1373,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
                 }
             }
 
-            tm = read_tablet_metadata(e.local_qp()).get();
+            tm = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
         };
 
         // Not a real deletion, but it should act the same way as a delete.
@@ -1421,7 +1421,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint_split_with_tombstone) {
 
         auto table1 = add_table(e).get();
 
-        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+        tablet_metadata tm = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
         auto ts = current_timestamp(e);
 
         const auto& tmap = tm.get_tablet_map(table1);
@@ -1614,7 +1614,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h2, 3}
             });
 
-            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get();
+            auto tm_from_disk = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
 
@@ -1652,7 +1652,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h2, 3}
             });
 
-            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get();
+            auto tm_from_disk = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
 
@@ -1684,7 +1684,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     }
             });
 
-            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get();
+            auto tm_from_disk = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
 
@@ -1720,7 +1720,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
             });
             expected_tmap.set_resize_decision(resize_decision);
 
-            auto tm_from_disk = read_tablet_metadata(e.local_qp()).get();
+            auto tm_from_disk = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
             expected_tmap.set_resize_task_info(tm_from_disk.get_tablet_map(table1).resize_task_info());
             BOOST_REQUIRE_EQUAL(expected_tmap, tm_from_disk.get_tablet_map(table1));
         }
@@ -2770,7 +2770,7 @@ SEASTAR_THREAD_TEST_CASE(test_merge_stale_isolated_tablet_reproducer_odd_even_ev
             return false;
         });
 
-        auto tm_from_disk = read_tablet_metadata(e.local_qp()).get();
+        auto tm_from_disk = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
         auto& decision = tm_from_disk.get_tablet_map(table1).resize_decision();
         BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::merge>(decision.way));
 
@@ -8980,7 +8980,7 @@ SEASTAR_THREAD_TEST_CASE(test_sc_tablet_resize_metadata_persistence) {
         auto table1 = add_table(e).get();
         auto ts = current_timestamp(e);
 
-        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+        tablet_metadata tm = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
 
         {
             tablet_map tmap(2, /* with_raft_info = */ true);
