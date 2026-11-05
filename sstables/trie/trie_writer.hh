@@ -104,7 +104,11 @@ public:
     // The fact that our caller calculates the `depth`, not us, might seem awkward,
     // but since the callers usually know the mismatch point for other reasons,
     // I figured this API spares us from a double key comparison.
-    void add(size_t depth, const_bytes key_tail, const trie_payload& p);
+    // The key may be given a mark, which isn't written: before writing each
+    // node, the writer tells the sink (if it has note_mark()) the node's
+    // position and the largest mark of the keys in its subtree, if not 0 -
+    // so the user can find where the nodes which lead to some keys are.
+    void add(size_t depth, const_bytes key_tail, const trie_payload& p, uint32_t mark = 0);
     void add_partial(size_t depth, const_bytes key_fragment);
     // Flushes all remaining nodes and returns the position of the root node.
     // The position is valid iff at least one key was added.
@@ -311,6 +315,7 @@ inline void trie_writer<Output>::compact_after_writing_children(ptr<writer_node>
         int16_t _node_size;
         int64_t _branch_size;
         int64_t _pos;
+        uint32_t _mark;
     };
     std::array<child_copy, 256> copy;
     size_t n_children = x->get_children().size();
@@ -319,6 +324,7 @@ inline void trie_writer<Output>::compact_after_writing_children(ptr<writer_node>
         copy[i]._pos = x->get_children()[i]->_pos.value;
         copy[i]._branch_size = x->get_children()[i]->_branch_size.value;
         copy[i]._node_size = x->get_children()[i]->_node_size.value;
+        copy[i]._mark = x->get_children()[i]->_mark;
     }
     // Step 2.
     x->reset_children();
@@ -329,7 +335,7 @@ inline void trie_writer<Output>::compact_after_writing_children(ptr<writer_node>
     _allocator.discard(x->_transition.offset(x->_transition_length));
     // Step 3.
     x->reserve_children(n_children, _allocator);
-    // Even though only the 4 copied child fields are needed after this point,
+    // Even though only the 5 copied child fields are needed after this point,
     // we use an array of full `writer_node` objects to store them.
     // This is somewhat wasteful. With some extra flags and reinterpret_casts,
     // we could be more efficient.
@@ -340,6 +346,7 @@ inline void trie_writer<Output>::compact_after_writing_children(ptr<writer_node>
         new_nodes[i]._pos = sink_pos(copy[i]._pos);
         new_nodes[i]._branch_size = sink_offset(copy[i]._branch_size);
         new_nodes[i]._node_size = node_size(copy[i]._node_size);
+        new_nodes[i]._mark = copy[i]._mark;
         x->push_child(new_nodes.element(i), _allocator);
     }
     #if TRIE_SANITIZE_BUMP_ALLOCATOR
@@ -408,10 +415,11 @@ inline void trie_writer<Output>::complete_until_depth(size_t depth) {
 }
 
 template <trie_writer_sink Output>
-inline void trie_writer<Output>::add(size_t depth, const_bytes key_tail, const trie_payload& p) {
+inline void trie_writer<Output>::add(size_t depth, const_bytes key_tail, const trie_payload& p, uint32_t mark) {
     SCYLLA_ASSERT(p._payload_bits);
     add_partial(depth, key_tail);
     _stack.back()->set_payload(p);
+    _stack.back()->_mark = mark;
 }
 
 
