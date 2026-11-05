@@ -221,6 +221,14 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         auto ts = mc.write_timestamp();
         auto global_request_id = mc.new_group0_state_id();
 
+        // preferred_rack is validated against the current replication, which a running
+        // RF change is about to replace.
+        if (_attrs->get_preferred_rack() && qp.proxy().features().rack_list_rf
+                && co_await qp.ongoing_rf_change(mc.guard(), _name)) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                    format("An RF change for keyspace {} is ongoing, retry altering preferred_rack later.", _name)));
+        }
+
         // we only want to run the tablets path if there are actually any tablets changes, not only schema changes
         // TODO: the current `if (changes_tablets(qp))` is insufficient: someone may set the same RFs as before,
         //       and we'll unnecessarily trigger the processing path for ALTER tablets KS,

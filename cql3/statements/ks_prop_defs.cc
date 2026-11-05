@@ -289,7 +289,8 @@ static locator::replication_strategy_config_options prepare_options(
 }
 
 ks_prop_defs::ks_prop_defs(property_definitions::map_type options) {
-    map_type replication_opts, storage_opts, tablets_opts, durable_writes_opts, consistency_opts;
+    map_type replication_opts, storage_opts, tablets_opts, durable_writes_opts, consistency_opts, preferred_rack_opts;
+    bool has_preferred_rack = false;
 
     auto read_property_into = [] (auto& map, const sstring& name, const sstring& value, const sstring& tag) {
         auto prefix = sstring(tag) + ":";
@@ -310,6 +311,10 @@ ks_prop_defs::ks_prop_defs(property_definitions::map_type options) {
             read_property_into(storage_opts, name, value, KW_STORAGE);
         } else if (name.starts_with(KW_CONSISTENCY)) {
             read_property_into(consistency_opts, name, value, KW_CONSISTENCY);
+        } else if (name == KW_PREFERRED_RACK) {
+            has_preferred_rack = true;
+        } else if (name.starts_with(KW_PREFERRED_RACK)) {
+            read_property_into(preferred_rack_opts, name, value, KW_PREFERRED_RACK);
         }
     }
 
@@ -323,6 +328,9 @@ ks_prop_defs::ks_prop_defs(property_definitions::map_type options) {
         add_property(KW_DURABLE_WRITES, durable_writes_opts.begin()->second);
     if (!consistency_opts.empty()) {
         add_property(KW_CONSISTENCY, consistency_opts.begin()->second);
+    }
+    if (has_preferred_rack) {
+        add_property(KW_PREFERRED_RACK, preferred_rack_opts);
     }
 }
 
@@ -498,9 +506,6 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
             consistency && *consistency != old->consistency_option().value_or(data_dictionary::consistency_config_option::eventual)) {
         throw exceptions::invalid_request_exception("Cannot alter consistency option of a keyspace");
     }
-    if (const auto preferred_rack = get_preferred_rack(); preferred_rack && *preferred_rack != old->preferred_rack()) {
-        throw exceptions::invalid_request_exception("Cannot alter preferred_rack of a keyspace");
-    }
 
     locator::replication_strategy_config_options options;
     const auto& old_options = old->strategy_options();
@@ -519,7 +524,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
         options = old_options;
     }
     auto config_options = apply_config_updates(old->config_options(), *this, feat);
-    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, old->consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt(), std::move(config_options), old->preferred_rack());
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, old->consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt(), std::move(config_options), get_preferred_rack().value_or(old->preferred_rack()));
 }
 
 namespace {
@@ -553,6 +558,12 @@ property_definitions::map_type ks_prop_defs::flattened() const {
             // Use nested map for backwards compatibility, ks_prop_defs() constructor expects this.
             add_prefixed_key(kw, std::map<sstring, sstring>({{sstring(kw), to_sstring(*val_opt)}}), result);
         }
+    }
+
+    // The bare key marks the option as set, so that an empty map, which unsets it, survives.
+    if (auto preferred_rack = get_preferred_rack()) {
+        result[KW_PREFERRED_RACK] = "";
+        add_prefixed_key(KW_PREFERRED_RACK, *preferred_rack, result);
     }
 
     return {result};
