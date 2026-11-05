@@ -168,7 +168,6 @@ void large_data_record_index::register_sstable(sstables::shared_sstable sst) {
         }
     }
     if (already_linked) [[unlikely]] {
-        large_data_logger.error("Skipped records of sstable {} that are already linked into a large data index", sst->get_filename());
         on_internal_error_noexcept(large_data_logger, "large_data_record_index::register_sstable(): record already linked");
     }
 }
