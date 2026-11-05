@@ -1180,4 +1180,67 @@ SEASTAR_TEST_CASE(test_callback_registered_during_pass_gets_initial_delivery) {
     });
 }
 
+// A callback closure can own another callback's registration. Unregistering the owner
+// destroys the owned registration from inside the sweep that removes the owner, which
+// must leave the manager consistent: the owned callback is removed too, and a later
+// registration still gets its delivery.
+SEASTAR_TEST_CASE(test_callback_owning_another_registration_is_swept_safely) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_own WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_own.t1 (pk int PRIMARY KEY)").get();
+        e.execute_cql("ALTER TABLE ks_own.t1 WITH auto_repair_enabled = true").get();
+
+        auto& mgr = e.cluster_config_manager();
+        auto noop = [] (const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
+            return make_ready_future<>();
+        };
+
+        auto b_token = std::make_shared<int>(0);
+        auto b_registration = std::make_shared<db::cluster_config_manager::config_callback_registration>(
+            mgr.local().register_config_callback("auto_repair_enabled", [b_token, noop] (const auto& ctx, auto value) {
+                return noop(ctx, std::move(value));
+            }));
+        auto a_registration = mgr.local().register_config_callback("auto_repair_enabled",
+            [b_registration = std::exchange(b_registration, nullptr), noop] (const auto& ctx, auto value) {
+                return noop(ctx, std::move(value));
+            });
+        // No pass is running after refresh() returns, so the unregistration below sweeps at once.
+        mgr.local().refresh().get();
+        a_registration.unregister();
+        BOOST_REQUIRE_EQUAL(b_token.use_count(), 1);
+
+        std::optional<sstring> c_value;
+        auto c_registration = mgr.local().register_config_callback("auto_repair_enabled",
+            [&c_value] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                if (ctx.keyspace_name == "ks_own" && ctx.table_name == "t1") {
+                    c_value = std::move(value);
+                }
+                return make_ready_future<>();
+            });
+        mgr.local().refresh().get();
+        BOOST_REQUIRE(c_value);
+        BOOST_REQUIRE_EQUAL(*c_value, "true");
+    });
+}
+
+// A callback whose closure owns its own registration and another one stays registered
+// until the manager stops. stop() destroys it, and the owned registrations unregister
+// from their destructors.
+SEASTAR_TEST_CASE(test_callback_owning_registrations_is_destroyed_on_stop) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto& mgr = e.cluster_config_manager();
+        auto noop = [] (const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
+            return make_ready_future<>();
+        };
+
+        auto owned = std::make_shared<std::vector<db::cluster_config_manager::config_callback_registration>>();
+        owned->push_back(mgr.local().register_config_callback("auto_repair_enabled", noop));
+        owned->push_back(mgr.local().register_config_callback("auto_repair_enabled",
+            [owned, noop] (const auto& ctx, auto value) {
+                return noop(ctx, std::move(value));
+            }));
+        mgr.local().refresh().get();
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
