@@ -2308,7 +2308,15 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
     }
 
     if (auto val = table_row.get<int32_t>("default_time_to_live")) {
-        builder.set_default_time_to_live(gc_clock::duration(*val));
+        // The property was not validated against max_ttl before SCYLLADB-6065,
+        // so a stored value can exceed it; clamp it once here, so every
+        // consumer of the schema sees a TTL the sstable reader accepts.
+        auto ttl = gc_clock::duration(*val);
+        if (ttl > max_ttl) {
+            slogger.warn("Table {}.{} has default_time_to_live = {}, above the maximum of {}; using the maximum", builder.ks_name(), builder.cf_name(), ttl.count(), max_ttl.count());
+            ttl = max_ttl;
+        }
+        builder.set_default_time_to_live(ttl);
     }
 
     if (auto val = get_map<sstring, bytes>(table_row, "extensions")) {

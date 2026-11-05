@@ -35,8 +35,7 @@ def testTTLPerRequestLimit(cql, test_keyspace):
 
         assert_invalid_message(cql, table, "A TTL must be greater or equal to 0", "UPDATE %s USING TTL ? SET i = 1 WHERE k = 2", -1)
 
-# Reproduces SCYLLADB-5152 (default_time_to_live not limited to the maximum TTL).
-@pytest.mark.xfail(reason="SCYLLADB-5152")
+# Reproduces SCYLLADB-6065 (default_time_to_live not limited to the maximum TTL).
 def testTTLDefaultLimit(cql, test_keyspace):
     # Scylla's error message is different from Cassandra's:
     # "default_time_to_live cannot be smaller than 0, (default 0)"
