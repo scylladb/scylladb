@@ -81,9 +81,12 @@ void raft_resize_tracker::mark_resize_phase(raft::group_id parent_gid, const res
         return;
     case resize_marker_kind::end_resize:
         if (!state.end_resize) {
-            logger.debug("group {}: end_resize applied, its log is final here", parent_gid);
+            logger.debug("group {}: end_resize applied, releasing the appliers of its {} children", parent_gid, state.children.size());
             state.end_resize = true;
             state.end_resize_timestamp = marker.timestamp;
+            for (auto* child : std::exchange(state.children, {})) {
+                child->enable();
+            }
         }
         return;
     }
@@ -95,8 +98,15 @@ void raft_resize_tracker::erase_resize_state(raft::group_id parent_gid) {
         return;
     }
     if (!it->second.end_resize) {
-        // The resize ended early: the node is shutting down, or the table was dropped.
-        logger.debug("group {}: resize ended before end_resize was applied", parent_gid);
+        // The resize ended early: the node is shutting down, or the table was dropped. We enable
+        // the children still parked so that their appliers can exit. What they apply on the way
+        // out is harmless: they are torn down too, and a handed-off write sorts above every write
+        // of the parent in either order.
+        logger.debug("group {}: resize ended before end_resize was applied, enabling its {} children",
+                parent_gid, it->second.children.size());
+        for (auto* child : std::exchange(it->second.children, {})) {
+            child->enable();
+        }
     }
     _resize_states.erase(it);
     logger.debug("group {}: resize is over, dropped its state", parent_gid);
@@ -130,6 +140,48 @@ std::optional<raft::group_id> raft_resize_tracker::get_parent_group(raft::group_
         return it->second;
     }
     return std::nullopt;
+}
+
+bool raft_resize_tracker::should_handoff_writes(raft::group_id parent_gid) const {
+    auto it = _resize_states.find(parent_gid);
+    return it != _resize_states.end() && it->second.start_resize;
+}
+
+std::optional<api::timestamp_type> raft_resize_tracker::parent_end_resize_timestamp(raft::group_id child_gid) const {
+    const auto parent_gid = get_parent_group(child_gid);
+    if (!parent_gid) {
+        return std::nullopt;
+    }
+    const auto it = _resize_states.find(*parent_gid);
+    if (it == _resize_states.end() || !it->second.end_resize) {
+        return std::nullopt;
+    }
+    return it->second.end_resize_timestamp;
+}
+
+void raft_resize_tracker::register_child(raft::group_id parent_gid, tablet_state_machine& child) {
+    auto it = _resize_states.find(parent_gid);
+    if (it == _resize_states.end()) {
+        // The resize is over on this replica, and with it the parent's log is applied here in
+        // full.
+        logger.debug("group {}: has no resize state, a child of it has nothing to wait for", parent_gid);
+        child.enable();
+        return;
+    }
+    if (it->second.end_resize) {
+        child.enable();
+        return;
+    }
+    it->second.children.push_back(&child);
+}
+
+void raft_resize_tracker::unregister_child(raft::group_id parent_gid, tablet_state_machine& child) {
+    // The state may be gone already, with the child released or abandoned when it went.
+    auto it = _resize_states.find(parent_gid);
+    if (it == _resize_states.end()) {
+        return;
+    }
+    std::erase(it->second.children, &child);
 }
 
 } // namespace service::strong_consistency

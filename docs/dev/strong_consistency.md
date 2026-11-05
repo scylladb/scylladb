@@ -436,6 +436,11 @@ machinery is meant to serve a tablet merge, where a child has several parents, h
 neutral name *resize* in the identifiers; merging is not implemented yet and no merge decision
 is emitted for a strongly consistent table.
 
+Two different components are called a coordinator here. The **topology coordinator**
+(`service::topology_coordinator`) is the cluster-wide one which drives the split; the **request
+coordinator** (`service::strong_consistency::coordinator`) is the per-request, replica-side one
+which serves a read or a write. Both are named explicitly wherever the difference matters.
+
 The markers are ordinary entries in the parent's log, so they are replicated and applied in
 log order like any write. They are *not* carried as mutations, though: each marker is recorded
 as a column of the group's own row in `system.raft_groups`, whose partition key contains
@@ -452,4 +457,58 @@ before the parent's Raft server is created: after a restart the parent's committ
 applied by commitlog replay rather than by `state_machine::apply()`, so nothing else would record
 the markers. The state is created when the replica learns of the resize, from the tablet
 metadata or from the markers after a restart, and dropped by the teardown of the parent's Raft
-server.
+server. A node shutting
+down or a table being dropped ends a resize early; the teardown then enables the children still
+parked, so that their appliers can exit.
+
+Every `apply()` first waits until the state machine is enabled
+(`tablet_state_machine::enable()`). `groups_manager` enables a group which replaces nothing as
+soon as its server is up, and registers a child with its parent's state in the tracker instead
+(`raft_resize_tracker::register_child()`); the parent's `end_resize` enables every child
+registered with it, and the parent's teardown enables the rest.
+
+## Co-locating the leaders of the children
+
+A request handed off to a child is timestamped from the clock which led the parent, so the
+leaders of the parent and of its children have to sit on the same node. They are elected together
+to begin with - a child derives its fast bootstrap seed from the current leader of its parent,
+which every replica knows, so they all pick the same node - and a fiber per resize
+(`groups_manager::leader_colocator()`) transfers a child's leadership back to the parent's leader
+whenever the two drift apart, using the targeted `raft::server::stepdown()`.
+
+The co-location fiber is detached when the parent group is deleted, which is the only ending a
+resize recorded on a replica has - the tablet map replacement takes the parent's tablet away, and
+nothing can undo a resize whose replacement ids are already recorded. It then drains in the
+background, joined only by `groups_manager::stop()`; the gates of the raft servers guard any
+access the aborted fiber still makes on its way out.
+
+## Handing the token range over without a gap
+
+**A write must either land in the parent's log or be handed off, with nothing in between.**
+The request coordinator checks the `start_resize` flag immediately before entering `add_entry()`,
+without suspending in between, so a write which saw the flag unset is submitted before the
+flag was set. That relies on `add_entry()` appending entries in the order in which callers
+entered it (the FIFO admission in `raft::server_impl`). A write which observed
+`!start_resize` is therefore appended ahead of the `end_resize` marker, and so ends up in the
+final log of the parent.
+
+A linearizable read checks the flag after its read barrier on the parent, since the barrier may
+be what applies the marker, and only then moves to the child and runs the child's barrier. The
+parent's barrier is needed even when the flag is already set: it is what applies every write the
+parent acknowledged before the hand-off, while the child's barrier covers the child's own entries.
+
+**A handed-off write has to be ordered after everything already committed in the parent.**
+Timestamps are handed out by the leader, so the handed-off writes have to come from the same
+clock as the ones already in the parent's log, which is what co-locating the leaders of the
+children with the parent's achieves. Until they are co-located the child bounces the request
+back to the parent, where the request coordinator retries it, since it has nowhere else to go. On
+top of that, a handed-off write carries the timestamp it got from the parent, and the child's
+clock is advanced past it before a new one is handed out.
+
+**A request which resolved the parent is never left without it.** A request pins the token
+metadata it resolved its group from, and may reach the parent after the finalization has taken the
+parent out of the tablet map. The parent's deletion therefore waits until every token metadata
+version older than the one which took it away is released
+(`groups_manager::retire_resized_group()`), and until then the parent hands such a request off
+like any other. The wait is local: a request on another node which forwards to the parent's node
+is resolved there against that node's current map, which names the child.
