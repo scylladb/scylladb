@@ -14,6 +14,7 @@
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/core/preempt.hh>
 
 #include "compress.hh"
 #include "compressor.hh"
@@ -311,10 +312,57 @@ class compressed_file_data_source_impl : public data_source_impl {
     sstables::compression::segmented_offsets::accessor _offsets;
     [[no_unique_address]] sstables::digest_members<check_digest> _digests;
     reader_permit _permit;
+    // Compressed bytes taken from the underlying stream and not yet consumed.
+    temporary_buffer<char> _buf;
     uint64_t _underlying_pos;
     uint64_t _pos;
     uint64_t _beg_pos;
     uint64_t _end_pos;
+    // options.buffer_size, which caps the coalesced output.
+    size_t _buffer_size = 0;
+
+    // Counts the current chunk plus the whole chunks in the `avail` bytes buffered
+    // after it. Exact, unlike an estimate based on one chunk's size.
+    uint64_t count_buffered_chunks(uint64_t chunk_index, uint64_t chunk_end, uint64_t avail,
+            uint64_t max_chunks) const {
+        const auto& offsets = _compression_metadata->offsets;
+        uint64_t count = 1; // the chunk that was just consumed
+        while (count < max_chunks) {
+            const uint64_t next_index = chunk_index + count;
+            if (next_index >= offsets.size()) {
+                break;
+            }
+            const uint64_t next_end = (next_index + 1 == offsets.size())
+                    ? _compression_metadata->compressed_file_length()
+                    : _offsets.at(next_index + 1);
+            if (next_end - chunk_end > avail) {
+                break; // the next chunk is not buffered whole
+            }
+            avail -= next_end - chunk_end;
+            chunk_end = next_end;
+            ++count;
+        }
+        return count;
+    }
+
+    // Assembles a chunk that straddles underlying reads; get() shares whole buffered chunks itself.
+    future<temporary_buffer<char>> read_chunk(size_t len) {
+        temporary_buffer<char> chunk(len);
+        size_t filled = 0;
+        while (filled < len) {
+            if (_buf.empty()) {
+                _buf = co_await _input_stream->read();
+                if (_buf.empty()) {
+                    sstables::throw_malformed_sstable_exception(format("compressed reader hit premature end-of-file at file offset {}, expected chunk_len={}, actual={}", _underlying_pos, len, filled));
+                }
+            }
+            auto n = std::min(len - filled, _buf.size());
+            std::copy_n(_buf.get(), n, chunk.get_write() + filled);
+            _buf.trim_front(n);
+            filled += n;
+        }
+        co_return chunk;
+    }
 public:
     compressed_file_data_source_impl(sstables::stream_creator_fn stream_creator, sstables::compression* cm,
                 uint64_t pos, size_t len, file_input_stream_options options,
@@ -323,6 +371,7 @@ public:
             , _offsets(_compression_metadata->offsets.get_accessor())
             , _permit(std::move(permit))
     {
+        _buffer_size = options.buffer_size;
         _pos = _beg_pos = pos;
         if (pos > _compression_metadata->uncompressed_file_length()) {
             throw std::runtime_error("attempt to uncompress beyond end");
@@ -367,55 +416,112 @@ public:
         if (!_input_stream) {
             _input_stream = co_await _stream_creator();
         }
-        auto addr = _compression_metadata->locate(_pos, _offsets);
-        // Uncompress the next chunk. We need to skip part of the first
-        // chunk, but then continue to read from beginning of chunks.
-        if (_pos != _beg_pos && addr.offset != 0) {
-            throw std::runtime_error(format("compressed reader not aligned to chunk boundary: pos={} offset={}", _pos, addr.offset));
-        }
-        if (!addr.chunk_len) {
-            sstables::throw_malformed_sstable_exception(format("compressed chunk_len must be greater than zero, chunk_start={}", addr.chunk_start));
-        }
-        auto buf = co_await _input_stream->read_exactly(addr.chunk_len);
-        if (buf.size() != addr.chunk_len) {
-            sstables::throw_malformed_sstable_exception(format("compressed reader hit premature end-of-file at file offset {}, expected chunk_len={}, actual={}", _underlying_pos, addr.chunk_len, buf.size()));
-        }
-        auto res_units = co_await _permit.request_memory(_compression_metadata->uncompressed_chunk_length());
-        // The last 4 bytes of the chunk are the adler32/crc32 checksum
-        // of the rest of the (compressed) chunk.
-        auto compressed_len = addr.chunk_len - 4;
-        // FIXME: Do not always calculate checksum - Cassandra has a
-        // probability (defaulting to 1.0, but still...)
-        auto expected_checksum = read_be<uint32_t>(buf.get() + compressed_len);
-        auto actual_checksum = ChecksumType::checksum(buf.get(), compressed_len);
-        if (expected_checksum != actual_checksum) {
-            sstables::throw_malformed_sstable_exception(format("compressed chunk of size {} at file offset {} failed checksum, expected={}, actual={}", addr.chunk_len, _underlying_pos, expected_checksum, actual_checksum));
-        }
-
-        if constexpr (check_digest) {
-            if (_digests.can_calculate_digest) {
-                _digests.actual_digest = checksum_combine_or_feed<ChecksumType>(_digests.actual_digest, actual_checksum, buf.get(), compressed_len);
-                if constexpr (mode == compressed_checksum_mode::checksum_all) {
-                    uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
-                    _digests.actual_digest = ChecksumType::checksum(_digests.actual_digest,
-                            reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
+        // Decompress every whole chunk already buffered into one output
+        // buffer, so the parser sees one fragment per underlying read.
+        const auto uncompressed_chunk_len = _compression_metadata->uncompressed_chunk_length();
+        const uint64_t chunk_base = _pos - _pos % uncompressed_chunk_len;
+        const uint64_t remaining_chunks = (_end_pos - chunk_base + uncompressed_chunk_len - 1) / uncompressed_chunk_len;
+        // Cap the coalesced output, never exceeding the caller's buffer_size.
+        const uint64_t coalesce_ceiling_chunks = std::max<uint64_t>(1,
+                std::min(sstables::max_coalesced_output_size, _buffer_size) / uncompressed_chunk_len);
+        temporary_buffer<char> out;
+        std::optional<reader_permit::resource_units> res_units_holder;
+        size_t produced = 0;
+        size_t first_offset = 0;
+        while (true) {
+            try {
+                auto addr = _compression_metadata->locate(_pos, _offsets);
+                // Uncompress the next chunk. We need to skip part of the first
+                // chunk, but then continue to read from beginning of chunks.
+                if (_pos != _beg_pos && addr.offset != 0) {
+                    throw std::runtime_error(format("compressed reader not aligned to chunk boundary: pos={} offset={}", _pos, addr.offset));
                 }
+                if (!addr.chunk_len) {
+                    sstables::throw_malformed_sstable_exception(format("compressed chunk_len must be greater than zero, chunk_start={}", addr.chunk_start));
+                }
+                // Never wait for I/O once something was produced; the rest comes next call.
+                if (produced && _buf.size() < addr.chunk_len) {
+                    break;
+                }
+                if (_buf.empty()) {
+                    _buf = co_await _input_stream->read();
+                }
+                temporary_buffer<char> buf;
+                const bool in_buf = _buf.size() >= addr.chunk_len;
+                if (in_buf) {
+                    // Common case: whole chunk already buffered; skip the read_chunk coroutine frame.
+                    buf = _buf.share(0, addr.chunk_len);
+                } else {
+                    buf = co_await read_chunk(addr.chunk_len);
+                }
+                // The last 4 bytes of the chunk are the adler32/crc32 checksum
+                // of the rest of the (compressed) chunk.
+                auto compressed_len = addr.chunk_len - 4;
+                // FIXME: Do not always calculate checksum - Cassandra has a
+                // probability (defaulting to 1.0, but still...)
+                auto expected_checksum = read_be<uint32_t>(buf.get() + compressed_len);
+                auto actual_checksum = ChecksumType::checksum(buf.get(), compressed_len);
+                if (expected_checksum != actual_checksum) {
+                    sstables::throw_malformed_sstable_exception(format("compressed chunk of size {} at file offset {} failed checksum, expected={}, actual={}", addr.chunk_len, _underlying_pos, expected_checksum, actual_checksum));
+                }
+
+                if (!produced) {
+                    // Size the output for the chunks that are actually buffered.
+                    const uint64_t buffered_chunks = count_buffered_chunks(
+                            _pos / uncompressed_chunk_len,
+                            addr.chunk_start + addr.chunk_len,
+                            _buf.size() - (in_buf ? addr.chunk_len : 0),
+                            coalesce_ceiling_chunks);
+                    const uint64_t cap_chunks = std::min(buffered_chunks, remaining_chunks);
+                    // Request the permit for the real allocation size, before allocating it.
+                    res_units_holder = co_await _permit.request_memory(cap_chunks * uncompressed_chunk_len);
+                    out = temporary_buffer<char>(cap_chunks * uncompressed_chunk_len);
+                    first_offset = addr.offset;
+                }
+                // We know that the uncompressed data will take exactly
+                // chunk_length bytes (or less, if reading the last chunk).
+                auto len = _compression_metadata->get_compressor().uncompress(buf.get(), compressed_len, out.get_write() + produced, uncompressed_chunk_len);
+                // An in-buffer chunk is consumed only once it decoded, so an error leaves _buf and the digest consistent with _pos.
+                if (in_buf) {
+                    _buf.trim_front(addr.chunk_len);
+                }
+                if constexpr (check_digest) {
+                    if (_digests.can_calculate_digest) {
+                        _digests.actual_digest = checksum_combine_or_feed<ChecksumType>(_digests.actual_digest, actual_checksum, buf.get(), compressed_len);
+                        if constexpr (mode == compressed_checksum_mode::checksum_all) {
+                            uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
+                            _digests.actual_digest = ChecksumType::checksum(_digests.actual_digest,
+                                    reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
+                        }
+                    }
+                }
+                produced += len;
+                _pos += len - addr.offset;
+                _underlying_pos += addr.chunk_len;
+                if (_pos >= _end_pos || produced + uncompressed_chunk_len > out.size() || need_preempt()) {
+                    break;
+                }
+            } catch (...) {
+                if (!produced) {
+                    throw;
+                }
+                // Once produced, every chunk came from _buf (I/O is never awaited) and is still there:
+                // deliver the good chunks; the next get() fails on this one, as the one-chunk reader did.
+                break;
             }
         }
-
-        // We know that the uncompressed data will take exactly
-        // chunk_length bytes (or less, if reading the last chunk).
-        temporary_buffer<char> out(
-                _compression_metadata->uncompressed_chunk_length());
-        // The compressed data is the whole chunk, minus the last 4
-        // bytes (which contain the checksum verified above).
-
-        auto len = _compression_metadata->get_compressor().uncompress(buf.get(), compressed_len, out.get_write(), out.size());
-
-        out.trim(len);
-        out.trim_front(addr.offset);
-        _pos += out.size();
-        _underlying_pos += addr.chunk_len;
+        if (out.size() - produced >= uncompressed_chunk_len) {
+            // Stopped early: free the unused coalescing capacity and its permit memory.
+            temporary_buffer<char> shrunk(produced);
+            std::copy_n(out.get(), produced, shrunk.get_write());
+            out = std::move(shrunk);
+            res_units_holder->reset_to(reader_resources::with_memory(produced));
+        } else {
+            out.trim(produced);
+        }
+        out.trim_front(first_offset);
+        // Deliberately not trimmed at _end_pos: like the pre-coalescing reader, the last chunk's
+        // tail stays in input_stream's buffer, and single-partition readers rely on it for skip().
 
         if constexpr (check_digest) {
             if (_digests.can_calculate_digest
@@ -424,7 +530,7 @@ public:
                 sstables::throw_malformed_sstable_exception(seastar::format("Digest mismatch: expected={}, actual={}", _digests.expected_digest, _digests.actual_digest));
             }
         }
-        co_return make_tracked_temporary_buffer(std::move(out), std::move(res_units));
+        co_return make_tracked_temporary_buffer(std::move(out), std::move(*res_units_holder));
     }
 
     virtual future<> close() override {
@@ -455,6 +561,12 @@ public:
         if (!_input_stream) {
             _input_stream = co_await _stream_creator();
         }
+        if (underlying_n <= _buf.size()) {
+            _buf.trim_front(underlying_n);
+            co_return temporary_buffer<char>();
+        }
+        underlying_n -= _buf.size();
+        _buf = {};
         co_await _input_stream->skip(underlying_n);
         co_return temporary_buffer<char>();
     }
