@@ -58,6 +58,14 @@ size_t local_quorum_for(const locator::token_replication_factor& rf) {
     return quorum(datacenter_counts(rf).local);
 }
 
+// EACH_QUORUM quota of the i-th datacenter of nrs.get_datacenters(), see each_quorum_block_for_dc().
+static size_t each_quorum_block_for_dc_index(const locator::network_topology_strategy& nrs, const locator::token_replication_factor& rf, size_t i) {
+    if (!nrs.get_replication_factor(nrs.get_datacenters()[i])) {
+        return 0;
+    }
+    return quorum(datacenter_counts(rf).per_dc[i]);
+}
+
 size_t block_for_each_quorum(const locator::effective_replication_map& erm, const locator::token_replication_factor& rf) {
     using namespace locator;
 
@@ -68,8 +76,8 @@ size_t block_for_each_quorum(const locator::effective_replication_map& erm, cons
             static_cast<const network_topology_strategy*>(&rs);
         size_t n = 0;
 
-        for (auto& dc : nrs->get_datacenters()) {
-            n += each_quorum_block_for_dc(erm, rf, dc);
+        for (size_t i = 0; i < nrs->get_datacenters().size(); ++i) {
+            n += each_quorum_block_for_dc_index(*nrs, rf, i);
         }
 
         return n;
@@ -82,10 +90,10 @@ size_t each_quorum_block_for_dc(const locator::effective_replication_map& erm, c
     const auto& nrs = locator::as_network_topology_strategy(erm);
     const auto& dcs = nrs.get_datacenters();
     auto it = std::ranges::find(dcs, dc);
-    if (it == dcs.end() || !nrs.get_replication_factor(dc)) {
+    if (it == dcs.end()) {
         return 0;
     }
-    return quorum(datacenter_counts(rf).per_dc[std::distance(dcs.begin(), it)]);
+    return each_quorum_block_for_dc_index(nrs, rf, std::distance(dcs.begin(), it));
 }
 
 size_t block_for(const locator::effective_replication_map& erm, consistency_level cl, const locator::token_replication_factor& rf) {
