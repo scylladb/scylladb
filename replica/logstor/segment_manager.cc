@@ -656,6 +656,7 @@ public:
 
     void on_add_record(record_location) noexcept;
     void on_free_record(record_location) noexcept;
+    void on_move_record(record_location from, record_location to) noexcept;
 
     // Calls `fn` for each chunk of the segment, in order.
     template <typename Func>
@@ -1396,6 +1397,21 @@ void segment_manager_impl::on_free_record(record_location location) noexcept {
         desc.owner->update_segment(desc, location.size);
     }
     _stats.bytes_freed += location.size;
+}
+
+void segment_manager_impl::on_move_record(record_location from, record_location to) noexcept {
+    auto& from_desc = get_segment_descriptor(from);
+    auto& to_desc = get_segment_descriptor(to);
+    if (to_desc.owner) {
+        on_fatal_internal_error(logstor_logger, format("moving a record to segment {}, which a compaction group already owns", to.segment));
+    }
+    from_desc.on_free(from);
+    if (from_desc.owner) {
+        from_desc.owner->update_segment(from_desc, from.size);
+    }
+    to_desc.on_write(to);
+    _stats.live_record_bytes += to.size;
+    _stats.live_record_bytes -= from.size;
 }
 
 future<log_record> segment_manager_impl::read(record_location location) {
@@ -2397,6 +2413,10 @@ void segment_manager::on_add_record(record_location location) noexcept {
 
 void segment_manager::on_free_record(record_location location) noexcept {
     get_impl().on_free_record(location);
+}
+
+void segment_manager::on_move_record(record_location from, record_location to) noexcept {
+    get_impl().on_move_record(from, to);
 }
 
 segment_manager_impl::needs_separation segment_manager_impl::place_recovered_segment(recovery_catalog& catalog, log_segment_id seg_id, const segment_info& info, recovery_stats& stats) {

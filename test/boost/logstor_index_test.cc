@@ -143,6 +143,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
         ssize_t live_bytes = 0;
         size_t add_calls = 0;
         size_t free_calls = 0;
+        size_t move_calls = 0;
         std::vector<record_location> added_locations;
         std::vector<record_location> freed_locations;
 
@@ -168,6 +169,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
             ++free_calls;
             BOOST_REQUIRE(is_live(loc));
             freed_locations.push_back(loc);
+        }
+
+        void on_move_record(record_location from, record_location to) noexcept override {
+            live_bytes += ssize_t(to.size) - ssize_t(from.size);
+            ++move_calls;
+            BOOST_REQUIRE(is_live(from));
+            freed_locations.push_back(from);
+            added_locations.push_back(to);
         }
     } accounting;
 
@@ -247,11 +256,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
 
-    // update_record_location(pk0, loc1 -> loc3): old location matches, succeeds, frees loc1 adds loc3  →  {pk0: loc3, pk1: loc2}
+    // update_record_location(pk0, loc1 -> loc3): old location matches, succeeds, moves the record from loc1 to loc3  →  {pk0: loc3, pk1: loc2}
     BOOST_REQUIRE(index.update_record_location(pk0, loc1, loc3));
     check_live_bytes(ssize_t(loc2.size + loc3.size));
-    BOOST_REQUIRE_EQUAL(accounting.add_calls, 4u);
-    BOOST_REQUIRE_EQUAL(accounting.free_calls, 2u);
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 3u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
+    BOOST_REQUIRE_EQUAL(accounting.move_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
     BOOST_REQUIRE(accounting.is_live(loc2));
     BOOST_REQUIRE(accounting.is_live(loc3));
@@ -262,15 +272,16 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     // update_record_location(pk0, loc1 -> loc4): old location no longer current, fails, no accounting change  →  {pk0: loc3, pk1: loc2}
     BOOST_REQUIRE(!index.update_record_location(pk0, loc1, loc4));
     check_live_bytes(ssize_t(loc2.size + loc3.size));
-    BOOST_REQUIRE_EQUAL(accounting.add_calls, 4u);
-    BOOST_REQUIRE_EQUAL(accounting.free_calls, 2u);
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 3u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
+    BOOST_REQUIRE_EQUAL(accounting.move_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
 
     // erase(pk1, loc2): location matches, succeeds, frees loc2  →  {pk0: loc3}
     BOOST_REQUIRE(index.erase(pk1, loc2));
     check_live_bytes(ssize_t(loc3.size));
-    BOOST_REQUIRE_EQUAL(accounting.add_calls, 4u);
-    BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 3u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 2u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 1);
     BOOST_REQUIRE(accounting.is_live(loc3));
     BOOST_REQUIRE(!accounting.is_live(loc2));
@@ -285,8 +296,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE(outcome5.inserted());
     BOOST_REQUIRE(!outcome5.previous_entry);
     check_live_bytes(ssize_t(loc3.size + loc4.size + loc5.size));
-    BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
-    BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 2u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 3);
 
     // range erase pk1: removes pk1 entry (loc4), frees via accounting  →  {pk0: loc3, pk2: loc5}
@@ -295,8 +306,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
             std::optional(interval_bound(pk1.token(), true)));
     index.erase(pk1_range).get();
     check_live_bytes(ssize_t(loc3.size + loc5.size));
-    BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
-    BOOST_REQUIRE_EQUAL(accounting.free_calls, 4u);
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
     BOOST_REQUIRE(!accounting.is_live(loc4));
     BOOST_REQUIRE(accounting.is_live(loc3));
@@ -307,8 +318,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     index.clear().get();
     BOOST_REQUIRE_EQUAL(index.get_usage().key_count, 0u);
     check_live_bytes(0);
-    BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
-    BOOST_REQUIRE_EQUAL(accounting.free_calls, 6u);
+    BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
+    BOOST_REQUIRE_EQUAL(accounting.free_calls, 5u);
+    BOOST_REQUIRE_EQUAL(accounting.move_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 0);
     BOOST_REQUIRE_EQUAL(accounting.freed_locations.size(), 6u);
 }
@@ -331,6 +343,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
             live_bytes -= loc.size;
             ++free_calls;
             freed_locations.push_back(loc);
+        }
+
+        void on_move_record(record_location from, record_location to) noexcept override {
+            live_bytes += ssize_t(to.size) - ssize_t(from.size);
         }
     } accounting;
 

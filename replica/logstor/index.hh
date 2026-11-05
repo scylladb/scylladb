@@ -269,8 +269,7 @@ public:
         if (it != _entries.end()) {
             if (it->_e.location == old_location) {
                 it->_e.location = new_location;
-                space_accounting_on_record_freed(old_location);
-                space_accounting_on_record_added(new_location);
+                space_accounting_on_record_moved(old_location, new_location);
                 // The cached partition is still valid (same data, new location on
                 // disk after compaction moved it) — do not evict the cache here.
                 return true;
@@ -597,6 +596,16 @@ private:
         }
         _space_accounting.on_free_record(location);
         _live_record_bytes -= location.size;
+    }
+
+    void space_accounting_on_record_moved(record_location from, record_location to) noexcept {
+        if (from.size > _live_record_bytes) {
+            on_fatal_internal_error(logstor_logger, fmt::format("moving a record of {} bytes in an index holding {} live record bytes",
+                    from.size, _live_record_bytes));
+        }
+        _space_accounting.on_move_record(from, to);
+        _live_record_bytes += to.size;
+        _live_record_bytes -= from.size;
     }
 
     // Evicts the cached partition of an entry that the tree erases, and frees its record in the
