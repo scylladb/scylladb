@@ -177,7 +177,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     // the same number the subscriber accumulates, so the two must agree after every operation.
     auto check_live_bytes = [&] (ssize_t expected) {
         BOOST_REQUIRE_EQUAL(accounting.live_bytes, expected);
-        BOOST_REQUIRE_EQUAL(index.get_live_record_bytes(), uint64_t(expected));
+        BOOST_REQUIRE_EQUAL(index.get_usage().live_record_bytes, uint64_t(expected));
     };
 
     const auto pk0 = make_primary_index_key(*schema, "pk0");
@@ -305,7 +305,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
 
     // clear(): removes all remaining entries (pk0->loc3, pk2->loc5), all freed  →  {}
     index.clear().get();
-    BOOST_REQUIRE(index.empty());
+    BOOST_REQUIRE_EQUAL(index.get_usage().key_count, 0u);
     check_live_bytes(0);
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 6u);
@@ -338,7 +338,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
 
     auto check_live_bytes = [&] (ssize_t expected) {
         BOOST_REQUIRE_EQUAL(accounting.live_bytes, expected);
-        BOOST_REQUIRE_EQUAL(index.get_live_record_bytes(), uint64_t(expected));
+        BOOST_REQUIRE_EQUAL(index.get_usage().live_record_bytes, uint64_t(expected));
     };
 
     struct entry {
@@ -393,7 +393,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
 
     index.clear().get();
 
-    BOOST_REQUIRE(index.empty());
+    BOOST_REQUIRE_EQUAL(index.get_usage().key_count, 0u);
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 5u);
     check_live_bytes(0);
@@ -402,15 +402,15 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[4].loc), 1);
 }
 
-// get_memory_usage() counts the B+tree, get_entries_memory_usage() does not, so it has to be the
-// larger of the two and it has to follow the index up and back down.
+// The `memory_usage` of an index counts the B+tree, and its `entries_memory_usage` does not, so the
+// first has to be the larger of the two, and it has to follow the index up and back down.
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_memory_usage) {
     auto schema = make_logstor_schema();
     primary_index index(noop_space_accounting, nullptr, false);
 
     // The tree builds its root on the first insert, so an untouched index holds nothing.
-    BOOST_REQUIRE_EQUAL(index.get_entries_memory_usage(), 0u);
-    BOOST_REQUIRE_EQUAL(index.get_memory_usage(), 0u);
+    BOOST_REQUIRE_EQUAL(index.get_usage().entries_memory_usage, 0u);
+    BOOST_REQUIRE_EQUAL(index.get_usage().memory_usage, 0u);
 
     constexpr size_t key_count = 2000;
     std::vector<primary_index_key> keys;
@@ -424,10 +424,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_memory_usage) {
                 .location = record_location{.segment = log_segment_id{1}, .offset = uint32_t(i * 64), .size = 32},
                 .timestamp = api::timestamp_type(i + 1)});
     }
-    BOOST_REQUIRE_EQUAL(index.get_key_count(), key_count);
+    BOOST_REQUIRE_EQUAL(index.get_usage().key_count, key_count);
 
-    const size_t entries = index.get_entries_memory_usage();
-    const size_t allocated = index.get_memory_usage();
+    const size_t entries = index.get_usage().entries_memory_usage;
+    const size_t allocated = index.get_usage().memory_usage;
     BOOST_REQUIRE_GT(entries, 0u);
     BOOST_REQUIRE_GT(allocated, entries);
     testlog.info("primary index over {} keys: entries {} bytes, allocated {} bytes", key_count, entries, allocated);
@@ -437,16 +437,16 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_memory_usage) {
         BOOST_REQUIRE(index.erase(keys[i],
                 record_location{.segment = log_segment_id{1}, .offset = uint32_t(i * 64), .size = 32}));
     }
-    BOOST_REQUIRE_LT(index.get_entries_memory_usage(), entries);
-    BOOST_REQUIRE_LT(index.get_memory_usage(), allocated);
-    BOOST_REQUIRE_GT(index.get_memory_usage(), index.get_entries_memory_usage());
+    BOOST_REQUIRE_LT(index.get_usage().entries_memory_usage, entries);
+    BOOST_REQUIRE_LT(index.get_usage().memory_usage, allocated);
+    BOOST_REQUIRE_GT(index.get_usage().memory_usage, index.get_usage().entries_memory_usage);
 
     // Clearing gives back everything but the root, which an element-wise erase leaves standing.
     // More than that left behind would mean the accounting had drifted.
     index.clear().get();
-    BOOST_REQUIRE_EQUAL(index.get_key_count(), 0u);
-    BOOST_REQUIRE_EQUAL(index.get_entries_memory_usage(), 0u);
-    const size_t after_clear = index.get_memory_usage();
+    BOOST_REQUIRE_EQUAL(index.get_usage().key_count, 0u);
+    BOOST_REQUIRE_EQUAL(index.get_usage().entries_memory_usage, 0u);
+    const size_t after_clear = index.get_usage().memory_usage;
     testlog.info("primary index after clear: allocated {} bytes", after_clear);
 }
 
@@ -532,7 +532,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_evict
     BOOST_REQUIRE(lookup_location(index, key3, *schema));
 
     index.clear().get();
-    BOOST_REQUIRE(index.empty());
+    BOOST_REQUIRE_EQUAL(index.get_usage().key_count, 0u);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_drain_cache_preserves_index_entries) {
@@ -588,13 +588,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
     }
 
     auto grown_keys = insert_same_token_keys(index, *schema, fixed_token, 10'000, 96);
-    BOOST_REQUIRE_EQUAL(index.get_key_count(), hot_keys.size() + grown_keys.size());
+    BOOST_REQUIRE_EQUAL(index.get_usage().key_count, hot_keys.size() + grown_keys.size());
 
     for (int i = 0; i < 48; ++i) {
         BOOST_REQUIRE(index.erase(grown_keys[i], make_index_entry(500 + i, i * 8, 8, 1).location));
     }
 
-    BOOST_REQUIRE_EQUAL(index.get_key_count(), hot_keys.size() + grown_keys.size() - 48);
+    BOOST_REQUIRE_EQUAL(index.get_usage().key_count, hot_keys.size() + grown_keys.size() - 48);
 
     for (size_t i = 0; i < hot_keys.size(); ++i) {
         BOOST_REQUIRE(lookup_exists(index, hot_keys[i], schema));

@@ -139,6 +139,18 @@ class index_read_guard {
 // once, from its slice: a slice with the bypass_cache option does neither.
 using use_cache = bool_class<class use_cache_tag>;
 
+// The counts of one primary index at the time of a call. The sizes are in bytes.
+struct primary_index_usage {
+    // The number of keys that the index holds.
+    size_t key_count{0};
+    // The memory of the entries alone, without the nodes of the B+tree.
+    size_t entries_memory_usage{0};
+    // The memory of the B+tree, with its nodes and the entries in them.
+    size_t memory_usage{0};
+    // The sum of the sizes of the records that the index points at.
+    uint64_t live_record_bytes{0};
+};
+
 class primary_index final {
 public:
     using tree_type = double_decker<int64_t, primary_index_entry,
@@ -584,13 +596,15 @@ public:
         return erase(dht::token_range());
     }
 
-    bool empty() const noexcept { return _entries.empty(); }
-    size_t get_key_count() const noexcept { return _key_count; }
-    // Returns the memory of the entries alone, without the nodes of the B+tree.
-    size_t get_entries_memory_usage() const noexcept { return _key_count * sizeof(primary_index_entry); }
-    // Everything the index holds, the B+tree's nodes and buckets included.
-    size_t get_memory_usage() const noexcept { return _tree_allocator.allocated_memory(); }
-    uint64_t get_live_record_bytes() const noexcept { return _live_record_bytes; }
+    // Returns what the index holds now.
+    primary_index_usage get_usage() const noexcept {
+        return {
+            .key_count = _key_count,
+            .entries_memory_usage = _key_count * sizeof(primary_index_entry),
+            .memory_usage = _tree_allocator.allocated_memory(),
+            .live_record_bytes = _live_record_bytes,
+        };
+    }
 
 };
 

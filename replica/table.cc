@@ -2619,7 +2619,7 @@ uint64_t table::logstor_disk_space_used() const {
 }
 
 uint64_t table::logstor_live_record_bytes() const {
-    return uses_logstor() ? logstor_index().get_live_record_bytes() : 0;
+    return uses_logstor() ? logstor_index().get_usage().live_record_bytes : 0;
 }
 
 utils::file_size_stats table::live_disk_space_used() const {
@@ -5016,7 +5016,7 @@ logstor::compaction_manager& table::get_logstor_compaction_manager() noexcept {
 size_t table::get_logstor_memory_usage() const {
     size_t m = 0;
     if (_logstor_index) {
-        m += _logstor_index->get_memory_usage();
+        m += _logstor_index->get_usage().memory_usage;
     }
     return m;
 }
@@ -5024,7 +5024,7 @@ size_t table::get_logstor_memory_usage() const {
 size_t table::get_logstor_index_entries_memory_usage() const {
     size_t m = 0;
     if (_logstor_index) {
-        m += _logstor_index->get_entries_memory_usage();
+        m += _logstor_index->get_usage().entries_memory_usage;
     }
     return m;
 }

@@ -248,7 +248,7 @@ using index_entries = std::vector<std::pair<replica::logstor::primary_index_key,
 
 inline index_entries entries_of(const replica::logstor::primary_index& index) {
     index_entries out;
-    out.reserve(index.get_key_count());
+    out.reserve(index.get_usage().key_count);
     auto scan = index.scan();
     while (auto batch = scan.next_batch(1024)) {
         for (const auto& e : batch->entries) {
