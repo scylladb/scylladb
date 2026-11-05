@@ -204,8 +204,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_restores_the_newest_records) {
     BOOST_REQUIRE_EQUAL(summary.separated_segments, 0u);
     BOOST_REQUIRE_EQUAL(group_a.logstor_segments().segment_count(), 1u);
     BOOST_REQUIRE_EQUAL(group_b.logstor_segments().segment_count(), 1u);
-    BOOST_REQUIRE_EQUAL(group_a.logstor_index().get_key_count(), 2u);
-    BOOST_REQUIRE_EQUAL(group_b.logstor_index().get_key_count(), 1u);
+    BOOST_REQUIRE_EQUAL(group_a.logstor_index().get_usage().key_count, 2u);
+    BOOST_REQUIRE_EQUAL(group_b.logstor_index().get_usage().key_count, 1u);
     require_value(ls, group_a.logstor_index(), a0_v1);
     require_value(ls, group_a.logstor_index(), a1_v1);
     require_value(ls, group_b.logstor_index(), b0);
@@ -302,7 +302,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_leaves_out_a_table_that_is_gone) 
     BOOST_REQUIRE_EQUAL(summary.used_segments, 1u);
     BOOST_REQUIRE_EQUAL(summary.free_segments + summary.used_segments, summary.found_segments);
     BOOST_REQUIRE_EQUAL(summary.dropped_records, 0u);
-    BOOST_REQUIRE_EQUAL(group_a.logstor_index().get_key_count(), 1u);
+    BOOST_REQUIRE_EQUAL(group_a.logstor_index().get_usage().key_count, 1u);
     require_value(ls, group_a.logstor_index(), a0);
 }
 
