@@ -616,8 +616,16 @@ The object storage page cache reports these metrics, per shard:
      - Pages evicted, by ``reason``: because the cache was full (``capacity``),
        or because their SSTable was deleted (``sstable_deleted``).
    * - ``scylla_object_storage_page_cache_errors``
-     - Failures of the cache, which didn't fail any read, by ``operation``:
-       ``read``, ``write``, ``record_hits`` and ``evict``.
+     - Failures of the cache, which didn't fail any read or compaction, by
+       ``operation``: ``read``, ``write``, ``record_hits``, ``evict`` and
+       ``compaction`` (failures to find which data of the compacted SSTables
+       was cached, or to copy pages to the cache).
+   * - ``scylla_object_storage_page_cache_compaction_copies``,
+       ``scylla_object_storage_page_cache_compaction_copied_bytes``
+     - Pages, and their bytes, which compaction copied to the cache, because
+       the data they hold was cached in the SSTables it compacted. The cache
+       holds these copies besides the compacted SSTables' pages until those
+       SSTables are deleted.
    * - ``scylla_object_storage_page_cache_unrecorded_hits``
      - Hits of pages which weren't recorded, because too many recordings of
        hits were in progress. Unrecorded hits make the choice of pages to evict

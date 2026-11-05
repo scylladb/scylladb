@@ -15,6 +15,7 @@
 #include "vint-serialization.hh"
 #include "sstables/types.hh"
 #include "sstables/mx/types.hh"
+#include "sstables/object_storage_page_cache_compaction.hh"
 #include "mutation/atomic_cell.hh"
 #include "utils/assert.hh"
 #include "utils/exceptions.hh"
@@ -554,6 +555,17 @@ private:
     // Position of the Data writer at the moment of the last
     // `consume_new_partition` call.
     uint64_t _current_partition_position = 0;
+    // For an output of a compaction which uses the object storage page
+    // cache, which tells where the data of each fragment is written (see
+    // object_storage_page_cache_compaction.hh), or null; and the key of the
+    // partition being written.
+    shared_ptr<page_cache_compaction_output> _page_cache_output;
+    std::optional<dht::decorated_key> _page_cache_key;
+    void page_cache_fragment(position_in_partition_view pos) {
+        if (_page_cache_output) {
+            _page_cache_output->on_data_fragment(*_page_cache_key, pos, _data_writer->offset());
+        }
+    }
     // If true, we don't build the bloom filter during the main pass
     // (when Data.db is written), but we instead write the murmur hashes
     // of keys to a temporary file, and later (after Data.db is written,
@@ -909,6 +921,9 @@ public:
         _sst.create_data().get();
         _compression_enabled = !_sst.has_component(component_type::CRC);
         _delayed_filter = _sst.has_component(component_type::Filter) && !_sst.has_component(component_type::Index);
+        if (auto* output = _cfg.monitor->page_cache_output()) {
+            _page_cache_output = output->shared_from_this();
+        }
         init_file_writers();
         _sst._shards = { shard };
 
@@ -937,6 +952,10 @@ public:
 };
 
 writer::~writer() {
+    if (_page_cache_output) {
+        // Its partitions which wait to be added to the index refer to this.
+        _page_cache_output->abandon();
+    }
     auto close_writer = [](auto& writer) {
         if (writer) {
             try {
@@ -956,6 +975,9 @@ writer::~writer() {
 void writer::maybe_set_pi_first_clustering(const clustering_info& info, tombstone preceding_range_tombstone) {
     uint64_t pos = _data_writer->offset();
     if (!_pi_write_m.first_clustering) {
+        if (_page_cache_output) {
+            _page_cache_output->on_row_index_block(pos);
+        }
         _pi_write_m.first_clustering = info;
         _pi_write_m.range_tombstone_preceding_current_block = preceding_range_tombstone;
         _pi_write_m.block_start_offset = pos;
@@ -1025,6 +1047,10 @@ void writer::init_file_writers() {
                 std::move(compressor)), _sst.get_filename());
     }
 
+    if (_page_cache_output) {
+        _page_cache_output->set_data_compression(_compression_enabled ? &_sst._components->compression : nullptr);
+    }
+
     if (_sst.has_component(component_type::Index)) {
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index).get();
         _index_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.index_filename());
@@ -1090,6 +1116,10 @@ void writer::close_rows_writer() {
 }
 
 void writer::consume_new_partition(const dht::decorated_key& dk) {
+    if (_page_cache_output) {
+        _page_cache_key = dk;
+        page_cache_fragment(position_in_partition_view::for_partition_start());
+    }
     _c_stats.start_offset = _data_writer->offset();
     _prev_row_start = _data_writer->offset();
 
@@ -1542,6 +1572,7 @@ void writer::write_static_row(const row& static_row, column_kind kind) {
 
 stop_iteration writer::consume(static_row&& sr) {
     ensure_tombstone_is_written();
+    page_cache_fragment(position_in_partition_view::for_static_row());
     write_static_row(sr.cells(), column_kind::static_column);
     return stop_iteration::no;
 }
@@ -1621,6 +1652,7 @@ void writer::record_corrupt_row(clustering_row&& clustered_row) {
 stop_iteration writer::consume(clustering_row&& cr) {
     if (_write_regular_as_static) {
         ensure_tombstone_is_written();
+        page_cache_fragment(cr.position());
         write_static_row(cr.cells(), column_kind::regular_column);
         return stop_iteration::no;
     }
@@ -1631,6 +1663,7 @@ stop_iteration writer::consume(clustering_row&& cr) {
 
     ensure_tombstone_is_written();
     ensure_static_row_is_written_if_needed();
+    page_cache_fragment(cr.position());
     write_clustered(cr, _current_tombstone);
 
     auto can_split_partition_at_clustering_boundary = [this] {
@@ -1735,6 +1768,7 @@ stop_iteration writer::consume(range_tombstone_change&& rtc) {
     if (!_current_tombstone && !rtc.tombstone()) {
         return stop_iteration::no;
     }
+    page_cache_fragment(pos);
     tombstone prev_tombstone = std::exchange(_current_tombstone, rtc.tombstone());
     if (!prev_tombstone) { // start bound
         auto bv = pos.as_start_bound_view();
@@ -1762,6 +1796,7 @@ stop_iteration writer::consume_end_of_partition() {
     ensure_static_row_is_written_if_needed();
 
     uint64_t end_of_partition_position = _data_writer->offset();
+    page_cache_fragment(position_in_partition_view::after_all_clustered_rows());
 
     auto write_end_of_partition = [&] {
         write(_sst.get_version(), *_data_writer, row_flags::end_of_partition);
@@ -1799,6 +1834,9 @@ stop_iteration writer::consume_end_of_partition() {
             partitions_db_payload
         );
     }
+    if (_page_cache_output) {
+        _page_cache_output->on_partition_end(_data_writer->offset());
+    }
 
     // compute size of the current row.
     _c_stats.partition_size = _data_writer->offset() - _c_stats.start_offset;
@@ -1824,6 +1862,9 @@ stop_iteration writer::consume_end_of_partition() {
 }
 
 void writer::consume_end_of_stream() {
+    if (_page_cache_output) {
+        _page_cache_output->on_data_end(_data_writer->offset());
+    }
     _cfg.monitor->on_data_write_completed();
 
   if (_sst._components->summary) {
