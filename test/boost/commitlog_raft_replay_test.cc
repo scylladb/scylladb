@@ -2853,6 +2853,74 @@ static void check_cut_at_the_seal(replica::database& db, table_id table) {
     BOOST_REQUIRE_EQUAL(ssts->size(), 2);
 }
 
+// Replays writes at timestamp 1 at indexes 1 and 2 and at timestamp 3 at index 4,
+// with a seal at index 3 and timestamp 2 recorded only in the group's row, by the
+// mutation `record` builds, and checks that the data is cut at the seal.
+static future<> check_replay_cuts_at_a_seal_of_the_row(
+        std::function<mutation(raft::group_id, const service::strong_consistency::raft_seal&)> record) {
+    return do_with_cql_env_thread([record = std::move(record)] (cql_test_env& env) {
+        env.get_storage_service().local().set_tablet_balancing_enabled(false).get();
+        env.execute_cql("CREATE TABLE ks.tbl (pk int PRIMARY KEY, c int) "
+                "WITH compaction = {'class': 'NullCompactionStrategy'}").get();
+        const auto table = env.local_db().find_schema("ks", "tbl")->id();
+
+        // Replay acts only on the groups of strongly consistent tablets, so give the
+        // table's only tablet a group, on the replica it already has.
+        const auto tm = env.local_token_metadata_ptr();
+        const auto& tmap = tm->tablets().get_tablet_map(table);
+        const auto original = tmap.clone_gently().get();
+        const auto replica = tmap.get_tablet_info(locator::tablet_id(0)).replicas.front();
+        const auto gid = make_group_id();
+        set_sc_tablet_metadata(env, table, gid, locator::tablet_replica_set{replica}).get();
+
+        env.db().invoke_on(replica.shard, [&env, &record, table, gid] (replica::database& db) {
+            return seastar::async([&env, &record, &db, table, gid] {
+                service::strong_consistency::raft_groups_storage::store_descriptor(
+                        env.local_qp(), gid, this_shard_id(), raft::index_t(3), raft::term_t(1),
+                        raft::configuration{}, {}).get();
+                const auto seal = record(gid, {.idx = raft::index_t(3), .ts = 2});
+                db.apply_in_memory(seal, seal.schema()->table(), db::rp_handle(), db::no_timeout).get();
+                const auto s = db.find_schema(table);
+                const std::vector<raft::log_entry_ptr> entries = {
+                    make_write_entry(s, raft::index_t(1), 1, 1),
+                    make_write_entry(s, raft::index_t(2), 2, 1),
+                    make_write_entry(s, raft::index_t(4), 3, 3),
+                };
+
+                db::raft_commitlog_replay_buffer buffer;
+                buffer.add_batch(db, env.local_qp(), env.get_system_keyspace().local(),
+                        gid, 1, raft::index_t(4), entries).get();
+                buffer.finish_replay(db, env.local_qp()).get();
+                buffer.stop().get();
+
+                replica::database::flush_table_on_all_shards(env.db(), table).get();
+                check_cut_at_the_seal(db, table);
+            });
+        }).get();
+
+        locator::shared_token_metadata::mutate_on_all_shards(env.shared_token_metadata(),
+                [table, &original] (locator::token_metadata& tm) -> future<> {
+            locator::tablet_metadata tmeta = co_await tm.tablets().copy();
+            tmeta.set_tablet_map(table, co_await original.clone_gently());
+            tm.set_tablets(std::move(tmeta));
+        }).get();
+    }, sc_replay_config());
+}
+
+// Test that replay cuts the tablet's data at a seal of the group's row.
+SEASTAR_TEST_CASE(test_replay_cuts_the_tablet_at_a_seal_of_the_row) {
+    return check_replay_cuts_at_a_seal_of_the_row([] (raft::group_id gid, const service::strong_consistency::raft_seal& seal) {
+        return service::strong_consistency::make_seal_mutation(gid, this_shard_id(), seal, api::new_timestamp());
+    });
+}
+
+// Test that replay cuts the tablet's data at the promoted seal of the group's row.
+SEASTAR_TEST_CASE(test_replay_cuts_the_tablet_at_the_promoted_seal_of_the_row) {
+    return check_replay_cuts_at_a_seal_of_the_row([] (raft::group_id gid, const service::strong_consistency::raft_seal& seal) {
+        return service::strong_consistency::make_promote_seal_mutation(gid, this_shard_id(), seal, {}, api::new_timestamp());
+    });
+}
+
 // Checks, on the shard of the tablet, that the group's row holds just the seal at
 // index 3 with timestamp 2.
 static void check_seal_in_the_row(cql_test_env& env, raft::group_id gid) {
@@ -2911,6 +2979,102 @@ SEASTAR_TEST_CASE(test_apply_cuts_the_tablet_at_a_seal) {
             });
         });
     }, std::move(db_cfg_ptr));
+}
+
+// Test that replay cuts the tablet's data at a committed seal and records the seal,
+// as applying it does.
+SEASTAR_TEST_CASE(test_replay_cuts_the_tablet_at_a_seal) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        env.get_storage_service().local().set_tablet_balancing_enabled(false).get();
+        env.execute_cql("CREATE TABLE ks.tbl (pk int PRIMARY KEY, c int) "
+                "WITH compaction = {'class': 'NullCompactionStrategy'}").get();
+        const auto table = env.local_db().find_schema("ks", "tbl")->id();
+
+        // Replay acts only on the groups of strongly consistent tablets, so give the
+        // table's only tablet a group, on the replica it already has.
+        const auto tm = env.local_token_metadata_ptr();
+        const auto& tmap = tm->tablets().get_tablet_map(table);
+        const auto original = tmap.clone_gently().get();
+        const auto replica = tmap.get_tablet_info(locator::tablet_id(0)).replicas.front();
+        const auto gid = make_group_id();
+        set_sc_tablet_metadata(env, table, gid, locator::tablet_replica_set{replica}).get();
+
+        env.db().invoke_on(replica.shard, [&env, table, gid] (replica::database& db) {
+            return seastar::async([&env, &db, table, gid] {
+                service::strong_consistency::raft_groups_storage::store_descriptor(
+                        env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                        raft::configuration{}, {}).get();
+                const auto entries = make_entries_around_a_seal(db.find_schema(table));
+
+                db::raft_commitlog_replay_buffer buffer;
+                buffer.add_batch(db, env.local_qp(), env.get_system_keyspace().local(),
+                        gid, 1, raft::index_t(4), entries).get();
+                buffer.finish_replay(db, env.local_qp()).get();
+                buffer.stop().get();
+
+                replica::database::flush_table_on_all_shards(env.db(), table).get();
+                check_cut_at_the_seal(db, table);
+                check_seal_in_the_row(env, gid);
+            });
+        }).get();
+
+        locator::shared_token_metadata::mutate_on_all_shards(env.shared_token_metadata(),
+                [table, &original] (locator::token_metadata& tm) -> future<> {
+            locator::tablet_metadata tmeta = co_await tm.tablets().copy();
+            tmeta.set_tablet_map(table, co_await original.clone_gently());
+            tm.set_tablets(std::move(tmeta));
+        }).get();
+    }, sc_replay_config());
+}
+
+// Test that replay cuts the tablet's data at a seal which ends the log: no entry
+// follows it, so the cut is made when replay finishes, before the data written after it.
+SEASTAR_TEST_CASE(test_replay_cuts_the_tablet_at_a_seal_ending_the_log) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        env.get_storage_service().local().set_tablet_balancing_enabled(false).get();
+        env.execute_cql("CREATE TABLE ks.tbl (pk int PRIMARY KEY, c int) "
+                "WITH compaction = {'class': 'NullCompactionStrategy'}").get();
+        const auto table = env.local_db().find_schema("ks", "tbl")->id();
+
+        const auto tm = env.local_token_metadata_ptr();
+        const auto& tmap = tm->tablets().get_tablet_map(table);
+        const auto original = tmap.clone_gently().get();
+        const auto replica = tmap.get_tablet_info(locator::tablet_id(0)).replicas.front();
+        const auto gid = make_group_id();
+        set_sc_tablet_metadata(env, table, gid, locator::tablet_replica_set{replica}).get();
+
+        env.db().invoke_on(replica.shard, [&env, table, gid] (replica::database& db) {
+            return seastar::async([&env, &db, table, gid] {
+                service::strong_consistency::raft_groups_storage::store_descriptor(
+                        env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
+                        raft::configuration{}, {}).get();
+                auto entries = make_entries_around_a_seal(db.find_schema(table));
+                entries.pop_back();
+
+                db::raft_commitlog_replay_buffer buffer;
+                buffer.add_batch(db, env.local_qp(), env.get_system_keyspace().local(),
+                        gid, 1, raft::index_t(3), entries).get();
+                buffer.finish_replay(db, env.local_qp()).get();
+                buffer.stop().get();
+
+                const auto s = db.find_schema(table);
+                mutation m(s, partition_key::from_singular(*s, 3));
+                m.set_cell(clustering_key::make_empty(), "c", data_value(3), 3);
+                db.apply(s, freeze(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no, db::no_timeout).get();
+
+                replica::database::flush_table_on_all_shards(env.db(), table).get();
+                check_cut_at_the_seal(db, table);
+                check_seal_in_the_row(env, gid);
+            });
+        }).get();
+
+        locator::shared_token_metadata::mutate_on_all_shards(env.shared_token_metadata(),
+                [table, &original] (locator::token_metadata& tm) -> future<> {
+            locator::tablet_metadata tmeta = co_await tm.tablets().copy();
+            tmeta.set_tablet_map(table, co_await original.clone_gently());
+            tm.set_tablets(std::move(tmeta));
+        }).get();
+    }, sc_replay_config());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

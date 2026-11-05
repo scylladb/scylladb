@@ -28,6 +28,7 @@
 #include "idl/raft_storage.dist.impl.hh"
 
 #include <algorithm>
+#include <limits>
 #include <unordered_map>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -50,7 +51,7 @@ namespace {
 // up its segment references, so a wider test here would try to recover a log whose
 // segments are being reclaimed. A replica in the middle of joining still answers yes, so
 // it replays what it received before the restart.
-std::unordered_map<raft::group_id, locator::global_tablet_id> build_group_to_tablet_map(replica::database& db) {
+std::unordered_map<raft::group_id, locator::range_based_tablet_id> build_group_to_tablet_map(replica::database& db) {
     const auto token_metadata = db.get_shared_token_metadata().get();
     const auto& tm = *token_metadata;
     if (!tm.get_my_id()) {
@@ -65,7 +66,7 @@ std::unordered_map<raft::group_id, locator::global_tablet_id> build_group_to_tab
         .shard = this_shard_id()
     };
 
-    std::unordered_map<raft::group_id, locator::global_tablet_id> result;
+    std::unordered_map<raft::group_id, locator::range_based_tablet_id> result;
     const auto& tablets = tm.tablets();
     for (const auto& [tid, _] : tablets.all_table_groups()) {
         const auto& tablet_map = tablets.get_tablet_map(tid);
@@ -79,7 +80,7 @@ std::unordered_map<raft::group_id, locator::global_tablet_id> build_group_to_tab
                 continue;
             }
             const auto gid = tablet_map.get_tablet_raft_info(tablet_id).group_id;
-            result.emplace(gid, locator::global_tablet_id{.table = tid, .tablet = tablet_id});
+            result.emplace(gid, locator::range_based_tablet_id{tid, tablet_map.get_token_range(tablet_id)});
         }
     }
     return result;
@@ -185,6 +186,12 @@ future<> raft_commitlog_replay_buffer::resolve_group(replica::database& db, cql3
     // entry's apply returns, so if it is here, the drop it is the receipt for happened,
     // and if it is not, no entry after the truncate was applied.
     group.truncate = persisted.truncate;
+    for (const auto& seal : persisted.seals) {
+        group.seals.emplace(seal.idx, seal.ts);
+    }
+    if (persisted.promoted_seal) {
+        group.promoted_seal = persisted.promoted_seal->idx;
+    }
     for (const auto& truncation : group.truncations) {
         group.cursors[truncation.segment].push_back(raft_buffer_detail::truncation_cursor{
                 .from = truncation.from, .to = truncation.to, .next = truncation.from});
@@ -210,11 +217,27 @@ void raft_commitlog_replay_buffer::note_committed(group_state& group, const raft
     }
 }
 
+void raft_commitlog_replay_buffer::cut_at_seals_before(replica::database& db, group_state& group, raft::index_t idx) {
+    raft::index_t newest_seal{0};
+    if (auto it = group.seals.lower_bound(idx); it != group.seals.begin()) {
+        newest_seal = std::prev(it)->first;
+    }
+    if (group.promoted_seal && *group.promoted_seal < idx) {
+        newest_seal = std::max(newest_seal, *group.promoted_seal);
+    }
+    // One cut covers all the seals passed since the last one, as no data lies between them.
+    if (newest_seal > group.cut_to) {
+        db.find_column_family(group.tablet.table).rotate_memtables(group.tablet.range);
+        group.cut_to = newest_seal;
+    }
+}
+
 future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db::system_keyspace& sys_ks,
         raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry) {
     if (!std::holds_alternative<raft::command>(entry->data)) {
         co_return;
     }
+    cut_at_seals_before(db, group, entry->idx);
     auto cmd = sc::detail::deserialize_raft_command(entry);
     if (auto* marker = std::get_if<sc::resize_marker>(&cmd.change)) {
         // Goes to the group's row, not the tablet, so a truncate above it drops nothing of it.
@@ -225,7 +248,12 @@ future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db
     }
     if (auto* s = std::get_if<sc::seal_command>(&cmd.change)) {
         // Also the group's row: a seal below the truncate was recorded before it ran.
+        // Written at this node's clock, so an old seal must be skipped, not overwritten.
+        if (group.promoted_seal && entry->idx <= *group.promoted_seal) {
+            co_return;
+        }
         logger.debug("group {}: replaying the seal at {}", group_id, entry->idx);
+        group.seals.emplace(entry->idx, s->timestamp);
         auto m = sc::make_seal_mutation(group_id, this_shard_id(), {.idx = entry->idx, .ts = s->timestamp}, api::new_timestamp());
         co_await db.apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
         co_return;
@@ -246,7 +274,10 @@ future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db
         // The same code the state machine runs. It drops the entries applied above, like
         // the truncate did before the crash, and advances the record the entries after it
         // are checked against.
-        co_await sc::apply_truncate_command(db, group.tablet, group_id, entry->idx,
+        // The tablet is tracked by its range; its id is the current map's.
+        const auto& tmap = db.get_shared_token_metadata().get()->tablets().get_tablet_map(group.tablet.table);
+        const locator::global_tablet_id tablet{group.tablet.table, tmap.get_tablet_id(group.tablet.range.end()->value())};
+        co_await sc::apply_truncate_command(db, tablet, group_id, entry->idx,
                 std::get<sc::truncate_command>(cmd.change), group.truncate);
     }
 }
@@ -477,6 +508,8 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
         if (!group.known) {
             continue;
         }
+        // The cut at a seal is made by the first entry past it, which the log may lack.
+        cut_at_seals_before(db, group, raft::index_t{std::numeric_limits<uint64_t>::max()});
         // The recovered floor is a real descriptor: every index at or below
         // commit_idx is committed, and commit_term is the term of the entry there.
         co_await service::strong_consistency::raft_groups_storage::store_descriptor(
