@@ -8,6 +8,7 @@
 
 #include "db/cluster_config_manager.hh"
 
+#include <algorithm>
 #include <utility>
 
 #include <seastar/core/coroutine.hh>
@@ -124,7 +125,9 @@ future<> cluster_config_manager::stop() {
     // indexes into _config_callbacks after resuming, so clearing the vector first would leave
     // it reading freed storage.
     co_await _gate.close();
-    _config_callbacks.clear();
+    // Empty the member before the entries are destroyed: a closure that owns a registration
+    // unregisters it from its destructor.
+    auto callbacks = std::exchange(_config_callbacks, {});
 }
 
 future<> cluster_config_manager::refresh() {
@@ -420,9 +423,17 @@ void cluster_config_manager::unregister_config_callback(uint64_t callback_id) no
 }
 
 void cluster_config_manager::sweep_unregistered_callbacks() noexcept {
-    std::erase_if(_config_callbacks, [] (const config_callback& callback) {
-        return !callback.registered;
+    // Removes the unregistered entries, destroying each one only after it has left the
+    // vector: a closure may own another registration, whose destructor re-enters
+    // unregister_config_callback() and sweeps again.
+    std::stable_partition(_config_callbacks.begin(), _config_callbacks.end(), [] (const config_callback& callback) {
+        return callback.registered;
     });
+    while (!_config_callbacks.empty() && !_config_callbacks.back().registered) {
+        config_callback removed;
+        std::swap(removed, _config_callbacks.back());
+        _config_callbacks.pop_back();
+    }
 }
 
 future<cluster_config_manager::scope_caches> cluster_config_manager::load_caches() {
