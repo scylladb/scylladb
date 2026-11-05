@@ -1152,8 +1152,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
     const auto pk0 = make_index_key(*schema, pk0_v1.decorated_key());
     const auto pk1 = make_index_key(*schema, pk1_v0.decorated_key());
 
-    auto pk0_before = cg.logstor_index().get(pk0);
-    auto pk1_before = cg.logstor_index().get(pk1);
+    auto pk0_before = lookup_location(cg.logstor_index(), pk0, *schema);
+    auto pk1_before = lookup_location(cg.logstor_index(), pk1, *schema);
     BOOST_REQUIRE(pk0_before);
     BOOST_REQUIRE(pk1_before);
 
@@ -1167,8 +1167,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
 
     // Nothing was flushed, so the group and the index are unchanged.
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 3u);
-    BOOST_REQUIRE(cg.logstor_index().get(pk0)->location == pk0_before->location);
-    BOOST_REQUIRE(cg.logstor_index().get(pk1)->location == pk1_before->location);
+    BOOST_REQUIRE(*lookup_location(cg.logstor_index(), pk0, *schema) == *pk0_before);
+    BOOST_REQUIRE(*lookup_location(cg.logstor_index(), pk1, *schema) == *pk1_before);
 
     // The buffer of the failed compaction is back in the pool, so this one runs to completion.
     setup_guard.reset();
@@ -1177,12 +1177,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
 
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 1u);
 
-    auto pk0_after = cg.logstor_index().get(pk0);
-    auto pk1_after = cg.logstor_index().get(pk1);
+    auto pk0_after = lookup_location(cg.logstor_index(), pk0, *schema);
+    auto pk1_after = lookup_location(cg.logstor_index(), pk1, *schema);
     BOOST_REQUIRE(pk0_after);
     BOOST_REQUIRE(pk1_after);
-    BOOST_REQUIRE(pk0_after->location != pk0_before->location);
-    BOOST_REQUIRE(pk1_after->location != pk1_before->location);
+    BOOST_REQUIRE(*pk0_after != *pk0_before);
+    BOOST_REQUIRE(*pk1_after != *pk1_before);
 
     assert_that(*read_mutation(ls, schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get()).is_equal_to(pk0_v1);
     assert_that(*read_mutation(ls, schema, cg.logstor_index(), pk1_v0.decorated_key(), schema->full_slice()).get()).is_equal_to(pk1_v0);
@@ -2367,7 +2367,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 1u);
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 0u);
 
-    auto entry_before_flush = cg.logstor_index().get(make_index_key(*schema, key));
+    auto entry_before_flush = lookup_location(cg.logstor_index(), make_index_key(*schema, key), *schema);
     BOOST_REQUIRE(entry_before_flush);
 
     cg.flush_separator().get();
@@ -2381,10 +2381,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     auto snapshot = ls.get_segment_manager().make_snapshot(cg).get();
     BOOST_REQUIRE_EQUAL(snapshot.size(), 1u);
 
-    auto entry_after_flush = cg.logstor_index().get(make_index_key(*schema, key));
+    auto entry_after_flush = lookup_location(cg.logstor_index(), make_index_key(*schema, key), *schema);
     BOOST_REQUIRE(entry_after_flush);
-    BOOST_REQUIRE(entry_after_flush->location.segment != entry_before_flush->location.segment);
-    BOOST_REQUIRE_EQUAL(entry_after_flush->location.segment.value, snapshot.front().segment_id.value);
+    BOOST_REQUIRE(entry_after_flush->segment != entry_before_flush->segment);
+    BOOST_REQUIRE_EQUAL(entry_after_flush->segment.value, snapshot.front().segment_id.value);
 
     auto actual = read_mutation(ls, schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
@@ -2420,7 +2420,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_discarded_group_does_not_free_its_unflushe
     ls.flush_to_separator().get();
     BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 1u);
 
-    auto entry_before_discard = cg.logstor_index().get(make_index_key(*schema, key));
+    auto entry_before_discard = lookup_location(cg.logstor_index(), make_index_key(*schema, key), *schema);
     BOOST_REQUIRE(entry_before_discard);
 
     // A value that takes most of a segment, so that the second record does not fit next to the first
@@ -2444,9 +2444,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_discarded_group_does_not_free_its_unflushe
 
     // The records were never written out, so the index still points at them where they were, and the
     // segment that holds them was not freed and reused underneath it.
-    auto entry_after_discard = cg.logstor_index().get(make_index_key(*schema, key));
+    auto entry_after_discard = lookup_location(cg.logstor_index(), make_index_key(*schema, key), *schema);
     BOOST_REQUIRE(entry_after_discard);
-    BOOST_REQUIRE(entry_after_discard->location == entry_before_discard->location);
+    BOOST_REQUIRE(*entry_after_discard == *entry_before_discard);
 
     auto actual = read_mutation(ls, schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
@@ -2486,7 +2486,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_closed_group_takes_no_separator_writes) {
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 0u);
 
     // The write itself succeeded and the record is readable where it was written.
-    BOOST_REQUIRE(cg.logstor_index().get(make_index_key(*schema, key)));
+    BOOST_REQUIRE(lookup_location(cg.logstor_index(), make_index_key(*schema, key), *schema));
 
     auto actual = read_mutation(ls, schema, cg.logstor_index(), key, schema->full_slice()).get();
     BOOST_REQUIRE(actual);
@@ -2762,8 +2762,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     const auto pk1 = make_index_key(*schema, pk1_v1.decorated_key());
     const auto pk2 = make_index_key(*schema, pk2_v0.decorated_key());
 
-    auto stale_pk0_location = cg.logstor_index().get(pk0);
-    auto stale_pk1_location = cg.logstor_index().get(pk1);
+    auto stale_pk0_location = lookup_location(cg.logstor_index(), pk0, *schema);
+    auto stale_pk1_location = lookup_location(cg.logstor_index(), pk1, *schema);
 
     BOOST_REQUIRE(stale_pk0_location);
     BOOST_REQUIRE(stale_pk1_location);
@@ -2773,9 +2773,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
 
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 5u);
 
-    auto live_pk0_before = cg.logstor_index().get(pk0);
-    auto live_pk1_before = cg.logstor_index().get(pk1);
-    auto live_pk2_before = cg.logstor_index().get(pk2);
+    auto live_pk0_before = lookup_location(cg.logstor_index(), pk0, *schema);
+    auto live_pk1_before = lookup_location(cg.logstor_index(), pk1, *schema);
+    auto live_pk2_before = lookup_location(cg.logstor_index(), pk2, *schema);
 
     BOOST_REQUIRE(live_pk0_before);
     BOOST_REQUIRE(live_pk1_before);
@@ -2793,28 +2793,28 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     BOOST_REQUIRE_EQUAL(new_snapshot.size(), 1u);
     const auto new_segment_ids = snapshot_segment_ids(new_snapshot);
 
-    auto live_pk0_after = cg.logstor_index().get(pk0);
-    auto live_pk1_after = cg.logstor_index().get(pk1);
-    auto live_pk2_after = cg.logstor_index().get(pk2);
+    auto live_pk0_after = lookup_location(cg.logstor_index(), pk0, *schema);
+    auto live_pk1_after = lookup_location(cg.logstor_index(), pk1, *schema);
+    auto live_pk2_after = lookup_location(cg.logstor_index(), pk2, *schema);
 
     BOOST_REQUIRE(live_pk0_after);
     BOOST_REQUIRE(live_pk1_after);
     BOOST_REQUIRE(live_pk2_after);
 
-    BOOST_REQUIRE(live_pk0_after->location != live_pk0_before->location);
-    BOOST_REQUIRE(live_pk1_after->location != live_pk1_before->location);
-    BOOST_REQUIRE(live_pk2_after->location != live_pk2_before->location);
+    BOOST_REQUIRE(*live_pk0_after != *live_pk0_before);
+    BOOST_REQUIRE(*live_pk1_after != *live_pk1_before);
+    BOOST_REQUIRE(*live_pk2_after != *live_pk2_before);
 
-    BOOST_REQUIRE(new_segment_ids.contains(live_pk0_after->location.segment));
-    BOOST_REQUIRE(new_segment_ids.contains(live_pk1_after->location.segment));
-    BOOST_REQUIRE(new_segment_ids.contains(live_pk2_after->location.segment));
+    BOOST_REQUIRE(new_segment_ids.contains(live_pk0_after->segment));
+    BOOST_REQUIRE(new_segment_ids.contains(live_pk1_after->segment));
+    BOOST_REQUIRE(new_segment_ids.contains(live_pk2_after->segment));
 
     for (const auto old_segment_id : old_segment_ids) {
         BOOST_REQUIRE(!new_segment_ids.contains(old_segment_id));
     }
 
-    BOOST_REQUIRE(!new_segment_ids.contains(stale_pk0_location->location.segment));
-    BOOST_REQUIRE(!new_segment_ids.contains(stale_pk1_location->location.segment));
+    BOOST_REQUIRE(!new_segment_ids.contains(stale_pk0_location->segment));
+    BOOST_REQUIRE(!new_segment_ids.contains(stale_pk1_location->segment));
 
     auto actual_pk0 = read_mutation(ls, schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
     auto actual_pk1 = read_mutation(ls, schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
@@ -2875,9 +2875,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit)
     const auto pk1 = make_index_key(*schema, pk1_v1.decorated_key());
     const auto pk2 = make_index_key(*schema, pk2_v0.decorated_key());
 
-    auto live_pk0_before = cg.logstor_index().get(pk0);
-    auto live_pk1_before = cg.logstor_index().get(pk1);
-    auto live_pk2_before = cg.logstor_index().get(pk2);
+    auto live_pk0_before = lookup_location(cg.logstor_index(), pk0, *schema);
+    auto live_pk1_before = lookup_location(cg.logstor_index(), pk1, *schema);
+    auto live_pk2_before = lookup_location(cg.logstor_index(), pk2, *schema);
 
     BOOST_REQUIRE(live_pk0_before);
     BOOST_REQUIRE(live_pk1_before);
@@ -2894,17 +2894,17 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit)
     BOOST_REQUIRE_EQUAL(snapshot_after.size(), snapshot_before.size());
     BOOST_REQUIRE(segment_ids_after == segment_ids_before);
 
-    auto live_pk0_after = cg.logstor_index().get(pk0);
-    auto live_pk1_after = cg.logstor_index().get(pk1);
-    auto live_pk2_after = cg.logstor_index().get(pk2);
+    auto live_pk0_after = lookup_location(cg.logstor_index(), pk0, *schema);
+    auto live_pk1_after = lookup_location(cg.logstor_index(), pk1, *schema);
+    auto live_pk2_after = lookup_location(cg.logstor_index(), pk2, *schema);
 
     BOOST_REQUIRE(live_pk0_after);
     BOOST_REQUIRE(live_pk1_after);
     BOOST_REQUIRE(live_pk2_after);
 
-    BOOST_REQUIRE(live_pk0_after->location == live_pk0_before->location);
-    BOOST_REQUIRE(live_pk1_after->location == live_pk1_before->location);
-    BOOST_REQUIRE(live_pk2_after->location == live_pk2_before->location);
+    BOOST_REQUIRE(*live_pk0_after == *live_pk0_before);
+    BOOST_REQUIRE(*live_pk1_after == *live_pk1_before);
+    BOOST_REQUIRE(*live_pk2_after == *live_pk2_before);
 
     auto actual_pk0 = read_mutation(ls, schema, cg.logstor_index(), pk0_v1.decorated_key(), schema->full_slice()).get();
     auto actual_pk1 = read_mutation(ls, schema, cg.logstor_index(), pk1_v1.decorated_key(), schema->full_slice()).get();
@@ -2974,9 +2974,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
 
     std::vector<record_location> locations_before;
     for (const auto& key : index_keys) {
-        auto entry = index.get(key);
-        BOOST_REQUIRE(entry);
-        locations_before.push_back(entry->location);
+        auto location = lookup_location(index, key, *schema);
+        BOOST_REQUIRE(location);
+        locations_before.push_back(*location);
     }
 
     const auto single_sided_segments = std::set<log_segment_id>{
@@ -3007,9 +3007,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
 
     std::vector<record_location> locations_after;
     for (const auto& key : index_keys) {
-        auto entry = index.get(key);
-        BOOST_REQUIRE(entry);
-        locations_after.push_back(entry->location);
+        auto location = lookup_location(index, key, *schema);
+        BOOST_REQUIRE(location);
+        locations_after.push_back(*location);
     }
 
     // The single-sided segments were moved as they are: the records they hold did not move, and
@@ -3513,9 +3513,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_rejects_a_cached_partiti
 
     auto& index = env.cg->logstor_index();
     primary_index_key key(ms[0].decorated_key());
-    auto entry = index.get(key);
-    BOOST_REQUIRE(entry);
-    BOOST_REQUIRE(index.populate_cache(key, entry->location, ms[1].schema(), ms[1].key(), to_single_row_partition(mutation(ms[1]))));
+    auto location = lookup_location(index, key, *env.schema);
+    BOOST_REQUIRE(location);
+    BOOST_REQUIRE(index.populate_cache(key, *location, ms[1].schema(), ms[1].key(), to_single_row_partition(mutation(ms[1]))));
 
     auto rd = env.make_reader(singular_range(ms[0]));
     auto close_rd = deferred_close(rd);
