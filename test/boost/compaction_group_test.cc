@@ -103,6 +103,7 @@ public:
     virtual std::optional<std::chrono::seconds> scrub_period() const noexcept override { return std::nullopt; }
     virtual bool compaction_enforce_min_threshold() const noexcept override { return false; }
     virtual future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override { co_return make_lw_shared<const sstables::sstable_set>(_main_set); }
+    virtual bool contains(const sstables::shared_sstable& sst) const override { return _main_set.all()->contains(sst); }
     virtual future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override { co_return make_lw_shared<const sstables::sstable_set>(_maintenance_set); }
     virtual lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override { return make_lw_shared<const sstables::sstable_set>(_main_set); }
     virtual bool skip_memtable_for_tombstone_gc() const noexcept override { return false; }

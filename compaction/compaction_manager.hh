@@ -56,6 +56,7 @@ class regular_compaction_task_executor;
 class offstrategy_compaction_task_executor;
 class rewrite_sstables_compaction_task_executor;
 class automatic_scrub_task_executor;
+class run_identifier_write_task_executor;
 class rewrite_sstables_component_compaction_task_executor;
 class split_compaction_task_executor;
 class cleanup_sstables_compaction_task_executor;
@@ -146,6 +147,19 @@ private:
     // Compaction groups views which should be considered for automatic scrub.
     std::unordered_set<compaction::compaction_group_view*> _awaiting_automatic_scrub;
 
+    // Fiber which waits for a signal and writes the run identifiers of sstables to disk.
+    std::optional<future<>> _waiting_run_identifier_write_reevaluation;
+
+    // Used to signal that some views may have run identifiers to write.
+    condition_variable _run_identifier_write_reevaluation;
+
+    // Compaction group views which may have sstables whose run identifier differs in memory from
+    // the one on disk. Unlike _awaiting_automatic_scrub, it's kept while the manager is disabled,
+    // since nothing would schedule the views again. The fiber is woken up when a view is scheduled,
+    // when compaction is enabled again on a queued view, when the manager is enabled, and by the
+    // periodic compaction submission.
+    std::unordered_set<compaction::compaction_group_view*> _awaiting_run_identifier_write;
+
     std::unordered_map<compaction::compaction_group_view*, compaction_state> _compaction_state;
 
     // Purpose is to serialize all maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
@@ -174,6 +188,15 @@ private:
     future<> do_one_automatic_scrub_reevaluation();
 
     future<> stop_automatic_scrub() noexcept;
+
+    void reevaluate_run_identifier_write() noexcept;
+    // Fiber waiting for signal and writing run identifiers to disk.
+    future<> run_identifier_write_reevaluation();
+    future<> stop_run_identifier_write() noexcept;
+    // Puts the view in the queue of views with run identifiers to write, without waking the fiber
+    // up, unless the view isn't registered or is being removed. Returns whether it did.
+    // Not waking the fiber up keeps a stopped task from being restarted right away.
+    bool reschedule_run_identifier_write(compaction::compaction_group_view* t);
 
     // all registered tables are reevaluated at a constant interval.
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.
@@ -412,7 +435,22 @@ private:
     future<> on_compaction_completion(compaction_group_view& t, compaction_completion_desc desc, sstables::offstrategy offstrategy);
 
     future<> submit_automatic_scrub(compaction_group_view& t);
+
+    future<> submit_run_identifier_write(compaction_group_view& t);
 public:
+    // Writes to disk, in the background, the run identifiers of the sstables of `t` which differ
+    // in memory from the ones on disk, e.g. because their runs were spliced in memory (see
+    // sstables::sstable::has_unpersisted_run_identifier()). The Scylla component of each such
+    // sstable is rewritten, one sstable at a time, so that regular compaction, and operations
+    // which disable compaction, such as repair, wait for one sstable at most.
+    // Sstables being compacted, or requiring cleanup, are left alone. So are sstables which
+    // something else replaces in the meantime, since the replacement has its run identifier
+    // written on creation. If some sstables are left, or the task is stopped, the view is taken
+    // up again later, at the latest by the periodic compaction submission.
+    // Does nothing if `t` isn't registered, or is being removed.
+    // Must not be called for views on which compaction is always disabled, like the repairing view.
+    void schedule_run_identifier_write(compaction::compaction_group_view& t);
+
     // Submit a table to be upgraded and wait for its termination.
     future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, bool exclude_current_version, tasks::task_info info);
 
@@ -574,6 +612,7 @@ public:
     friend class compaction::offstrategy_compaction_task_executor;
     friend class compaction::rewrite_sstables_compaction_task_executor;
     friend class compaction::automatic_scrub_task_executor;
+    friend class compaction::run_identifier_write_task_executor;
     friend class compaction::rewrite_sstables_component_compaction_task_executor;
     friend class compaction::cleanup_sstables_compaction_task_executor;
     friend class compaction::validate_sstables_compaction_task_executor;

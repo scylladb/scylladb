@@ -136,6 +136,16 @@ public:
     // delay a regular compaction more than the time needed to finish scrubbing
     // the current sstable.
     seastar::semaphore automatic_compaction_sem{1};
+
+    // Taken by the run identifier writer each time before rewriting an sstable, and held
+    // until the rewritten sstable is in the sstable set and no longer registered as compacting.
+    // Held by regular compaction while it selects and registers sstables, whatever the strategy.
+    // ICS picks whole runs, so it can't pick a run while one of its sstables is being rewritten.
+    // But as waiters are served in order, a regular compaction which starts meanwhile gets the
+    // semaphore before the writer moves on to the next sstable of the run, so it waits for the
+    // current sstable only. Unlike automatic_compaction_sem, it doesn't make regular compaction
+    // wait for automatic scrub, which reads a whole sstable.
+    seastar::semaphore run_identifier_write_sem{1};
 private:
     std::unique_ptr<cleanup_state> _cleanup_state;
 

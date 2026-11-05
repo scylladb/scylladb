@@ -828,6 +828,9 @@ compaction_reenabler::~compaction_reenabler() {
         cmlog.debug("Reenabling compaction for {}", *_table);
         try {
             _cm.submit(*_table);
+            if (_cm._awaiting_run_identifier_write.contains(_table)) {
+                _cm.reevaluate_run_identifier_write();
+            }
         } catch (...) {
             cmlog.warn("compaction_reenabler could not reenable compaction for {}: {}",
                     *_table, std::current_exception());
@@ -1283,6 +1286,12 @@ void compaction_manager::enable() {
     _waiting_reevaluation.emplace(postponed_compactions_reevaluation());
     throwing_assert(!_waiting_automatic_scrub_reevaluation);
     _waiting_automatic_scrub_reevaluation.emplace(automatic_scrub_reevaluation());
+    throwing_assert(!_waiting_run_identifier_write_reevaluation);
+    _waiting_run_identifier_write_reevaluation.emplace(run_identifier_write_reevaluation());
+    // Views scheduled before the manager was enabled, or left over from before it was drained.
+    if (!_awaiting_run_identifier_write.empty()) {
+        reevaluate_run_identifier_write();
+    }
     cmlog.info("Enabled");
 }
 
@@ -1295,6 +1304,11 @@ std::function<void()> compaction_manager::compaction_submission_callback() {
             }
         }
         reevaluate_postponed_compactions();
+        // Retries the views whose run identifiers weren't all written, e.g. because their task was
+        // stopped while compaction was enabled, or some sstables couldn't be picked.
+        if (!_awaiting_run_identifier_write.empty()) {
+            reevaluate_run_identifier_write();
+        }
     };
 }
 
@@ -1352,6 +1366,41 @@ future<> compaction_manager::automatic_scrub_reevaluation() {
     }
 }
 
+future<> compaction_manager::run_identifier_write_reevaluation() {
+    while (true) {
+        co_await _run_identifier_write_reevaluation.when();
+
+        if (is_disabled()) {
+            co_return;
+        }
+
+        // A task which cannot proceed puts its view back, to be taken up on the next signal.
+        // That's the reason for moving the views to be processed into a local.
+        auto candidates = std::exchange(_awaiting_run_identifier_write, {});
+        while (!candidates.empty()) {
+            auto t = candidates.extract(candidates.begin()).value();
+            // Skip views removed in the meantime.
+            if (!_compaction_state.contains(t)) {
+                continue;
+            }
+            if (is_disabled()) {
+                _awaiting_run_identifier_write.insert(t);
+                continue;
+            }
+            try {
+                // One view at a time, so that at most one sstable per shard is rewritten.
+                co_await submit_run_identifier_write(*t);
+            } catch (...) {
+                if (_compaction_state.contains(t)) {
+                    cmlog.warn("Run identifier write for {} failed: {}", *t, std::current_exception());
+                } else {
+                    cmlog.warn("Run identifier write failed: {}", std::current_exception());
+                }
+            }
+        }
+    }
+}
+
 future<> compaction_manager::postponed_compactions_reevaluation() {
      while (true) {
         co_await _postponed_reevaluation.when();
@@ -1388,6 +1437,10 @@ void compaction_manager::reevaluate_automatic_scrub() noexcept {
     _automatic_scrub_reevaluation.signal();
 }
 
+void compaction_manager::reevaluate_run_identifier_write() noexcept {
+    _run_identifier_write_reevaluation.signal();
+}
+
 future<> compaction_manager::stop_postponed_compactions() noexcept {
     auto waiting_reevaluation = std::exchange(_waiting_reevaluation, std::nullopt);
     if (!waiting_reevaluation) {
@@ -1414,6 +1467,33 @@ future<> compaction_manager::stop_automatic_scrub() noexcept {
 
 void compaction_manager::schedule_table_for_automatic_scrub(compaction_group_view* t) {
     _awaiting_automatic_scrub.insert(t);
+}
+
+future<> compaction_manager::stop_run_identifier_write() noexcept {
+    auto waiting_reevaluation = std::exchange(_waiting_run_identifier_write_reevaluation, std::nullopt);
+    if (!waiting_reevaluation) {
+        return make_ready_future();
+    }
+    // Trigger a signal to properly exit from run_identifier_write_reevaluation() fiber
+    reevaluate_run_identifier_write();
+    return std::move(*waiting_reevaluation);
+}
+
+void compaction_manager::schedule_run_identifier_write(compaction_group_view& t) {
+    if (reschedule_run_identifier_write(&t)) {
+        reevaluate_run_identifier_write();
+    }
+}
+
+bool compaction_manager::reschedule_run_identifier_write(compaction_group_view* t) {
+    // A view being removed mustn't be put in the queue, since remove() takes it out only once.
+    // remove() closes the gate before stopping the tasks of the view.
+    auto it = _compaction_state.find(t);
+    if (it == _compaction_state.end() || it->second.gate.is_closed()) {
+        return false;
+    }
+    _awaiting_run_identifier_write.insert(t);
+    return true;
 }
 
 bool compaction_manager::should_be_automatically_scrubbed(const compaction_group_view& t, const sstables::shared_sstable& sst, for_regular_compaction regular) {
@@ -1536,7 +1616,8 @@ future<> compaction_manager::drain() {
     co_await stop_ongoing_compactions("drain");
     co_await coroutine::all(
         [this] { return stop_postponed_compactions(); },
-        [this] { return stop_automatic_scrub(); }
+        [this] { return stop_automatic_scrub(); },
+        [this] { return stop_run_identifier_write(); }
     );
     cmlog.info("Drained");
 }
@@ -1585,7 +1666,8 @@ future<> compaction_manager::really_do_stop() noexcept {
     }
     co_await coroutine::all(
         [this] { return stop_postponed_compactions(); },
-        [this] { return stop_automatic_scrub(); }
+        [this] { return stop_automatic_scrub(); },
+        [this] { return stop_run_identifier_write(); }
     );
     co_await _sys_ks.close();
     _weight_tracker.clear();
@@ -1771,6 +1853,9 @@ protected:
                 // Wait for auto scrub to finish scrubbing its current sstable.
                 automatic_scrub_exclusion = co_await acquire_semaphore(_compaction_state.automatic_compaction_sem);
             }
+            // Wait for the run identifier writer to finish rewriting its current sstable, but not
+            // the next one, so that the run of that sstable can be picked.
+            auto run_identifier_write_exclusion = co_await acquire_semaphore(_compaction_state.run_identifier_write_sem);
 
             // Read lock serializes with major compaction (which takes write lock).
             auto lock_holder = co_await _compaction_state.lock.hold_read_lock();
@@ -1819,6 +1904,7 @@ protected:
             // Keep read lock held during compaction execution.
             sstable_set_units.return_all();
             automatic_scrub_exclusion.reset();
+            run_identifier_write_exclusion.return_all();
 
             setup_new_compaction(descriptor.run_identifier);
             _compaction_state.last_regular_compaction = gc_clock::now();
@@ -2458,6 +2544,233 @@ public:
             }
         }
 
+        co_return std::nullopt;
+    }
+};
+
+// Writes to disk the run identifiers of the sstables of a view which differ in memory from the
+// ones on disk, by rewriting their Scylla component, one sstable at a time.
+// See compaction_manager::schedule_run_identifier_write().
+class run_identifier_write_task_executor final : public compaction_task_executor {
+    // Sstables already picked or written by this task. Like with automatic scrub, this ensures
+    // the task finishes even if some rewrites fail.
+    std::unordered_set<sstables::generation_type> _excluded_sstables;
+    size_t _written = 0;
+public:
+    run_identifier_write_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view& t)
+        : compaction_task_executor(mgr, do_throw_if_stopping, &t, compaction_type::RewriteComponent, "Run identifier write")
+    {}
+private:
+    // Sstables whose run identifier is to be written, picked by select_sstables(). They're
+    // rewritten one at a time, and each is checked again with can_pick() before it's rewritten,
+    // since the set can change in between. Only the sstable being rewritten is registered as
+    // compacting, so the others can still be picked by compaction, which drops them from here.
+    std::vector<sstables::shared_sstable> _batch;
+
+    // Returns true if the sstable can be rewritten now. Sets `skipped` if it can't, e.g. because
+    // it's being compacted, or its rewrite failed.
+    bool can_pick(const sstables::shared_sstable& sst, bool& skipped) const {
+        if (!_cm.eligible_for_compaction(sst) || _compaction_state.requires_cleanup(sst) || _excluded_sstables.contains(sst->generation())) {
+            skipped = true;
+            return false;
+        }
+        return true;
+    }
+
+    // Returns the sstables of the view whose run identifier is to be written, and can be picked
+    // now. Sets `skipped` if some sstable whose run identifier differs from the one on disk
+    // can't be picked now.
+    // Building the set of the view costs as much as going over all its sstables, so this is
+    // done once per batch, not once per sstable.
+    future<std::vector<sstables::shared_sstable>> select_sstables(compaction_group_view& t, bool& skipped) {
+        auto main_set = co_await t.main_sstable_set();
+        std::vector<sstables::shared_sstable> res;
+        co_await main_set->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) {
+            if (sst->has_unpersisted_run_identifier() && can_pick(sst, skipped)) {
+                res.push_back(sst);
+            }
+        });
+        co_return res;
+    }
+
+    // Returns the next sstable of the batch which is still in the main set of the view and can
+    // be picked, if there is one. Sets `skipped` as can_pick() does. Must be called with the
+    // sstable set lock held, and then followed by the registration of the sstable without
+    // yielding in between, so that the sstable can't be picked or replaced by something else
+    // meanwhile. An sstable which is no longer in the set was replaced meanwhile, and the
+    // replacement has its run identifier written on creation, so it's just dropped.
+    sstables::shared_sstable pick_from_batch(compaction_group_view& t, bool& skipped) {
+        while (!_batch.empty()) {
+            auto sst = std::move(_batch.back());
+            _batch.pop_back();
+            if (t.contains(sst) && can_pick(sst, skipped)) {
+                return sst;
+            }
+        }
+        return nullptr;
+    }
+
+    static compaction_descriptor make_descriptor(const sstables::shared_sstable& sst) {
+        // The rewritten sstable stores the run identifier the original is known by in memory
+        // (see sstables::sstable::link_with_rewritten_component()), so no modifier is needed.
+        // The rewrite gives it a new sstable identifier. That's required on object storage, and
+        // keeps a crash between sealing it and deleting the original from leaving two sstables
+        // with the same identifier.
+        auto options = compaction_type_options::make_component_rewrite(sstables::component_type::Scylla,
+                [] (sstables::sstable&) {}, sstables::update_sstable_id::yes);
+        return compaction_descriptor({sst}, sst->get_sstable_level(), compaction_descriptor::default_max_sstable_bytes,
+                sst->run_identifier(), std::move(options), owned_ranges_ptr{});
+    }
+
+    // Called when the task stops before writing all run identifiers. The view is taken up again
+    // once it can be compacted again, or by the periodic compaction submission.
+    void reschedule() {
+        _cm.reschedule_run_identifier_write(_compacting_table);
+    }
+protected:
+    // The executor can outlive the task, so the batch, which a stopped task leaves behind, is
+    // released with it, as it keeps its sstables alive.
+    virtual void release() noexcept override {
+        _batch = {};
+        compaction_task_executor::release();
+    }
+public:
+    virtual future<compaction_manager::compaction_stats_opt> do_run() override {
+        co_await coroutine::switch_to(_cm.maintenance_sg());
+        compaction_group_view& t = *_compacting_table;
+        // Set when some sstable with a run identifier to write couldn't be picked.
+        bool skipped = false;
+
+        for (;;) {
+            // Checked before each sstable, so that an operation which disables compaction and waits
+            // for the view's tasks without stopping them, like incremental repair, waits for one
+            // rewrite at most.
+            if (!can_proceed()) {
+                reschedule();
+                co_return std::nullopt;
+            }
+            switch_state(state::pending);
+
+            std::optional<semaphore_units<>> handoff_permit;
+            std::optional<seastar::rwlock::holder> lock_holder;
+            std::optional<compacting_sstable_registration> registration;
+            bool started = false;
+            bool done = false;
+            std::exception_ptr ex;
+            // Waiting for the permits is in the try block too, so that a stop request which
+            // aborts the wait goes through maybe_retry() and puts the view back.
+            try {
+                handoff_permit = co_await acquire_semaphore(_compaction_state.run_identifier_write_sem);
+
+                // Major compaction takes the lock for writing while it selects. The lock is fair, so
+                // it waits for one sstable at most.
+                lock_holder = co_await _compaction_state.lock.hold_read_lock();
+                if (!can_proceed()) {
+                    reschedule();
+                    co_return std::nullopt;
+                }
+
+                auto sstable_set_units = co_await get_units(_compaction_state.sstable_set_lock, 1);
+                if (!can_proceed()) {
+                    reschedule();
+                    co_return std::nullopt;
+                }
+
+                if (_batch.empty()) {
+                    // The sstables added since the previous batch was picked are picked now.
+                    // Once there are none left to pick, the task is done.
+                    skipped = false;
+                    _batch = co_await select_sstables(t, skipped);
+                    // Picking yields, so a stop request may have come meanwhile. It mustn't be
+                    // lost by setup_new_compaction() below, which starts afresh.
+                    if (!can_proceed()) {
+                        reschedule();
+                        co_return std::nullopt;
+                    }
+                    if (_batch.empty()) {
+                        done = true;
+                    }
+                }
+                // Checked and registered without yielding in between.
+                sstables::shared_sstable sst;
+                if (!done) {
+                    sst = pick_from_batch(t, skipped);
+                }
+                if (sst) {
+                    _excluded_sstables.emplace(sst->generation());
+
+                    auto descriptor = make_descriptor(sst);
+                    // Not checked against nor counted in the weights of running compactions (see
+                    // can_register_compaction()), like automatic scrub: a regular compaction of a
+                    // similar size mustn't postpone this rewrite of one small component, nor be
+                    // postponed by it.
+                    registration.emplace(_cm, _compaction_state, descriptor.sstables);
+                    sstable_set_units.return_all();
+
+                    cmlog.debug("Writing run identifier {} of sstable {} of {}", sst->run_identifier(), sst, t);
+                    setup_new_compaction(descriptor.run_identifier);
+                    started = true;
+                    co_await utils::get_local_injector().inject("run_identifier_write_pause", utils::wait_for_message(5min));
+                    auto on_replace = registration->update_on_sstable_replacement();
+                    // The rewritten sstable replaces the original in the sstable set as soon as it's
+                    // written, and nothing else keeps the original, so the original is deleted before
+                    // the next sstable is rewritten.
+                    compaction_result res = co_await compact_sstables(std::move(descriptor), _compaction_data, on_replace, compaction_manager::can_purge_tombstones::no);
+                    for (const auto& new_sst : res.new_sstables) {
+                        _excluded_sstables.emplace(new_sst->generation());
+                    }
+                    ++_written;
+                    // Released without yielding, so that a regular compaction waiting for the handoff
+                    // permit finds the rewritten sstable unregistered and no output run advertised,
+                    // and can pick its run.
+                    registration.reset();
+                    finish_compaction();
+                    started = false;
+                    handoff_permit.reset();
+                    lock_holder.reset();
+                    co_await update_history(t, std::move(res), _compaction_data);
+                }
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            if (done) {
+                break;
+            }
+            if (!ex) {
+                continue;
+            }
+
+            registration.reset();
+            if (started) {
+                finish_compaction(state::failed);
+            }
+            handoff_permit.reset();
+            lock_holder.reset();
+            // Unlike with maybe_retry(), a failed rewrite isn't followed by a backoff sleep, which
+            // would delay operations waiting for the task, like incremental repair, and the writes
+            // of the other views. The sstable stays excluded, so the task moves on to the next one,
+            // and puts the view back at the end (see can_pick()).
+            if (!try_catch<compaction_stopped_exception>(ex) && !try_catch<compaction_aborted_exception>(ex)
+                    && !try_catch<storage_io_error>(ex)) {
+                _cm._stats.errors++;
+                cmlog.error("{}: failed: {}. Moving on to the next sstable", *this, ex);
+                continue;
+            }
+            // Stops the task, or the compaction manager on a storage I/O error.
+            if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
+                reschedule();
+                co_return std::nullopt;
+            }
+        }
+
+        if (_written) {
+            cmlog.debug("Wrote run identifiers of {} sstables of {}", _written, t);
+        }
+        // Some run identifiers are left to write, e.g. of sstables being compacted by a task which
+        // doesn't replace them, like scrub in validate mode, or of sstables whose rewrite failed.
+        if (skipped) {
+            reschedule();
+        }
         co_return std::nullopt;
     }
 };
@@ -3154,6 +3467,7 @@ future<> compaction_manager::remove(compaction_group_view& t, sstring reason) no
     auto erase_state = defer([&t, this] () noexcept {
        t.get_backlog_tracker().retire();
        _compaction_state.erase(&t);
+       _awaiting_run_identifier_write.erase(&t);
     });
 
     // We need to guarantee that a task being stopped will not retry to compact
@@ -3161,6 +3475,7 @@ future<> compaction_manager::remove(compaction_group_view& t, sstring reason) no
     // The requirement above is provided by stop_ongoing_compactions().
     _postponed.erase(&t);
     _awaiting_automatic_scrub.erase(&t);
+    _awaiting_run_identifier_write.erase(&t);
 
     // Wait for all compaction tasks running under gate to terminate
     // and prevent new tasks from entering the gate.
@@ -3395,6 +3710,24 @@ compaction_backlog_manager::~compaction_backlog_manager() {
 
 compaction_backlog_tracker& compaction_manager::get_backlog_tracker(compaction_group_view& t) {
     return t.get_backlog_tracker();
+}
+
+future<> compaction_manager::submit_run_identifier_write(compaction_group_view& t) {
+    // Leaves the run identifiers in memory only, as if the node stopped before writing them.
+    if (utils::get_local_injector().enter("skip_run_identifier_write")) {
+        co_return;
+    }
+    auto gh = start_compaction(t);
+    if (!gh) {
+        co_return;
+    }
+
+    co_await perform_compaction<run_identifier_write_task_executor>(
+        {.type = "run identifier write", .internal = tasks::is_internal::yes, .reports_progress = false},
+        throw_if_stopping::no,
+        tasks::make_empty_task_info(),
+        t
+    );
 }
 
 future<> compaction_manager::submit_automatic_scrub(compaction_group_view& t) {

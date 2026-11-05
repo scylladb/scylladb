@@ -41,6 +41,8 @@ public:
     virtual std::optional<std::chrono::seconds> scrub_period() const noexcept = 0;
     virtual bool compaction_enforce_min_threshold() const noexcept = 0;
     virtual future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const = 0;
+    // Returns true if the sstable is in the main sstable set of this view.
+    virtual bool contains(const sstables::shared_sstable& sst) const = 0;
     virtual future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const = 0;
     virtual lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const = 0;
     // Returns true when tombstone GC considers only the repaired sstable set, meaning the

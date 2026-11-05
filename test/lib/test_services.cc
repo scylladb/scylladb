@@ -76,6 +76,9 @@ public:
     future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override {
         co_return co_await table().try_get_compaction_group_view_with_static_sharding().main_sstable_set();
     }
+    bool contains(const sstables::shared_sstable& sst) const override {
+        return table().try_get_compaction_group_view_with_static_sharding().contains(sst);
+    }
     future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override {
         co_return co_await table().try_get_compaction_group_view_with_static_sharding().maintenance_sstable_set();
     }
@@ -663,6 +666,10 @@ future<> test_env_compaction_manager::close_compaction_state_gate(compaction::co
 
 void test_env_compaction_manager::trigger_auto_scrub_timer() {
     _cm.automatic_scrub_submission_callback()();
+}
+
+void test_env_compaction_manager::trigger_compaction_submission_timer() {
+    _cm.compaction_submission_callback()();
 }
 
 future<> test_env_compaction_manager::submit_automatic_scrub(compaction::compaction_group_view& t) {

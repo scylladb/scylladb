@@ -100,6 +100,7 @@ public:
     future<> close_compaction_state_gate(compaction::compaction_group_view& table_s);
 
     void trigger_auto_scrub_timer();
+    void trigger_compaction_submission_timer();
     future<> submit_automatic_scrub(compaction::compaction_group_view& t);
     future<> reevaluate_automatic_scrub();
 

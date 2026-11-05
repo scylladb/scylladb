@@ -3484,6 +3484,9 @@ public:
     future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override {
         return make_sstable_set_for_this_view(_cg.main_sstables(), [this] { return _cg.make_main_sstable_set(); });
     }
+    bool contains(const sstables::shared_sstable& sst) const override {
+        return _cg.main_sstables()->all()->contains(sst) && belongs_to_this_view(sst);
+    }
     future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override {
         return make_sstable_set_for_this_view(_cg.maintenance_sstables(), [this] { return *_cg.make_maintenance_sstable_set(); });
     }
