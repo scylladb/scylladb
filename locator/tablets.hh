@@ -22,6 +22,8 @@
 #include "utils/UUID.hh"
 #include "raft/raft_fwd.hh"
 
+#include <boost/container/small_vector.hpp>
+#include <boost/version.hpp>
 #include <memory>
 #include <ranges>
 #include <seastar/util/log.hh>
@@ -630,6 +632,54 @@ public:
     future<> clear_gently();
 };
 
+/// Append-only list of datacenter names. The position of a name is its index in
+/// tablet_dc_counts. Shared by all tablet maps of one tablet_metadata.
+class tablet_dc_dictionary {
+    std::vector<sstring> _names;
+public:
+    size_t index_of_or_add(const sstring& dc);
+    std::optional<size_t> index_of(const sstring& dc) const;
+};
+
+using tablet_dc_counts_vector = boost::container::small_vector<uint16_t, 3, void,
+        boost::container::small_vector_options<boost::container::stored_size<uint32_t>>::type>;
+
+/// Count of a replica set's replicas per datacenter, indexed by tablet_dc_dictionary. A tablet map
+/// holds one per tablet and one per transition. The counts sit in place while every index is below
+/// inline_dcs, and on the heap otherwise. The flags sit in the tail padding of the private base.
+struct tablet_dc_counts : private tablet_dc_counts_vector {
+    static constexpr size_t inline_dcs = tablet_dc_counts_vector::static_capacity;
+    // A replica's host had no datacenter in the topology at load time (maintenance mode).
+    bool unknown : 1 = false;
+    // The tablet's counts wait for tablet_map::update_dc_counts().
+    bool dirty : 1 = false;
+
+    size_t at_or_zero(size_t dc_index) const {
+        return dc_index < size() ? (*this)[dc_index] : 0;
+    }
+    // Adds a replica in the datacenter at dc_index. Returns false when its count is already 65535.
+    bool add_replica(size_t dc_index) {
+        if (dc_index >= size()) {
+            resize(dc_index + 1);
+        }
+        auto& count = (*this)[dc_index];
+        if (count == std::numeric_limits<uint16_t>::max()) {
+            return false;
+        }
+        ++count;
+        return true;
+    }
+    size_t external_memory_usage() const {
+        return capacity() > inline_dcs ? capacity() * sizeof(value_type) : 0;
+    }
+    bool operator==(const tablet_dc_counts&) const = default;
+};
+// The flags fit in the tail padding. Boost 1.90 packs the vector into 24 bytes.
+static_assert(sizeof(tablet_dc_counts) == sizeof(tablet_dc_counts_vector));
+#if BOOST_VERSION >= 109000
+static_assert(sizeof(tablet_dc_counts) == 24);
+#endif
+
 /// Stores information about tablets of a single table.
 ///
 /// The map contains a constant number of tablets, tablet_count().
@@ -653,6 +703,16 @@ public:
 private:
     using transitions_map = std::unordered_map<tablet_id, tablet_transition_info>;
     using raft_resize_map = std::unordered_map<tablet_id, tablet_raft_resize_info>;
+    using dc_counts_container = utils::chunked_vector<tablet_dc_counts>;
+    using transition_dc_counts_map = std::unordered_map<tablet_id, tablet_dc_counts>;
+    // Compares equal always, since the dictionary indices of the counts depend on load history.
+    // tablet_map::operator== stays defaulted.
+    struct dc_counts_state {
+        dc_counts_container counts; // Indexed by tablet_id, like _tablets.
+        transition_dc_counts_map transitions; // For tablet_transition_info::next.
+        utils::chunked_vector<tablet_id> dirty; // Tablets to recompute in the next update_dc_counts().
+        bool operator==(const dc_counts_state&) const { return true; }
+    };
     tablet_id_map _tablet_ids;
     tablet_container _tablets;
     transitions_map _transitions;
@@ -661,6 +721,9 @@ private:
     raft_info_container _raft_info;
     raft_resize_map _raft_resizes;
     size_t _target_pow2_tablet_count = 0; // 0 means no convergence in progress
+    // Derived from the replica sets by update_dc_counts(), so a request reads them without
+    // resolving the datacenter of each replica.
+    dc_counts_state _dc;
 
     // Internal constructor, used by clone() and clone_gently().
     tablet_map(tablet_id_map ids,
@@ -670,7 +733,8 @@ private:
                tablet_task_info resize_task_info,
                raft_info_container raft_info,
                raft_resize_map raft_resizes,
-               size_t target_pow2_tablet_count)
+               size_t target_pow2_tablet_count,
+               dc_counts_state dc)
         : _tablet_ids(std::move(ids))
         , _tablets(std::move(tablets))
         , _transitions(std::move(transitions))
@@ -679,6 +743,7 @@ private:
         , _raft_info(std::move(raft_info))
         , _raft_resizes(std::move(raft_resizes))
         , _target_pow2_tablet_count(target_pow2_tablet_count)
+        , _dc(std::move(dc))
     {}
 public:
     /// Constructs a tablet map.
@@ -747,6 +812,29 @@ public:
     /// get_replicas_for_writing(), or nullptr if there is none. Returns nullptr for an
     /// intra-node migration, whose pending replica is on a host already in the write set.
     const tablet_replica* get_pending_replica(tablet_id) const;
+
+    struct replicas_and_dc_counts {
+        const tablet_replica_set& replicas;
+        const tablet_dc_counts& dc_counts;
+    };
+
+    /// Returns get_replicas_for_reading() and its per-datacenter counts, with one transition lookup.
+    /// It is an internal error to call this method if has_dirty_dc_counts() returns true.
+    replicas_and_dc_counts get_replicas_and_dc_counts_for_reading(tablet_id) const;
+
+    /// Returns get_replicas_for_writing() and its per-datacenter counts, with one transition lookup.
+    /// It is an internal error to call this method if has_dirty_dc_counts() returns true.
+    replicas_and_dc_counts get_replicas_and_dc_counts_for_writing(tablet_id) const;
+
+    /// Returns true if a replica set changed after the last update_dc_counts() which completed.
+    bool has_dirty_dc_counts() const {
+        return !_dc.dirty.empty();
+    }
+
+    /// Recomputes the per-datacenter counts of the tablets whose replica sets changed.
+    /// Datacenters missing from dcs are added to it.
+    /// Returns the number of recomputed tablets with a replica whose datacenter is unknown.
+    future<size_t> update_dc_counts(const topology&, tablet_dc_dictionary& dcs);
 
     /// Returns true for strongly-consistent tablets.
     /// Use get_tablet_raft_info() to retrieve Raft info for a specific tablet_id.
@@ -870,6 +958,7 @@ public:
 
     size_t external_memory_usage() const;
 
+    // Excludes the per-datacenter counts, which are derived from the replica sets.
     bool operator==(const tablet_map&) const = default;
 
     bool needs_split() const;
@@ -911,6 +1000,10 @@ public:
     friend fmt::formatter<tablet_map>;
 private:
     void check_tablet_id(tablet_id) const;
+    void mark_dc_counts_dirty(tablet_id);
+    void check_dc_counts_updated(tablet_id) const;
+    // The counts of tablet_transition_info::next. An internal error if the tablet has none.
+    const tablet_dc_counts& transition_dc_counts(tablet_id) const;
 };
 
 using table_group_set = utils::small_vector<table_id, 2>;
@@ -934,8 +1027,13 @@ public:
     using tablet_map_ptr = foreign_ptr<lw_shared_ptr<const tablet_map>>;
     using table_to_tablet_map = std::unordered_map<table_id, tablet_map_ptr>;
     using table_group_map = std::unordered_map<table_id, table_group_set>;
+    using dc_dictionary = tablet_dc_dictionary;
 private:
     table_to_tablet_map _tablets;
+
+    // Indexes the per-datacenter counts of all tablet maps. Excluded from operator==, since
+    // the order of the datacenters depends on the order of the loads.
+    dc_dictionary _datacenters;
 
     // This map contains all tables by co-location groups. The key is the base table and the value
     // is a list all co-located tables in the co-location group, including the base table.
@@ -949,6 +1047,8 @@ private:
     bool _balancing_enabled = true;
 public:
     bool balancing_enabled() const { return _balancing_enabled; }
+    const dc_dictionary& datacenters() const { return _datacenters; }
+    dc_dictionary& datacenters() { return _datacenters; }
     const tablet_map& get_tablet_map(table_id id) const;
     // Gets shared ownership of tablet map
     future<tablet_map_ptr> get_tablet_map_ptr(table_id id) const;
