@@ -3,13 +3,16 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 import re
+from cassandra import ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
+from cassandra.policies import FallthroughRetryPolicy
 from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest, ConfigurationException
 
 from .util import new_test_table, unique_name, keyspace_has_tablets
-from .nodetool import flush
+from .nodetool import flush, rest_api_url
 import pytest
+import requests
 import time
 
 # Waits until at least one CDC generation is published to system_distributed.cdc_generation_timestamps
@@ -478,3 +481,24 @@ def test_cdc_ttl_option_limit(scylla_only, cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", f"WITH cdc = {{'enabled': true, 'ttl': '{max_ttl}'}}") as table:
         with pytest.raises(ConfigurationException, match=f"ttl must be less than or equal to {max_ttl}"):
             cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': true, 'ttl': '{max_ttl + 1}'}}")
+
+
+# The CDC preimage read is a part of the write, so it must end by the write's
+# timeout rather than CDC's own 10-second limit (scylladb/scylladb#31652).
+def test_cdc_preimage_read_uses_write_timeout(scylla_only, cql, test_keyspace):
+    schema = 'p int PRIMARY KEY, v int'
+    with new_test_table(cql, test_keyspace, schema, "with cdc = {'enabled': true, 'preimage': true}") as table:
+        cql.execute(f'INSERT INTO {table} (p, v) VALUES (1, 1)')
+        injection = f'{rest_api_url(cql)}/v2/error_injection/injection/replica_query_wait'
+        requests.post(injection, json={'table': table.split('.')[1]}).raise_for_status()
+        try:
+            if 'replica_query_wait' not in requests.get(f'{rest_api_url(cql)}/v2/error_injection/injection').text:
+                pytest.skip('Error injection is not enabled in this build mode')
+            start = time.monotonic()
+            with pytest.raises((ReadTimeout, WriteTimeout)):
+                cql.execute(SimpleStatement(f'INSERT INTO {table} (p, v) VALUES (1, 2) USING TIMEOUT 100ms',
+                                            retry_policy=FallthroughRetryPolicy()))
+            assert time.monotonic() - start < 5
+        finally:
+            requests.post(f'{injection}/message')
+            requests.delete(injection)

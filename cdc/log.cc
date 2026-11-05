@@ -1973,7 +1973,8 @@ public:
     future<lw_shared_ptr<cql3::untyped_result_set>> pre_image_select(
             service::client_state& client_state,
             db::consistency_level write_cl,
-            const mutation& m)
+            const mutation& m,
+            db::timeout_clock::time_point write_timeout)
     {
         auto& p = m.partition();
         const bool no_ck_schema_partition_deletion = m.schema()->clustering_key_size() == 0 && bool(p.partition_tombstone());
@@ -2059,7 +2060,10 @@ public:
         const auto select_cl = adjust_cl(write_cl);
 
       try {
-        return _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), select_cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
+        // The preimage read is part of the write, so it must not outlive the write's timeout.
+        return _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), select_cl,
+                service::storage_proxy::coordinator_query_options(
+                        std::min(default_timeout(), write_timeout), empty_service_permit(), client_state)).then(
                 [s = _schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
             return make_lw_shared<cql3::untyped_result_set>(*s, std::move(qr.query_result), *selection, partition_slice);
         });
@@ -2162,8 +2166,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     mutations.reserve(2 * mutations.size());
 
     return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), operation_details{}, std::move(options),
-            [this, tr_state = std::move(tr_state), write_cl] (utils::chunked_vector<mutation>& mutations, service::query_state& qs, operation_details& details, per_request_options& options) {
-        return transform_mutations(mutations, 1, [this, &mutations, &qs, tr_state = tr_state, &details, write_cl, &options] (int idx) mutable {
+            [this, tr_state = std::move(tr_state), write_cl, timeout] (utils::chunked_vector<mutation>& mutations, service::query_state& qs, operation_details& details, per_request_options& options) {
+        return transform_mutations(mutations, 1, [this, &mutations, &qs, tr_state = tr_state, &details, write_cl, &options, timeout] (int idx) mutable {
             auto& m = mutations[idx];
             auto s = m.schema();
 
@@ -2184,7 +2188,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 // if a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
                 tracing::trace(tr_state, "CDC: Selecting preimage for {}", m.decorated_key());
-                f = trans.pre_image_select(qs.get_client_state(), write_cl, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
+                f = trans.pre_image_select(qs.get_client_state(), write_cl, m, timeout).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
                     auto& cdc_stats = _ctxt._proxy.get_cdc_stats();
                     cdc_stats.counters_total.preimage_selects++;
                     if (f.failed()) {
