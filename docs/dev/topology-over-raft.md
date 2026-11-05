@@ -876,6 +876,19 @@ This selector is reflected in the set of shards returned by the sharder. But sin
 may be different than for writes, the sharder provides separate methods for reads and writes. Reads should
 use sharder::shard_for_reads(), while writes should use sharder::shard_for_writes().
 
+## Per-datacenter replica counts
+
+Besides the replica sets, tablet_map holds the replica count per datacenter of each tablet's replica set, and of
+tablet_transition_info::next for tablets in transition. effective_replication_map sizes LOCAL_* and EACH_QUORUM
+consistency levels from these counts, through tablet_map::get_replicas_and_dc_counts_for_reading() and
+get_replicas_and_dc_counts_for_writing().
+The counts are indexed by tablet_metadata::datacenters(), an append-only list of datacenter names. They are derived
+data: the tablet metadata loader computes them with tablet_map::update_dc_counts() for the tablets whose replica sets
+changed, using the topology loaded together with the tablets. Reading the counts of a map which was changed and not
+updated is an internal error. A replica whose host is missing from the topology, as in maintenance mode, marks the
+counts unknown. The erm then counts that tablet's replicas through the topology on each per-datacenter request, which
+fails while a host is still missing. The counts of the first seven datacenters are stored in place, more go to the heap.
+
 ## Tracking replica-side requests
 
 Do I have to hold effective_replication_map_ptr around reading on the replica side?

@@ -50,14 +50,6 @@ static const locator::token_replication_factor::datacenter_counts& datacenter_co
     return *rf.dcs;
 }
 
-static const locator::network_topology_strategy& as_network_topology(const locator::effective_replication_map& erm) {
-    const auto& rs = erm.get_replication_strategy();
-    if (rs.get_type() != locator::replication_strategy_type::network_topology) [[unlikely]] {
-        on_internal_error(cl_logger, format("per-datacenter quorum requested for {} strategy", rs.get_type()));
-    }
-    return static_cast<const locator::network_topology_strategy&>(rs);
-}
-
 size_t quorum_for(const locator::token_replication_factor& rf) {
     return quorum(rf.total);
 }
@@ -87,7 +79,7 @@ size_t block_for_each_quorum(const locator::effective_replication_map& erm, cons
 }
 
 size_t each_quorum_block_for_dc(const locator::effective_replication_map& erm, const locator::token_replication_factor& rf, const sstring& dc) {
-    const auto& nrs = as_network_topology(erm);
+    const auto& nrs = locator::as_network_topology_strategy(erm);
     const auto& dcs = nrs.get_datacenters();
     auto it = std::ranges::find(dcs, dc);
     if (it == dcs.end() || !nrs.get_replication_factor(dc)) {

@@ -9420,8 +9420,9 @@ struct tablet_rf_env {
     effective_replication_map_ptr make_erm(tablet_map tmap, replication_strategy_config_options options = {{"dc1", sstring("3")}, {"dc2", sstring("2")}}) {
         auto tablet_count = tmap.tablet_count();
         stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            // The tablet metadata loader computes the counts of the maps it installs.
+            co_await tmap.update_dc_counts(tm.get_topology(), tm.tablets().datacenters());
             tm.tablets().set_tablet_map(table, std::move(tmap));
-            return make_ready_future<>();
         }).get();
         auto tmptr = stm.get();
         replication_strategy_params params(options, tablet_count, std::nullopt);
