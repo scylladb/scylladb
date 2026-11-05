@@ -959,6 +959,30 @@ async def test_compaction_keeps_cached_data(manager: ScyllaClusterManager, s3_st
         assert scan(cql, ks) == data
 
 
+@pytest.mark.parametrize('sstable_format', ['me'])
+async def test_compaction_keeps_cached_index(manager: ScyllaClusterManager, s3_storage, sstable_format):
+    '''Compaction copies to the cache the index pages which a point read of
+    cached data needs, as well as its data pages, so after the compaction,
+    reading the data again sends no request to the object store.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage) | {'sstable_format': sstable_format})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await write_two_sstables(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+        compacted = cached_sstables(cql)
+        await manager.api.keyspace_compaction(server.ip_addr, ks)
+        await wait_for_eviction(cql, compacted)
+
+        # Count only the requests of reads through the cache: deleting the
+        # compacted sstables lists their objects' references (a GET), maybe
+        # after their pages were evicted.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await page_cache_metric(manager, server, 'object_reads')
+        assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+        assert await page_cache_metric(manager, server, 'object_reads') == requests_before
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_compaction_cache_errors(manager: ScyllaClusterManager, s3_storage):
     '''A failure to find which data of the compacted sstables was cached

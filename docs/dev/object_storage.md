@@ -379,6 +379,18 @@ ahead of the merged data which is written, by many pages - but by keys:
   yet - because the writer hasn't finished writing its data - waits in the
   sink until it is. The storage finds the output by the sstable's id, so the
   sstable needn't know about it.
+* The index is copied too, so that a read of cached data needs no request to
+  the object store at all: a partition's entries in the index are copied if its
+  hot data is in Data pages which are copied. A partition usually ends before
+  the page which holds its end is decided, so the decision about its index
+  entries waits for the page. The Index component of a `me` sstable is read by
+  intervals: a read reads the whole range of the Index between two of the
+  Summary's entries - and the next range too, if the entry it looks for is the
+  last in its range, to know where the partition ends. So the whole interval
+  is copied if any of its partitions is hot, and so is the next interval if
+  the last partition of a hot interval is hot; its pages wait in the sink until
+  this is decided. (So the whole entry of a hot wide partition is copied,
+  including its promoted index, even if only a few of its rows are hot.)
 
 A copied page gets the latest last hit of the input pages which made it hot,
 so it is evicted when they would have been. If it got no last hit, the hand

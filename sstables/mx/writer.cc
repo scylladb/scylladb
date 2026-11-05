@@ -721,9 +721,13 @@ private:
 
     void maybe_add_summary_entry(const dht::token& token, bytes_view key) {
       if (_index_writer) {
-        return sstables::maybe_add_summary_entry(
+        auto entries = _sst._components->summary.entries.size();
+        sstables::maybe_add_summary_entry(
             _sst._components->summary, token, key, get_data_offset(),
             _index_writer->offset(), _index_sampling_state);
+        if (_page_cache_output && _sst._components->summary.entries.size() != entries) {
+            _page_cache_output->on_index_interval(_index_writer->offset());
+        }
       }
     }
 
@@ -1096,6 +1100,9 @@ void writer::close_data_writer() {
 
 void writer::close_index_writer() {
     if (_index_writer) {
+        if (_page_cache_output) {
+            _page_cache_output->on_index_end(_index_writer->offset());
+        }
         _sst.get_components_digests().map[component_type::Index] = close_digest_writer(_index_writer);
     }
 }
