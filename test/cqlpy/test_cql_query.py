@@ -488,9 +488,10 @@ def test_twcs_max_window(cql, test_keyspace, scylla_only):
                 cql.execute(f"CREATE TABLE {tbl} (a int, b int, PRIMARY KEY (a)) WITH {TWCS_1_HOUR} AND default_time_to_live=86400")
             # However the creation of a table within bounds should succeed
             cql.execute(f"CREATE TABLE {tbl} (a int, b int, PRIMARY KEY (a)) WITH {TWCS_1_HOUR} AND default_time_to_live=36000")
-            # LiveUpdate - Disable check
+            # LiveUpdate - Disable check. Use the largest default_time_to_live
+            # Scylla accepts (max_ttl, 20 years), which is way beyond 10 windows.
             cql.execute("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count'")
-            cql.execute(f"CREATE TABLE {tbl2} (a int, b int, PRIMARY KEY (a)) WITH {TWCS_1_HOUR} AND default_time_to_live=864000000")
+            cql.execute(f"CREATE TABLE {tbl2} (a int, b int, PRIMARY KEY (a)) WITH {TWCS_1_HOUR} AND default_time_to_live={max_ttl}")
     finally:
         for t in [tbl, tbl2]:
             cql.execute(f"DROP TABLE IF EXISTS {t}")
