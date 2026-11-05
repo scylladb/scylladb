@@ -10,7 +10,7 @@ from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for
 from test.cluster.util import new_test_keyspace, create_new_test_keyspace, feature_configs, FeatureConfigurations, \
-    FeatureConfig, count_rows
+    FeatureConfig, count_rows, reconnect_driver
 
 import pytest
 import asyncio
@@ -777,3 +777,84 @@ async def test_gc_sstable_release_during_tablet_merge(manager: ScyllaClusterMana
 
         # Unblock the merge fiber to let cleanup proceed
         await manager.api.message_injection(server.ip_addr, "merge_completion_fiber")
+
+
+async def create_table_with_two_ics_runs(manager: ScyllaClusterManager, server: ServerInfo, ks: str):
+    """
+    Creates the table `test` with two tablets on `server`, each holding a single ICS run of
+    similar size, and disables auto-compaction for it, so that pending compactions stay pending.
+    """
+    cql = manager.get_cql()
+    # min_threshold=2 makes ICS compact any two runs of similar size.
+    await cql.run_async(f"""CREATE TABLE {ks}.test (pk int PRIMARY KEY, c text)
+                           WITH compaction = {{'class': 'IncrementalCompactionStrategy', 'min_threshold': 2}}
+                           AND tablets = {{'min_tablet_count': 2}}""")
+    # Not done with the 'enabled' compaction option, which replaces ICS with NullCompactionStrategy.
+    # The REST API disables it only in memory, so only until the restart.
+    await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
+    value = 'x' * 1024
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, '{value}')") for k in range(1000)])
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+    # Leaves each tablet with a single run.
+    await manager.api.keyspace_compaction(server.ip_addr, ks)
+
+
+async def get_pending_compactions(manager: ScyllaClusterManager, server: ServerInfo, ks: str):
+    return await manager.api.client.get_json(f"/column_family/metrics/pending_compactions/{ks}:test", host=server.ip_addr)
+
+
+async def merge_tablets(manager: ScyllaClusterManager, server: ServerInfo, ks: str):
+    """Merges the two tablets of the table `test` into one, and waits for the merge completion fiber."""
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+    # Makes the merge completion fiber log once it's done.
+    await inject_error_on(manager, "replica_merge_completion_wait", [server])
+    await manager.get_cql().run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 1}}")
+    await manager.enable_tablet_balancing()
+    await log.wait_for('Merge completion fiber finished', from_mark=mark)
+    await manager.disable_tablet_balancing()
+    assert await get_tablet_count(manager, server, ks, 'test') == 1
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("splice", ["spliced", "skipped"])
+async def test_ics_runs_are_spliced_after_merge(manager: ScyllaClusterManager, storage_config: FeatureConfig, splice: str):
+    """
+    Each of two sibling tablets holds a single ICS run, so after they're merged, the merged
+    tablet holds two disjoint runs of similar size. Compacting them together would just
+    rewrite them, so they're expected to be spliced into one run instead.
+    The runs are spliced in memory right after the merge, and again on every boot.
+    - spliced: the runs are spliced after the merge, and again after the restart.
+    - skipped: the merge leaves the runs unspliced, as if the node stopped between merging
+      the tablets and splicing their runs. Then they're spliced on the next boot.
+    Reproduces SCYLLADB-3584.
+    """
+    cfg = storage_config.get_cluster_cfg({'enable_tablets': True, 'tablet_load_stats_refresh_interval_in_seconds': 1})
+    cmdline = ['--smp', '1', '--logger-log-level', 'table=debug']
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+    await manager.disable_tablet_balancing()
+
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await create_table_with_two_ics_runs(manager, server, ks)
+        assert await get_pending_compactions(manager, server, ks) == 0
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        if splice == "skipped":
+            await inject_error_on(manager, "skip_splice_sstable_runs_after_merge", [server])
+        await merge_tablets(manager, server, ks)
+        if splice == "skipped":
+            assert await log.grep(f'Splic(ing|ed) .* of {ks}.test', from_mark=mark) == []
+            assert await get_pending_compactions(manager, server, ks) > 0
+        else:
+            await log.wait_for(f'Spliced .* of {ks}.test', from_mark=mark)
+            assert await get_pending_compactions(manager, server, ks) == 0
+
+        mark = await log.mark()
+        # Error injections don't survive the restart.
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        assert len(await log.grep(f'Spliced .* of {ks}.test', from_mark=mark)) == 1
+        assert await get_pending_compactions(manager, server, ks) == 0

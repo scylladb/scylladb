@@ -358,6 +358,16 @@ future<> table_populator::start() {
     for (auto dir : _sstable_directories) {
         co_await populate_subdir(*dir);
     }
+
+    // Runs are spliced in memory only, so a restarted node loads them unspliced. So does a node
+    // which merged tablets with a version which didn't splice runs. So runs are spliced again on
+    // every boot. That's done before auto-compaction is enabled, so that the compaction strategy
+    // sees the spliced runs from the start.
+    if (_global_table->uses_tablets()) {
+        co_await smp::invoke_on_all([this] {
+            return _global_table->splice_sstable_runs();
+        });
+    }
 }
 
 future<> table_populator::stop() {

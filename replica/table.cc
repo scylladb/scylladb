@@ -4028,6 +4028,14 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
                     co_await main_group->merge_sstables_from(*group);
                     co_await main_group->merge_logstor_segments_from(*group);
                 }
+                // The runs of the merged groups cover disjoint token ranges. The compaction strategy
+                // may want to compact some of them together, which would rewrite them without merging
+                // any data. Splicing such runs into one avoids that. Done while compaction is still
+                // disabled, so that the strategy sees the spliced runs from the start.
+                // The injection leaves the runs unspliced, as if the node stopped before splicing them.
+                if (sz > 0 && !utils::get_local_injector().enter("skip_splice_sstable_runs_after_merge")) {
+                    co_await main_group->splice_sstable_runs();
+                }
                 co_await sg.remove_empty_merging_groups();
                 tlogger.debug("Merge compaction groups for table={}.{} group_id={} range={} finished",
                         ks_name, cf_name, main_group->group_id(), main_group->token_range());
