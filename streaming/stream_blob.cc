@@ -96,6 +96,7 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
         };
         auto new_sstables = co_await t.add_new_sstable_and_update_cache(sst, on_add);
         blogger.info("stream_sstables[{}] Loaded sstable {} successfully", ops_id, sst->toc_filename());
+        t.schedule_run_identifier_write(new_sstables);
 
         if (state == sstables::sstable_state::staging) {
             // If the sstable is in staging state, register it to view building worker

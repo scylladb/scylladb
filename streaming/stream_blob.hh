@@ -98,7 +98,8 @@ struct stream_sstable_meta {
     int32_t format; // serialized sstables::sstable_format_types
     sstables::sstable_state state;
     // The run identifier the sstable is known by in memory on the source. It can differ from the
-    // one stored on disk, e.g. if its run was spliced. Not sent by older versions.
+    // one stored on disk, e.g. if its run was spliced and the new one isn't written yet.
+    // Not sent by older versions.
     std::optional<sstables::run_id> run_identifier;
 };
 

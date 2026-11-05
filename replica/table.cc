@@ -1723,6 +1723,21 @@ future<> table::splice_sstable_runs() {
     });
 }
 
+void table::schedule_run_identifier_write(const std::vector<sstables::shared_sstable>& ssts) {
+    for (auto& sst : ssts) {
+        if (!sst->has_unpersisted_run_identifier()) {
+            continue;
+        }
+        auto& cg = compaction_group_for_sstable(sst);
+        auto& view = cg.view_for_sstable(sst);
+        // Compaction is always disabled on the repairing view. Marking its sstables as repaired
+        // rewrites their Scylla component, which writes their run identifier too.
+        if (!cg.is_repairing_view(&view)) {
+            get_compaction_manager().schedule_run_identifier_write(view);
+        }
+    }
+}
+
 future<> table::parallel_foreach_compaction_group(std::function<future<>(compaction_group&)> action) {
     co_await _sg_manager->parallel_foreach_storage_group([&] (storage_group& sg) -> future<> {
         co_await utils::get_local_injector().inject("foreach_compaction_group_wait", [this, &sg] (auto& handler) -> future<> {

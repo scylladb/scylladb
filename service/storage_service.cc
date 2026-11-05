@@ -5551,7 +5551,8 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
             }
             co_return;
         };
-        co_await table.add_new_sstables_and_update_cache(std::vector(ssts.begin(), ssts.end()), on_add);
+        auto added = co_await table.add_new_sstables_and_update_cache(std::vector(ssts.begin(), ssts.end()), on_add);
+        table.schedule_run_identifier_write(added);
     });
     rtlogger.debug("Successfully loaded storage of tablet {} into pending replica {}", tablet, pending);
 }

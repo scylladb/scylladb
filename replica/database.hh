@@ -1265,6 +1265,11 @@ public:
     future<unsigned> estimate_pending_compactions() const;
     // See compaction_group::splice_sstable_runs().
     future<> splice_sstable_runs();
+    // Schedules writing to disk the run identifiers of those of the given sstables of this table
+    // whose run identifier differs in memory from the one on disk, e.g. sstables of a migrated
+    // tablet whose run identifier was carried over from the source replica.
+    // See compaction_manager::schedule_run_identifier_write().
+    void schedule_run_identifier_write(const std::vector<sstables::shared_sstable>& ssts);
 
     void set_compaction_strategy(compaction::compaction_strategy_type strategy);
     const compaction::compaction_strategy& get_compaction_strategy() const {
@@ -1559,7 +1564,7 @@ public:
     struct cloned_sstable {
         sstables::entry_descriptor desc;
         // The run identifier the original sstable is known by in memory. It can differ from the
-        // one stored on disk, e.g. if its run was spliced.
+        // one stored on disk, e.g. if its run was spliced and the new one isn't written yet.
         sstables::run_id run_identifier;
     };
 

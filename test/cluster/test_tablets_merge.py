@@ -877,14 +877,15 @@ async def test_ics_runs_are_spliced_after_merge(manager: ScyllaClusterManager, s
 @pytest.mark.parametrize("intranode", [False, True])
 async def test_ics_runs_spliced_in_memory_are_migrated_spliced(manager: ScyllaClusterManager, storage_config: FeatureConfig, intranode: bool):
     """
-    The runs of a merged tablet are spliced in memory, while the run identifiers on disk stay
-    as they were. A migrated tablet must arrive with its runs spliced, since compaction on the
-    destination would otherwise compact them together.
+    The runs of a merged tablet are spliced in memory, and their new run identifiers are written
+    to disk in the background. A tablet migrated before they're written must arrive with its runs
+    spliced, since compaction on the destination would otherwise compact them together.
+    The destination then writes the run identifiers itself.
     With intranode, the tablet is migrated to another shard of the same node, which clones its
     sstables instead of streaming them.
     """
     cfg = storage_config.get_cluster_cfg({'enable_tablets': True, 'tablet_load_stats_refresh_interval_in_seconds': 1})
-    cmdline = ['--smp', '2' if intranode else '1', '--logger-log-level', 'table=debug']
+    cmdline = ['--smp', '2' if intranode else '1', '--logger-log-level', 'table=debug', '--logger-log-level', 'compaction_manager=debug']
     src = await manager.server_add(cmdline=cmdline, config=cfg)
     await manager.disable_tablet_balancing()
 
@@ -894,6 +895,7 @@ async def test_ics_runs_spliced_in_memory_are_migrated_spliced(manager: ScyllaCl
         await create_table_with_two_ics_runs(manager, src, ks)
         src_log = await manager.server_open_log(src.server_id)
         src_mark = await src_log.mark()
+        await inject_error_on(manager, "skip_run_identifier_write", [src])
         await merge_tablets(manager, src, ks)
         await src_log.wait_for(f'Spliced .* of {ks}.test', from_mark=src_mark)
         assert await get_pending_compactions(manager, src, ks) == 0
@@ -903,11 +905,24 @@ async def test_ics_runs_spliced_in_memory_are_migrated_spliced(manager: ScyllaCl
         if intranode:
             dst = src
             dst_host_id, dst_shard = src_host_id, 1 - src_shard
+            # The destination shard must write the run identifiers.
+            await manager.api.disable_injection(src.ip_addr, "skip_run_identifier_write")
         else:
             dst = await manager.server_add(cmdline=cmdline, config=cfg)
             # Would hide unspliced runs on the destination by compacting them.
             await manager.api.disable_autocompaction(dst.ip_addr, ks, 'test')
             dst_host_id, dst_shard = await manager.get_host_id(dst.server_id), 0
+        dst_log = await manager.server_open_log(dst.server_id)
+        dst_mark = await dst_log.mark()
         await manager.api.move_tablet(src.ip_addr, ks, 'test', src_host_id, src_shard, dst_host_id, dst_shard, tablet.last_token)
 
+        assert await get_pending_compactions(manager, dst, ks) == 0
+        await dst_log.wait_for(f'Wrote run identifiers of [0-9]+ sstables of {ks}.test', from_mark=dst_mark)
+        if not intranode:
+            assert await src_log.grep(f'Wrote run identifiers of [0-9]+ sstables of {ks}.test', from_mark=src_mark) == []
+
+        dst_mark = await dst_log.mark()
+        await manager.server_restart(dst.server_id)
+        await reconnect_driver(manager)
+        assert await dst_log.grep(f'Spliced .* of {ks}.test', from_mark=dst_mark) == []
         assert await get_pending_compactions(manager, dst, ks) == 0
