@@ -49,6 +49,17 @@ struct noop_space_accounting_subscriber final : replica::logstor::space_accounti
 
 inline noop_space_accounting_subscriber noop_space_accounting{};
 
+// Returns the location of the record of a key, or nullopt when the index does not have the key. It
+// looks the key up the way a read that bypasses the cache does.
+inline std::optional<replica::logstor::record_location> lookup_location(const replica::logstor::primary_index& index,
+        const replica::logstor::primary_index_key& key, const schema& s) {
+    auto result = index.lookup_for_read(key, s, replica::logstor::use_cache::no);
+    if (!result) {
+        return std::nullopt;
+    }
+    return std::get<replica::logstor::primary_index::guarded_location>(*result).location;
+}
+
 struct shared_logstor_cache {
     ::cache_tracker shared_tracker;
     replica::logstor::cache_tracker logstor_tracker;

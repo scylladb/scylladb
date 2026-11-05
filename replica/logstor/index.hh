@@ -416,15 +416,6 @@ public:
         return token_range_scan(*this, tr);
     }
 
-    // Returns the entry of a key without a guard. Do not read from it.
-    std::optional<index_entry> get(const primary_index_key& key) const {
-        auto it = find_key(key);
-        if (it != _entries.end()) {
-            return it->_e;
-        }
-        return std::nullopt;
-    }
-
     // Looks up a key for MUTATION_FRAGMENTS(): returns its index entry and, when the key
     // is cached, a snapshot of the cached mutation. Unlike the read path this neither
     // touches the cache's LRU nor counts a cache hit or miss, so that inspecting a table
