@@ -20,7 +20,7 @@ from cassandra.protocol import ConfigurationException, InvalidRequest
 from test.pylib.object_storage import format_tuples
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace
-from test.pylib.tablets import get_tablet_replica
+from test.pylib.tablets import get_tablet_count, get_tablet_replica
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
 
@@ -34,9 +34,12 @@ def storage_options(object_storage, **extra):
                          bucket=object_storage.bucket_name, **extra)
 
 
-def keyspace_options(object_storage, tablets=True, **extra):
+def keyspace_options(object_storage, tablets=True, initial_tablets=None, **extra):
+    tablets_options = f"'enabled': {'true' if tablets else 'false'}"
+    if initial_tablets:
+        tablets_options += f", 'initial': {initial_tablets}"
     return (f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}"
-            f" AND tablets = {{'enabled': {'true' if tablets else 'false'}}}"
+            f' AND tablets = {{{tablets_options}}}'
             f' AND STORAGE = {storage_options(object_storage, **extra)}')
 
 
@@ -750,6 +753,31 @@ async def test_reversed_read(manager: ScyllaClusterManager, s3_storage):
         assert cached_pages(cql) == pages
 
 
+@pytest.mark.parametrize('sstable_format', ['me', 'ms'])
+async def test_reversed_row_reads(manager: ScyllaClusterManager, s3_storage, sstable_format):
+    '''Reversed reads of a few rows of a wide partition - which read whole
+    blocks of the partition's row index, rather than from the start of a
+    block up to the row, as forward reads do - populate the cache, so that
+    repeating them sends no request to the object store.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage) | {'sstable_format': sstable_format})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        rows = await create_wide_partition(manager, server, ks)
+
+        def read():
+            for low, high in [(195, 205), (101, 103)]:
+                result = [(row.c, row.v) for row in cql.execute(
+                    f'SELECT c, v FROM {ks}.test WHERE p = 0 AND c >= {low} AND c <= {high} ORDER BY c DESC')]
+                assert result == list(reversed(rows[low:high + 1]))
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        requests_before = await read_requests(manager, server, s3_storage)
+        read()
+        assert await read_requests(manager, server, s3_storage) == requests_before
+
+
 async def test_compaction_does_not_populate_cache(manager: ScyllaClusterManager, s3_storage):
     '''Compaction, which reads whole sstables once, reads them from the object
     store without populating the page cache. The sstable it writes - with the
@@ -1001,6 +1029,642 @@ async def test_compaction_cache_errors(manager: ScyllaClusterManager, s3_storage
         assert cached_pages(cql) == []
         assert await page_cache_metric(manager, server, 'errors', {'operation': 'compaction'}) > 0
         assert scan(cql, ks) == data
+
+
+async def settled_read_requests(manager: ScyllaClusterManager, server, object_storage):
+    '''The number of read requests which the server sent to the object store,
+    once it stops changing - after a compaction, deleting the compacted
+    sstables lists their objects' references (a GET), maybe some time after
+    their pages were evicted.'''
+    deadline = time.time() + 60
+    previous = await read_requests(manager, server, object_storage)
+    while True:
+        await asyncio.sleep(1)
+        current = await read_requests(manager, server, object_storage)
+        if current == previous:
+            return current
+        assert time.time() < deadline
+        previous = current
+
+
+async def check_no_requests(manager: ScyllaClusterManager, server, object_storage, read):
+    '''Drops the in-memory caches - the row cache, and the sstables' caches of
+    their index - so they can't serve read() instead of the page cache, and
+    checks that read() - which checks what it reads - sends no request to the
+    object store.'''
+    await manager.api.drop_sstable_caches(server.ip_addr)
+    requests_before = await settled_read_requests(manager, server, object_storage)
+    read()
+    assert await read_requests(manager, server, object_storage) == requests_before
+
+
+async def compact_and_wait_for_eviction(manager: ScyllaClusterManager, server, ks):
+    '''Compacts the keyspace, and waits until the pages of the compacted
+    sstables are evicted, so they can't serve reads.'''
+    cql = manager.get_cql()
+    compacted = cached_sstables(cql)
+    await manager.api.keyspace_compaction(server.ip_addr, ks)
+    await wait_for_eviction(cql, compacted)
+
+
+@pytest.mark.parametrize('sstable_format', ['me', 'ms'])
+@pytest.mark.parametrize('encryption', ['plain', 'encrypted'])
+@pytest.mark.parametrize('compression', ['compressed', 'uncompressed'])
+async def test_compaction_resistant_caching(manager: ScyllaClusterManager, s3_storage, tmp_path,
+                                            compression, encryption, sstable_format):
+    '''Compaction-resistant caching, end to end: rows which were read from two
+    sstables are cached, so reading them again sends no request to the object
+    store - and after the two sstables are compacted, and their pages
+    evicted, reading the rows still sends no request, because compaction
+    copied the pages of their data and index to the cache. The data, the
+    index and the cache's pages are different for compressed and
+    uncompressed sstables, for encrypted ones, and for the "me" format, with
+    the Index component, and the BTI ("ms") format, with the Partitions and
+    Rows components.'''
+    config = page_cache_config(s3_storage) | {'sstable_format': sstable_format}
+    if encryption == 'encrypted':
+        config |= encryption_config(tmp_path)
+    server = await manager.server_add(config=config)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        table_options = "WITH compression = {'sstable_compression': ''}" if compression == 'uncompressed' else ''
+        data = await write_two_sstables(manager, server, ks, table_options)
+
+        def read():
+            # Row 17 is only in the first sstable, and row 20 in both.
+            for p in [17, 20]:
+                assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = {p}').one().v == data[p]
+
+        # Check that the rows, once read, are read again from the cache.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        await check_no_requests(manager, server, s3_storage, read)
+
+        # Check that they are still read from the cache after a compaction.
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+        assert scan(cql, ks) == data
+
+
+@pytest.mark.parametrize('sstable_format', ['me', 'ms'])
+async def test_compaction_resistant_caching_wide_partition(manager: ScyllaClusterManager, s3_storage, sstable_format):
+    '''Rows of a wide partition, which a read finds through the partition's
+    row index - in the Index component of "me" sstables, and in the Rows
+    component of BTI sstables - are still read from the cache after a
+    compaction.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage) | {'sstable_format': sstable_format})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        rows = await create_wide_partition(manager, server, ks)
+        await manager.api.disable_autocompaction(server.ip_addr, ks)
+        # A second sstable, overwriting some of the rows.
+        update = cql.prepare(f'UPDATE {ks}.test SET v = ? WHERE p = 0 AND c = ?')
+        for c in range(0, len(rows), 10):
+            rows[c] = (c, f'updated {c}')
+            await cql.run_async(update, [rows[c][1], c])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        def read():
+            read_rows(cql, ks, [rows[123], rows[200]])
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        await check_no_requests(manager, server, s3_storage, read)
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+        assert read_partition(cql, ks) == rows
+
+
+async def test_compaction_resistant_caching_overwrite(manager: ScyllaClusterManager, s3_storage):
+    '''A row which was read, and then overwritten - in an sstable which was
+    never read - is read from the cache after a compaction merges the two
+    sstables: its new version is in the range of keys which was cached, so
+    compaction copies it to the cache too.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await create_table(manager, server, ks)
+        await manager.api.disable_autocompaction(server.ip_addr, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+        data[17] = 'overwritten'
+        await cql.run_async(f"UPDATE {ks}.test SET v = 'overwritten' WHERE p = 17")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        def read():
+            assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == 'overwritten'
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+
+
+async def test_compaction_resistant_caching_scan(manager: ScyllaClusterManager, s3_storage):
+    '''A table which was all cached stays all cached after a compaction: a
+    scan after it sends no request. Unlike the point reads of the other
+    tests, which check that the pages of a few rows are copied, a scan
+    checks that no page is missed when all of them are hot - the last page of
+    each component, and every page of the index.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await write_two_sstables(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        def read():
+            assert scan(cql, ks) == data
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+
+
+async def test_compaction_resistant_caching_incremental(manager: ScyllaClusterManager, s3_storage):
+    '''Incremental compaction of a run of sstables replaces the input
+    sstables which it exhausted - and so evicts their pages - while it is
+    still writing its output. Data which was cached in all of the run's
+    sstables stays cached.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    await manager.api.set_logger_level(server.ip_addr, 'compaction', 'debug')
+    cql = manager.get_cql()
+    # A single tablet, so that all of the data is compacted together.
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        # About 4 MB of uncompressed rows of 1 KB, which compaction writes in
+        # runs of sstables of 1 MB.
+        table_options = ("WITH compression = {'sstable_compression': ''}"
+                         " AND compaction = {'class': 'IncrementalCompactionStrategy', 'sstable_size_in_mb': 1}")
+        data = await create_table(manager, server, ks, table_options, rows=4000)
+        await manager.api.disable_autocompaction(server.ip_addr, ks)
+        # Compact the table into a run of several sstables, and write another
+        # sstable, overwriting some of the rows.
+        await manager.api.keyspace_compaction(server.ip_addr, ks)
+        update = cql.prepare(f'UPDATE {ks}.test SET v = ? WHERE p = ?')
+        for p in range(0, 4000, 10):
+            data[p] = f'updated {p}'
+            await cql.run_async(update, [data[p], p])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        def read():
+            # Rows in different sstables of the run, some overwritten.
+            for p in [17, 1500, 2600, 3990]:
+                assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = {p}').one().v == data[p]
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        await compact_and_wait_for_eviction(manager, server, ks)
+        # Check that the compaction replaced some of its inputs early.
+        assert await log.grep('Replacing earlier exhausted sstable', from_mark=mark)
+        await check_no_requests(manager, server, s3_storage, read)
+        assert scan(cql, ks) == data
+
+
+async def insert_rows(cql, ks, rows, chunk=1000):
+    '''Writes the rows {p: v} into ks.test, chunk rows at a time.'''
+    insert = cql.prepare(f'INSERT INTO {ks}.test (p, v) VALUES (?, ?)')
+    items = list(rows.items())
+    for i in range(0, len(items), chunk):
+        await asyncio.gather(*[cql.run_async(insert, [p, v]) for p, v in items[i:i + chunk]])
+
+
+def copied_and_total_pages(cql, object_storage, sstable, component):
+    '''The number of cached pages of the component of the sstable - which
+    compaction copied - and the number of 4 KiB pages it has (a lower bound
+    for a compressed Data component, whose chunks are smaller).'''
+    copied = sum(1 for sst, comp, _ in cached_pages(cql) if sst == sstable and comp == component)
+    total = (len(object_bytes(object_storage, sstable, component)) + 4095) // 4096
+    return copied, total
+
+
+# Why the following tests: in the other tests, the sstables are so small that
+# most of their components - certainly their index - have one page, or two.
+# In such a tiny sstable, even a badly broken way of finding which pages of
+# the output hold the cached data can work by accident: copying all of the
+# pages, or the page next to the right one, or none of the index's inner
+# nodes, all copy the one page there is, and the reads after the compaction
+# find everything they need. So these tests use sstables whose components
+# span many pages - and whose tries have several levels - and check both
+# that reads after the compaction need no request, and that compaction
+# copied only a few of the pages.
+
+
+@pytest.mark.parametrize('sstable_format', ['me', 'ms'])
+@pytest.mark.parametrize('encryption', ['plain', 'encrypted'])
+@pytest.mark.parametrize('compression', ['compressed', 'uncompressed'])
+async def test_compaction_resistant_caching_many_pages(manager: ScyllaClusterManager, s3_storage, tmp_path,
+                                                       compression, encryption, sstable_format):
+    '''Compaction-resistant caching of a few rows of a table of many small
+    partitions, whose Data has hundreds of pages and whose index - the Index
+    component of "me" sstables, or the Partitions trie of BTI sstables - has
+    many pages: the reads after the compaction need no request, and the
+    compaction copied only a few of the pages (see above). It is repeated
+    for compressed Data, whose pages are its compressed chunks, of different
+    sizes, which the output finds as it writes them; uncompressed Data, in
+    4 KiB pages; and encrypted Data, in 4 KiB pages of the compressed data,
+    each of which holds parts of several chunks.'''
+    config = page_cache_config(s3_storage) | {'sstable_format': sstable_format}
+    if encryption == 'encrypted':
+        config |= encryption_config(tmp_path)
+    server = await manager.server_add(config=config)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        table_options = "WITH compression = {'sstable_compression': ''}" if compression == 'uncompressed' else ''
+        await cql.run_async(f'CREATE TABLE {ks}.test (p int PRIMARY KEY, v text) {table_options}')
+        await manager.api.disable_autocompaction(server.ip_addr, ks)
+        rand = random.Random(1)
+        data = {p: rand.randbytes(20).hex() for p in range(50000)}
+        await insert_rows(cql, ks, data)
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        # A second sstable, overwriting some of the rows.
+        overwrites = {p: f'updated {p}' for p in range(0, 50000, 100)}
+        data.update(overwrites)
+        await insert_rows(cql, ks, overwrites)
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        keys = [17, 12345, 30000, 49999]
+
+        def read():
+            for p in keys:
+                assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = {p}').one().v == data[p]
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+        # Check that compaction copied only a few pages of the output's
+        # components - those which hold the rows which were read, and the
+        # index which leads to them - while each component has many pages.
+        [output] = cached_sstables(cql)
+        index = 'Index' if sstable_format == 'me' else 'Partitions'
+        for component, max_copied in [('Data', 6 * len(keys)), (index, 4 * len(keys))]:
+            copied, total = copied_and_total_pages(cql, s3_storage, output, component)
+            assert 0 < copied <= max_copied
+            assert total >= 5 * max_copied
+
+
+def cached_pages_by_component(cql, sstables):
+    '''The number of cached pages of each component of the given sstables.'''
+    counts = {}
+    for sst, component, _ in cached_pages(cql):
+        if sst in sstables:
+            counts[component] = counts.get(component, 0) + 1
+    return counts
+
+
+@pytest.mark.parametrize('sstable_format', ['me', 'ms'])
+@pytest.mark.parametrize('compression', ['compressed', 'uncompressed'])
+async def test_compaction_resistant_caching_copies_no_more(manager: ScyllaClusterManager, s3_storage, compression, sstable_format):
+    '''The opposite of the tests above: compaction doesn't copy to the cache
+    data which wasn't cached. A single row is read from a table of many
+    small partitions, so only a page or two of each of the input sstable's
+    components is cached - and after the compaction, the output has at most
+    one page more of each component cached: the pages which hold the row
+    (which may be split differently into pages), and the index which leads
+    to it.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage) | {'sstable_format': sstable_format})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        table_options = "WITH compression = {'sstable_compression': ''}" if compression == 'uncompressed' else ''
+        await cql.run_async(f'CREATE TABLE {ks}.test (p int PRIMARY KEY, v text) {table_options}')
+        await manager.api.disable_autocompaction(server.ip_addr, ks)
+        rand = random.Random(1)
+        data = {p: rand.randbytes(20).hex() for p in range(50000)}
+        await insert_rows(cql, ks, data)
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        # A second sstable, which is never read, so has nothing cached.
+        overwrites = {p: f'updated {p}' for p in range(0, 50000, 100)}
+        data.update(overwrites)
+        await insert_rows(cql, ks, overwrites)
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        def read():
+            assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 12345').one().v == data[12345]
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        inputs = cached_sstables(cql)
+        cached_before = cached_pages_by_component(cql, inputs)
+        await compact_and_wait_for_eviction(manager, server, ks)
+        [output] = cached_sstables(cql)
+        cached_after = cached_pages_by_component(cql, {output})
+        # Check that each component of the output has at most one page more
+        # cached than the input had, and that it has the row's Data cached.
+        assert cached_after.get('Data', 0) > 0
+        for component, count in cached_after.items():
+            assert count <= cached_before.get(component, 0) + 1, (component, cached_before, cached_after)
+        await check_no_requests(manager, server, s3_storage, read)
+
+
+@pytest.mark.parametrize('sstable_format', ['me', 'ms'])
+@pytest.mark.parametrize('encryption', ['plain', 'encrypted'])
+@pytest.mark.parametrize('compression', ['compressed', 'uncompressed'])
+async def test_compaction_resistant_caching_many_index_blocks(manager: ScyllaClusterManager, s3_storage, tmp_path,
+                                                              compression, encryption, sstable_format):
+    '''Compaction-resistant caching of a few rows of a wide partition, whose
+    Data has thousands of pages, with many blocks in its row index - the
+    Rows trie of BTI sstables, or the promoted index in the Index component
+    of "me" sstables - which span a dozen pages or more: the reads after the
+    compaction need no request, and the compaction copied only a few of the
+    pages (see above).'''
+    config = page_cache_config(s3_storage) | {'sstable_format': sstable_format, 'column_index_size_in_kb': 1}
+    if encryption == 'encrypted':
+        config |= encryption_config(tmp_path)
+    server = await manager.server_add(config=config)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        table_options = "WITH compression = {'sstable_compression': ''}" if compression == 'uncompressed' else ''
+        await cql.run_async(f'CREATE TABLE {ks}.test (p int, c int, v text, PRIMARY KEY (p, c)) {table_options}')
+        await manager.api.disable_autocompaction(server.ip_addr, ks)
+        insert = cql.prepare(f'INSERT INTO {ks}.test (p, c, v) VALUES (0, ?, ?)')
+        rand = random.Random(1)
+        rows = [(c, rand.randbytes(500).hex()) for c in range(12000)]
+        for i in range(0, len(rows), 1000):
+            await asyncio.gather(*[cql.run_async(insert, [c, v]) for c, v in rows[i:i + 1000]])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        update = cql.prepare(f'UPDATE {ks}.test SET v = ? WHERE p = 0 AND c = ?')
+        for c in range(0, len(rows), 100):
+            rows[c] = (c, f'updated {c}')
+            await cql.run_async(update, [rows[c][1], c])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        def read():
+            read_rows(cql, ks, [rows[123], rows[6000], rows[11999]])
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+        # Check that compaction copied only a few pages of the output's Data -
+        # those which hold the rows which were read - and of a BTI sstable's
+        # Rows: the header of the partition's entry, and the paths to the
+        # rows' blocks. (The Index of a "me" sstable is copied by intervals of
+        # partitions, so the whole entry of a hot partition is copied, with
+        # all of its promoted index.)
+        [output] = cached_sstables(cql)
+        copied, total = copied_and_total_pages(cql, s3_storage, output, 'Data')
+        assert 0 < copied <= 18
+        assert total >= 5 * 18
+        if sstable_format == 'ms':
+            copied, total = copied_and_total_pages(cql, s3_storage, output, 'Rows')
+            assert 0 < copied <= 6
+            assert total >= 2 * 6
+
+
+async def write_wide_partition(manager: ScyllaClusterManager, server, ks, rows, value_bytes=500, static=False, table_options=''):
+    '''Creates the table ks.test, with a static column if static, and writes
+    to it a wide partition, p = 0, of the given number of rows, with
+    random values of value_bytes bytes (as hex, so twice as many
+    characters), in chunks, and then a second sstable which overwrites one
+    of every 10 rows. Automatic compaction doesn't replace them. Returns the
+    rows as a list of (c, v).'''
+    cql = manager.get_cql()
+    static_column = ', s text static' if static else ''
+    await cql.run_async(f'CREATE TABLE {ks}.test (p int, c int, v text{static_column}, PRIMARY KEY (p, c)) {table_options}')
+    await manager.api.disable_autocompaction(server.ip_addr, ks)
+    if static:
+        await cql.run_async(f"INSERT INTO {ks}.test (p, s) VALUES (0, 'static value')")
+    insert = cql.prepare(f'INSERT INTO {ks}.test (p, c, v) VALUES (0, ?, ?)')
+    rand = random.Random(1)
+    data = [(c, rand.randbytes(value_bytes).hex()) for c in range(rows)]
+    for i in range(0, len(data), 1000):
+        await asyncio.gather(*[cql.run_async(insert, [c, v]) for c, v in data[i:i + 1000]])
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+    update = cql.prepare(f'UPDATE {ks}.test SET v = ? WHERE p = 0 AND c = ?')
+    for c in range(0, rows, 10):
+        data[c] = (c, f'updated {c}')
+        await cql.run_async(update, [data[c][1], c])
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+    return data
+
+
+@pytest.mark.parametrize('sstable_format', ['me', 'ms'])
+@pytest.mark.parametrize('index_block_kb', [1, 64])
+async def test_compaction_resistant_caching_reversed_reads(manager: ScyllaClusterManager, s3_storage, index_block_kb, sstable_format):
+    '''Reversed reads of a few rows of a wide partition read whole blocks of
+    the partition's row index - and the blocks of the compaction's output
+    aren't those of its inputs - so compaction copies the whole blocks of
+    the output which hold the rows, and reversed reads of the rows after
+    the compaction send no request. With blocks of 1 KiB, smaller than a
+    page, and of 64 KiB (the default), of many pages.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage) | {'sstable_format': sstable_format,
+                                                                              'column_index_size_in_kb': index_block_kb})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        rows = await write_wide_partition(manager, server, ks, rows=2000)
+
+        def read():
+            for low, high in [(1195, 1205), (101, 103)]:
+                result = [(row.c, row.v) for row in cql.execute(
+                    f'SELECT c, v FROM {ks}.test WHERE p = 0 AND c >= {low} AND c <= {high} ORDER BY c DESC')]
+                assert result == list(reversed(rows[low:high + 1]))
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+
+
+@pytest.mark.parametrize('sstable_format', ['me', 'ms'])
+async def test_compaction_resistant_caching_static_columns(manager: ScyllaClusterManager, s3_storage, sstable_format):
+    '''A read of a row of a wide partition with static columns reads the
+    partition's static row, at its start, as well as the row's block, so
+    compaction copies the pages with the static row too: reads of the rows
+    after the compaction - forward and reversed - send no request.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage) | {'sstable_format': sstable_format})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        rows = await write_wide_partition(manager, server, ks, rows=2000, static=True)
+
+        def read():
+            select = cql.prepare(f'SELECT s, v FROM {ks}.test WHERE p = 0 AND c = ?')
+            for c in [1500, 1234, 1901]:
+                row = cql.execute(select, [c]).one()
+                assert (row.s, row.v) == ('static value', rows[c][1])
+            result = [(row.s, row.c) for row in cql.execute(
+                f'SELECT s, c FROM {ks}.test WHERE p = 0 AND c >= 1700 AND c <= 1702 ORDER BY c DESC')]
+            assert result == [('static value', c) for c in [1702, 1701, 1700]]
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        await check_no_requests(manager, server, s3_storage, read)
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+
+
+@pytest.mark.parametrize('sstable_format', ['me', 'ms'])
+async def test_compaction_resistant_caching_default_index_blocks(manager: ScyllaClusterManager, s3_storage, sstable_format):
+    '''With the default blocks of 64 KiB in a wide partition's row index -
+    16 pages - compaction copies the blocks which hold the rows which were
+    read, but not much more: reads of the rows after the compaction send no
+    request, and the copied pages of the Data are about those of one block
+    for each row.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage) | {'sstable_format': sstable_format})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        rows = await write_wide_partition(manager, server, ks, rows=12000)
+        keys = [1234, 6001, 11999]
+
+        def read():
+            read_rows(cql, ks, [rows[c] for c in keys])
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        inputs = cached_sstables(cql)
+        cached_before = cached_pages_by_component(cql, inputs).get('Data', 0)
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+        [output] = cached_sstables(cql)
+        copied, total = copied_and_total_pages(cql, s3_storage, output, 'Data')
+        # The reads cached about a block for each row, and more, which they
+        # read ahead. Check that compaction copied about as much - at most a
+        # block more for each row: a block of 64 KiB spans 16 pages, or 17,
+        # and the page with the start of the next row after the block.
+        assert 0 < copied <= cached_before + len(keys) * 18
+        assert total >= 10 * (cached_before + len(keys) * 18)
+
+
+@pytest.mark.parametrize('sstable_format', ['me', 'ms'])
+async def test_compaction_resistant_caching_large_rows(manager: ScyllaClusterManager, s3_storage, sstable_format):
+    '''Rows larger than a page (20 KB): rows which were read before a
+    compaction are read after it from the cache.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage) | {'sstable_format': sstable_format})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        rows = await write_wide_partition(manager, server, ks, rows=200, value_bytes=10000)
+        keys = [17, 120, 199]
+
+        def read():
+            read_rows(cql, ks, [rows[c] for c in keys])
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+
+
+async def test_compaction_resistant_caching_tombstones(manager: ScyllaClusterManager, s3_storage):
+    '''Tombstones - a deleted partition, a deleted row, and a range of
+    deleted rows - which were read before a compaction are read after it
+    from the cache, as are rows which were read and then deleted before the
+    compaction.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        await cql.run_async(f'CREATE TABLE {ks}.test (p int, c int, v text, PRIMARY KEY (p, c))')
+        await manager.api.disable_autocompaction(server.ip_addr, ks)
+        insert = cql.prepare(f'INSERT INTO {ks}.test (p, c, v) VALUES (?, ?, ?)')
+        rand = random.Random(1)
+        await asyncio.gather(*[cql.run_async(insert, [p, c, rand.randbytes(100).hex()]) for p in range(100) for c in range(20)])
+        await cql.run_async(f'DELETE FROM {ks}.test WHERE p = 17')
+        await cql.run_async(f'DELETE FROM {ks}.test WHERE p = 18 AND c = 5')
+        await cql.run_async(f'DELETE FROM {ks}.test WHERE p = 19 AND c >= 3 AND c <= 9')
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        def read_deleted():
+            assert list(cql.execute(f'SELECT * FROM {ks}.test WHERE p = 17')) == []
+            assert list(cql.execute(f'SELECT * FROM {ks}.test WHERE p = 18 AND c = 5')) == []
+            assert list(cql.execute(f'SELECT * FROM {ks}.test WHERE p = 19 AND c >= 4 AND c <= 8')) == []
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read_deleted()
+        assert len(list(cql.execute(f'SELECT * FROM {ks}.test WHERE p = 20'))) == 20
+        # Delete a row which was read, in a second sstable.
+        await cql.run_async(f'DELETE FROM {ks}.test WHERE p = 20 AND c = 7')
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        def read():
+            read_deleted()
+            assert [row.c for row in cql.execute(f'SELECT c FROM {ks}.test WHERE p = 20')] == [c for c in range(20) if c != 7]
+
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+
+
+async def test_compaction_resistant_caching_large_chunks(manager: ScyllaClusterManager, s3_storage):
+    '''With compression chunks of 64 KiB - so a point read caches a whole
+    chunk of many rows - rows which were read before a compaction are read
+    after it from the cache.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        table_options = "WITH compression = {'sstable_compression': 'LZ4Compressor', 'chunk_length_in_kb': 64}"
+        data = await write_two_sstables(manager, server, ks, table_options)
+
+        def read():
+            for p in [17, 20, 333]:
+                assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = {p}').one().v == data[p]
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
+
+
+async def test_compaction_resistant_caching_tablet_split(manager: ScyllaClusterManager, s3_storage):
+    '''Splitting a tablet rewrites its sstables, with a compaction which
+    writes an sstable for each new tablet: rows which were read before the
+    split are read after it from the cache.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        data = await write_two_sstables(manager, server, ks)
+
+        def read():
+            for p in [17, 20, 333, 101]:
+                assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = {p}').one().v == data[p]
+
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        read()
+        before = cached_sstables(cql)
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}}")
+
+        async def split():
+            return True if await get_tablet_count(manager, server, ks, 'test') >= 2 else None
+        await wait_for(split, time.time() + 120)
+        await wait_for_eviction(cql, before)
+        assert len(cached_sstables(cql)) >= 2
+        await check_no_requests(manager, server, s3_storage, read)
+        assert scan(cql, ks) == data
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_compaction_resistant_caching_aborted_compaction(manager: ScyllaClusterManager, s3_storage):
+    '''A compaction which is stopped while it copies pages to the cache
+    leaves no pages of its output in the cache, and a later compaction
+    copies them.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, initial_tablets=1, disk_cache='pages')) as ks:
+        data = await write_two_sstables(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        inputs = cached_sstables(cql)
+
+        # Pause the compaction while it copies a page, stop it, and then let
+        # it continue - and stop. (Stopping a compaction waits until it
+        # stops.)
+        injection = 'object_storage_page_cache_compaction_copy'
+        await manager.api.enable_injection(server.ip_addr, injection, one_shot=False)
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        compaction = asyncio.create_task(manager.api.keyspace_compaction(server.ip_addr, ks))
+        await manager.api.wait_for_injection_enter(server.ip_addr, injection)
+        stop = asyncio.create_task(manager.api.stop_compaction(server.ip_addr, 'COMPACTION'))
+        await log.wait_for(f'Stopping .* compactions for table {ks}.test .* due to user request', from_mark=mark, timeout=60)
+        await manager.api.disable_injection(server.ip_addr, injection)
+        await manager.api.message_injection(server.ip_addr, injection)
+        await stop
+        await compaction
+        assert await log.grep('Compacting of .* interrupted due to: Compaction for .* was stopped', from_mark=mark)
+
+        # Check that the pages of the abandoned output were evicted with it,
+        # leaving only the inputs' pages.
+        async def only_inputs():
+            return True if cached_sstables(cql) <= inputs else None
+        await wait_for(only_inputs, time.time() + 60)
+        assert scan(cql, ks) == data
+
+        # Check that a compaction which isn't stopped keeps the cache.
+        def read():
+            assert scan(cql, ks) == data
+        await compact_and_wait_for_eviction(manager, server, ks)
+        await check_no_requests(manager, server, s3_storage, read)
 
 
 async def test_drop_table_evicts_its_sstables(manager: ScyllaClusterManager, s3_storage):
