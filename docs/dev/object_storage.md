@@ -391,6 +391,21 @@ ahead of the merged data which is written, by many pages - but by keys:
   the last partition of a hot interval is hot; its pages wait in the sink until
   this is decided. (So the whole entry of a hot wide partition is copied,
   including its promoted index, even if only a few of its rows are hot.)
+* The Partitions and Rows components of a BTI sstable are tries, which a read
+  descends from the root to the key it looks for - and then to the next key,
+  to know where its partition, or block of rows, ends. So the writer of each
+  trie marks the keys whose data is hot, and the next keys, and tells the
+  output the position of each node it writes whose subtree has a marked key
+  - including the root - before writing the node; the page which holds the
+  node is copied. (The marks are a generic feature of the trie writer: each
+  key may have a 32-bit mark, which isn't written, and the writer tells its
+  sink the largest mark in the subtree of each node it writes.) A key in
+  Partitions is marked if its partition is hot; a key in Rows - the
+  separator of a block of a partition's rows - if its block is copied; and the
+  header of a partition's entry in Rows, which a read reads first, if the
+  partition is hot. Whether they are is decided only when the partition's
+  blocks are, which may be after the partition ends, so the writer writes a
+  partition's entries in Rows and Partitions only then.
 
 A copied page gets the latest last hit of the input pages which made it hot,
 so it is evicted when they would have been. If it got no last hit, the hand
@@ -406,6 +421,35 @@ A failure to read `pagecache_hits` or to copy a page doesn't fail the
 compaction: it only stops copying pages. Resharding, which writes sstables of
 other shards, doesn't copy pages, and neither does scrub, which may write its
 outputs interleaved rather than in the order of their keys.
+
+The copying is approximate, so the cache doesn't keep exactly what it held:
+
+* Rows which were read only from small sstables aren't kept. A cached page of
+  a small sstable, such as one which a memtable flush wrote, holds rows from
+  all over the keys, which end up one in each of many pages of the output,
+  so less than a 16th of each of these pages is hot, and none is copied. A
+  read of such a row misses the cache once after the compaction. A row which
+  was read from a large sstable too is kept, because the large sstable's
+  cached page makes the output's page hot. Likewise, a hot page isn't copied
+  if writes added to its range more than 15 times as much data as it had.
+* A copied page copies the whole row-index blocks with hot data in it, which
+  a reversed read reads, though a forward read of a row reads only from the
+  start of its block - so in a wide partition, a hot row may cost the cache
+  up to a whole block (64 KiB by default) more than was cached. In a `me`
+  sstable, the whole Index entry of a hot partition is copied, including all
+  of its promoted index.
+* Until the inputs are deleted, the cache holds both their pages and the
+  copies. Incremental compaction deletes its inputs as it goes, but a
+  compaction which deletes them only at its end can grow the cache by up to
+  all of its hot data - and if this exceeds the cache's limit, the hand may
+  evict copies, whose last hits are those of the input pages, rather than
+  the input pages, which will be deleted anyway.
+* The sink holds the output's pages in memory until it is decided whether
+  to copy them - from the start of the row-index block being written, so
+  at most about a block, except for a row larger than a block, which the
+  sink holds whole (as the reader already holds it).
+* sstables which aren't written by compaction - by repair, streaming, or a
+  tablet's migration to another node - start with nothing cached.
 
 ### Migrating tablets
 

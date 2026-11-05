@@ -959,7 +959,7 @@ async def test_compaction_keeps_cached_data(manager: ScyllaClusterManager, s3_st
         assert scan(cql, ks) == data
 
 
-@pytest.mark.parametrize('sstable_format', ['me'])
+@pytest.mark.parametrize('sstable_format', ['me', 'ms'])
 async def test_compaction_keeps_cached_index(manager: ScyllaClusterManager, s3_storage, sstable_format):
     '''Compaction copies to the cache the index pages which a point read of
     cached data needs, as well as its data pages, so after the compaction,
