@@ -31,6 +31,10 @@ namespace db {
     class system_keyspace;
 }
 
+namespace locator {
+    class tablet_metadata;
+}
+
 namespace service {
 
 class raft_group0;
@@ -226,6 +230,11 @@ struct topology {
     size_t size() const;
     // Are there any non-left nodes?
     bool is_empty() const;
+
+    // Updates the parts of `topology` derived from tablet placement: narrows
+    // left_nodes_rs / excluded_tablet_nodes to nodes still holding a replica,
+    // and rebuilds paused_requests. Yields while walking tablets.
+    future<> update_tablet_dependent_state(const locator::tablet_metadata& tablets, const gms::feature_service& features);
 
     // Returns false iff we can safely start a new topology change.
     bool is_busy() const;
