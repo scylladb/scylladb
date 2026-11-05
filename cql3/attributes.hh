@@ -14,12 +14,17 @@
 #include "cql3/expr/unset.hh"
 #include "db/timeout_clock.hh"
 
+class cql_duration;
+
 namespace qos {
 class service_level_controller;
 struct service_level_options;
 }
 
 namespace cql3 {
+
+/// Validate the common USING TIMEOUT duration constraints and convert it.
+db::timeout_clock::duration timeout_from_duration(const cql_duration& duration);
 
 class query_options;
 class prepare_context;
