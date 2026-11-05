@@ -71,7 +71,9 @@ fedora_packages=(
     compiler-rt
     libasan
     libubsan
-    gdb
+    # gdb 18.1 needs ~16GB and ~2 minutes to load a release scylla binary
+    # (17.x: ~2.6GB, ~6s), so test/scylla_gdb runs push CI hosts out of memory.
+    'gdb < 18'
     lua-devel
     yaml-cpp-devel
     jsoncpp-devel
