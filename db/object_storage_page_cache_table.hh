@@ -239,6 +239,10 @@ public:
 
     virtual future<> put_page(sstables::sstable_id sst, sstables::component_type component,
             uint64_t offset, temporary_buffer<char> data) override;
+    virtual future<> put_copied_page(sstables::sstable_id sst, sstables::component_type component,
+            uint64_t offset, temporary_buffer<char> data, std::optional<db_clock::time_point> last_hit) override;
+    virtual future<std::vector<page_hits>> get_page_hits(sstables::sstable_id sst, sstables::component_type component,
+            uint64_t from, size_t max_pages) override;
     virtual future<std::vector<page>> get_pages(sstables::sstable_id sst, sstables::component_type component,
             uint64_t from, uint64_t to, size_t max_pages, sstables::populate_disk_cache populate) override;
     virtual future<> evict_sstable(sstables::sstable_id sst) override;
@@ -286,6 +290,10 @@ private:
     // component. Never fails: a failure is only logged and counted.
     future<> write_hits(utils::UUID sstable, sstring component, std::vector<int64_t> offsets, db_clock::time_point now) noexcept;
     future<> apply(mutation m);
+    // Implements put_page() and put_copied_page(): writes the page's last
+    // hit only if one is given.
+    future<> do_put_page(sstables::sstable_id sst, sstables::component_type component,
+            uint64_t offset, temporary_buffer<char> data, std::optional<db_clock::time_point> last_hit);
     // Whether the given page's key is at the given position, or before it,
     // in the order in which the hand passes the pages.
     static bool at_or_before(const hand_position& pos, int16_t shard, utils::UUID sstable, std::string_view component, int64_t offset);

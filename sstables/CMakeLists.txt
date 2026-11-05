@@ -5,6 +5,7 @@ target_sources(sstables
     object_storage_page_cache_geometry.cc
     object_storage_page_cache_source.cc
     object_storage_page_cache_file.cc
+    object_storage_page_cache_compaction.cc
     compressor.cc
     checksummed_data_source.cc
     digest_checked_data_source.cc
