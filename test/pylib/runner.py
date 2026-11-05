@@ -869,20 +869,29 @@ class TestSuiteConfig:
 
     @cached_property
     def _run_in_specific_mode(self) -> set[str]:
-        return set(chain.from_iterable(self.cfg.get(f"run_in_{build_mode}", []) for build_mode in ALL_MODES))
+        return set(chain.from_iterable(self.cfg.get(f"run_in_{mode}", []) for mode in [*ALL_MODES, "debug_modes"]))
 
     @cache
     def disabled_tests(self, build_mode: str) -> set[str]:
         result = set(self.cfg.get("disable", []))
         result.update(self.cfg.get(f"skip_in_{build_mode}", []))
+        run_in_this_mode = set(self.cfg.get(f"run_in_{build_mode}", []))
         if build_mode in DEBUG_MODES:
             result.update(self.cfg.get("skip_in_debug_modes", []))
-        run_in_this_mode = set(self.cfg.get(f"run_in_{build_mode}", []))
+            run_in_this_mode.update(self.cfg.get("run_in_debug_modes", []))
         result.update(self._run_in_specific_mode - run_in_this_mode)
         return result
 
     def is_test_disabled(self, build_mode: str, path: pathlib.Path) -> bool:
         return str(path.relative_to(self.path).with_suffix("")) in self.disabled_tests(build_mode=build_mode)
+
+    @classmethod
+    def from_path(cls, path: pathlib.Path) -> TestSuiteConfig | None:
+        """The config of the nearest ancestor directory that has one."""
+        for directory in path.parents:
+            if (config_file := directory / TEST_CONFIG_FILENAME).is_file():
+                return cls(config_file=config_file)
+        return None
 
     @classmethod
     def from_pytest_node(cls, node: _pytest.nodes.Node) -> TestSuiteConfig | None:
@@ -903,6 +912,26 @@ class TestSuiteConfig:
                 suite.cfg['extra_scylla_cmdline_options'] = extra_cmd
             node.stash[TEST_SUITE] = suite
         return suite
+
+
+def drop_disabled_tests(args: list[str], modes: list[str]) -> list[str]:
+    """Drop ``file::test`` arguments whose file the suite config disables in
+    every requested mode.
+
+    Such a file collects nothing, which pytest accepts for a plain file
+    argument but reports as "found no collectors" (exit code 4) for a test
+    inside it.
+    """
+    kept = []
+    for arg in args:
+        strpath, sep, _ = arg.partition("::")
+        path = pathlib.Path(strpath).absolute()
+        suite = TestSuiteConfig.from_path(path) if sep else None
+        if suite and all(suite.is_test_disabled(build_mode=mode, path=path) for mode in modes):
+            print(f"skipping {arg}: disabled in {', '.join(modes)} mode", file=sys.stderr)
+            continue
+        kept.append(arg)
+    return kept
 
 
 TEST_SUITE = pytest.StashKey[TestSuiteConfig | None]()

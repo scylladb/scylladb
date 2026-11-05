@@ -8,6 +8,7 @@ Test functionality on the cluster with different values of the --smp parameter o
 """
 import logging
 import time
+from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
@@ -43,7 +44,7 @@ async def test_nodes_with_different_smp(request: FixtureRequest, manager: Scylla
     # hoping it'll help to debug it.
     # This should produce ~16M of logs per Scylla node.
     log_args = []
-    if build_mode == 'debug' and ('aarch64' in platform.processor()):
+    if build_mode in DEBUG_MODES and ('aarch64' in platform.processor()):
         log_args = [
             '--default-log-level', 'debug',
             '--logger-log-level', 'raft_group0=trace:group0_client=trace:storage_service=trace'

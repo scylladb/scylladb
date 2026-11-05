@@ -13,13 +13,6 @@ from test.cqlpy.util import cql_session
 from test.pylib.rest_client import ScyllaRESTAPIClient
 from test.scylla_gdb.conftest import execute_gdb_command
 
-pytestmark = [
-    pytest.mark.skip_mode(
-        mode=["dev", "debug", "coverage"],
-        reason="Scylla was built without debug symbols; use release mode",
-    ),
-]
-
 
 @pytest.mark.parametrize(
     "command",
