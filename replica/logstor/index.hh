@@ -145,7 +145,7 @@ using use_cache = bool_class<class use_cache_tag>;
 
 class primary_index final {
 public:
-    using partitions_type = double_decker<int64_t, primary_index_entry,
+    using tree_type = double_decker<int64_t, primary_index_entry,
                             dht::raw_token_less_comparator, primary_index_key_cmp,
                             16, bplus::key_search::linear>;
 
@@ -182,8 +182,8 @@ public:
     };
 
 private:
-    using iterator = typename partitions_type::iterator;
-    using const_iterator = typename partitions_type::const_iterator;
+    using iterator = typename tree_type::iterator;
+    using const_iterator = typename tree_type::const_iterator;
 
 public:
 
@@ -314,7 +314,7 @@ public:
 
 private:
     counting_allocation_strategy _tree_allocator{standard_allocator(), logstor_logger};
-    partitions_type _partitions;
+    tree_type _entries;
     size_t _key_count = 0;
     size_t _entries_memory_usage = 0;
     // Bytes of the records this index points at.
@@ -368,7 +368,7 @@ private:
         };
     }
 
-    future<> erase_range_gently(partitions_type::iterator begin, auto&& end_fn) {
+    future<> erase_range_gently(tree_type::iterator begin, auto&& end_fn) {
         static constexpr size_t chunk_size = 1024;
         auto dispose = make_entry_disposer();
         while (true) {
@@ -378,35 +378,35 @@ private:
             for (size_t i = 0; i < chunk_size && chunk_end != end; ++i, ++chunk_end);
 
             if (chunk_end == end) {
-                with_allocator(_tree_allocator, [&] { _partitions.erase_and_dispose(begin, chunk_end, dispose); });
+                with_allocator(_tree_allocator, [&] { _entries.erase_and_dispose(begin, chunk_end, dispose); });
                 co_return;
             }
 
             auto next_key = chunk_end->key();
-            with_allocator(_tree_allocator, [&] { _partitions.erase_and_dispose(begin, chunk_end, dispose); });
+            with_allocator(_tree_allocator, [&] { _entries.erase_and_dispose(begin, chunk_end, dispose); });
             co_await coroutine::maybe_yield();
-            begin = _partitions.lower_bound(next_key, primary_index_key_cmp{});
+            begin = _entries.lower_bound(next_key, primary_index_key_cmp{});
         }
     }
 
     auto find_key(this auto& self, const primary_index_key& key) {
-        return self._partitions.find(key, primary_index_key_cmp{});
+        return self._entries.find(key, primary_index_key_cmp{});
     }
 
-    auto position_at_range_start(this auto& self, const dht::token_range& tr) -> decltype(self._partitions.begin()) {
+    auto position_at_range_start(this auto& self, const dht::token_range& tr) -> decltype(self._entries.begin()) {
         return tr.start()
                 ? (tr.start()->is_inclusive()
-                    ? self._partitions.lower_bound(tr.start()->value().raw(), primary_index_key_cmp{})
-                    : self._partitions.upper_bound(tr.start()->value().raw(), primary_index_key_cmp{}))
-                : self._partitions.begin();
+                    ? self._entries.lower_bound(tr.start()->value().raw(), primary_index_key_cmp{})
+                    : self._entries.upper_bound(tr.start()->value().raw(), primary_index_key_cmp{}))
+                : self._entries.begin();
     }
 
-    auto position_at_range_end(this auto& self, const dht::token_range& tr) -> decltype(self._partitions.end()) {
+    auto position_at_range_end(this auto& self, const dht::token_range& tr) -> decltype(self._entries.end()) {
         return tr.end()
                 ? (tr.end()->is_inclusive()
-                    ? self._partitions.upper_bound(tr.end()->value().raw(), primary_index_key_cmp{})
-                    : self._partitions.lower_bound(tr.end()->value().raw(), primary_index_key_cmp{}))
-                : self._partitions.end();
+                    ? self._entries.upper_bound(tr.end()->value().raw(), primary_index_key_cmp{})
+                    : self._entries.lower_bound(tr.end()->value().raw(), primary_index_key_cmp{}))
+                : self._entries.end();
     }
 
     bool reads_cache() const noexcept {
@@ -418,19 +418,19 @@ private:
     }
 
     const_iterator upper_bound(dht::token token) const {
-        return _partitions.upper_bound(token.raw(), primary_index_key_cmp{});
+        return _entries.upper_bound(token.raw(), primary_index_key_cmp{});
     }
 
 public:
     explicit primary_index(space_accounting_subscriber& space_accounting, cache_tracker* ct, bool cache_enabled)
-        : _partitions(dht::raw_token_less_comparator{})
+        : _entries(dht::raw_token_less_comparator{})
         , _cache_tracker(ct)
         , _cache_enabled(cache_enabled)
         , _space_accounting(space_accounting)
         {}
 
     ~primary_index() {
-        with_allocator(_tree_allocator, [this] { _partitions.clear(); });
+        with_allocator(_tree_allocator, [this] { _entries.clear(); });
     }
 
     void set_cache_enabled(bool enabled) noexcept {
@@ -460,7 +460,7 @@ public:
     // Returns the entry of a key without a guard. Do not read from it.
     std::optional<index_entry> get(const primary_index_key& key) const {
         auto it = find_key(key);
-        if (it != _partitions.end()) {
+        if (it != _entries.end()) {
             return it->_e;
         }
         return std::nullopt;
@@ -472,7 +472,7 @@ public:
     // does not perturb its cache.
     std::optional<dump_lookup_result> lookup_for_dump(const primary_index_key& key, schema_ptr target_schema) const {
         auto it = find_key(key);
-        if (it == _partitions.end()) {
+        if (it == _entries.end()) {
             return std::nullopt;
         }
 
@@ -499,7 +499,7 @@ public:
     // so the caller compares the key of a cached partition with its own.
     std::optional<read_lookup_result> lookup_for_read(const primary_index_key& key, const schema& target_schema, use_cache uses_cache) const {
         auto it = find_key(key);
-        if (it == _partitions.end()) {
+        if (it == _entries.end()) {
             return std::nullopt;
         }
 
@@ -518,7 +518,7 @@ public:
         }
 
         auto it = find_key(key);
-        if (it == _partitions.end() || it->entry().location != read_location) {
+        if (it == _entries.end() || it->entry().location != read_location) {
             return false;
         }
 
@@ -529,7 +529,7 @@ public:
 
     bool is_record_alive(const primary_index_key& key, record_location location) const {
         auto it = find_key(key);
-        if (it != _partitions.end()) {
+        if (it != _entries.end()) {
             return it->_e.location == location;
         } else {
             return false;
@@ -538,7 +538,7 @@ public:
 
     bool update_record_location(const primary_index_key& key, record_location old_location, record_location new_location) {
         auto it = find_key(key);
-        if (it != _partitions.end()) {
+        if (it != _entries.end()) {
             if (it->_e.location == old_location) {
                 it->_e.location = new_location;
                 space_accounting_on_record_freed(old_location);
@@ -565,8 +565,8 @@ public:
 
     template <typename EntryCmp = default_entry_cmp>
     insert_outcome insert(const primary_index_key& key, index_entry new_entry, const EntryCmp& cmp = {}) {
-        partitions_type::bound_hint hint;
-        auto i = _partitions.lower_bound(key, primary_index_key_cmp{}, hint);
+        tree_type::bound_hint hint;
+        auto i = _entries.lower_bound(key, primary_index_key_cmp{}, hint);
         if (hint.match) {
             if (cmp(i->_e, new_entry) <= 0) {
                 // Overwriting with newer data: evict the stale cached partition.
@@ -584,7 +584,7 @@ public:
         }
 
         auto it = with_allocator(_tree_allocator, [&] {
-            return _partitions.emplace_before(i, key.raw_token().value, hint, key, std::move(new_entry));
+            return _entries.emplace_before(i, key.raw_token().value, hint, key, std::move(new_entry));
         });
         space_accounting_on_record_added(it->_e.location);
         on_index_entry_inserted(*it);
@@ -593,7 +593,7 @@ public:
 
     bool erase(const primary_index_key& key, record_location loc) {
         auto it = find_key(key);
-        if (it != _partitions.end() && it->_e.location == loc) {
+        if (it != _entries.end() && it->_e.location == loc) {
             with_allocator(_tree_allocator, [&] {
                 it.erase_and_dispose(dht::raw_token_less_comparator{}, make_entry_disposer());
             });
@@ -611,12 +611,12 @@ public:
 
     future<> clear() {
         co_await erase_range_gently(
-                _partitions.begin(),
-                [this] { return _partitions.end(); }
+                _entries.begin(),
+                [this] { return _entries.end(); }
             );
     }
 
-    bool empty() const noexcept { return _partitions.empty(); }
+    bool empty() const noexcept { return _entries.empty(); }
     size_t get_key_count() const noexcept { return _key_count; }
     // The entries alone, without the B+tree.
     size_t get_entries_memory_usage() const noexcept { return _entries_memory_usage; }
