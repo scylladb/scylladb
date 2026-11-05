@@ -368,27 +368,6 @@ private:
         };
     }
 
-    future<> erase_range_gently(tree_type::iterator begin, auto&& end_fn) {
-        static constexpr size_t chunk_size = 1024;
-        auto dispose = make_entry_disposer();
-        while (true) {
-            auto end = end_fn();
-
-            auto chunk_end = begin;
-            for (size_t i = 0; i < chunk_size && chunk_end != end; ++i, ++chunk_end);
-
-            if (chunk_end == end) {
-                with_allocator(_tree_allocator, [&] { _entries.erase_and_dispose(begin, chunk_end, dispose); });
-                co_return;
-            }
-
-            auto next_key = chunk_end->key();
-            with_allocator(_tree_allocator, [&] { _entries.erase_and_dispose(begin, chunk_end, dispose); });
-            co_await coroutine::maybe_yield();
-            begin = _entries.lower_bound(next_key, primary_index_key_cmp{});
-        }
-    }
-
     auto find_key(this auto& self, const primary_index_key& key) {
         return self._entries.find(key, primary_index_key_cmp{});
     }
@@ -602,18 +581,36 @@ public:
         return false;
     }
 
+    // Erases the entries of the token range a page at a time, with a yield between the pages. Each
+    // page seeks both of its ends, so that no iterator lives from one page to the next.
     future<> erase(dht::token_range tr) {
-        co_await erase_range_gently(
-                position_at_range_start(tr),
-                [this, &tr] { return position_at_range_end(tr); }
-            );
+        static constexpr size_t page_size = 1024;
+        auto dispose = make_entry_disposer();
+        std::optional<primary_index_key> next_key;
+        while (true) {
+            const bool done = with_allocator(_tree_allocator, [&] {
+                auto begin = next_key ? _entries.lower_bound(*next_key, primary_index_key_cmp{}) : position_at_range_start(tr);
+                auto end = position_at_range_end(tr);
+
+                auto page_end = begin;
+                for (size_t i = 0; i < page_size && page_end != end; ++i, ++page_end);
+
+                const bool last_page = page_end == end;
+                if (!last_page) {
+                    next_key = page_end->key();
+                }
+                _entries.erase_and_dispose(begin, page_end, dispose);
+                return last_page;
+            });
+            if (done) {
+                co_return;
+            }
+            co_await coroutine::maybe_yield();
+        }
     }
 
     future<> clear() {
-        co_await erase_range_gently(
-                _entries.begin(),
-                [this] { return _entries.end(); }
-            );
+        return erase(dht::token_range());
     }
 
     bool empty() const noexcept { return _entries.empty(); }
