@@ -45,6 +45,7 @@ namespace tests::logstor {
 struct noop_space_accounting_subscriber final : replica::logstor::space_accounting_subscriber {
     void on_add_record(replica::logstor::record_location) noexcept override {}
     void on_free_record(replica::logstor::record_location) noexcept override {}
+    void on_move_record(replica::logstor::record_location, replica::logstor::record_location) noexcept override {}
 };
 
 inline noop_space_accounting_subscriber noop_space_accounting{};
@@ -242,6 +243,7 @@ public:
 struct null_space_accounting final : replica::logstor::space_accounting_subscriber {
     void on_add_record(replica::logstor::record_location) noexcept override {}
     void on_free_record(replica::logstor::record_location) noexcept override {}
+    void on_move_record(replica::logstor::record_location, replica::logstor::record_location) noexcept override {}
 };
 
 using index_entries = std::vector<std::pair<replica::logstor::primary_index_key, replica::logstor::index_entry>>;

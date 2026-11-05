@@ -106,6 +106,7 @@ public:
     virtual ~space_accounting_subscriber() = default;
     virtual void on_add_record(record_location location) noexcept = 0;
     virtual void on_free_record(record_location location) noexcept = 0;
+    virtual void on_move_record(record_location from, record_location to) noexcept = 0;
 };
 
 }
