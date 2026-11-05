@@ -9418,16 +9418,20 @@ struct tablet_rf_env {
     }
 
     effective_replication_map_ptr make_erm(tablet_map tmap, replication_strategy_config_options options = {{"dc1", sstring("3")}, {"dc2", sstring("2")}}) {
-        auto tablet_count = tmap.tablet_count();
         stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
             // The tablet metadata loader computes the counts of the maps it installs.
             co_await tmap.update_dc_counts(tm.get_topology(), tm.tablets().datacenters());
             tm.tablets().set_tablet_map(table, std::move(tmap));
         }).get();
+        return make_installed_erm(table, std::move(options));
+    }
+
+    // Builds an erm of table_ over the tablet metadata installed in stm, as it is.
+    effective_replication_map_ptr make_installed_erm(table_id table_, replication_strategy_config_options options) {
         auto tmptr = stm.get();
-        replication_strategy_params params(options, tablet_count, std::nullopt);
+        replication_strategy_params params(options, tmptr->tablets().get_tablet_map(table_).tablet_count(), std::nullopt);
         auto rs = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
-        return rs->maybe_as_tablet_aware()->make_replication_map(table, tmptr);
+        return rs->maybe_as_tablet_aware()->make_replication_map(table_, tmptr);
     }
 
     effective_replication_map_ptr make_erm(const std::vector<host_id>& hosts, replication_strategy_config_options options = {{"dc1", sstring("3")}, {"dc2", sstring("2")}}) {
@@ -9700,6 +9704,250 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_consistency_level_block_for) {
     // dc2 goes from RF 1 to 0. h5 still takes writes, so QUORUM needs 3 of 4 acks, or the ack of
     // h5 and one dc1 replica could complete a write.
     check_write_both_read_new(env.replicas({h1, h2, h3, h5}), env.replicas({h1, h2, h3}), std::nullopt, {{"dc1", sstring("3")}, {"dc2", sstring("1")}}, 3, 4);
+}
+
+// The tablet metadata loader computes the per-datacenter replica counts: all of them on a full
+// load, and those of the changed tablets only on an incremental update.
+SEASTAR_TEST_CASE(test_tablet_dc_counts_loaded) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        tablet_rf_env env;
+        auto [h1, h2, h3, h4, h5, h6, unknown] = std::tie(env.h1, env.h2, env.h3, env.h4, env.h5, env.h6, env.unknown);
+        auto h7 = host_id(utils::UUID_gen::get_time_UUID()); // in dc3, added to the topology later
+        auto table1 = add_table(e).get();
+        auto ts = current_timestamp(e);
+        const std::vector<sstring> all_dcs = {"dc1", "dc2", "dc3"};
+
+        // Checks counts against a count of replicas over topo.
+        auto check_counts = [&] (const tablet_metadata& tm, const locator::topology& topo, const tablet_dc_counts& counts, const tablet_replica_set& replicas) {
+            std::map<sstring, size_t> expected;
+            bool expected_unknown = false;
+            for (const auto& r : replicas) {
+                if (auto* node = topo.find_node(r.host)) {
+                    ++expected[node->dc_rack().dc];
+                } else {
+                    expected_unknown = true;
+                }
+            }
+            BOOST_REQUIRE_EQUAL(counts.unknown, expected_unknown);
+            if (expected_unknown) {
+                return;
+            }
+            for (const auto& dc : all_dcs) {
+                auto i = tm.datacenters().index_of(dc);
+                BOOST_REQUIRE_EQUAL(i ? counts.at_or_zero(*i) : 0, expected[dc]);
+            }
+        };
+        auto check_all_counts = [&] (const tablet_metadata& tm, const locator::topology& topo) {
+            const auto& tmap = tm.get_tablet_map(table1);
+            BOOST_REQUIRE(!tmap.has_dirty_dc_counts());
+            for (auto tid : tmap.tablet_ids()) {
+                BOOST_TEST_CONTEXT(fmt::format("tablet {}", tid)) {
+                    check_counts(tm, topo, tmap.get_replicas_and_dc_counts_for_reading(tid).dc_counts, tmap.get_replicas_for_reading(tid));
+                    check_counts(tm, topo, tmap.get_replicas_and_dc_counts_for_writing(tid).dc_counts, tmap.get_replicas_for_writing(tid));
+                }
+            }
+        };
+
+        // In write_both_read_new tablet 1 reads from next and writes to the previous replicas.
+        // Tablet 3 has a replica whose host is not in the topology.
+        tablet_map tmap(4);
+        std::vector<dht::token> tokens;
+        for (auto tid : tmap.tablet_ids()) {
+            tokens.push_back(tmap.get_last_token(tid));
+        }
+        tmap.set_tablet(tablet_id(0), tablet_info{env.replicas({h1, h2, h5})});
+        tmap.set_tablet(tablet_id(1), tablet_info{env.replicas({h1, h2, h3})});
+        tmap.set_tablet_transition_info(tablet_id(1), tablet_transition_info{
+            tablet_transition_stage::write_both_read_new, tablet_transition_kind::rebuild_v2, env.replicas({h1, h2, h3, h5}), tablet_replica{h5, 0}});
+        tmap.set_tablet(tablet_id(2), tablet_info{env.replicas({h5, h6})});
+        tmap.set_tablet_transition_info(tablet_id(2), tablet_transition_info{
+            tablet_transition_stage::use_new, tablet_transition_kind::migration, env.replicas({h4, h6}), tablet_replica{h4, 0}});
+        tmap.set_tablet(tablet_id(3), tablet_info{env.replicas({h2, unknown, h5})});
+        {
+            tablet_metadata tm;
+            tm.set_tablet_map(table1, std::move(tmap));
+            save_tablet_metadata(e.local_db(), tm, ts++).get();
+        }
+
+        // Full load.
+        auto tmptr = env.stm.get();
+        auto tm = read_tablet_metadata(e.local_qp(), tmptr->get_topology()).get();
+        check_all_counts(tm, tmptr->get_topology());
+        BOOST_REQUIRE(!tm.datacenters().index_of("dc3"));
+        BOOST_REQUIRE(tm.get_tablet_map(table1).get_replicas_and_dc_counts_for_reading(tablet_id(3)).dc_counts.unknown);
+
+        // The per-datacenter request on the tablet with an unknown replica throws, the total does not.
+        {
+            auto tm_copy = tm.copy().get();
+            env.stm.mutate_token_metadata([&] (token_metadata& tokm) -> future<> {
+                tokm.set_tablets(std::move(tm_copy));
+                return make_ready_future<>();
+            }).get();
+            auto erm = env.make_installed_erm(table1, {{"dc1", sstring("3")}, {"dc2", sstring("2")}});
+            BOOST_REQUIRE_EQUAL(erm->get_read_replicas_with_rf(tokens[3], with_datacenters::no).rf.total, 3u);
+            BOOST_REQUIRE_EQUAL(erm->get_write_replicas_with_rf(tokens[3], with_datacenters::no).rf.total, 3u);
+            BOOST_REQUIRE_THROW(erm->get_read_replicas_with_rf(tokens[3], with_datacenters::yes), std::runtime_error);
+            BOOST_REQUIRE_THROW(erm->get_write_replicas_with_rf(tokens[3], with_datacenters::yes), std::runtime_error);
+            BOOST_REQUIRE_EQUAL(erm->get_read_replicas_with_rf(tokens[0], with_datacenters::yes).rf.dcs->local, 2u);
+        }
+
+        // The topology learns h7 in dc3 and the host of tablet 3's unknown replica.
+        env.stm.mutate_token_metadata([&] (token_metadata& tokm) -> future<> {
+            tokm.update_topology(h7, locator::endpoint_dc_rack{"dc3", "r1"}, node::state::normal, 1);
+            tokm.update_topology(unknown, locator::endpoint_dc_rack{"dc2", "r3"}, node::state::normal, 1);
+            return make_ready_future<>();
+        }).get();
+        tmptr = env.stm.get();
+
+        // Incremental update of tablet 0, which moves a replica to dc3. Only tablet 0 is counted
+        // again: tablet 3 keeps the unknown counts it was loaded with.
+        std::vector<tablet_dc_counts> counts_before;
+        for (auto tid : tm.get_tablet_map(table1).tablet_ids()) {
+            counts_before.push_back(tm.get_tablet_map(table1).get_replicas_and_dc_counts_for_reading(tid).dc_counts);
+        }
+        {
+            replica::tablet_mutation_builder builder(ts++, table1);
+            builder.set_replicas(tokens[0], env.replicas({h1, h7}));
+            auto mut = builder.build();
+            locator::tablet_metadata_change_hint hint;
+            replica::update_tablet_metadata_change_hint(hint, mut);
+            BOOST_REQUIRE(!hint.tables.at(table1).full_read);
+            e.local_db().apply(freeze(utils::chunked_vector<mutation>{mut}), db::no_timeout).get();
+            update_tablet_metadata(e.local_db(), e.local_qp(), tm, hint, tmptr->get_topology()).get();
+        }
+        {
+            const auto& tmap = tm.get_tablet_map(table1);
+            BOOST_REQUIRE(!tmap.has_dirty_dc_counts());
+            BOOST_REQUIRE(tm.datacenters().index_of("dc3"));
+            check_counts(tm, tmptr->get_topology(), tmap.get_replicas_and_dc_counts_for_reading(tablet_id(0)).dc_counts, env.replicas({h1, h7}));
+            for (size_t i = 1; i < counts_before.size(); ++i) {
+                const auto& counts = tmap.get_replicas_and_dc_counts_for_reading(tablet_id(i)).dc_counts;
+                BOOST_REQUIRE(counts == counts_before[i]);
+                BOOST_REQUIRE_EQUAL(counts.unknown, counts_before[i].unknown);
+            }
+            BOOST_REQUIRE(tmap.get_replicas_and_dc_counts_for_reading(tablet_id(3)).dc_counts.unknown);
+        }
+
+        // A full load counts tablet 3 with the new topology.
+        check_all_counts(read_tablet_metadata(e.local_qp(), tmptr->get_topology()).get(), tmptr->get_topology());
+
+        // The erm reports dc3, which got its index in the incremental update.
+        env.stm.mutate_token_metadata([&] (token_metadata& tokm) -> future<> {
+            tokm.set_tablets(std::move(tm));
+            return make_ready_future<>();
+        }).get();
+        auto erm = env.make_installed_erm(table1, {{"dc1", sstring("3")}, {"dc2", sstring("2")}, {"dc3", sstring("1")}});
+        auto rf = erm->get_read_replicas_with_rf(tokens[0], with_datacenters::yes).rf;
+        BOOST_REQUIRE_EQUAL(rf.total, 2u);
+        BOOST_REQUIRE_EQUAL(rf.dcs->local, 1u);
+        BOOST_REQUIRE_EQUAL(dc_count(*erm, rf, "dc1"), 1u);
+        BOOST_REQUIRE_EQUAL(dc_count(*erm, rf, "dc2"), 0u);
+        BOOST_REQUIRE_EQUAL(dc_count(*erm, rf, "dc3"), 1u);
+
+        // Tablet 3 keeps its unknown counts, but every host of it resolves now, so the erm
+        // counts its replicas through topology: h2 in dc1, unknown and h5 in dc2.
+        rf = erm->get_read_replicas_with_rf(tokens[3], with_datacenters::yes).rf;
+        BOOST_REQUIRE_EQUAL(rf.total, 3u);
+        BOOST_REQUIRE_EQUAL(rf.dcs->local, 1u);
+        BOOST_REQUIRE_EQUAL(dc_count(*erm, rf, "dc1"), 1u);
+        BOOST_REQUIRE_EQUAL(dc_count(*erm, rf, "dc2"), 2u);
+        BOOST_REQUIRE_EQUAL(dc_count(*erm, rf, "dc3"), 0u);
+    }, tablet_cql_test_config());
+}
+
+// A tablet map changed after update_dc_counts() fails the per-datacenter request instead of
+// returning stale counts.
+SEASTAR_THREAD_TEST_CASE(test_tablet_dc_counts_not_updated) {
+    tablet_rf_env env;
+    tablet_map tmap(1);
+    tmap.set_tablet(tmap.first_tablet(), tablet_info{env.replicas({env.h1, env.h5})});
+    env.stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        co_await tmap.update_dc_counts(tm.get_topology(), tm.tablets().datacenters());
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{env.replicas({env.h1, env.h2, env.h5})});
+        tm.tablets().set_tablet_map(env.table, std::move(tmap));
+    }).get();
+    auto erm = env.make_installed_erm(env.table, {{"dc1", sstring("3")}, {"dc2", sstring("2")}});
+    BOOST_REQUIRE_EQUAL(erm->get_read_replicas_with_rf(env.token, with_datacenters::no).rf.total, 3u);
+    BOOST_REQUIRE_EQUAL(erm->get_write_replicas_with_rf(env.token, with_datacenters::no).rf.total, 3u);
+    seastar::testing::scoped_no_abort_on_internal_error abort_guard;
+    BOOST_REQUIRE_THROW(erm->get_read_replicas_with_rf(env.token, with_datacenters::yes), std::runtime_error);
+    BOOST_REQUIRE_THROW(erm->get_write_replicas_with_rf(env.token, with_datacenters::yes), std::runtime_error);
+}
+
+// An update_dc_counts() which throws leaves the map dirty, so the tablets it did not reach are
+// recomputed by the next call instead of keeping stale counts.
+SEASTAR_THREAD_TEST_CASE(test_tablet_dc_counts_update_failure) {
+    tablet_rf_env env;
+    auto tmptr = env.stm.get();
+    const auto& topo = tmptr->get_topology();
+    tablet_dc_dictionary dcs;
+    tablet_map tmap(2);
+    auto t0 = tmap.first_tablet();
+    auto t1 = *tmap.next_tablet(t0);
+    tmap.set_tablet(t0, tablet_info{env.replicas({env.h1, env.h5})});
+    tmap.update_dc_counts(topo, dcs).get();
+    BOOST_REQUIRE(!tmap.has_dirty_dc_counts());
+
+    // More replicas in dc1 than a tablet_dc_counts entry holds: the update throws on t0, before t1.
+    tablet_replica_set too_many;
+    for (unsigned shard = 0; shard <= std::numeric_limits<uint8_t>::max(); ++shard) {
+        too_many.push_back(tablet_replica{env.h1, shard});
+    }
+    tmap.set_tablet(t0, tablet_info{std::move(too_many)});
+    tmap.set_tablet(t1, tablet_info{env.replicas({env.h2, env.h6})});
+    {
+        seastar::testing::scoped_no_abort_on_internal_error abort_guard;
+        BOOST_REQUIRE_THROW(tmap.update_dc_counts(topo, dcs).get(), std::runtime_error);
+    }
+    BOOST_REQUIRE(tmap.has_dirty_dc_counts());
+
+    // Once t0 fits, the next update counts both tablets.
+    tmap.set_tablet(t0, tablet_info{env.replicas({env.h1, env.h5})});
+    tmap.update_dc_counts(topo, dcs).get();
+    BOOST_REQUIRE(!tmap.has_dirty_dc_counts());
+    auto dc2 = dcs.index_of("dc2");
+    BOOST_REQUIRE(dc2);
+    BOOST_REQUIRE_EQUAL(tmap.get_replicas_and_dc_counts_for_reading(t1).dc_counts.at_or_zero(*dc2), 1u);
+}
+
+// A tablet with replicas in more datacenters than tablet_dc_counts holds in place keeps exact
+// counts on the heap, and the erm reads them.
+SEASTAR_THREAD_TEST_CASE(test_tablet_dc_counts_many_dcs) {
+    tablet_rf_env env;
+    // h1 in dc1 and h5 in dc2, then one host in each of dc3 to dc{last_dc}.
+    constexpr int last_dc = tablet_dc_counts::inline_dcs * 2 + 1;
+    std::vector<host_id> hosts = {env.h1, env.h5};
+    replication_strategy_config_options options = {{"dc1", sstring("1")}, {"dc2", sstring("1")}};
+    env.stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        for (int dc = 3; dc <= last_dc; ++dc) {
+            auto h = host_id(utils::UUID_gen::get_time_UUID());
+            tm.update_topology(h, locator::endpoint_dc_rack{format("dc{}", dc), "r1"}, node::state::normal, 1);
+            hosts.push_back(h);
+            options.emplace(format("dc{}", dc), sstring("1"));
+        }
+        return make_ready_future<>();
+    }).get();
+    BOOST_REQUIRE_GT(hosts.size(), tablet_dc_counts::inline_dcs);
+
+    auto erm = env.make_erm(hosts, options);
+    auto tmptr = env.stm.get();
+    const auto& tmap = tmptr->tablets().get_tablet_map(env.table);
+    const auto& counts = tmap.get_replicas_and_dc_counts_for_reading(tmap.first_tablet()).dc_counts;
+    BOOST_REQUIRE(!counts.unknown);
+    BOOST_REQUIRE_GT(counts.external_memory_usage(), 0u);
+    for (int dc = 1; dc <= last_dc; ++dc) {
+        auto i = tmptr->tablets().datacenters().index_of(format("dc{}", dc));
+        BOOST_REQUIRE(i);
+        BOOST_REQUIRE_EQUAL(counts.at_or_zero(*i), 1u);
+    }
+    for (auto rf : {erm->get_read_replicas_with_rf(env.token, with_datacenters::yes).rf,
+                    erm->get_write_replicas_with_rf(env.token, with_datacenters::yes).rf}) {
+        BOOST_REQUIRE_EQUAL(rf.total, hosts.size());
+        BOOST_REQUIRE_EQUAL(rf.dcs->local, 1u);
+        for (int dc = 1; dc <= last_dc; ++dc) {
+            BOOST_REQUIRE_EQUAL(dc_count(*erm, rf, format("dc{}", dc)), 1u);
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
