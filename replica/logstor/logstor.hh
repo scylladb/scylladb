@@ -39,6 +39,16 @@ struct logstor_config {
     size_t write_buffer_ring_size{5};
 };
 
+// Thrown when the record found at the indexed location holds a different key than the one that was looked up.
+// This can happen if the hashes of the keys collide, or on corruption.
+class key_mismatch_error : public std::runtime_error {
+public:
+    struct cache_location {};
+    using location_variant = std::variant<record_location, cache_location>;
+
+    key_mismatch_error(const partition_key& expected, const partition_key& actual, const location_variant& location);
+};
+
 class logstor {
 
     struct stats {
@@ -89,7 +99,9 @@ public:
     // mutation was frozen with.
     future<> write(const frozen_mutation&, const schema& s, write_target target, db::timeout_clock::time_point timeout) noexcept;
 
-    // Create a mutation reader for a partition range.
+    // Creates a mutation reader for a partition range.
+    // The reader fails with key_mismatch_error if the record or the cached partition at the indexed
+    // location holds a different key.
     mutation_reader make_reader(schema_ptr schema,
                                 const primary_index& index,
                                 reader_permit permit,

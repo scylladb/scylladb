@@ -26,6 +26,23 @@
 
 namespace replica::logstor {
 
+static std::string format_key_mismatch(const partition_key& expected, const partition_key& actual,
+        const key_mismatch_error::location_variant& location) {
+    return std::visit([&](auto&& loc) {
+        using T = std::decay_t<decltype(loc)>;
+        if constexpr (std::is_same_v<T, record_location>) {
+            return format("logstor: key mismatch reading log entry at {}: expected {}, got {}",
+                loc, expected, actual);
+        } else {
+            return format("logstor: key mismatch reading from cache: expected {}, got {}", expected, actual);
+        }
+    }, location);
+}
+
+key_mismatch_error::key_mismatch_error(const partition_key& expected, const partition_key& actual, const location_variant& location)
+    : std::runtime_error(format_key_mismatch(expected, actual, location))
+{ }
+
 namespace {
 
 // What the readers share: a single_row_partition going into the buffer as a partition start, its

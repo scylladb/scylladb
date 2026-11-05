@@ -603,29 +603,4 @@ public:
 
 };
 
-// Thrown when the record found at the indexed location holds a different key than the one that was looked up.
-// This can happen if the hashes of the keys collide, or on corruption.
-class key_mismatch_error : public std::runtime_error {
-public:
-    struct cache_location {};
-    using location_variant = std::variant<record_location, cache_location>;
-
-    key_mismatch_error(const partition_key& expected, const partition_key& actual, const location_variant& location)
-        : std::runtime_error(format_message(expected, actual, location))
-    { }
-
-private:
-    static std::string format_message(const partition_key& expected, const partition_key& actual, const location_variant& location) {
-        return std::visit([&](auto&& loc) {
-            using T = std::decay_t<decltype(loc)>;
-            if constexpr (std::is_same_v<T, record_location>) {
-                return format("logstor: key mismatch reading log entry at {}: expected {}, got {}",
-                    loc, expected, actual);
-            } else {
-                return format("logstor: key mismatch reading from cache: expected {}, got {}", expected, actual);
-            }
-        }, location);
-    }
-};
-
 }
