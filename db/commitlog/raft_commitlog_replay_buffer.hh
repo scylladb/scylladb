@@ -9,6 +9,7 @@
 #pragma once
 
 #include <deque>
+#include <map>
 #include <optional>
 #include <unordered_map>
 #include <seastar/core/future.hh>
@@ -80,7 +81,16 @@ class raft_commitlog_replay_buffer {
         // moved away or been dropped; everything read for it is discarded.
         bool resolved = false;
         bool known = false;
-        locator::global_tablet_id tablet{table_id{}, locator::tablet_id(0)};
+        locator::range_based_tablet_id tablet;
+        // The group's seals, from its row and from the entries replay reads, so that
+        // replay cuts the tablet's memtables where apply cut them. A seal's own entry
+        // can be gone while the data before it still has to be replayed, but then its
+        // row is flushed.
+        std::map<raft::index_t, api::timestamp_type> seals;
+        // Seals older than the promoted one need no cut any more, but this one does.
+        std::optional<raft::index_t> promoted_seal;
+        // The newest seal replay has cut the memtables at.
+        raft::index_t cut_to{0};
 
         // The running commit index and the term of the entry at it.
         raft::index_t commit_idx{0};
@@ -121,7 +131,7 @@ class raft_commitlog_replay_buffer {
     // The tablet of each raft group this shard hosts, by hosts_raft_group(). Built
     // once, on first use, by walking every tablet in the cluster's metadata; replay
     // changes no tablet.
-    std::optional<std::unordered_map<raft::group_id, locator::global_tablet_id>> _group_to_tablet;
+    std::optional<std::unordered_map<raft::group_id, locator::range_based_tablet_id>> _group_to_tablet;
 
     // Segments a replay could not read in full; see note_unreadable_segment().
     std::vector<db::segment_id_type> _unreadable_segments;
@@ -133,6 +143,8 @@ class raft_commitlog_replay_buffer {
     // Apply one committed command entry: a write to its table's memtable, a resize marker
     // or a seal to the group's row in system.raft_groups, a truncate to the tablet. A write
     // the recorded truncate dropped is skipped.
+    // Cuts the tablet's memtables at the newest seal below `idx`, unless already cut there.
+    static void cut_at_seals_before(replica::database& db, group_state& group, raft::index_t idx);
     future<> apply_committed(replica::database& db, db::system_keyspace& sys_ks,
         raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry);
 
