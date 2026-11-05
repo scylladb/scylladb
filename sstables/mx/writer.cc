@@ -735,6 +735,32 @@ private:
     void write_delta_ttl(bytes_ostream& writer, gc_clock::duration ttl) {
         sstables::mc::write_delta_ttl(writer, ttl, _enc_stats);
     }
+    // The reader rejects a TTL above max_ttl (see parse_ttl()), so never write
+    // one: clamp it to max_ttl. The write time (expiry - ttl) is kept, as
+    // tombstone GC relies on it once the cell expires, so the expiry moves
+    // earlier. Failing the write instead would fail the memtable flush, which
+    // is retried forever. Every entry point validates the TTL now, but cells
+    // with a larger one can still arrive from before that, via the commitlog,
+    // hints or streaming (SCYLLADB-6065). Only live TTLs come here; the
+    // expired-liveness sentinel of a dead row marker is written as is.
+    // The serialization header's min_ttl is the base the TTLs are encoded
+    // against. It comes from the unclamped input (the memtable's stats, or
+    // the source sstables' on compaction), so clamp it too, otherwise a
+    // clamped cell's delta is negative and goes out as a wrapped vint: still
+    // read back correctly, but 10 bytes instead of 1, with a header min_ttl
+    // the reader itself would reject.
+    static encoding_stats clamp_enc_stats_ttl(encoding_stats enc_stats) {
+        enc_stats.min_ttl = std::min(enc_stats.min_ttl, max_ttl);
+        return enc_stats;
+    }
+    std::pair<gc_clock::duration, gc_clock::time_point> clamp_ttl(gc_clock::duration ttl, gc_clock::time_point expiry) {
+        if (ttl > max_ttl) [[unlikely]] {
+            static thread_local logger::rate_limit rl(std::chrono::minutes(1));
+            sstlog.log(log_level::warn, rl, "Clamping too big ttl {} to max_ttl ({}) while writing {}", ttl.count(), max_ttl.count(), _sst.get_filename());
+            return {max_ttl, expiry - ttl + max_ttl};
+        }
+        return {ttl, expiry};
+    }
     void write_delta_local_deletion_time(bytes_ostream& writer, gc_clock::time_point ldt) {
         sstables::mc::write_delta_local_deletion_time(writer, ldt, _enc_stats);
     }
@@ -857,7 +883,7 @@ public:
         const sstable_writer_config& cfg, encoding_stats enc_stats,
         shard_id shard = this_shard_id())
         : sstable_writer::writer_impl(sst, s, cfg)
-        , _enc_stats(enc_stats)
+        , _enc_stats(clamp_enc_stats_ttl(enc_stats))
         , _shard(shard)
         , _tmp_bufs(_sst.sstable_buffer_size)
         , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
@@ -1310,6 +1336,10 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
     bool use_row_timestamp = (properties.timestamp == cell.timestamp());
     bool is_row_expiring = properties.ttl.has_value();
     bool is_cell_expiring = cell.is_live_and_has_ttl();
+    // Clamped once here, for both the data and the stats below.
+    const auto [cell_ttl, cell_expiry] = is_cell_expiring
+            ? clamp_ttl(cell.ttl(), cell.expiry())
+            : std::pair{gc_clock::duration::zero(), gc_clock::time_point()};
     bool use_row_ttl = is_row_expiring && is_cell_expiring &&
                        properties.ttl == cell.ttl() &&
                        properties.local_deletion_time == cell.deletion_time();
@@ -1339,8 +1369,8 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
         if (is_deleted) {
             write_delta_local_deletion_time(writer, cell.deletion_time());
         } else if (is_cell_expiring) {
-            write_delta_local_deletion_time(writer, cell.expiry());
-            write_delta_ttl(writer, cell.ttl());
+            write_delta_local_deletion_time(writer, cell_expiry);
+            write_delta_ttl(writer, cell_ttl);
         }
     }
 
@@ -1381,11 +1411,11 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
     _c_stats.update_timestamp(timestamp, is_live::yes);
 
     if (is_cell_expiring) {
-        _c_stats.update_ttl(cell.ttl());
+        _c_stats.update_ttl(cell_ttl);
         // tombstone histogram is updated with expiration time because if ttl is longer
         // than gc_grace_seconds for all data, sstable will be considered fully expired
         // when actually nothing is expired.
-        _c_stats.update_local_deletion_time_and_tombstone_histogram(cell.expiry());
+        _c_stats.update_local_deletion_time_and_tombstone_histogram(cell_expiry);
     } else { // regular live cell
         _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
     }
@@ -1415,7 +1445,8 @@ void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker
     if (!marker.is_live()) {
         write_expiring_liveness_info(gc_clock::duration(expired_liveness_ttl), marker.deletion_time());
     } else if (marker.is_expiring()) {
-        write_expiring_liveness_info(marker.ttl(), marker.expiry());
+        auto [ttl, expiry] = clamp_ttl(marker.ttl(), marker.expiry());
+        write_expiring_liveness_info(ttl, expiry);
     } else {
         _c_stats.update_ttl(0);
         _c_stats.update_local_deletion_time(std::numeric_limits<int32_t>::max());
