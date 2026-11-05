@@ -104,6 +104,9 @@ class raft_commitlog_replay_buffer {
         // The last truncate the group applied, as the row recorded it; replay drops the
         // entries at or below its index and applies the truncate_commands above it.
         service::strong_consistency::truncate_record truncate;
+        // Replay's last write to the group's row at this node's clock, starting from the
+        // row's newest one, so that replay's writes win after a clock step back.
+        api::timestamp_type row_timestamp = api::min_timestamp;
 
         uint64_t applied = 0;
         uint64_t dropped_truncated = 0;
@@ -131,8 +134,8 @@ class raft_commitlog_replay_buffer {
         raft::group_id group_id, group_state& group);
 
     // Apply one committed command entry: a write to its table's memtable, a resize marker
-    // to the group's row in system.raft_groups, a truncate to the tablet. A write the
-    // recorded truncate dropped is skipped.
+    // or a seal to the group's row in system.raft_groups, a truncate to the tablet. A write
+    // the recorded truncate dropped is skipped.
     future<> apply_committed(replica::database& db, db::system_keyspace& sys_ks,
         raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry);
 

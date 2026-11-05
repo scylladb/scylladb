@@ -184,6 +184,7 @@ future<> raft_commitlog_replay_buffer::resolve_group(replica::database& db, cql3
     // entry's apply returns, so if it is here, the drop it is the receipt for happened,
     // and if it is not, no entry after the truncate was applied.
     group.truncate = persisted.truncate;
+    group.row_timestamp = persisted.row_timestamp;
     for (const auto& truncation : group.truncations) {
         group.cursors[truncation.segment].push_back(raft_buffer_detail::truncation_cursor{
                 .from = truncation.from, .to = truncation.to, .next = truncation.from});
@@ -219,6 +220,14 @@ future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db
         // Goes to the group's row, not the tablet, so a truncate above it drops nothing of it.
         logger.debug("group {}: replaying the {} marker", group_id, marker->kind);
         auto m = sc::make_resize_marker_mutation(group_id, this_shard_id(), *marker);
+        co_await db.apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
+        co_return;
+    }
+    if (auto* s = std::get_if<sc::seal_command>(&cmd.change)) {
+        // Also the group's row: a seal below the truncate was recorded before it ran.
+        logger.debug("group {}: replaying the seal at {}", group_id, entry->idx);
+        group.row_timestamp = std::max(api::new_timestamp(), group.row_timestamp + 1);
+        auto m = sc::make_seal_mutation(group_id, this_shard_id(), {.idx = entry->idx, .ts = s->timestamp}, group.row_timestamp);
         co_await db.apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
         co_return;
     }
