@@ -45,6 +45,7 @@ mutation make_resize_marker_mutation(raft::group_id gid, shard_id shard, const r
 
 class state_machine : public raft_state_machine {
     locator::global_tablet_id _tablet;
+    dht::token_range _range;
     raft::group_id _group_id;
     replica::database& _db;
     service::migration_manager& _mm;
@@ -57,6 +58,7 @@ class state_machine : public raft_state_machine {
 
 public:
     state_machine(locator::global_tablet_id tablet,
+        dht::token_range range,
         raft::group_id gid,
         replica::database& db,
         service::migration_manager& mm,
@@ -65,6 +67,7 @@ public:
         raft_resize_tracker& resize_tracker,
         lw_shared_ptr<state_machine_stats> stats)
         : _tablet(tablet)
+        , _range(std::move(range))
         , _group_id(gid)
         , _db(db)
         , _mm(mm)
@@ -84,6 +87,22 @@ public:
         if (!command.empty()) {
             _persistence.note_applied(command.back()->idx);
         }
+    }
+
+    future<> apply_seal(raft_seal s) {
+        // Applied again after a restart. The row is written at this node's clock, so
+        // the seal must be skipped, not written over its promotion.
+        if (const auto& promoted = _persistence.promoted_seal(); promoted && s.idx <= promoted->idx) {
+            co_return;
+        }
+        // Once the row is written, add_seal() must not fail, or the row would
+        // hold a seal that memory misses.
+        _persistence.reserve_seal();
+        _db.find_column_family(_tablet.table).rotate_memtables(_range);
+        auto m = make_seal_mutation(_group_id, this_shard_id(), s, _persistence.next_row_timestamp());
+        co_await _db.apply_in_memory(m, m.schema()->table(),
+                _persistence.pin_raft_groups_for_apply(s.idx), db::no_timeout);
+        _persistence.add_seal(s);
     }
 
     future<> apply(raft::log_entry_ptr_list command) override {
@@ -127,6 +146,13 @@ public:
                     // reported applied only below, once the record is durable, so its
                     // segment outlives the record's sync and a crash replays the entry.
                     co_await apply_truncate_command(_db, _tablet, _group_id, command[i]->idx, *tc, record);
+                    _persistence.note_applied(command[i]->idx);
+                    continue;
+                }
+                if (const auto* s = std::get_if<seal_command>(&cmd.change)) {
+                    logger.log(log_level::trace, rate_limit, "apply(): applying the seal of group {} at {}",
+                        _group_id, command[i]->idx);
+                    co_await apply_seal(raft_seal{.idx = command[i]->idx, .ts = s->timestamp});
                     _persistence.note_applied(command[i]->idx);
                     continue;
                 }
@@ -321,6 +347,7 @@ future<schema_ptr> schema_store::resolve_and_upgrade(frozen_mutation& m) {
 }
 
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
+    dht::token_range range,
     raft::group_id gid,
     replica::database& db,
     service::migration_manager& mm,
@@ -329,7 +356,7 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     raft_resize_tracker& resize_tracker,
     lw_shared_ptr<state_machine_stats> stats)
 {
-    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, resize_tracker, std::move(stats));
+    return std::make_unique<state_machine>(tablet, std::move(range), gid, db, mm, sys_ks, persistence, resize_tracker, std::move(stats));
 }
 
 future<> apply_truncate_command(replica::database& db, locator::global_tablet_id tablet, raft::group_id gid,

@@ -32,8 +32,12 @@ struct truncate_command {
     utils::UUID request_id;
 };
 
+struct seal_command {
+    api::timestamp_type timestamp;
+};
+
 struct raft_command {
-    std::variant<service::strong_consistency::resize_marker, service::strong_consistency::write_mutation, service::strong_consistency::truncate_command> change;
+    std::variant<service::strong_consistency::resize_marker, service::strong_consistency::write_mutation, service::strong_consistency::truncate_command, service::strong_consistency::seal_command> change;
 };
 
 } // namespace strong_consistency

@@ -2025,6 +2025,7 @@ SEASTAR_TEST_CASE(test_groups_dropped_table_batch_is_reported_as_applied) {
         service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
         auto state_machine = service::strong_consistency::make_state_machine(
                 locator::global_tablet_id{.table = schema->id(), .tablet = locator::tablet_id(0)},
+                dht::token_range::make_open_ended_both_sides(),
                 gid, env.local_db(), env.migration_manager().local(),
                 env.get_system_keyspace().local(), storage, resize_tracker,
                 make_lw_shared<service::strong_consistency::state_machine_stats>());

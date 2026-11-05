@@ -183,6 +183,10 @@ public:
     // adding the same seal twice keeps one copy and a promoted seal stays out. Only in
     // memory: make_seal_mutation() writes the row.
     void add_seal(raft_seal seal);
+    // Makes room for one more seal, so that the next add_seal() does not allocate.
+    void reserve_seal() {
+        _seals.reserve(_seals.size() + 1);
+    }
     // Removes the seal and every older one. Only in memory:
     // make_remove_seals_mutation() writes the row.
     void remove_seals(const raft_seal& seal);

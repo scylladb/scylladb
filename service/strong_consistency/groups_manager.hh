@@ -199,6 +199,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
+        dht::token_range range,
         raft::group_id group_id,
         locator::token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,

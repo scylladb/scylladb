@@ -27,6 +27,8 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
+#include "sstables/sstables.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "utils/UUID_gen.hh"
@@ -2609,7 +2611,7 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
 
                 service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
                 auto state_machine = service::strong_consistency::make_state_machine(
-                        locator::global_tablet_id{schema->id(), locator::tablet_id(0)}, gid, db,
+                        locator::global_tablet_id{schema->id(), locator::tablet_id(0)}, dht::token_range::make_open_ended_both_sides(), gid, db,
                         env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
                         make_lw_shared<service::strong_consistency::state_machine_stats>());
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
@@ -2799,7 +2801,7 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
                 // The tablet's state machine, with no raft server around it.
                 service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
                 auto state_machine = service::strong_consistency::make_state_machine(
-                        locator::global_tablet_id{table, locator::tablet_id(0)}, gid, db,
+                        locator::global_tablet_id{table, locator::tablet_id(0)}, dht::token_range::make_open_ended_both_sides(), gid, db,
                         env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
                         make_lw_shared<service::strong_consistency::state_machine_stats>());
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
@@ -2807,6 +2809,105 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
                 const auto writes_before = db.get_stats().total_writes;
                 state_machine->apply(entries).get();
                 BOOST_REQUIRE_EQUAL(db.get_stats().total_writes - writes_before, 3);
+            });
+        });
+    }, std::move(db_cfg_ptr));
+}
+
+// An entry writing partition `pk` of `s`, with timestamp `ts`.
+static raft::log_entry_ptr make_write_entry(const schema_ptr& s, raft::index_t idx, int pk, api::timestamp_type ts) {
+    mutation m(s, partition_key::from_singular(*s, pk));
+    m.set_cell(clustering_key::make_empty(), "c", data_value(pk), ts);
+    raft::command cmd;
+    ser::serialize(cmd, service::strong_consistency::raft_command{
+            .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
+    return make_lw_shared<raft::log_entry>(raft::log_entry{.term = raft::term_t(1), .idx = idx, .data = std::move(cmd)});
+}
+
+static raft::log_entry_ptr make_seal_entry(raft::index_t idx, api::timestamp_type ts) {
+    raft::command cmd;
+    ser::serialize(cmd, service::strong_consistency::raft_command{
+            .change = service::strong_consistency::seal_command{.timestamp = ts}});
+    return make_lw_shared<raft::log_entry>(raft::log_entry{.term = raft::term_t(1), .idx = idx, .data = std::move(cmd)});
+}
+
+// Writes at timestamp 1 at indexes 1 and 2, a seal at timestamp 2 at index 3, and a
+// write at timestamp 3 at index 4.
+static raft::log_entry_ptr_list make_entries_around_a_seal(const schema_ptr& s) {
+    return {
+        make_write_entry(s, raft::index_t(1), 1, 1),
+        make_write_entry(s, raft::index_t(2), 2, 1),
+        make_seal_entry(raft::index_t(3), 2),
+        make_write_entry(s, raft::index_t(4), 3, 3),
+    };
+}
+
+// Checks, on the shard of the tablet, that once the table is flushed, the data written
+// at timestamps 1 and 3 is cut at a seal with timestamp 2.
+static void check_cut_at_the_seal(replica::database& db, table_id table) {
+    const auto ssts = db.find_column_family(table).get_sstables();
+    for (const auto& sst : *ssts) {
+        const auto& stats = sst->get_stats_metadata();
+        BOOST_REQUIRE(stats.max_timestamp < 2 || stats.min_timestamp > 2);
+    }
+    BOOST_REQUIRE_EQUAL(ssts->size(), 2);
+}
+
+// Checks, on the shard of the tablet, that the group's row holds just the seal at
+// index 3 with timestamp 2.
+static void check_seal_in_the_row(cql_test_env& env, raft::group_id gid) {
+    const auto rows = env.local_qp().execute_internal(
+            format("SELECT seals FROM system.{} WHERE shard = ? AND group_id = ?", db::system_keyspace::RAFT_GROUPS),
+            {int16_t(this_shard_id()), gid.id}, cql3::query_processor::cache_internal::no).get();
+    BOOST_REQUIRE(!rows->empty());
+    const auto seals = rows->one().get_map<int64_t, int64_t>("seals");
+    BOOST_REQUIRE(seals == (std::unordered_map<int64_t, int64_t>{{3, 2}}));
+}
+
+// Test that applying a seal cuts the tablet's data at the seal and records the seal.
+SEASTAR_TEST_CASE(test_apply_cuts_the_tablet_at_a_seal) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+
+    return do_with_cql_env([] (cql_test_env& env) -> future<> {
+        co_await env.get_storage_service().local().set_tablet_balancing_enabled(false);
+        co_await env.execute_cql("CREATE KEYSPACE test_ks WITH replication = {'class': 'NetworkTopologyStrategy', "
+                "'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'");
+        co_await env.execute_cql("CREATE TABLE test_ks.tbl (pk int PRIMARY KEY, c int) "
+                "WITH compaction = {'class': 'NullCompactionStrategy'}");
+
+        const auto table = env.local_db().find_schema("test_ks", "tbl")->id();
+        const auto& replicas = env.local_token_metadata_ptr()->tablets()
+                .get_tablet_map(table)
+                .get_tablet_info(locator::tablet_id(0))
+                .replicas;
+        BOOST_REQUIRE_EQUAL(replicas.size(), 1);
+
+        co_await env.db().invoke_on(replicas.front().shard, [&env, table] (replica::database& db) {
+            return seastar::async([&env, &db, table] {
+                const auto entries = make_entries_around_a_seal(db.find_schema(table));
+                const auto gid = make_group_id();
+                service::strong_consistency::raft_groups_storage storage(
+                        env.qp().local(), db, gid, raft::server_id::create_random_id(),
+                        this_shard_id(), *db.commitlog(), table,
+                        service::strong_consistency::replayed_data_per_group{});
+                auto stop_storage = defer([&] noexcept { storage.abort().get(); });
+                storage.store_log_entries(entries).get();
+
+                service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                auto state_machine = service::strong_consistency::make_state_machine(
+                        locator::global_tablet_id{table, locator::tablet_id(0)}, dht::token_range::make_open_ended_both_sides(), gid, db,
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
+                        make_lw_shared<service::strong_consistency::state_machine_stats>());
+                auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
+
+                state_machine->apply(entries).get();
+                BOOST_REQUIRE(storage.seals() == (std::vector<service::strong_consistency::raft_seal>{
+                        {.idx = raft::index_t(3), .ts = 2}}));
+
+                replica::database::flush_table_on_all_shards(env.db(), table).get();
+                check_cut_at_the_seal(db, table);
+                check_seal_in_the_row(env, gid);
             });
         });
     }, std::move(db_cfg_ptr));
