@@ -154,6 +154,13 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
         shared_future<> server_control_op = make_ready_future<>();
 
+        // The priority members of the raft server; refreshed by update().
+        std::vector<raft::server_id> priority_members;
+
+        std::vector<raft::server_id> effective_priority_members() const {
+            return priority_members;
+        }
+
         // Populated only when this node thinks it's a tablet raft group leader.
         std::optional<leader_info> leader_info = std::nullopt;
         condition_variable leader_info_cond = condition_variable();
@@ -200,7 +207,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         locator::token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,
         lw_shared_ptr<raft_rpc::stats> rpc_stats,
-        lw_shared_ptr<state_machine_stats> apply_stats);
+        lw_shared_ptr<state_machine_stats> apply_stats,
+        std::vector<raft::server_id> priority_members);
 
     // Creates them if the table does not have any yet.
     table_metrics& get_table_metrics(const schema& s);

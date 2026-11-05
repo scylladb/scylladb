@@ -84,6 +84,27 @@ static dht::token_range token_range_of_group(const tablet_map& tablet_map, table
             *tablet_map.get_token_range(second.value_or(first)).end_copy());
 }
 
+// The replicas of the tablet in its keyspace's preferred rack - at most one, since a
+// rack list places one replica per rack - or none if the keyspace has no preferred rack.
+static std::vector<raft::server_id> preferred_leaders(const std::map<sstring, sstring>& preferred_rack,
+        const locator::tablet_replica_set& replicas, const locator::topology& topo) {
+    std::vector<raft::server_id> preferred;
+    if (preferred_rack.empty()) {
+        return preferred;
+    }
+    for (const auto& replica : replicas) {
+        const auto* node = topo.find_node(replica.host);
+        if (!node) {
+            continue;
+        }
+        const auto it = preferred_rack.find(node->dc());
+        if (it != preferred_rack.end() && it->second == node->rack()) {
+            preferred.push_back(to_server_id(replica.host));
+        }
+    }
+    return preferred;
+}
+
 class groups_manager::rpc_impl: public service::raft_rpc {
 public:
     rpc_impl(raft_state_machine& sm, netw::messaging_service& ms,
@@ -207,7 +228,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,
         lw_shared_ptr<raft_rpc::stats> rpc_stats,
-        lw_shared_ptr<state_machine_stats> apply_stats)
+        lw_shared_ptr<state_machine_stats> apply_stats,
+        std::vector<raft::server_id> priority_members)
 {
     const auto my_id = to_server_id(tm->get_my_id());
     const auto this_replica = locator::tablet_replica{
@@ -314,7 +336,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // groups pick different replicas instead of all electing the
         // smallest-id node (which would concentrate load on one node when a
         // table starts with many tablets).
-        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
+        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id),
+        .priority_members = std::move(priority_members)
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config, std::move(server_stats));
@@ -1015,14 +1038,18 @@ void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::gr
             m = metrics.weak_from_this(), server_stats = metrics.server_stats(),
             rpc_stats = metrics.rpc_stats(), apply_stats = metrics.apply_stats()] () mutable -> future<> {
         co_await start_raft_group(tablet, id, std::move(tm), std::move(server_stats), std::move(rpc_stats),
-            std::move(apply_stats));
+                std::move(apply_stats), state.effective_priority_members());
         state.server = &_raft_gr.get_server(id);
+        // update() may have changed the list while the server was starting.
+        state.server->set_priority_members(state.effective_priority_members());
         state.metrics = std::move(m);
         if (state.metrics) {
             state.metrics->add_server(*state.server);
         }
         state.leader_info_updater = leader_info_updater(state, tablet.table, id, range);
         co_await wait_for_first_leader(tablet, id, state, *g);
+        // Nor could update() push the list while the server was waiting for a leader.
+        state.server->set_priority_members(state.effective_priority_members());
 
         // If a restart is already queued behind us, the group isn't started yet; that
         // start will unlink the state.
@@ -1093,6 +1120,13 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             raft::group_id id;
             std::optional<raft::group_id> parent_id;
         };
+        std::map<sstring, sstring> preferred_rack;
+        if (table) {
+            const auto& keyspaces = _db.get_keyspaces();
+            if (const auto ks = keyspaces.find(table->schema()->ks_name()); ks != keyspaces.end()) {
+                preferred_rack = ks->second->metadata()->preferred_rack();
+            }
+        }
         std::vector<tablet_group_info> tablet_groups;
         for (const auto& tid: tablet_map.tablet_ids()) {
             const auto id = tablet_map.get_tablet_raft_info(tid).group_id;
@@ -1132,6 +1166,21 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
             auto& state = _raft_groups[id];
             state.has_tablet = true;
+            // A child of a resize has no preference until the resize is finalized. During a
+            // migration, the replica leaving the preferred rack is about to lose its vote, so the
+            // pending one is preferred; Raft skips it until it becomes a voter.
+            const auto* trinfo = tablet_map.get_tablet_transition_info(tid);
+            auto priority_members = parent_id
+                    ? std::vector<raft::server_id>{}
+                    : preferred_leaders(preferred_rack, trinfo ? trinfo->next : tablet_map.get_tablet_info(tid).replicas,
+                            new_tm->get_topology());
+            if (priority_members != state.priority_members) {
+                state.priority_members = std::move(priority_members);
+                // A server which is still starting gets the list once it has started.
+                if (auto srv = state.gate ? try_acquire_server(state) : std::nullopt) {
+                    srv->server().set_priority_members(state.effective_priority_members());
+                }
+            }
             // Start the server, unless it is started or starting already and not being
             // deleted.
             if (!state.gate || state.gate->is_closed()) {
