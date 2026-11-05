@@ -9735,6 +9735,16 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_consistency_level_block_for) {
                                 exceptions::unavailable_exception, exception_predicate::message_contains("no datacenter the keyspace replicates to"));
     }
 
+    // EACH_QUORUM on a keyspace with replication factor 0 everywhere is unavailable too, and the error
+    // names the replication factor rather than an RF change.
+    {
+        auto erm = env.make_erm({h5, h6}, {{"dc1", sstring("0")}, {"dc2", sstring("0")}});
+        auto rf = write_rf(*erm);
+        BOOST_REQUIRE_EQUAL(db::block_for(*erm, cl::EACH_QUORUM, rf), 0u);
+        BOOST_REQUIRE_EXCEPTION(db::assure_sufficient_live_nodes(cl::EACH_QUORUM, *erm, host_id_vector_replica_set{h5, h6}, rf),
+                                exceptions::unavailable_exception, exception_predicate::message_contains("with replication factor 0"));
+    }
+
     // LOCAL_* on a tablet with no replica in the local dc1: the error names the RF change
     // when the schema replicates to dc1, and RF 0 when the schema does not.
     for (auto [options, msg] : {std::pair<replication_strategy_config_options, sstring>{{{"dc1", sstring("3")}, {"dc2", sstring("2")}}, "while the keyspace replication factor changes"},
