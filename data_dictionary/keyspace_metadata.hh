@@ -52,6 +52,8 @@ class keyspace_metadata final {
     // The current configs therefore have to be carried here: without them, any unrelated
     // keyspace DDL would rewrite the row and wipe the stored options.
     std::map<sstring, sstring> _config_options;
+    // Datacenter -> rack whose replicas are preferred as strong consistency Raft group leaders.
+    std::map<sstring, sstring> _preferred_rack;
 public:
     keyspace_metadata(std::string_view name,
                  std::string_view strategy_name,
@@ -63,7 +65,8 @@ public:
                  user_types_metadata user_types = user_types_metadata{},
                  storage_options storage_opts = storage_options{},
                  std::optional<locator::replication_strategy_config_options> next_options = std::nullopt,
-                 std::map<sstring, sstring> config_options = {});
+                 std::map<sstring, sstring> config_options = {},
+                 std::map<sstring, sstring> preferred_rack = {});
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(std::string_view name,
                  std::string_view strategy_name,
@@ -74,7 +77,8 @@ public:
                  storage_options storage_opts = {},
                  std::vector<schema_ptr> cf_defs = {},
                  std::optional<locator::replication_strategy_config_options> next_options = std::nullopt,
-                 std::map<sstring, sstring> config_options = {});
+                 std::map<sstring, sstring> config_options = {},
+                 std::map<sstring, sstring> preferred_rack = {});
     static lw_shared_ptr<keyspace_metadata>
     new_keyspace(const keyspace_metadata& ksm);
     void validate(const gms::feature_service&, const locator::topology&) const;
@@ -129,6 +133,9 @@ public:
     }
     void set_config_options(std::map<sstring, sstring> config_options) {
         _config_options = std::move(config_options);
+    }
+    const std::map<sstring, sstring>& preferred_rack() const noexcept {
+        return _preferred_rack;
     }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() {
         return _storage_options;
