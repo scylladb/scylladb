@@ -101,6 +101,7 @@ class stream_sstable_meta {
     int32_t version;
     int32_t format;
     sstables::sstable_state state;
+    std::optional<sstables::run_id> run_identifier [[version 2027.1]];
 };
 
 class stream_blob_meta {

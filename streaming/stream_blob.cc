@@ -56,9 +56,11 @@ static sstables::sstable_state sstable_state(const streaming::stream_blob_meta& 
     return meta.sstable_state.value_or(sstables::sstable_state::normal);
 }
 
-static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::database& db, db::view::view_building_worker& vbw, table_id id, sstables::sstable_state state, sstables::entry_descriptor desc, seastar::shard_id shard) {
+// `run_identifier` is the run identifier the sstable is known by on the source replica, if it sent one.
+static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::database& db, db::view::view_building_worker& vbw, table_id id, sstables::sstable_state state, sstables::entry_descriptor desc,
+        std::optional<sstables::run_id> run_identifier, seastar::shard_id shard) {
     auto& sharded_vbw = vbw.container();
-    co_await db.container().invoke_on(shard, [&sharded_vbw, id, desc, state, ops_id] (replica::database& db) -> future<> {
+    co_await db.container().invoke_on(shard, [&sharded_vbw, id, desc, state, run_identifier, ops_id] (replica::database& db) -> future<> {
         replica::table& t = db.find_column_family(id);
         // The guard has to be taken in the same continuation as the lookup: `t` is a bare
         // reference that nothing pins, and a concurrent DROP destroys the table across the
@@ -76,6 +78,12 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
         // registry entry — the registry entry is still in "creating" state at this point,
         // as left by clone() on the caller side.
         co_await sst->load(sharder, cfg);
+        // The source may know the sstable by a run identifier which isn't on disk yet, e.g. if its
+        // run was spliced. Taking it over makes spliced runs arrive spliced, so that compaction never
+        // sees them unspliced. The sstable isn't in any sstable set yet, so it can be changed.
+        if (run_identifier) {
+            sst->set_in_memory_run_identifier(*run_identifier);
+        }
         auto on_add = [sst, &sstm] (sstables::shared_sstable loading_sst) -> future<> {
             if (loading_sst == sst) {
                 auto cfg = sstm.configure_writer(sst->get_origin());
@@ -495,7 +503,8 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
                         blogger.debug("stream_sstables[{}] Loading sstable {} on shard {}", meta.ops_id, sst->toc_filename(), meta.dst_shard_id);
                         auto desc = sst->get_descriptor(sstables::component_type::TOC);
                         sst = {};
-                        co_await load_sstable_for_tablet(meta.ops_id, db, vbw, meta.table, sstable_state(meta), std::move(desc), meta.dst_shard_id);
+                        auto run_identifier = meta.sstable_meta ? meta.sstable_meta->run_identifier : std::nullopt;
+                        co_await load_sstable_for_tablet(meta.ops_id, db, vbw, meta.table, sstable_state(meta), std::move(desc), run_identifier, meta.dst_shard_id);
                     }
                 },
                 std::move(out)
@@ -858,6 +867,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
                     clone_req.sstable_meta.version = static_cast<int32_t>(sst->get_version());
                     clone_req.sstable_meta.format = static_cast<int32_t>(sst->get_format());
                     clone_req.sstable_meta.state = sst_state;
+                    clone_req.sstable_meta.run_identifier = sst->run_identifier();
                     clone_req.dst_shard_id = target.shard;
                     clone_req.topo_guard = req.topo_guard;
 
@@ -880,7 +890,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
 
                     auto& info = files.emplace_back();
                     info.fops = file_ops::stream_sstables;
-                    info.sstable_meta = stream_sstable_meta{*sst_id, sst->generation().as_uuid(), static_cast<int32_t>(sst->get_version()), static_cast<int32_t>(sst->get_format()), sst_state};
+                    info.sstable_meta = stream_sstable_meta{*sst_id, sst->generation().as_uuid(), static_cast<int32_t>(sst->get_version()), static_cast<int32_t>(sst->get_format()), sst_state, sst->run_identifier()};
                     info.filename = std::move(newname);
                     info.source = [s = std::move(s)](const file_input_stream_options& options) {
                         return s->input(options);
@@ -973,7 +983,7 @@ future<stream_files_response> clone_sstable_handler(replica::database& db, db::v
     auto desc = co_await orig_sst->clone(new_gen, /*leave_unsealed=*/true, /*may_use_reference_sharing=*/use_reference_sharing);
     blogger.debug("stream_sstables[{}] Cloned {} -> {} on destination using {}", req.ops_id, generation, new_gen,
         use_reference_sharing ? "reference sharing" : "server-side copy");
-    co_await load_sstable_for_tablet(req.ops_id, db, vbw, req.table, state, std::move(desc), req.dst_shard_id);
+    co_await load_sstable_for_tablet(req.ops_id, db, vbw, req.table, state, std::move(desc), meta.run_identifier, req.dst_shard_id);
     co_return resp;
 }
 

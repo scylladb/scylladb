@@ -858,3 +858,43 @@ async def test_ics_runs_are_spliced_after_merge(manager: ScyllaClusterManager, s
         await reconnect_driver(manager)
         assert len(await log.grep(f'Spliced .* of {ks}.test', from_mark=mark)) == 1
         assert await get_pending_compactions(manager, server, ks) == 0
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("intranode", [False, True])
+async def test_ics_runs_spliced_in_memory_are_migrated_spliced(manager: ScyllaClusterManager, storage_config: FeatureConfig, intranode: bool):
+    """
+    The runs of a merged tablet are spliced in memory, while the run identifiers on disk stay
+    as they were. A migrated tablet must arrive with its runs spliced, since compaction on the
+    destination would otherwise compact them together.
+    With intranode, the tablet is migrated to another shard of the same node, which clones its
+    sstables instead of streaming them.
+    """
+    cfg = storage_config.get_cluster_cfg({'enable_tablets': True, 'tablet_load_stats_refresh_interval_in_seconds': 1})
+    cmdline = ['--smp', '2' if intranode else '1', '--logger-log-level', 'table=debug']
+    src = await manager.server_add(cmdline=cmdline, config=cfg)
+    await manager.disable_tablet_balancing()
+
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await create_table_with_two_ics_runs(manager, src, ks)
+        src_log = await manager.server_open_log(src.server_id)
+        src_mark = await src_log.mark()
+        await merge_tablets(manager, src, ks)
+        await src_log.wait_for(f'Spliced .* of {ks}.test', from_mark=src_mark)
+        assert await get_pending_compactions(manager, src, ks) == 0
+
+        tablet = (await get_all_tablet_replicas(manager, src, ks, 'test'))[0]
+        src_host_id, src_shard = tablet.replicas[0]
+        if intranode:
+            dst = src
+            dst_host_id, dst_shard = src_host_id, 1 - src_shard
+        else:
+            dst = await manager.server_add(cmdline=cmdline, config=cfg)
+            # Would hide unspliced runs on the destination by compacting them.
+            await manager.api.disable_autocompaction(dst.ip_addr, ks, 'test')
+            dst_host_id, dst_shard = await manager.get_host_id(dst.server_id), 0
+        await manager.api.move_tablet(src.ip_addr, ks, 'test', src_host_id, src_shard, dst_host_id, dst_shard, tablet.last_token)
+
+        assert await get_pending_compactions(manager, dst, ks) == 0

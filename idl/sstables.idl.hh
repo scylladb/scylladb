@@ -21,4 +21,8 @@ class sstable_id final {
     utils::UUID uuid();
 };
 
+class run_id final {
+    utils::UUID uuid();
+};
+
 }

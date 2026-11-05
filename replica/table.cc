@@ -1824,9 +1824,9 @@ future<std::unique_ptr<logstor::segment_stream_sink>> table::create_logstor_segm
     return get_logstor_segment_manager().create_segment_output_stream(db);
 }
 
-future<utils::chunked_vector<sstables::entry_descriptor>>
+future<utils::chunked_vector<table::cloned_sstable>>
 table::clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed) {
-    utils::chunked_vector<sstables::entry_descriptor> ret;
+    utils::chunked_vector<cloned_sstable> ret;
     auto holder = async_gate().hold();
 
     // In the internode migration path the handler runs on all shards via
@@ -1846,7 +1846,10 @@ table::clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed) {
     auto deletion_guard = co_await get_sstable_list_permit();
     const bool may_use_reference_sharing = _sstables_manager.get_features().sstable_reference_sharing;
     co_await sg.make_sstable_set()->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) -> future<> {
-        ret.push_back(co_await sst->clone(calculate_generation_for_new_table(), leave_unsealed, may_use_reference_sharing));
+        ret.push_back(cloned_sstable{
+            .desc = co_await sst->clone(calculate_generation_for_new_table(), leave_unsealed, may_use_reference_sharing),
+            .run_identifier = sst->run_identifier(),
+        });
     });
     co_return ret;
 }

@@ -23,6 +23,7 @@
 #include "locator/host_id.hh"
 #include "service/topology_guard.hh"
 #include "sstables/open_info.hh"
+#include "sstables/types_fwd.hh"
 
 #include <fmt/core.h>
 #include <fmt/ostream.h>
@@ -96,6 +97,9 @@ struct stream_sstable_meta {
     int32_t version; // serialized sstables::sstable_version_types
     int32_t format; // serialized sstables::sstable_format_types
     sstables::sstable_state state;
+    // The run identifier the sstable is known by in memory on the source. It can differ from the
+    // one stored on disk, e.g. if its run was spliced. Not sent by older versions.
+    std::optional<sstables::run_id> run_identifier;
 };
 
 class stream_blob_meta {

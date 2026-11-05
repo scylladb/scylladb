@@ -1555,10 +1555,18 @@ public:
     future<utils::chunked_vector<logstor::segment_snapshot>> take_logstor_snapshot(dht::token_range tr);
     future<std::unique_ptr<logstor::segment_stream_sink>> create_logstor_segment_sink(replica::database&);
 
+    // An sstable cloned by clone_tablet_storage().
+    struct cloned_sstable {
+        sstables::entry_descriptor desc;
+        // The run identifier the original sstable is known by in memory. It can differ from the
+        // one stored on disk, e.g. if its run was spliced.
+        sstables::run_id run_identifier;
+    };
+
     // Clones storage of a given tablet. Memtable is flushed first to guarantee that the
     // snapshot (list of sstables) will include all the data written up to the time it was taken.
     // If leave_unsealead is set, all the destination sstables will be left unsealed.
-    future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed);
+    future<utils::chunked_vector<cloned_sstable>> clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed);
 
     tombstone_gc_state get_tombstone_gc_state() const;
 

@@ -5506,15 +5506,16 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
     // cause problems if unsplit sstables are found after split was ACKed to coordinator.
     bool leave_unsealed = true;
 
-    auto d = co_await smp::submit_to(leaving.shard, [this, tablet, leave_unsealed] () -> future<utils::chunked_vector<sstables::entry_descriptor>> {
+    auto d = co_await smp::submit_to(leaving.shard, [this, tablet, leave_unsealed] () -> future<utils::chunked_vector<replica::table::cloned_sstable>> {
         auto& table = _db.local().find_column_family(tablet.table);
         auto op = table.stream_in_progress();
         co_return co_await table.clone_tablet_storage(tablet.tablet, leave_unsealed);
     });
     rtlogger.debug("Cloned storage of tablet {} from leaving replica {}, {} sstables were found", tablet, leaving, d.size());
 
-    auto load_sstable = [leave_unsealed] (const dht::sharder& sharder, replica::table& t, sstables::entry_descriptor d) -> future<sstables::shared_sstable> {
+    auto load_sstable = [leave_unsealed] (const dht::sharder& sharder, replica::table& t, replica::table::cloned_sstable cloned) -> future<sstables::shared_sstable> {
         auto& mng = t.get_sstables_manager();
+        auto& d = cloned.desc;
         auto sst = mng.make_sstable(t.schema(), t.get_storage_options(), d.generation, d.sid, d.state.value_or(sstables::sstable_state::normal),
                                     d.version, d.format, db_clock::now(), default_io_error_handler_gen());
         // The loader will consider current shard as sstable owner, despite the tablet sharder
@@ -5524,6 +5525,11 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
         auto cfg = sstables::sstable_open_config{ .current_shard_as_sstable_owner = true,
                                                   .unsealed_sstable = leave_unsealed };
         co_await sst->load(sharder, cfg);
+        // The leaving replica may know the sstable by a run identifier which isn't on disk yet,
+        // e.g. if its run was spliced. Taking it over makes spliced runs arrive spliced, so that
+        // compaction never sees them unspliced. The sstable isn't in any sstable set yet, so it
+        // can be changed.
+        sst->set_in_memory_run_identifier(cloned.run_identifier);
         co_return sst;
     };
 
