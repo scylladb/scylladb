@@ -431,6 +431,26 @@ future<> repair_reader::close() noexcept {
     _reader_handle.reset();
 }
 
+bool repair_reader::track_partition(const mutation_fragment& mf) {
+    if (mf.is_partition_start()) {
+        auto& start = mf.as_partition_start();
+        set_current_dk(start.key());
+        // Ignore partition_start with empty partition tombstone
+        return bool(start.partition_tombstone());
+    }
+    if (mf.is_end_of_partition()) {
+        clear_current_dk();
+        return false;
+    }
+    return true;
+}
+
+repair_row make_repair_row_from_disk(
+        const lw_shared_ptr<const decorated_key_with_hash>& dk, repair_hasher& hasher, const schema& s, const mutation_fragment& mf) {
+    auto hash = hasher.do_hash_for_mf(*dk, mf);
+    return repair_row(freeze(s, mf), position_in_partition(mf.position()), dk, hash, is_dirty_on_master::no);
+}
+
 void repair_reader::set_current_dk(const dht::decorated_key& key) {
     _current_dk = make_lw_shared<const decorated_key_with_hash>(*_schema, key, _seed);
 }
@@ -1309,19 +1329,10 @@ private:
     }
 
     void handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
-        if (mf.is_partition_start()) {
-            auto& start = mf.as_partition_start();
-            _repair_reader->set_current_dk(start.key());
-            if (!start.partition_tombstone()) {
-                // Ignore partition_start with empty partition tombstone
-                return;
-            }
-        } else if (mf.is_end_of_partition()) {
-            _repair_reader->clear_current_dk();
+        if (!_repair_reader->track_partition(mf)) {
             return;
         }
-        auto hash = _repair_hasher.do_hash_for_mf(*_repair_reader->get_current_dk(), mf);
-        repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader->get_current_dk(), hash, is_dirty_on_master::no);
+        repair_row r = make_repair_row_from_disk(_repair_reader->get_current_dk(), _repair_hasher, *_schema, mf);
         rlogger.trace("Reading: r.boundary={{ {}, {} }}, r.hash={}", r.get_dk_with_hash()->dk, r.position(), r.hash());
         auto sz = r.size();
         _metrics.row_from_disk_nr++;
