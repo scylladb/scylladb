@@ -905,6 +905,80 @@ async def test_compaction_evicts_compacted_sstables(manager: ScyllaClusterManage
         assert scan(cql, ks) == data
 
 
+async def write_two_sstables(manager: ScyllaClusterManager, server, ks, table_options=''):
+    '''Creates the table ks.test with two sstables - the second overwriting
+    some of the rows of the first - which automatic compaction doesn't
+    replace, and returns the data.'''
+    data = await create_table(manager, server, ks, table_options)
+    await manager.api.disable_autocompaction(server.ip_addr, ks)
+    cql = manager.get_cql()
+    update = cql.prepare(f'UPDATE {ks}.test SET v = ? WHERE p = ?')
+    for p in range(0, 400, 10):
+        data[p] = f'updated {p}'
+        await cql.run_async(update, [data[p], p])
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+    return data
+
+
+async def test_compaction_keeps_cached_data(manager: ScyllaClusterManager, s3_storage):
+    '''When compaction rewrites sstables whose data was cached, it copies to
+    the cache the pages of the sstable it writes which hold that data, so the
+    data stays cached after the compacted sstables, and their pages, are
+    deleted - and only that data: compaction copies only a few pages. The
+    copied pages have the last hit of the pages which they were copied from.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await write_two_sstables(manager, server, ks)
+        # Read a row twice: the first read caches its pages, and the second
+        # records their hits.
+        for _ in range(2):
+            await manager.api.drop_sstable_caches(server.ip_addr)
+            assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+        hits = await settled(lambda: page_hits(cql))
+        latest_data_hit = max(hit for (_, component, _), hit in hits.items() if component == 'Data' and hit)
+        compacted = cached_sstables(cql)
+
+        copies_before = await page_cache_metric(manager, server, 'compaction_copies')
+        await manager.api.keyspace_compaction(server.ip_addr, ks)
+        await wait_for_eviction(cql, compacted)
+        copied_data_pages = cached_data_pages(cql)
+        # Check that compaction copied some Data pages - those which hold the
+        # row which was cached - but only a few of the sstable's pages.
+        assert 0 < len(copied_data_pages) <= 4
+        assert await page_cache_metric(manager, server, 'compaction_copies') - copies_before >= len(copied_data_pages)
+        # Check that the latest hit of the compacted Data pages is now the
+        # latest hit of the copied pages.
+        hits = page_hits(cql)
+        assert max(hit for (_, component, _), hit in hits.items() if component == 'Data' and hit) == latest_data_hit
+        # Check that reading the row again reads its data from the cache, so
+        # it caches no other Data page.
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert cql.execute(f'SELECT v FROM {ks}.test WHERE p = 17').one().v == data[17]
+        assert sorted(cached_data_pages(cql)) == sorted(copied_data_pages)
+        assert scan(cql, ks) == data
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_compaction_cache_errors(manager: ScyllaClusterManager, s3_storage):
+    '''A failure to find which data of the compacted sstables was cached
+    doesn't fail the compaction, which then copies nothing to the cache.'''
+    server = await manager.server_add(config=page_cache_config(s3_storage))
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
+        data = await write_two_sstables(manager, server, ks)
+        await manager.api.drop_sstable_caches(server.ip_addr)
+        assert scan(cql, ks) == data
+        compacted = cached_sstables(cql)
+        await manager.api.enable_injection(server.ip_addr, 'object_storage_page_cache_get_page_hits', one_shot=False)
+        await manager.api.keyspace_compaction(server.ip_addr, ks)
+        await manager.api.disable_injection(server.ip_addr, 'object_storage_page_cache_get_page_hits')
+        await wait_for_eviction(cql, compacted)
+        assert cached_pages(cql) == []
+        assert await page_cache_metric(manager, server, 'errors', {'operation': 'compaction'}) > 0
+        assert scan(cql, ks) == data
+
+
 async def test_drop_table_evicts_its_sstables(manager: ScyllaClusterManager, s3_storage):
     '''Dropping a table evicts the cached pages of all its sstables from the
     page cache - but not the cached pages of another table.'''

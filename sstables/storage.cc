@@ -28,6 +28,7 @@
 #include "db/extensions.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/object_storage_client.hh"
+#include "sstables/object_storage_page_cache_compaction.hh"
 #include "sstables/object_storage_page_cache_file.hh"
 #include "sstables/object_storage_page_cache_geometry.hh"
 #include "sstables/object_storage_page_cache_source.hh"
@@ -1072,7 +1073,13 @@ future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, com
         || type == component_type::Rows
         || type == component_type::Partitions);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
-    return maybe_wrap_sink(sst, type, make_data_upload_sink(make_object_name(sst, type), object_storage_attributes{}, std::nullopt));
+    auto sink = make_data_upload_sink(make_object_name(sst, type), object_storage_attributes{}, std::nullopt);
+    if (caches_pages()) {
+        // A compaction's output may copy pages to the cache, as they are
+        // stored - so below the file I/O extensions.
+        sink = maybe_make_page_cache_compaction_sink(sst, type, std::move(sink));
+    }
+    return maybe_wrap_sink(sst, type, std::move(sink));
 }
 
 // A source of the byte range [offset, offset + len) of an sstable component's

@@ -238,6 +238,11 @@ with `BYPASS CACHE` neither reads nor populates. Reading pages which are already
 in the object storage page cache is never worse than reading them from the
 object store.
 
+When compaction rewrites SSTables, the data which was cached in them stays
+cached: compaction copies to the cache the pages of the SSTables it writes
+which hold data that was cached in the SSTables it compacts - so writes, which
+cause compactions, don't make the cache lose the data which reads need.
+
 SSTables of the old `ka` and `la` formats, which ScyllaDB no longer writes -
 only loading old SSTables can bring them to such a keyspace - are read without
 the cache: it doesn't support these formats.
