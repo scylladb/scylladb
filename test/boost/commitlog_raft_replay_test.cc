@@ -2610,7 +2610,8 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
                 service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
                 auto state_machine = service::strong_consistency::make_state_machine(
                         locator::global_tablet_id{schema->id(), locator::tablet_id(0)}, gid, db,
-                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker);
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
+                        make_lw_shared<service::strong_consistency::state_machine_stats>());
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 // Abort the apply after the pin is taken and before the entry reaches a memtable.
@@ -2799,7 +2800,8 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
                 service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
                 auto state_machine = service::strong_consistency::make_state_machine(
                         locator::global_tablet_id{table, locator::tablet_id(0)}, gid, db,
-                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker);
+                        env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
+                        make_lw_shared<service::strong_consistency::state_machine_stats>());
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 const auto writes_before = db.get_stats().total_writes;

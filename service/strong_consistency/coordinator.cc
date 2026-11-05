@@ -529,7 +529,20 @@ auto coordinator::mutate(schema_ptr schema,
 
     utils::latency_counter lc;
     lc.start();
-    auto mark_write_latency = defer([this, &lc] noexcept { get_stats().write.mark(lc.stop().latency()); });
+    lw_shared_ptr<table_request_stats> table_stats;
+    auto mark_write_latency = defer([this, &lc, &table_stats] noexcept {
+        const auto latency = lc.stop().latency();
+        get_stats().write.mark(latency);
+        if (table_stats) {
+            table_stats->write_latency.add(latency);
+        }
+    });
+    auto count_error = [this, &table_stats] (auto increment) {
+        increment(get_stats());
+        if (table_stats) {
+            increment(*table_stats);
+        }
+    };
     ++get_stats().foreground_writes;
     auto end_foreground_write = defer([this] noexcept { --get_stats().foreground_writes; });
 
@@ -575,13 +588,13 @@ auto coordinator::mutate(schema_ptr schema,
             }
             logger.debug("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
-            ++get_stats().write_errors_timeout;
+            count_error([] (auto& s) { ++s.write_errors_timeout; });
             return std::make_exception_ptr(write_timeout(schema->ks_name(), schema->cf_name()));
         } else if (try_catch<raft::commit_status_unknown>(ex)) {
             logger.debug("mutate(): add_entry, got commit_status_unknown {}, table {}.{}, {}",
                 ex, schema->ks_name(), schema->cf_name(), state_fmt);
 
-            ++get_stats().write_errors_status_unknown;
+            count_error([] (auto& s) { ++s.write_errors_status_unknown; });
             // FIXME: use a dedicated ERROR_CODE instead of SERVER_ERROR
             return std::make_exception_ptr(exceptions::server_exception(
                 "The outcome of this statement is unknown. It may or may not have been applied. "
@@ -597,11 +610,11 @@ auto coordinator::mutate(schema_ptr schema,
         } else if (auto* too_big = try_catch<raft::command_is_too_big_error>(ex)) {
             logger.trace("mutate(): command of {} bytes exceeds the limit of {}, table {}.{}, token {}",
                 too_big->command_size, too_big->limit, schema->ks_name(), schema->cf_name(), token);
-            ++get_stats().write_errors_other;
+            count_error([] (auto& s) { ++s.write_errors_other; });
             return std::make_exception_ptr(exceptions::invalid_request_exception(fmt::format(
                 "Strongly consistent write of {} bytes exceeds the limit of {} bytes", too_big->command_size, too_big->limit)));
         } else {
-            ++get_stats().write_errors_other;
+            count_error([] (auto& s) { ++s.write_errors_other; });
             logger.debug("mutate(): unknown exception {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
@@ -624,6 +637,7 @@ auto coordinator::mutate(schema_ptr schema,
         co_return std::move(*redirect);
     }
     op = &get<operation_ctx>(op_result);
+    table_stats = op->raft_server.table_stats();
 
     while (true) {
         // `disposition` below is local to one iteration, so the pointer into
@@ -773,9 +787,21 @@ auto coordinator::query(schema_ptr schema,
     utils::latency_counter lc;
     lc.start();
 
-    auto& read_stats = (rtype == read_type::linearizable)
-        ? get_stats().linearizable_read : get_stats().non_linearizable_read;
-    auto mark_read_latency = defer([&read_stats, &lc] () mutable noexcept { read_stats.mark(lc.stop().latency()); });
+    lw_shared_ptr<table_request_stats> table_stats;
+    auto mark_read_latency = defer([this, &lc, &table_stats, rtype] noexcept {
+        const auto latency = lc.stop().latency();
+        const bool linearizable = rtype == read_type::linearizable;
+        (linearizable ? get_stats().linearizable_read : get_stats().non_linearizable_read).mark(latency);
+        if (table_stats) {
+            (linearizable ? table_stats->linearizable_read_latency : table_stats->non_linearizable_read_latency).add(latency);
+        }
+    });
+    auto count_error = [this, &table_stats] (auto increment) {
+        increment(get_stats());
+        if (table_stats) {
+            increment(*table_stats);
+        }
+    };
     ++get_stats().foreground_reads;
     auto end_foreground_read = defer([this] noexcept { --get_stats().foreground_reads; });
 
@@ -805,7 +831,7 @@ auto coordinator::query(schema_ptr schema,
             }
             logger.debug("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
-            ++get_stats().read_errors_timeout;
+            count_error([] (auto& s) { ++s.read_errors_timeout; });
             return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name()));
         } else if (try_catch<exceptions::unavailable_exception>(ex)) {
             logger.trace("query(): no live replica, table {}.{}, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
@@ -818,7 +844,7 @@ auto coordinator::query(schema_ptr schema,
         } else {
             logger.debug("query(): unknown exception {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
-            ++get_stats().read_errors_other;
+            count_error([] (auto& s) { ++s.read_errors_other; });
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
             return ex;
         }
@@ -843,6 +869,7 @@ auto coordinator::query(schema_ptr schema,
         co_return std::move(*redirect);
     }
     auto& op = get<operation_ctx>(op_result);
+    table_stats = op.raft_server.table_stats();
 
     if (rtype == read_type::linearizable) {
         // For linearizable reads we may need to forward to the raft leader.

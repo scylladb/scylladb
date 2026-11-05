@@ -23,6 +23,7 @@
 #include "schema/schema_registry.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
 #include "service/strong_consistency/raft_resize_tracker.hh"
+#include "utils/latency.hh"
 
 using namespace std::chrono_literals;
 
@@ -50,6 +51,7 @@ class state_machine : public raft_state_machine {
     db::system_keyspace& _sys_ks;
     raft_groups_storage& _persistence;
     raft_resize_tracker& _resize_tracker;
+    lw_shared_ptr<state_machine_stats> _stats;
 
     abort_source _as;
 
@@ -60,7 +62,8 @@ public:
         service::migration_manager& mm,
         db::system_keyspace& sys_ks,
         raft_groups_storage& persistence,
-        raft_resize_tracker& resize_tracker)
+        raft_resize_tracker& resize_tracker,
+        lw_shared_ptr<state_machine_stats> stats)
         : _tablet(tablet)
         , _group_id(gid)
         , _db(db)
@@ -68,6 +71,7 @@ public:
         , _sys_ks(sys_ks)
         , _persistence(persistence)
         , _resize_tracker(resize_tracker)
+        , _stats(std::move(stats))
     {
     }
 
@@ -91,6 +95,7 @@ public:
             // One store for the whole batch, so that commands written with the same
             // schema version resolve their schema only once.
             schema_store schemas(_db, _sys_ks, [this]() -> future<> {
+                ++_stats->schema_barrier_waits;
                 if (utils::get_local_injector().enter("disable_raft_drop_append_entries_for_specified_group")) {
                     utils::get_local_injector().disable("raft_drop_incoming_append_entries_for_specified_group");
                 }
@@ -101,6 +106,8 @@ public:
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
             for (size_t i = 0; i < command.size(); ++i) {
+                utils::latency_counter lc;
+                lc.start();
                 auto cmd = detail::deserialize_raft_command(command[i]);
                 if (const auto* marker = std::get_if<resize_marker>(&cmd.change)) {
                     logger.log(log_level::trace, rate_limit, "apply(): applying the {} marker of group {}",
@@ -132,6 +139,7 @@ public:
                     throw;
                 }
                 ++_db.get_stats().total_writes;
+                _stats->apply_latency.add(lc.stop().latency());
                 _persistence.note_applied(command[i]->idx);
             }
         } catch (replica::no_such_column_family&) {
@@ -308,9 +316,10 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     service::migration_manager& mm,
     db::system_keyspace& sys_ks,
     raft_groups_storage& persistence,
-    raft_resize_tracker& resize_tracker)
+    raft_resize_tracker& resize_tracker,
+    lw_shared_ptr<state_machine_stats> stats)
 {
-    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, resize_tracker);
+    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, resize_tracker, std::move(stats));
 }
 
 namespace detail {
