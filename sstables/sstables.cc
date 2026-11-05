@@ -1735,6 +1735,15 @@ void sstable::set_scrub_time(db_clock::time_point scrub_time) {
     metadata->set_scrub_time(scrub_time);
 }
 
+void sstable::set_run_identifier(run_id identifier) {
+    auto& metadata = _components->scylla_metadata;
+    if (!has_scylla_component() || !metadata) {
+        on_internal_error(sstlog, fmt::format("Cannot set run identifier for sstable {}, missing scylla-metadata component", shared_from_this()));
+    }
+    metadata->set_run_identifier(identifier);
+    _run_identifier = identifier;
+}
+
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
     const stats_metadata& old_stats = get_stats_metadata();
     auto old_repaired_at = old_stats.repaired_at;
@@ -1768,11 +1777,12 @@ bool sstable::should_update_repaired_at(int64_t repaired_at) const {
 // 4. Read the Scylla, Compression, Filter and Summary components from disk
 //    - This is done in order to have a deep copy of in-memory components, not just a shallow-copy of the _components pointer.
 //    - Reading the Scylla component form disk ensures we have the latest on-disk metadata (not potentially modified in-memory state)
-// 5. Apply the modifier function to the new SSTable's components
-// 6. If update_sstable_id is true, update the Scylla metadata's sstable identifier to a new value
-// 7. Write the component with updated Scylla metadata
+// 5. Give the new SSTable the run identifier the source SSTable is known by in memory
+// 6. Apply the modifier function to the new SSTable's components
+// 7. If update_sstable_id is true, update the Scylla metadata's sstable identifier to a new value
+// 8. Write the component with updated Scylla metadata
 //    - Uses write_component_with_metadata() which handles digest calculation and metadata updates
-// 8. Finalize the new SSTable
+// 9. Finalize the new SSTable
 //    - Copy sharding information, seal the SSTable, and open data files
 future<shared_sstable> sstable::link_with_rewritten_component(std::function<shared_sstable(shared_sstable)> sstable_creator,
         component_type component,
@@ -1870,6 +1880,12 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         parallel_for_each(excluded_components, coroutine::lambda([this, new_sst] (component_type type) -> future<> {
             new_sst->_metadata_size_on_disk -= co_await component_filesize(type);
         })).get();
+
+        // The rewritten sstable replaces this one in its run, so it takes over the run identifier
+        // this one is known by. That one can differ from the one stored on disk, e.g. if the sstable
+        // set generated a new one because the stored one overlapped with another sstable of its run.
+        // The modifier may still change it.
+        new_sst->set_run_identifier(_run_identifier);
 
         new_sst->write_component_with_metadata_and_modifier(component, std::move(modifier));
 

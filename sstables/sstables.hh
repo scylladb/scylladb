@@ -1100,6 +1100,12 @@ public:
         _run_identifier = run_id::create_random_id();
     }
 
+    // Changes the run identifier both in memory and in the Scylla metadata, so it's persisted
+    // once the Scylla component is written, e.g. by a modifier of link_with_rewritten_component().
+    // Sstable sets index their sstables by run identifier, so this must not be called on an
+    // sstable which is in a set.
+    void set_run_identifier(run_id identifier);
+
     // Changes the run identifier in memory only. The Scylla metadata keeps the one stored on disk.
     // Sstable sets index their sstables by run identifier. So once this is called, the sstable
     // must not be inserted into or erased from a set which already holds it.

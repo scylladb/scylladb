@@ -743,6 +743,9 @@ struct scylla_metadata {
         auto* m = data.get<scylla_metadata_type::RunIdentifier, run_identifier>();
         return m ? std::make_optional(m->id) : std::nullopt;
     }
+    void set_run_identifier(run_id id) {
+        data.set<scylla_metadata_type::RunIdentifier>(run_identifier{id});
+    }
     const ext_timestamp_stats* get_ext_timestamp_stats() const {
         return data.get<scylla_metadata_type::ExtTimestampStats, ext_timestamp_stats>();
     }
