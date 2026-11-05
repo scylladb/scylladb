@@ -365,6 +365,16 @@ uint64_t object_storage_page_cache_table::limit() const noexcept {
 
 future<> object_storage_page_cache_table::put_page(sstables::sstable_id sst, sstables::component_type component,
         uint64_t offset, temporary_buffer<char> data) {
+    return do_put_page(sst, component, offset, std::move(data), std::nullopt);
+}
+
+future<> object_storage_page_cache_table::put_copied_page(sstables::sstable_id sst, sstables::component_type component,
+        uint64_t offset, temporary_buffer<char> data, std::optional<db_clock::time_point> last_hit) {
+    return do_put_page(sst, component, offset, std::move(data), last_hit);
+}
+
+future<> object_storage_page_cache_table::do_put_page(sstables::sstable_id sst, sstables::component_type component,
+        uint64_t offset, temporary_buffer<char> data, std::optional<db_clock::time_point> last_hit) {
     utils::get_local_injector().inject("object_storage_page_cache_put_page", [] {
         throw std::runtime_error("object_storage_page_cache_put_page: injected error");
     });
@@ -387,7 +397,7 @@ future<> object_storage_page_cache_table::put_page(sstables::sstable_id sst, sst
     // while a page without a hits row would stay until its sstable is
     // deleted. Not writing last_hit means that a page which is cached again
     // keeps its last hit.
-    co_await apply(hits_mutation(this_shard(), sst.uuid(), component_name, int64_t(offset), int32_t(data.size()), std::nullopt));
+    co_await apply(hits_mutation(this_shard(), sst.uuid(), component_name, int64_t(offset), int32_t(data.size()), last_hit));
     co_await utils::get_local_injector().inject("object_storage_page_cache_put_page_between_writes",
             utils::wait_for_message(std::chrono::minutes(5)), false);
     co_await apply(page_mutation(this_shard(), sst.uuid(), component_name, int64_t(offset),
@@ -396,7 +406,7 @@ future<> object_storage_page_cache_table::put_page(sstables::sstable_id sst, sst
     // The page may have been evicted and cached again, so its next hit must
     // be recorded.
     _hit_in_pass.erase(page_key{sst.uuid(), component, offset});
-    count_written_page(this_shard(), sst.uuid(), component_name, int64_t(offset), int32_t(data.size()), std::nullopt);
+    count_written_page(this_shard(), sst.uuid(), component_name, int64_t(offset), int32_t(data.size()), last_hit);
     // A page which was already cached is counted twice, until the bytes are
     // recounted.
     _bytes += data.size();
@@ -404,6 +414,28 @@ future<> object_storage_page_cache_table::put_page(sstables::sstable_id sst, sst
     if (limit() && _bytes > limit()) {
         _eviction_needed.signal();
     }
+}
+
+// Reads the rows of an sstable's component in the given table of the cache,
+// whose offsets are in [from, to), but at most max_rows of them - directly
+// from the table, with a permit of a semaphore which never makes it wait (see
+// get_pages()).
+static future<query::result_set> query_component(replica::database& db, std::string_view table_name, sstables::sstable_id sst,
+        const sstring& component_name, uint64_t from, uint64_t to, size_t max_rows, const char* op_name) {
+    auto& table = db.find_column_family(object_storage_page_cache_table::SYSTEM_CACHE, table_name);
+    auto s = table.schema();
+    auto key = dht::decorate_key(*s, cache_partition_key(*s, this_shard(), sst.uuid()));
+    auto cmd = query::read_command(s->id(), s->version(),
+            partition_slice_builder(*s).with_range(query::clustering_range::make(
+                    {cache_clustering_key(*s, component_name, int64_t(from)), true},
+                    {cache_clustering_key(*s, component_name, int64_t(to)), false})).build(),
+            query::max_result_size(query::result_memory_limiter::unlimited_result_size), query::tombstone_limit::max,
+            query::row_limit(max_rows));
+    auto ranges = dht::partition_range_vector{dht::partition_range::make_singular(key)};
+    auto permit = db.object_storage_page_cache_semaphore().make_tracking_only_permit(s, op_name, db::no_timeout, {});
+    auto result = co_await table.query(s, std::move(permit), cmd, query::result_options::only_result(), ranges, {},
+            db.get_result_memory_limiter(), db::no_timeout);
+    co_return query::result_set::from_raw_result(s, cmd.slice, *result);
 }
 
 future<std::vector<sstables::object_storage_page_cache::page>>
@@ -433,22 +465,9 @@ object_storage_page_cache_table::get_pages(sstables::sstable_id sst, sstables::c
     // memory is bounded anyway, by max_pages, and the read's own permit
     // tracks the pages which the read keeps (see
     // make_data_or_index_source()).
-    auto& db = _qp.proxy().local_db();
-    auto& table = db.find_column_family(SYSTEM_CACHE, PAGECACHE);
-    auto s = table.schema();
-    auto key = dht::decorate_key(*s, cache_partition_key(*s, this_shard(), sst.uuid()));
     auto component_name = fmt::to_string(component);
-    auto cmd = query::read_command(s->id(), s->version(),
-            partition_slice_builder(*s).with_range(query::clustering_range::make(
-                    {cache_clustering_key(*s, component_name, int64_t(from)), true},
-                    {cache_clustering_key(*s, component_name, int64_t(to)), false})).build(),
-            query::max_result_size(query::result_memory_limiter::unlimited_result_size), query::tombstone_limit::max,
-            query::row_limit(max_pages));
-    auto ranges = dht::partition_range_vector{dht::partition_range::make_singular(key)};
-    auto permit = db.object_storage_page_cache_semaphore().make_tracking_only_permit(s, "object_storage_page_cache_get_pages", db::no_timeout, {});
-    auto result = co_await table.query(s, std::move(permit), cmd, query::result_options::only_result(), ranges, {},
-            db.get_result_memory_limiter(), db::no_timeout);
-    auto rs = query::result_set::from_raw_result(s, cmd.slice, *result);
+    auto rs = co_await query_component(_qp.proxy().local_db(), PAGECACHE, sst, component_name, from, to, max_pages,
+            "object_storage_page_cache_get_pages");
     std::vector<page> pages;
     pages.reserve(rs.rows().size());
     for (const auto& row : rs.rows()) {
@@ -505,6 +524,28 @@ object_storage_page_cache_table::get_pages(sstables::sstable_id sst, sstables::c
         }
     }
     co_return pages;
+}
+
+future<std::vector<sstables::object_storage_page_cache::page_hits>>
+object_storage_page_cache_table::get_page_hits(sstables::sstable_id sst, sstables::component_type component,
+        uint64_t from, size_t max_pages) {
+    utils::get_local_injector().inject("object_storage_page_cache_get_page_hits", [] {
+        throw std::runtime_error("object_storage_page_cache_get_page_hits: injected error");
+    });
+    // Read directly from the table, like get_pages(): compaction asks for
+    // the hits of its input sstables while it reads them, holding its permit.
+    auto rs = co_await query_component(_qp.proxy().local_db(), PAGECACHE_HITS, sst, fmt::to_string(component),
+            from, std::numeric_limits<int64_t>::max(), max_pages, "object_storage_page_cache_get_page_hits");
+    std::vector<page_hits> ret;
+    ret.reserve(rs.rows().size());
+    for (const auto& row : rs.rows()) {
+        ret.push_back(page_hits{
+            .offset = uint64_t(row.get_nonnull<int64_t>("offset")),
+            .size = uint64_t(std::max(0, row.get<int32_t>("size").value_or(0))),
+            .last_hit = row.get<db_clock::time_point>("last_hit"),
+        });
+    }
+    co_return ret;
 }
 
 future<> object_storage_page_cache_table::write_hits(utils::UUID sstable, sstring component, std::vector<int64_t> offsets,
@@ -810,6 +851,12 @@ void object_storage_page_cache_table::register_metrics() {
                 sm::description("Index files of sstables which use the object storage page cache, duplicated for resharding, which read without it"), {reason("dup")}),
         sm::make_counter("page_cache_bypasses", [this] { return _stats.transform_bypasses; },
                 sm::description("Reads of sstables which use the object storage page cache, transformed by a file I/O extension in a way which prevents it"), {reason("transform")}),
+        sm::make_counter("page_cache_compaction_copies", [this] { return _stats.compaction_copied_pages; },
+                sm::description("Pages which compaction wrote and copied to the object storage page cache, because their data was cached in its input sstables")),
+        sm::make_counter("page_cache_compaction_copied_bytes", [this] { return _stats.compaction_copied_bytes; },
+                sm::description("Bytes of the pages which compaction wrote and copied to the object storage page cache")),
+        sm::make_counter("page_cache_errors", [this] { return _stats.compaction_errors; },
+                sm::description("Failures of compaction to find which data of its input sstables was in the object storage page cache, or to copy pages to it"), {operation("compaction")}),
     });
 }
 

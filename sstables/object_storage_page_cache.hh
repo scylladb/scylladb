@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <unordered_set>
 #include <vector>
 #include <seastar/core/future.hh>
@@ -24,6 +25,7 @@
 #include "sstables/object_storage_page_cache_stats.hh"
 #include "sstables/types.hh"
 #include "sstables/types_fwd.hh"
+#include "db_clock.hh"
 #include "seastarx.hh"
 
 namespace sstables {
@@ -53,6 +55,15 @@ public:
         temporary_buffer<char> data;
     };
 
+    // A cached page's offset and size, and when it was last hit (nothing if
+    // it was never hit since it was cached). A size of 0 means that the page
+    // isn't cached after all: its hit was recorded after it was evicted.
+    struct page_hits {
+        uint64_t offset;
+        uint64_t size;
+        std::optional<db_clock::time_point> last_hit;
+    };
+
     virtual ~object_storage_page_cache() = default;
 
     // Caches a page of the sstable's component, which starts at the given
@@ -60,6 +71,21 @@ public:
     // a page doesn't count as a hit of it (see get_pages()).
     virtual future<> put_page(sstable_id sst, component_type component,
             uint64_t offset, temporary_buffer<char> data) = 0;
+
+    // Like put_page(), but for a page which compaction wrote with the data
+    // of pages that were cached (see object_storage_page_cache_compaction.hh):
+    // the page gets the last hit of those pages, so it is evicted when they
+    // would have been.
+    virtual future<> put_copied_page(sstable_id sst, component_type component,
+            uint64_t offset, temporary_buffer<char> data, std::optional<db_clock::time_point> last_hit) = 0;
+
+    // Returns which pages of the sstable's component are cached, and when
+    // they were last hit: those whose start offset is at least "from", in
+    // offset order - but at most max_pages of them, so fewer than max_pages
+    // means that there are no more. Unlike get_pages(), it doesn't read the
+    // pages themselves, and never records hits.
+    virtual future<std::vector<page_hits>> get_page_hits(sstable_id sst, component_type component,
+            uint64_t from, size_t max_pages) = 0;
 
     // Returns the cached pages of the sstable's component whose start offset
     // is in [from, to), in offset order - but at most max_pages of them, so

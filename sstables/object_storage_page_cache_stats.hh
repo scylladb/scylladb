@@ -64,6 +64,14 @@ struct object_storage_page_cache_stats {
     // a component.
     uint64_t dup_bypasses = 0;
     uint64_t transform_bypasses = 0;
+    // The pages, and their bytes, which compaction copied to the cache,
+    // because their data was cached in its input sstables (see
+    // object_storage_page_cache_compaction.hh); and the failures to look up
+    // what the inputs had cached, or to copy the pages, which don't fail the
+    // compaction.
+    uint64_t compaction_copied_pages = 0;
+    uint64_t compaction_copied_bytes = 0;
+    uint64_t compaction_errors = 0;
 };
 
 // The statistics of the reads of one table through the cache, which its

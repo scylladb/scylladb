@@ -19,6 +19,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/util/memory-data-sink.hh>
 #include <seastar/util/memory-data-source.hh>
 
 #include "cql3/query_processor.hh"
@@ -29,7 +30,9 @@
 #include "dht/fixed_shard.hh"
 #include "replica/database.hh"
 #include "replica/memtable.hh"
+#include "schema/schema_builder.hh"
 #include "sstables/compress.hh"
+#include "sstables/object_storage_page_cache_compaction.hh"
 #include "sstables/object_storage_page_cache_geometry.hh"
 #include "sstables/object_storage_page_cache_file.hh"
 #include "sstables/object_storage_page_cache_source.hh"
@@ -1489,6 +1492,11 @@ BOOST_AUTO_TEST_CASE(test_pages_covering) {
 class fake_page_cache : public sstables::object_storage_page_cache {
 public:
     std::map<std::pair<sstables::component_type, uint64_t>, sstring> pages;
+    // The last hits of the pages, which put_copied_page() sets.
+    std::map<std::pair<sstables::component_type, uint64_t>, std::optional<db_clock::time_point>> last_hits;
+    // The cached 4 KiB Data pages of other sstables, by their offsets, with
+    // their last hits - which only get_page_hits() returns.
+    std::map<sstables::sstable_id, std::map<uint64_t, std::optional<db_clock::time_point>>> other_sstables_hits;
     int reads = 0;
     // How many hits get_pages() recorded.
     size_t hits = 0;
@@ -1501,6 +1509,11 @@ public:
         auto it = pages.find({Data, offset});
         return it == pages.end() ? sstring() : it->second;
     }
+    // The last hit of the copied Data page at the given offset.
+    std::optional<db_clock::time_point> data_last_hit(uint64_t offset) const {
+        auto it = last_hits.find({Data, offset});
+        return it == last_hits.end() ? std::nullopt : it->second;
+    }
 
     virtual future<> put_page(sstables::sstable_id, sstables::component_type component,
             uint64_t offset, temporary_buffer<char> data) override {
@@ -1509,6 +1522,33 @@ public:
         }
         pages[{component, offset}] = sstring(data.get(), data.size());
         return make_ready_future<>();
+    }
+    virtual future<> put_copied_page(sstables::sstable_id sst, sstables::component_type component,
+            uint64_t offset, temporary_buffer<char> data, std::optional<db_clock::time_point> last_hit) override {
+        last_hits[{component, offset}] = last_hit;
+        return put_page(sst, component, offset, std::move(data));
+    }
+    virtual future<std::vector<page_hits>> get_page_hits(sstables::sstable_id sst, sstables::component_type component,
+            uint64_t from, size_t max_pages) override {
+        reads++;
+        if (fail_gets) {
+            return make_exception_future<std::vector<page_hits>>(std::runtime_error("fake_page_cache: get_page_hits failed"));
+        }
+        std::vector<page_hits> ret;
+        if (auto it = other_sstables_hits.find(sst); it != other_sstables_hits.end()) {
+            for (auto [offset, last_hit] : it->second) {
+                if (offset >= from && ret.size() < max_pages && component == Data) {
+                    ret.push_back(page_hits{offset, 4096, last_hit});
+                }
+            }
+            return make_ready_future<std::vector<page_hits>>(std::move(ret));
+        }
+        for (auto it = pages.lower_bound({component, from});
+                it != pages.end() && it->first.first == component && ret.size() < max_pages; ++it) {
+            auto lh = last_hits.find(it->first);
+            ret.push_back(page_hits{it->first.second, it->second.size(), lh == last_hits.end() ? std::nullopt : lh->second});
+        }
+        return make_ready_future<std::vector<page_hits>>(std::move(ret));
     }
     virtual future<std::vector<page>> get_pages(sstables::sstable_id, sstables::component_type component,
             uint64_t from, uint64_t to, size_t max_pages, sstables::populate_disk_cache populate) override {
@@ -2320,6 +2360,660 @@ SEASTAR_THREAD_TEST_CASE(test_page_cached_file_forwards_size) {
 
     BOOST_REQUIRE_EQUAL(f.size().get(), 10000);
     f.close().get();
+}
+
+// get_page_hits() returns the cached pages from an offset, with their sizes
+// and last hits, and put_copied_page() caches a page with a given last hit.
+SEASTAR_TEST_CASE(test_page_cache_get_page_hits) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        db::object_storage_page_cache_table cache(env.local_qp(), unlimited(), remembered_hits());
+        auto sst = new_sstable_id();
+        auto copied_hit = db_clock::time_point(std::chrono::milliseconds(123456789));
+        cache.put_page(sst, Data, 0, make_page('a')).get();
+        cache.put_page(sst, Data, 4096, make_page('b', 100)).get();
+        cache.put_copied_page(sst, Data, 8192, make_page('c'), copied_hit).get();
+        cache.put_copied_page(sst, Data, 12288, make_page('d'), std::nullopt).get();
+        cache.put_page(sst, Index, 0, make_page('e')).get();
+        cache.get_pages(sst, Data, 0, 4096, 100, sstables::populate_disk_cache::yes).get();
+
+        auto hits = cache.get_page_hits(sst, Data, 0, 100).get();
+        BOOST_REQUIRE_EQUAL(hits.size(), 4);
+        // Check that the offsets and sizes are those of the pages, of the
+        // component asked for.
+        BOOST_REQUIRE_EQUAL(hits[0].offset, 0);
+        BOOST_REQUIRE_EQUAL(hits[0].size, 4096);
+        BOOST_REQUIRE_EQUAL(hits[1].offset, 4096);
+        BOOST_REQUIRE_EQUAL(hits[1].size, 100);
+        BOOST_REQUIRE_EQUAL(hits[2].offset, 8192);
+        BOOST_REQUIRE_EQUAL(hits[3].offset, 12288);
+        // Check that the page which was hit has a last hit, that the page
+        // which wasn't has none, and that the copied pages have the last
+        // hits they were copied with.
+        BOOST_REQUIRE(hits[0].last_hit);
+        BOOST_REQUIRE(!hits[1].last_hit);
+        BOOST_REQUIRE(hits[2].last_hit == copied_hit);
+        BOOST_REQUIRE(!hits[3].last_hit);
+        // Check that a copied page is cached like any other.
+        check_pages(cache.get_pages(sst, Data, 8192, 8193, 100, no_hits).get(), {{8192, 'c'}});
+        // Check that the pages are returned from "from", at most max_pages.
+        hits = cache.get_page_hits(sst, Data, 4097, 1).get();
+        BOOST_REQUIRE_EQUAL(hits.size(), 1);
+        BOOST_REQUIRE_EQUAL(hits[0].offset, 8192);
+    }, page_cache_config());
+}
+
+static const auto hit1 = db_clock::time_point(std::chrono::milliseconds(1000000));
+static const auto hit2 = db_clock::time_point(std::chrono::milliseconds(2000000));
+
+static void check_hotness(sstables::page_cache_hotness h, bool hot, std::optional<db_clock::time_point> last_hit = std::nullopt) {
+    BOOST_REQUIRE_EQUAL(h.hot, hot);
+    BOOST_REQUIRE(h.last_hit == last_hit);
+}
+
+// page_cache_hot_ranges tells whether a range overlaps a hot range, with the
+// latest last hit of those it overlaps.
+BOOST_AUTO_TEST_CASE(test_page_cache_hot_ranges) {
+    sstables::page_cache_hot_ranges ranges;
+    ranges.add(0, 4096, hit1);
+    ranges.add(4096, 8192, hit1);
+    ranges.add(12288, 16384, std::nullopt);
+    ranges.add(16384, 20480, hit2);
+    // Check a range inside a hot range. The ranges are asked about in
+    // increasing order, as hotness() requires.
+    check_hotness(ranges.hotness(100, 200), true, hit1);
+    // Check that a range overlapping several hot ranges has the latest of
+    // their last hits.
+    check_hotness(ranges.hotness(8000, 13000), true, hit1);
+    // Check a range between hot ranges, and that a range never hit counts
+    // as hot.
+    check_hotness(ranges.hotness(8192, 12288), false);
+    check_hotness(ranges.hotness(12288, 12289), true);
+    check_hotness(ranges.hotness(16000, 17000), true, hit2);
+    check_hotness(ranges.hotness(20480, 30000), false);
+    // Check that a range is decided only up to where the writer says.
+    ranges.set_decided_until(50000);
+    BOOST_REQUIRE(ranges.decided(50000));
+    BOOST_REQUIRE(!ranges.decided(50001));
+    ranges.set_all_decided();
+    BOOST_REQUIRE(ranges.decided(1000000));
+}
+
+static schema_ptr compaction_test_schema() {
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v", int32_type)
+            .build();
+}
+
+// n partition keys, in the order of their tokens.
+static std::vector<dht::decorated_key> sorted_keys(const schema& s, int n) {
+    std::vector<dht::decorated_key> keys;
+    for (int i = 0; i < n; i++) {
+        keys.push_back(dht::decorate_key(s, partition_key::from_singular(s, i)));
+    }
+    std::ranges::sort(keys, [&] (const dht::decorated_key& a, const dht::decorated_key& b) {
+        return a.tri_compare(s, b) < 0;
+    });
+    return keys;
+}
+
+static position_in_partition row(const schema& s, int ck) {
+    return position_in_partition::for_key(clustering_key::from_singular(s, ck));
+}
+
+// A compression whose chunks have the given (uncompressed) length, which
+// sets the size of the pages of an output's Data component.
+static sstables::compression chunks_of(unsigned length) {
+    sstables::compression c;
+    c.set_uncompressed_chunk_length(length);
+    return c;
+}
+
+// A compaction finds which fragments of its inputs were cached, and copies
+// the pages of its output which hold them.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_copies_hot_pages) {
+    auto s = compaction_test_schema();
+    auto keys = sorted_keys(*s, 4);
+    fake_page_cache cache;
+    // The input's Data component is uncompressed, so it is cached in 4 KiB
+    // pages: the page at 4096 was hit, and the one at 12288 was cached but
+    // never hit.
+    cache.put_copied_page(test_sstable, Data, 4096, make_page('a'), hit1).get();
+    cache.put_copied_page(test_sstable, Data, 12288, make_page('b'), std::nullopt).get();
+    auto compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+    auto& input = compaction->add_input(test_sstable, nullptr, false);
+    // Another input, with nothing cached.
+    auto& other = compaction->add_input(new_sstable_id(), nullptr, false);
+    // The output's Data pages have 1000 bytes.
+    auto output = compaction->make_output(new_sstable_id());
+    auto chunks = chunks_of(1000);
+    output->set_data_compression(&chunks);
+
+    // The reader reads the inputs in two buffers, and then their fragments.
+    input.on_read(0, 10000).get();
+    input.on_read(10000, 20000).get();
+    other.on_read(0, 20000).get();
+    auto start = position_in_partition::for_partition_start();
+    auto end = position_in_partition::after_all_clustered_rows();
+    input.on_fragment(keys[0], start, 0);
+    input.on_fragment(keys[0], row(*s, 1), 1000);
+    input.on_fragment(keys[0], row(*s, 3), 5000);
+    input.on_fragment(keys[0], row(*s, 5), 7000);
+    input.on_fragment(keys[0], end, 8200);
+    input.on_fragment(keys[1], start, 8300);
+    input.on_fragment(keys[1], row(*s, 1), 13000);
+    input.on_fragment(keys[1], end, 17000);
+    other.on_fragment(keys[0], start, 0);
+    other.on_fragment(keys[0], row(*s, 4), 100);
+    other.on_fragment(keys[0], end, 200);
+    other.on_fragment(keys[2], start, 300);
+    other.on_fragment(keys[2], end, 400);
+    other.on_fragment(keys[3], start, 500);
+    other.on_fragment(keys[3], end, 600);
+
+    // The output writes the merged fragments, at its own offsets.
+    output->on_data_fragment(keys[0], start, 0);
+    output->on_data_fragment(keys[0], row(*s, 1), 1000);
+    output->on_data_fragment(keys[0], row(*s, 3), 1500);
+    output->on_data_fragment(keys[0], row(*s, 4), 2000);
+    output->on_data_fragment(keys[0], row(*s, 5), 2500);
+    output->on_data_fragment(keys[0], end, 2900);
+    output->on_data_fragment(keys[1], start, 3000);
+    output->on_data_fragment(keys[1], row(*s, 1), 3500);
+    output->on_data_fragment(keys[1], end, 3900);
+    output->on_data_fragment(keys[2], start, 4000);
+    output->on_data_fragment(keys[2], end, 4100);
+    output->on_data_fragment(keys[3], start, 5000);
+    output->on_data_fragment(keys[3], end, 5100);
+    output->on_data_end(6000);
+
+    auto& hot = *output->hot_ranges(Data);
+    BOOST_REQUIRE(hot.decided(6000));
+    // Check that the pages of the first partition - which has no row
+    // index, so a read of its rows reads it from its start - are copied,
+    // with the hit of the cached page, because they hold rows which the
+    // input had in a cached page (and a row of the other input among them).
+    check_hotness(hot.hotness(0, 1000), true, hit1);
+    check_hotness(hot.hotness(1000, 2000), true, hit1);
+    check_hotness(hot.hotness(2000, 3000), true, hit1);
+    // Check that the second partition's page is copied, for its row which
+    // was cached but never hit - and also has the hit of the start of this
+    // page, which a read of the first partition's last row parses.
+    check_hotness(hot.hotness(3000, 4000), true, hit1);
+    // Check that so is the page after the second partition, without a hit,
+    // and that the page with only a partition which wasn't cached isn't.
+    check_hotness(hot.hotness(4000, 5000), true);
+    check_hotness(hot.hotness(5000, 6000), false);
+    // Check that the pages' hits were fetched with one query per input.
+    BOOST_REQUIRE_EQUAL(cache.reads, 2);
+}
+
+// A partition with a row index is read by blocks: forward reads read from
+// the start of a row's block, and reversed reads read the whole block. So
+// all of a block with hot data in a copied page is copied - with the start
+// of the next row, which a forward read of its last row parses, and the row
+// before it, which a reversed read of its first row parses - and the
+// block's entry in the row index is hot.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_copies_blocks) {
+    auto s = compaction_test_schema();
+    auto keys = sorted_keys(*s, 1);
+    auto start = position_in_partition::for_partition_start();
+    fake_page_cache cache;
+    cache.put_copied_page(test_sstable, Data, 0, make_page('a'), hit1).get();
+    auto compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+    auto& input = compaction->add_input(test_sstable, nullptr, false);
+    input.on_read(0, 4096).get();
+    input.on_fragment(keys[0], row(*s, 21), 10);
+    input.on_fragment(keys[0], row(*s, 32), 20);
+    auto output = compaction->make_output(new_sstable_id());
+    auto chunks = chunks_of(1000);
+    output->set_data_compression(&chunks);
+    // The partition's blocks start at 0 (A, from the partition's start),
+    // 2000 (B), 4000 (C) and 4500 (D). The hot rows are B's last row,
+    // ending at the end of a page, and C's last row, in a page which D
+    // ends. The writer reports each block when it writes its first row.
+    std::vector<uint32_t> block_marks;
+    uint32_t partition_mark = 0;
+    output->on_data_fragment(keys[0], start, 0);
+    output->on_data_fragment(keys[0], row(*s, 1), 100);
+    output->on_row_index_block(100);
+    output->on_data_fragment(keys[0], row(*s, 19), 1900);
+    output->on_data_fragment(keys[0], row(*s, 20), 2000);
+    output->on_row_index_block(2000);
+    output->on_data_fragment(keys[0], row(*s, 21), 3700);
+    output->on_data_fragment(keys[0], row(*s, 30), 4000);
+    output->on_row_index_block(4000);
+    output->on_data_fragment(keys[0], row(*s, 32), 4400);
+    output->on_data_fragment(keys[0], row(*s, 40), 4500);
+    output->on_row_index_block(4500);
+    output->on_data_fragment(keys[0], position_in_partition::after_all_clustered_rows(), 6900);
+    output->on_partition_end(7000, [&] (uint32_t mark, std::span<const uint32_t> marks) {
+        partition_mark = mark;
+        block_marks.assign(marks.begin(), marks.end());
+    });
+    output->on_data_end(7000);
+    auto& hot = *output->hot_ranges(Data);
+    // Check that blocks B and C are copied, with the page before B, which
+    // has the row before B, and the page after it, which has the start of
+    // C's first row - and that the rest of A and D aren't.
+    check_hotness(hot.hotness(0, 1000), false);
+    check_hotness(hot.hotness(1000, 5000), true, hit1);
+    check_hotness(hot.hotness(5000, 7000), false);
+    // Check that the partition is hot, and so are blocks B and C.
+    using output_type = sstables::page_cache_compaction_output;
+    check_hotness(output_type::hotness_of_mark(partition_mark), true, hit1);
+    BOOST_REQUIRE_EQUAL(block_marks.size(), 4);
+    check_hotness(output_type::hotness_of_mark(block_marks[0]), false);
+    check_hotness(output_type::hotness_of_mark(block_marks[1]), true, hit1);
+    check_hotness(output_type::hotness_of_mark(block_marks[2]), true, hit1);
+    check_hotness(output_type::hotness_of_mark(block_marks[3]), false);
+}
+
+// Data which was cached in several inputs gets the latest of their last
+// hits, in the Data and in the index.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_merges_hits) {
+    auto s = compaction_test_schema();
+    auto keys = sorted_keys(*s, 1);
+    auto start = position_in_partition::for_partition_start();
+    auto end = position_in_partition::after_all_clustered_rows();
+    fake_page_cache cache;
+    auto compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+    // Three inputs have the same rows in a cached page, last hit at
+    // different times, or never.
+    for (auto hit : {std::optional(hit1), std::optional(hit2), std::optional<db_clock::time_point>()}) {
+        auto sst = new_sstable_id();
+        cache.other_sstables_hits[sst][0] = hit;
+        auto& input = compaction->add_input(sst, nullptr, false);
+        input.on_read(0, 4096).get();
+        input.on_fragment(keys[0], start, 0);
+        input.on_fragment(keys[0], row(*s, 1), 100);
+        input.on_fragment(keys[0], end, 200);
+    }
+    // Check that the output copies the page with the latest hit, and marks
+    // the partition with it.
+    auto output = compaction->make_output(new_sstable_id());
+    uint32_t partition_mark = 0;
+    output->on_data_fragment(keys[0], start, 0);
+    output->on_data_fragment(keys[0], row(*s, 1), 100);
+    output->on_data_fragment(keys[0], end, 200);
+    output->on_partition_end(300, [&] (uint32_t mark, std::span<const uint32_t>) { partition_mark = mark; });
+    output->on_data_end(300);
+    check_hotness(output->hot_ranges(Data)->hotness(0, 300), true, hit2);
+    check_hotness(sstables::page_cache_compaction_output::hotness_of_mark(partition_mark), true, hit2);
+}
+
+// A page of an output is copied only if enough of its data is hot: a row
+// which an input had cached, among many which it didn't - as when a cached
+// page of a small sstable, with rows of many keys, is merged into a large
+// sstable - doesn't make its page hot.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_copies_mostly_hot_pages) {
+    auto s = compaction_test_schema();
+    auto keys = sorted_keys(*s, 2);
+    auto start = position_in_partition::for_partition_start();
+    auto end = position_in_partition::after_all_clustered_rows();
+    fake_page_cache cache;
+    cache.put_copied_page(test_sstable, Data, 0, make_page('a'), hit1).get();
+    auto compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+    auto& input = compaction->add_input(test_sstable, nullptr, false);
+    input.on_read(0, 4096).get();
+    input.on_fragment(keys[0], row(*s, 1), 10);
+    input.on_fragment(keys[1], row(*s, 3), 20);
+    // The output's pages have 1600 bytes, and each holds a partition with
+    // one hot row between rows which no input had cached: 99 bytes in the
+    // first page, one less than a 16th of it, and 100 in the second.
+    static_assert(sstables::page_cache_compaction_output::min_hot_fraction_denominator == 16);
+    auto output = compaction->make_output(new_sstable_id());
+    auto chunks = chunks_of(1600);
+    output->set_data_compression(&chunks);
+    output->on_data_fragment(keys[0], start, 0);
+    output->on_data_fragment(keys[0], row(*s, 1), 100);
+    output->on_data_fragment(keys[0], row(*s, 2), 199);
+    output->on_data_fragment(keys[0], end, 1599);
+    output->on_data_fragment(keys[1], start, 1600);
+    output->on_data_fragment(keys[1], row(*s, 3), 1650);
+    output->on_data_fragment(keys[1], row(*s, 4), 1750);
+    output->on_data_fragment(keys[1], end, 3199);
+    output->on_data_end(3200);
+    auto& hot = *output->hot_ranges(Data);
+    check_hotness(hot.hotness(0, 1600), false);
+    check_hotness(hot.hotness(1600, 3200), true, hit1);
+}
+
+// The cached pages of a compressed input are its compressed chunks, unless a
+// file I/O extension made it cached in 4 KiB pages.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_compressed_input) {
+    auto s = compaction_test_schema();
+    auto keys = sorted_keys(*s, 1);
+    auto start = position_in_partition::for_partition_start();
+    sstables::compression c;
+    c.set_uncompressed_chunk_length(4096);
+    auto writer = c.offsets.get_writer();
+    for (uint64_t offset : {0, 1000, 2500, 2600}) {
+        writer.push_back(offset);
+    }
+    c.set_compressed_file_length(4000);
+    {
+        fake_page_cache cache;
+        // The second chunk is cached.
+        cache.put_copied_page(test_sstable, Data, 1000, make_page('a', 1500), hit1).get();
+        auto compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+        auto& input = compaction->add_input(test_sstable, &c, false);
+        input.on_read(0, 16384).get();
+        // Check that only the data of the second chunk is hot.
+        input.on_fragment(keys[0], start, 4000);
+        check_hotness(compaction->hotness_at(keys[0], start), false);
+        input.on_fragment(keys[0], row(*s, 1), 5000);
+        check_hotness(compaction->hotness_at(keys[0], row(*s, 1)), true, hit1);
+        input.on_fragment(keys[0], row(*s, 2), 9000);
+        check_hotness(compaction->hotness_at(keys[0], row(*s, 2)), false);
+    }
+    {
+        fake_page_cache cache;
+        // The first 4 KiB of the stored chunks are cached, which holds all
+        // of them.
+        cache.put_copied_page(test_sstable, Data, 0, make_page('a', 4000), hit2).get();
+        auto compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+        auto& input = compaction->add_input(test_sstable, &c, true);
+        input.on_read(0, 16384).get();
+        // Check that the data of the last chunk is hot.
+        input.on_fragment(keys[0], start, 13000);
+        check_hotness(compaction->hotness_at(keys[0], start), true, hit2);
+    }
+}
+
+// The Index of a "me" sstable is copied by the intervals between the
+// Summary's entries, which is how it is read: an interval is hot if any of
+// its partitions is hot, and so is the next interval, if the last partition
+// of an interval is hot. A partition is hot if its hot data is in pages
+// which are copied - which may be decided only after the partition ends, and
+// the partitions are added to the index of a BTI sstable when it is.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_index_intervals) {
+    auto s = compaction_test_schema();
+    auto keys = sorted_keys(*s, 5);
+    auto start = position_in_partition::for_partition_start();
+    auto end = position_in_partition::after_all_clustered_rows();
+    fake_page_cache cache;
+    cache.put_copied_page(test_sstable, Data, 4096, make_page('a'), hit1).get();
+    auto compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+    auto& input = compaction->add_input(test_sstable, nullptr, false);
+    input.on_read(0, 10000).get();
+    // Only the second partition is in the cached page.
+    std::vector<uint64_t> input_offsets = {0, 4096, 9000, 9200, 9400};
+    for (int i = 0; i < 5; i++) {
+        input.on_fragment(keys[i], start, input_offsets[i]);
+        input.on_fragment(keys[i], end, input_offsets[i] + 50);
+    }
+    // The output's Data has a single page, of 4 KiB.
+    auto output = compaction->make_output(new_sstable_id());
+    auto& index = *output->hot_ranges(Index);
+    // The writer writes the partitions, starting an interval of the Index
+    // at the first, third and fourth.
+    std::vector<std::optional<uint64_t>> intervals = {0, std::nullopt, 100, 200, std::nullopt};
+    std::vector<std::pair<int, uint32_t>> added;
+    for (int i = 0; i < 5; i++) {
+        output->on_data_fragment(keys[i], start, i * 100);
+        if (intervals[i]) {
+            output->on_index_interval(*intervals[i]);
+        }
+        output->on_data_fragment(keys[i], end, i * 100 + 50);
+        output->on_partition_end(i * 100 + 100, [&added, i] (uint32_t mark, std::span<const uint32_t>) { added.emplace_back(i, mark); });
+    }
+    // Check that only the first partition was decided - the page which
+    // holds the partitions isn't, and may copy the hot partition, which
+    // the following ones wait for - and that no interval is decided.
+    BOOST_REQUIRE_EQUAL(added.size(), 1);
+    BOOST_REQUIRE(!index.decided(1));
+    output->on_data_end(500);
+    output->on_index_end(300);
+    BOOST_REQUIRE(index.decided(1000));
+    // Check that the partitions were added in order, and only the hot one
+    // with a mark.
+    BOOST_REQUIRE_EQUAL(added.size(), 5);
+    for (int i = 0; i < 5; i++) {
+        BOOST_REQUIRE_EQUAL(added[i].first, i);
+        check_hotness(sstables::page_cache_compaction_output::hotness_of_mark(added[i].second), i == 1, i == 1 ? std::optional(hit1) : std::nullopt);
+    }
+    // Check that the first interval, with the hot partition, is hot; that
+    // the second is hot, because the hot partition was the first interval's
+    // last; and that the third isn't.
+    check_hotness(index.hotness(0, 100), true, hit1);
+    check_hotness(index.hotness(100, 200), true, hit1);
+    check_hotness(index.hotness(200, 300), false);
+}
+
+// The writers of the tries of BTI sstables mark the keys whose data is hot,
+// with marks which encode the hotness, and the larger of two marks is that
+// of their merged hotness. The output finds the pages of the nodes which
+// lead to marked keys, and the headers of hot partitions in Rows.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_trie_marks) {
+    using output_type = sstables::page_cache_compaction_output;
+    // Check that marks encode the hotness, and are ordered as merged.
+    auto cold = sstables::page_cache_hotness{};
+    auto never_hit = sstables::page_cache_hotness{true, std::nullopt};
+    auto hit = sstables::page_cache_hotness{true, hit1};
+    auto later_hit = sstables::page_cache_hotness{true, hit2};
+    BOOST_REQUIRE_EQUAL(output_type::mark(cold), 0);
+    for (const auto& h : {cold, never_hit, hit, later_hit}) {
+        BOOST_REQUIRE(output_type::hotness_of_mark(output_type::mark(h)) == h);
+    }
+    BOOST_REQUIRE_LT(output_type::mark(never_hit), output_type::mark(hit));
+    BOOST_REQUIRE_LT(output_type::mark(hit), output_type::mark(later_hit));
+
+    fake_page_cache cache;
+    auto output = make_lw_shared<sstables::page_cache_compaction>(cache, compaction_test_schema())->make_output(new_sstable_id());
+    // Check that a marked node makes its page hot.
+    output->on_trie_node(Partitions, 5000, output_type::mark(hit));
+    check_hotness(output->hot_ranges(Partitions)->hotness(4096, 8192), true, hit1);
+    check_hotness(output->hot_ranges(Partitions)->hotness(8192, 12288), false);
+    // Check that a Rows entry is undecided while it is written, and that the
+    // header of a partition which isn't hot isn't hot.
+    auto& rows = *output->hot_ranges(Rows);
+    output->on_rows_entry_start(100);
+    BOOST_REQUIRE(!rows.decided(101));
+    output->on_rows_entry_end(200, 300, 0);
+    BOOST_REQUIRE(rows.decided(1000));
+    check_hotness(rows.hotness(0, 1000), false);
+}
+
+// A failure to look up the cache makes compaction find nothing hot, but
+// doesn't fail it.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_lookup_failure) {
+    auto s = compaction_test_schema();
+    auto keys = sorted_keys(*s, 1);
+    fake_page_cache cache;
+    cache.put_copied_page(test_sstable, Data, 0, make_page('a'), hit1).get();
+    cache.fail_gets = true;
+    auto compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+    auto& input = compaction->add_input(test_sstable, nullptr, false);
+    input.on_read(0, 4096).get();
+    input.on_fragment(keys[0], position_in_partition::for_partition_start(), 0);
+    check_hotness(compaction->hotness_at(keys[0], position_in_partition::for_partition_start()), false);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().compaction_errors, 1);
+}
+
+// A compaction whose inputs have no Data page cached has nothing to copy, so
+// it doesn't track its inputs and outputs at all.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_start) {
+    auto s = compaction_test_schema();
+    auto other = new_sstable_id();
+    std::vector<sstables::sstable_id> inputs{other, test_sstable};
+    fake_page_cache cache;
+    // Check that a compaction of inputs with nothing cached has nothing to
+    // copy - nor if only an input's index is cached, which is copied only
+    // for the data it indexes.
+    auto compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+    compaction->start(inputs).get();
+    BOOST_REQUIRE(compaction->nothing_cached());
+    cache.put_copied_page(test_sstable, Index, 0, make_page('a'), hit1).get();
+    compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+    compaction->start(inputs).get();
+    BOOST_REQUIRE(compaction->nothing_cached());
+    // Check that a Data page cached in any of the inputs is found.
+    cache.put_copied_page(test_sstable, Data, 4096, make_page('b'), hit1).get();
+    compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+    compaction->start(inputs).get();
+    BOOST_REQUIRE(!compaction->nothing_cached());
+    // Check that if the cache can't be read, nothing is copied.
+    cache.fail_gets = true;
+    compaction = make_lw_shared<sstables::page_cache_compaction>(cache, s);
+    compaction->start(inputs).get();
+    BOOST_REQUIRE(compaction->nothing_cached());
+    BOOST_REQUIRE_EQUAL(cache.get_stats().compaction_errors, 1);
+}
+
+// The bytes [0, n), with a different byte at every offset (mod 251).
+static sstring test_bytes(size_t n) {
+    sstring ret(sstring::initialized_later(), n);
+    for (size_t i = 0; i < n; i++) {
+        ret[i] = char(i % 251);
+    }
+    return ret;
+}
+
+// Writes the bytes through the sink in buffers of 1000 bytes, which aren't
+// aligned to pages, and returns what the sink passed on.
+static void write_through(data_sink& sink, const sstring& bytes) {
+    for (size_t pos = 0; pos < bytes.size(); pos += 1000) {
+        auto n = std::min<size_t>(1000, bytes.size() - pos);
+        sink.put(temporary_buffer<char>(bytes.data() + pos, n)).get();
+    }
+}
+
+static void write_and_close(data_sink sink, const sstring& bytes) {
+    write_through(sink, bytes);
+    sink.close().get();
+}
+
+static sstring joined(const std::vector<temporary_buffer<char>>& bufs) {
+    sstring ret;
+    for (const auto& b : bufs) {
+        ret += sstring(b.get(), b.size());
+    }
+    return ret;
+}
+
+// The sink which writes an output of a compaction copies the pages which hold
+// hot data to the cache.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_sink_copies_hot_pages) {
+    auto s = compaction_test_schema();
+    auto bytes = test_bytes(10000);
+    {
+        // An uncompressed component, cached in 4 KiB pages.
+        fake_page_cache cache;
+        auto output = make_lw_shared<sstables::page_cache_compaction>(cache, s)->make_output(test_sstable);
+        output->hot_ranges(Data)->add(5000, 6000, hit1);
+        std::vector<temporary_buffer<char>> written;
+        write_and_close(sstables::make_page_cache_compaction_sink(data_sink(std::make_unique<seastar::util::memory_data_sink>(written)),
+                output, Data, nullptr, [] { return false; }), bytes);
+        // Check that all the bytes were written, and that only the page
+        // which holds the hot range was copied, with its last hit.
+        BOOST_REQUIRE(joined(written) == bytes);
+        BOOST_REQUIRE_EQUAL(cache.pages.size(), 1);
+        BOOST_REQUIRE(cache.data_page(4096) == bytes.substr(4096, 4096));
+        BOOST_REQUIRE(cache.data_last_hit(4096) == hit1);
+        BOOST_REQUIRE_EQUAL(cache.get_stats().compaction_copied_pages, 1);
+        BOOST_REQUIRE_EQUAL(cache.get_stats().compaction_copied_bytes, 4096);
+    }
+    {
+        // A compressed component, cached in its chunks.
+        sstables::compression c;
+        c.set_uncompressed_chunk_length(4096);
+        auto writer = c.offsets.get_writer();
+        for (uint64_t offset : {0, 1000, 2500, 2600}) {
+            writer.push_back(offset);
+        }
+        c.set_compressed_file_length(4000);
+        fake_page_cache cache;
+        auto output = make_lw_shared<sstables::page_cache_compaction>(cache, s)->make_output(test_sstable);
+        // Hot data in the second chunk, and at the end of the last one.
+        output->hot_ranges(Data)->add(5000, 5001, hit1);
+        output->hot_ranges(Data)->add(16000, 16001, std::nullopt);
+        std::vector<temporary_buffer<char>> written;
+        write_and_close(sstables::make_page_cache_compaction_sink(data_sink(std::make_unique<seastar::util::memory_data_sink>(written)),
+                output, Data, &c, [] { return false; }), bytes.substr(0, 4000));
+        // Check that the two chunks were copied, whole.
+        BOOST_REQUIRE_EQUAL(cache.pages.size(), 2);
+        BOOST_REQUIRE(cache.data_page(1000) == bytes.substr(1000, 1500));
+        BOOST_REQUIRE(cache.data_last_hit(1000) == hit1);
+        BOOST_REQUIRE(cache.data_page(2600) == bytes.substr(2600, 1400));
+        BOOST_REQUIRE(!cache.data_last_hit(2600));
+    }
+    {
+        // A compressed component, cached in 4 KiB pages: the first page
+        // holds all the chunks.
+        sstables::compression c;
+        c.set_uncompressed_chunk_length(4096);
+        auto writer = c.offsets.get_writer();
+        for (uint64_t offset : {0, 1000, 2500, 2600}) {
+            writer.push_back(offset);
+        }
+        c.set_compressed_file_length(4000);
+        fake_page_cache cache;
+        auto output = make_lw_shared<sstables::page_cache_compaction>(cache, s)->make_output(test_sstable);
+        output->hot_ranges(Data)->add(16000, 16001, hit2);
+        std::vector<temporary_buffer<char>> written;
+        // The stored component may be longer than the compressed data.
+        write_and_close(sstables::make_page_cache_compaction_sink(data_sink(std::make_unique<seastar::util::memory_data_sink>(written)),
+                output, Data, &c, [] { return true; }), bytes.substr(0, 4100));
+        // Check that both pages were copied: the second, beyond the
+        // compressed data, belongs to the last chunk.
+        BOOST_REQUIRE_EQUAL(cache.pages.size(), 2);
+        BOOST_REQUIRE(cache.data_page(0) == bytes.substr(0, 4096));
+        BOOST_REQUIRE(cache.data_last_hit(0) == hit2);
+        BOOST_REQUIRE(cache.data_page(4096) == bytes.substr(4096, 4));
+    }
+}
+
+// The storage which writes an output sstable finds its output by the
+// sstable's id, while the output exists.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_output_registry) {
+    fake_page_cache cache;
+    auto compaction = make_lw_shared<sstables::page_cache_compaction>(cache, compaction_test_schema());
+    auto sst = new_sstable_id();
+    auto output = compaction->make_output(sst);
+    BOOST_REQUIRE(sstables::page_cache_compaction_output::find(sst) == output);
+    BOOST_REQUIRE(!sstables::page_cache_compaction_output::find(new_sstable_id()));
+    output = nullptr;
+    BOOST_REQUIRE(!sstables::page_cache_compaction_output::find(sst));
+}
+
+// The sink copies a page only when the writer decided whether its data is
+// hot, which may be after the page was written.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_sink_waits_for_decision) {
+    auto s = compaction_test_schema();
+    auto bytes = test_bytes(10000);
+    fake_page_cache cache;
+    auto output = make_lw_shared<sstables::page_cache_compaction>(cache, s)->make_output(test_sstable);
+    auto& ranges = *output->hot_ranges(Data);
+    ranges.set_decided_until(4096);
+    std::vector<temporary_buffer<char>> written;
+    auto sink = sstables::make_page_cache_compaction_sink(data_sink(std::make_unique<seastar::util::memory_data_sink>(written)),
+            output, Data, nullptr, [] { return false; });
+    write_through(sink, bytes);
+    // Check that the page whose hotness isn't decided wasn't copied yet.
+    BOOST_REQUIRE(cache.pages.empty());
+    ranges.add(4096, 4097, hit1);
+    sink.close().get();
+    // Check that it was copied when the component was closed.
+    BOOST_REQUIRE_EQUAL(cache.pages.size(), 1);
+    BOOST_REQUIRE(cache.data_page(4096) == bytes.substr(4096, 4096));
+}
+
+// A failure to copy a page stops the copying, but doesn't fail the write.
+SEASTAR_THREAD_TEST_CASE(test_page_cache_compaction_sink_copy_failure) {
+    auto s = compaction_test_schema();
+    auto bytes = test_bytes(10000);
+    fake_page_cache cache;
+    cache.fail_puts = true;
+    auto output = make_lw_shared<sstables::page_cache_compaction>(cache, s)->make_output(test_sstable);
+    output->hot_ranges(Data)->add(0, 10000, hit1);
+    std::vector<temporary_buffer<char>> written;
+    write_and_close(sstables::make_page_cache_compaction_sink(data_sink(std::make_unique<seastar::util::memory_data_sink>(written)),
+            output, Data, nullptr, [] { return false; }), bytes);
+    BOOST_REQUIRE(joined(written) == bytes);
+    BOOST_REQUIRE(cache.pages.empty());
+    BOOST_REQUIRE_EQUAL(cache.get_stats().compaction_errors, 1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -819,6 +819,9 @@ public:
     future<> create_reference(sstable_id sid, generation_type gen, locator::host_id node_owner) const;
 
     bool is_object_storage() const override { return true; }
+    bool caches_pages() const noexcept override {
+        return _disk_cache == data_dictionary::storage_options::disk_cache_mode::pages;
+    }
 
     // The attributes are deliberately not defaulted: every object this class
     // writes either carries the sstable descriptor or knowingly carries nothing,
