@@ -110,8 +110,21 @@ void writer_node::write(ptr<writer_node> self, Output& out, bool guaranteed_fit)
         expensive_log("writer_node::write: node={} pos={} n_children={} size={} transition_length={}",
             fmt::ptr(node.get()), out.pos().value, node->get_children().size(), node->_node_size.value, node->_transition_length);
 
+        // The children are already written, so their marks are known.
+        for (const auto& child : node->get_children()) {
+            node->_mark = std::max(node->_mark, child->_mark);
+        }
+        auto note_mark = [&] {
+            if constexpr (requires { out.note_mark(out.pos(), uint32_t(0)); }) {
+                if (node->_mark) {
+                    out.note_mark(out.pos(), node->_mark);
+                }
+            }
+        };
+
         if (guaranteed_fit) {
             SCYLLA_ASSERT(out.pos() - startpos == node->_branch_size);
+            note_mark();
             node->_pos = sink_pos(out.write(*node, sink_pos(out.pos())));
             SCYLLA_ASSERT(out.pos() - startpos == node->_branch_size + node->_node_size);
         } else {
@@ -120,6 +133,7 @@ void writer_node::write(ptr<writer_node> self, Output& out, bool guaranteed_fit)
             }
             node->_branch_size = out.pos() - startpos;
             auto before = out.pos();
+            note_mark();
             node->_pos = sink_pos(out.write(*node, sink_pos(out.pos())));
             node->_node_size = node_size((out.pos() - before).value);
             expensive_assert(uint64_t(node->_node_size.value) <= out.page_size());

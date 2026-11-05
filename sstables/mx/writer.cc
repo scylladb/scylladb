@@ -617,6 +617,9 @@ private:
         // (If there's no predecessor, this is a "live" tombstone).
         tombstone preceding_range_tombstone;
     };
+    // With the object storage page cache, the blocks of the partition's row
+    // index, of a BTI sstable, until it is decided which of them are hot.
+    std::vector<pi_block> _page_cache_pi_blocks;
     // _pi_write_m is used temporarily for building the promoted
     // index (column sample) of one partition when writing a new sstable.
     struct {
@@ -1066,6 +1069,14 @@ void writer::init_file_writers() {
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Partitions).get();
         _partitions_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, component_name(_sst, component_type::Partitions));
         _bti_partition_index_writer = trie::bti_partition_index_writer(_sst.get_version(), *_partitions_writer);
+        if (_page_cache_output) {
+            _bti_row_index_writer->set_mark_observer([output = _page_cache_output] (uint64_t pos, uint32_t mark) {
+                output->on_trie_node(component_type::Rows, pos, mark);
+            });
+            _bti_partition_index_writer->set_mark_observer([output = _page_cache_output] (uint64_t pos, uint32_t mark) {
+                output->on_trie_node(component_type::Partitions, pos, mark);
+            });
+        }
     }
     if (_delayed_filter) {
         file_output_stream_options options;
@@ -1733,13 +1744,19 @@ void writer::write_pi_block(const pi_block& block) {
     }
   }
     if (_bti_row_index_writer) {
-        _bti_row_index_writer->add(
-            _schema,
-            block.first,
-            block.last,
-            block.offset,
-            to_deletion_time(block.preceding_range_tombstone)
-        );
+        if (_page_cache_output) {
+            // The partition's row index is written once it is decided
+            // which of its blocks are hot (see consume_end_of_partition()).
+            _page_cache_pi_blocks.push_back(block);
+        } else {
+            _bti_row_index_writer->add(
+                _schema,
+                block.first,
+                block.last,
+                block.offset,
+                to_deletion_time(block.preceding_range_tombstone)
+            );
+        }
     }
 }
 
@@ -1825,7 +1842,29 @@ stop_iteration writer::consume_end_of_partition() {
 
     write_promoted_index();
 
-    if (_bti_partition_index_writer) {
+    if (_bti_partition_index_writer && _page_cache_output) {
+        // The partition's entries in Rows and Partitions are written once it
+        // is decided whether the partition and its blocks are hot, with marks
+        // of their hotness - which may be after the partition ends.
+        _page_cache_output->on_partition_end(_data_writer->offset(), [this, blocks = std::exchange(_page_cache_pi_blocks, {}),
+                partition_start = _current_partition_position, partition_end = end_of_partition_position,
+                key = *_partition_key, partition_tombstone = _pi_write_m.partition_tombstone,
+                dk = *std::exchange(_current_dk_for_bti, std::nullopt), hash = _current_murmur_hash]
+                (uint32_t mark, std::span<const uint32_t> block_marks) mutable {
+            for (size_t i = 0; i < blocks.size(); i++) {
+                _bti_row_index_writer->add(_schema, blocks[i].first, blocks[i].last, blocks[i].offset,
+                        to_deletion_time(blocks[i].preceding_range_tombstone), i < block_marks.size() ? block_marks[i] : 0);
+            }
+            _page_cache_output->on_rows_entry_start(_rows_writer->offset());
+            auto partitions_db_payload = _bti_row_index_writer->finish(_sst.get_version(), _schema, partition_start, partition_end,
+                    key, partition_tombstone);
+            // A negative payload is a position in Data, of a partition
+            // without an entry in Rows.
+            _page_cache_output->on_rows_entry_end(partitions_db_payload >= 0 ? std::optional<uint64_t>(partitions_db_payload) : std::nullopt,
+                    _rows_writer->offset(), mark);
+            _bti_partition_index_writer->add(_schema, std::move(dk), hash, partitions_db_payload, mark);
+        });
+    } else if (_bti_partition_index_writer) {
         auto partitions_db_payload = _bti_row_index_writer->finish(
             _sst.get_version(),
             _schema,
@@ -1840,8 +1879,7 @@ stop_iteration writer::consume_end_of_partition() {
             _current_murmur_hash,
             partitions_db_payload
         );
-    }
-    if (_page_cache_output) {
+    } else if (_page_cache_output) {
         _page_cache_output->on_partition_end(_data_writer->offset());
     }
 

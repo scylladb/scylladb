@@ -491,6 +491,11 @@ struct writer_node {
     // Invalid after _pos is set.
     uint16_t _children_capacity = 0;
     uint16_t _children_size = 0;
+    // A mark which the user may give a key, which isn't written (see
+    // trie_writer::add()): the key's own mark, until the node is written,
+    // and then the largest mark in the node's subtree. (It fits in padding,
+    // so it costs no memory.)
+    uint32_t _mark = 0;
     ptr<ptr<writer_node>[]> _children;
     // The expected total serialized size of the node's descendants.
     // (In other words: if we wrote the node's entire subtree to a file, without any padding,
