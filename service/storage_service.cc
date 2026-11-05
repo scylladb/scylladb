@@ -734,9 +734,9 @@ future<locator::mutable_token_metadata_ptr> storage_service::prepare_topology_to
         // We want to update the tablet metadata incrementally, so copy it
         // from the current token metadata and update only the changed parts.
         tablets = co_await get_token_metadata().tablets().copy();
-        co_await replica::update_tablet_metadata(_db.local(), _qp, *tablets, *tablets_hint);
+        co_await replica::update_tablet_metadata(_db.local(), _qp, *tablets, *tablets_hint, tmptr->get_topology());
     } else {
-        tablets = co_await replica::read_tablet_metadata(_qp);
+        tablets = co_await replica::read_tablet_metadata(_qp, tmptr->get_topology());
     }
     tablets->set_balancing_enabled(topology.tablet_balancing_enabled);
     tmptr->set_tablets(std::move(*tablets));
@@ -4222,9 +4222,9 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
 future<locator::mutable_token_metadata_ptr> storage_service::prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     if (hint) {
-        co_await replica::update_tablet_metadata(_db.local(), _qp, pending_token_metadata->tablets(), hint);
+        co_await replica::update_tablet_metadata(_db.local(), _qp, pending_token_metadata->tablets(), hint, pending_token_metadata->get_topology());
     } else {
-        pending_token_metadata->set_tablets(co_await replica::read_tablet_metadata(_qp));
+        pending_token_metadata->set_tablets(co_await replica::read_tablet_metadata(_qp, pending_token_metadata->get_topology()));
     }
     pending_token_metadata->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
     co_return pending_token_metadata;
