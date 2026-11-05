@@ -63,6 +63,18 @@
 #include <atomic>
 #include "utils/assert.hh"
 
+namespace service {
+// Test access to the private storage_service::topology_state_load()
+// (friend declaration in storage_service.hh).
+struct topology_state_load_test_access {
+    static future<> reload(storage_service& ss, topology_change_hint::scope scope) {
+        storage_service::state_change_hint hint;
+        hint.topology_hint = topology_change_hint{.reload_scope = scope};
+        return ss.topology_state_load(std::move(hint));
+    }
+};
+}
+
 BOOST_AUTO_TEST_SUITE(tablets_test)
 
 using namespace locator;
@@ -1504,6 +1516,35 @@ SEASTAR_TEST_CASE(test_topology_change_hint) {
 
             BOOST_REQUIRE(db::get_topology_change_hint(muts).get().reload_scope == scope::tablets_only);
         }
+    }, tablet_cql_test_config());
+}
+
+// A tablets_only reload with non-empty left_nodes_rs must not do a full reload
+// and must drop left_nodes_rs/excluded_tablet_nodes entries without tablet replicas.
+SEASTAR_TEST_CASE(test_topology_state_load_tablets_only_reload_with_left_nodes_rs) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h_leaving = raft::server_id::create_random_id();
+
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        abort_source as;
+        auto holder = e.get_raft_group0_client().hold_read_apply_mutex(as).get();
+        // Only a full reload re-reads this from disk, so it staying flipped proves a non-full reload.
+        const bool flipped = !topology.tablet_balancing_enabled;
+        topology.tablet_balancing_enabled = flipped;
+        topology.left_nodes_rs.emplace(h_leaving, replica_state{});
+        topology.excluded_tablet_nodes.insert(h_leaving);
+
+        service::topology_state_load_test_access::reload(e.get_storage_service().local(),
+                service::topology_change_hint::scope::tablets_only).get();
+
+        BOOST_REQUIRE_EQUAL(topology.tablet_balancing_enabled, flipped);
+        BOOST_REQUIRE(!topology.left_nodes_rs.contains(h_leaving));
+        BOOST_REQUIRE(!topology.excluded_tablet_nodes.contains(h_leaving));
+
+        // Restore state so token metadata is consistent for teardown.
+        topology.tablet_balancing_enabled = !flipped;
+        service::topology_state_load_test_access::reload(e.get_storage_service().local(),
+                service::topology_change_hint::scope::tablets_only).get();
     }, tablet_cql_test_config());
 }
 
