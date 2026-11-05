@@ -176,6 +176,14 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     auto tombstone_gc_options = get_tombstone_gc_options(schema_extensions);
     validate_tombstone_gc_options(tombstone_gc_options, db, ks_name);
 
+    // The CDC log rows get this TTL, which the sstable reader rejects above
+    // max_ttl. Checked here and not in cdc::options, which also decodes the
+    // persisted schema extension: a table created before this check must keep
+    // loading (its oversized value is clamped when the extension is decoded).
+    if (auto cdc_options = get_cdc_options(schema_extensions)) {
+        check_maximum_int("Invalid CDC option: ttl", cdc_options->ttl(), max_ttl.count());
+    }
+
     validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
     validate_minimum_int(KW_PAXOSGRACESECONDS, 0, DEFAULT_GC_GRACE_SECONDS);
     // Both end up as the TTL of cells, which the sstable reader rejects above
