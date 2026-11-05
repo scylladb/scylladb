@@ -636,6 +636,17 @@ public:
     future<> clear_gently();
 };
 
+/// Returns the datacenter of a tablet replica's host, or nullptr for an unknown host.
+/// Converts from a topology, which falls back to the configured location of this node.
+/// The resolver holds the topology by reference, so the topology must outlive its last call.
+class host_dc_resolver {
+    std::function<const sstring*(host_id)> _dc_of;
+public:
+    host_dc_resolver(const topology&);
+    explicit host_dc_resolver(std::function<const sstring*(host_id)> dc_of) : _dc_of(std::move(dc_of)) {}
+    const sstring* operator()(host_id host) const { return _dc_of(host); }
+};
+
 /// Append-only list of datacenter names. The position of a name is its index in
 /// tablet_dc_counts. Shared by all tablet maps of one tablet_metadata.
 class tablet_dc_dictionary {
@@ -838,7 +849,7 @@ public:
     /// Recomputes the per-datacenter counts of the tablets whose replica sets changed.
     /// Datacenters missing from dcs are added to it.
     /// Returns the number of recomputed tablets with a replica whose datacenter is unknown.
-    future<size_t> update_dc_counts(const topology&, tablet_dc_dictionary& dcs);
+    future<size_t> update_dc_counts(host_dc_resolver, tablet_dc_dictionary& dcs);
 
     /// Returns true for strongly-consistent tablets.
     /// Use get_tablet_raft_info() to retrieve Raft info for a specific tablet_id.
