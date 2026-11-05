@@ -423,6 +423,10 @@ std::optional<data_dictionary::consistency_config_option> ks_prop_defs::get_cons
     }
 }
 
+std::optional<property_definitions::map_type> ks_prop_defs::get_preferred_rack() const {
+    return get_map(KW_PREFERRED_RACK);
+}
+
 std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
     return _strategy_class;
 }
@@ -465,10 +469,24 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
     bool uses_tablets = initial_tablets.has_value();
     bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat.rack_list_rf;
-    auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), {}, rack_list_enabled, uses_tablets);
+    auto preferred_rack = get_preferred_rack().value_or(map_type{});
+    // Checked before prepare_options(), which may expand a numeric RF into a rack list.
+    const auto raw_options = get_replication_options();
+    for (const auto& [dc, rack] : preferred_rack) {
+        auto it = raw_options.find(dc);
+        if (it == raw_options.end()) {
+            it = raw_options.find(REPLICATION_FACTOR_KEY);
+        }
+        if (it != raw_options.end()
+                && !locator::abstract_replication_strategy::parse_replication_factor(it->second).is_rack_based()) {
+            throw exceptions::configuration_exception(
+                fmt::format("preferred_rack requires rack-based replication for datacenter '{}', but replication factor is numeric", dc));
+        }
+    }
+    auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), raw_options, {}, rack_list_enabled, uses_tablets);
     auto config_options = apply_config_updates({}, *this, feat);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
-            std::move(options), initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, std::nullopt, std::move(config_options));
+            std::move(options), initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, std::nullopt, std::move(config_options), std::move(preferred_rack));
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
@@ -479,6 +497,9 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
     if (const auto consistency = get_consistency_option();
             consistency && *consistency != old->consistency_option().value_or(data_dictionary::consistency_config_option::eventual)) {
         throw exceptions::invalid_request_exception("Cannot alter consistency option of a keyspace");
+    }
+    if (const auto preferred_rack = get_preferred_rack(); preferred_rack && *preferred_rack != old->preferred_rack()) {
+        throw exceptions::invalid_request_exception("Cannot alter preferred_rack of a keyspace");
     }
 
     locator::replication_strategy_config_options options;
@@ -498,7 +519,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
         options = old_options;
     }
     auto config_options = apply_config_updates(old->config_options(), *this, feat);
-    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, old->consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt(), std::move(config_options));
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, old->consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt(), std::move(config_options), old->preferred_rack());
 }
 
 namespace {

@@ -52,10 +52,11 @@ public:
     static constexpr auto KW_STORAGE = "storage";
     static constexpr auto KW_TABLETS = "tablets";
     static constexpr auto KW_CONSISTENCY = "consistency";
+    static constexpr auto KW_PREFERRED_RACK = "preferred_rack";
 
     // The keywords a keyspace statement accepts besides registry-backed config options.
     static std::set<sstring> keywords() {
-        return {KW_DURABLE_WRITES, KW_REPLICATION, KW_STORAGE, KW_TABLETS, KW_CONSISTENCY};
+        return {KW_DURABLE_WRITES, KW_REPLICATION, KW_STORAGE, KW_TABLETS, KW_CONSISTENCY, KW_PREFERRED_RACK};
     }
 
     static constexpr auto REPLICATION_STRATEGY_CLASS_KEY = "class";
@@ -83,6 +84,7 @@ public:
     void set_default_replication_strategy_class_option();
     std::optional<unsigned> get_initial_tablets(std::optional<unsigned> default_value, bool enforce_tablets = false) const;
     std::optional<data_dictionary::consistency_config_option> get_consistency_option() const;
+    std::optional<map_type> get_preferred_rack() const;
     data_dictionary::storage_options get_storage_options() const;
     bool get_durable_writes() const;
     bool has_keyspace_config_properties(const gms::feature_service&) const;
