@@ -15,6 +15,7 @@
 #include <seastar/core/byteorder.hh>
 #include "index_reader.hh"
 #include "sstables/mx/partition_reversing_data_source.hh"
+#include "sstables/object_storage_page_cache_compaction.hh"
 
 namespace sstables {
 
@@ -129,6 +130,15 @@ inline future<std::unique_ptr<DataConsumeRowsContext>> data_consume_rows(const s
     // returned context, and may make small skips.
     auto input = co_await sst->data_stream(toread.start, last_end - toread.start,
             consumer.permit(), consumer.trace_state(), sst->_partition_range_history, sstable::raw_stream::no, integrity, populate);
+    if constexpr (requires { consumer.page_cache_input(); }) {
+        // A compaction's read tells which of the data it reads is cached
+        // (see object_storage_page_cache_compaction.hh).
+        if (auto* page_cache_input = consumer.page_cache_input()) {
+            co_return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer,
+                    input_stream<char>(make_page_cache_compaction_source(std::move(input), *page_cache_input, toread.start)),
+                    toread.start, toread.end - toread.start);
+        }
+    }
     co_return std::make_unique<DataConsumeRowsContext>(s, std::move(sst), consumer, std::move(input), toread.start, toread.end - toread.start);
 }
 
