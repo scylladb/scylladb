@@ -131,8 +131,8 @@ class raft_commitlog_replay_buffer {
         raft::group_id group_id, group_state& group);
 
     // Apply one committed command entry: a write to its table's memtable, a resize marker
-    // to the group's row in system.raft_groups, a truncate to the tablet. A write the
-    // recorded truncate dropped is skipped.
+    // or a seal to the group's row in system.raft_groups, a truncate to the tablet. A write
+    // the recorded truncate dropped is skipped.
     future<> apply_committed(replica::database& db, db::system_keyspace& sys_ks,
         raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry);
 
