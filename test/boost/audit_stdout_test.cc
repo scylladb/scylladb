@@ -7,9 +7,11 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <climits>
 
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/core/fstream.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -72,9 +74,49 @@ sstring test_query(unsigned shard, int i) {
     return seastar::format("{}:{}:{}", shard, i, sstring(length, char('a' + i % 26)));
 }
 
-sstring test_record(unsigned shard, int i) {
+sstring test_record(std::string_view query) {
     return seastar::format(R"(scylla-audit: node="{}", category="DML", cl="ONE", error="false", keyspace="ks", query="{}", client_ip="{}", table="t", username="user")",
-            test_addr, test_query(shard, i), test_addr);
+            test_addr, query, test_addr);
+}
+
+sstring test_record(unsigned shard, int i) {
+    return test_record(test_query(shard, i));
+}
+
+// Query 0 is longer than a pipe can hold, the others are all equally long.
+sstring memory_test_query(unsigned shard, int i) {
+    return seastar::format("{}:{:03}:{}", shard, i, sstring(i == 0 ? pipe_capacity() + 4096 : pipe_capacity() / 4, 'a'));
+}
+
+// The writes of one shard that are not finished yet, with the records they write.
+struct unfinished_writes {
+    std::vector<std::unique_ptr<audit::audit_info>> infos;
+    std::vector<future<>> writes;
+
+    future<> stop() {
+        return make_ready_future<>();
+    }
+};
+
+struct fill_result {
+    int taken;
+    sstring error;
+};
+
+// Writes the records of memory_test_query() until one fails at once, and
+// returns how many were taken before it and its error.
+fill_result write_until_rejected(audit::audit_stdout_storage_helper& helper, unfinished_writes& unfinished) {
+    constexpr int max_records = 100;
+    for (int i = 0; i < max_records; ++i) {
+        auto& info = *unfinished.infos.emplace_back(std::make_unique<audit::audit_info>(audit::statement_category::DML, "ks", "t", false));
+        info.set_query_string(memory_test_query(this_shard_id(), i));
+        auto write = helper.write(test_sinks(), &info, test_addr, test_addr, db::consistency_level::ONE, "user", false);
+        if (write.failed()) {
+            return {i, seastar::format("{}", write.get_exception())};
+        }
+        unfinished.writes.push_back(std::move(write));
+    }
+    return {max_records, ""};
 }
 
 future<> write_test_record(audit::audit_stdout_storage_helper& helper, int i) {
@@ -221,6 +263,200 @@ SEASTAR_THREAD_TEST_CASE(test_gives_up_on_stalled_reader) {
         auto shard_pos = line.find(R"(query=")") + 7;
         auto shard = std::stoul(line.substr(shard_pos, line.find(':', shard_pos) - shard_pos));
         BOOST_REQUIRE(line.ends_with(test_record(shard, 0)));
+    }
+}
+
+// While nobody reads the pipe, each shard takes records up to the memory
+// limit. The record that does not fit fails at once and never reaches the
+// pipe, and once the pipe is read, the shard takes records again.
+SEASTAR_THREAD_TEST_CASE(test_limits_unwritten_memory) {
+    const size_t max_unwritten_memory = pipe_capacity() * 4;
+    test_pipe pipe;
+    db::config cfg;
+    sharded<audit::audit_stdout_storage_helper> helpers;
+    helpers.start(pipe.path, std::chrono::minutes(1), max_unwritten_memory).get();
+    auto stop_helpers = defer([&helpers] noexcept {
+        helpers.stop().get();
+    });
+    helpers.invoke_on_all([&cfg] (audit::audit_stdout_storage_helper& helper) {
+        return helper.start(cfg);
+    }).get();
+    sharded<unfinished_writes> unfinished;
+    unfinished.start().get();
+    auto stop_unfinished = defer([&unfinished] noexcept {
+        unfinished.stop().get();
+    });
+
+    // record 0 is longer than the pipe can hold, so no record is written
+    auto results = helpers.map([&unfinished] (audit::audit_stdout_storage_helper& helper) {
+        return write_until_rejected(helper, unfinished.local());
+    }).get();
+    int taken = 0;
+    for (const auto& result : results) {
+        BOOST_REQUIRE_GT(result.taken, 1);
+        BOOST_REQUIRE_NE(result.error.find("has no room for the record"), sstring::npos);
+        taken += result.taken;
+    }
+
+    auto lines = read_lines(pipe.in, taken).get();
+    unfinished.invoke_on_all([] (unfinished_writes& shard_writes) -> future<> {
+        for (auto& write : shard_writes.writes) {
+            co_await std::move(write);
+        }
+    }).get();
+    std::vector<int> next_record(this_smp_shard_count());
+    std::vector<size_t> taken_memory(this_smp_shard_count());
+    std::vector<size_t> last_record_size(this_smp_shard_count());
+    for (const auto& line : lines) {
+        auto shard_pos = line.find(R"(query=")") + 7;
+        auto shard = std::stoul(line.substr(shard_pos, line.find(':', shard_pos) - shard_pos));
+        BOOST_REQUIRE_LT(shard, this_smp_shard_count());
+        BOOST_REQUIRE(line.ends_with(test_record(memory_test_query(shard, next_record[shard]++))));
+        last_record_size[shard] = line.size() + 1;
+        taken_memory[shard] += last_record_size[shard];
+    }
+    for (unsigned shard = 0; shard < this_smp_shard_count(); ++shard) {
+        BOOST_REQUIRE_EQUAL(next_record[shard], results[shard].taken);
+        BOOST_REQUIRE_LE(taken_memory[shard], max_unwritten_memory);
+        // the rejected record is as long as the last one taken
+        BOOST_REQUIRE_GT(taken_memory[shard] + last_record_size[shard], max_unwritten_memory);
+    }
+
+    auto more_lines = read_lines(pipe.in, this_smp_shard_count());
+    helpers.invoke_on_all([] (audit::audit_stdout_storage_helper& helper) -> future<> {
+        audit::audit_info info(audit::statement_category::DML, "ks", "t", false);
+        info.set_query_string(memory_test_query(this_shard_id(), 999));
+        co_await helper.write(test_sinks(), &info, test_addr, test_addr, db::consistency_level::ONE, "user", false);
+    }).get();
+    for (const auto& line : more_lines.get()) {
+        auto shard_pos = line.find(R"(query=")") + 7;
+        auto shard = std::stoul(line.substr(shard_pos, line.find(':', shard_pos) - shard_pos));
+        BOOST_REQUIRE(line.ends_with(test_record(memory_test_query(shard, 999))));
+    }
+}
+
+// A record that the memory limit rejects leaves no future behind that fails
+// unhandled once the timeout passes.
+SEASTAR_THREAD_TEST_CASE(test_rejected_record_leaves_no_failed_future) {
+    constexpr auto timeout = std::chrono::milliseconds(500);
+    test_pipe pipe;
+    db::config cfg;
+    sharded<audit::audit_stdout_storage_helper> helpers;
+    helpers.start(pipe.path, timeout, pipe_capacity() * 4).get();
+    auto stop_helpers = defer([&helpers] noexcept {
+        helpers.stop().get();
+    });
+    helpers.invoke_on_all([&cfg] (audit::audit_stdout_storage_helper& helper) {
+        return helper.start(cfg);
+    }).get();
+    sharded<unfinished_writes> unfinished;
+    unfinished.start().get();
+    auto stop_unfinished = defer([&unfinished] noexcept {
+        unfinished.stop().get();
+    });
+    auto abandoned_failed_futures = [&helpers] {
+        return helpers.map([] (audit::audit_stdout_storage_helper&) {
+            return engine().abandoned_failed_futures();
+        }).get();
+    };
+
+    auto abandoned_before = abandoned_failed_futures();
+    auto results = helpers.map([&unfinished] (audit::audit_stdout_storage_helper& helper) {
+        return write_until_rejected(helper, unfinished.local());
+    }).get();
+    int taken = 0;
+    for (const auto& result : results) {
+        BOOST_REQUIRE_NE(result.error.find("has no room for the record"), sstring::npos);
+        taken += result.taken;
+    }
+
+    seastar::sleep(timeout * 2).get();
+    auto timed_out = unfinished.map([] (unfinished_writes& shard_writes) {
+        int count = 0;
+        for (auto& write : shard_writes.writes) {
+            if (write.failed() && seastar::format("{}", write.get_exception()).find("did not write the record within") != sstring::npos) {
+                ++count;
+            }
+        }
+        return count;
+    }).get();
+    auto abandoned_after = abandoned_failed_futures();
+    for (unsigned shard = 0; shard < this_smp_shard_count(); ++shard) {
+        BOOST_REQUIRE_EQUAL(timed_out[shard], results[shard].taken);
+        BOOST_REQUIRE_EQUAL(abandoned_after[shard], abandoned_before[shard]);
+    }
+
+    // drain the pipe, so that no write outlives the helpers
+    read_lines(pipe.in, taken).get();
+}
+
+// A record longer than the memory limit is taken only while no other record of
+// its shard waits to be written.
+SEASTAR_THREAD_TEST_CASE(test_takes_record_longer_than_limit) {
+    const size_t max_unwritten_memory = pipe_capacity() * 4;
+    test_pipe pipe;
+    audit::audit_stdout_storage_helper helper(pipe.path, std::chrono::minutes(1), max_unwritten_memory);
+    helper.start(db::config()).get();
+    auto stop_helper = defer([&helper] noexcept {
+        helper.stop().get();
+    });
+    auto write = [&helper] (const sstring& query) {
+        audit::audit_info info(audit::statement_category::DML, "ks", "t", false);
+        info.set_query_string(query);
+        return helper.write(test_sinks(), &info, test_addr, test_addr, db::consistency_level::ONE, "user", false);
+    };
+    auto first_query = memory_test_query(this_shard_id(), 0);
+    auto long_query = sstring(max_unwritten_memory + 4096, 'b');
+
+    // the first record is longer than the pipe can hold, so it waits
+    auto first = write(first_query);
+    BOOST_REQUIRE_EXCEPTION(write(long_query).get(), audit::audit_exception,
+            exception_predicate::message_contains("has no room for the record"));
+
+    auto lines = read_lines(pipe.in, 2);
+    first.get();
+    write(long_query).get();
+    auto written = lines.get();
+    BOOST_REQUIRE(written[0].ends_with(test_record(first_query)));
+    BOOST_REQUIRE(written[1].ends_with(test_record(long_query)));
+}
+
+// A batch of more buffers than one write to the pipe takes reaches the pipe
+// whole and in order.
+SEASTAR_THREAD_TEST_CASE(test_writes_batch_of_many_buffers) {
+    constexpr size_t chunk_size = 64 * 1024;
+    constexpr int records = 2 * IOV_MAX;
+    test_pipe pipe;
+    audit::audit_stdout_storage_helper helper(pipe.path, std::chrono::minutes(5), records * chunk_size * 2);
+    helper.start(db::config()).get();
+    auto stop_helper = defer([&helper] noexcept {
+        helper.stop().get();
+    });
+    // Query 0 is longer than a pipe can hold, so the others wait for it in one batch.
+    auto query = [] (int i) {
+        return seastar::format("{:04}:{}", i, sstring(i == 0 ? pipe_capacity() + 4096 : chunk_size, 'c'));
+    };
+
+    // The batch merges adjacent buffers, so a spacer after each record keeps
+    // its buffers apart, as they are when memory is fragmented.
+    std::vector<temporary_buffer<char>> spacers;
+    std::vector<future<>> writes;
+    for (int i = 0; i < records; ++i) {
+        audit::audit_info info(audit::statement_category::DML, "ks", "t", false);
+        info.set_query_string(query(i));
+        writes.push_back(helper.write(test_sinks(), &info, test_addr, test_addr, db::consistency_level::ONE, "user", false));
+        spacers.emplace_back(chunk_size);
+    }
+
+    auto lines = read_all_lines(pipe.in);
+    for (auto& write : writes) {
+        write.get();
+    }
+    helper.stop().get();
+    auto written = lines.get();
+    BOOST_REQUIRE_EQUAL(written.size(), size_t(records));
+    for (int i = 0; i < records; ++i) {
+        BOOST_REQUIRE(written[i].ends_with(test_record(query(i))));
     }
 }
 
