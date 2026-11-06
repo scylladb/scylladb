@@ -5,7 +5,7 @@
 import time
 
 from . import nodetool
-from .util import new_test_table
+from .util import new_test_table, unique_name
 
 
 
@@ -22,7 +22,7 @@ def test_snapshot_ttl(cql, test_keyspace):
             cql.execute(write, [i])
         nodetool.flush(cql, table)
 
-        tag = "test_snapshot"
+        tag = unique_name()
         ttl = 60
 
         # Take a snapshot of the table
