@@ -33,6 +33,10 @@ namespace replica {
 class database;
 }
 
+namespace cdc {
+class generation_service;
+}
+
 namespace db {
 class batchlog_manager;
 class raft_commitlog_replay_buffer;
@@ -250,6 +254,8 @@ public:
     virtual sharded<sstables::storage_manager>& get_sstorage_manager() = 0;
 
     virtual sharded<service::storage_service>& get_storage_service() = 0;
+
+    virtual sharded<cdc::generation_service>& get_cdc_generation_service() = 0;
 
     virtual sharded<tasks::task_manager>& get_task_manager() = 0;
 
