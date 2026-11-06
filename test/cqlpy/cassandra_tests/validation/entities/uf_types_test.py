@@ -35,7 +35,15 @@ def read_function_from_file(file_name, wasm_name=None, udf_name=None):
         print(f"Can't open {wat_path}.\nPlease build Wasm examples.")
         exit(1)
 
+<<<<<<< HEAD
 @pytest.mark.skip_bug(reason="Issue #22799")
+||||||| parent of c56fad91d7 (test/cqlpy: unskip test_complex_null_values)
+@pytest.mark.skip_bug(
+    link="https://github.com/scylladb/scylladb/issues/22799",
+    reason="CI regression, no understanding why this started happening ",
+)
+=======
+>>>>>>> c56fad91d7 (test/cqlpy: unskip test_complex_null_values)
 def test_complex_null_values(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(txt text, i int)") as type:
         schema = f"(key int primary key, lst list<double>, st set<text>, mp map<int, boolean>, tup frozen<tuple<double, text, int, boolean>>, udt frozen<{type}>)"
