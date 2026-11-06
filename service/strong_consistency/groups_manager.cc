@@ -55,6 +55,13 @@ static logging::logger logger("sc_groups_manager");
 // request holds the server by then, so all that's left is stopping it.
 static constexpr auto group_teardown_timeout = std::chrono::seconds(60);
 
+// Replicas whose priority lists disagree can hand the leadership back and forth. A
+// replica which gains it more than this many times within the window withdraws the
+// group's priority members for the hold, so that it keeps the leadership.
+static constexpr size_t max_leadership_gains = 3;
+static constexpr auto leadership_gains_window = std::chrono::minutes(1);
+static constexpr auto priority_members_hold = std::chrono::minutes(5);
+
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
@@ -435,6 +442,9 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         }
         _raft_gr.destroy_server(id);
         state.server = nullptr;
+        // The hold is for the server which bounced; a restarted one starts clean.
+        state.priority_members_hold.cancel();
+        state.leadership_gains.clear();
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
 
         // We need to erase the raft group state only if we are still the last operation on it.
@@ -464,6 +474,35 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
             on_internal_error(logger, format("raft group {} is already deleted", id));
         }
     });
+}
+
+void groups_manager::maybe_reset_priority_members(raft_group_state& state, raft::group_id gid) {
+    const auto now = lowres_clock::now();
+    auto& gains = state.leadership_gains;
+    while (!gains.empty() && now - gains.front() > leadership_gains_window) {
+        gains.pop_front();
+    }
+    gains.push_back(now);
+    if (gains.size() <= max_leadership_gains || state.priority_members_hold.armed()) {
+        return;
+    }
+    const auto hold = priority_members_hold;
+    logger.warn("group {}: this replica gained the leadership {} times within {}s, ignoring the preferred leaders for {}s",
+            gid, gains.size(), std::chrono::duration_cast<std::chrono::seconds>(leadership_gains_window).count(),
+            std::chrono::duration_cast<std::chrono::seconds>(hold).count());
+    gains.clear();
+    state.priority_members_hold.set_callback([&state, gid] {
+        // A queued deletion cancels the hold, so the chained push can't run after it.
+        if (state.gate->is_closed()) {
+            return;
+        }
+        chain_control_op(state, gid, [&state] {
+            state.server->set_priority_members(state.effective_priority_members());
+            return make_ready_future<>();
+        });
+    });
+    state.priority_members_hold.arm(hold);
+    state.server->set_priority_members({});
 }
 
 void groups_manager::chain_control_op(raft_group_state& state, raft::group_id id,
@@ -762,6 +801,8 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
                 continue;
             }
 
+            // Reached once per led term.
+            maybe_reset_priority_members(state, gid);
             logger.debug("leader_info_updater({}, group_id={}): current term {}, running read_barrier()",
                 tablet, gid,
                 current_term);
