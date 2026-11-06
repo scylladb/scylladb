@@ -2210,16 +2210,6 @@ schema::position(const column_definition& column) const {
     return clustering_key_size();
 }
 
-std::optional<index_metadata> schema::find_index_noname(const index_metadata& target) const {
-    const auto& it = std::ranges::find_if(_raw._indices_by_name, [&] (auto&& e) {
-        return e.second.equals_noname(target);
-    });
-    if (it != _raw._indices_by_name.end()) {
-        return it->second;
-    }
-    return {};
-}
-
 std::vector<index_metadata> schema::indices() const {
     return _raw._indices_by_name | std::views::values | std::ranges::to<std::vector>();
 }
