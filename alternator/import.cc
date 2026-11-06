@@ -8,8 +8,8 @@
 
 #include "alternator/import.hh"
 
-#include <array>
 #include <chrono>
+#include <string_view>
 #include <utility>
 #include <seastar/core/coroutine.hh>
 #include "alternator/error.hh"
@@ -68,7 +68,7 @@ static rjson::value get_table_creation_parameters(const rjson::value& request) {
     if (!params->IsObject()) {
         throw api_error::validation("TableCreationParameters attribute must be an object");
     }
-    constexpr std::array accepted_members{
+    static constexpr std::string_view accepted_members[] = {
             "TableName",
             "AttributeDefinitions",
             "KeySchema",
@@ -82,7 +82,8 @@ static rjson::value get_table_creation_parameters(const rjson::value& request) {
     rjson::value accepted = rjson::empty_object();
     for (std::string_view name : accepted_members) {
         if (const rjson::value* member = rjson::find(*params, name)) {
-            rjson::add_with_string_name(accepted, name, rjson::copy(*member));
+            // The name is a string literal, so it lives longer than accepted.
+            rjson::add(accepted, rjson::string_ref_type(name.data(), name.size()), rjson::copy(*member));
         }
     }
     // Unlike the dropped members, a GSI's WarmThroughput is refused, although
