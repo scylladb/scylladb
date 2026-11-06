@@ -1101,8 +1101,10 @@ future<> schema_and_topology_applier::commit() {
     // However, we can only acquire the (write) lock after preparing all
     // entities for the pending schema change that need to iterate over tables_metadata;
     // otherwise, such iteration would deadlock.
-    _metadata_locks = std::make_unique<replica::tables_metadata_lock_on_all_shards>(
-            co_await replica::database::lock_tables_metadata(sharded_db));
+    if (_lock_tables_metadata) {
+        _metadata_locks = std::make_unique<replica::tables_metadata_lock_on_all_shards>(
+                co_await replica::database::lock_tables_metadata(sharded_db));
+    }
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map
     // with a new e_r_m instance.

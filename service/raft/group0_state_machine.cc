@@ -341,6 +341,9 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 
     bool state_change = false;
     bool topology_changed = false;
+    // A topology_change carries no schema, so like master's topology_state_load()
+    // it does not take the tables_metadata lock.
+    bool schema_changed = false;
     modules_to_reload modules_to_reload;
     utils::chunked_vector<canonical_mutation>* mutations = nullptr;
 
@@ -348,6 +351,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     [&] (schema_change& chng) {
         modules_to_reload = get_modules_to_reload(chng.mutations);
         state_change = true;
+        schema_changed = true;
         mutations = &chng.mutations;
     },
     [] (unused&) {
@@ -363,6 +367,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         modules_to_reload = get_modules_to_reload(chng.mutations);
         state_change = true;
         topology_changed = true;
+        schema_changed = true;
         mutations = &chng.mutations;
     },
     [&] (write_mutations& muts) {
@@ -377,7 +382,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     // are only persisted.
     std::unique_ptr<db::schema_tables::schema_and_topology_applier> applier;
     if (state_change && _in_memory_state_machine_enabled) {
-        applier = std::make_unique<db::schema_tables::schema_and_topology_applier>(_sp.container(), _ss.container(), _ss._sys_ks, topology_changed);
+        applier = std::make_unique<db::schema_tables::schema_and_topology_applier>(_sp.container(), _ss.container(), _ss._sys_ks, topology_changed, schema_changed);
     }
     std::exception_ptr ex;
     try {
