@@ -688,6 +688,11 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
         persisted = true;
         co_await persist_snapshot_state(std::move(topology_snp), std::move(raft_snp));
         if (applier) {
+            // Lets a test fail the snapshot transfer after the snapshot is persisted,
+            // but before the in-memory state is updated from it.
+            co_await utils::get_local_injector().inject("group0_snapshot_transfer_apply_fail", [] {
+                return std::make_exception_ptr(std::runtime_error("injected failure in applying the transferred group 0 snapshot"));
+            });
             co_await applier->apply_persisted();
         }
     } catch (...) {
@@ -702,6 +707,7 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
             // already persisted and does not update the in-memory state. Stop the
             // group 0 server, as raft does when apply() fails. A failure caused by
             // shutdown is not fatal: the state is reloaded from disk after the restart.
+            slogger.error("The group 0 snapshot from {} was persisted, but applying it to the in-memory state failed: {:t}. Stopping group 0.", hid, ex);
             fail();
             _on_fatal_error(ex);
         }
