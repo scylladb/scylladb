@@ -296,6 +296,9 @@ private:
     std::optional<shared_promise<>> _state_change_promise;
     // Index of the last entry applied to `_state_machine`.
     index_t _applied_idx;
+    // The commit index start() waited to be applied before returning. Only
+    // for the block_raft_io_fiber_commit_past_start injection.
+    index_t _start_commit_idx;
     // Index of the last persisted snapshot descriptor.
     index_t _snapshot_desc_idx;
     std::list<active_read> _reads;
@@ -628,6 +631,7 @@ future<> server_impl::start() {
     }
 
     _is_alive = true;
+    _start_commit_idx = commit_idx;
 
     // start fiber to persist entries added to in-memory log
     _io_status = io_fiber(stable_idx);
@@ -1642,6 +1646,18 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         // the leader or, after a full cluster restart, the new leader recomputes
         // it from a quorum. So the commit notification above does not need to
         // wait for this write.
+        //
+        // Lets a test hold the io fiber before the commit index of entries
+        // that start() did not wait for is persisted. On a running server
+        // that is every commit, with the entries already in the persisted
+        // log: a crash here leaves them past the persisted commit index. On
+        // a restarted server it is every commit after start(); for a sole
+        // voter, whose whole log start() applied, the first one is of the
+        // dummy entry it appends as leader.
+        if (ids.last_idx > _start_commit_idx) {
+            co_await utils::get_local_injector().inject("block_raft_io_fiber_commit_past_start",
+                    utils::wait_for_message(std::chrono::minutes(5)));
+        }
         co_await _persistence->store_commit_idx(ids.last_idx);
         _stats->queue_entries_for_apply += ids.size();
         _applier_mailbox.publish_committed(ids.last_idx);
