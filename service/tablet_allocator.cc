@@ -37,11 +37,13 @@
 #include "gms/feature_service.hh"
 #include <algorithm>
 #include <bit>
+#include <deque>
 #include <iterator>
 #include <ranges>
 #include <utility>
 #include <fmt/ranges.h>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/coroutine/generator.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <absl/container/flat_hash_map.h>
@@ -1068,6 +1070,53 @@ private:
         return infos;
     }
 
+    // Plan makers write into the plan of their scope and yield after each migration group
+    // they add, so that the plan makers of different scopes can take turns. The yielded
+    // value carries no information.
+    using plan_generator = seastar::coroutine::experimental::generator<stop_iteration>;
+
+    // A plan maker for one location, and the plan it has made so far. The plans are
+    // kept apart until the round ends, to be logged and merged per location.
+    struct plan_maker {
+        sstring location;
+        migration_plan plan;
+        plan_generator generator;
+    };
+    using plan_makers = std::deque<plan_maker>; // The generators refer to the plans, so the elements must not move.
+
+    // Lets the generators take turns, one migration group each, until all of them are done.
+    plan_generator take_turns(std::vector<plan_generator> generators) {
+        while (!generators.empty()) {
+            for (auto it = generators.begin(); it != generators.end();) {
+                if (co_await (*it)()) {
+                    co_yield stop_iteration::no;
+                    ++it;
+                } else {
+                    it = generators.erase(it);
+                }
+            }
+        }
+    }
+
+    // The plan makers take turns, so that no location is favoured when they compete for
+    // a shared resource. Otherwise the location planned first would take the whole share
+    // and the others would not progress. The order is random.
+    future<> plan_in_turns(plan_makers& makers) {
+        std::vector<plan_maker*> order;
+        for (auto& pm : makers) {
+            order.push_back(&pm);
+        }
+        std::ranges::shuffle(order, rand_engine());
+        lblogger.debug("Planning order: {}", fmt::join(order | std::views::transform(&plan_maker::location), ", "));
+        std::vector<plan_generator> generators;
+        for (auto* pm : order) {
+            generators.push_back(std::move(pm->generator));
+        }
+        auto turns = take_turns(std::move(generators));
+        while (co_await turns()) {
+        }
+    }
+
     using migration_streaming_info_vector = utils::small_vector<tablet_migration_streaming_info, 2>;
     static migration_streaming_info_vector
     get_migration_streaming_infos(const locator::topology& topology, const tablet_map& tmap, const migration_vector& infos) {
@@ -1165,21 +1214,26 @@ public:
         auto rack_list_colocation = ongoing_rack_list_colocation();
         auto rf_change_prep = co_await prepare_per_rack_rf_change_plan(plan);
 
-        // Prepare plans for each DC separately and combine them to be executed in parallel.
+        plan_makers makers;
+        auto add_plan_maker = [&] (sstring location, dc_name dc, std::optional<sstring> rack, std::vector<rf_change_action> rf_change_actions) {
+            auto& pm = makers.emplace_back(plan_maker{.location = std::move(location)});
+            pm.generator = make_plan(pm.plan, dc, rack, std::move(rf_change_actions));
+        };
         for (auto&& dc : topo.get_datacenters()) {
             if (_db.get_config().rf_rack_valid_keyspaces() || _db.get_config().enforce_rack_list() || rack_list_colocation || !rf_change_prep.actions.empty()) {
                 for (auto rack : topo.get_datacenter_racks().at(dc) | std::views::keys) {
-                    auto rack_plan = co_await make_plan(dc, rack, rf_change_prep.actions[{dc, rack}]);
-                    auto level = rack_plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
-                    lblogger.log(level, "Plan for {}/{}: {}", dc, rack, plan_summary(rack_plan));
-                    plan.merge(std::move(rack_plan));
+                    add_plan_maker(fmt::format("{}/{}", dc, rack), dc, rack, rf_change_prep.actions[{dc, rack}]);
                 }
             } else {
-                auto dc_plan = co_await make_plan(dc);
-                auto level = dc_plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
-                lblogger.log(level, "Plan for {}: {}", dc, plan_summary(dc_plan));
-                plan.merge(std::move(dc_plan));
+                add_plan_maker(dc, dc, std::nullopt, {});
             }
+        }
+
+        co_await plan_in_turns(makers);
+        for (auto& pm : makers) {
+            auto level = pm.plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
+            lblogger.log(level, "Plan for {}: {}", pm.location, plan_summary(pm.plan));
+            plan.merge(std::move(pm.plan));
         }
 
         if (rack_list_colocation) {
@@ -1828,13 +1882,10 @@ public:
         co_return res;
     }
 
-    future<migration_plan> make_rf_change_plan(dc_rack_plan_state& state, node_load_map& nodes, std::vector<rf_change_action> actions) {
+    plan_generator make_rf_change_plan(dc_rack_plan_state& state, migration_plan& plan, node_load_map& nodes, std::vector<rf_change_action> actions) {
         lblogger.debug("In make_rf_change_plan");
         const auto& dc = state.dc;
         const auto& rack = *state.rack;
-
-        migration_plan mplan;
-        keyspace_rf_change_plan plan;
 
         auto nodes_by_load_dst = nodes | std::views::filter([&] (const auto& host_load) {
             auto& [host, load] = host_load;
@@ -1872,7 +1923,7 @@ public:
                     return a.state == rf_change_state::needs_extending;
                 });
                 if (actions.empty()) {
-                    co_return mplan;
+                    co_return;
                 }
             }
         }
@@ -1898,10 +1949,12 @@ public:
                 : ks.metadata()->tables();
             for (const auto& table_or_mv : table_list) {
                 const auto& tmap = _tm->tablets().get_tablet_map(table_or_mv->id());
-                co_await tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
-                    if (!_tm->tablets().is_base_table(table_or_mv->id())) {
-                        return make_ready_future<>();
-                    }
+                if (!_tm->tablets().is_base_table(table_or_mv->id())) {
+                    continue;
+                }
+                for (auto tid : tmap.tablet_ids()) {
+                    co_await coroutine::maybe_yield();
+                    const tablet_info& ti = tmap.get_tablet_info(tid);
 
                     auto gid = locator::global_tablet_id{table_or_mv->id(), tid};
 
@@ -1922,18 +1975,18 @@ public:
 
                     if ((rf_change_state == rf_change_state::needs_extending && (replica && !leaving_replica_in_this_rack)) ||
                             (rf_change_state == rf_change_state::needs_shrinking && (!replica && !pending_replica_in_this_rack))) {
-                        return make_ready_future<>();
+                        continue;
                     }
 
                     // Skip tablet that is in transitions.
                     if (tti) {
                         lblogger.debug("Skipped rf change extending for tablet={} which is already in transition={} stage={}", gid, tti->transition, tti->stage);
-                        return make_ready_future<>();
+                        continue;
                     }
 
                     // Skip tablet that is about to be in transition.
                     if (_scheduled_tablets.contains(gid)) {
-                        return make_ready_future<>();
+                        continue;
                     }
 
                     auto host = replica ? replica->host : ti.replicas.front().host;
@@ -1969,14 +2022,18 @@ public:
                         };
                         auto mig_streaming_info = get_migration_streaming_info(topo, ti, mig);
                         pick(*state.load_sketch, dst.host, dst.shard, source_tablets);
-                        if (can_accept_load(nodes, mig_streaming_info)) {
+                        bool accepted = can_accept_load(nodes, mig_streaming_info);
+                        if (accepted) {
                             lblogger.debug("Starting rebuild_v2 transition to {}.{} of tablet {}; new_replica = {}", dc, rack, gid, pending_replica);
                             apply_load(nodes, mig_streaming_info);
                             mark_as_scheduled(mig);
-                            mplan.add(std::move(mig));
                         }
                         increase_node_load(nodes, dst, source_tablets);
                         std::push_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
+                        if (accepted) {
+                            plan.add(std::move(mig));
+                            co_yield stop_iteration::no;
+                        }
                     } else {
                         auto next = ti.replicas | std::views::filter([&] (const tablet_replica& r) {
                             return r != *replica;
@@ -1994,21 +2051,22 @@ public:
                         if (state.load_sketch->has_node(replica->host) && !(rep_node && rep_node->is_excluded())) {
                             unload(*state.load_sketch, replica->host, replica->shard, source_tablets);
                         }
-                        if (can_accept_load(nodes, mig_streaming_info)) {
+                        bool accepted = can_accept_load(nodes, mig_streaming_info);
+                        if (accepted) {
                             apply_load(nodes, mig_streaming_info);
                             mark_as_scheduled(mig);
-                            mplan.add(std::move(mig));
                         }
                         if (nodes.contains(replica->host)) {
                             decrease_node_load(nodes, *replica, source_tablets);
                         }
+                        if (accepted) {
+                            plan.add(std::move(mig));
+                            co_yield stop_iteration::no;
+                        }
                     }
-                    return make_ready_future<>();
-                });
+                }
             }
         }
-        mplan.set_rf_change_plan(std::move(plan));
-        co_return mplan;
     }
 
     // Returns true if a table has replicas of all its sibling tablets co-located.
@@ -3124,10 +3182,14 @@ public:
         return !_db.features().tablet_merge || utils::get_local_injector().enter("tablet_merge_completion_bypass");
     }
 
-    size_t rand_int() const {
+    static std::default_random_engine& rand_engine() {
         static thread_local std::default_random_engine re{std::random_device{}()};
+        return re;
+    }
+
+    size_t rand_int() const {
         static thread_local std::uniform_int_distribution<size_t> dist;
-        return dist(re);
+        return dist(rand_engine());
     }
 
     shard_id rand_shard(shard_id shard_count) const {
@@ -3460,8 +3522,10 @@ public:
         sketch.pick(host, shard, tablet_set.tablets().size(), tablet_set.tablet_set_disk_size);
     }
 
-    // A candidate parked in the skip list of a drained node may have been scheduled since,
-    // through another replica. A tablet can be in only one transition at a time.
+    // A candidate may have been scheduled since it was picked as one: by another scope, which
+    // holds another replica of the tablet and erases its own candidates only, or by this scope
+    // through another replica while the candidate was parked in the skip list of a drained node.
+    // A tablet can be in only one transition at a time.
     bool already_scheduled(const migration_tablet_set& tablets) const {
         return std::ranges::any_of(tablets.tablets(), [&] (const global_tablet_id& t) {
             return _scheduled_tablets.contains(t);
@@ -3478,14 +3542,13 @@ public:
         }
     }
 
-    future<migration_plan> make_node_plan(dc_rack_plan_state& state, node_load_map& nodes, host_id host, node_load& node_load) {
-        migration_plan plan;
+    plan_generator make_node_plan(dc_rack_plan_state& state, migration_plan& plan, node_load_map& nodes, host_id host, node_load& node_load) {
         const tablet_metadata& tmeta = _tm->tablets();
         bool shuffle = in_shuffle_mode();
 
         if (node_load.shard_count <= 1) {
             lblogger.debug("Node {} is balanced", host);
-            co_return plan;
+            co_return;
         }
 
         auto& sketch = *state.load_sketch;
@@ -3564,17 +3627,24 @@ public:
 
             auto candidate = co_await peek_candidate(state, nodes, src_info, tablet_replica{host, src}, tablet_replica{host, dst});
             auto tablets = candidate.tablets;
+            auto& tmap = tmeta.get_tablet_map(tablets.table());
 
             if (!shuffle && (src == dst || !check_intranode_convergence(node_load, src, dst, tablets))) {
                 lblogger.debug("Node {} is balanced", host);
                 break;
             }
 
+            if (already_scheduled(tablets)) {
+                lblogger.debug("Candidate {} skipped because it is already scheduled", tablets);
+                state.migrating_candidates++;
+                erase_candidates(nodes, tmap, tablets);
+                continue;
+            }
+
             // Emit migration.
 
             auto mig = get_migration_info(tablets, tablet_transition_kind::intranode_migration,
                                           tablet_replica{host, src}, tablet_replica{host, dst});
-            auto& tmap = tmeta.get_tablet_map(tablets.table());
             auto mig_streaming_info = get_migration_streaming_infos(_tm->get_topology(), tmap, mig);
 
             if (!can_accept_load(nodes, mig_streaming_info)) {
@@ -3588,16 +3658,16 @@ public:
             state.stats->migrations_produced++;
             state.stats->intranode_migrations_produced++;
             mark_as_scheduled(mig);
-            plan.add(std::move(mig));
 
             erase_candidates(nodes, tmap, tablets);
 
             update_node_load_on_migration(node_load, host, src, dst, tablets);
             pick(sketch, host, dst, tablets);
             unload(sketch, host, src, tablets);
-        }
 
-        co_return plan;
+            plan.add(std::move(mig));
+            co_yield stop_iteration::no;
+        }
     }
 
     bool is_strongly_consistent(table_id table) const {
@@ -3618,9 +3688,7 @@ public:
     }
 
     // Changes the candidates of `nodes`, which no later plan looks at.
-    future<migration_plan> make_intranode_plan(dc_rack_plan_state& state, node_load_map& nodes, const std::unordered_set<host_id>& skip_nodes) {
-        migration_plan plan;
-
+    plan_generator make_intranode_plan(dc_rack_plan_state& state, migration_plan& plan, node_load_map& nodes, const std::unordered_set<host_id>& skip_nodes) {
         for (auto&& [host, node_load] : nodes) {
             if (skip_nodes.contains(host)) {
                 lblogger.debug("Skipped balancing of node {}", host);
@@ -3630,10 +3698,11 @@ public:
             for (auto& shard : node_load.shards) {
                 drop_strongly_consistent_candidates(shard);
             }
-            plan.merge(co_await make_node_plan(state, nodes, host, node_load));
+            auto node_plan = make_node_plan(state, plan, nodes, host, node_load);
+            while (co_await node_plan()) {
+                co_yield stop_iteration::no;
+            }
         }
-
-        co_return plan;
     }
 
     struct skip_info {
@@ -4060,11 +4129,9 @@ public:
         lblogger.debug("Table {} shard overcommit: {}", table, overcommit);
     }
 
-    future<migration_plan> make_internode_plan(dc_rack_plan_state& state, node_load_map& nodes,
-                                               const std::unordered_set<host_id>& nodes_to_drain,
-                                               host_id target) {
-        migration_plan plan;
-
+    plan_generator make_internode_plan(dc_rack_plan_state& state, migration_plan& plan, node_load_map& nodes,
+                                            const std::unordered_set<host_id>& nodes_to_drain,
+                                            host_id target) {
         // Prepare candidate nodes and shards for heap-based balancing.
 
         // Any given node is either in nodes_by_load or nodes_by_load_dst, but not both.
@@ -4317,12 +4384,14 @@ public:
 
             pick(*state.load_sketch, dst.host, dst.shard, source_tablets);
 
+            bool produced = false;
             if (can_accept_load(nodes, mig_streaming_info)) {
                 apply_load(nodes, mig_streaming_info);
                 lblogger.debug("Adding migration: {} size: {}", mig, source_tablets.tablet_set_disk_size);
                 state.stats->migrations_produced++;
                 mark_as_scheduled(mig);
                 plan.add(std::move(mig));
+                produced = true;
 
                 if (kind == tablet_transition_kind::rebuild || kind == tablet_transition_kind::rebuild_v2) {
                     ++state.stats->rebuilds_produced;
@@ -4354,6 +4423,10 @@ public:
             if (lblogger.is_enabled(seastar::log_level::debug)) {
                 co_await log_table_load(nodes, source_tablets.table());
             }
+
+            if (produced) {
+                co_yield stop_iteration::no;
+            }
         }
 
         if (plan.size() == batch_size) {
@@ -4382,8 +4455,6 @@ public:
                 print_node_stats(nodes, only_active::no);
             }
         }
-
-        co_return std::move(plan);
     }
 
     class sibling_tablets_replicas_processor {
@@ -4455,11 +4526,10 @@ public:
         }
     }
 
-    future<migration_plan> make_plan(dc_name dc, std::optional<sstring> rack = std::nullopt, std::vector<rf_change_action> rf_change_actions = {}) {
-        migration_plan plan;
-
+    // Makes the plan for one DC or DC/rack and writes it into plan.
+    plan_generator make_plan(migration_plan& plan, dc_name dc, std::optional<sstring> rack, std::vector<rf_change_action> rf_change_actions) {
         if (utils::get_local_injector().enter("tablet_migration_bypass")) {
-            co_return std::move(plan);
+            co_return;
         }
 
         dc_rack_plan_state state{
@@ -4617,7 +4687,7 @@ public:
             }
             if (!node.dusage) {
                 lblogger.info("Cannot balance because capacity of node {} (or more) is unknown", host);
-                co_return plan;
+                co_return;
             }
         }
 
@@ -4628,7 +4698,7 @@ public:
                     state.load_sketch->ignore_incomplete_data(host);
                 } else {
                     lblogger.info("Cannot balance because node {} (or more) has incomplete tablet stats", host);
-                    co_return plan;
+                    co_return;
                 }
             }
         }
@@ -4787,17 +4857,26 @@ public:
         if (has_dest_nodes && (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || !is_balanced(min_load, max_load)))) && !nodes.empty()) {
             host_id target = *min_load_node;
             lblogger.info("target node: {}, avg_load: {}, max: {}", target, min_load, max_load);
-            plan.merge(co_await make_internode_plan(state, nodes, nodes_to_drain, target));
+            auto stage = make_internode_plan(state, plan, nodes, nodes_to_drain, target);
+            while (co_await stage()) {
+                co_yield stop_iteration::no;
+            }
         } else {
             state.stats->stop_balance++;
         }
 
         if (_tm->tablets().balancing_enabled()) {
-            plan.merge(co_await make_intranode_plan(state, nodes, nodes_to_drain));
+            auto stage = make_intranode_plan(state, plan, nodes, nodes_to_drain);
+            while (co_await stage()) {
+                co_yield stop_iteration::no;
+            }
         }
 
         if (!rf_change_actions.empty() && rack.has_value()) {
-            plan.merge(co_await make_rf_change_plan(state, nodes, rf_change_actions));
+            auto stage = make_rf_change_plan(state, plan, nodes, rf_change_actions);
+            while (co_await stage()) {
+                co_yield stop_iteration::no;
+            }
         }
 
         if (_tm->tablets().balancing_enabled() && plan.empty() && !ongoing_rack_list_colocation()) {
@@ -4808,7 +4887,6 @@ public:
         }
 
         co_await utils::clear_gently(nodes);
-        co_return std::move(plan);
     }
 };
 
