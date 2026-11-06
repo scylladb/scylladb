@@ -20,6 +20,7 @@
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
 #include "object_storage_client.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "db/config.hh"
 #include "db/object_storage_endpoint_param.hh"
 #include "gms/feature.hh"
@@ -298,6 +299,9 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         db_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
+    if (auto it = _tables.find(schema->id()); it != _tables.end() && it->second.closes) {
+        throw data_dictionary::no_such_column_family(schema->id());
+    }
     return make_lw_shared<sstable>(std::move(schema), storage, generation, sid, state, v, f, get_large_data_handler(), get_corrupt_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
 }
 
@@ -462,11 +466,33 @@ future<> sstables_manager::await_table_sstables_destroyed(table_id id) {
     });
 }
 
+void sstables_manager::close_table(table_id id) {
+    ++_tables[id].closes;
+}
+
+void sstables_manager::reopen_table(table_id id) noexcept {
+    auto it = _tables.find(id);
+    if (it == _tables.end() || it->second.closes == 0) {
+        on_internal_error_noexcept(smlogger, format("Reopening table {}, which is not closed", id));
+        return;
+    }
+    if (--it->second.closes == 0 && it->second.count == 0) {
+        _tables.erase(it);
+    }
+}
+
+bool sstables_manager::table_has_sstables(table_id id) const noexcept {
+    auto it = _tables.find(id);
+    return it != _tables.end() && it->second.count != 0;
+}
+
 void sstables_manager::remove(sstable* sst) {
     _undergoing_close.erase(_undergoing_close.iterator_to(*sst));
     auto it = _tables.find(sst->get_schema()->id());
     if (--it->second.count == 0) {
-        _tables.erase(it);
+        if (!it->second.closes) {
+            _tables.erase(it);
+        }
         _table_sstables_destroyed.broadcast();
     }
     delete sst;

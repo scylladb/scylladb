@@ -174,6 +174,9 @@ private:
     struct table_sstables {
         // The number of sstables of the table that are not destroyed yet.
         size_t count = 0;
+        // The number of close_table() calls that reopen_table() has not
+        // undone yet. make_sstable() fails for the table while it is not zero.
+        unsigned closes = 0;
     };
     std::unordered_map<table_id, table_sstables> _tables;
     // Signalled when the last sstable of a table is destroyed.
@@ -336,6 +339,18 @@ public:
     // Waits until every sstable of the table on this shard is destroyed. Then
     // the files of those that were deleted are gone.
     future<> await_table_sstables_destroyed(table_id id);
+    // Makes make_sstable() fail for the table, until reopen_table() undoes
+    // the call. Called before the directory of a dropped table is removed.
+    // Once the table is closed, the number of its sstables can only go down,
+    // so after table_has_sstables() returns false, or
+    // await_table_sstables_destroyed() returns, no sstable of the table can
+    // use the directory on this shard. The calls nest, so that the removal of
+    // the storage of a dropped table and clear_snapshot() can both close it.
+    void close_table(table_id id);
+    // Undoes one close_table() call.
+    void reopen_table(table_id id) noexcept;
+    // Tells if some sstable of the table on this shard is not destroyed yet.
+    bool table_has_sstables(table_id id) const noexcept;
 
     std::vector<std::filesystem::path> get_local_directories(const data_dictionary::storage_options::local& so) const;
 
