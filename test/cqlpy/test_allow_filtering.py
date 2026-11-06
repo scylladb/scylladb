@@ -31,7 +31,7 @@ import time
 from cassandra.protocol import InvalidRequest, ConfigurationException
 
 from test.pylib.skip_types import skip_env
-from .util import unique_name, new_test_table
+from .util import config_value_context, unique_name, new_named_table, new_test_table
 
 # check_af_optional() and check_af_mandatory() are utility functions for
 # checking that ALLOW FILTERING is optional or mandatory on a SELECT on a
@@ -533,3 +533,78 @@ def test_allow_filtering_index_intersection_sai(cql, test_keyspace, cassandra_bu
         check_af_mandatory(cql, (table, everything),
             "x = 1 AND y = 1",
             lambda r : r.x == 1 and r.y == 1)
+
+# With strict_allow_filtering=warn, a query that needs ALLOW FILTERING but
+# doesn't have it (here, a restriction on a clustering column only) is
+# executed, but with a warning. With strict_allow_filtering=false there is
+# no warning.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_strict_allow_filtering_warn(scylla_only, cql, test_keyspace):
+    warning = "This query should use ALLOW FILTERING and will be rejected in future versions."
+    with new_test_table(cql, test_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+        for pk in range(3):
+            cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ({pk}, 2, 100)")
+        with config_value_context(cql, 'strict_allow_filtering', 'warn'):
+            result = cql.execute(f"SELECT pk, ck FROM {table} WHERE ck = 2")
+            assert sorted(result) == [(0, 2), (1, 2), (2, 2)]
+            assert result.response_future.warnings and warning in result.response_future.warnings
+        with config_value_context(cql, 'strict_allow_filtering', 'false'):
+            result = cql.execute(f"SELECT pk, ck FROM {table} WHERE ck = 2")
+            assert sorted(result) == [(0, 2), (1, 2), (2, 2)]
+            assert not result.response_future.warnings
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# Restrictions on the parts of a composite partition key, alone or with the
+# clustering key, with ALLOW FILTERING, also in count(*); without ALLOW
+# FILTERING such queries are rejected (CASSANDRA-11031).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_filtering_on_partition_key_parts(cql, test_keyspace_vnodes):
+    table = f"{test_keyspace_vnodes}.test_filter"
+    cql.execute(f"CREATE TABLE IF NOT EXISTS {table} (k1 int, k2 int, ck1 int, v int, PRIMARY KEY ((k1, k2), ck1))")
+    try:
+        for k1 in [0, 1]:
+            for k2 in [0, 1]:
+                for ck1 in range(4):
+                    cql.execute(f"INSERT INTO {table} (k1, k2, ck1, v) VALUES ({k1}, {k2}, {ck1}, 0)")
+        def select(where):
+            return sorted(cql.execute(f"SELECT * FROM {table} WHERE {where}"))
+        def rows(k1s, k2s, ck1s=range(4)):
+            return sorted((k1, k2, ck1, 0) for k1 in k1s for k2 in k2s for ck1 in ck1s)
+        assert select("k1 = 0 ALLOW FILTERING") == rows([0], [0, 1])
+        assert select("k1 <= 1 AND k2 >= 1 ALLOW FILTERING") == rows([0, 1], [1])
+        assert select("k1 = 2 ALLOW FILTERING") == []
+        assert select("k1 <=0 AND k2 > 1 ALLOW FILTERING") == []
+        assert select("k2 <= 0 ALLOW FILTERING") == rows([0, 1], [0])
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k1 <= 0 AND k2 = 0 ALLOW FILTERING")) == rows([0], [0])
+        assert select("k2 = 1 ALLOW FILTERING") == rows([0, 1], [1])
+        assert select("k2 = 2 ALLOW FILTERING") == []
+        assert select("k1 = 0 AND ck1=0 ALLOW FILTERING") == rows([0], [0, 1], [0])
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k1 = 0 AND k2=1 AND ck1=0")) == [(0, 1, 0, 0)]
+        for k2, count in [(0, 8), (1, 8), (2, 0)]:
+            assert list(cql.execute(f"SELECT count(*) FROM {table} WHERE k2 = {k2} ALLOW FILTERING")) == [(count,)]
+        for where in ["k1 = 0", "k1 = 0 AND k2 > 0", "k1 >= 0 AND k2 in (0,1,2)", "k2 > 0"]:
+            with pytest.raises(InvalidRequest, match="ALLOW FILTERING|allow filtering"):
+                cql.execute(f"SELECT * FROM {table} WHERE {where}")
+    finally:
+        cql.execute(f"DROP TABLE {table}")
+
+# Restrictions that need no filtering are allowed with and without ALLOW
+# FILTERING; restrictions on regular columns need it.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_allow_filtering_required(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, c int, v int, PRIMARY KEY (k, c)") as table:
+        for i in range(3):
+            for j in range(3):
+                cql.execute(f"INSERT INTO {table}(k, c, v) VALUES({i}, {j}, {j})")
+        for where, expected in [("k = 1", [(1, 0, 0), (1, 1, 1), (1, 2, 2)]), ("k = 1 AND c > 2", []), ("k = 1 AND c = 2", [(1, 2, 2)])]:
+            assert list(cql.execute(f"SELECT * FROM {table} WHERE {where}")) == expected
+            assert list(cql.execute(f"SELECT * FROM {table} WHERE {where} ALLOW FILTERING")) == expected
+        for where, expected in [("v = 2", [(0, 2, 2), (1, 2, 2), (2, 2, 2)]), ("v > 2 AND v <= 4", [])]:
+            assert sorted(cql.execute(f"SELECT * FROM {table} WHERE {where} ALLOW FILTERING")) == expected
+            with pytest.raises(InvalidRequest, match="ALLOW FILTERING|allow filtering"):
+                cql.execute(f"SELECT * FROM {table} WHERE {where}")
+

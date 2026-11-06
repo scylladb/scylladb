@@ -133,3 +133,16 @@ async def test_replace_reuse_ip_using_host_id(manager: ScyllaClusterManager) -> 
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = True)
     await manager.server_add(replace_cfg)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+async def test_replace_after_full_cluster_restart(manager: ScyllaClusterManager) -> None:
+    """Stop the whole cluster, start all nodes but one, and replace that one."""
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
+    for s in servers:
+        await manager.server_stop_gracefully(s.server_id)
+    for s in servers[:2]:
+        await manager.server_start(s.server_id)
+    replace_cfg = ReplaceConfig(replaced_id=servers[2].server_id, reuse_ip_addr=False, use_host_id=True)
+    await manager.server_add(replace_cfg, property_file=servers[2].property_file())
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)

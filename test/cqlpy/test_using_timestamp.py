@@ -10,7 +10,7 @@
 # aiming to reproduce bugs discovered by bigger Cassandra tests.
 #############################################################################
 
-from .util import unique_name, unique_key_int, new_test_table, config_value_context
+from .util import unique_name, unique_key_int, new_named_table, new_test_table, config_value_context
 from test.pylib.skip_types import skip_env
 from cassandra.protocol import InvalidRequest
 from cassandra.query import BoundStatement
@@ -306,3 +306,55 @@ def test_empty_timestamp(cql, table1, cassandra_bug):
     bound.values = [struct.pack('>i', p), struct.pack('>i', 1), b'']
     with pytest.raises(InvalidRequest):
         cql.execute(bound)
+
+# Ported from scylla-dtest cql_additional_tests.py::TestsCQLAdditional::test_restricted_future_timestamp.
+# USING TIMESTAMP up to 2 days in the future is always allowed in INSERT,
+# UPDATE and DELETE. With restrict_future_timestamp=true, 5 days or more in
+# the future is rejected (while a write without USING TIMESTAMP succeeds);
+# with restrict_future_timestamp=false, it is allowed too.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("restrict", [False, True])
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_restrict_future_timestamp(scylla_only, cql, test_keyspace, restrict):
+    def check_write(table, timestamp):
+        cql.execute(f"INSERT INTO {table} (key, val1, val2) VALUES (1, 'java1', 1.0) USING TIMESTAMP {timestamp}")
+        result = list(cql.execute(f"SELECT * FROM {table}"))
+        assert len(result) == 1, "Invalid number of inserted rows"
+        assert list(cql.execute(f"SELECT writetime(val1) FROM {table} WHERE key = 1")) == [(timestamp,)]
+        cql.execute(f"UPDATE {table} USING TIMESTAMP {timestamp + 100} SET val1 = 'test' WHERE key = 1")
+        assert list(cql.execute(f"SELECT writetime(val1) FROM {table} WHERE key = 1")) == [(timestamp + 100,)]
+        cql.execute(f"DELETE val1 FROM {table} USING TIMESTAMP {timestamp + 1000} WHERE key = 1")
+        result = list(cql.execute(f"SELECT val1 FROM {table} WHERE key = 1"))
+        assert result[0].val1 is None
+
+    with new_named_table(cql, test_keyspace, "foobar", "key bigint PRIMARY KEY , val1 text , val2 float") as table, \
+         config_value_context(cql, 'restrict_future_timestamp', str(restrict).lower()):
+        # A timestamp less than 3 days in the future is always written.
+        for day in [0, 1, 2]:
+            check_write(table, int((time.time() + day * 24 * 3600) * 1000000))
+
+        # A timestamp more than 3 days in the future is written only if
+        # restrict_future_timestamp is disabled.
+        for day in [5, 10, 100, 1000]:
+            timestamp = int((time.time() + day * 24 * 3600) * 1000000)
+            if restrict:
+                with pytest.raises(InvalidRequest, match="into the future"):
+                    cql.execute(f"INSERT INTO {table} (key, val1, val2) VALUES (1, 'java1', 1.0) USING TIMESTAMP {timestamp}")
+                cql.execute(f"INSERT INTO {table} (key, val1, val2) VALUES (1, 'java1', 1.0)")
+                with pytest.raises(InvalidRequest, match="into the future"):
+                    cql.execute(f"UPDATE {table} USING TIMESTAMP {timestamp} SET val1 = 'test' WHERE key = 1")
+                with pytest.raises(InvalidRequest, match="into the future"):
+                    cql.execute(f"DELETE val1 FROM {table} USING TIMESTAMP {timestamp} WHERE key = 1")
+            else:
+                check_write(table, timestamp)
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# A negative USING TIMESTAMP is accepted and returned by writetime().
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_negative_timestamp_writetime(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (k, v) VALUES (1, 1) USING TIMESTAMP -42")
+        assert list(cql.execute(f"SELECT writetime(v) FROM {table.upper()} WHERE k = 1")) == [(-42,)]

@@ -853,6 +853,7 @@ def testClusteringOrder(cql, test_keyspace):
 # Test for CASSANDRA-7105 bug,
 # SELECT with IN on final column of composite and compound primary key fails
 # migrated from cql_tests.py:TestCQL.bug7105_test()
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def testSelectInFinalColumn(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, d int, PRIMARY KEY (a, b))") as table:
         execute(cql, table, "INSERT INTO %s (a, b, c, d) VALUES (1, 2, 3, 3)")

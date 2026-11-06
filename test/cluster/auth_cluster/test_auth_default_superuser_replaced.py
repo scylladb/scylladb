@@ -10,8 +10,11 @@ import logging
 from cassandra.cluster import NoHostAvailable
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import unique_name
+from test.pylib.internal_types import ServerUpState
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 from cassandra.auth import PlainTextAuthProvider
+from test.cluster.auth_cluster.test_auth_switch_authenticator import (
+    DtestSessions, assert_auth_failed, assert_unauthorized, dtest_auth_prepare)
 
 
 """
@@ -62,3 +65,39 @@ async def test_auth_default_superuser_replaced(manager: ScyllaClusterManager) ->
         logging.info(f"Checking if added superuser works on server {s.server_id}")
         await manager.driver_connect(server=s,
             auth_provider=PlainTextAuthProvider(username=role, password=role))
+
+
+# Ported from scylla-dtest auth_test.py::TestAuth::test_auth_username_password_parameters.
+# Three nodes with the superuser configured by auth_superuser_name and
+# auth_superuser_salted_password (the hash of "gris") instead of the default
+# one: logins without credentials, with an unknown user or with the wrong
+# password fail, while the configured superuser can log in and create roles
+# that then have no permissions of their own.
+@pytest.mark.tier3
+@pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
+async def test_auth_superuser_from_config(manager: ScyllaClusterManager) -> None:
+    config = {
+        "auth_superuser_name": "gris",  # not 'cassandra'
+        "auth_superuser_salted_password": "$6$IcPWfCigHWVhHTf.$h3.30m5R2CnYqIeniCumbXCBxBxvtYPP3MbZVsjKcu268ESOcrUtSJwf1iO1s83KUT3waITRtTiexBdSWEI0Q/",
+    }
+    # The test framework would wait for the default superuser to log in.
+    servers = await dtest_auth_prepare(manager, enable_auth=True, wait_for_superuser=True, config=config,
+                                       expected_server_up_state=ServerUpState.HOST_ID_QUERIED, connect_driver=False)
+    node1 = servers[0]
+    sessions = DtestSessions(manager)
+    try:
+        for user, password in [(None, None), ("normal", "wrongpwd"), ("gris", "tuta")]:
+            with pytest.raises(NoHostAvailable) as exc:
+                sessions.get(node1, user, password, patient=False)
+            assert_auth_failed(exc)
+
+        gris = sessions.get(node1, "gris", "gris")
+        gris.execute("CREATE USER normal WITH PASSWORD '123456' NOSUPERUSER")
+        gris.execute("CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1}")
+        gris.execute("CREATE TABLE ks.cf (id int primary key)")
+
+        session = sessions.get(node1, "normal", "123456")
+        assert_unauthorized("User normal has no SELECT permission on <table ks.cf> or any of its parents", session, "SELECT * FROM ks.cf")
+        assert_unauthorized("User normal has no AUTHORIZE permission on <table ks.cf> or any of its parents", session, "REVOKE SELECT ON ks.cf from normal")
+    finally:
+        sessions.close()

@@ -10,9 +10,23 @@
 #############################################################################
 
 import pytest
-from .util import new_test_table, unique_key_int
+from contextlib import contextmanager
+from .util import new_named_table, new_test_table, new_cql, unique_key_int
 from cassandra.query import UNSET_VALUE, BatchStatement
 from cassandra.protocol import InvalidRequest
+
+
+# The dtests' sessions USE their keyspace and create user types by their
+# unqualified name; this creates one so and yields its qualified name.
+@contextmanager
+def new_type_after_use(cql, keyspace, name, fields):
+    with new_cql(cql) as session:
+        session.execute(f"USE {keyspace}")
+        session.execute(f"CREATE TYPE {name} {fields}")
+    try:
+        yield f"{keyspace}.{name}"
+    finally:
+        cql.execute(f"DROP TYPE {keyspace}.{name}")
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -98,6 +112,26 @@ def test_unset_counter_increment(cql, test_keyspace):
         assert [(3,)] == list(cql.execute(f'SELECT c FROM {table} WHERE p = {p}'))
         cql.execute(stmt, [UNSET_VALUE])
         assert [(3,)] == list(cql.execute(f'SELECT c FROM {table} WHERE p = {p}'))
+
+# Ported from scylla-dtest counter_tests.py::TestCounters::test_prepare_unset_value.
+# Since an UNSET_VALUE counter increment skips the write, a prepared
+# increment by UNSET_VALUE changes neither an existing counter nor creates
+# rows for keys which do not exist yet. As in the dtest, one counter is set
+# to 1, then 1000 keys (the first one being that counter's) are incremented
+# by UNSET_VALUE, the statement being prepared again for each, and a full
+# scan of the table (in a vnodes keyspace with RF=1) still returns only the
+# first counter, unchanged.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_prepare_unset_value(cql, test_keyspace_vnodes):
+    with new_test_table(cql, test_keyspace_vnodes, "t int, c counter, primary key(t)") as table:
+        cql.execute(f"UPDATE {table} SET c = c + 1 where t = 0")
+        assert list(cql.execute(f"SELECT * from {table}")) == [(0, 1)]
+        for key in range(1000):
+            statement = cql.prepare(f"update {table} set c = c + ? where t = ?")
+            cql.execute(statement.bind((UNSET_VALUE, key)))
+        rows = list(cql.execute(f"SELECT * from {table}"))
+        assert len(rows) == 1, "Update with UNSET_VALUE unexpectedly changed number of counters"
+        assert rows == [(0, 1)], "Update with UNSET_VALUE unexpectedly changed value of first counter"
 
 # Like the counter increment, a list append operation (li=li+?) is a primitive
 # operation and not expression, so we believe UNSET_VALUE should be able
@@ -273,3 +307,23 @@ def test_unset_traced_batch(cql, table1, scylla_only):
     params = cql.execute(batch, trace=True).get_query_trace(max_wait_sec=60).parameters
     assert params["param[0][1]"] == "unset value"
     assert params["param[1][1]"] == "null"
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_unset_value_support.
+# Binding UNSET_VALUE to an int, list, set, map, tuple and frozen UDT column
+# in an UPDATE leaves the old values unchanged, also when another column in
+# the same UPDATE is set.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_unset_whole_tuple_and_udt(cql, test_keyspace):
+    with new_type_after_use(cql, test_keyspace, "simple_type", "(number int)") as typ, \
+         new_named_table(cql, test_keyspace, "test", f"key int, i int, l list<int>, s set<int>, m map<int,int>, t tuple<int,int>, u frozen<{typ}>, PRIMARY KEY (key)") as table:
+        def select():
+            return [(r.key, r.i, r.l, r.s, r.m, r.t, r.u.number) for r in cql.execute(f"SELECT key, i, l, s, m, t, u FROM {table}")]
+        cql.execute(f"INSERT INTO {table} (key, i, l, s, m, t, u) VALUES (0, 1, [1, 2, 3], {{1, 2, 3}}, {{1: 2}}, (1, 2), {{number: 1}})")
+        assert select() == [(0, 1, [1, 2, 3], {1, 2, 3}, {1: 2}, (1, 2), 1)]
+        stmt = cql.prepare(f"UPDATE {table} SET i = ?, l = ?, s = ?, m = ?, t = ?, u = ? WHERE key = ?")
+        cql.execute(stmt, (UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, 0))
+        assert select() == [(0, 1, [1, 2, 3], {1, 2, 3}, {1: 2}, (1, 2), 1)]
+        stmt = cql.prepare(f"UPDATE {table} SET i = ?, l = ?, s = ?, m = ?, t = ?, u = ? WHERE key = ?")
+        cql.execute(stmt, (2, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, UNSET_VALUE, 0))
+        assert select() == [(0, 2, [1, 2, 3], {1, 2, 3}, {1: 2}, (1, 2), 1)]

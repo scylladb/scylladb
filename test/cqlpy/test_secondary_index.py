@@ -16,10 +16,11 @@ from . import rest_api
 from . import nodetool
 from test.pylib.skip_types import skip_env
 from cassandra.protocol import InvalidRequest, ConfigurationException, ReadFailure
+from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from .cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order
 
-from .util import new_test_table, new_test_keyspace, new_cql, unique_name, unique_key_int, is_scylla, ScyllaMetrics, config_value_context
+from .util import new_test_table, new_named_table, new_test_keyspace, new_cql, unique_name, unique_key_int, is_scylla, ScyllaMetrics, config_value_context
 
 # A reproducer for issue #7443: Normally, when the entire table is SELECTed,
 # the partitions are returned sorted by the partitions' token. When there
@@ -3065,3 +3066,363 @@ def test_index_query_with_stale_index_entry(cql, test_keyspace, scylla_only):
                     inj_disable(err)
                 except Exception:
                     pass
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_composite_index_collections.
+# An index on a regular column of a table with two clustering columns and a
+# collection column: selecting the collection through an index lookup
+# returns the right rows. The rows are inserted with set literals in the
+# statements' text, as in the dtest.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_index_select_collection(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "blog_id int, time1 int, time2 int, author text, content set<text>, PRIMARY KEY (blog_id, time1, time2)") as table:
+        cql.execute(f"CREATE INDEX ON {table}(author)")
+        req = f"INSERT INTO {table} (blog_id, time1, time2, author, content) VALUES (%d, %d, %d, '%s', %s)"
+        cql.execute(req % (1, 0, 0, "foo", "{ 'bar1', 'bar2' }"))
+        cql.execute(req % (1, 0, 1, "foo", "{ 'bar2', 'bar3' }"))
+        cql.execute(req % (2, 1, 0, "foo", "{ 'baz' }"))
+        cql.execute(req % (3, 0, 1, "gux", "{ 'qux' }"))
+        res = cql.execute(f"SELECT blog_id, content FROM {table} WHERE author='foo'")
+        assert [list(r) for r in res] == [[1, {'bar1', 'bar2'}], [1, {'bar2', 'bar3'}], [2, {'baz'}]]
+
+# Ported from scylla-dtest prepared_statements_test.py::TestPreparedStatements::test_dropped_index.
+# A prepared statement which used an index (created right before the rows,
+# without waiting for its build) is handled after DROP INDEX: executing it
+# again either works or fails with InvalidRequest, never anything else.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_prepared_statement_after_drop_index(cql):
+    ks = unique_name()
+    cql.execute(f"CREATE KEYSPACE IF NOT EXISTS {ks} WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': '1' }} AND tablets = {{'enabled': false}}")
+    try:
+        cql.execute(f"CREATE TABLE IF NOT EXISTS {ks}.mytable (a int PRIMARY KEY, b int)")
+        cql.execute(f"CREATE INDEX IF NOT EXISTS bindex ON {ks}.mytable(b)")
+        insert_statement = cql.prepare(f"INSERT INTO {ks}.mytable (a, b) VALUES (?, ?)")
+        for i in range(10):
+            cql.execute(insert_statement, (i, 0))
+        query_statement = cql.prepare(f"SELECT * FROM {ks}.mytable WHERE b=?")
+        print("Number of matching rows:", len(list(cql.execute(query_statement, (0,)))))
+        cql.execute(f"DROP INDEX {ks}.bindex")
+        try:
+            cql.execute(query_statement, (0,))
+        except InvalidRequest as ir:
+            print(ir)
+    finally:
+        cql.execute(f"DROP KEYSPACE {ks}")
+
+
+# Wait until system_distributed.view_build_status says the view backing the
+# given index is built on this node, as the dtests waited for index builds.
+def wait_for_index_view_built(cql, keyspace, index_name, timeout_sec=60):
+    query = SimpleStatement(f"SELECT status FROM system_distributed.view_build_status WHERE keyspace_name = '{keyspace}' AND view_name = '{index_name}_index'",
+                            consistency_level=ConsistencyLevel.ONE)
+    start_time = time.time()
+    while time.time() < start_time + timeout_sec:
+        if [r.status for r in cql.execute(query)] == ["SUCCESS"]:
+            return
+        time.sleep(0.1)
+    pytest.fail(f"Timeout ({timeout_sec} seconds) waiting for index {keyspace}.{index_name} to be built")
+
+# A query restricting both the partition key and an indexed column returns
+# only the row of that partition matching the indexed value.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_indexed_column_with_key_eq(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "users", "userid uuid PRIMARY KEY, firstname text, lastname text, age int") as table:
+        cql.execute(f"CREATE INDEX byAge ON {table}(age)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "byage")
+        cql.execute(f"INSERT INTO {table} (userid, firstname, lastname, age) VALUES (550e8400-e29b-41d4-a716-446655440000, 'Frodo', 'Baggins', 32)")
+        cql.execute(f"UPDATE {table} SET firstname = 'Samwise', lastname = 'Gamgee', age = 33 WHERE userid = f47ac10b-58cc-4372-a567-0e02b2c3d479")
+        assert list(cql.execute(f"SELECT firstname FROM {table} WHERE userid = 550e8400-e29b-41d4-a716-446655440000 AND age = 33")) == []
+        assert list(cql.execute(f"SELECT firstname FROM {table} WHERE userid = f47ac10b-58cc-4372-a567-0e02b2c3d479 AND age = 33")) == [("Samwise",)]
+
+# An index restriction combined with a range on a non-indexed regular column
+# needs ALLOW FILTERING (CASSANDRA-4257).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_index_with_range_on_regular_column(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "indextest", "id int primary key, row int, setid int") as table:
+        cql.execute(f"CREATE INDEX indextest_setid_idx ON {table} (setid)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "indextest_setid_idx")
+        for i in range(4):
+            cql.execute(f"INSERT INTO {table} (id, row, setid) VALUES ({i}, {i}, 0);")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT * FROM {table} WHERE setid = 0 AND row < 1;")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE setid = 0 AND row < 1 ALLOW FILTERING;")) == [(0, 0, 0)]
+
+# With an index on one column of a composite partition key, a range on that
+# column, alone or with an equality on the other key column, is filtered.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_index_on_partition_key_column_range(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "test_index", "a BIGINT, b BIGINT, c BIGINT, PRIMARY KEY ((a, b))") as table:
+        cql.execute(f"CREATE INDEX ON {table}(a)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "test_index_a_idx")
+        for a, c in [(0, 1), (1, 3), (2, 4)]:
+            cql.execute(f"INSERT INTO {table} (a, b, c) VALUES ({a}, 2, {c})")
+        assert set(cql.execute(f"SELECT * FROM {table} WHERE a>0 AND b=2 ALLOW FILTERING")) == {(2, 2, 4), (1, 2, 3)}
+        assert set(cql.execute(f"SELECT b,c FROM {table} WHERE a>=2 ALLOW FILTERING")) == {(2, 4)}
+
+# A query restricting an indexed column that is not selected, by equality
+# (using the index) and by a range (filtering).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_indexed_column_not_selected(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "test_index", "a BIGINT, b BIGINT, c BIGINT, d INT, e INT, PRIMARY KEY ((a, b),c)") as table:
+        cql.execute(f"CREATE INDEX ON {table}(d)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "test_index_d_idx")
+        cql.execute(f"INSERT INTO {table} (a, b, c, d, e) VALUES (1, 2, 3, 4, 5)")
+        cql.execute(f"INSERT INTO {table} (a, b, c, d, e) VALUES (11, 22, 33, 44, 55)")
+        assert list(cql.execute(f"select c,e from {table} where d = 44 ALLOW FILTERING")) == [(33, 55)]
+        assert list(cql.execute(f"select a from {table} where d > 43 ALLOW FILTERING")) == [(11,)]
+
+# An index on a regular column combined with restrictions on the clustering
+# columns: without a partition key restriction, they need ALLOW FILTERING,
+# also an equality on the first clustering column (CASSANDRA-8148), and a
+# restriction on the second clustering column alone is rejected.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_index_with_clustering_restrictions(cql, test_keyspace_vnodes, scylla_only):
+    schema = "blog_id int, time1 int, time2 int, author text, content text, PRIMARY KEY (blog_id, time1, time2)"
+    with new_named_table(cql, test_keyspace_vnodes, "blogs", schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(author)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "blogs_author_idx")
+        for row in [(1, 0, 0, "foo", "bar1"), (1, 0, 1, "foo", "bar2"), (2, 1, 0, "foo", "baz"), (3, 0, 1, "gux", "qux")]:
+            cql.execute(f"INSERT INTO {table} (blog_id, time1, time2, author, content) VALUES {row}")
+        assert list(cql.execute(f"SELECT blog_id, content FROM {table} WHERE author='foo'")) == [(1, "bar1"), (1, "bar2"), (2, "baz")]
+        filtered = [("SELECT blog_id, content", "time1 > 0", [(2, "baz")]),
+                    ("SELECT blog_id, content", "time1 = 1", [(2, "baz")]),
+                    ("SELECT blog_id, content", "time1 = 1 AND time2 = 0", [(2, "baz")]),
+                    ("SELECT content", "time1 = 1 AND time2 = 1", []),
+                    ("SELECT content", "time1 = 1 AND time2 > 0", [])]
+        for select, where, expected in filtered:
+            assert list(cql.execute(f"{select} FROM {table} WHERE {where} AND author='foo' ALLOW FILTERING")) == expected
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT content FROM {table} WHERE time2 >= 0 AND author='foo'")
+        for select, where, _ in filtered:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"{select} FROM {table} WHERE {where} AND author='foo'")
+
+# An index created on a table that already has rows finds them once built,
+# and finds rows inserted or deleted later. Rows come in token order of
+# their partitions, and in clustering order within one.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_index_on_existing_rows_then_updates(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "blog_id int, timestamp int, author text, content text, PRIMARY KEY (blog_id, timestamp)") as table:
+        insert = f"INSERT INTO {table} (blog_id, timestamp, author, content) VALUES "
+        for row in [(0, 0, "bob", "1st post"), (0, 1, "tom", "2nd post"), (0, 2, "bob", "3rd post"), (0, 3, "tom", "4nd post"), (1, 0, "bob", "5th post")]:
+            cql.execute(f"{insert}{row}")
+        cql.execute(f"CREATE INDEX ON {table}(author)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "test_author_idx")
+        assert len(list(cql.execute(f"SELECT * FROM system_schema.indexes WHERE keyspace_name = '{test_keyspace_vnodes}' and table_name ='test' AND index_name='test_author_idx'"))) == 1
+        select = f"SELECT blog_id, timestamp FROM {table} WHERE author = 'bob'"
+        assert list(cql.execute(select)) == [(1, 0), (0, 0), (0, 2)]
+        for row in [(1, 1, "tom", "6th post"), (1, 2, "tom", "7th post"), (1, 3, "bob", "8th post")]:
+            cql.execute(f"{insert}{row}")
+        assert list(cql.execute(select)) == [(1, 0), (1, 3), (0, 0), (0, 2)]
+        cql.execute(f"DELETE FROM {table} WHERE blog_id = 0 AND timestamp = 2")
+        assert list(cql.execute(select)) == [(1, 0), (1, 3), (0, 0)]
+
+# Indexes on a clustering column and on a partition key column of a
+# composite partition key; setting a regular column to null does not hide
+# the row from the indexes (CASSANDRA-8206).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_index_on_clustering_and_partition_key(cql, test_keyspace_vnodes, scylla_only):
+    schema = "id1 int, id2 int, author text, time bigint, v1 text, v2 text, PRIMARY KEY ((id1, id2), author, time)"
+    with new_named_table(cql, test_keyspace_vnodes, "posts", schema) as table:
+        cql.execute(f"CREATE INDEX ON {table}(time)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "posts_time_idx")
+        cql.execute(f"CREATE INDEX ON {table}(id2)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "posts_id2_idx")
+        for row in [(0, 0, 'bob', 0, 'A', 'A'), (0, 0, 'bob', 1, 'B', 'B'), (0, 1, 'bob', 2, 'C', 'C'), (0, 0, 'tom', 0, 'D', 'D'), (0, 1, 'tom', 1, 'E', 'E')]:
+            cql.execute(f"INSERT INTO {table}(id1, id2, author, time, v1, v2) VALUES{row}")
+        assert list(cql.execute(f"SELECT v1 FROM {table} WHERE time = 1")) == [("B",), ("E",)]
+        assert list(cql.execute(f"SELECT v1 FROM {table} WHERE id2 = 1")) == [("C",), ("E",)]
+        assert list(cql.execute(f"SELECT v1 FROM {table} WHERE id1 = 0 AND id2 = 0 AND author = 'bob' AND time = 0")) == [("A",)]
+        cql.execute(f"UPDATE {table} SET v2 = null WHERE id1 = 0 AND id2 = 0 AND author = 'bob' AND time = 1")
+        assert list(cql.execute(f"SELECT v1 FROM {table} WHERE id2 = 0")) == [("A",), ("B",), ("D",)]
+        assert list(cql.execute(f"SELECT v1 FROM {table} WHERE time = 1")) == [("B",), ("E",)]
+
+# An index can be created on a static column, and gets built.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_create_index_on_static_column(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "a int, b int, c int static , PRIMARY KEY (a, b)") as table:
+        cql.execute(f"CREATE INDEX ON {table}(c)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "test_c_idx")
+
+# Indexes on a partition key column of a composite partition key and on
+# each of three clustering columns, used alone, with the partition key, and
+# combined with another clustering column restriction and ALLOW FILTERING.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_indexes_on_complex_primary_key(cql, test_keyspace_vnodes, scylla_only):
+    schema = "pk0 int, pk1 int, ck0 int, ck1 int, ck2 int, value int, PRIMARY KEY ((pk0, pk1), ck0, ck1, ck2)"
+    with new_named_table(cql, test_keyspace_vnodes, "indexed", schema) as table:
+        for col in ["pk0", "ck0", "ck1", "ck2"]:
+            cql.execute(f"CREATE INDEX ON {table}({col})")
+            wait_for_index_view_built(cql, test_keyspace_vnodes, f"indexed_{col}_idx")
+        for row in [(0, 1, 2, 3, 4, 5), (1, 2, 3, 4, 5, 0), (2, 3, 4, 5, 0, 1), (3, 4, 5, 0, 1, 2), (4, 5, 0, 1, 2, 3), (5, 0, 1, 2, 3, 4)]:
+            cql.execute(f"INSERT INTO {table} (pk0, pk1, ck0, ck1, ck2, value) VALUES {row}")
+        assert list(cql.execute(f"SELECT value FROM {table} WHERE pk0 = 2")) == [(1,)]
+        assert list(cql.execute(f"SELECT value FROM {table} WHERE ck0 = 0")) == [(3,)]
+        assert list(cql.execute(f"SELECT value FROM {table} WHERE pk0 = 3 AND pk1 = 4 AND ck1 = 0")) == [(2,)]
+        assert list(cql.execute(f"SELECT value FROM {table} WHERE pk0 = 5 AND pk1 = 0 AND ck0 = 1 AND ck2 = 3 ALLOW FILTERING")) == [(4,)]
+
+# An index restriction together with the full composite partition key of a
+# table with a DESC clustering column (CASSANDRA-5240).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_index_with_composite_partition_key(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "interval text, seq int, id int, severity int, PRIMARY KEY ((interval, seq), id)",
+                         "WITH CLUSTERING ORDER BY (id DESC)") as table:
+        cql.execute(f"CREATE INDEX ON {table}(severity);")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "test_severity_idx")
+        for row in [('t', 1, 1, 1), ('t', 1, 2, 1), ('t', 1, 3, 2), ('t', 1, 4, 3), ('t', 2, 1, 3), ('t', 2, 2, 3), ('t', 2, 3, 1), ('t', 2, 4, 2)]:
+            cql.execute(f"insert into {table}(interval, seq, id , severity) values{row};")
+        assert list(cql.execute(f"select * from {table} where severity = 3 and interval = 't' and seq =1;")) == [("t", 1, 4, 3)]
+
+# An index restriction combined with IN on a non-indexed regular column is
+# rejected without ALLOW FILTERING (CASSANDRA-6050).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_index_with_in_on_regular_column(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, a int, b int") as table:
+        cql.execute(f"CREATE INDEX ON {table}(a)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "test_a_idx")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT * FROM {table} WHERE a = 3 AND b IN (1, 3)")
+
+# count(*) with an indexed clustering column, filtering on another
+# clustering column and a range on an indexed timestamp column, before and
+# after a matching row is written (CASSANDRA-6612).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_count_with_several_indexes(cql, test_keyspace_vnodes, scylla_only):
+    schema = "username text, session_id text, app_name text, account text, last_access timestamp, created_on timestamp, PRIMARY KEY (username, session_id, app_name, account)"
+    with new_named_table(cql, test_keyspace_vnodes, "session_data", schema) as table:
+        cql.execute(f"create index sessionIndex ON {table} (session_id)")
+        cql.execute(f"create index sessionAppName ON {table} (app_name)")
+        cql.execute(f"create index lastAccessIndex ON {table} (last_access)")
+        for index in ["sessionindex", "sessionappname", "lastaccessindex"]:
+            wait_for_index_view_built(cql, test_keyspace_vnodes, index)
+        select = f"select count(*) from {table} where app_name='foo' and account='bar' and last_access > 4 allow filtering"
+        assert list(cql.execute(select)) == [(0,)]
+        cql.execute(f"insert into {table} (username, session_id, app_name, account, last_access, created_on) values ('toto', 'foo', 'foo', 'bar', 12, 13)")
+        assert list(cql.execute(select)) == [(1,)]
+
+# count(*) through an index counts all matching rows; the LIMIT applies to
+# the single result row (CASSANDRA-6579).
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_count_through_index_with_limit(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "field1 text, field2 timeuuid, field3 boolean, primary key(field1, field2)") as table:
+        cql.execute(f"create index test_index on {table}(field3);")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "test_index")
+        for _ in range(2):
+            cql.execute(f"insert into {table}(field1, field2, field3) values ('hola', now(), false);")
+        assert list(cql.execute(f"select count(*) from {table} where field3 = false limit 1;")) == [(2,)]
+
+# DROP INDEX IF EXISTS of a missing index and CREATE INDEX IF NOT EXISTS of
+# an existing one succeed; the index shows up in system."IndexInfo" once
+# built and is gone from it after DROP INDEX IF EXISTS. Like on the dtest's
+# node, auto_snapshot is on, so the dropped index is snapshotted; the test
+# removes its snapshots.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_conditional_create_and_drop_index(cql, this_dc, scylla_only):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{'enabled': false}}") as ks:
+        cql.execute(f"CREATE TABLE {ks}.my_test_table (id text PRIMARY KEY, value1 blob, value2 blob) with comment = 'foo'")
+        cql.execute(f"DROP INDEX IF EXISTS {ks}.myindex")
+        cql.execute(f"CREATE INDEX IF NOT EXISTS myindex ON {ks}.my_test_table (value1)")
+        wait_for_index(cql, ks, "myindex")
+        assert [r.index_name for r in cql.execute(f"select index_name from system.\"IndexInfo\" where table_name = '{ks}'")] == ["myindex"]
+        cql.execute(f"CREATE INDEX IF NOT EXISTS myindex ON {ks}.my_test_table (value1)")
+        try:
+            with config_value_context(cql, 'auto_snapshot', 'true'):
+                cql.execute(f"DROP INDEX IF EXISTS {ks}.myindex")
+            assert list(cql.execute(f"select index_name from system.\"IndexInfo\" where table_name = '{ks}'")) == []
+        finally:
+            for snapshot in nodetool.list_snapshots(cql):
+                if any(s['ks'] == ks for s in snapshot['value']):
+                    nodetool.del_snapshot(cql, snapshot['key'], [ks])
+
+# An index on a regular column of a table with a static column returns the
+# static value with each matching row.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_index_with_static_column_selected(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, p int, s int static, v int, PRIMARY KEY (k, p)") as table:
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "test_v_idx")
+        cql.execute(f"INSERT INTO {table}(k, p, s, v) VALUES (0, 0, 42, 1)")
+        cql.execute(f"INSERT INTO {table}(k, p, v) VALUES (0, 1, 1)")
+        cql.execute(f"INSERT INTO {table}(k, p, v) VALUES (0, 2, 2)")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE v = 1")) == [(0, 0, 42, 1), (0, 1, 42, 1)]
+        assert list(cql.execute(f"SELECT p, s FROM {table} WHERE v = 1")) == [(0, 42), (1, 42)]
+        assert list(cql.execute(f"SELECT p FROM {table} WHERE v = 1")) == [(0,), (1,)]
+        assert list(cql.execute(f"SELECT s FROM {table} WHERE v = 1")) == [(42,), (42,)]
+
+# A restriction on the partition key or only on an indexed column needs no
+# ALLOW FILTERING, but accepts it; an indexed column with a non-indexed one
+# needs it.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_index_allow_filtering_required(cql, test_keyspace_vnodes, scylla_only):
+    with new_named_table(cql, test_keyspace_vnodes, "indexed", "k int PRIMARY KEY, a int, b int") as table:
+        cql.execute(f"CREATE INDEX ON {table}(a)")
+        wait_for_index_view_built(cql, test_keyspace_vnodes, "indexed_a_idx")
+        for i in range(5):
+            cql.execute(f"INSERT INTO {table}(k, a, b) VALUES({i}, {i * 10}, {i * 100})")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k = 1")) == [(1, 10, 100)]
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k = 1 ALLOW FILTERING")) == [(1, 10, 100)]
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE a = 20")) == [(2, 20, 200)]
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE a = 20 ALLOW FILTERING")) == [(2, 20, 200)]
+        with pytest.raises(InvalidRequest, match="ALLOW FILTERING|allow filtering"):
+            cql.execute(f"SELECT * FROM {table} WHERE a = 20 AND b = 200")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE a = 20 AND b = 200 ALLOW FILTERING")) == [(2, 20, 200)]
+
+# The tests below come from scylla-dtest secondary_indexes_test.py. Like the
+# dtests, they use a vnodes keyspace of their own with 'replication_factor': 1, and
+# the tables and index views use one compaction strategy, drawn at random
+# once per process like the dtests' random_compaction_strategy().
+DTEST_COMPACTION = random.choice(["LeveledCompactionStrategy", "SizeTieredCompactionStrategy",
+                                  "TimeWindowCompactionStrategy", "IncrementalCompactionStrategy"])
+
+
+def dtest_keyspace(cql):
+    return new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                                  "AND tablets = {'enabled': false}")
+
+
+def dtest_create_cf(cql, table, key_type, columns, compact_storage=False):
+    cols = "".join(f", {k} {v}" for k, v in columns.items())
+    cql.execute(f"CREATE COLUMNFAMILY {table} (key {key_type} PRIMARY KEY{cols}) WITH comment='test cf' "
+                f"AND compaction={{'class': '{DTEST_COMPACTION}'}} AND compression = {{}}"
+                + (" AND COMPACT STORAGE" if compact_storage else ""))
+    # Like the dtests' create_cf(), check that the table exists by reading it.
+    cql.execute(f"SELECT * FROM {table} LIMIT 1")
+
+
+def dtest_create_index(cql, ks, table, column, name):
+    cql.execute(f"CREATE INDEX {name} ON {ks}.{table} ({column})")
+    cql.execute(f"ALTER MATERIALIZED VIEW {ks}.{name}_index WITH compaction={{'class': '{DTEST_COMPACTION}'}}")
+    # Like the dtests, wait until view_build_status reports the index view
+    # built, and check that the index is in the schema.
+    deadline = time.time() + 60
+    status = SimpleStatement(f"SELECT host_id, status FROM system_distributed.view_build_status "
+                             f"WHERE keyspace_name = '{ks}' AND view_name = '{name}_index'", consistency_level=ConsistencyLevel.ONE)
+    while not [r for r in cql.execute(status) if r.status == "SUCCESS"]:
+        assert time.time() < deadline, f"index {ks}.{name} is not built"
+        time.sleep(0.1)
+    assert len(list(cql.execute(f"SELECT * FROM system_schema.indexes WHERE keyspace_name = '{ks}' "
+                                f"and table_name = '{table}' AND index_name = '{name}'"))) == 1
+
+
+# SELECT by an indexed column restricted twice, "c0 = X AND c0 = Y", finds
+# nothing. Reproduces #7772.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_index_same_key_twice(cql):
+    with dtest_keyspace(cql) as ks:
+        dtest_create_cf(cql, f"{ks}.tbl", "uuid", {"c0": "text", "c1": "text", "c2": "text"})
+        dtest_create_index(cql, ks, "tbl", "c0", "ix_tbl_c0")
+        for c0, c1, c2 in [("a", "b", "c"), ("a", "b", "c"), ("q", "b", "c"), ("a", "e", "f"), ("a", "e", "f")]:
+            cql.execute(f"INSERT INTO {ks}.tbl (key, c0, c1, c2) values (uuid(), '{c0}', '{c1}', '{c2}')")
+        assert list(cql.execute(f"SELECT count(*) FROM {ks}.tbl WHERE c0 = 'a' AND c0 = 'b'")) == [(0,)]
+
+
+# An index, global or local, can't be created on several columns.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("local", [False, True], ids=["global", "local"])
+def test_multi_column_index(cql, local):
+    with dtest_keyspace(cql) as ks:
+        for table, columns in [("cf", ["b", "c"]), ("cf_6columns", ["b", "c", "d", "e", "f", "g"])]:
+            dtest_create_cf(cql, f"{ks}.{table}", "int", {c: "int" for c in columns})
+            target = f"((key), {', '.join(columns)})" if local else f"({', '.join(columns)})"
+            with pytest.raises(InvalidRequest, match="Only CUSTOM indexes support multiple columns"):
+                cql.execute(f"CREATE INDEX idx_{table} ON {ks}.{table} {target}")

@@ -54,3 +54,19 @@ def test_big_key_index_reader(cql, test_keyspace, scylla_only):
         # Read the partition from sstables.
         select = cql.prepare(f"SELECT pk, ck FROM {table} WHERE pk = ? BYPASS CACHE")
         cql.execute(select, [pk])
+
+# Reproduces issue #6995: dropping a table that has both flushed sstables and
+# unflushed data in the memtable failed an assertion on commitlog replay
+# positions when auto_snapshot is disabled - which is how test servers run
+# (with auto_snapshot enabled, the drop flushes the memtable first).
+def test_drop_table_with_sstables_and_memtable(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, v text, PRIMARY KEY (p, c)") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (p, c, v) VALUES (?, ?, ?)")
+        for c in range(10):
+            cql.execute(insert, [0, c, 'x'])
+        nodetool.flush(cql, table)
+        for c in range(10, 20):
+            cql.execute(insert, [0, c, 'x'])
+        cql.execute(f"DROP TABLE {table}")
+        cql.execute(f"CREATE TABLE {table} (p int, c int, v text, PRIMARY KEY (p, c))")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == []

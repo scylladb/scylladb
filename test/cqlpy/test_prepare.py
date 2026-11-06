@@ -11,7 +11,9 @@
 # https://github.com/apache/cassandra/blob/1959502d8b16212479eecb076c89945c3f0f180c/doc/native_protocol_v4.spec#L675
 
 import pytest
-from .util import new_test_table, unique_key_int, config_value_context, is_scylla
+from cassandra.protocol import InvalidRequest
+from .util import new_test_table, unique_key_int, unique_name, config_value_context, is_scylla, new_cql
+from .nodetool import flush_all
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -353,3 +355,74 @@ def test_in_bind_marker_name_case_sensitive_column_lowercase_operator(cql, test_
     with new_test_table(cql, test_keyspace, 'p int, "C" int, PRIMARY KEY (p, "C")') as table:
         prepared = cql.prepare(f'SELECT * FROM {table} WHERE p = ? AND "C" IN ?')
         assert [col.name for col in prepared.column_metadata] == ['p', 'in(C)']
+
+# Test that statements prepared before an ALTER TABLE keep working correctly
+# after it: a prepared "SELECT *" returns the new set of columns after a column
+# is dropped or added, while a prepared SELECT naming a dropped column fails.
+# Reproduces CASSANDRA-7910.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_prepared_statement_after_alter_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, a int, b int, c int') as table:
+        cql.execute(f'INSERT INTO {table} (k, a, b, c) VALUES (0, 0, 0, 0)')
+        wildcard_prepared = cql.prepare(f'SELECT * FROM {table}')
+        explicit_prepared = cql.prepare(f'SELECT k, a, b, c FROM {table}')
+        assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0, 0)]
+
+        cql.execute(f'ALTER TABLE {table} DROP c')
+        assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0)]
+        # The driver re-prepares the statement, which fails now that c is gone.
+        with pytest.raises(InvalidRequest):
+            cql.execute(explicit_prepared)
+
+        cql.execute(f'ALTER TABLE {table} ADD d int')
+        assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0, None)]
+        explicit_prepared = cql.prepare(f'SELECT k, a, b, d FROM {table}')
+        assert list(cql.execute(explicit_prepared)) == [(0, 0, 0, None)]
+
+        # After a column's type changes, both statements still work (the
+        # driver re-prepares them). Cassandra no longer allows changing a
+        # column's type, so this part is Scylla-only.
+        if is_scylla(cql):
+            cql.execute(f'ALTER TABLE {table} ALTER d TYPE blob')
+            assert list(cql.execute(wildcard_prepared)) == [(0, 0, 0, None)]
+            assert list(cql.execute(explicit_prepared)) == [(0, 0, 0, None)]
+
+
+# A "SELECT *" prepared by two sessions returns the table's current columns
+# after a column is added and another dropped (CASSANDRA-10786): the prepared
+# statements get the new result metadata. Ported from dtest
+# prepared_statements_test.py, on a vnodes keyspace.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_prepared_select_star_on_schema_change(cql, has_tablets):
+    # As the dtest: its CREATE KEYSPACE IF NOT EXISTS (vnodes, as on the
+    # dtest nodes), both sessions in the keyspace, unqualified names.
+    ks = unique_name()
+    vnodes = " AND TABLETS = {'enabled': false}" if has_tablets else ""
+    cql.execute(f"CREATE KEYSPACE IF NOT EXISTS {ks} "
+                f"WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': '1' }}{vnodes}")
+    try:
+        with new_cql(cql) as session1, new_cql(cql) as session2:
+            session1.set_keyspace(ks)
+            session2.set_keyspace(ks)
+            session1.execute("CREATE TABLE IF NOT EXISTS mytable (a int PRIMARY KEY, b int)")
+            insert = session1.prepare("INSERT INTO mytable (a, b) VALUES (?, ?)")
+            for i in range(10):
+                session1.execute(insert, (i, 0))
+            statements = []
+            for session in [session1, session2]:
+                select = session.prepare("SELECT * FROM mytable")
+                rows = list(session.execute(select))
+                assert len(rows) == 10 and all(hasattr(r, 'b') for r in rows)
+                statements.append((session, select))
+            session1.execute("ALTER TABLE mytable ADD c int")
+            session1.execute("ALTER TABLE mytable DROP b")
+            for session, select in statements:
+                rows = list(session.execute(select))
+                assert len(rows) == 10
+                for row in rows:
+                    assert hasattr(row, 'c') and not hasattr(row, 'b')
+        # The node's tables are written to sstables, as when a dtest node stops.
+        flush_all(cql)
+    finally:
+        cql.execute(f"DROP KEYSPACE {ks}")

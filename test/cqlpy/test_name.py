@@ -11,6 +11,7 @@ import pytest
 from contextlib import contextmanager
 from cassandra.protocol import InvalidRequest, SyntaxException, ConfigurationException, Unauthorized
 from .util import unique_name, new_test_table, new_secondary_index, new_function, is_scylla
+from . import nodetool
 
 # This context manager is similar to new_test_table() - creating a table and
 # keeping it alive while the context manager is in scope - but allows the
@@ -174,6 +175,26 @@ def test_column_name_500(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int primary key, " + padded_name(500) + " int"):
         pass
 
+# Column names are not limited by schema::NAME_LENGTH, but a column name is
+# part of the clustering key of system_schema.columns, together with the table
+# name, and keys are limited to 65535 bytes. Check that the longest column name
+# that fits works (including writing, flushing and reading the table), and
+# that one character more is rejected with a clean InvalidRequest.
+# This is scylla_only because the exact limit depends on the key encoding of
+# Scylla's schema tables.
+def test_column_name_max_length(cql, test_keyspace, scylla_only):
+    table_name = unique_name()
+    # The key is serialized as (2-byte length, table name, 2-byte length,
+    # column name).
+    max_length = 65535 - 2 - len(table_name) - 2
+    with pytest.raises(InvalidRequest, match='Key length of 65536 is longer than maximum of 65535'):
+        cql.execute(f'CREATE TABLE {test_keyspace}.{table_name} (p int, {"k" * (max_length + 1)} int, PRIMARY KEY (p))')
+    column = 'k' * max_length
+    with new_named_table(cql, test_keyspace, table_name, f'p int PRIMARY KEY, {column} int') as table:
+        cql.execute(f'INSERT INTO {table} (p, {column}) VALUES (1, 2)')
+        nodetool.flush(cql, table)
+        assert list(cql.execute(f'SELECT {column} FROM {table} WHERE p = 1')) == [(2,)]
+
 # Test that column names containing hyphens work when double-quoted.
 # Hyphens are not valid in unquoted identifiers (the '-' is parsed as
 # subtraction), but double-quoted identifiers can contain any character.
@@ -293,3 +314,32 @@ def test_access_table_forbidden_chars(cql, test_keyspace):
         cql.execute(f'SELECT * FROM {test_keyspace}."{bad_name}"')
     with pytest.raises(InvalidRequest, match='does not exist|doesn\'t exist|unconfigured table'):
         cql.execute(f'ALTER TABLE {test_keyspace}."{bad_name}" WITH COMMENT=\'hi\'')
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_identifier.
+# Unquoted column names are case-insensitive: a column created as "CoLuMn"
+# can be written as Column or COLUMN. Naming the same column twice in an
+# INSERT is an error even when the two spellings differ in case, for key
+# and regular columns alike. A reserved keyword cannot be a column name.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_unquoted_column_name_case_insensitive(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "key_23 int PRIMARY KEY, CoLuMn int") as table:
+        cql.execute(f"INSERT INTO {table} (Key_23, Column) VALUES (0, 0)")
+        cql.execute(f"INSERT INTO {table} (KEY_23, COLUMN) VALUES (0, 0)")
+        for cols in ["key_23, column, column", "key_23, column, COLUMN",
+                     "key_23, key_23, column", "key_23, KEY_23, column"]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"INSERT INTO {table} ({cols}) VALUES (0, 0, 0)")
+        with pytest.raises(SyntaxException):
+            cql.execute(f"CREATE TABLE {table} (select int PRIMARY KEY, column int)")
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_reserved_keyword.
+# An unreserved keyword ("count") can be an unquoted column name, here of a
+# counter column (with a trailing comma in the column list), but a reserved
+# one ("select") cannot.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_keyword_as_column_name(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, count counter,"):
+        with pytest.raises(SyntaxException):
+            cql.execute(f"CREATE TABLE {test_keyspace}.{unique_name()} ( select text PRIMARY KEY, x int)")

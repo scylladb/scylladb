@@ -10,8 +10,9 @@
 # That latter concept is tested in test_timestamp.py, not here.
 #############################################################################
 
-from .util import new_test_table, unique_key_int
+from .util import new_named_table, new_test_table, run_cqlsh, unique_key_int
 from datetime import datetime
+import re
 from cassandra.protocol import InvalidRequest
 import pytest
 
@@ -141,3 +142,42 @@ def test_type_timestamp_arithmetic(cql, table2):
     cql.execute(f"INSERT INTO {table2} (p, c, t) VALUES ({p}, 1, '2011-02-03 04:05:12.345+0000')")
     assert list(cql.execute(f"SELECT c from {table2} where p = {p} and t > '2011-02-03 04:05:12.345+0000' - 1d ALLOW FILTERING")) == [(1,)]
     assert list(cql.execute(f"SELECT c from {table2} where p = {p} and t = '2011-02-03 05:05:12.345+0000' - 1h ALLOW FILTERING")) == [(1,)]
+
+# Ported from scylla-dtest cql_additional_tests.py::TestsCQLAdditional::test_limit_date_value_out_of_range_upper_limit.
+# Timestamp strings with years far in the future, up to 9999, are accepted
+# in a DESC clustering column: 8000 partitions, one per year from 2000, are
+# read back with LIMIT and by a full scan, by the driver and by cqlsh.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_type_timestamp_far_future_years(cql, test_keyspace):
+    query_template = "select * from raw_data %s;"
+    regex = r"([0-9]+) (rows)"
+    schema = "test_id int, partition_key text, time timestamp, value double, PRIMARY KEY ((test_id, partition_key), time)"
+    with new_named_table(cql, test_keyspace, "raw_data", schema, " WITH CLUSTERING ORDER BY (time DESC);") as table:
+        for i in range(8000):
+            cql.execute(f"insert into {table} (test_id, partition_key, time, value) values ({i}, '{i}', '{2000 + i}-02-03 04:05+0000', {i * 1.0});")
+
+        res = cql.execute(f"select * from {table} limit 1;")
+        assert len(list(res)) == 1
+        out = run_cqlsh(cql, f"use {test_keyspace}; " + query_template % "limit 1").stdout
+        num_rows = int(re.search(regex, out).group(1))
+        assert num_rows == 1
+
+        res = cql.execute(f"select * from {table} ;")
+        assert len(list(res)) == 8000
+        out = run_cqlsh(cql, f"use {test_keyspace}; " + query_template % "limit 10").stdout
+        num_rows = int(re.search(regex, out).group(1))
+        assert num_rows == 10
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# A date string is accepted for a timestamp column, an invalid date is
+# rejected.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_timestamp_from_date_string(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int PRIMARY KEY, t timestamp") as table:
+        cql.execute(f"INSERT INTO {table} (k, t) VALUES (0, '2011-02-03')")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table} (k, t) VALUES (0, '2011-42-42')")

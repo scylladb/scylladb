@@ -12,7 +12,10 @@
 
 import pytest
 import re
-from .util import new_test_table, new_type, user_type
+import time
+from contextlib import contextmanager
+from .util import new_named_table, new_test_table, new_type, user_type
+from cassandra import ConsistencyLevel
 from cassandra.protocol import InvalidRequest
 from cassandra.query import UNSET_VALUE, SimpleStatement
 
@@ -560,3 +563,268 @@ def test_multi_column_slice_with_filtering_on_indexed_column(cql, test_keyspace)
             cql.execute(f"INSERT INTO {table} (p, c1, c2, v) VALUES (1, {i}, {i}, {i % 2})")
         assert set(cql.execute(f"SELECT c1, c2 FROM {table} WHERE (c1, c2) < (4, 4) AND v = 1 ALLOW FILTERING")) == {(3, 3), (1, 1)}
         assert set(cql.execute(f"SELECT c1, c2 FROM {table} WHERE (c1, c2) > (2, 2) AND v = 1 ALLOW FILTERING")) == {(5, 5), (3, 3)}
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_filter_by_counter.
+# Filtering on counter columns: =, >, IN and >= on one counter combined with
+# a restriction on another, the ALLOW FILTERING error, a counter column added
+# by ALTER TABLE (null in the old rows) and a deleted counter cell.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_filter_counter_in_alter_delete(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, c1 counter, c2 counter, PRIMARY KEY (pk, ck)") as table:
+        for i in range(5):
+            cql.execute(f"UPDATE {table} SET c1 = c1+{i} WHERE pk=0 and ck={i}")
+        for i in range(5):
+            cql.execute(f"UPDATE {table} SET c1 = c1+{i}, c2 = c2+{i} WHERE pk=1 and ck={i}")
+        assert list(cql.execute(f"SELECT count(*) FROM {table}")) == [(10,)]
+        assert list(cql.execute(f"select * from {table} where c1 = 2 ALLOW FILTERING")) == [(1, 2, 2, 2), (0, 2, 2, None)]
+        assert list(cql.execute(f"select * from {table} where c1 > 2 ALLOW FILTERING")) == [(1, 3, 3, 3), (1, 4, 4, 4), (0, 3, 3, None), (0, 4, 4, None)]
+        assert list(cql.execute(f"select * from {table} where c1 > 3 and c2 = 4 ALLOW FILTERING")) == [(1, 4, 4, 4)]
+        assert list(cql.execute(f"select * from {table} where c1 in (0, 2) and c2 >= 2 ALLOW FILTERING")) == [(1, 2, 2, 2)]
+        assert list(cql.execute(f"select * from {table} where pk = 1 and ck = 4 and c1 < 3 and c2 = 0 ALLOW FILTERING")) == []
+        with pytest.raises(InvalidRequest, match="Cannot execute this query as it might involve data filtering and thus may have unpredictable performance. "
+                           "If you want to execute this query despite the performance unpredictability, use ALLOW FILTERING"):
+            cql.execute(f"select * from {table} where pk = 1 and ck = 4 and c1 > 3 and c2 = 0")
+        cql.execute(f"ALTER TABLE {table} ADD c3 counter")
+        assert list(cql.execute(f"select * from {table} where pk=1 and ck=1")) == [(1, 1, 1, 1, None)]
+        # c3 is null in all rows, which no filter on its value matches
+        assert list(cql.execute(f"select count(*) from {table} where c3 = 0 ALLOW FILTERING")) == [(0,)]
+        cql.execute(f"UPDATE {table} SET c3 = c3-1 WHERE pk=0 and ck=1")
+        assert list(cql.execute(f"select * from {table} where c3 = -1 ALLOW FILTERING")) == [(0, 1, 1, None, -1)]
+        cql.execute(f"DELETE c1 FROM {table} WHERE pk = 1 and ck = 1")
+        assert list(cql.execute(f"select * from {table} where c1 = 1 ALLOW FILTERING")) == [(0, 1, 1, None, -1)]
+        assert list(cql.execute(f"select * from {table} where c1 = 0 ALLOW FILTERING")) == [(1, 0, 0, 0, None), (0, 0, 0, None, None)]
+
+# Ported from scylla-dtest cql_additional_tests.py::TestsMultiColumnRestrictionSimple::test_filter_by_one_non_indexed_columns.
+# ALLOW FILTERING with an equality on one regular column, for several column
+# types (int, varchar, timestamp, boolean, ascii, uuid, blob), selecting the
+# timestamp and uuid columns cast as text; some reads at QUORUM.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_filter_regular_column_types(cql, test_keyspace):
+    # eight_columns_table() and its data are defined below, with the other
+    # TestsMultiColumnRestrictionSimple ports.
+    with eight_columns_table(cql, test_keyspace) as table:
+        insert_eight_columns_data(cql, table)
+        expected = MULTI_EXPECTED_DATA
+        def check(where, rows, cl=None):
+            query = f"select {MULTI_SELECT_COLUMNS} from {table} {where}"
+            stmt = SimpleStatement(query, consistency_level=cl) if cl else query
+            assert sorted(tuple(r) for r in cql.execute(stmt)) == sorted(rows)
+        check("where clmn_int = 0 ALLOW FILTERING", expected[:2])
+        check("where clmn_text = 'text3' ALLOW FILTERING", [expected[2]])
+        check("where clmn_timestamp = 398793781719 ALLOW FILTERING", expected[2:4])
+        check("where clmn_bool = True ALLOW FILTERING", [expected[0], expected[2]], ConsistencyLevel.QUORUM)
+        check("where clmn_ascii = 'abcdefj' ALLOW FILTERING", [expected[1]], ConsistencyLevel.QUORUM)
+        check("where clmn_uuid = de5cba0d-41a2-4f39-8834-35130d8b5d86 ALLOW FILTERING", [expected[0], expected[2]], ConsistencyLevel.QUORUM)
+        check(" where clmn_blob = textAsBlob('{}') ALLOW FILTERING".format("b" * 10), expected[1:3], ConsistencyLevel.QUORUM)
+
+# LIKE on a partition key still needs ALLOW FILTERING, and the pattern on the
+# right-hand side of LIKE must be a string: a function returning another type
+# (uuid, date, time) is rejected.
+# Currently, Cassandra only allows LIKE on a SASI index, not when filtering
+# (CASSANDRA-17198), see test_filter_like_on_desc_column.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_filter_like_invalid(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, "pk text, ck text, v text, PRIMARY KEY (pk, ck)") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('teststring0', '0teststring', 'test0string')")
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f"SELECT * FROM {table} WHERE pk LIKE 'teststring%'")
+        for func in ['uuid()', 'currentDate()', 'currentTime()']:
+            with pytest.raises(InvalidRequest, match='cannot assign result of function'):
+                cql.execute(f"SELECT * FROM {table} WHERE ck LIKE {func} ALLOW FILTERING")
+
+# Ported from scylla-dtest like_operator_test.py::TestLikeOperatorForBaseTable::test_filtering_with_long_values.
+# On the dtest's text table, LIKE filtering on the partition key returns
+# all of its rows; then the rows get long (64 KB) values, and LIKE filtering
+# on them, read with paging, matches the pattern against the whole value,
+# both at its end and at its beginning.
+# Currently, Cassandra only allows LIKE on a SASI index, not when filtering
+# (CASSANDRA-17198), see test_filter_like_on_desc_column.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_filter_like_long_values(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, "pk text, ck text, test text, PRIMARY KEY (pk, ck)") as table:
+        all_data = [(f"teststring{i}", f"{i}teststring", f"test{i}string") for i in range(5)]
+        for data in all_data:
+            cql.execute(f"INSERT INTO {table} (pk, ck, test) VALUES ('{data[0]}', '{data[1]}', '{data[2]}')")
+        assert sorted(cql.execute(f"SELECT * FROM {table} WHERE pk LIKE 't%ts%g%' ALLOW FILTERING")) == sorted(all_data)
+        for i in range(5):
+            value = "a" * 65520 + "findme" if i % 2 == 0 else "findme" + "a" * 65520
+            cql.execute(f"INSERT INTO {table} (pk, ck, test) VALUES ('teststring{i}', '{i}teststring', '{value}')")
+        for pattern, expected in [("%me", ["teststring0", "teststring2", "teststring4"]), ("_indme%", ["teststring1", "teststring3"])]:
+            actual = [row.pk for row in cql.execute(SimpleStatement(f"SELECT pk FROM {table} WHERE test LIKE '{pattern}' ALLOW FILTERING"))]
+            for pk in expected:
+                assert pk in actual
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# The TestsMultiColumnRestrictionSimple dtests: a table with columns of
+# eight types, filtered by several of them at once, with the partition and
+# clustering key, a global or a local index, or a materialized view.
+MULTI_INSERT_COLUMNS = "key,clmn_int,clmn_text,clmn_timestamp,clmn_bool,clmn_ascii,clmn_uuid,clmn_blob"
+MULTI_SELECT_COLUMNS = MULTI_INSERT_COLUMNS.replace("clmn_timestamp", "cast(clmn_timestamp as text)").replace("clmn_uuid", "cast(clmn_uuid as text)")
+MULTI_TEST_DATA = [
+    [0, 0, "text1", 12345674987, True, "045asciitext", "de5cba0d-41a2-4f39-8834-35130d8b5d86", "c" * 10],
+    [1, 0, "text2", 63873478378, False, "abcdefj", "fa80080c-a4c5-46d6-afe4-5e184fec35ae", "b" * 10],
+    [2, 2, "text3", 398793781719, True, "354dsfsd", "de5cba0d-41a2-4f39-8834-35130d8b5d86", "b" * 10],
+    [3, 3, "text4", 398793781719, False, "897dfjka9", "fa80080c-a4c5-46d6-afe4-5e184fec35ae", "a" * 10],
+    [4, 4],
+]
+MULTI_EXPECTED_DATA = [
+    (0, 0, "text1", "1970-05-23T21:21:14.987Z", True, "045asciitext", "de5cba0d-41a2-4f39-8834-35130d8b5d86", b"c" * 10),
+    (1, 0, "text2", "1972-01-10T06:37:58.378Z", False, "abcdefj", "fa80080c-a4c5-46d6-afe4-5e184fec35ae", b"b" * 10),
+    (2, 2, "text3", "1982-08-21T16:03:01.719Z", True, "354dsfsd", "de5cba0d-41a2-4f39-8834-35130d8b5d86", b"b" * 10),
+    (3, 3, "text4", "1982-08-21T16:03:01.719Z", False, "897dfjka9", "fa80080c-a4c5-46d6-afe4-5e184fec35ae", b"a" * 10),
+    (4, 4, None, None, None, None, None, None),
+]
+
+@contextmanager
+def eight_columns_table(cql, keyspace, add_ck=False):
+    ck = ", clmn_int" if add_ck else ""
+    schema = f"key int, clmn_int int, clmn_text varchar, clmn_timestamp timestamp, clmn_bool boolean, clmn_ascii ascii, clmn_uuid uuid, clmn_blob blob, PRIMARY KEY(key{ck})"
+    table = f"{keyspace}.cf"
+    cql.execute(f"CREATE COLUMNFAMILY {table} ({schema})")
+    try:
+        yield table
+    finally:
+        cql.execute(f"DROP TABLE {table}")
+
+def insert_eight_columns_data(cql, table, insert_data=MULTI_TEST_DATA):
+    for data in insert_data:
+        if len(data) == 2:
+            cql.execute(f"INSERT INTO {table}(key,clmn_int) VALUES({data[0]},{data[1]})")
+        else:
+            cql.execute(f"INSERT INTO {table}({MULTI_INSERT_COLUMNS}) VALUES({data[0]},{data[1]},'{data[2]}','{data[3]}',{data[4]},'{data[5]}',{data[6]},textAsBlob('{data[7]}'))")
+
+def multi_select(cql, source, where):
+    return sorted(cql.execute(f"select {MULTI_SELECT_COLUMNS} from {source} where {where} ALLOW FILTERING"), key=lambda r: r[0])
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_filter_by_three_non_indexed_columns(cql, test_keyspace_vnodes):
+    with eight_columns_table(cql, test_keyspace_vnodes) as table:
+        insert_eight_columns_data(cql, table)
+        assert multi_select(cql, table, "clmn_int = 2 and clmn_uuid = de5cba0d-41a2-4f39-8834-35130d8b5d86 and clmn_timestamp = 398793781719") == [MULTI_EXPECTED_DATA[2]]
+        assert multi_select(cql, table, f"clmn_ascii = '897dfjka9' and clmn_text = 'text4' and clmn_blob = textAsBlob('{'a' * 10}')") == [MULTI_EXPECTED_DATA[3]]
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_filter_by_pk_ck_and_non_indexed_columns(cql, test_keyspace_vnodes):
+    with eight_columns_table(cql, test_keyspace_vnodes, add_ck=True) as table:
+        insert_eight_columns_data(cql, table)
+        for where in ["key = 0 and clmn_timestamp = 12345674987",
+                      "key = 0 and clmn_int = 0 and clmn_timestamp = 12345674987",
+                      "key = 0 and clmn_timestamp = 12345674987 and clmn_bool = True",
+                      "key = 0 and clmn_int = 0 and clmn_timestamp = 12345674987 and clmn_uuid=de5cba0d-41a2-4f39-8834-35130d8b5d86"]:
+            assert multi_select(cql, table, where) == [MULTI_EXPECTED_DATA[0]]
+
+# The same four queries with a global (global_idx) or a local index on
+# clmn_text, created before the data is written.
+def do_test_filter_by_pk_ck_index_and_non_indexed_columns(cql, keyspace, create_index):
+    with eight_columns_table(cql, keyspace, add_ck=True) as table:
+        cql.execute(create_index.format(table=table))
+        insert_eight_columns_data(cql, table)
+        for where in ["key = 1 and clmn_text = 'text2' and clmn_timestamp = 63873478378",
+                      "key = 1 and clmn_int = 0 and clmn_text = 'text2' and clmn_timestamp = 63873478378",
+                      "key = 1 and clmn_text = 'text2' and clmn_uuid = fa80080c-a4c5-46d6-afe4-5e184fec35ae and clmn_timestamp = 63873478378",
+                      "key = 1 and clmn_int = 0 and clmn_text = 'text2' and clmn_bool = False and clmn_timestamp = 63873478378"]:
+            assert multi_select(cql, table, where) == [MULTI_EXPECTED_DATA[1]]
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_filter_by_pk_ck_globalSI_and_non_indexed_columns(cql, test_keyspace_vnodes):
+    do_test_filter_by_pk_ck_index_and_non_indexed_columns(cql, test_keyspace_vnodes, "CREATE INDEX global_idx ON {table} (clmn_text)")
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_filter_by_pk_ck_localSI_and_non_indexed_columns(cql, test_keyspace_vnodes, scylla_only):
+    do_test_filter_by_pk_ck_index_and_non_indexed_columns(cql, test_keyspace_vnodes, "CREATE INDEX global_idx ON {table} ((key), clmn_text)")
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_filter_by_two_non_indexed_columns_with_operator(cql, test_keyspace_vnodes):
+    with eight_columns_table(cql, test_keyspace_vnodes) as table:
+        insert_eight_columns_data(cql, table)
+        assert multi_select(cql, table, "clmn_int < 2 and clmn_uuid <= fa80080c-a4c5-46d6-afe4-5e184fec35ae") == MULTI_EXPECTED_DATA[:2]
+
+def wait_for_view_built(cql, view, timeout=60):
+    ks, name = view.split('.')
+    query = SimpleStatement(f"SELECT status FROM system_distributed.view_build_status WHERE keyspace_name='{ks}' AND view_name='{name}'",
+                            consistency_level=ConsistencyLevel.ONE)
+    start = time.time()
+    while [r.status for r in cql.execute(query)] != ["SUCCESS"]:
+        assert time.time() < start + timeout, f"view {view} not built"
+        time.sleep(0.1)
+
+# Filtering that matches nothing, on a base table with a materialized view
+# and on the view.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_filter_with_empty_result_on_table_and_view(cql, test_keyspace_vnodes, scylla_only):
+    with eight_columns_table(cql, test_keyspace_vnodes, add_ck=True) as table:
+        view = f"{test_keyspace_vnodes}.cf_mv"
+        cql.execute(f"CREATE MATERIALIZED VIEW {view} as SELECT * FROM {table} WHERE key IS NOT NULL AND clmn_int IS NOT NULL and clmn_text IS NOT NULL PRIMARY KEY (key, clmn_int, clmn_text)")
+        try:
+            wait_for_view_built(cql, view)
+            insert_eight_columns_data(cql, table, MULTI_TEST_DATA[:4])
+            assert multi_select(cql, table, "key > 1 and clmn_int < 5 and clmn_text <= 'text2' and clmn_timestamp < 63873478378") == []
+            assert multi_select(cql, table, "key > 1 and clmn_int < 5 and clmn_uuid = fa80080c-a4c5-46d6-afe4-5e184fec35ae and clmn_blob = textAsBlob('bbbbbbbbbb')") == []
+            assert multi_select(cql, view, "key > 1 and clmn_int < 5 and clmn_text <= 'text2' and clmn_timestamp < 63873478378") == []
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW {view}")
+
+# The TestsMultiColumnRestrictionCollection dtests: filtering with CONTAINS,
+# CONTAINS KEY and equality on non-frozen and frozen lists, sets and maps.
+COLLECTIONS_TEST_DATA = [
+    [0, "[0, 1, 2]", "[textAsBlob('t1'), textAsBlob('t2')]", "{de5cba0d-41a2-4f39-8834-35130d8b5d86, fa80080c-a4c5-46d6-afe4-5e184fec35ae}",
+     "{'t3', 't4', 't5'}", "{'a': True, 'b': True, 'c': False}", "{'a': f34f6a76-b383-11e9-a2a3-2a2ae2dbcce4, 'c': f34f6cec-b383-11e9-a2a3-2a2ae2dbcce4}",
+     "[5, 6]", "['f1', 'f2']", "{7, 9}", "{'f3', 'f4', 'f5'}", "{'fa': 'b', 'fc': 'd'}", "{'fa': 1, 'fb': 2, 'fc':3}"],
+    [1, "[3, 4, 5]", "[textAsBlob('t3'), textAsBlob('t4')]", "{8e4fe826-b383-11e9-a2a3-2a2ae2dbcce4, 8e4fea9c-b383-11e9-a2a3-2a2ae2dbcce4}",
+     "{'t5', 't6', 't7'}", "{'a1': False, 'c1': False}",
+     "{'a1': 26a8e352-b384-11e9-a2a3-2a2ae2dbcce4, 'b1': 26a8e5be-b384-11e9-a2a3-2a2ae2dbcce4, 'c1': 26a8e712-b384-11e9-a2a3-2a2ae2dbcce4}",
+     "[7, 8]", "['f3', 'f4']", "{9, 10}", "{'f6', 'f7', 'f8'}", "{'f1': 'c', 'f2': 'e'}", "{'f1': 1, 'f2': 2, 'f3': 3}"],
+]
+
+@contextmanager
+def all_collections_table(cql, keyspace):
+    schema = ("id int PRIMARY KEY, list_int list<int>, list_blob list<blob>, set_uuid set<uuid>, set_text set<text>, map_bool map<text, boolean>, "
+              "map_uuid map<text, uuid>, f_list_int frozen<list<int>>, f_list_text frozen<list<text>>, f_set_int frozen<set<int>>, "
+              "f_set_text frozen<set<text>>,f_map_text frozen<map<text, text>>, f_map_int frozen<map<text, int>>")
+    columns = "id, list_int, list_blob, set_uuid, set_text, map_bool, map_uuid, f_list_int, f_list_text, f_set_int, f_set_text, f_map_text, f_map_int"
+    with new_named_table(cql, keyspace, "cf", schema) as table:
+        for data in COLLECTIONS_TEST_DATA:
+            cql.execute(f"INSERT INTO {table}({columns}) VALUES({','.join(str(d) for d in data)})")
+        yield table
+
+def select_ids(cql, table, where):
+    return sorted(r.id for r in cql.execute(f"select id from {table} where {where} ALLOW FILTERING"))
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_filter_by_one_non_indexed_collection_column(cql, test_keyspace_vnodes):
+    with all_collections_table(cql, test_keyspace_vnodes) as table:
+        for where, expected in [("list_int CONTAINS 4", [1]),
+                                ("list_blob CONTAINS textAsBlob('t1')", [0]),
+                                ("set_uuid CONTAINS 8e4fe826-b383-11e9-a2a3-2a2ae2dbcce4", [1]),
+                                ("set_text CONTAINS 't5'", [0, 1]),
+                                ("map_bool CONTAINS False and map_bool CONTAINS KEY 'a1'", [1]),
+                                ("map_uuid CONTAINS f34f6a76-b383-11e9-a2a3-2a2ae2dbcce4 ", [0]),
+                                ("map_uuid CONTAINS KEY 'a1'", [1]),
+                                ("f_list_int CONTAINS 8", [1]),
+                                ("f_list_text CONTAINS 'f4'", [1]),
+                                ("f_set_int = {9, 7} ", [0]),
+                                ("f_set_int CONTAINS 9 and f_set_int CONTAINS 10 ", [1]),
+                                ("f_set_text CONTAINS 'f6'", [1]),
+                                ("f_map_text = {'f2': 'e', 'f1': 'c'}", [1]),
+                                ("f_map_text CONTAINS 'c'", [1]),
+                                ("f_map_text CONTAINS KEY 'f2'", [1]),
+                                ("f_map_int CONTAINS 2", [0, 1])]:
+            assert select_ids(cql, table, where) == expected, where
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_filter_by_pk_and_two_non_indexed_collection_column(cql, test_keyspace_vnodes):
+    with all_collections_table(cql, test_keyspace_vnodes) as table:
+        assert select_ids(cql, table, "id = 0 and map_uuid CONTAINS f34f6a76-b383-11e9-a2a3-2a2ae2dbcce4 and f_set_int CONTAINS 9") == [0]
+        assert select_ids(cql, table, "id = 1 and set_uuid CONTAINS 8e4fe826-b383-11e9-a2a3-2a2ae2dbcce4 and f_map_int = {'f1': 1, 'f2': 2, 'f3': 3}") == [1]
+
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_filter_collections_with_empty_result(cql, test_keyspace_vnodes):
+    with all_collections_table(cql, test_keyspace_vnodes) as table:
+        assert select_ids(cql, table, "id = 0 and map_uuid CONTAINS f54f6a76-b383-11e9-a2a3-2a2ae2dbcce4 and f_set_int CONTAINS 9") == []

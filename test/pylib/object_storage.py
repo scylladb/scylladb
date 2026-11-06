@@ -23,7 +23,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
 
-import boto3
 import pytest
 import requests
 
@@ -90,6 +89,9 @@ class S3Server:
 
     def get_resource(self):
         """Creates boto3.resource object that can be used to communicate to the given server"""
+        # imported here, not at module level: each worker pays for every module-level
+        # import whether or not its tests ever reach this code
+        import boto3
         return boto3.resource('s3',
             endpoint_url=self.address,
             aws_access_key_id=self.acc_key,
@@ -187,6 +189,9 @@ class GSFront:
 
     def get_resource(self):
         """Creates boto3.resource object that can be used to communicate to the given server"""
+        # imported here, not at module level: each worker pays for every module-level
+        # import whether or not its tests ever reach this code
+        import boto3
         return boto3.resource('s3',
             endpoint_url=self.endpoint,
             config=boto3.session.Config(signature_version='s3v4'),

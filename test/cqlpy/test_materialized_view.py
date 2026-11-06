@@ -8,7 +8,7 @@ import time
 import pytest
 from . import rest_api
 
-from .util import new_test_table, unique_name, new_materialized_view, new_secondary_index, new_type, new_function, is_scylla
+from .util import new_named_table, new_test_table, unique_name, new_materialized_view, new_secondary_index, new_type, new_function, is_scylla
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -1955,3 +1955,85 @@ def test_mv_where_case_sensitive_function_name(cql, test_keyspace):
                 ks, view = mv.split('.')
                 [where_clause] = [r[0] for r in cql.execute(f"SELECT where_clause FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{view}'")]
                 assert f'{name}()' in where_clause
+
+
+# Ported from scylla-dtest cql_additional_tests.py::TestsMultiColumnRestrictionSimple::test_filter_by_non_indexed_columns_from_mv.
+# ALLOW FILTERING works on a materialized view: an equality on a column of
+# the view's key, and a combination of a partition key range, a clustering
+# key range and filters on regular columns. As in the dtest, the view is
+# built (on the empty table) before the rows are written, the timestamps
+# are written as strings, and the timestamp and uuid columns are selected
+# cast to text.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_filtering_on_view(cql, test_keyspace):
+    insert_columns = "key,clmn_int,clmn_text,clmn_timestamp,clmn_bool,clmn_ascii,clmn_uuid,clmn_blob"
+    select_columns = insert_columns.replace("clmn_timestamp", "cast(clmn_timestamp as text)").replace("clmn_uuid", "cast(clmn_uuid as text)")
+    test_data = [
+        [0, 0, "text1", 12345674987, True, "045asciitext", "de5cba0d-41a2-4f39-8834-35130d8b5d86", "c" * 10],
+        [1, 0, "text2", 63873478378, False, "abcdefj", "fa80080c-a4c5-46d6-afe4-5e184fec35ae", "b" * 10],
+        [2, 2, "text3", 398793781719, True, "354dsfsd", "de5cba0d-41a2-4f39-8834-35130d8b5d86", "b" * 10],
+        [3, 3, "text4", 398793781719, False, "897dfjka9", "fa80080c-a4c5-46d6-afe4-5e184fec35ae", "a" * 10],
+        [4, 4],
+    ]
+    expected_data = [
+        [0, 0, "text1", "1970-05-23T21:21:14.987Z", True, "045asciitext", "de5cba0d-41a2-4f39-8834-35130d8b5d86", b"c" * 10],
+        [1, 0, "text2", "1972-01-10T06:37:58.378Z", False, "abcdefj", "fa80080c-a4c5-46d6-afe4-5e184fec35ae", b"b" * 10],
+        [2, 2, "text3", "1982-08-21T16:03:01.719Z", True, "354dsfsd", "de5cba0d-41a2-4f39-8834-35130d8b5d86", b"b" * 10],
+        [3, 3, "text4", "1982-08-21T16:03:01.719Z", False, "897dfjka9", "fa80080c-a4c5-46d6-afe4-5e184fec35ae", b"a" * 10],
+        [4, 4, None, None, None, None, None, None],
+    ]
+    # The dtest's create_8_columns_table(add_ck=True).
+    table = f"{test_keyspace}.{unique_name()}"
+    cql.execute(f"CREATE COLUMNFAMILY {table} (key int, clmn_int int, clmn_text varchar, clmn_timestamp timestamp, clmn_bool boolean, clmn_ascii ascii, clmn_uuid uuid, clmn_blob blob, PRIMARY KEY(key, clmn_int))")
+    try:
+        # The dtest's create_materialized_view(view_column="clmn_text"), which waits for the view to be built.
+        mv = f"{test_keyspace}.{unique_name()}"
+        cql.execute(f"CREATE MATERIALIZED VIEW {mv} as SELECT * FROM {table} WHERE key IS NOT NULL AND clmn_int IS NOT NULL and clmn_text IS NOT NULL PRIMARY KEY (key, clmn_int, clmn_text)")
+        try:
+            wait_for_view_built(cql, mv)
+            # The dtest's insert_data_in_8_columns_table().
+            for data in test_data:
+                if len(data) == 2:
+                    data_str = f"{data[0]},{data[1]}"
+                    columns = "key,clmn_int"
+                else:
+                    data_str = f"{data[0]},{data[1]},'{data[2]}','{data[3]}',{data[4]},'{data[5]}',{data[6]},textAsBlob('{data[7]}')"
+                    columns = insert_columns
+                cql.execute(f"INSERT INTO {table}({columns}) VALUES({data_str})")
+
+            select_stmt = f"select {select_columns} from {mv} "
+
+            # Filter by one non-indexed column
+            res = cql.execute(select_stmt + "where clmn_text = 'text1' ALLOW FILTERING")
+            assert sorted(list(r) for r in res) == [expected_data[0]]
+
+            # Filter by PK, CK, SI and two non-indexed column with "less-more" operator
+            res = cql.execute(select_stmt + "where key > 1 and clmn_int < 5 and clmn_uuid = fa80080c-a4c5-46d6-afe4-5e184fec35ae and clmn_blob = textAsBlob('{}') ALLOW FILTERING".format("a" * 10))
+            assert sorted(list(r) for r in res) == [expected_data[3]]
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW {mv}")
+    finally:
+        cql.execute(f"DROP TABLE {table}")
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# count(*) on a base table by key, and on its view filtering by the view's
+# clustering column alone (ALLOW FILTERING) and with the full view key.
+@pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+def test_count_on_view_with_filtering(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "users", "username varchar, password varchar, gender varchar, session_token varchar, state varchar, birth_year bigint, PRIMARY KEY (username)") as table:
+        view = f"{test_keyspace_vnodes}.users_by_state"
+        cql.execute(f"CREATE MATERIALIZED VIEW {view} AS SELECT * FROM {table} WHERE STATE IS NOT NULL AND username IS NOT NULL PRIMARY KEY (state, username)")
+        try:
+            insert = f"INSERT INTO {table} (username, password, gender, state, birth_year) VALUES "
+            for row in ["('user1', 'ch@ngem3a', 'f', 'TX', 1968);", "('user2', 'ch@ngem3b', 'm', 'CA', 1971);",
+                        "('user3', 'ch@ngem3c', 'f', 'FL', 1978);", "('user4', 'ch@ngem3d', 'm', 'TX', 1974);"]:
+                cql.execute(insert + row)
+            assert list(cql.execute(f"SELECT count(*) FROM {table} WHERE username = 'user1'")) == [(1,)]
+            assert list(cql.execute(f"SELECT count(*) FROM {view} WHERE username = 'user1' ALLOW FILTERING")) == [(1,)]
+            assert list(cql.execute(f"SELECT count(*) FROM {view} WHERE state = 'TX' AND username = 'user1'")) == [(1,)]
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW {view}")
