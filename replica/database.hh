@@ -1862,6 +1862,10 @@ private:
     // removal. Drop table runs on shard 0, so the removals are tracked there.
     std::unordered_map<table_id, pending_table_storage_removal> _pending_table_storage_removals;
     seastar::named_gate _table_storage_removal_gate{"database::table_storage_removal"};
+    // Both the removal of the storage of a dropped table and clear_snapshot()
+    // remove the directory of a dropped table. They both run on shard 0, and
+    // this semaphore keeps them from removing it at the same time.
+    seastar::named_semaphore _dropped_table_dir_removal_sem = {1, named_semaphore_exception_factory{"dropped table dir removal"}};
 
     querier_cache _querier_cache;
 
@@ -2326,6 +2330,9 @@ private:
             lw_shared_ptr<const data_dictionary::storage_options> storage_opts, gate::holder holder);
     // Completes the registered removal, and wakes up its waiters.
     void finish_table_storage_removal(table_id id) noexcept;
+    // Removes the directory of a dropped table for clear_snapshot(), unless
+    // some sstable of the table is not destroyed yet on some shard.
+    future<> remove_dropped_table_dir(std::string_view ks_name, table_id id, std::filesystem::path table_dir);
 public:
 
     const dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {

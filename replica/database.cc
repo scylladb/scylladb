@@ -1486,6 +1486,9 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
         return table_shards->stop();
     });
     f.get(); // re-throw exception from truncate() if any
+    utils::get_local_injector().inject("cleanup_drop_table_fail", [] {
+        throw std::runtime_error("cleanup_drop_table_fail injection");
+    });
     co_await sys_ks.local().remove_truncation_records(id);
     finish_on_failure.cancel();
     sharded_db.local().schedule_table_storage_removal(sharded_db, table_shards);
@@ -1534,6 +1537,7 @@ future<> database::remove_table_storage(sharded<database>& sharded_db, table_id 
             manager.close_table(id);
             return manager.await_table_sstables_destroyed(id);
         });
+        auto units = co_await get_units(_dropped_table_dir_removal_sem, 1);
         co_await get_sstables_manager(is_system).destroy_table_storage(*storage_opts);
     } catch (...) {
         ex = std::current_exception();
@@ -3727,14 +3731,47 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                         auto id_opt = _tables_metadata.get_table_id_if_exists(std::make_pair(ks_name, cf_name));
                         auto dropped = !id_opt || (cf_uuid != id_opt);
                         if (dropped) {
-                            dblog.info("Removing dropped table dir {}", table_dir);
-                            sstables::remove_table_directory_if_has_no_snapshots(table_dir).get();
+                            remove_dropped_table_dir(ks_name, cf_uuid, table_dir).get();
                         }
                     }
                 }
             }
         });
     });
+}
+
+future<> database::remove_dropped_table_dir(std::string_view ks_name, table_id id, fs::path table_dir) {
+    auto is_system = system_keyspace(is_system_table(ks_name));
+    // The removal of the storage of the dropped table may be removing the
+    // directory too.
+    auto units = co_await get_units(_dropped_table_dir_removal_sem, 1);
+    std::exception_ptr ex;
+    try {
+        // Close the table on every shard first, so that no sstable of the
+        // table can be created after it is counted.
+        auto has_sstables = co_await container().map_reduce0([id, is_system] (database& db) {
+            auto& manager = db.get_sstables_manager(is_system);
+            manager.close_table(id);
+            return manager.table_has_sstables(id);
+        }, false, std::logical_or<bool>());
+        if (has_sstables) {
+            // Callers that hold these sstables may still need their files. The
+            // removal of the storage of the table, if it is pending, or a later
+            // clear_snapshot() removes the directory once they are destroyed.
+            dblog.info("Leaving dropped table dir {} behind, because some of its sstables are still referenced", table_dir);
+        } else {
+            dblog.info("Removing dropped table dir {}", table_dir);
+            co_await sstables::remove_table_directory_if_has_no_snapshots(table_dir);
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await container().invoke_on_all([id, is_system] (database& db) {
+        db.get_sstables_manager(is_system).reopen_table(id);
+    });
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
 }
 
 future<> database::flush_non_system_column_families() {
