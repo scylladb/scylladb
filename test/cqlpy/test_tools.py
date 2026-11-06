@@ -31,6 +31,7 @@ from typing import Iterable, Type, Union
 from cassandra.util import Duration
 import yaml
 
+from test import llvm_profile_env
 from test.pylib.object_storage import s3_server
 
 
@@ -666,7 +667,7 @@ def test_scylla_sstable_write_temp_dir(cql, scylla_path, scylla_data_dir):
 
         with tempfile.NamedTemporaryFile("r") as f:
             args = [scylla_path, "sstable", "write", "--schema-file", schema_file, "--input-file", input_file, "--input-format", "cql", "--output-dir", tmp_dir]
-            res = subprocess.run(args, text=True, capture_output=True, env={'TEMPDIR': f.name})
+            res = subprocess.run(args, text=True, capture_output=True, env={'TEMPDIR': f.name, **llvm_profile_env()})
 
         assert res.returncode == 2
         assert res.stdout == ""
@@ -1108,7 +1109,7 @@ class TestScyllaSsstableSchemaLoadingBase:
 
     def check_fail(self, scylla_path, extra_args, sstable, error_msg=None, cwd=None):
         common_args = [scylla_path, "sstable", "dump-data", "--logger-log-level", "scylla-sstable=debug:schema_loader=trace"]
-        res = subprocess.run(common_args + extra_args + [sstable], capture_output=True, text=True, cwd=cwd, env={})
+        res = subprocess.run(common_args + extra_args + [sstable], capture_output=True, text=True, cwd=cwd, env=llvm_profile_env())
         print(res.stderr)
         if error_msg is None:
             error_msg = "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually"
@@ -1335,7 +1336,7 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
                 ["--keyspace", self.keyspace, "--table", self.table],
                 ext_sstable,
                 system_scylla_local_reference_dump,
-                env={"SCYLLA_CONF": conf_dir})
+                env={"SCYLLA_CONF": conf_dir, **llvm_profile_env()})
 
     def test_external_dir_autodetect_conf_dir_home_env(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir, scylla_home_dir):
         ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
@@ -1344,7 +1345,7 @@ class TestScyllaSsstableSchemaLoading(TestScyllaSsstableSchemaLoadingBase):
                 ["--keyspace", self.keyspace, "--table", self.table],
                 ext_sstable,
                 system_scylla_local_reference_dump,
-                env={"SCYLLA_HOME": scylla_home_dir})
+                env={"SCYLLA_HOME": scylla_home_dir, **llvm_profile_env()})
 
     def test_external_dir_autodetect_sstable_serialization_header_keyspace_table(self, scylla_path, system_scylla_local_sstable_prepared, system_scylla_local_reference_dump, temp_workdir):
         ext_sstable = self.copy_sstable_to_external_dir(system_scylla_local_sstable_prepared, temp_workdir)
@@ -2250,7 +2251,7 @@ def test_scylla_sstable_query_temp_dir(cql, scylla_path, scylla_data_dir):
 
         with tempfile.NamedTemporaryFile("r") as f:
             args = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local"]
-            res = subprocess.run(args + sstables, text=True, capture_output=True, env={'TEMPDIR': f.name})
+            res = subprocess.run(args + sstables, text=True, capture_output=True, env={'TEMPDIR': f.name, **llvm_profile_env()})
 
         assert res.returncode == 2
         assert res.stdout == ""

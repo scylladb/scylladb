@@ -13,7 +13,7 @@ from typing import NamedTuple
 import pytest
 import requests.exceptions
 
-from test import asan_options, path_to, ubsan_options
+from test import asan_options, llvm_profile_env, path_to, ubsan_options
 from test.nodetool.rest_api_mock import get_expected_requests, get_unexpected_requests, expected_requests_manager
 from test.pylib.host_registry import HostRegistry
 
@@ -115,7 +115,8 @@ def nodetool(nodetool_path, rest_api_mock_server):
                    "-h", api_ip,
                    "-p", str(api_port)] + after
             env = {'UBSAN_OPTIONS': ubsan_options(),
-                   'ASAN_OPTIONS': asan_options()}
+                   'ASAN_OPTIONS': asan_options(),
+                   **llvm_profile_env()}
             res = subprocess.run(cmd, capture_output=True, text=True, env=env)
             sys.stdout.write(res.stdout)
             sys.stderr.write(res.stderr)

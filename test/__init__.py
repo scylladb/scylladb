@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 __all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_MODES", "HOST_ID", "TEST_DIR", "TEST_RUNNER", "TOP_SRC_DIR",
-           "asan_options", "path_to", "ubsan_options", "use_traditional_build"]
+           "asan_options", "llvm_profile_env", "path_to", "ubsan_options", "use_traditional_build"]
 
 
 TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
@@ -86,6 +86,17 @@ def use_traditional_build() -> bool:
     """
 
     return TOP_SRC_DIR.joinpath("build.ninja").exists()
+
+
+def llvm_profile_env() -> dict[str, str]:
+    """Where an instrumented Scylla or Scylla-based tool should write its coverage profile.
+
+    For processes started with an explicit environment, which would otherwise
+    drop the routing test.py puts in ours and dump default.profraw into the
+    working directory.
+    """
+
+    return {name: os.environ[name] for name in ("LLVM_PROFILE_FILE",) if name in os.environ}
 
 
 def path_to(mode: str, *components: str) -> str:
