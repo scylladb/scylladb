@@ -5,6 +5,7 @@
 # Tests for the CRUD item operations: PutItem, GetItem, UpdateItem, DeleteItem
 
 import pytest
+from concurrent.futures import ThreadPoolExecutor
 from botocore.exceptions import ClientError
 from decimal import Decimal
 from test.alternator.util import random_string, random_bytes
@@ -661,6 +662,58 @@ def test_update_item_add(test_table_s):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={'a': {'Action': 'ADD', 'Value': value}})
         assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': value}
+
+# Test that AttributeUpdates' ADD with a value of a different type than the
+# attribute's current value - a string, a number, a set or a list - fails.
+# test_update_item_add above checks some of these combinations; this test
+# checks all of them. Note that ADD of a string is never allowed.
+# Translated from scylla-dtest's alternator_tests.py::TesterAlternator::test_exception_error_for_update_item_with_add_action.
+@pytest.mark.parametrize('value', ['1', [1], {1}, Decimal(1)], ids=['string', 'list', 'set', 'number'])
+def test_update_item_add_type_mismatch(test_table_s, value):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': value})
+    for add_value in ['1', [1], {1}, Decimal(1)]:
+        if type(add_value) == type(value):
+            continue
+        # DynamoDB's message is "Type mismatch for attribute to update",
+        # or for a string value "ADD action is not supported for the type
+        # S"; Scylla's is "Operand type mismatch in AttributeUpdates ADD".
+        with pytest.raises(ClientError, match='ValidationException.*[Tt]ype'):
+            test_table_s.update_item(Key={'p': p},
+                AttributeUpdates={'a': {'Action': 'ADD', 'Value': add_value}})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': value}
+
+# Test that concurrent AttributeUpdates' ADD operations on the same
+# attribute, from several threads, are all applied: for a number, the
+# result is the sum of all the values added; for a set, the union; for a
+# list, all the added elements (in some order).
+# Translated from scylla-dtest's alternator_tests.py::TesterAlternator::test_update_items_from_multiple_threads.
+# The dtest did 10,000 ADD operations, and set the table's write isolation
+# to always use LWT; this test does 150, and on Scylla uses the test
+# server's write isolation, which uses LWT for read-modify-write operations
+# such as ADD.
+@pytest.mark.parametrize('value', [[1], {1}, 1], ids=['list', 'set', 'number'])
+def test_update_item_add_concurrent(test_table_s, value):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': value})
+    n = 150
+    nthreads = 3
+    def add(i):
+        return [i] if isinstance(value, list) else {i} if isinstance(value, set) else i
+    def worker(first):
+        for i in range(first, n, nthreads):
+            test_table_s.update_item(Key={'p': p},
+                AttributeUpdates={'a': {'Action': 'ADD', 'Value': add(i)}})
+    with ThreadPoolExecutor(max_workers=nthreads) as executor:
+        for future in [executor.submit(worker, t) for t in range(nthreads)]:
+            future.result()
+    result = test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a']
+    if isinstance(value, list):
+        assert sorted(result) == sorted([1] + list(range(n)))
+    elif isinstance(value, set):
+        assert result == {1} | set(range(n))
+    else:
+        assert result == 1 + sum(range(n))
 
 # DynamoDB Does not allow empty sets.
 # Trying to ask UpdateItem to PUT one of these in an attribute should be

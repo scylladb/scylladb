@@ -9,7 +9,6 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 from ...porting import *
-from ....test_materialized_view_old import clock
 import random
 
 # Test for cassandra 8558

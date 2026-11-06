@@ -7,6 +7,8 @@
 # Tests for user-defined functions (UDF)
 #############################################################################
 
+import re
+
 import pytest
 from cassandra.protocol import InvalidRequest
 
@@ -132,3 +134,54 @@ def test_udf_udt_literal_argument_column_name(cql, test_keyspace, scylla_only):
                 rs = cql.execute(f'SELECT {test_keyspace}.{f}({{"A": 1, b: 2}}) FROM {table}')
                 assert rs.column_names == [f'{test_keyspace}.{f}({{"A":1, b:2}})']
                 assert list(rs) == [(7,)]
+
+# Test overloaded functions: a call is resolved by the type of its argument,
+# a string literal argument picks one of the string overloads, varchar is an alias
+# of text so the function on varchar is the one on text, DROP FUNCTION of
+# a signature which doesn't exist fails, and DROP FUNCTION without a
+# signature fails while the function is overloaded.
+# Translated from scylla-dtest's user_functions_test.py::TestUserFunctions::test_udf_overload_test.
+def test_udf_overload(cql, test_keyspace, has_java_udf):
+    def body(arg, result):
+        if has_java_udf:
+            return f'({arg}) CALLED ON NULL INPUT RETURNS text LANGUAGE java AS \'return "{result}";\''
+        return f'({arg}) CALLED ON NULL INPUT RETURNS text LANGUAGE lua AS \'return "{result}"\''
+    fun = f'{test_keyspace}.{unique_name()}'
+    with new_test_table(cql, test_keyspace, 'v varchar PRIMARY KEY, i int, t text, a ascii') as table:
+        cql.execute(f"INSERT INTO {table} (v, i, t, a) VALUES ('foo', 1, 'foo', 'foo')")
+        cql.execute(f'CREATE FUNCTION {fun}{body("v varchar", "f1")}')
+        try:
+            cql.execute(f'CREATE OR REPLACE FUNCTION {fun}{body("i int", "f2")}')
+            cql.execute(f'CREATE OR REPLACE FUNCTION {fun}{body("t text", "f3")}')
+            cql.execute(f'CREATE OR REPLACE FUNCTION {fun}{body("a ascii", "f4")}')
+            # A string literal matches both the text and ascii overloads.
+            # The dtest expected the call to be rejected as ambiguous, but
+            # neither Scylla nor Cassandra does that: Scylla picks the text
+            # overload, and Cassandra the ascii one.
+            assert list(cql.execute(f"SELECT {fun}('foo') FROM {table}"))[0][0] in ['f3', 'f4']
+            # varchar is the same as text, so the "t text" overload replaced
+            # the "v varchar" one
+            assert list(cql.execute(f'SELECT v, {fun}(v) FROM {table}')) == [('foo', 'f3')]
+            assert list(cql.execute(f'SELECT i, {fun}(i) FROM {table}')) == [(1, 'f2')]
+            assert list(cql.execute(f'SELECT t, {fun}(t) FROM {table}')) == [('foo', 'f3')]
+            assert list(cql.execute(f'SELECT a, {fun}(a) FROM {table}')) == [('foo', 'f4')]
+            # Dropping signatures which don't exist
+            with pytest.raises(InvalidRequest):
+                cql.execute(f'DROP FUNCTION {fun}(boolean)')
+            with pytest.raises(InvalidRequest):
+                cql.execute(f'DROP FUNCTION {fun}(bigint)')
+            # Dropping without a signature is ambiguous
+            with pytest.raises(InvalidRequest):
+                cql.execute(f'DROP FUNCTION {fun}')
+            # varchar is the same as text here too
+            cql.execute(f'DROP FUNCTION {fun}(varchar)')
+            # Cassandra puts the function's name in quotes, Scylla doesn't
+            with pytest.raises(InvalidRequest, match=re.escape(f'{fun}(text)') + "'? doesn't exist"):
+                cql.execute(f'DROP FUNCTION {fun}(text)')
+            cql.execute(f'DROP FUNCTION {fun}(ascii)')
+            # Now only the "i int" overload remains, so dropping without a
+            # signature is no longer ambiguous
+            cql.execute(f'DROP FUNCTION {fun}')
+        finally:
+            for arg in ['int', 'text', 'ascii']:
+                cql.execute(f'DROP FUNCTION IF EXISTS {fun}({arg})')

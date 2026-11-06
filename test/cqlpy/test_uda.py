@@ -359,3 +359,25 @@ def test_create_aggregate_null_state_with_returns_null_sfunc(cql, test_keyspace)
     with new_function(cql, test_keyspace, sfunc('CALLED')) as sf:
         with new_aggregate(cql, test_keyspace, f'(int) SFUNC {sf} STYPE int'):
             pass
+
+# Test a user-defined aggregate with a state function, a final function
+# and an initial condition, and that an aggregate can't be created with
+# a state function or final function which isn't an existing function.
+# Translated from scylla-dtest's user_functions_test.py::TestUserFunctions::test_aggregate_udf.
+def test_aggregate_with_final_func_and_initcond(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, val int') as table:
+        for x in range(1, 4):
+            cql.execute(f'INSERT INTO {table} (key, val) VALUES ({x}, {x})')
+        with new_function(cql, test_keyspace, "(key int, val int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return key + val'") as plus, \
+             new_function(cql, test_keyspace, "(key int) CALLED ON NULL INPUT RETURNS text LANGUAGE lua AS 'return tostring(key)'") as stri, \
+             new_function(cql, test_keyspace, "(a int, b double) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return a + b'") as test:
+            with new_aggregate(cql, test_keyspace, f'(int) SFUNC {plus} STYPE int FINALFUNC {stri} INITCOND 10') as suma:
+                # 10 + 1 + 2 + 3
+                assert list(cql.execute(f'SELECT {test_keyspace}.{suma}(val) FROM {table}')) == [('16',)]
+            with new_aggregate(cql, test_keyspace, f'(double) SFUNC {test} STYPE int') as aggy:
+                # An aggregate can't be the state function of another aggregate
+                with pytest.raises(InvalidRequest, match='State function .* not found'):
+                    cql.execute(f'CREATE AGGREGATE {test_keyspace}.{unique_name()}(int) SFUNC {aggy} STYPE int')
+                # A function which doesn't exist can't be the final function
+                with pytest.raises(InvalidRequest, match='Final function .* not found'):
+                    cql.execute(f'CREATE AGGREGATE {test_keyspace}.{unique_name()}(int) SFUNC {plus} STYPE int FINALFUNC {unique_name()}')

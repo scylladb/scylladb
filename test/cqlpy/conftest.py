@@ -22,7 +22,7 @@ import random
 from test.pylib.skip_types import skip_env
 from test.pylib.connect_options import add_host_option, add_cql_connection_options, add_s3_options
 from test.pylib.scylla_cluster import ScyllaCluster
-from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context, is_cassandra_older_than
+from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context, is_cassandra_older_than, Clock
 from .nodetool import scylla_log
 from ..conftest import dynamic_scope
 from .vector_store_mock import VectorStoreMock
@@ -248,13 +248,14 @@ def scylla_path(cql):
     return path
 
 # A fixture for finding Scylla's data directory. We get it using the CQL
-# interface to Scylla's configuration. Note that if the server is remote,
-# the directory retrieved this way may be irrelevant, whether or not it
-# exists on the local machine... However, if the same test that uses this
-# fixture also uses the scylla_path fixture, the test will anyway be skipped
-# if the running Scylla is not on the local machine local.
+# interface to Scylla's configuration. If the server is remote, the directory
+# retrieved this way is irrelevant, whether or not it exists on the local
+# machine, and the tests using this fixture access the directory. So this
+# fixture skips the test if the running Scylla is not on the local machine.
 @pytest.fixture(scope=dynamic_scope())
 def scylla_data_dir(cql):
+    if not local_process_id(cql):
+        skip_env("Can't find local Scylla process")
     try:
         dir = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'data_file_directories'").one().value)[0]
         return dir
@@ -348,3 +349,11 @@ def needs_vector_store(cql):
 def vector_store_mock(_vector_store_mock_session):
     _vector_store_mock_session.reset()
     yield _vector_store_mock_session
+
+# The "clock" fixture lets a test move the server's clock forward instead
+# of really waiting. See the Clock class in util.py.
+@pytest.fixture(scope="function")
+def clock(cql):
+    c = Clock(cql)
+    yield c
+    c._restore()
