@@ -249,16 +249,33 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     host_id_vector_replica_set natural_endpoints = ermp->get_natural_replicas(token);
     host_id_vector_topology_change pending_endpoints  = ermp->get_pending_replicas(token);
 
+<<<<<<< HEAD
+<<<<<<< HEAD
     return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints, &pending_endpoints] () mutable -> future<> {
+||||||| parent of deb7e4bbde (db/hints: Coroutinize hint_sender::send_one_mutation)
+    return futurize_invoke([this, m = std::move(m), ermp = std::move(ermp), &natural_endpoints, &pending_endpoints, &token] () mutable -> future<> {
+=======
+>>>>>>> deb7e4bbde (db/hints: Coroutinize hint_sender::send_one_mutation)
         // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
         // to be generated as a result of hints sending.
         const auto& tm = ermp->get_token_metadata();
         const auto dst = end_point_key();
+||||||| parent of 429f25eacd (db/hints: Fix indentation)
+        // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
+        // to be generated as a result of hints sending.
+        const auto dst = end_point_key();
+=======
+    // The fact that we send with CL::ALL in both cases below ensures that new hints are not going
+    // to be generated as a result of hints sending.
+    const auto dst = end_point_key();
+>>>>>>> 429f25eacd (db/hints: Fix indentation)
 
+<<<<<<< HEAD
+<<<<<<< HEAD
         if (std::ranges::contains(natural_endpoints, dst) && !tm.is_leaving(dst)) {
             manager_logger.trace("hint_sender[{}]:send_one_mutation: Sending directly", dst);
             // dst is not duplicated in pending_endpoints because it's in natural_endpoints
-            return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), dst, std::move(pending_endpoints));
+            co_await _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), dst, std::move(pending_endpoints));
         } else {
             if (manager_logger.is_enabled(log_level::trace)) {
                 if (tm.is_leaving(end_point_key())) {
@@ -266,10 +283,44 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
                 } else {
                     manager_logger.trace("hint_sender[{}]:send_one_mutation: Endpoint set has changed and original target is no longer a replica. Mutating from scratch", dst);
                 }
-            }
-            return _proxy.send_hint_to_all_replicas(std::move(m));
-        }
+||||||| parent of 429f25eacd (db/hints: Fix indentation)
+        const bool is_leaving = ermp->is_leaving(dst, token);
+        if (std::ranges::contains(natural_endpoints, dst) && (!is_leaving || !pending_endpoints.empty())) {
+            manager_logger.trace("hint_sender[{}]:send_one_mutation: Sending directly", dst);
+            // dst is not duplicated in pending_endpoints because it's in natural_endpoints
+            co_await _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), dst, std::move(pending_endpoints));
+        } else {
+            if (manager_logger.is_enabled(log_level::trace)) {
+                if (is_leaving) {
+                    manager_logger.trace("hint_sender[{}]:send_one_mutation: Original target host or tablet replica is leaving. Mutating from scratch", dst);
+                } else {
+                    manager_logger.trace("hint_sender[{}]:send_one_mutation: Endpoint set has changed and original target is no longer a replica. Mutating from scratch", dst);
+                }
+=======
+||||||| parent of 31c28f6356 (db/hints: Don't drop hints when running into a corrupted segment)
+=======
+    co_await utils::get_local_injector().inject("hinted_handoff_fail_hint_send", [] (auto& handler) -> future<> {
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + 5min);
+        throw std::runtime_error("Sending a hint failed due to: hinted_handoff_fail_hint_send");
     });
+
+>>>>>>> 31c28f6356 (db/hints: Don't drop hints when running into a corrupted segment)
+    const bool is_leaving = ermp->is_leaving(dst, token);
+    if (std::ranges::contains(natural_endpoints, dst) && (!is_leaving || !pending_endpoints.empty())) {
+        manager_logger.trace("hint_sender[{}]:send_one_mutation: Sending directly", dst);
+        // dst is not duplicated in pending_endpoints because it's in natural_endpoints
+        co_await _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), dst, std::move(pending_endpoints));
+    } else {
+        if (manager_logger.is_enabled(log_level::trace)) {
+            if (is_leaving) {
+                manager_logger.trace("hint_sender[{}]:send_one_mutation: Original target host or tablet replica is leaving. Mutating from scratch", dst);
+            } else {
+                manager_logger.trace("hint_sender[{}]:send_one_mutation: Endpoint set has changed and original target is no longer a replica. Mutating from scratch", dst);
+>>>>>>> 429f25eacd (db/hints: Fix indentation)
+            }
+        }
+        co_await _proxy.send_hint_to_all_replicas(std::move(m));
+    }
 }
 
 future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
@@ -506,10 +557,15 @@ bool hint_sender::send_one_file(const sstring& fname) {
             };
         }, _last_not_complete_rp.pos, &_db.extensions()).get();
     } catch (db::commitlog::segment_error& ex) {
-        manager_logger.error("hint_sender[{}]:send_one_file: Segment error in {}: {}. Last not complete position={}",
-                _ep_key, fname, ex.what(), _last_not_complete_rp);
-        ctx_ptr->segment_replay_failed = false;
-        ++this->shard_stats().corrupted_files;
+        if (!_current_segment_corrupted) {
+            _current_segment_corrupted = true;
+            manager_logger.error("hint_sender[{}]:send_one_file: Segment error in {}: {}. Last not complete position={}",
+                    _ep_key, fname, ex.what(), _last_not_complete_rp);
+            ++this->shard_stats().corrupted_files;
+        } else {
+            manager_logger.debug("hint_sender[{}]:send_one_file: Processed a corrupted segment {} again: {}. "
+                    "Last not complete position={}", _ep_key, fname, ex.what(), _last_not_complete_rp);
+        }
     } catch  (const canceled_draining_exception&) {
         manager_logger.debug("hint_sender[{}]:send_one_file: Loop in send_one_file finishes due to canceled draining", _ep_key);
     } catch (...) {
@@ -549,10 +605,18 @@ bool hint_sender::send_one_file(const sstring& fname) {
         return p->delete_segments({ fname });
     }).get();
 
+    if (_current_segment_corrupted) {
+        manager_logger.info("hint_sender[{}]:send_one_file: Corrupted segment {} has been deleted",
+                _ep_key, fname);
+    } else {
+        manager_logger.debug("hint_sender[{}]:send_one_file: Segment {} has been sent in full and deleted", _ep_key, fname);
+    }
+
+    _current_segment_corrupted = false;
     // clear the replay position - we are going to send the next segment...
     _last_not_complete_rp = replay_position();
     _last_schema_ver_to_column_mapping.clear();
-    manager_logger.debug("hint_sender[{}]:send_one_file: Segment {} has been sent in full and deleted", _ep_key, fname);
+
     return true;
 }
 
