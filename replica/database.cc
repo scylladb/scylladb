@@ -3277,6 +3277,11 @@ uint64_t database::disk_space_used() const {
 
 future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, table_id uuid, sstring tag, db::snapshot_options opts, snapshot_callback ssc) {
     if (!opts.skip_flush) {
+        // A strongly consistent write is acked once its raft entry is committed, and
+        // reaches the memtable only when each replica applies it, a little later. The
+        // raft log is in no snapshot, so make the local replicas apply what they know is
+        // committed, and the snapshot holds the writes acked before it started.
+        co_await sharded_db.local().wait_for_strongly_consistent_apply(uuid);
         co_await flush_table_on_all_shards(sharded_db, uuid);
     }
     auto table_shards = co_await get_table_on_all_shards(sharded_db, uuid);
@@ -3930,6 +3935,21 @@ void database::plug_snapshot_ctl(db::snapshot_ctl& snapshot_ctl) noexcept {
 
 void database::unplug_snapshot_ctl() noexcept {
     _snapshot_ctl = nullptr;
+}
+
+void database::plug_strongly_consistent_apply_barrier(strongly_consistent_apply_barrier barrier) noexcept {
+    _sc_apply_barrier = std::move(barrier);
+}
+
+void database::unplug_strongly_consistent_apply_barrier() noexcept {
+    _sc_apply_barrier.reset();
+}
+
+future<> database::wait_for_strongly_consistent_apply(table_id id) {
+    if (_sc_apply_barrier) {
+        return (*_sc_apply_barrier)(id);
+    }
+    return make_ready_future<>();
 }
 
 } // namespace replica

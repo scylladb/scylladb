@@ -1256,6 +1256,9 @@ public:
     lw_shared_ptr<const sstable_list> get_sstables_including_compacted_undeleted() const;
     // For tests only.
     bool tablet_has_compacted_undeleted_sstables(locator::tablet_id) const;
+    // Whether this shard holds no data of the tablet: no sstables, no memtable
+    // contents, and no sstable being added. True for a tablet this shard doesn't host.
+    bool tablet_empty(locator::tablet_id) const;
     std::vector<sstables::shared_sstable> select_sstables(const dht::partition_range& range) const;
     future<> drop_quarantined_sstables();
     size_t sstables_count() const;
@@ -1911,6 +1914,17 @@ private:
     db::snapshot_ctl* _snapshot_ctl = nullptr;
 
 public:
+    // Makes this node's replicas of the strongly consistent tablets of a table apply what
+    // their raft groups have committed, so that a flush that follows captures those
+    // writes. Plugged by main once the strongly consistent groups manager is up; until
+    // then no table of the node has running raft groups. See
+    // strong_consistency::groups_manager::wait_for_committed_writes().
+    using strongly_consistent_apply_barrier = noncopyable_function<future<>(table_id)>;
+
+private:
+    std::optional<strongly_consistent_apply_barrier> _sc_apply_barrier;
+
+public:
     data_dictionary::database as_data_dictionary() const;
     db::commitlog* commitlog_for(const schema_ptr& schema);
     std::shared_ptr<data_dictionary::user_types_storage> as_user_types_storage() const noexcept;
@@ -1939,6 +1953,11 @@ public:
 
     void plug_snapshot_ctl(db::snapshot_ctl& snapshot_ctl) noexcept;
     void unplug_snapshot_ctl() noexcept;
+
+    void plug_strongly_consistent_apply_barrier(strongly_consistent_apply_barrier barrier) noexcept;
+    void unplug_strongly_consistent_apply_barrier() noexcept;
+    // Runs the plugged barrier for the table; a no-op before it is plugged.
+    future<> wait_for_strongly_consistent_apply(table_id);
 
 private:
     future<> flush_non_system_column_families();
