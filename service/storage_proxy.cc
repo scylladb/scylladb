@@ -2344,6 +2344,10 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
         tracing::trace(tr_state, "Preparing {}", ballot);
 
         paxos::prepare_summary summary = co_await prepare_ballot(ballot);
+        // Store the floor before the rejection check: a rejecting replica tells us
+        // the ballot it promised, and the retry must go above it even if our clock
+        // is behind.
+        min_timestamp_micros_to_use = utils::UUID_gen::micros_timestamp(summary.most_recent_promised_ballot) + 1;
 
         if (!summary.promised) {
             paxos::paxos_state::logger.debug("CAS[{}] Some replicas have already promised a higher ballot than ours; aborting", _id);
@@ -2352,8 +2356,6 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
             co_await sleep_approx_50ms();
             continue;
         }
-
-        min_timestamp_micros_to_use = utils::UUID_gen::micros_timestamp(summary.most_recent_promised_ballot) + 1;
 
         std::optional<paxos::proposal> in_progress = std::move(summary.most_recent_proposal);
 
