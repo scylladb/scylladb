@@ -174,6 +174,9 @@ public:
 
     virtual future<cql3::prepared_cache_key_type> prepare(sstring query) = 0;
 
+    /// The dialect execute_cql() and prepare() parse statements with.
+    virtual cql3::dialect test_dialect() = 0;
+
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_prepared(
         cql3::prepared_cache_key_type id,
         cql3::raw_value_vector_with_unset values,

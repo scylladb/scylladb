@@ -1730,6 +1730,7 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
 
     tracing::trace(trace_state, "Parsing a statement");
     auto prepared = qp.local().get_statement(query.assume_value(), client_state, dialect,
+            cql3::query_processor::prepared_for_driver::no,
             cql3::query_processor::pinned_plan_from_paging_state(options.get_paging_state()));
     auto& statement = *prepared->statement;
     auto execute_fut = reclassifying_control_connection_needs_user_service_level(statement, query_state)
@@ -1829,8 +1830,9 @@ maybe_rederive_with_pinned_plan(cql3::query_processor& qp, const service::client
     pinned_plan rederived{.parsing_units = consume_units(memory_available, qp.parsing_cost_estimate())};
     tracing::trace(trace_state,
             "Paging state pins another query plan; re-deriving the statement with that plan pinned");
+    // It's still the statement the driver prepared.
     rederived.statement = qp.get_statement(stmt.raw_cql_statement, client_state, dialect,
-            std::move(pinned), keyspace);
+            cql3::query_processor::prepared_for_driver::yes, std::move(pinned), keyspace);
     // Counts the pages that got a statement back. A refusal pays the re-parse
     // too - it is thrown while preparing what was parsed - but serves no page.
     ++qp.get_cql_stats().select_paging_plan_rederivations;
@@ -2044,7 +2046,8 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
             if (!query) {
                 return make_exception_future<cql_server::process_fn_return_type>(std::move(query).assume_error());
             }
-            stmt_ptr = qp.local().get_statement(query.assume_value(), client_state, dialect);
+            stmt_ptr = qp.local().get_statement(query.assume_value(), client_state, dialect,
+                    cql3::query_processor::prepared_for_driver::no);
             ps = stmt_ptr->checked_weak_from_this();
             if (init_trace && trace_state) {
                 tracing::add_query(trace_state, query.assume_value());
@@ -2124,6 +2127,34 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     record_client_timestamp_drift(sg_stats, init_trace, request_start_timestamp, options.get_specific_options().timestamp);
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
+    }
+
+    if (client_state.is_protocol_extension_set(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
+        const utils::result_with_exception_ptr<uint16_t> routing_statement_index = in.read_short();
+        if (!routing_statement_index) [[unlikely]] {
+            return make_exception_future<cql_server::process_fn_return_type>(
+                    std::move(routing_statement_index).assume_error());
+        }
+        const utils::result_with_exception_ptr<int8_t> tablet_version_byte = in.read_byte();
+        if (!tablet_version_byte) [[unlikely]] {
+            return make_exception_future<cql_server::process_fn_return_type>(
+                    std::move(tablet_version_byte).assume_error());
+        }
+        // The index of a batch the driver didn't route by any statement.
+        constexpr uint16_t no_routing_statement = 0xFFFF;
+        const uint16_t index = routing_statement_index.assume_value();
+        if (index != no_routing_statement) {
+            if (index >= modifications.size()) [[unlikely]] {
+                return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(format(
+                        "Invalid routing statement index in BATCH message: {} for a batch of {} statements",
+                        index, modifications.size())));
+            }
+            // Whether the driver could compute the token from the routing statement
+            // is only decided when the batch is executed: it depends on the prepared
+            // statement the ID names now, not on the request.
+            const locator::tablet_version_block block{uint8_t(tablet_version_byte.assume_value())};
+            options.set_routing_hint(index, block);
+        }
     }
 
     if (init_trace && trace_state) {

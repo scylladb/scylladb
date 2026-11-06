@@ -81,16 +81,27 @@ def scylla_inject_error(cql, err, one_shot=False):
         print("Disabling error injection", err)
         delete_request(cql, f'v2/error_injection/injection/{err}')
 
-# Waits until a fiber reaches the given error injection. The injection's enter
-# count is bumped before the fiber parks, so once it is non-zero the injected
-# code is paused.
-def wait_for_injection_enter(cql, err, timeout=60):
+# Waits until `count` fibers reach the given error injection. The injection's
+# enter count is bumped before a fiber parks, so once it reaches `count`, that
+# many fibers are paused in the injected code.
+def wait_for_injection_enter(cql, err, timeout=60, count=1):
     tick = threading.Event()
     deadline = time.monotonic() + timeout
-    while get_request(cql, f'v2/error_injection/injection/{err}/enters') == 0:
+    while get_request(cql, f'v2/error_injection/injection/{err}/enters') < count:
         assert time.monotonic() < deadline, f'timed out waiting for injection {err}'
         tick.wait(0.01)
 
 # Sends a message to a fiber paused on the given error injection, resuming it.
 def message_injection(cql, err):
     post_request(cql, f'v2/error_injection/injection/{err}/message')
+
+# Disables tablet load balancing for the duration of the context, so that the
+# tablets stay where they are. Disabling it also waits until no tablet
+# transition is in flight.
+@contextmanager
+def tablet_balancing_disabled(cql):
+    post_request(cql, 'storage_service/tablets/balancing?enabled=false')
+    try:
+        yield
+    finally:
+        post_request(cql, 'storage_service/tablets/balancing?enabled=true')
