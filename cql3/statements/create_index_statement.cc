@@ -224,6 +224,26 @@ static bool is_viewless_custom_class(const sstring& class_name) {
     return factory && !(*factory)()->view_should_exist();
 }
 
+// Finds an existing index with the same kind, targets and options,
+// ignoring the name. An index created before class names were stored
+// in lowercase may keep another spelling, so the class names of existing
+// indexes are compared in their canonical form.
+static std::optional<index_metadata> find_duplicate_index(const schema& s, const index_metadata& index) {
+    for (const auto& [name, existing] : s.all_indices()) {
+        auto options = existing.options();
+        auto class_it = options.find(db::index::secondary_index::custom_class_option_name);
+        if (class_it != options.end()) {
+            auto& class_name = class_it->second;
+            class_name = secondary_index::secondary_index_manager::canonical_custom_class_name(class_name).value_or(class_name);
+        }
+        index_metadata canonical{existing.name(), options, existing.kind(), index_metadata::is_local_index(existing.local())};
+        if (canonical.equals_noname(index)) {
+            return existing;
+        }
+    }
+    return std::nullopt;
+}
+
 view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, const index_metadata& im,
         const data_dictionary::database& db) const
 {
@@ -766,7 +786,7 @@ create_index_statement::build_index_schema(data_dictionary::database db, locator
         kind = schema->is_compound() ? index_metadata_kind::composites : index_metadata_kind::keys;
     }
     auto index = make_index_metadata(targets, accepted_name, kind, index_options);
-    auto existing_index = schema->find_index_noname(index);
+    auto existing_index = find_duplicate_index(*schema, index);
     bool is_viewless = _idx_properties->custom_class && is_viewless_custom_class(*_idx_properties->custom_class);
     // For viewless indexes:
     // - unnamed ones are blocked by the duplicate check on the same column;
