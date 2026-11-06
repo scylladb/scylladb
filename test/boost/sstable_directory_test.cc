@@ -1036,9 +1036,12 @@ SEASTAR_TEST_CASE(test_atomic_deletion_keeps_log_when_unlink_fails) {
 // deletion removes the files right away.
 SEASTAR_TEST_CASE(test_atomic_deletion_defers_file_removal) {
     return sstables::test_env::do_with_async([] (test_env& env) {
+        // Without compression, the sstable has CRC.db, which read_checksum()
+        // opens by name.
         auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("p", bytes_type, column_kind::partition_key)
                 .with_column("c", int32_type)
+                .set_compressor_params(compression_parameters::no_compression())
                 .build();
         auto make_sst = [&] {
             mutation m(s, tests::generate_partition_key(s));
@@ -1056,6 +1059,7 @@ SEASTAR_TEST_CASE(test_atomic_deletion_defers_file_removal) {
         };
 
         auto sst = make_sst();
+        BOOST_REQUIRE(sst->has_component(component_type::CRC));
         const auto toc = test(sst).filename(component_type::TOC).native();
         const auto temp_toc = test(sst).filename(component_type::TemporaryTOC).native();
         const auto data = test(sst).filename(component_type::Data).native();
@@ -1068,6 +1072,7 @@ SEASTAR_TEST_CASE(test_atomic_deletion_defers_file_removal) {
         BOOST_REQUIRE(!file_exists(toc).get());
         BOOST_REQUIRE(file_exists(temp_toc).get());
         BOOST_REQUIRE(file_exists(data).get());
+        BOOST_REQUIRE(sst->read_checksum().get());
 
         sst = {};
         env.manager().await_table_sstables_destroyed(s->id()).get();
@@ -1078,6 +1083,7 @@ SEASTAR_TEST_CASE(test_atomic_deletion_defers_file_removal) {
         sst->unlink().get();
         remaining = list_dir();
         BOOST_REQUIRE_MESSAGE(remaining.empty(), fmt::format("Expected empty sstable dir after unlink, found: {}", remaining));
+        BOOST_REQUIRE(!sst->read_checksum().get());
     });
 }
 
