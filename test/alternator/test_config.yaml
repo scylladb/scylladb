@@ -1,3 +1,8 @@
+dirties_cluster:
+  # Sets alternator_http_response_server_header and restores its empty
+  # default as `""`: through Alternator, the config table can't be given an
+  # empty string, and its values read back in JSON.
+  - test_http_headers
 extra_scylla_cmdline_options:
   - '--logger-log-level=alternator-auth=trace'
   - '--logger-log-level=alternator-conditions=trace'
