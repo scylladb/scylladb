@@ -3937,6 +3937,75 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_colocated_tablets) {
   }).get();
 }
 
+// A tablet with replicas on two drained nodes is migrated once, even though both
+// replicas are parked in the skip lists before either of them is migrated.
+SEASTAR_THREAD_TEST_CASE(test_tablet_skipped_on_two_drained_nodes_is_scheduled_once) {
+    cql_test_config cfg{};
+    // Keeps all nodes in one rack, so that both drained nodes are in the same plan.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto host1 = topo.add_node(node_state::normal, 1);
+        auto host2 = topo.add_node(node_state::normal, 1);
+        // host3 is the least loaded target, but it already holds a replica, so both drained
+        // replicas are parked in the skip lists with host4 as the only viable target.
+        auto host3 = topo.add_node(node_state::normal, 4);
+        auto host4 = topo.add_node(node_state::normal, 2);
+
+        auto ks1 = add_keyspace(e, {{topo.dc(), 3}}, 1);
+        auto table1 = add_table(e, ks1).get();
+        auto ks2 = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table2 = add_table(e, ks2).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap1(1);
+            tmap1.set_tablet(tmap1.first_tablet(), tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                    tablet_replica{host2, 0},
+                    tablet_replica{host3, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap1));
+            // Loads host4 more than host3.
+            tablet_map tmap2(1);
+            tmap2.set_tablet(tmap2.first_tablet(), tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host4, 0},
+                }
+            });
+            tmeta.set_tablet_map(table2, std::move(tmap2));
+            co_return;
+        });
+
+        // Draining nodes get no replicas of new tables, so drain after the tables are created.
+        topo.add_draining_request(host1);
+        topo.add_draining_request(host2);
+
+        auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        // Otherwise the replicas would go straight to host4, as it holds no replica of table1.
+        talloc.set_use_table_aware_balancing(false);
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        auto plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+
+        size_t migrations = 0;
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Migration: {}", mig);
+            if (mig.tablet.table == table1) {
+                migrations++;
+                BOOST_REQUIRE(mig.dst && mig.dst->host == host4);
+            }
+        }
+        BOOST_REQUIRE_EQUAL(migrations, 1);
+    }, std::move(cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
     // Verifies that load balancer moves tablets out of the decommissioned node.
     // The scenario is such that replication factor of tablets can be satisfied after decommission.

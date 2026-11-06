@@ -3458,6 +3458,14 @@ public:
         sketch.pick(host, shard, tablet_set.tablets().size(), tablet_set.tablet_set_disk_size);
     }
 
+    // A candidate parked in the skip list of a drained node may have been scheduled since,
+    // through another replica. A tablet can be in only one transition at a time.
+    bool already_scheduled(const migration_tablet_set& tablets) const {
+        return std::ranges::any_of(tablets.tablets(), [&] (const global_tablet_id& t) {
+            return _scheduled_tablets.contains(t);
+        });
+    }
+
     void mark_as_scheduled(const tablet_migration_info& mig) {
         _scheduled_tablets.insert(mig.tablet);
     }
@@ -4243,6 +4251,13 @@ public:
             dst = candidate.dst;
 
             auto& tmap = tmeta.get_tablet_map(source_tablets.table());
+            if (already_scheduled(source_tablets)) {
+                lblogger.debug("Candidate {} skipped because it is already scheduled", source_tablets);
+                state.migrating_candidates++;
+                erase_candidates(nodes, tmap, source_tablets);
+                continue;
+            }
+
             if (can_check_convergence && !check_convergence(src_node_info, target_info, source_tablets)) {
                 lblogger.debug("No more candidates. Load would be inverted.");
                 state.stats->stop_load_inversion++;
