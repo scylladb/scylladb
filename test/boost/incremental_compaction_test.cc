@@ -81,13 +81,15 @@ SEASTAR_TEST_CASE(incremental_compaction_test) {
                 .with_sharder(this_smp_shard_count(), 0);
         auto s = builder.build();
 
-        auto tmp = make_lw_shared<tmpdir>();
-        auto sst_gen = [&env, s, tmp] () mutable {
-            auto sst = env.make_sstable(s, tmp->path().string(), env.new_generation(), sstable_version_types::md, big);
+        // The sstables manager removes the files of deleted sstables in the
+        // background, until it is closed. So the directory must outlive it.
+        auto& tmp = env.tempdir();
+        auto sst_gen = [&env, s, &tmp] () mutable {
+            auto sst = env.make_sstable(s, tmp.path().string(), env.new_generation(), sstable_version_types::md, big);
             return sst;
         };
 
-        table_for_tests cf = env.make_table_for_tests(s, tmp->path().string());
+        table_for_tests cf = env.make_table_for_tests(s, tmp.path().string());
         auto close_cf = deferred_stop(cf);
         cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
         auto compact = [&, s] (std::vector<shared_sstable> all, auto replacer) -> std::vector<shared_sstable> {
@@ -300,7 +302,8 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_sag_test) {
 
 SEASTAR_TEST_CASE(basic_garbage_collection_test) {
     return test_env::do_with_async([] (test_env& env) {
-        auto tmp = tmpdir();
+        // See incremental_compaction_test.
+        auto& tmp = env.tempdir();
         auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("c1", utf8_type, column_kind::clustering_key)
@@ -438,7 +441,8 @@ SEASTAR_TEST_CASE(ics_reshape_test) {
             return m;
         };
 
-        auto tmp = tmpdir();
+        // See incremental_compaction_test.
+        auto& tmp = env.tempdir();
 
         auto sst_gen = [&env, s, &tmp]() {
             return env.make_sstable(s, tmp.path().string(), env.new_generation(), sstables::sstable::version_types::md, big);
