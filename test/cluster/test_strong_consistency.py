@@ -3872,18 +3872,35 @@ async def test_non_pure_pk_function_is_evaluated_once_per_request(manager: Scyll
     every tablet and so learns the leader from raft. A control run with plain keys shows what
     a request costs: it goes straight to the leader, nobody redirects it and nobody bounces
     it. The same requests with `uuid()` as the key must leave the counters just as they are.
+
+    Leaders come from elections, so the client talks to the node that leads the fewest
+    tablets: the other node leads at least half of them, and the requests to those are
+    forwarded. The forward counter of the coordinator has to grow during the `uuid()` run,
+    or the test checked nothing.
     """
     servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='dc1')
     # A tablet that moves during the run is redirected for a reason that has nothing to do
     # with uuid().
     await manager.disable_tablet_balancing()
     cql, hosts = await manager.get_ready_cql(servers)
-    coordinator, others = servers[0], servers[1:]
-    via = hosts[0]
+    host_ids = [await manager.get_host_id(s.server_id) for s in servers]
 
     ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 8} AND consistency = 'global'"
     async with new_test_keyspace(manager, ks_opts) as ks:
         async with new_test_table(manager, ks, "pk uuid PRIMARY KEY, c int") as table:
+            table_id = await manager.get_table_id(*table.split('.'))
+            groups = [str(r.raft_group_id) for r in await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")]
+            leaders = [await wait_for_leader(manager, servers[0], g) for g in groups]
+            led = [leaders.count(h) for h in host_ids]
+            coordinator_idx = led.index(min(led))
+            coordinator, via = servers[coordinator_idx], hosts[coordinator_idx]
+            others = [s for s in servers if s is not coordinator]
+            logger.info(f"Tablets led per node: {dict(zip(host_ids, led))}, the client talks to {host_ids[coordinator_idx]}")
+
+            FORWARDED = 'scylla_transport_requests_forwarded_successfully'
+            async def forwarded() -> float:
+                return (await manager.metrics.query(coordinator.ip_addr)).get(FORWARDED) or 0
+
             def delta(before: dict[str, float], after: dict[str, float]) -> dict[str, float]:
                 return {k: after[k] - before[k] for k in before if after[k] != before[k]}
 
@@ -3906,12 +3923,20 @@ async def test_non_pure_pk_function_is_evaluated_once_per_request(manager: Scyll
 
             # The same requests, key computed by the server.
             STATEMENTS_CNT = 30
+            forwarded_before = await forwarded()
             offenders = await rerouted(STATEMENTS_CNT, 'uuid()')
+            forwarded_cnt = await forwarded() - forwarded_before
 
-            logger.info(f"{kind} with uuid(): {len(offenders)} of {STATEMENTS_CNT} requests were re-routed after the coordinator: {offenders}")
+            logger.info(f"{kind} with uuid(): {forwarded_cnt} of {STATEMENTS_CNT} requests were forwarded, "
+                        f"{len(offenders)} were re-routed after the coordinator: {offenders}")
             assert not offenders, (
                 f"{len(offenders)} of {STATEMENTS_CNT} {kind}s with uuid() as the key were re-routed after the node the client "
                 f"talked to had routed them, while {CONTROL_STATEMENTS_CNT} {kind}s with literal keys were not: {offenders}")
+            # Unchanged counters prove nothing when the coordinator led every tablet the keys
+            # landed on. The other node leads at least half of them, so that takes 30 keys in a row.
+            assert forwarded_cnt > 0, (
+                f"premise: none of the {STATEMENTS_CNT} {kind}s with uuid() as the key was forwarded to the other node "
+                f"(tablets led per node: {dict(zip(host_ids, led))}), so the computed key never had to travel")
 
 @pytest.mark.parametrize("kind", ['insert', 'select'])
 async def test_non_pure_pk_function_shard_bounce_is_at_most_one(manager: ScyllaClusterManager, kind: str):
@@ -3920,7 +3945,8 @@ async def test_non_pure_pk_function_shard_bounce_is_at_most_one(manager: ScyllaC
     shard that receives it has nothing left to route.
 
     One node, RF=1, 8 tablets spread over its shards. A text statement lands on a random
-    shard, so about half of the requests need one bounce. A second bounce for the same
+    shard, so about half of the requests need one bounce, and over 30 requests at least one
+    has to be seen: a run with no bounce at all checked nothing. A second bounce for the same
     request means the receiving shard ran `uuid()` again and got a different token.
     """
     server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
@@ -3944,13 +3970,22 @@ async def test_non_pure_pk_function_shard_bounce_is_at_most_one(manager: ScyllaC
 
             STATEMENTS_CNT = 30
             offenders = {}
+            total = 0
             for i in range(STATEMENTS_CNT):
                 before = await bounces()
                 query = QUERY[kind].format(table=table, key='uuid()', i=i)
                 await cql.run_async(SimpleStatement(query, consistency_level=ConsistencyLevel.QUORUM))
-                if (d := await bounces() - before) > 1:
+                d = await bounces() - before
+                total += d
+                if d > 1:
                     offenders[i] = d
 
+            logger.info(f"{kind} with uuid(): {total} bounces over {STATEMENTS_CNT} requests, more than one per request: {offenders}")
             assert not offenders, (
                 f"{len(offenders)} of {STATEMENTS_CNT} {kind}s with uuid() as the key were bounced between shards more "
                 f"than once (bounces per request: {offenders}): the receiving shard evaluated uuid() again")
+            # The counter is not exported while it is zero, so a renamed counter reads as "no bounce"
+            # for every request. One bounce in 30 requests is near-certain.
+            assert total > 0, (
+                f"premise: none of the {STATEMENTS_CNT} {kind}s with uuid() as the key was bounced between the "
+                f"{len(shards)} shards, so no shard ever received a computed key")
