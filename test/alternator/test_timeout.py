@@ -16,7 +16,8 @@ import pytest
 import requests
 from botocore.exceptions import ClientError
 
-from .util import client_headers, client_ssl_context, get_signed_request, new_test_table, scylla_config_temporary, scylla_inject_error
+from .util import (client_headers, client_ssl_context, get_signed_request, new_test_table,
+                   scylla_config_read, scylla_config_temporary, scylla_config_write, scylla_inject_error)
 
 
 @pytest.mark.parametrize('header', ['X-Scylla-Timeout', 'x-scylla-timeout'])
@@ -281,7 +282,9 @@ def test_timeout_backend_global_override(scylla_only, dynamodb, test_table_s, re
     # plus a smaller header and the no-header baseline (#31652).
     client = test_table_s.meta.client
     global_ms = '100' if header in [None, '1s'] else '30000'
-    with scylla_config_temporary(dynamodb, 'alternator_timeout_in_ms', global_ms):
+    original = scylla_config_read(dynamodb, 'alternator_timeout_in_ms')
+    scylla_config_write(dynamodb, 'alternator_timeout_in_ms', global_ms)
+    try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             with scylla_inject_error(rest_api, 'replica_query_wait_table_match'), \
                     scylla_inject_error(rest_api, 'replica_query_wait', parameters={'table': test_table_s.name}):
@@ -303,6 +306,10 @@ def test_timeout_backend_global_override(scylla_only, dynamodb, test_table_s, re
                         with pytest.raises(ClientError, match='InternalServerError.*([Tt]imeout|timed out)'):
                             pending.result(timeout=5)
                     assert time.monotonic() - start < 5
+    finally:
+        # Restoration must not inherit the short timeout being tested.
+        with client_headers(dynamodb.meta.client, {'X-Scylla-Timeout': '1m'}):
+            scylla_config_write(dynamodb, 'alternator_timeout_in_ms', original)
 
 
 @pytest.fixture(scope='module')
