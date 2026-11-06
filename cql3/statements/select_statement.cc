@@ -1799,7 +1799,8 @@ parallelized_select_statement::do_execute(
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout_duration = get_timeout(state.get_client_state(), options);
     if (options.get_read_deadline() != db::no_timeout) {
-        timeout_duration = read_deadline(timeout_duration, options) - db::timeout_clock::now();
+        timeout_duration = std::max(read_deadline(timeout_duration, options) - db::timeout_clock::now(),
+                db::timeout_clock::duration::zero());
     }
     auto timeout = lowres_system_clock::now() + timeout_duration;
     auto reductions = _selection->get_reductions();
