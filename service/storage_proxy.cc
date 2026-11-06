@@ -2529,6 +2529,11 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                     paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: got a response {} from {}", _id, response, peer);
                     tracing::trace(tr_state, "prepare_ballot: got a response {} from /{}", response, peer);
 
+                    // A replica without the fix to SCYLLADB-6044 returns the proposals of a
+                    // reversed read with the reversed schema; the round uses the table schema.
+                    response.accepted_proposal = paxos::paxos_state::unreverse_if_needed(std::move(response.accepted_proposal), _schema);
+                    response.most_recent_commit = paxos::paxos_state::unreverse_if_needed(std::move(response.most_recent_commit), _schema);
+
                     // Find the newest learned value among all replicas that answered.
                     // It will be used to "repair" replicas that did not learn this value yet.
                     if (response.most_recent_commit) {
@@ -7116,6 +7121,15 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
         clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write, cdc::per_request_options cdc_opts,
         bool bypass_large_data_guardrails) {
 
+    // A SERIAL read in reversed order comes with its reversed query schema. The paxos
+    // round runs on the table schema; the reversed one is only for reading the data.
+    schema_ptr query_schema = schema;
+    if (cmd) {
+        auto schemas = paxos::paxos_state::get_round_schemas(std::move(schema), *cmd);
+        schema = std::move(schemas.table);
+        query_schema = std::move(schemas.query);
+    }
+
     auto& table = local_db().find_column_family(schema->id());
     if (table.uses_tablets()) {
         if (!_features.lwt_with_tablets) {
@@ -7213,7 +7227,7 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
                 ++get_stats().cas_failed_read_round_optimization;
 
                 auto pr = partition_ranges; // cannot move original because it can be reused during retry
-                auto cqr = co_await query(schema, cmd, std::move(pr), cl, query_options);
+                auto cqr = co_await query(query_schema, cmd, std::move(pr), cl, query_options);
                 qr = std::move(cqr.query_result);
             }
 
