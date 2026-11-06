@@ -2051,6 +2051,55 @@ SEASTAR_TEST_CASE(test_large_tablet_metadata) {
     }, tablet_cql_test_config());
 }
 
+static
+std::vector<table_id> make_table_ids(size_t count) {
+    std::vector<table_id> ids;
+    ids.reserve(count);
+    for (size_t i = 0; i < count; i++) {
+        ids.push_back(table_id(utils::UUID_gen::get_time_UUID()));
+    }
+    return ids;
+}
+
+static
+void add_single_tablet_maps(tablet_metadata& tm, const std::vector<table_id>& ids, host_id h) {
+    for (auto id : ids) {
+        tablet_map tmap(1);
+        tmap.set_tablet(tablet_id(0), tablet_info{tablet_replica_set{{h, 0}}});
+        tm.set_tablet_map(id, std::move(tmap));
+    }
+}
+
+// Unchanged tables must keep the same tablet_map object across copy();
+// replica-side ERM-update gating relies on this pointer stability.
+static
+void check_copy_shares_tablet_maps(const tablet_metadata& src, const std::vector<table_id>& ids) {
+    auto copy = src.copy().get();
+    BOOST_REQUIRE_EQUAL(copy.all_tables_ungrouped().size(), ids.size());
+    for (auto id : ids) {
+        BOOST_REQUIRE(&copy.get_tablet_map(id) == &src.get_tablet_map(id));
+    }
+    copy.clear_gently().get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_metadata_copy_shares_tablet_maps) {
+    auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+
+    tablet_metadata tm;
+    auto ids = make_table_ids(2);
+    add_single_tablet_maps(tm, ids, h1);
+    check_copy_shares_tablet_maps(tm, ids);
+
+    // Mutating one table's map replaces only that table's object.
+    auto copy = tm.copy().get();
+    copy.mutate_tablet_map_async(ids[0], [] (tablet_map&) { return make_ready_future<>(); }).get();
+    BOOST_REQUIRE(&copy.get_tablet_map(ids[0]) != &tm.get_tablet_map(ids[0]));
+    BOOST_REQUIRE(&copy.get_tablet_map(ids[1]) == &tm.get_tablet_map(ids[1]));
+    copy.clear_gently().get();
+
+    tm.clear_gently().get();
+}
+
 // Compaction groups must come out of creation with a counter id and tombstone-GC flag set,
 // because the update_effective_replication_map() sweep that used to set them can be skipped.
 SEASTAR_THREAD_TEST_CASE(test_compaction_group_counter_id_and_gc_flag_set_at_creation) {
