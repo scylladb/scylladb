@@ -49,6 +49,15 @@ static logging::logger logger("sc_groups_manager");
 // request holds the server by then, so all that's left is stopping it.
 static constexpr auto group_teardown_timeout = std::chrono::seconds(60);
 
+// Two replicas which disagree on the priority members of a group - one has a stale
+// view of the topology, say - can hand its leadership back and forth. Raft's cooldown
+// after a handover covers a short disagreement, but not a lasting one. A replica which
+// gains the leadership more than this many times within the window withdraws the
+// priority members of the group for the hold, so that it keeps the leadership.
+static constexpr size_t max_leadership_gains = 3;
+static constexpr auto leadership_gains_window = std::chrono::minutes(1);
+static constexpr auto priority_members_hold = std::chrono::minutes(5);
+
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
@@ -428,6 +437,9 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         }
         _raft_gr.destroy_server(id);
         state.server = nullptr;
+        // The hold is for the server which bounced; a restarted one starts clean.
+        state.priority_members_hold.cancel();
+        state.leadership_gains.clear();
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
 
         // We need to erase the raft group state only if we are still the last operation on it.
@@ -457,6 +469,33 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
             on_internal_error(logger, format("raft group {} is already deleted", id));
         }
     });
+}
+
+void groups_manager::note_leadership_gain(raft_group_state& state, raft::group_id gid) {
+    const auto now = lowres_clock::now();
+    auto& gains = state.leadership_gains;
+    while (!gains.empty() && now - gains.front() > leadership_gains_window) {
+        gains.pop_front();
+    }
+    gains.push_back(now);
+    if (gains.size() <= max_leadership_gains || state.priority_members_hold.armed()) {
+        return;
+    }
+    const auto hold = utils::get_local_injector().inject_parameter<int64_t>("sc_priority_members_hold_ms")
+            .transform([] (int64_t ms) { return lowres_clock::duration(std::chrono::milliseconds(ms)); })
+            .value_or(priority_members_hold);
+    logger.warn("group {}: this replica gained the leadership {} times within {}s, ignoring the preferred leaders for {}s",
+            gid, gains.size(), std::chrono::duration_cast<std::chrono::seconds>(leadership_gains_window).count(),
+            std::chrono::duration_cast<std::chrono::seconds>(hold).count());
+    gains.clear();
+    state.priority_members_hold.set_callback([&state] {
+        // A server which is (re)starting gets the list once it has started.
+        if (auto srv = try_acquire_server(state)) {
+            srv->server().set_priority_members(state.priority_members);
+        }
+    });
+    state.priority_members_hold.arm(hold);
+    state.server->set_priority_members({});
 }
 
 void groups_manager::chain_control_op(raft_group_state& state, raft::group_id id,
@@ -625,6 +664,7 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
     try {
         const auto schema = _db.find_schema(table);
         const auto server_id = state.server->id();
+        raft::term_t last_led_term{};
 
         while (true) {
             const auto current_term = state.server->get_current_term();
@@ -633,6 +673,10 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
                 tablet, gid, current_term, current_leader);
 
             if (current_leader == server_id) {
+                if (current_term != last_led_term) {
+                    last_led_term = current_term;
+                    note_leadership_gain(state, gid);
+                }
                 logger.debug("leader_info_updater({}, group_id={}): current term {}, running read_barrier()",
                     tablet, gid,
                     current_term);
@@ -1174,6 +1218,9 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                     ? std::vector<raft::server_id>{}
                     : preferred_leaders(preferred_rack, trinfo ? trinfo->next : tablet_map.get_tablet_info(tid).replicas,
                             new_tm->get_topology());
+            if (const auto host = utils::get_local_injector().inject_parameter<std::string_view>("sc_preferred_leader_override")) {
+                priority_members = {raft::server_id(utils::UUID(*host))};
+            }
             if (priority_members != state.priority_members) {
                 state.priority_members = std::move(priority_members);
                 // A server which is still starting gets the list once it has started.
