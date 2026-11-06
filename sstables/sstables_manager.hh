@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/gate.hh>
@@ -169,6 +171,14 @@ private:
     list_type _active;
     list_type _undergoing_close;
 
+    struct table_sstables {
+        // The number of sstables of the table that are not destroyed yet.
+        size_t count = 0;
+    };
+    std::unordered_map<table_id, table_sstables> _tables;
+    // Signalled when the last sstable of a table is destroyed.
+    seastar::condition_variable _table_sstables_destroyed;
+
     // Total reclaimable memory used by components of sstables in _active list
     size_t _total_reclaimable_memory{0};
     // Total memory reclaimed so far across all sstables
@@ -322,6 +332,10 @@ public:
 
     // To be called by the sstable to signal its unlinking
     void on_unlink(sstable* sst);
+
+    // Waits until every sstable of the table on this shard is destroyed. Then
+    // the files of those that were deleted are gone.
+    future<> await_table_sstables_destroyed(table_id id);
 
     std::vector<std::filesystem::path> get_local_directories(const data_dictionary::storage_options::local& so) const;
 

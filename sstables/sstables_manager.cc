@@ -434,6 +434,7 @@ void sstables_manager::erase_from_reclaimed(sstable* sst) noexcept {
 }
 
 void sstables_manager::add(sstable* sst) {
+    ++_tables[sst->get_schema()->id()].count;
     _active.push_back(*sst);
 }
 
@@ -454,8 +455,20 @@ void sstables_manager::deactivate(sstable* sst) {
     });
 }
 
+future<> sstables_manager::await_table_sstables_destroyed(table_id id) {
+    return _table_sstables_destroyed.wait([this, id] {
+        auto it = _tables.find(id);
+        return it == _tables.end() || it->second.count == 0;
+    });
+}
+
 void sstables_manager::remove(sstable* sst) {
     _undergoing_close.erase(_undergoing_close.iterator_to(*sst));
+    auto it = _tables.find(sst->get_schema()->id());
+    if (--it->second.count == 0) {
+        _tables.erase(it);
+        _table_sstables_destroyed.broadcast();
+    }
     delete sst;
     _components_memory_change_event.signal();
     maybe_done();
