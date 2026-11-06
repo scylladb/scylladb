@@ -104,6 +104,7 @@ SEASTAR_THREAD_TEST_CASE(test_check_abort_on_client_api) {
     BOOST_CHECK_EXCEPTION(cluster.add_entries(1, 0).get(), raft::stopped_error, check_error);
     BOOST_CHECK_EXCEPTION(cluster.get_server(0).modify_config({}, {to_raft_id(0)}, nullptr).get(), raft::stopped_error, check_error);
     BOOST_CHECK_EXCEPTION(cluster.get_server(0).read_barrier(nullptr).get(), raft::stopped_error, check_error);
+    BOOST_CHECK_EXCEPTION(cluster.get_server(0).wait_for_apply(raft::index_t{1}, nullptr).get(), raft::stopped_error, check_error);
     BOOST_CHECK_EXCEPTION(cluster.get_server(0).set_configuration({}, nullptr).get(), raft::stopped_error, check_error);
 }
 
@@ -1526,6 +1527,62 @@ SEASTAR_THREAD_TEST_CASE(test_applier_stops_on_abort) {
     // The held batch finishes -- abort() cannot take that back -- but nothing
     // after it is applied.
     BOOST_CHECK_LE(applied->size(), 1);
+}
+
+// wait_for_apply() waits for the given entry to be applied without contacting
+// other servers, so it works without a quorum.
+SEASTAR_THREAD_TEST_CASE(test_wait_for_apply_without_quorum) {
+    // apply_entries must be greater than the number of entries added during
+    // the test, otherwise the state machine's done promise fires prematurely.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        test_case { .nodes = 3 },
+        ::apply_changes,
+        100,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& leader = cluster.get_server(0);
+    auto& follower = cluster.get_server(1);
+
+    // Hold the follower's applier fiber, so that the entries committed below
+    // stay unapplied on the follower.
+    delay_apply = to_raft_id(1);
+    auto release_apply = defer([] noexcept {
+        // A failed check below may leave the applier fiber waiting here, and
+        // stop_all() would then wait for it forever.
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.add_entries(1, 0).get();
+    apply_entered.wait().get();
+
+    leader.add_entry(create_command(42), raft::wait_type::committed, nullptr).get();
+    const auto committed_idx = leader.get_status().commit_idx;
+
+    // Wait until the follower learns that the last entry is committed, so that
+    // it can apply the entry after being cut off below.
+    const auto commit_deadline = std::chrono::steady_clock::now() + tick_delay * 200;
+    while (follower.get_status().commit_idx < committed_idx) {
+        BOOST_REQUIRE(std::chrono::steady_clock::now() < commit_deadline);
+        seastar::sleep(tick_delay).get();
+    }
+    BOOST_REQUIRE_LT(follower.get_status().applied_idx, committed_idx);
+
+    // Cut the follower off, so it has no quorum.
+    cluster.disconnect(1);
+
+    auto fut = follower.wait_for_apply(committed_idx, nullptr);
+    seastar::sleep(3 * tick_delay).get();
+    BOOST_CHECK(!fut.available());
+
+    apply_release.signal();
+    fut.get();
+    BOOST_CHECK_GE(follower.get_status().applied_idx, committed_idx);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_apply_waiter_resolved_when_snapshot_subsumes_committed_entry) {
