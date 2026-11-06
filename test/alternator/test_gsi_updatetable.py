@@ -11,7 +11,7 @@
 import pytest
 from botocore.exceptions import ClientError
 from .util import random_string, full_scan, full_query, multiset, \
-    new_test_table, wait_for_gsi, wait_for_gsi_gone
+    new_test_table, wait_for_gsi, wait_for_gsi_gone, is_aws
 from .test_gsi import assert_index_query
 
 # All tests in test_gsi.py involved creating a new table with a GSI up-front.
@@ -595,13 +595,21 @@ def test_gsi_updatetable_spurious_attribute_definitions(table1, scylla_only):
         # Just in case the update_table didn't fail as expected...
         wait_for_gsi(table1, 'gsi2')
 
-# Check that attempting to delete a GSI that doesn't exist results in
-# the expected ResourceNotFoundException.
-def test_updatetable_delete_missing_gsi(dynamodb, table1):
-    with pytest.raises(ClientError, match='ResourceNotFoundException'):
+# Check that attempting to delete or update a GSI that doesn't exist results in
+# the expected ResourceNotFoundException. DynamoDB fails the Update with an
+# InternalFailure (HTTP 500) instead, which Alternator does not copy. The
+# WarmThroughput of the Update is above DynamoDB's minimum, so only the missing
+# GSI can fail it.
+@pytest.mark.parametrize('action', [
+        {'Delete': {'IndexName': 'nonexistent'}},
+        {'Update': {'IndexName': 'nonexistent',
+            'WarmThroughput': {'ReadUnitsPerSecond': 13000, 'WriteUnitsPerSecond': 5000}}}],
+    ids=['delete', 'update'])
+def test_updatetable_missing_gsi(dynamodb, table1, action):
+    error = 'InternalFailure' if 'Update' in action and is_aws(dynamodb) else 'ResourceNotFoundException'
+    with pytest.raises(ClientError, match=error):
         dynamodb.meta.client.update_table(TableName=table1.name,
-            GlobalSecondaryIndexUpdates=[{  'Delete':
-                { 'IndexName': 'nonexistent' } }])
+            GlobalSecondaryIndexUpdates=[action])
 
 # Whereas DynamoDB allows attribute values to reach a generous length (they
 # are only limited by the item's size limit, 400 KB), an attribute which is
