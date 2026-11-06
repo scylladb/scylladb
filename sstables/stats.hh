@@ -36,6 +36,7 @@ class sstables_stats {
         uint64_t closed_for_writing = 0;
         uint64_t deleted = 0;
         uint64_t promoted_index_auto_scale_events = 0;
+        uint64_t compression_offsets_memory = 0;
     } _shard_stats;
 
     stats& _stats = _shard_stats;
@@ -129,6 +130,18 @@ public:
 
     inline void on_promoted_index_auto_scale() noexcept {
         ++_stats.promoted_index_auto_scale_events;
+    }
+
+    // Memory held by the in-memory copies of compression offsets
+    // (compression::segmented_offsets buckets). Unlike the counters above,
+    // these buckets aren't tied to any particular writer or reader, so they
+    // update the shard stats directly.
+    static void on_compression_offsets_memory_allocated(uint64_t bytes) noexcept {
+        _shard_stats.compression_offsets_memory += bytes;
+    }
+
+    static void on_compression_offsets_memory_freed(uint64_t bytes) noexcept {
+        _shard_stats.compression_offsets_memory -= bytes;
     }
 };
 

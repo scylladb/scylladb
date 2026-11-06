@@ -461,6 +461,7 @@ struct compaction_read_monitor_generator final : public sstables::read_monitor_g
     class compaction_read_monitor final : public  sstables::read_monitor, public backlog_read_progress_manager {
         sstables::shared_sstable _sst;
         compaction_group_view& _table_s;
+        sstables::read_progress_estimator _progress_estimator;
         const sstables::reader_position_tracker* _tracker = nullptr;
         uint64_t _last_position_seen = 0;
         use_backlog_tracker _use_backlog_tracker;
@@ -474,14 +475,14 @@ struct compaction_read_monitor_generator final : public sstables::read_monitor_g
 
         virtual void on_read_completed() override {
             if (_tracker) {
-                _last_position_seen = _tracker->position;
+                _last_position_seen = _progress_estimator(_tracker->position);
                 _tracker = nullptr;
             }
         }
 
         virtual uint64_t compacted() const override {
             if (_tracker) {
-                return _tracker->position;
+                return _progress_estimator(_tracker->position);
             }
             return _last_position_seen;
         }
@@ -494,7 +495,7 @@ struct compaction_read_monitor_generator final : public sstables::read_monitor_g
         }
 
         compaction_read_monitor(sstables::shared_sstable sst, compaction_group_view& table_s, use_backlog_tracker use_backlog_tracker)
-            : _sst(std::move(sst)), _table_s(table_s), _use_backlog_tracker(use_backlog_tracker) { }
+            : _sst(std::move(sst)), _table_s(table_s), _progress_estimator(*_sst), _use_backlog_tracker(use_backlog_tracker) { }
 
         ~compaction_read_monitor() {
             // We failed to finish handling this SSTable, so we have to update the backlog_tracker

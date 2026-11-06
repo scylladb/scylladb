@@ -47,6 +47,7 @@
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/metrics.hh>
+#include "sstables/compress.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include <boost/container/static_vector.hpp>
@@ -4392,37 +4393,165 @@ void database::check_rack_list_everywhere(const bool enforce_rack_list) const {
     }
 }
 
-utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, uint64_t n_values) {
+// The random number generator of the data-file sampler.
+static std::minstd_rand& sampling_rng() {
     static thread_local std::minstd_rand rng{std::random_device{}()};
+    return rng;
+}
+
+utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, uint64_t n_values) {
     std::uniform_int_distribution<uint64_t> dist(0, max_value);
     utils::chunked_vector<uint64_t> chosen;
     chosen.reserve(n_values);
     for (size_t i = 0; i < n_values; ++i) {
-        chosen.push_back(dist(rng));
+        chosen.push_back(dist(sampling_rng()));
     }
     std::ranges::sort(chosen);
     return chosen;
 }
 
-// In this function, we imagine a global list of all Data.db file chunks
-// (with size and alignment equal to `chunk_size`), sorted by <shard id; sstable index; offset within sstable>,
-// and we "address" each chunk by its offset in this list.
-// Then, we randomly select `n_chunks` of those chunks,
-// and we let each shard fulfill the choices which belong to its files.
+// The stream options for reading a sample from the physically indexed `sst`.
+// A sample needs one chunk, or a few if it is larger than a chunk. The buffer
+// size is the smallest that lets the first I/O hold any one chunk. Each later
+// chunk takes at most one more I/O. There is no read-ahead, so the stream
+// issues only the I/Os that the sample needs.
+static file_input_stream_options sample_read_options(const sstables::sstable& sst) {
+    const auto codec = sst.get_chunk_codec();
+    const uint64_t max_extent = codec.extent(sstables::compressed_chunk_length_limit(codec.uncompressed_chunk_length()));
+    // The stream starts the I/O at the start of the chunk, aligned down to the
+    // DMA alignment. So the chunk can start up to `alignment - 1` bytes after
+    // the start of the I/O.
+    const uint64_t alignment = sst.get_data_file().disk_read_dma_alignment();
+    file_input_stream_options options;
+    options.buffer_size = alignment - 1 + max_extent;
+    options.read_ahead = 0;
+    return options;
+}
+
+// Lets tests simulate an sstable that is deleted while it is sampled.
+static void maybe_inject_sample_read_error() {
+    auto& injector = utils::get_local_injector();
+    const auto err = injector.inject_parameter<int>("sample_data_files_read_error", "errno").value_or(ENOENT);
+    if (injector.enter("sample_data_files_read_error")) {
+        throw std::system_error(err, std::system_category(), "sample_data_files_read_error injection");
+    }
+}
+
 future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_files(
     table_id id,
     uint64_t chunk_size,
     uint64_t n_chunks
 ) {
+    // Compaction can delete an sstable while a round reads it. The round skips
+    // the samples of such an sstable. A later round, which takes fresh snapshots
+    // of the sstable sets, replaces them.
+    constexpr int max_rounds = 3;
+
+    // Take the units for all rounds at once. Taking more units while the result
+    // holds some could deadlock: waiters are served in order, and another
+    // request may already be waiting for the units that we hold.
+    //
+    // A round allocates `n_chunks` buffers, and before a round the result holds
+    // at most `n_chunks`. So the units of `2 * n_chunks` buffers cover any round.
+    //
     // If the volume of samples is bigger than the semaphore allows,
     // we still want to let the request in, so we clip the number of units to the semaphore's capacity.
-    auto memory_consumption = std::min(chunk_size * n_chunks, _memory_for_data_file_samples);
+    auto memory_consumption = std::min(2 * chunk_size * n_chunks, _memory_for_data_file_samples);
     auto memory_units = co_await get_units(_sample_data_files_memory_limiter, memory_consumption);
 
-    // Note: this shard owns the result's `temporary_buffer`s. Other shards only write to them.
-    //
     // The returned buffers will hold the semaphore units until they are freed.
     auto result = utils::chunked_vector<temporary_buffer<char>>{};
+    for (int round = 0; round < max_rounds && result.size() < n_chunks; ++round) {
+        // The units of the buffers of this round. The units of the buffers that
+        // we don't keep go back to `memory_units`.
+        auto round_units = memory_units.split(chunk_size * n_chunks);
+        auto [samples, n_gone] = co_await sample_data_files_once(id, chunk_size, n_chunks);
+        auto keep = [&] (temporary_buffer<char>& buf) {
+            buf = temporary_buffer<char>(buf.get_write(), buf.size(),
+                                         make_object_deleter(buf.release(), round_units.split(chunk_size)));
+            result.push_back(std::move(buf));
+        };
+        const uint64_t n_wanted = n_chunks - result.size();
+        if (samples.size() <= n_wanted) {
+            for (auto& buf : samples) {
+                keep(buf);
+            }
+        } else {
+            // The samples are ordered by shard and sstable. Choose at random, so
+            // that the first shards aren't favoured. A sample can be kept only
+            // once, so this draw is without replacement.
+            std::vector<size_t> kept;
+            kept.reserve(n_wanted);
+            std::ranges::sample(std::views::iota(size_t(0), samples.size()), std::back_inserter(kept), n_wanted, sampling_rng());
+            for (const size_t i : kept) {
+                keep(samples[i]);
+            }
+        }
+        samples.clear();
+        memory_units.adopt(std::move(round_units));
+        if (n_gone == 0) {
+            // Another round can replace only the samples of deleted sstables.
+            // A round without them can still be short: the table can have no
+            // data, or a sample can run past the end of the data (see
+            // sstables::sampled_chunk_min_data). The callers accept a short
+            // result.
+            break;
+        }
+        dblog.debug("sample_data_files: {} samples of table {} were in deleted sstables in round {}, have {} of {}",
+                n_gone, id, round, result.size(), n_chunks);
+    }
+    co_return result;
+}
+
+// The number of `chunk_size`-sized units of data of an sstable. It is the weight
+// of the sstable in the draw of sample_data_files_once().
+static uint64_t sample_units(const sstables::sstable& sst, uint64_t chunk_size) {
+    if (!sst.uses_physical_positions()) {
+        return sst.data_size() / chunk_size;
+    }
+    // CompressionInfo.db of `mu` stores a sample of the chunk offsets, and the
+    // sampler reads only from the sampled chunks. The writer keeps each chunk in
+    // the sample with probability 1/D, so each sampled offset stands for
+    // D * chunk_len bytes of data. Weighting by the sample, not by the data size,
+    // keeps the draw uniform over chunks also for sstables with few or no
+    // sampled offsets.
+    //
+    // Saturate, so that a corrupt D can't make the sum of the units of all
+    // sstables overflow. A valid sstable has far fewer units.
+    const auto& c = sst.get_compression();
+    const auto units = static_cast<unsigned __int128>(c.sample_size()) * c.sampling_denominator() * c.uncompressed_chunk_length() / chunk_size;
+    return std::min<unsigned __int128>(units, uint64_t(1) << 48);
+}
+
+// In this function, we imagine a global list of all Data.db file units
+// (see sample_units()), sorted by <shard id; sstable index; unit index within sstable>,
+// and we "address" each unit by its offset in this list.
+// Then, we randomly select `n_chunks` of those units, with replacement,
+// and we let each shard fulfill the choices which belong to its files.
+//
+// For an sstable with logical positions, a unit is a `chunk_size`-aligned range
+// of the data. An sstable with physical positions has fewer samples than units:
+// its samples can start only at `chunk_size`-aligned places in the sampled
+// chunks (see sample_units()). If `k` units of such an sstable are chosen, `k`
+// samples of the sstable are chosen at random, again with replacement.
+future<database::data_file_samples> database::sample_data_files_once(
+    table_id id,
+    uint64_t chunk_size,
+    uint64_t n_chunks
+) {
+    // Note: this shard owns the result's `temporary_buffer`s. Other shards only write to them.
+    auto result = utils::chunked_vector<temporary_buffer<char>>{};
+    enum class sample_state : uint8_t {
+        ok,
+        // The sstable was deleted while it was read.
+        sstable_gone,
+        // The sample runs past the end of the data, so the buffer can't be
+        // filled.
+        past_end_of_data,
+    };
+    // The state of the sample in the buffer of the same index.
+    // Other shards write to it. They write distinct elements, so they don't race.
+    auto states = utils::chunked_vector<sample_state>{};
 
     struct state_by_shard {
         // For sanity, we hold onto a stable snapshot of the sstable set throughout this function.
@@ -4445,11 +4574,6 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
         // (Shard X owns range `global_offset[X] .. global_offset[X + 1]`).
         std::vector<uint64_t> global_offset(this_smp_shard_count() + 1);
 
-        // Watch out: static lambda. Don't add captures to it.
-        static auto size_in_chunks = [] (const sstables::shared_sstable& sst, uint64_t chunk_size) {
-            return sst->data_size() / chunk_size;
-        };
-
         // Initialize `state` and `global_offset`.
         co_await container().invoke_on_all(coroutine::lambda([&global_offset, id, chunk_size] (
             replica::database& local_db,
@@ -4465,7 +4589,7 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
 
             uint64_t my_total_chunks = 0;
             for (const auto& sst : local_state.snapshot) {
-                my_total_chunks += size_in_chunks(sst, chunk_size);
+                my_total_chunks += sample_units(*sst, chunk_size);
             }
             global_offset[this_shard_id()] = my_total_chunks;
         }), std::ref(state));
@@ -4478,27 +4602,25 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
         const uint64_t total_chunks = global_offset.back();
         if (total_chunks == 0) {
             co_await state.stop();
-            co_return utils::chunked_vector<temporary_buffer<char>>{};
+            co_return data_file_samples{};
         }
 
-        // Generate `n_chunks` integers in the (inclusive) range [0, total_chunks - 1].
+        // Generate `n_chunks` integers in the (inclusive) range [0, total_chunks - 1], with replacement.
         const auto chosen_chunks = compute_random_sorted_ints(total_chunks - 1, n_chunks);
 
-        // Allocate `n_chunks` output buffers of size `chunk_size`,
-        // and tie semaphore units (the ones we obtained at the top of the function) to their memory.
+        // Allocate an output buffer of size `chunk_size` for each chosen chunk.
+        // The caller accounts for their memory.
         result.reserve(chosen_chunks.size());
         for (uint64_t i = 0; i < chosen_chunks.size(); ++i) {
-            // Attach semaphore units to each sample.
-            auto buf = temporary_buffer<char>(chunk_size);
-            buf = temporary_buffer<char>(buf.get_write(), buf.size(),
-                                         make_object_deleter(buf.release(), memory_units.split(chunk_size)));
-            result.push_back(std::move(buf));
+            result.push_back(temporary_buffer<char>(chunk_size));
         }
+        states = utils::chunked_vector<sample_state>(chosen_chunks.size(), sample_state::ok);
 
         auto sample_one_shard = [
             &chosen_chunks = std::as_const(chosen_chunks),
             &global_offset = std::as_const(global_offset),
             &result,
+            &states,
             chunk_size
         ] (database& local_db, state_by_shard& local_state) -> future<> {
             auto ticket = co_await get_units(local_db._sample_data_files_local_concurrency_limiter, 1);
@@ -4509,47 +4631,154 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
             const uint64_t neighbour_offset = global_offset[this_shard_id() + 1];
             auto choices_it = std::ranges::lower_bound(chosen_chunks, my_offset);
             const auto choices_end = std::ranges::lower_bound(chosen_chunks, neighbour_offset);
-            const uint64_t n_chunks_to_read = choices_end - choices_it;
 
-            // Output iterator, pointing into our subrange in `result`.
-            auto out_it = result.begin() + (choices_it - std::begin(chosen_chunks));
-
-            // Iterator over our SSTables, and the range of "global chunk offsets"
-            // belonging to the SSTable under the iterator.
-            auto sst_it = local_state.snapshot.begin();
-            const auto sst_end = local_state.snapshot.end();
-            uint64_t current_sst_beg = my_offset;
-            uint64_t current_sst_end = current_sst_beg
-                + (sst_it != sst_end ? size_in_chunks(*sst_it, chunk_size) : 0);
-
-            // Chooses the the next sample to be read.
-            // Returns a pointer to the sstable and the offset of the sample *in bytes*.
-            auto get_next_chunk = [&] () -> std::pair<sstables::shared_sstable, uint64_t> {
-                SCYLLA_ASSERT(sst_it != sst_end);
-                while (*choices_it >= current_sst_end) {
-                    ++sst_it;
-                    SCYLLA_ASSERT(sst_it != sst_end);
-                    current_sst_beg = current_sst_end;
-                    current_sst_end = current_sst_beg + size_in_chunks(*sst_it, chunk_size);
-                }
-                SCYLLA_ASSERT(choices_it != choices_end);
-                uint64_t chosen_chunk = *choices_it++;
-                return {*sst_it, (chosen_chunk - current_sst_beg) * chunk_size};
+            struct choice {
+                // Index of the sstable in `local_state.snapshot`.
+                size_t sst_index;
+                // The index of the unit within the sstable.
+                uint64_t unit;
+                // The index of the sample in `result`.
+                size_t slot;
+                // For an sstable with physical positions: where the sample
+                // starts. The offset of a sampled chunk, and the offset in the
+                // decompressed chunk.
+                uint64_t chunk_start = 0;
+                uint64_t offset_in_chunk = 0;
             };
+            // Our choices, ordered by sstable and unit.
+            utils::chunked_vector<choice> choices;
+            choices.reserve(choices_end - choices_it);
+            if (choices_it != choices_end) {
+                // The range of "global unit offsets" belonging to the sstable
+                // under `sst_index`.
+                size_t sst_index = 0;
+                uint64_t current_sst_beg = my_offset;
+                uint64_t current_sst_end = current_sst_beg + sample_units(*local_state.snapshot[0], chunk_size);
+                for (; choices_it != choices_end; ++choices_it) {
+                    while (*choices_it >= current_sst_end) {
+                        ++sst_index;
+                        SCYLLA_ASSERT(sst_index < local_state.snapshot.size());
+                        current_sst_beg = current_sst_end;
+                        current_sst_end = current_sst_beg + sample_units(*local_state.snapshot[sst_index], chunk_size);
+                    }
+                    choices.push_back({
+                        .sst_index = sst_index,
+                        .unit = *choices_it - current_sst_beg,
+                        .slot = size_t(choices_it - chosen_chunks.begin()),
+                    });
+                }
+            }
+
+            // Marks the choices [begin, end) of `sst` as failed if `ex` reports
+            // that `sst` was deleted. Otherwise rethrows `ex`.
+            auto mark_failed_if_gone = [&] (std::exception_ptr ex, const sstables::shared_sstable& sst, size_t begin, size_t end) {
+                if (!sstables::is_sstable_gone(ex)) {
+                    std::rethrow_exception(std::move(ex));
+                }
+                dblog.debug("sample_data_files: skipping {} samples of {}, which was deleted: {}", end - begin, sst->get_filename(), ex);
+                for (size_t i = begin; i < end; ++i) {
+                    states[choices[i].slot] = sample_state::sstable_gone;
+                }
+            };
+
+            // The choices of each sstable with physical positions, as ranges of indices in `choices`.
+            std::vector<std::pair<size_t, size_t>> physical_groups;
+            for (size_t begin = 0; begin < choices.size();) {
+                size_t end = begin;
+                while (end < choices.size() && choices[end].sst_index == choices[begin].sst_index) {
+                    ++end;
+                }
+                if (local_state.snapshot[choices[begin].sst_index]->uses_physical_positions()) {
+                    physical_groups.emplace_back(begin, end);
+                }
+                begin = end;
+            }
 
             // An arbitrary limit.
             int concurrency_limit = 10;
-            co_await max_concurrent_for_each(
-                std::views::iota(uint64_t(0), n_chunks_to_read),
-                concurrency_limit,
-                coroutine::lambda([&] (int) -> future<>
+
+            // For each sstable with physical positions, choose a sample for
+            // each of its choices, and store where they start in `chunk_start`
+            // and `offset_in_chunk`. CompressionInfo.db isn't kept open, so this
+            // fails if the sstable was deleted.
+            co_await max_concurrent_for_each(physical_groups, concurrency_limit,
+                coroutine::lambda([&] (std::pair<size_t, size_t> group) -> future<>
             {
+                const auto& sst = local_state.snapshot[choices[group.first].sst_index];
+                const auto& c = sst->get_compression();
+                // A sample starts at a `chunk_size`-aligned place in a sampled
+                // chunk, and ends in the same chunk if it is smaller than one.
+                // Sample `i` starts at place `i % places` of the sampled chunk
+                // with index `i / places`.
+                const uint64_t chunk_len = c.uncompressed_chunk_length();
+                const uint64_t places = chunk_size < chunk_len ? (chunk_len - chunk_size) / chunk_size + 1 : 1;
+                const uint64_t n_samples = c.sample_size() * places;
+                // The sstable has units only if its sample isn't empty.
+                SCYLLA_ASSERT(n_samples > 0);
+                // The units decide only how many samples this sstable gives.
+                // Several units can stand for the same sample, so choose the
+                // samples again. The draw is with replacement, so the sstable
+                // can give more samples than it has sampled offsets.
+                const auto samples = compute_random_sorted_ints(n_samples - 1, group.second - group.first);
+                std::vector<uint64_t> indices;
+                indices.reserve(samples.size());
+                for (const uint64_t sample : samples) {
+                    indices.push_back(sample / places);
+                }
+                try {
+                    maybe_inject_sample_read_error();
+                    // Reads only the parts of the sample that hold these indices.
+                    const auto offsets = co_await sst->read_sampled_offsets(std::move(indices));
+                    for (size_t i = 0; i < samples.size(); ++i) {
+                        auto& ch = choices[group.first + i];
+                        ch.chunk_start = offsets[i];
+                        ch.offset_in_chunk = samples[i] % places * chunk_size;
+                    }
+                } catch (...) {
+                    mark_failed_if_gone(std::current_exception(), sst, group.first, group.second);
+                }
+            }));
+
+            co_await max_concurrent_for_each(std::views::iota(size_t(0), choices.size()), concurrency_limit,
+                coroutine::lambda([&] (size_t i) -> future<>
+            {
+                const auto& ch = choices[i];
+                if (states[ch.slot] != sample_state::ok) {
+                    co_return;
+                }
+                const auto& sst = local_state.snapshot[ch.sst_index];
                 auto permit = co_await local_db._system_read_concurrency_sem.obtain_permit(
                     local_state.schema, "sample_data_files", chunk_size, no_timeout, nullptr);
-                auto [sst, offset] = get_next_chunk();
-                auto sample = co_await sst->data_read(offset, chunk_size, permit);
-                auto& out_buf = *out_it++;
-                std::copy(sample.begin(), sample.end(), out_buf.get_write());
+                try {
+                    temporary_buffer<char> sample;
+                    if (sst->uses_physical_positions()) {
+                        // A sample larger than a chunk continues into the next
+                        // chunks. A smaller one ends in its chunk. The writer
+                        // samples only chunks that have at least
+                        // max(16 KiB, chunk length) bytes of data from their
+                        // start (see sstables::sampled_chunk_min_data). A
+                        // larger sample can run past the end of the data.
+                        //
+                        // An extent hint of 0 means "unknown": the reader gets the
+                        // length of the chunk from its header.
+                        auto range = sstables::disk_read_range{
+                            sstables::sstable_position::from_physical(ch.chunk_start, 0, ch.offset_in_chunk),
+                            sst->end_position(),
+                        };
+                        sample = co_await sst->data_read(range, chunk_size, permit, sample_read_options(*sst));
+                    } else {
+                        maybe_inject_sample_read_error();
+                        sample = co_await sst->data_read(ch.unit * chunk_size, chunk_size, permit);
+                    }
+                    if (sample.size() < chunk_size) {
+                        // The rest of the buffer would be uninitialized.
+                        states[ch.slot] = sample_state::past_end_of_data;
+                    } else {
+                        std::ranges::copy(sample, result[ch.slot].get_write());
+                    }
+                } catch (...) {
+                    mark_failed_if_gone(std::current_exception(), sst, i, i + 1);
+                }
             }));
         };
 
@@ -4561,7 +4790,27 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
     if (ep) {
         co_return coroutine::exception(std::move(ep));
     }
-    co_return result;
+
+    data_file_samples ret;
+    ret.samples.reserve(result.size());
+    uint64_t n_past_end = 0;
+    for (size_t i = 0; i < result.size(); ++i) {
+        switch (states[i]) {
+        case sample_state::ok:
+            ret.samples.push_back(std::move(result[i]));
+            break;
+        case sample_state::sstable_gone:
+            ++ret.n_gone;
+            break;
+        case sample_state::past_end_of_data:
+            ++n_past_end;
+            break;
+        }
+    }
+    if (n_past_end) {
+        dblog.debug("sample_data_files: skipped {} samples of table {} that run past the end of the data", n_past_end, id);
+    }
+    co_return ret;
 }
 
 } // namespace replica

@@ -406,7 +406,7 @@ auto_snapshot_ttl: 864000
 # column_index_size_in_kb: 64
 
 # sstable format version for newly written sstables.
-# Currently allowed values are `me` and `mt`.
+# Currently allowed values are `me`, `mt` and `mu`.
 # If not specified in the config, this defaults to `me`.
 #
 # The difference between `me` and `mt` are the data structures used

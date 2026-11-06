@@ -78,6 +78,8 @@ add_scylla_test(cql_auth_syntax_test
   LIBRARIES cql3)
 add_scylla_test(crc_test
   KIND BOOST)
+add_scylla_test(decompressing_cursor_test
+  KIND SEASTAR)
 add_scylla_test(dict_trainer_test
   KIND SEASTAR)
 add_scylla_test(dirty_memory_manager_test
@@ -144,6 +146,8 @@ add_scylla_test(idl_test
   LIBRARIES idl)
 add_scylla_test(incremental_compaction_test
   KIND SEASTAR)
+add_scylla_test(index_position_resolver_test
+  KIND BOOST)
 add_scylla_test(index_reader_test
   KIND SEASTAR)
 add_scylla_test(input_stream_test
@@ -281,6 +285,8 @@ add_scylla_test(sstable_mutation_test
   KIND SEASTAR)
 add_scylla_test(sstable_partition_index_cache_test
   KIND SEASTAR)
+add_scylla_test(sstable_position_test
+  KIND BOOST)
 add_scylla_test(sstable_resharding_test
   KIND SEASTAR)
 add_scylla_test(sstable_test

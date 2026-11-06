@@ -46,6 +46,7 @@
 #include "sstables/index_reader.hh"
 #include "sstables/sstable_version.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/consumer.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
 #include "sstables/object_storage_client.hh"
@@ -64,12 +65,12 @@
 #include "tools/scylla-sstable/scylla-sstable.hh"
 #include "tools/scylla-sstable/scylla-sstable-layout.hh"
 #include "tools/utils.hh"
-#include "types/json_utils.hh"
 #include "locator/host_id.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "dht/token-sharding.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/pretty_printers.hh"
+#include "sstables/exceptions.hh"
 
 using namespace seastar;
 using namespace sstables;
@@ -1229,9 +1230,10 @@ void write_index_component(schema_ptr schema, reader_permit permit, const sstabl
     auto close_idx_reader = deferred_close(*idx_reader);
 
     writer.StartArray();
+
     while (!idx_reader->eof()) {
         idx_reader->read_partition_data().get();
-        auto pos = idx_reader->data_file_positions().start;
+        auto pos = idx_reader->sstable_positions().start;
         auto pkey = idx_reader->get_partition_key();
 
         writer.StartObject();
@@ -1240,7 +1242,22 @@ void write_index_component(schema_ptr schema, reader_permit permit, const sstabl
             writer.DataKey(*schema, *pkey);
         }
         writer.Key("pos");
-        writer.Uint64(pos);
+        if (pos.is_physical()) {
+            // Physical positions (used by compressed sstables) are a
+            // (chunk_position, extent_hint, offset_within_chunk) tuple rather
+            // than a single logical offset, so emit them as an object.
+            auto ph = pos.as_physical();
+            writer.StartObject();
+            writer.Key("chunk_position");
+            writer.Uint64(ph.chunk_position);
+            writer.Key("extent_hint");
+            writer.Uint64(ph.extent_hint);
+            writer.Key("offset_within_chunk");
+            writer.Uint64(ph.offset_within_chunk);
+            writer.EndObject();
+        } else {
+            writer.Uint64(pos.to_logical());
+        }
         writer.EndObject();
 
         idx_reader->advance_to_next_partition().get();
@@ -1285,11 +1302,18 @@ void write_compression_info_component(const sstables::shared_sstable& sst, json_
     writer.Uint(compression.uncompressed_chunk_length());
     writer.Key("data_len");
     writer.Uint64(compression.data_len);
-    writer.Key("offsets");
-    writer.StartArray();
-    for (const auto& offset : compression.offsets) {
-        writer.Uint64(offset);
+    if (sst->uses_physical_positions()) {
+        // CompressionInfo.db of `mu` stores only a random sample of the chunk offsets.
+        writer.Key("sampling_denominator");
+        writer.Uint(compression.sampling_denominator());
+        writer.Key("sampled_offsets");
+    } else {
+        writer.Key("offsets");
     }
+    writer.StartArray();
+    sst->for_each_compression_offset([&writer] (uint64_t offset) {
+        writer.Uint64(offset);
+    }).get();
     writer.EndArray();
     writer.EndObject();
 }
@@ -2084,14 +2108,23 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
         auto ostream = make_file_output_stream(std::move(ofile), options).get();
         auto close_ostream = defer([&ostream] noexcept { ostream.close().get(); });
 
-        auto istream = sst->data_stream(0, sst->data_size(), permit, nullptr, nullptr).get();
-        auto close_istream = defer([&istream] noexcept { istream.close().get(); });
-
-        istream.consume([&] (temporary_buffer<char> buf) {
-            return ostream.write(buf.get(), buf.size()).then([] {
-                return consumption_result<char>(continue_consuming{});
-            });
-        }).get();
+        // Read the whole data file decompressed and write it out. data_stream()
+        // decompresses if needed and handles both compressed and uncompressed
+        // files; we drain it buffer by buffer until it reports end of file (an
+        // empty buffer).
+        auto istream = sst->data_stream(sst->full_range(), permit, nullptr, nullptr).get();
+        auto close_istream = defer([&istream] noexcept { istream->close().get(); });
+        while (true) {
+            temporary_buffer<char> buf;
+            istream->consume_one(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+                buf = std::move(data);
+                return continue_consuming{};
+            }).get();
+            if (buf.empty()) {
+                break;
+            }
+            ostream.write(buf.get(), buf.size()).get();
+        }
         ostream.flush().get();
 
         sst_log.info("Sstable {} decompressed into {}", sst->get_filename(), output_filename);
@@ -3055,7 +3088,7 @@ For more information, see: {}
                     typed_option<size_t>("memory-limit", 1 << 20, "the maximum amount of memory in bytes to use for the memtable buffering the query results (default 1MiB)"),
                     typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
                     typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
-                    typed_option<std::string>("sstable-version", "SSTable format version, (e.g. \"me\", \"mt\")"),
+                    typed_option<std::string>("sstable-version", "SSTable format version, (e.g. \"me\", \"mu\")"),
             }},
             write_operation},
 /* script */
@@ -3137,7 +3170,7 @@ directly expressed in CQL. Editing schema options (the part after WITH) is safe.
 
 The sstable version can be selected manually with the --sstable-version option,
 by default the latest supported version is used. Valid options are sstable
-versions which are supported for writing: mc, md, me, ms, mt.
+versions which are supported for writing: mc, md, me, ms, mt, mu.
 
 Mapping of input sstables to output sstables is printed to stdout.
 
@@ -3603,6 +3636,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
         feature_service.ms_sstable.enable();
         feature_service.mt_sstable.enable();
+        feature_service.mu_sstable.enable();
         sstables::sstables_manager sst_man(
             "scylla_sstable",
             large_data_handler,

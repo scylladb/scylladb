@@ -42,10 +42,10 @@ def sstable_version_of(filename: str) -> str:
     return base.split('-', 1)[0]
 
 async def check_output_format(workdirs: list[str], ks: str, cf: str, expected_version: str):
-    # `expected_version` is one of "me", "ms", "mt".
-    # ME uses Index.db/Summary.db; MS and MT use Partitions.db/Rows.db.
+    # `expected_version` is one of "me", "ms", "mt", "mu".
+    # ME uses Index.db/Summary.db; MS, MT and MU use Partitions.db/Rows.db.
     sstable_sets = await asyncio.gather(*[get_sstable_files_for_server(wd, ks, cf) for wd in workdirs])
-    bti_expected = expected_version in ("ms", "mt")
+    bti_expected = expected_version in ("ms", "mt", "mu")
     for sstable_set in sstable_sets:
         partitions = [x for x in sstable_set if x.endswith('Partitions.db')]
         rows = [x for x in sstable_set if x.endswith('Rows.db')]
@@ -69,12 +69,14 @@ async def check_output_format(workdirs: list[str], ks: str, cf: str, expected_ve
         )
 
 async def set_suppressions(manager: ScyllaClusterManager, servers: list[ServerInfo],
-                           ms_unsuppressed: bool, mt_unsuppressed: bool):
+                           ms_unsuppressed: bool, mt_unsuppressed: bool, mu_unsuppressed: bool):
     suppressed = []
     if not ms_unsuppressed:
         suppressed.append("MS_SSTABLE_FORMAT")
     if not mt_unsuppressed:
         suppressed.append("MT_SSTABLE_FORMAT")
+    if not mu_unsuppressed:
+        suppressed.append("MU_SSTABLE_FORMAT")
     if suppressed:
         injections = [{'name': 'suppress_features', 'value': ';'.join(suppressed)}]
     else:
@@ -82,7 +84,7 @@ async def set_suppressions(manager: ScyllaClusterManager, servers: list[ServerIn
     await asyncio.gather(*[manager.server_update_config(s.server_id, "error_injections_at_startup", injections) for s in servers])
 
 async def wait_for_sstable_format_features(manager: ScyllaClusterManager, servers: list[ServerInfo],
-                                           ms_unsuppressed: bool, mt_unsuppressed: bool):
+                                           ms_unsuppressed: bool, mt_unsuppressed: bool, mu_unsuppressed: bool):
     # A cluster feature is enabled asynchronously after the node observes that it
     # is supported (i.e. after a suppression is lifted and the node restarts).
     # Writing or upgrading sstables before the corresponding *_SSTABLE_FORMAT
@@ -93,6 +95,8 @@ async def wait_for_sstable_format_features(manager: ScyllaClusterManager, server
         features.append("MS_SSTABLE_FORMAT")
     if mt_unsuppressed:
         features.append("MT_SSTABLE_FORMAT")
+    if mu_unsuppressed:
+        features.append("MU_SSTABLE_FORMAT")
     if not features:
         return
     cql, hosts = await manager.get_ready_cql(servers)
@@ -105,9 +109,9 @@ async def wait_for_sstable_format_features(manager: ScyllaClusterManager, server
 # "don't set it"; in our test setup this is equivalent to the default `mt`,
 # since test/pylib/scylla_server.py sets sstable_format=mt.
 #
-# Rows are ordered so that `ms_unsuppressed` and `mt_unsuppressed` only ever go
-# from False to True as we move down the table: suppressions can be lifted but
-# never re-added, and the older feature (MS) is lifted before the newer (MT).
+# Rows are ordered so that `ms_unsuppressed`, `mt_unsuppressed` and `mu_unsuppressed`
+# only ever go from False to True as we move down the table: suppressions can be
+# lifted but never re-added, and older features are lifted before newer ones.
 # `chosen` cycles freely within each suppression block since the format choice
 # can be changed live.
 #
@@ -115,17 +119,24 @@ async def wait_for_sstable_format_features(manager: ScyllaClusterManager, server
 # This only makes sense in the first iteration. After we start updating the scylla.yaml,
 # the original value of the option of `sstable_format` will be gone.
 #
-#   chosen   ms_unsuppressed   mt_unsuppressed   ->   expected output
-SSTABLE_FORMAT_MATRIX: list[tuple[Optional[str], bool, bool, str]] = [
-    ("me",   False, False, "me"),
-    ("ms",   False, False, "me"),
-    ("mt",   False, False, "me"),
-    ("me",   True,  False, "me"),
-    ("ms",   True,  False, "ms"),
-    ("mt",   True,  False, "me"),
-    ("me",   True,  True,  "me"),
-    ("ms",   True,  True,  "mt"),
-    ("mt",   True,  True,  "mt"),
+#   chosen   ms_unsuppressed   mt_unsuppressed   mu_unsuppressed   ->   expected output
+SSTABLE_FORMAT_MATRIX: list[tuple[Optional[str], bool, bool, bool, str]] = [
+    ("me",   False, False, False, "me"),
+    ("ms",   False, False, False, "me"),
+    ("mt",   False, False, False, "me"),
+    ("mu",   False, False, False, "me"),
+    ("me",   True,  False, False, "me"),
+    ("ms",   True,  False, False, "ms"),
+    ("mt",   True,  False, False, "me"),
+    ("mu",   True,  False, False, "me"),
+    ("me",   True,  True,  False, "me"),
+    ("ms",   True,  True,  False, "mt"),
+    ("mt",   True,  True,  False, "mt"),
+    ("mu",   True,  True,  False, "mt"),
+    ("me",   True,  True,  True,  "me"),
+    ("ms",   True,  True,  True,  "mt"),
+    ("mt",   True,  True,  True,  "mt"),
+    ("mu",   True,  True,  True,  "mu"),
 ]
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -143,7 +154,7 @@ async def test_bti_index_output_format(manager: ScyllaClusterManager) -> None:
         'error_injections_at_startup': [
             {
                 'name': 'suppress_features',
-                'value': 'MS_SSTABLE_FORMAT;MT_SSTABLE_FORMAT',
+                'value': 'MS_SSTABLE_FORMAT;MT_SSTABLE_FORMAT;MU_SSTABLE_FORMAT',
             }
         ],
         'column_index_size_in_kb': 1,
@@ -163,24 +174,24 @@ async def test_bti_index_output_format(manager: ScyllaClusterManager) -> None:
             await cql.run_async(insert, (pk, ck, random.randbytes(1024)))
     await asyncio.gather(*[manager.api.keyspace_flush(s.ip_addr, ks, cf) for s in servers])
 
-    prev_suppressions: Optional[tuple[bool, bool]] = None
-    for chosen, ms_unsuppressed, mt_unsuppressed, expected in SSTABLE_FORMAT_MATRIX:
+    prev_suppressions: Optional[tuple[bool, bool, bool]] = None
+    for chosen, ms_unsuppressed, mt_unsuppressed, mu_unsuppressed, expected in SSTABLE_FORMAT_MATRIX:
         # Suppressions only take effect at startup, so restart whenever they change.
-        if prev_suppressions != (ms_unsuppressed, mt_unsuppressed):
+        if prev_suppressions != (ms_unsuppressed, mt_unsuppressed, mu_unsuppressed):
             if prev_suppressions is not None:
                 logger.info(
                     f"Lifting suppressions to ms_unsuppressed={ms_unsuppressed}, "
-                    f"mt_unsuppressed={mt_unsuppressed}"
+                    f"mt_unsuppressed={mt_unsuppressed}, mu_unsuppressed={mu_unsuppressed}"
                 )
-                await set_suppressions(manager, servers, ms_unsuppressed, mt_unsuppressed)
+                await set_suppressions(manager, servers, ms_unsuppressed, mt_unsuppressed, mu_unsuppressed)
                 manager.driver_close()
                 await manager.rolling_restart(servers)
                 await manager.driver_connect()
                 await manager.get_ready_cql(servers)
-            prev_suppressions = (ms_unsuppressed, mt_unsuppressed)
+            prev_suppressions = (ms_unsuppressed, mt_unsuppressed, mu_unsuppressed)
 
         logger.info(f"chosen={chosen!r} -> expected output format {expected!r}")
-        await wait_for_sstable_format_features(manager, servers, ms_unsuppressed, mt_unsuppressed)
+        await wait_for_sstable_format_features(manager, servers, ms_unsuppressed, mt_unsuppressed, mu_unsuppressed)
         await live_update_config(manager, servers, 'sstable_format', chosen)
         await asyncio.gather(*[manager.api.keyspace_upgrade_sstables(s.ip_addr, ks) for s in servers])
         await check_output_format(workdirs, ks, cf, expected)
@@ -296,7 +307,7 @@ async def test_bti_index_read_path(manager: ScyllaClusterManager) -> None:
                     f"Setting suppressions to ms_unsuppressed={ms_unsuppressed}, "
                     f"mt_unsuppressed={mt_unsuppressed}"
                 )
-                await set_suppressions(manager, servers, ms_unsuppressed, mt_unsuppressed)
+                await set_suppressions(manager, servers, ms_unsuppressed, mt_unsuppressed, mu_unsuppressed=True)
                 manager.driver_close()
                 await manager.rolling_restart(servers)
                 await manager.driver_connect()
@@ -304,7 +315,7 @@ async def test_bti_index_read_path(manager: ScyllaClusterManager) -> None:
             prev_suppressions = (ms_unsuppressed, mt_unsuppressed)
 
         logger.info(f"chosen={chosen!r}")
-        await wait_for_sstable_format_features(manager, servers, ms_unsuppressed, mt_unsuppressed)
+        await wait_for_sstable_format_features(manager, servers, ms_unsuppressed, mt_unsuppressed, mu_unsuppressed=True)
         await live_update_config(manager, servers, 'sstable_format', chosen)
         await asyncio.gather(*[manager.api.keyspace_upgrade_sstables(s.ip_addr, ks) for s in servers])
         await check_output_format(workdirs, ks, cf, chosen)

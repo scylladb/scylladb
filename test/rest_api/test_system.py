@@ -13,7 +13,7 @@ def test_system_uptime_ms(rest_api):
 def test_system_highest_sstable_format(rest_api):
     resp = rest_api.send('GET', "system/highest_supported_sstable_version")
     resp.raise_for_status()
-    assert resp.json() == "mt"
+    assert resp.json() == "mu"
 
 def test_chosen_sstable_format(rest_api):
     resp = rest_api.send('GET', "system/chosen_sstable_version")

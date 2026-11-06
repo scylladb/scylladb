@@ -1452,4 +1452,17 @@ future<> destroy_table_storage(const data_dictionary::storage_options& so) {
     }, so.value);
 }
 
+bool is_sstable_gone(std::exception_ptr ep) noexcept {
+    // A filesystem throws std::system_error. The object storage clients
+    // (map_s3_client_exception() and the GCS client) translate a missing object
+    // to storage_io_error with ENOENT.
+    if (auto* e = try_catch<std::system_error>(ep)) {
+        return e->code() == std::errc::no_such_file_or_directory;
+    }
+    if (auto* e = try_catch<storage_io_error>(ep)) {
+        return e->code() == std::errc::no_such_file_or_directory;
+    }
+    return false;
+}
+
 } // namespace sstables
