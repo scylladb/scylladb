@@ -7,6 +7,7 @@
  */
 
 #include <algorithm>
+#include <charconv>
 #include <limits>
 #include <ostream>
 #include <random>
@@ -51,7 +52,17 @@ token token::get_random_token() {
 }
 
 token token::from_sstring(const sstring& t) {
-    auto lp = boost::lexical_cast<long>(t);
+    const char* first = t.data();
+    const char* last = first + t.size();
+    if (last - first > 1 && first[0] == '+' && first[1] >= '0' && first[1] <= '9') {
+        // from_chars rejects a leading '+'; skip one that a digit follows.
+        ++first;
+    }
+    long lp;
+    auto [ptr, ec] = std::from_chars(first, last, lp);
+    if (ec != std::errc{} || ptr != last) {
+        throw boost::bad_lexical_cast(typeid(sstring), typeid(long));
+    }
     if (lp == std::numeric_limits<long>::min()) {
         return minimum_token();
     } else {
