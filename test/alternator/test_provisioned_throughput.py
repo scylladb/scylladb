@@ -243,14 +243,16 @@ def test_gsi_partial_throughput_rejected_by_update_table(dynamodb, gsi_throughpu
 # completeness above - before the billing mode, so a PAY_PER_REQUEST table which
 # may carry no throughput at all rejects the value rather than its presence -
 # and again with a protocol-level message Alternator does not reproduce.
+# Alternator deliberately accepts zeros, an incompatibility with DynamoDB, so
+# only negative capacities are tested here.
 @pytest.mark.parametrize('billing_args', [
         {'BillingMode': 'PROVISIONED',
          'ProvisionedThroughput': {'ReadCapacityUnits': 2, 'WriteCapacityUnits': 3}},
         {'BillingMode': 'PAY_PER_REQUEST'}])
 @pytest.mark.parametrize('gsi_throughput', [
-        {'ReadCapacityUnits': 0, 'WriteCapacityUnits': 5},
+        {'ReadCapacityUnits': -1, 'WriteCapacityUnits': 5},
         {'ReadCapacityUnits': 4, 'WriteCapacityUnits': -1}])
-def test_gsi_nonpositive_throughput_rejected_by_create_table(dynamodb, billing_args, gsi_throughput):
+def test_gsi_negative_throughput_rejected_by_create_table(dynamodb, billing_args, gsi_throughput):
     with pytest.raises(ClientError, match='ValidationException'):
         with new_test_table(dynamodb,
                 KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
@@ -267,9 +269,9 @@ def test_gsi_nonpositive_throughput_rejected_by_create_table(dynamodb, billing_a
 
 # The same rule for a GSI added by UpdateTable.
 @pytest.mark.parametrize('gsi_throughput', [
-        {'ReadCapacityUnits': 0, 'WriteCapacityUnits': 5},
+        {'ReadCapacityUnits': -1, 'WriteCapacityUnits': 5},
         {'ReadCapacityUnits': 4, 'WriteCapacityUnits': -1}])
-def test_gsi_nonpositive_throughput_rejected_by_update_table(dynamodb, gsi_throughput):
+def test_gsi_negative_throughput_rejected_by_update_table(dynamodb, gsi_throughput):
     with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
@@ -283,6 +285,59 @@ def test_gsi_nonpositive_throughput_rejected_by_update_table(dynamodb, gsi_throu
                     'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
                     'Projection': {'ProjectionType': 'ALL'},
                     'ProvisionedThroughput': gsi_throughput}}])
+
+# A deliberate incompatibility with DynamoDB: DynamoDB refuses a GSI's
+# capacities of zero, on a PAY_PER_REQUEST table as on a PROVISIONED one, but
+# Alternator accepts them, as it only remembers the values. On a
+# PAY_PER_REQUEST table they are taken as no throughput at all. Scylla Migrator
+# relies on this: it copies the zeros DynamoDB reports for every GSI of a
+# PAY_PER_REQUEST table into the GSIs of the PAY_PER_REQUEST table it creates
+# for such a source (scylladb/scylla-migrator#413). The GSI is created here by
+# CreateTable, as Scylla Migrator does, or by UpdateTable, which validates the
+# throughput with the same code.
+@pytest.mark.parametrize('billing_args', [
+        {'BillingMode': 'PAY_PER_REQUEST'},
+        {'BillingMode': 'PROVISIONED',
+         'ProvisionedThroughput': {'ReadCapacityUnits': 2, 'WriteCapacityUnits': 3}}],
+    ids=['pay_per_request', 'provisioned'])
+@pytest.mark.parametrize('creator', ['create_table', 'update_table'])
+def test_gsi_zero_throughput_accepted(scylla_only, dynamodb, billing_args, creator):
+    gsi = {'IndexName': 'gsi',
+           'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+           'Projection': {'ProjectionType': 'ALL'},
+           'ProvisionedThroughput': {'ReadCapacityUnits': 0, 'WriteCapacityUnits': 0}}
+    x = {'AttributeName': 'x', 'AttributeType': 'S'}
+    gsi_args = {'GlobalSecondaryIndexes': [gsi]} if creator == 'create_table' else {}
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}] + ([x] if gsi_args else []),
+            **gsi_args, **billing_args) as table:
+        if creator == 'update_table':
+            table.meta.client.update_table(TableName=table.name, AttributeDefinitions=[x],
+                GlobalSecondaryIndexUpdates=[{'Create': gsi}])
+        got = table.meta.client.describe_table(TableName=table.name)['Table']['GlobalSecondaryIndexes'][0]
+        assert got['ProvisionedThroughput']['ReadCapacityUnits'] == 0
+        assert got['ProvisionedThroughput']['WriteCapacityUnits'] == 0
+
+# The tolerance is for both capacities zero only: on a PAY_PER_REQUEST table, a
+# zero next to a non-zero capacity is a throughput, which that mode refuses.
+@pytest.mark.parametrize('gsi_throughput', [
+        {'ReadCapacityUnits': 0, 'WriteCapacityUnits': 5},
+        {'ReadCapacityUnits': 4, 'WriteCapacityUnits': 0}])
+def test_gsi_one_zero_capacity_refused_in_pay_per_request_mode(scylla_only, dynamodb, gsi_throughput):
+    with pytest.raises(ClientError, match='ValidationException.*PAY_PER_REQUEST'):
+        with new_test_table(dynamodb,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[
+                    {'AttributeName': 'p', 'AttributeType': 'S'},
+                    {'AttributeName': 'x', 'AttributeType': 'S'}],
+                BillingMode='PAY_PER_REQUEST',
+                GlobalSecondaryIndexes=[{
+                    'IndexName': 'gsi',
+                    'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                    'Projection': {'ProjectionType': 'ALL'},
+                    'ProvisionedThroughput': gsi_throughput}]):
+            pass
 
 # A PROVISIONED table with one provisioned GSI, gsi1, for the tests below of a
 # switch to PAY_PER_REQUEST.
