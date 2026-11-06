@@ -352,6 +352,21 @@ double get_table_creation_time(const schema &schema) {
     return 0.0;
 }
 
+// Whether a WarmThroughput is missing both ReadUnitsPerSecond and
+// WriteUnitsPerSecond, so that it configures nothing.
+static bool has_no_warm_throughput_units(const rjson::value& warm) {
+    return !rjson::find(warm, "ReadUnitsPerSecond") && !rjson::find(warm, "WriteUnitsPerSecond");
+}
+
+// Unlike CreateTable, UpdateTable refuses a GSI's WarmThroughput which
+// configures nothing, in a Create and in an Update alike.
+static void check_gsi_warm_throughput_units(const rjson::value& gsi, std::string_view index_name) {
+    if (const rjson::value* warm = rjson::find(gsi, "WarmThroughput"); warm && warm->IsObject() && has_no_warm_throughput_units(*warm)) {
+        throw api_error::validation(fmt::format("One or more parameter values were invalid: "
+            "WarmThroughput must have at least one of ReadUnitsPerSecond or WriteUnitsPerSecond specified for index: {}", index_name));
+    }
+}
+
 // Complete, in the response of CreateTable or UpdateTable, the WarmThroughput
 // which the request gave to the table or to a GSI. It appears in the response
 // only when the request configured one, which echoing the request back already
@@ -360,7 +375,14 @@ double get_table_creation_time(const schema &schema) {
 // already says TableStatus ACTIVE, so the warm throughput is active with it.
 static void complete_warm_throughput(rjson::value& parent) {
     rjson::value* warm = rjson::find(parent, "WarmThroughput");
-    if (warm && warm->IsObject() && !rjson::find(*warm, "Status")) {
+    if (!warm || !warm->IsObject()) {
+        return;
+    }
+    if (has_no_warm_throughput_units(*warm)) {
+        // DynamoDB leaves out a WarmThroughput which configures nothing.
+        // The removal invalidates warm.
+        rjson::remove_member(parent, "WarmThroughput");
+    } else if (!rjson::find(*warm, "Status")) {
         rjson::add(*warm, "Status", "ACTIVE");
     }
 }
@@ -2784,6 +2806,13 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         }
     }
 
+    // Unlike CreateTable, DynamoDB refuses an update to a WarmThroughput which
+    // is missing both ReadUnitsPerSecond and WriteUnitsPerSecond.
+    if (const rjson::value* warm = rjson::find(request, "WarmThroughput"); warm && warm->IsObject() && has_no_warm_throughput_units(*warm)) {
+        co_await coroutine::return_exception(api_error::validation("One or more parameter values were invalid: "
+                "WarmThroughput must have at least one of ReadUnitsPerSecond or WriteUnitsPerSecond specified"));
+    }
+
     bool empty_request = true;
     // UpdateTable can switch a table only to PAY_PER_REQUEST: it refuses a
     // ProvisionedThroughput above, and verify_billing_mode() refuses
@@ -3259,6 +3288,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         const bool table_provisioned = get_provisioned_throughput(db::get_tags_of_table(schema)).has_value();
                         auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
                         validate_and_store_gsi_provisioned_throughput(tags, it->value, index_name, table_provisioned, gsi_creator::update_table);
+                        check_gsi_warm_throughput_units(it->value, index_name);
                         add_warm_throughput_tags(tags, it->value);
                         view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
                         // Note below we don't need to add virtual columns, as all
@@ -3291,6 +3321,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         if (!warm || !warm->IsObject()) {
                             co_return api_error::validation("GlobalSecondaryIndexUpdates Update supports only WarmThroughput");
                         }
+                        check_gsi_warm_throughput_units(it->value, index_name);
                         // DynamoDB refuses a GSI's WarmThroughput update together
                         // with another change of the GSI, or with a BillingMode -
                         // even the one which the table already has. An Update
