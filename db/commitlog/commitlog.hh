@@ -404,6 +404,12 @@ public:
     // For testing only. Returns the active segments current position
     // (ignoring chunk overhead etc)
     replay_position current_position() const;
+    // For testing only. Units left in the memory request controller.
+    ssize_t get_available_memory_units() const;
+    // For testing only. Entries allocated without the coroutine slow path.
+    uint64_t get_fast_path_allocations() const;
+    // For testing only. Allocations that had to wait for memory units.
+    uint64_t get_requests_blocked_memory() const;
     // Gets sector overhead for size in given segment
     size_t sector_overhead(segment_id_type, size_t) const;
 
