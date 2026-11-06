@@ -29,6 +29,7 @@
 #include "test/lib/eventually.hh"
 #include "test/lib/error_injection.hh"
 #include "test/lib/topology_builder.hh"
+#include "test/lib/tablet_test_utils.hh"
 #include "db/config.hh"
 #include "db/cluster_config_manager.hh"
 #include "cql3/util.hh"
@@ -66,6 +67,9 @@ BOOST_AUTO_TEST_SUITE(tablets_test)
 using namespace locator;
 using namespace replica;
 using namespace service;
+using tablet_test_utils::add_table;
+using tablet_test_utils::add_keyspace;
+using tablet_test_utils::add_keyspace_racks;
 
 static inline
 future<mutation> tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& keyspace_name, const sstring& table_name,
@@ -121,70 +125,6 @@ cql_test_config tablet_cql_test_config(db::tablets_mode_t::mode enable_tablets =
         c.initial_tablets = 2;
     }
     return c;
-}
-
-static
-future<table_id> add_table(cql_test_env& e, sstring test_ks_name = "", std::map<sstring, sstring> tablet_options = {}) {
-    auto id = table_id(utils::UUID_gen::get_time_UUID());
-    co_await e.create_table([&] (std::string_view ks_name) {
-        if (!test_ks_name.empty()) {
-            ks_name = test_ks_name;
-        }
-        auto builder = schema_builder(this_smp_shard_count(), ks_name, id.to_sstring(), id)
-                .with_column("p1", utf8_type, column_kind::partition_key)
-                .with_column("r1", int32_type);
-        if (!tablet_options.empty()) {
-            builder.set_tablet_options(std::move(tablet_options));
-        }
-
-        return *builder.build();
-    });
-    co_return id;
-}
-
-// Run in a seastar thread
-static
-sstring do_add_keyspace(cql_test_env& e, std::unordered_map<sstring, std::variant<int, std::vector<sstring>>> dc_rf, int initial_tablets = 0) {
-    static std::atomic<int> ks_id = 0;
-    auto ks_name = fmt::format("keyspace{}", ks_id.fetch_add(1));
-
-    sstring rf_options;
-    for (auto& [dc, rf] : dc_rf) {
-        auto rf_fmt = std::visit(overloaded_functor(
-            [] (int rf) { return fmt::format("{}", rf); },
-            [] (const std::vector<sstring>& racks) {
-                return fmt::format("[{}]", fmt::join(racks | std::views::transform(&cql3::util::single_quote), ", "));
-            }), rf);
-        rf_options += fmt::format(", '{}': {}", dc, rf_fmt);
-    }
-
-    testlog.info("Adding keyspace {} with replication factor options: {}", ks_name, rf_options);
-
-    e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy'{}}}"
-                              " and tablets = {{'enabled': true, 'initial': {}}}",
-                              ks_name, rf_options, initial_tablets)).get();
-
-    return ks_name;
-}
-
-// Run in a seastar thread
-static
-sstring add_keyspace(cql_test_env& e, std::unordered_map<sstring, int> dc_rf, int initial_tablets = 0) {
-    std::unordered_map<sstring, std::variant<int, std::vector<sstring>>> dc_rf_expanded;
-    for (auto& [dc, rf] : dc_rf) {
-        dc_rf_expanded[dc] = rf;
-    }
-    return do_add_keyspace(e, std::move(dc_rf_expanded), initial_tablets);
-}
-
-// Run in a seastar thread
-static
-sstring add_keyspace_racks(cql_test_env& e, std::unordered_map<sstring, std::vector<sstring>> dc_rf, int initial_tablets = 0) {
-    std::unordered_map<sstring, std::variant<int, std::vector<sstring>>> dc_rf_expanded;
-    for (auto& [dc, rf] : dc_rf) {
-        dc_rf_expanded[dc] = rf;
-    }
-    return do_add_keyspace(e, std::move(dc_rf_expanded), initial_tablets);
 }
 
 // Run in a seastar thread
