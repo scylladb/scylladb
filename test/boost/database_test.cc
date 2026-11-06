@@ -1912,6 +1912,53 @@ SEASTAR_TEST_CASE(drop_table_with_explicit_snapshot) {
     });
 }
 
+// Checks that dropping a table keeps the files of its sstables that are still
+// referenced, and removes the table directory once the last of them is
+// released. Truncate deletes the sstables, but the files of each are removed
+// only when the last reference to it is dropped.
+SEASTAR_TEST_CASE(drop_table_with_held_sstables) {
+    sstring ks_name = "ks";
+    sstring table_name = "table_with_held_sstables";
+
+    co_await do_with_some_data({table_name}, [&] (cql_test_env& e) -> future<> {
+        auto& cf = e.local_db().find_column_family(ks_name, table_name);
+        auto cf_dir = table_dir(cf).native();
+        auto id = cf.schema()->id();
+        co_await replica::database::flush_table_on_all_shards(e.db(), ks_name, table_name);
+        using held_sstables = foreign_ptr<lw_shared_ptr<utils::chunked_vector<sstables::shared_sstable>>>;
+        auto held = co_await e.db().map([&] (replica::database& db) -> future<held_sstables> {
+            auto& cf = db.find_column_family(ks_name, table_name);
+            co_return make_foreign(make_lw_shared(co_await cf.take_sstable_set_snapshot()));
+        });
+        BOOST_REQUIRE(std::ranges::any_of(held, [] (const held_sstables& ssts) { return !ssts->empty(); }));
+
+        co_await replica::database::legacy_drop_table_on_all_shards(e.db(), e.get_system_keyspace(), ks_name, table_name, false);
+
+        auto files_exist = co_await map_reduce(held, [] (held_sstables& ssts) {
+            return smp::submit_to(ssts.get_owner_shard(), [&ssts] () -> future<bool> {
+                for (auto& sst : *ssts) {
+                    for (auto component : {sstables::component_type::TemporaryTOC, sstables::component_type::Data}) {
+                        if (!co_await file_exists(fmt::to_string(sst->get_filename(component)))) {
+                            co_return false;
+                        }
+                    }
+                }
+                co_return true;
+            });
+        }, true, std::logical_and<bool>());
+        BOOST_REQUIRE(files_exist);
+        BOOST_REQUIRE(co_await file_exists(cf_dir));
+
+        co_await parallel_for_each(held, [] (held_sstables& ssts) {
+            return smp::submit_to(ssts.get_owner_shard(), [&ssts] {
+                ssts->clear();
+            });
+        });
+        co_await e.local_db().await_table_storage_removal(id);
+        BOOST_REQUIRE(!co_await file_exists(cf_dir));
+    });
+}
+
 // Checks that creating a table with the ID of a dropped table, as restoring
 // the schema.cql of a snapshot does, waits until the storage of the dropped
 // table is removed. Both tables use the same directory, so the pending removal
@@ -2009,6 +2056,21 @@ SEASTAR_TEST_CASE(clear_snapshot_of_failed_drop_with_held_sstables) {
 
         co_await e.local_db().clear_snapshot("", {ks_name}, table_name);
         BOOST_REQUIRE(co_await file_exists(cf_dir));
+        // Truncate deleted the held sstables, but their files stay until they
+        // are released.
+        auto files_exist = co_await map_reduce(held, [] (held_sstables& ssts) {
+            return smp::submit_to(ssts.get_owner_shard(), [&ssts] () -> future<bool> {
+                for (auto& sst : *ssts) {
+                    for (auto component : {sstables::component_type::TemporaryTOC, sstables::component_type::Data}) {
+                        if (!co_await file_exists(fmt::to_string(sst->get_filename(component)))) {
+                            co_return false;
+                        }
+                    }
+                }
+                co_return true;
+            });
+        }, true, std::logical_and<bool>());
+        BOOST_REQUIRE(files_exist);
 
         co_await parallel_for_each(held, [] (held_sstables& ssts) {
             return smp::submit_to(ssts.get_owner_shard(), [&ssts] {

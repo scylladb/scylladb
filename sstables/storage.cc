@@ -108,7 +108,7 @@ public:
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
-    virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
+    virtual future<> destroy(const sstable& sst) override;
     virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
     virtual bool operator==(const storage&) const noexcept override;
     virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const override;
@@ -601,14 +601,40 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
         return fmt::to_string(sst.toc_filename());
     }();
 
+    // The mark means that the TOC is renamed to a temporary TOC, and that the
+    // other files may still be there. destroy() removes them.
     std::exception_ptr ex;
+    bool renamed = false;
     try {
         auto new_toc_name = co_await make_toc_temporary(name, sync);
-        if (!new_toc_name.empty()) {
-            co_await remove_files(sst, new_toc_name, sync);
+        if (new_toc_name.empty()) {
+            // There is nothing to delete.
+            sst.unmark_for_deletion();
+        } else {
+            renamed = true;
+            sst.mark_for_deletion();
+            // An atomic deletion removes sstables from a table, but readers that
+            // hold an sstable can still open its components by name. So their
+            // files are removed only by destroy(), when the last reference is
+            // dropped. The temporary TOC records the intent: the startup scan
+            // removes an sstable with a temporary TOC, so a crash before
+            // destroy() can't bring the sstable back.
+            //
+            // Other callers own the sstable, and may rely on its files being gone
+            // when unlink() returns, e.g. before a rescan of the upload directory.
+            if (!deletion) {
+                co_await remove_files(sst, new_toc_name, sync);
+                sst.unmark_for_deletion();
+            }
         }
     } catch (...) {
         ex = std::current_exception();
+        // If the TOC wasn't renamed, the sstable is still valid. Clear the mark,
+        // including one set by a caller before unlink(), so that destroy()
+        // leaves the files alone. Otherwise, destroy() tries again.
+        if (!renamed) {
+            sst.unmark_for_deletion();
+        }
         // Log and ignore the failure since there is nothing much we can do about it at this point.
         // a. Compaction will retry deleting the sstable in the next pass, and
         // b. in the future sstables_manager is planned to handle sstables deletion.
@@ -617,12 +643,45 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
         sstlog.warn("Failed to delete {}: {:t}. Ignoring.", name, std::current_exception());
     }
 
-    co_await remove_temp_dir_of_unsealed();
+    if (!deletion) {
+        co_await remove_temp_dir_of_unsealed();
+    }
 
     // The sstable may survive while others in the batch are gone, so the
     // atomic deletion must keep its pending-delete log for the replay.
     if (ex && deletion) {
         co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+}
+
+future<> filesystem_storage::destroy(const sstable& sst) {
+    // An sstable that is destroyed before it is sealed can't be sealed anymore.
+    co_await remove_temp_dir_of_unsealed();
+
+    // The mark is set only if wipe() renamed the TOC to a temporary TOC and
+    // the other files may still be there. Without the mark, the sstable must
+    // survive, for example on shutdown.
+    if (!sst.marked_for_deletion()) {
+        co_return;
+    }
+
+    // The last reference can be dropped in any scheduling group.
+    co_await coroutine::switch_to(sst.manager().maintenance_sg());
+
+    auto new_toc_name = fmt::to_string(sst.filename(component_type::TemporaryTOC));
+    try {
+        // Not synced, so that an atomic deletion doesn't cost a directory sync
+        // per sstable (see 6f037549ac). If a crash loses the unlinks, the
+        // startup scan removes the sstable by its temporary TOC. The temporary
+        // TOC is unlinked last, and unlinks in a directory persist in the order
+        // they are issued on a journaling filesystem, so a crash can't keep
+        // components without it.
+        co_await remove_files(sst, new_toc_name, sync_dir::no);
+    } catch (...) {
+        // destroy() is called fire-and-forget from the shared_sstable deleter,
+        // so the error is not propagated. The temporary TOC makes the next
+        // startup remove what is left.
+        sstlog.warn("Failed to delete {}: {:t}. Ignoring.", new_toc_name, std::current_exception());
     }
 }
 
@@ -651,7 +710,9 @@ public:
             co_await sync_directory(dir);
         });
 
-        // Once all sstables are deleted, the log file can be removed.
+        // Once the TOCs of all sstables are renamed to temporary TOCs, and the
+        // renames are on disk, the log file can be removed: the next startup
+        // removes any sstable with a temporary TOC.
         try {
             co_await remove_file(_pending_delete_log);
             sstlog.debug("{} removed.", _pending_delete_log);
