@@ -41,7 +41,7 @@ struct minimal_sst_info {
     sstables::sstable_id source_sid;
 };
 
-future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger);
+future<minimal_sst_info> download_sstable(replica::table& table, sstables::shared_sstable sstable, logging::logger& logger);
 future<minimal_sst_info> clone_backup_sstable(replica::table& table, const sstables::shared_sstable& sstable, std::string_view snapshot_tag, logging::logger& logger);
 
 template <std::ranges::input_range Range, typename T = std::ranges::range_value_t<Range>>
