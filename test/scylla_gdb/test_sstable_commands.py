@@ -9,7 +9,7 @@ import re
 
 import pytest
 
-from test.cqlpy.util import cql_session
+from test.cqlpy.util import cql_session, unique_name
 from test.pylib.rest_client import ScyllaRESTAPIClient
 from test.scylla_gdb.conftest import execute_gdb_command
 
@@ -120,3 +120,38 @@ def test_sstable_index_cache_output(gdb_cmd, index_cached_table):
         assert pk in index_cached_table, result.stdout
         # Tokens are computed lazily, so some may not be there yet.
         assert token == "null" or int(token) == index_cached_table[pk], result.stdout
+
+
+@pytest.fixture(scope="module")
+async def tablets_tables(scylla_server):
+    """Two flushed tables in a tablets keyspace, regular and TWCS, as `ks.table` names."""
+    ks, ip = unique_name(), scylla_server.ip_addr
+    with cql_session(ip, 9042, False, "cassandra", "cassandra") as cql:
+        cql.execute(
+            f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}"
+            " AND tablets = {'enabled': true}"
+        )
+        for t, opts in (("t", ""), ("tw", " WITH compaction = {'class': 'TimeWindowCompactionStrategy'}")):
+            cql.execute(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, v int){opts}")
+            for i in range(100):
+                cql.execute(f"INSERT INTO {ks}.{t} (pk, v) VALUES ({i}, {i})")
+        await ScyllaRESTAPIClient().keyspace_flush(ip, ks)
+        yield f"{ks}.t", f"{ks}.tw"
+        cql.execute(f"DROP KEYSPACE {ks}")
+
+
+def test_sstables_attached_to_tables(gdb_cmd, tablets_tables):
+    """`scylla sstables -t` walks table::_sstables and must list some sstables."""
+    t_table, tw_table = tablets_tables
+    result = execute_gdb_command(gdb_cmd, "sstables -t")
+    assert result.returncode == 0, (
+        f"sstables -t failed. stdout: {result.stdout} stderr: {result.stderr}"
+    )
+    entries = re.findall(r"^\(sstables::sstable\*\) 0x[0-9a-f]+:.*$", result.stdout, re.M)
+    assert entries, f"No sstables listed. stdout: {result.stdout} stderr: {result.stderr}"
+    m = re.search(r"^total \(shard-local\): count=(\d+)", result.stdout, re.M)
+    assert m and int(m.group(1)) == len(entries), result.stdout
+    assert "unsupported sstable_set" not in result.stdout, result.stdout
+    # Tablets tables go through replica::tablet_sstable_set; TWCS ones hold a time_series_sstable_set.
+    for table in (t_table, tw_table):
+        assert any(f" {table} " in e.replace('"', "") for e in entries), result.stdout
