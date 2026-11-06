@@ -115,6 +115,7 @@ const sstring WCU_TAG_KEY("system:provisioned_wcu");
 // WarmThroughput. Alternator has nothing to pre-warm, so these are only
 // remembered and reported back - the Terraform AWS Provider needs
 // DescribeTable to return the warm throughput a table was configured with.
+// Each GSI's view carries the GSI's own pair.
 const sstring WARM_READ_TAG_KEY("system:warm_read_units");
 const sstring WARM_WRITE_TAG_KEY("system:warm_write_units");
 // Tag storing the table's original creation time, in milliseconds since the
@@ -335,6 +336,19 @@ double get_table_creation_time(const schema &schema) {
     return 0.0;
 }
 
+// Complete, in the response of CreateTable or UpdateTable, the WarmThroughput
+// which the request gave to the table or to a GSI. It appears in the response
+// only when the request configured one, which echoing the request back already
+// achieves - but the request carries only the units, and DynamoDB reports a
+// Status with them. Alternator's CreateTable is synchronous and the response
+// already says TableStatus ACTIVE, so the warm throughput is active with it.
+static void complete_warm_throughput(rjson::value& parent) {
+    rjson::value* warm = rjson::find(parent, "WarmThroughput");
+    if (warm && warm->IsObject() && !rjson::find(*warm, "Status")) {
+        rjson::add(*warm, "Status", "ACTIVE");
+    }
+}
+
 void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
     auto creation_time = get_table_creation_time(schema);
 
@@ -342,21 +356,14 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
     rjson::add(descr, "TableStatus", "ACTIVE");
     rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
 
-    // A WarmThroughput appears in this response only when the request
-    // configured one, which echoing the request back already achieves - but the
-    // request carries only the units, and DynamoDB reports a Status with them.
-    // Alternator's CreateTable is synchronous and this response already says
-    // TableStatus ACTIVE, so the warm throughput is active with it.
-    rjson::value* warm = rjson::find(descr, "WarmThroughput");
-    if (warm && warm->IsObject() && !rjson::find(*warm, "Status")) {
-        rjson::add(*warm, "Status", "ACTIVE");
-    }
+    complete_warm_throughput(descr);
 
     // DynamoDB reports every GSI's ProvisionedThroughput here - zeros in
     // PAY_PER_REQUEST mode - so fill in what the request left out.
     rjson::value* gsis = rjson::find(descr, "GlobalSecondaryIndexes");
     if (gsis && gsis->IsArray()) {
         for (rjson::value& g : gsis->GetArray()) {
+            complete_warm_throughput(g);
             rjson::value* throughput = rjson::find(g, "ProvisionedThroughput");
             if (!throughput) {
                 rjson::value t = rjson::empty_object();
@@ -535,8 +542,8 @@ static std::optional<std::pair<int, int>> get_provisioned_throughput(const std::
     }
 }
 
-// Read the WarmThroughput units stored in a table's tags, or nullopt when the
-// table never had any configured. Both units are optional in a request, and a
+// Read the WarmThroughput units stored in a table's or a view's tags, or nullopt
+// when none were ever configured. Both units are optional in a request, and a
 // request configuring just one of them is remembered - DynamoDB fills the other
 // with the baseline every table has, Alternator has none and leaves it zero.
 static std::optional<std::pair<int, int>> get_warm_throughput(const std::map<sstring, sstring>* tags_ptr) {
@@ -562,10 +569,10 @@ static std::optional<std::pair<int, int>> get_warm_throughput(const std::map<sst
     return std::make_pair(read_units.value_or(0), write_units.value_or(0));
 }
 
-// Remember a WarmThroughput given in a CreateTable or UpdateTable request.
-// Returns whether the request carried one at all.
-static bool add_warm_throughput_tags(std::map<sstring, sstring>& tags, const rjson::value& request) {
-    const rjson::value* warm = rjson::find(request, "WarmThroughput");
+// Remember the WarmThroughput member of a CreateTable or UpdateTable request, or
+// of a GSI given in one. Returns whether there was one at all.
+static bool add_warm_throughput_tags(std::map<sstring, sstring>& tags, const rjson::value& value) {
+    const rjson::value* warm = rjson::find(value, "WarmThroughput");
     if (!warm || !warm->IsObject()) {
         return false;
     }
@@ -673,12 +680,12 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
                         rjson::add(view_entry, "IndexStatus", "ACTIVE");
                         // DynamoDB reports a GSI's WarmThroughput only once the
                         // index is ACTIVE - while it is still being built the
-                        // structure is absent. An LSI has none. See the base
-                        // table's WarmThroughput above for why the values are
-                        // zeros.
+                        // structure is absent. An LSI has none. Like the base
+                        // table's above, the values are only remembered.
+                        const auto [index_warm_read, index_warm_write] = get_warm_throughput(view_tags_ptr).value_or(std::make_pair(0, 0));
                         rjson::value warm_throughput = rjson::empty_object();
-                        rjson::add(warm_throughput, "ReadUnitsPerSecond", 0);
-                        rjson::add(warm_throughput, "WriteUnitsPerSecond", 0);
+                        rjson::add(warm_throughput, "ReadUnitsPerSecond", index_warm_read);
+                        rjson::add(warm_throughput, "WriteUnitsPerSecond", index_warm_write);
                         rjson::add(warm_throughput, "Status", "ACTIVE");
                         rjson::add(view_entry, "WarmThroughput", std::move(warm_throughput));
                     } else {
@@ -1786,6 +1793,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 tags[SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY] = "true";
             }
             validate_and_store_gsi_provisioned_throughput(tags, g, index_name, bm.provisioned, gsi_creator::create_table);
+            add_warm_throughput_tags(tags, g);
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
             view_builders.emplace_back(std::move(view_builder));
         }
@@ -2504,6 +2512,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         const bool table_provisioned = get_provisioned_throughput(db::get_tags_of_table(schema)).has_value();
                         std::map<sstring, sstring> tags;
                         validate_and_store_gsi_provisioned_throughput(tags, it->value, index_name, table_provisioned, gsi_creator::update_table);
+                        add_warm_throughput_tags(tags, it->value);
                         view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
                         // Note below we don't need to add virtual columns, as all
                         // base columns were copied to view. TODO: reconsider the need
