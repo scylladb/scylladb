@@ -26,7 +26,6 @@ async def test_data_survives_crash(manager: ScyllaClusterManager):
     must be re-applied to memtables even if they were already snapshotted, because
     the snapshot data may not have been flushed to sstables."""
     config = {
-        'experimental_features': ['strongly-consistent-tables'],
         # Prevent automatic memtable flushes so data stays in the commitlog
         # and is not persisted to sstables before the crash.
         'commitlog_total_space_in_mb': 10000,
@@ -77,7 +76,6 @@ async def test_schema_upgrade_during_replay(manager: ScyllaClusterManager):
     between writes. During commitlog replay, mutations written under the old schema
     must be upgraded to the current schema before being applied to memtables."""
     config = {
-        'experimental_features': ['strongly-consistent-tables'],
         # Prevent automatic memtable flushes so data stays in the commitlog
         # and is not persisted to sstables before the crash.
         'commitlog_total_space_in_mb': 10000,
@@ -133,7 +131,6 @@ async def test_double_crash_recovery(manager: ScyllaClusterManager):
     Write data, crash, restart (commitlog replay restores data), write more data,
     crash again, restart, and verify all data (from both write phases) is present."""
     config = {
-        'experimental_features': ['strongly-consistent-tables'],
         'commitlog_total_space_in_mb': 10000,
     }
     cmdline = [
@@ -188,7 +185,6 @@ async def test_crash_with_multiple_commitlog_segments(manager: ScyllaClusterMana
     enough rows to span multiple segments, crashes, and verifies all data
     is recovered from replaying multiple segment files."""
     config = {
-        'experimental_features': ['strongly-consistent-tables'],
         # Small segment size to force multiple segments. The minimum effective
         # segment size is clamped internally, but a low value triggers rotation.
         'commitlog_segment_size_in_mb': 1,
@@ -237,7 +233,6 @@ async def test_crash_recovery_multi_tablet(manager: ScyllaClusterManager):
     crashes, and verifies all data is recovered — testing that commitlog replay
     correctly routes entries to multiple independent raft groups."""
     config = {
-        'experimental_features': ['strongly-consistent-tables'],
         'commitlog_total_space_in_mb': 10000,
     }
     cmdline = [
@@ -282,7 +277,6 @@ async def test_crash_recovery_after_flush(manager: ScyllaClusterManager):
     more data (which exists only in the commitlog), crash, and verify both the
     flushed and unflushed data are present after recovery."""
     config = {
-        'experimental_features': ['strongly-consistent-tables'],
         'commitlog_total_space_in_mb': 10000,
     }
     cmdline = [
@@ -333,7 +327,6 @@ async def test_unapplied_entry_survives_aborted_apply(manager: ScyllaClusterMana
     Reproducer of SCYLLADB-5053.
     """
     config = {
-        "experimental_features": ["strongly-consistent-tables"],
         # Prevent automatic memtable flushes so data stays in the commitlog.
         "commitlog_total_space_in_mb": 10000,
     }
@@ -406,7 +399,6 @@ async def test_truncated_copies_are_dropped_on_replay(manager: ScyllaClusterMana
     truncates, then crash it so replay has to sort out two copies of the same
     indexes."""
     config = {
-        'experimental_features': ['strongly-consistent-tables'],
         # Keep the entries in the commitlog rather than letting a flush move them
         # to sstables before the crash.
         'commitlog_total_space_in_mb': 10000,
@@ -573,7 +565,6 @@ async def test_migrated_group_is_not_resurrected_on_replay(manager: ScyllaCluste
     strongly consistent tablet is not implemented (SCYLLADB-2497), so a tablet
     moved to another shard of the same node never finishes migrating."""
     config = {
-        'experimental_features': ['strongly-consistent-tables'],
         # Keep the entries in the commitlog rather than in sstables.
         'commitlog_total_space_in_mb': 10000,
     }
@@ -644,7 +635,6 @@ async def test_replay_after_a_crash_before_the_cleanup_erased_the_row(manager: S
     aborts the boot when the recovered tail no longer starts one past the row's
     floor."""
     config = {
-        'experimental_features': ['strongly-consistent-tables'],
         'commitlog_total_space_in_mb': 10000,
         # The coordinator sleeps while the cleanup below is held. The load stats
         # refresh wakes it once the hold is lifted.
@@ -737,7 +727,6 @@ async def test_crash_after_recycling_a_segment(manager: ScyllaClusterManager):
     short test never recycles, so the test sets a small commitlog_total_space_in_mb
     and asserts that recycling happened."""
     config = {
-        'experimental_features': ['strongly-consistent-tables'],
         # Small segments and a small budget, so the commitlog reclaims and recycles
         # rather than keeping every segment it ever wrote.
         'commitlog_segment_size_in_mb': 1,

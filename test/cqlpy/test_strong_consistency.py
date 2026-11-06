@@ -6,9 +6,6 @@
 # with consistency = 'global'. Only tests which are happy with a single node
 # and plain CQL belong here - the ones which need raft leadership, the node
 # lifecycle or coordinated error injection live in test/cluster instead.
-#
-# The directory carries its own test_config.yaml so that only the server
-# these tests run against gets the strongly-consistent-tables feature.
 #############################################################################
 
 import collections
@@ -16,13 +13,14 @@ import re
 import time
 
 import pytest
-from cassandra.cluster import ConsistencyLevel
+from cassandra.cluster import ConsistencyLevel, NoHostAvailable
+from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
-from .. import nodetool
-from ..test_service_levels import new_service_level
-from ..util import ScyllaMetrics, new_materialized_view, new_session, new_test_table, new_user, unique_name
+from . import nodetool
+from .test_service_levels import new_service_level
+from .util import ScyllaMetrics, config_value_context, new_materialized_view, new_session, new_test_table, new_user, unique_name
 
 
 def test_reject_user_provided_timestamps(cql, sc_keyspace):
@@ -753,3 +751,271 @@ def test_coordinator_metrics_per_scheduling_group(cql, sc_keyspace):
         writes_before = write_count()
         cql.execute(f"INSERT INTO {table} (pk, c) VALUES (3, 3)")
         assert write_count() - writes_before == 0
+
+
+#############################################################################
+# Tests for the shape of single-partition reads from strongly consistent
+# tables - clustering slices, limits, ordering, DISTINCT, static columns,
+# aggregates, filtering and paging.
+#
+# A strongly consistent SELECT does not go through storage_proxy and the
+# query pagers. It builds its read_command by hand in
+# cql3/statements/strong_consistency/select_statement.cc and runs it as one
+# local query. So everything the regular path gets from the pagers - paging
+# itself, the internal paging of aggregates and of filtering queries - has to
+# be checked separately here. The slice itself is built by code shared with
+# the regular path, so the cases below aim at what the strongly consistent
+# path sets on its own: the row and partition limits, the result size limit,
+# and the absence of paging.
+#
+# The expected result of every query is what the same query returns from an
+# eventually consistent table holding the same data. The read path of such a
+# table is the reference implementation of CQL semantics, so the tests don't
+# repeat them.
+#############################################################################
+
+SCHEMA = "pk int, ck int, s int static, v int, PRIMARY KEY (pk, ck)"
+
+# pk=1: a partition with a static row and 20 clustering rows, with v repeating
+#       so that filtering on it and aggregating over it pick several rows.
+# pk=2: a partition with only a static row.
+ROWS = 20
+
+
+def fill(cql, table):
+    cql.execute(f"INSERT INTO {table} (pk, s) VALUES (1, 7)")
+    insert = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (1, ?, ?)")
+    execute_concurrent_with_args(cql, insert, [(ck, ck % 5) for ck in range(ROWS)], raise_on_first_error=True)
+    cql.execute(f"INSERT INTO {table} (pk, s) VALUES (2, 8)")
+
+
+@pytest.fixture(scope="module")
+def tables(cql, sc_keyspace, test_keyspace):
+    with new_test_table(cql, sc_keyspace, SCHEMA) as sc_table:
+        with new_test_table(cql, test_keyspace, SCHEMA) as ec_table:
+            fill(cql, sc_table)
+            fill(cql, ec_table)
+            yield sc_table, ec_table
+
+
+def select(cql, query, table, **kwargs):
+    return list(cql.execute(SimpleStatement(query.format(table=table), **kwargs)))
+
+
+def assert_same_result(cql, tables, query, **kwargs):
+    sc_table, ec_table = tables
+    expected = select(cql, query, ec_table, **kwargs)
+    assert select(cql, query, sc_table, **kwargs) == expected
+
+
+# Filtering is done by the coordinator after the replica has applied the row
+# limit, which is why the regular path pages internally through a filtering
+# query rather than passing its LIMIT down to the replica. The strongly
+# consistent path passes it down, so the replica returns the first LIMIT rows
+# of the partition and the filter drops the ones that don't match.
+limit_before_filter = pytest.mark.xfail(strict=True, raises=AssertionError,
+    reason="SCYLLADB-5429: strongly consistent read applies LIMIT on the replica, before ALLOW FILTERING drops rows")
+
+
+@pytest.mark.parametrize("query", [
+    # Clustering slices.
+    "SELECT * FROM {table} WHERE pk = 1",
+    "SELECT ck, v FROM {table} WHERE pk = 1 AND ck > 3 AND ck < 9",
+    "SELECT ck, v FROM {table} WHERE pk = 1 AND ck IN (2, 5, 100)",
+    "SELECT ck, v FROM {table} WHERE pk = 1 AND ck > 100",
+    # The row limit and the per-partition limit the strongly consistent path
+    # puts into the read_command itself, with get_inner_loop_limit().
+    "SELECT ck, v FROM {table} WHERE pk = 1 LIMIT 4",
+    "SELECT ck, v FROM {table} WHERE pk = 1 PER PARTITION LIMIT 4",
+    "SELECT ck, v FROM {table} WHERE pk = 1 AND ck > 3 AND ck < 9 LIMIT 2",
+    # A reversed query reads with the reversed schema and reverses the
+    # clustering bounds, so a slice and a limit have to come out of the other
+    # end of the partition.
+    "SELECT ck, v FROM {table} WHERE pk = 1 ORDER BY ck DESC LIMIT 4",
+    "SELECT ck, v FROM {table} WHERE pk = 1 AND ck > 3 AND ck < 9 ORDER BY ck DESC LIMIT 2",
+    "SELECT ck, v FROM {table} WHERE pk = 1 AND ck IN (2, 5, 100) ORDER BY ck DESC",
+    # Static columns and DISTINCT.
+    "SELECT * FROM {table} WHERE pk = 2",
+    "SELECT s FROM {table} WHERE pk = 1 LIMIT 3",
+    "SELECT DISTINCT pk, s FROM {table} WHERE pk = 1",
+    # An aggregate reads with no row limit (get_inner_loop_limit() returns
+    # max_rows for it), and LIMIT then applies to the single aggregated row.
+    "SELECT count(v), min(v), max(v), sum(v), avg(v) FROM {table} WHERE pk = 1",
+    "SELECT count(*) FROM {table} WHERE pk = 1 LIMIT 1",
+    # Filtering.
+    "SELECT ck, v FROM {table} WHERE pk = 1 AND v = 3 ALLOW FILTERING",
+    "SELECT ck, v FROM {table} WHERE pk = 1 AND v = 3 ORDER BY ck DESC ALLOW FILTERING",
+    "SELECT count(*) FROM {table} WHERE pk = 1 AND v = 3 ALLOW FILTERING",
+    pytest.param("SELECT ck, v FROM {table} WHERE pk = 1 AND v = 3 LIMIT 2 ALLOW FILTERING",
+                 marks=limit_before_filter),
+    pytest.param("SELECT ck, v FROM {table} WHERE pk = 1 AND v = 3 PER PARTITION LIMIT 2 ALLOW FILTERING",
+                 marks=limit_before_filter),
+    pytest.param("SELECT ck, v FROM {table} WHERE pk = 1 AND v = 3 ORDER BY ck DESC LIMIT 2 ALLOW FILTERING",
+                 marks=limit_before_filter),
+])
+def test_select(cql, tables, query):
+    assert_same_result(cql, tables, query)
+
+
+# The strongly consistent path reads the whole result at once, whatever the
+# page size the client asked for. However it's served, the rows the client
+# ends up with have to be the ones an eventually consistent table returns. A
+# page size that doesn't divide the result leaves a partial last page.
+@pytest.mark.parametrize("query", [
+    "SELECT * FROM {table} WHERE pk = 1",
+    "SELECT ck, v FROM {table} WHERE pk = 1 ORDER BY ck DESC",
+    "SELECT ck, v FROM {table} WHERE pk = 1 AND ck > 3 LIMIT 7",
+    "SELECT ck, v FROM {table} WHERE pk = 1 AND v = 3 ALLOW FILTERING",
+])
+def test_paging(cql, tables, query):
+    assert_same_result(cql, tables, query, fetch_size=3)
+
+
+# Paged strongly consistent reads are deferred (SCYLLADB-2589), so a result
+# has to fit in a single read, bounded like an unpaged regular read by
+# max_memory_for_unlimited_query_hard_limit (100 MB by default). 150 rows of
+# 10 KB each go over 1 MB - the regular page size - while staying far under
+# that default, and each write stays well under the raft command size
+# limit. count(v) and max(v) read every cell, like the plain read - on the
+# regular path aggregates are paged internally whatever the client's page size.
+LARGE_ROWS = 150
+LARGE_VALUE = b'x' * 10 * 1024
+
+
+@pytest.fixture(scope="module")
+def large_partition_tables(cql, sc_keyspace, test_keyspace):
+    schema = "pk int, ck int, v blob, PRIMARY KEY (pk, ck)"
+    with new_test_table(cql, sc_keyspace, schema) as sc_table:
+        with new_test_table(cql, test_keyspace, schema) as ec_table:
+            for table in (sc_table, ec_table):
+                insert = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (1, ?, ?)")
+                execute_concurrent_with_args(cql, insert, [(ck, LARGE_VALUE) for ck in range(LARGE_ROWS)], raise_on_first_error=True)
+            yield sc_table, ec_table
+
+
+@pytest.mark.parametrize("query", [
+    "SELECT ck, v FROM {table} WHERE pk = 1",
+    "SELECT ck, v FROM {table} WHERE pk = 1 ORDER BY ck DESC",
+    "SELECT count(*) FROM {table} WHERE pk = 1",
+    "SELECT count(v) FROM {table} WHERE pk = 1",
+    "SELECT max(v) FROM {table} WHERE pk = 1",
+])
+def test_partition_larger_than_result_size_limit(cql, large_partition_tables, query):
+    assert_same_result(cql, large_partition_tables, query, fetch_size=10)
+
+
+# The limit is the configured one: with the hard limit lowered to 512 KB, a
+# read of 80 rows (~800 KB) fails, and with the limit restored it succeeds.
+@pytest.mark.parametrize("order", ["ASC", "DESC"])
+def test_result_size_limit_is_configurable(cql, large_partition_tables, order):
+    sc_table, _ = large_partition_tables
+    limit = str(512 * 1024)
+    query = f"SELECT ck, v FROM {sc_table} WHERE pk = 1 ORDER BY ck {order} LIMIT 80"
+    with config_value_context(cql, 'max_memory_for_unlimited_query_soft_limit', limit), \
+            config_value_context(cql, 'max_memory_for_unlimited_query_hard_limit', limit):
+        with pytest.raises(NoHostAvailable, match=f"exceeds hard limit of {limit}"):
+            cql.execute(SimpleStatement(query, fetch_size=10))
+    assert len(list(cql.execute(SimpleStatement(query, fetch_size=10)))) == 80
+
+
+#############################################################################
+# Tests for the restrictions a strongly consistent table puts on a statement.
+#
+# A strongly consistent statement is executed by a single raft group, the one
+# owning the tablet of the partition it touches, which is why the coordinator
+# rejects anything that does not resolve to exactly one partition, and anything
+# mixing a strongly consistent table with an eventually consistent one in a
+# single batch.  Each rejection happens on the coordinator before the raft
+# group is ever contacted, so a single node and plain CQL are enough.
+#
+# The rejections themselves live in:
+#   cql3/statements/strong_consistency/select_statement.cc       (reads)
+#   cql3/statements/strong_consistency/modification_statement.cc (writes)
+#   transport/server.cc                                          (mixed batch)
+#
+# Restrictions which apply to a batch as a whole - a batch mixing keyspaces in
+# its textual form, batch level USING TIMESTAMP and USING TTL, consistency
+# levels, counters - are tested next to the rest of the batch behaviour above.
+#############################################################################
+
+# Raised by both the read and the write path for a statement that does not
+# resolve to exactly one partition.
+ERR_SINGLE_PARTITION = "Strongly consistent queries can only target a single partition"
+# Raised by the native protocol batch path for a batch which is part strongly
+# consistent and part eventually consistent.
+ERR_CANNOT_MIX = "Cannot mix strongly consistent and eventually consistent statements in a batch"
+
+
+# Every shape of read which does not resolve to a single partition goes through
+# the same check, so one representative of each is enough: a full scan, a scan
+# with an aggregate on top, several single-partition ranges, and a token range.
+# The aggregate is worth a case of its own because the strongly consistent
+# branch of select_statement::prepare() is picked before can_be_mapreduced(),
+# so a count(*) never reaches the parallelized aggregation path which would
+# have fanned the query out to every shard of every replica.  An
+# ALLOW FILTERING query is the same full scan and is not repeated here.
+def test_reject_multi_partition_reads(cql, sc_keyspace):
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 10)")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (2, 1, 20)")
+
+        with pytest.raises(InvalidRequest, match=ERR_SINGLE_PARTITION):
+            cql.execute(f"SELECT * FROM {table}")
+        with pytest.raises(InvalidRequest, match=ERR_SINGLE_PARTITION):
+            cql.execute(f"SELECT count(*) FROM {table}")
+        with pytest.raises(InvalidRequest, match=ERR_SINGLE_PARTITION):
+            cql.execute(f"SELECT * FROM {table} WHERE pk IN (1, 2)")
+        with pytest.raises(InvalidRequest, match=ERR_SINGLE_PARTITION):
+            cql.execute(f"SELECT * FROM {table} WHERE token(pk) > 0")
+
+        # A single partition, however the restriction spells it, is fine - an
+        # IN with one element resolves to one range like a plain equality does.
+        assert list(cql.execute(f"SELECT pk, ck, v FROM {table} WHERE pk = 1")) == [(1, 1, 10)]
+        assert list(cql.execute(f"SELECT pk, ck, v FROM {table} WHERE pk IN (2)")) == [(2, 1, 20)]
+
+
+# The write path builds its partition keys and applies the same check, so a
+# DELETE spanning two partitions is rejected.  An UPDATE with the same IN
+# restriction shares build_partition_keys() and is not repeated here.  The same
+# DELETE inside a batch is covered by test_batch; this is the standalone
+# statement, which reaches the check through modification_statement rather than
+# through the batch.
+def test_reject_multi_partition_writes(cql, sc_keyspace):
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 10)")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (2, 1, 20)")
+
+        with pytest.raises(InvalidRequest, match=ERR_SINGLE_PARTITION):
+            cql.execute(f"DELETE FROM {table} WHERE pk IN (1, 2) AND ck = 1")
+
+        # A single partition, however the restriction spells it: the check
+        # counts the keys the statement builds, so a one element IN is as good
+        # as an equality - and the delete takes that row and nothing else.
+        cql.execute(f"DELETE FROM {table} WHERE pk IN (2) AND ck = 1")
+        assert list(cql.execute(f"SELECT pk, ck, v FROM {table} WHERE pk = 2")) == []
+        assert list(cql.execute(f"SELECT pk, ck, v FROM {table} WHERE pk = 1")) == [(1, 1, 10)]
+
+
+# A native protocol batch carries prepared statements which the server has
+# already classified, so it can tell a mixed batch apart from a homogeneous one
+# and rejects it.  The check counts the strongly consistent statements against
+# the batch size, so the order the two halves arrive in does not matter.  The
+# textual form of the same batch is rejected elsewhere, by
+# batch_statement::prepare(), and is covered by
+# test_mixed_keyspace_batch_on_sc_table.
+def test_reject_mixed_batch_native_protocol(cql, sc_keyspace, test_keyspace):
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as sc_table, \
+         new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as ec_table:
+        sc_insert = cql.prepare(f"INSERT INTO {sc_table} (pk, v) VALUES (?, ?)")
+        ec_insert = cql.prepare(f"INSERT INTO {ec_table} (pk, v) VALUES (?, ?)")
+
+        for first, second in [(sc_insert, ec_insert), (ec_insert, sc_insert)]:
+            batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+            batch.add(first, (1, 10))
+            batch.add(second, (1, 20))
+            with pytest.raises(InvalidRequest, match=ERR_CANNOT_MIX):
+                cql.execute(batch)
+
+        # Neither half of a rejected batch may be applied.
+        assert list(cql.execute(f"SELECT pk, v FROM {sc_table} WHERE pk = 1")) == []
+        assert list(cql.execute(f"SELECT pk, v FROM {ec_table} WHERE pk = 1")) == []
