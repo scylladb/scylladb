@@ -19,7 +19,7 @@ from cassandra.protocol import InvalidRequest, ConfigurationException, ReadFailu
 from cassandra.query import SimpleStatement
 from .cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order
 
-from .util import new_test_table, new_test_keyspace, new_cql, unique_name, unique_key_int, is_scylla, ScyllaMetrics, config_value_context
+from .util import new_test_table, new_test_keyspace, new_cql, unique_name, unique_key_int, is_scylla, ScyllaMetrics, config_value_context, paging_plan_rederivations
 
 # A reproducer for issue #7443: Normally, when the entire table is SELECTed,
 # the partitions are returned sorted by the partitions' token. When there
@@ -1812,14 +1812,6 @@ def wait_for_index_gone(cql, keyspace, index_name, timeout_sec=60):
             return
         time.sleep(0.1)
     pytest.fail(f"Timeout ({timeout_sec} seconds) waiting for index {keyspace}.{index_name} to be gone")
-
-# Pages so far that re-derived their query plan, watched by the prepared tests
-# to tell a real exercise of the fix from a vacuous pass. 0 on Cassandra.
-def paging_plan_rederivations(cql):
-    if not is_scylla(cql):
-        return 0
-    count = ScyllaMetrics.query(cql).get('scylla_cql_select_paging_plan_rederivations')
-    return count if count is not None else 0
 
 # The following test starts a filtering request (with ALLOW FILTERING),
 # pages through the results, and between two pages adds a secondary-index

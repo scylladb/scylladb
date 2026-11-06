@@ -24,14 +24,11 @@ import pytest
 from test.pylib.skip_types import skip_env
 
 from .. import cql_frames
-from ..util import new_test_table
+from ..util import new_test_table, paging_plan_rederivations
 
 
 EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL"
 PAYLOAD_KEY = "tablets-routing-v2"
-
-CL_QUORUM = 0x0004
-VALUES_FLAG = 0x01
 
 PROTOCOL_ERROR = 0x000A
 
@@ -44,28 +41,13 @@ def connect(request, host, scylla_only):
         skip_env("The tests talk to the server over a plain socket")
     port = int(request.config.getoption("--port"))
     with cql_frames.connection(host, port) as sock:
-        response = cql_frames.request(sock, cql_frames.OPTIONS, b'')
-        assert response.opcode == cql_frames.SUPPORTED
-        supported = response.body.read_string_multimap()
+        supported = cql_frames.supported(sock)
     if EXTENSION not in supported:
         skip_env(f"The server doesn't support {EXTENSION}")
 
     def open_connection(negotiate: bool = True):
         return cql_frames.connection(host, port, {EXTENSION: ""} if negotiate else {})
     return open_connection
-
-
-# Sends an EXECUTE request of a prepared statement with the given int values.
-# `block` is the tablet version block, or None to leave it out.
-def execute(sock: socket.socket, statement_id: bytes, values: list[int], block: int | None) -> cql_frames.Response:
-    body = cql_frames.encode_short_bytes(statement_id)
-    body += cql_frames.encode_short(CL_QUORUM)
-    body += cql_frames.encode_byte(VALUES_FLAG)
-    body += cql_frames.encode_short(len(values))
-    body += b''.join(cql_frames.encode_bytes(cql_frames.encode_int(value)) for value in values)
-    if block is not None:
-        body += cql_frames.encode_byte(block)
-    return cql_frames.request(sock, cql_frames.EXECUTE, body)
 
 
 # The tablets-routing-v2 payload: a tuple (first token: bigint, last token:
@@ -107,11 +89,16 @@ def routing_information_of(response: cql_frames.Response) -> RoutingInformation 
 # The two blocks differ only in their value nibble, so they can't both match the
 # tablet's version: if the server checks the version, at least one of the
 # responses carries routing information. Returns the routing information of
-# each response, None for none.
-def execute_with_both_blocks(sock: socket.socket, statement_id: bytes, values: list[int]) -> list[RoutingInformation | None]:
+# each response, None for none. The paging arguments are as in
+# cql_frames.execute().
+def execute_with_both_blocks(sock: socket.socket, statement_id: bytes, values: list[int],
+                             page_size: int | None = None,
+                             paging_state: bytes | None = None) -> list[RoutingInformation | None]:
     infos: list[RoutingInformation | None] = []
     for block in (0x00, 0x01):
-        infos.append(routing_information_of(execute(sock, statement_id, values, block)))
+        response = cql_frames.execute(sock, statement_id, values, page_size=page_size, paging_state=paging_state,
+                                      tablet_version_block=block)
+        infos.append(routing_information_of(response))
     return infos
 
 
@@ -136,7 +123,7 @@ def tablet_last_tokens(cql, table: str) -> list[int]:
 def test_execute_without_extension(cql, connect, test_keyspace):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table, connect(negotiate=False) as sock:
         statement_id = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)").query_id
-        assert routing_information_of(execute(sock, statement_id, [1, 1], None)) is None
+        assert routing_information_of(cql_frames.execute(sock, statement_id, [1, 1])) is None
 
 
 # With the extension, the tablet version block is mandatory. The server reads
@@ -145,13 +132,13 @@ def test_execute_without_tablet_version_block(cql, connect, test_keyspace):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table, connect() as sock:
         statement_id = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)").query_id
 
-        response = execute(sock, statement_id, [1, 1], None)
+        response = cql_frames.execute(sock, statement_id, [1, 1])
         assert response.opcode == cql_frames.ERROR
         assert response.body.read_int() == PROTOCOL_ERROR
         assert response.body.read_string() == "truncated frame: expected 1 bytes, length is 0"
 
         # The same request with a block succeeds, so the rest of it is valid.
-        assert execute(sock, statement_id, [1, 1], 0x00).opcode == cql_frames.RESULT
+        assert cql_frames.execute(sock, statement_id, [1, 1], tablet_version_block=0x00).opcode == cql_frames.RESULT
 
 
 # The routing information is about the tablet of the partition the statement
@@ -196,6 +183,45 @@ def test_no_routing_information_for_range_scan(cql, connect, test_keyspace):
 
 # The partition key is a literal, so the driver can't compute the token, and the
 # server ignores the tablet version block.
-def test_no_routing_information_for_literal_partition_key(cql, connect, test_keyspace):
-    assert_no_routing_information(cql, connect, test_keyspace,
-                                  "INSERT INTO {} (pk, ck, v) VALUES (1, ?, ?)", [1, 1])
+@pytest.mark.parametrize("query,values", [
+    pytest.param("INSERT INTO {} (pk, ck, v) VALUES (1, ?, ?)", [1, 1], id="insert"),
+    pytest.param("SELECT * FROM {} WHERE pk = 1 AND ck = ?", [1], id="select"),
+])
+def test_no_routing_information_for_literal_partition_key(cql, connect, test_keyspace, query, values):
+    assert_no_routing_information(cql, connect, test_keyspace, query, values)
+
+
+# The same goes for a strongly consistent table.
+@pytest.mark.parametrize("query,values", [
+    pytest.param("INSERT INTO {} (pk, ck, v) VALUES (1, ?, ?)", [1, 1], id="insert"),
+    pytest.param("SELECT * FROM {} WHERE pk = 1 AND ck = ?", [1], id="select"),
+])
+def test_no_routing_information_for_literal_partition_key_strongly_consistent(cql, connect, sc_keyspace, query, values):
+    assert_no_routing_information(cql, connect, sc_keyspace, query, values)
+
+
+# A page continues with the query plan of the first page. If the plan of the
+# prepared statement has changed since, the server prepares the statement anew
+# with the plan of the first page. It's still the statement the driver
+# prepared, so the server still checks the tablet version block.
+def test_routing_information_after_query_plan_change(cql, connect, test_keyspace_tablets):
+    if not test_keyspace_tablets:
+        skip_env("The test needs a keyspace with tablets")
+    with new_test_table(cql, test_keyspace_tablets, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table, connect() as sock:
+        for ck in range(2):
+            cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, {ck}, 1)")
+        query = f"SELECT ck FROM {table} WHERE pk = ? AND v = ? ALLOW FILTERING"
+        statement_id = cql.prepare(query).query_id
+        first_page = cql_frames.execute(sock, statement_id, [1, 1], page_size=1, tablet_version_block=0x00)
+        paging_state = cql_frames.paging_state_of(first_page)
+        assert paging_state is not None
+
+        # The paging state pins the base table, while the statement, prepared
+        # anew, reads the index. The server only returns routing information
+        # for reads of the base table.
+        cql.execute(f"CREATE INDEX ON {table} ((pk), v)")
+        assert cql.prepare(query).query_id == statement_id
+        rederivations = paging_plan_rederivations(cql)
+        infos = execute_with_both_blocks(sock, statement_id, [1, 1], page_size=1, paging_state=paging_state)
+        assert paging_plan_rederivations(cql) > rederivations
+        assert any(info is not None for info in infos)
