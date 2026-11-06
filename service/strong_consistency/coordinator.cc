@@ -608,7 +608,9 @@ auto coordinator::mutate(schema_ptr schema,
             logger.trace("mutate(): no live replica, table {}.{}, token {}", schema->ks_name(), schema->cf_name(), token);
             ++get_stats().write_errors_unavailable;
             return ex;
-        } else if (try_catch<replica::no_such_column_family>(ex)) {
+        } else if (try_catch<replica::no_such_column_family>(ex)
+                // The exception type doesn't say which table is missing.
+                && !_db.column_family_exists(schema->id())) {
             logger.trace("mutate(): table {}.{} was dropped, token {}", schema->ks_name(), schema->cf_name(), token);
             ++get_stats().write_errors_table_dropped;
             return make_table_dropped_error(*schema);
@@ -842,7 +844,9 @@ auto coordinator::query(schema_ptr schema,
             logger.trace("query(): no live replica, table {}.{}, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
             ++get_stats().read_errors_unavailable;
             return ex;
-        } else if (try_catch<replica::no_such_column_family>(ex)) {
+        } else if (try_catch<replica::no_such_column_family>(ex)
+                // The exception type doesn't say which table is missing.
+                && !_db.column_family_exists(schema->id())) {
             logger.trace("query(): table {}.{} was dropped, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
             ++get_stats().read_errors_table_dropped;
             return make_table_dropped_error(*schema);
