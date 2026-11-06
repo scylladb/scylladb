@@ -4121,6 +4121,18 @@ db::replay_position db::commitlog::current_position() const {
     return _segment_manager->current_position();
 }
 
+ssize_t db::commitlog::get_available_memory_units() const {
+    return _segment_manager->_request_controller.available_units();
+}
+
+uint64_t db::commitlog::get_fast_path_allocations() const {
+    return _segment_manager->totals.fast_path_allocations;
+}
+
+uint64_t db::commitlog::get_requests_blocked_memory() const {
+    return _segment_manager->totals.requests_blocked_memory;
+}
+
 db::replay_position db::commitlog::flush_position() const {
     return _segment_manager->flush_position();
 }

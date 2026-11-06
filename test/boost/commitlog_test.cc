@@ -30,6 +30,10 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/shared_future.hh>
+#include <seastar/core/memory.hh>
+#include <seastar/core/preempt.hh>
+#include <seastar/util/later.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/closeable.hh>
 
@@ -2872,6 +2876,322 @@ SEASTAR_TEST_CASE(test_commitlog_replay_segment_order) {
             BOOST_CHECK_GT(replayed_ids[i], replayed_ids[i - 1]);
         }
     });
+}
+
+// Yields until the task quota is fresh; a no-op in debug, where need_preempt() is always true.
+static future<> fresh_task_quota() {
+#ifndef SEASTAR_DEBUG
+    while (need_preempt()) {
+        co_await seastar::yield();
+    }
+#endif
+    co_return;
+}
+
+// Adds a small entry for `id`, whose segment must already exist. Where the allocator
+// counts, checks that no coroutine frame was allocated, i.e. the fast path was taken.
+static future<rp_handle> add_on_fast_path(commitlog& log, table_id id, const sstring& data) {
+    co_await fresh_task_quota();
+#ifndef SEASTAR_DEBUG
+    auto fast = log.get_fast_path_allocations();
+#endif
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
+    auto mallocs = memory::stats().mallocs();
+#endif
+    auto f = log.add_mutation(id, data.size(), commitlog::force_sync::no, [&data] (db::commitlog::output& dst) {
+        dst.write(data.data(), data.size());
+    });
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
+    BOOST_CHECK_EQUAL(memory::stats().mallocs() - mallocs, 0);
+#endif
+#ifndef SEASTAR_DEBUG
+    BOOST_CHECK_EQUAL(log.get_fast_path_allocations() - fast, 1);
+#endif
+    co_return co_await std::move(f);
+}
+
+// Replays the segments a released log left behind and returns the entries in replay order.
+static future<std::vector<std::pair<replay_position, sstring>>> replay_entries(const commitlog::config& cfg) {
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto segs = co_await log.get_segments_to_replay();
+    std::ranges::sort(segs, std::less<>(), [&] (const sstring& f) { return commitlog::descriptor(f, cfg.fname_prefix).id; });
+    std::vector<std::pair<replay_position, sstring>> res;
+    commitlog::replay_state state;
+    for (auto& f : segs) {
+        co_await commitlog::read_log_file(state, f, cfg.fname_prefix, [&] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
+            auto linearization_buffer = bytes_ostream();
+            auto in = buf_rp.buffer.get_istream();
+            auto str = to_string_view(in.read_bytes_view(buf_rp.buffer.size_bytes(), linearization_buffer).value());
+            res.emplace_back(buf_rp.position, sstring(str));
+            co_return;
+        });
+    }
+    co_await log.shutdown();
+    co_await log.clear();
+    co_return res;
+}
+
+// Entries allocated on the fast path replay with their content and in write order.
+SEASTAR_TEST_CASE(test_commitlog_fast_path_replay) {
+    tmpdir tmp;
+    commitlog::config cfg;
+    cfg.commit_log_location = tmp.path().string();
+    cfg.metrics_category_name = "commitlog";
+    cfg.commitlog_sync_period_in_ms = 3600 * 1000; // the sync timer must not cycle buffers mid-loop
+    auto id = make_table_id();
+    std::vector<std::pair<replay_position, sstring>> written;
+    {
+        auto log = co_await commitlog::create_commitlog(cfg);
+        auto blocked = log.get_requests_blocked_memory();
+        sstring first = "first";
+        auto h = co_await log.add_mutation(id, first.size(), commitlog::force_sync::no, [&] (db::commitlog::output& dst) {
+            dst.write(first.data(), first.size());
+        });
+        written.emplace_back(h.release(), first);
+        for (int i = 0; i < 100; ++i) {
+            auto data = fmt::format("entry-{}", i);
+            auto h = co_await add_on_fast_path(log, id, data);
+            BOOST_REQUIRE_GT(h.rp(), written.back().first);
+            written.emplace_back(h.release(), data);
+        }
+        BOOST_CHECK_EQUAL(log.get_requests_blocked_memory(), blocked);
+        co_await log.sync_all_segments();
+        co_await log.release();
+        co_await log.shutdown();
+    }
+    auto replayed = co_await replay_entries(cfg);
+    BOOST_CHECK_MESSAGE(replayed == written, fmt::format("replayed {} != written {}", replayed, written));
+}
+
+// Entries that do not fit the fast path (too large, or the segment is full) fall back
+// to the slow path without leaving anything behind, and replay intact.
+SEASTAR_TEST_CASE(test_commitlog_fast_path_fallbacks) {
+    tmpdir tmp;
+    commitlog::config cfg;
+    cfg.commit_log_location = tmp.path().string();
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 16 * this_smp_shard_count();
+    cfg.allow_fragmented_entries = true;
+    auto id = make_table_id();
+    std::vector<std::pair<replay_position, sstring>> written;
+    {
+        auto log = co_await commitlog::create_commitlog(cfg);
+        // Returns whether the entry was allocated on the fast path.
+        auto add = [&] (sstring data) -> future<bool> {
+            co_await fresh_task_quota();
+            auto fast = log.get_fast_path_allocations();
+            auto h = co_await log.add_mutation(id, data.size(), commitlog::force_sync::no, [&] (db::commitlog::output& dst) {
+                dst.write(data.data(), data.size());
+            });
+            written.emplace_back(h.release(), std::move(data));
+            co_return log.get_fast_path_allocations() > fast;
+        };
+        co_await add("first");
+        co_await log.sync_all_segments(); // an oversized entry waits for all memory units
+#ifndef SEASTAR_DEBUG
+        // A normal entry takes the fast path, so the gate is open for the fallbacks below.
+        BOOST_CHECK(co_await add("normal"));
+#endif
+        // Passes the fast path's size check, but is too large with its entry overhead.
+        BOOST_CHECK(!(co_await add(sstring(log.max_record_size() + 1, 'o'))));
+        // Small entries until the segment rolls over twice; an entry that rolls over is not fast.
+        std::set<segment_id_type> segments;
+        for (int i = 0; segments.size() < 3; ++i) {
+            bool fast = co_await add(fmt::format("entry-{:01000}", i));
+            if (!segments.empty() && !segments.contains(written.back().first.id)) {
+                BOOST_CHECK(!fast);
+            }
+            segments.insert(written.back().first.id);
+        }
+        co_await log.sync_all_segments();
+        co_await log.release();
+        co_await log.shutdown();
+    }
+    auto replayed = co_await replay_entries(cfg);
+    BOOST_REQUIRE_EQUAL(replayed.size(), written.size());
+    for (size_t i = 0; i < written.size(); ++i) {
+        BOOST_CHECK_EQUAL(replayed[i].first, written[i].first);
+        BOOST_CHECK(replayed[i].second == written[i].second);
+    }
+}
+
+// Adds an entry that must not take the fast path, as it waits for an fsync.
+static future<rp_handle> add_off_fast_path(commitlog& log, table_id id, const sstring& data, commitlog::force_sync sync) {
+    co_await fresh_task_quota();
+#ifndef SEASTAR_DEBUG
+    auto fast = log.get_fast_path_allocations();
+#endif
+    auto h = co_await log.add_mutation(id, data.size(), sync, [&data] (db::commitlog::output& dst) {
+        dst.write(data.data(), data.size());
+    });
+#ifndef SEASTAR_DEBUG
+    BOOST_CHECK_EQUAL(log.get_fast_path_allocations(), fast);
+#endif
+    co_return h;
+}
+
+// Batch mode and force_sync entries skip the fast path, and are on disk once they resolve, in order.
+SEASTAR_TEST_CASE(test_commitlog_fast_path_skips_batch_and_sync) {
+    commitlog::config cfg;
+    cfg.mode = commitlog::sync_mode::BATCH;
+    cfg.commitlog_sync_period_in_ms = 3600 * 1000;
+    co_await cl_test(cfg, [] (commitlog& log) -> future<> {
+        auto id = make_table_id();
+        std::vector<sstring> written{"first"};
+        auto h = co_await log.add_mutation(id, written[0].size(), commitlog::force_sync::no, [&] (db::commitlog::output& dst) {
+            dst.write(written[0].data(), written[0].size());
+        });
+        h.release();
+        for (int i = 0; i < 10; ++i) {
+            written.push_back(fmt::format("entry-{}", i));
+            auto flushes = log.get_flush_count();
+            auto h = co_await add_off_fast_path(log, id, written.back(), commitlog::force_sync::no);
+            BOOST_CHECK_GT(log.get_flush_count(), flushes);
+            h.release();
+        }
+        auto segments = log.get_active_segment_names();
+        BOOST_REQUIRE_EQUAL(segments.size(), 1);
+        // Read the file directly, without syncing first.
+        std::vector<sstring> on_disk;
+        try {
+            co_await commitlog::read_log_file(segments[0], commitlog::descriptor::FILENAME_PREFIX, [&] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
+                auto linearization_buffer = bytes_ostream();
+                auto in = buf_rp.buffer.get_istream();
+                on_disk.emplace_back(to_string_view(in.read_bytes_view(buf_rp.buffer.size_bytes(), linearization_buffer).value()));
+                co_return;
+            });
+        } catch (commitlog::segment_truncation&) {
+            // the unwritten tail of the active segment
+        }
+        BOOST_CHECK_MESSAGE(on_disk == written, fmt::format("on disk {} != written {}", on_disk, written));
+    });
+
+    // In periodic mode only force_sync entries skip it.
+    cfg.mode = commitlog::sync_mode::PERIODIC;
+    co_await cl_test(cfg, [] (commitlog& log) -> future<> {
+        auto id = make_table_id();
+        (co_await log.add_mutation(id, 5, commitlog::force_sync::no, [] (db::commitlog::output& dst) {
+            dst.write("first", 5);
+        })).release();
+        // Before the sync: it drops the buffer, and the next allocation would malloc a new one.
+        (co_await add_on_fast_path(log, id, "unsynced")).release();
+        (co_await add_off_fast_path(log, id, "synced", commitlog::force_sync::yes)).release();
+    });
+}
+
+// A writer exception on the fast path comes back as a failed future and later allocations still work.
+SEASTAR_TEST_CASE(test_commitlog_fast_path_writer_exception) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    cfg.commitlog_sync_period_in_ms = 3600 * 1000;
+    return cl_test(cfg, [] (commitlog& log) -> future<> {
+        auto id = make_table_id();
+        sstring first = "first";
+        (co_await log.add_mutation(id, first.size(), commitlog::force_sync::no, [&] (db::commitlog::output& dst) {
+            dst.write(first.data(), first.size());
+        })).release();
+        (co_await add_on_fast_path(log, id, "probe")).release(); // fast path conditions hold
+        co_await fresh_task_quota();
+        auto f = log.add_mutation(id, 100, commitlog::force_sync::no, [] (db::commitlog::output&) {
+            throw std::runtime_error("writer failed");
+        });
+#ifndef SEASTAR_DEBUG
+        BOOST_REQUIRE(f.failed());
+#endif
+        BOOST_CHECK_THROW(co_await std::move(f), std::runtime_error);
+        BOOST_CHECK_EQUAL(log.get_pending_allocations(), 0);
+        (co_await add_on_fast_path(log, id, "after")).release();
+    });
+}
+
+// While memory waiters are queued, a new entry queues behind them even if its own units
+// are available, and is written after them.
+SEASTAR_TEST_CASE(test_commitlog_fast_path_keeps_fifo) {
+    static auto nada = [] (std::exception_ptr) {};
+    // Holds commitlog file writes while blocked, so memory units are not returned.
+    struct write_gate {
+        bool blocked = false;
+        shared_promise<> opened;
+    };
+    class gated_file_impl : public checked_file_impl {
+        write_gate& _gate;
+    public:
+        gated_file_impl(file f, write_gate& g) : checked_file_impl(nada, std::move(f)), _gate(g) {}
+        future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
+            if (_gate.blocked) {
+                co_await _gate.opened.get_shared_future();
+            }
+            co_return co_await checked_file_impl::write_dma(pos, buffer, len, intent);
+        }
+    };
+    class gated_cl_ext : public commitlog_file_extension {
+        write_gate& _gate;
+    public:
+        explicit gated_cl_ext(write_gate& g) : _gate(g) {}
+        future<file> wrap_file(const sstring&, file f, open_flags) override {
+            co_return file(make_shared<gated_file_impl>(std::move(f), _gate));
+        }
+        future<> before_delete(const sstring&) override { return make_ready_future<>(); }
+        future<> before_rename(const sstring&, const sstring&) override { return make_ready_future<>(); }
+        future<> after_rename(const sstring&, const sstring&) override { return make_ready_future<>(); }
+    };
+
+    write_gate gate;
+    db::extensions exts;
+    exts.add_commitlog_file_extension("gate", std::make_unique<gated_cl_ext>(gate));
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    cfg.commitlog_segment_size_in_mb = 4;
+    cfg.extensions = &exts;
+
+    co_await cl_test(cfg, seastar::coroutine::lambda([&gate] (commitlog& log) -> future<> {
+        auto open_gate = defer([&gate] () noexcept {
+            if (gate.blocked) {
+                gate.blocked = false;
+                gate.opened.set_value();
+            }
+        });
+        auto id = make_table_id();
+        auto add = [&] (size_t size) {
+            return log.add_mutation(id, size, commitlog::force_sync::no, [size] (db::commitlog::output& dst) {
+                dst.fill('x', size);
+            });
+        };
+        (co_await add(10)).release();
+        gate.blocked = true;
+        auto blocked = log.get_requests_blocked_memory();
+
+        // Fill memory until an entry has to wait for units.
+        auto big = log.max_record_size() / 4;
+        std::vector<future<rp_handle>> filled;
+        while (log.get_pending_allocations() == 0) {
+            filled.push_back(add(big));
+        }
+        BOOST_REQUIRE_EQUAL(log.get_pending_allocations(), 1);
+        BOOST_REQUIRE(!filled.back().available());
+        BOOST_CHECK_EQUAL(log.get_requests_blocked_memory(), blocked + 1);
+
+        constexpr size_t small = 10;
+        BOOST_REQUIRE_GT(log.get_available_memory_units(), ssize_t(small));
+        // Fresh task quota, so only the waiter can keep the entry off the fast path.
+        co_await fresh_task_quota();
+        auto f = add(small);
+        BOOST_CHECK(!f.available());
+        BOOST_CHECK_EQUAL(log.get_pending_allocations(), 2);
+        BOOST_CHECK_EQUAL(log.get_requests_blocked_memory(), blocked + 2);
+
+        gate.blocked = false;
+        gate.opened.set_value();
+        auto waiter = co_await std::move(filled.back());
+        filled.pop_back();
+        auto h = co_await std::move(f);
+        BOOST_CHECK_LT(waiter.rp(), h.rp());
+        for (auto& f : filled) {
+            (co_await std::move(f)).release();
+        }
+        waiter.release();
+        h.release();
+    }));
 }
 
 // Helper: verify column mapping is included in the first entry for a schema
