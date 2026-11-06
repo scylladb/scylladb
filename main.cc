@@ -2176,6 +2176,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 groups_manager.local().stop_all_shards().get();
             });
 
+            // A snapshot of a strongly consistent table first makes its local replicas
+            // apply the writes committed so far, so that it holds every acked write.
+            db.invoke_on_all([&groups_manager] (replica::database& db) {
+                db.plug_strongly_consistent_apply_barrier([&groups_manager] (table_id table) {
+                    return groups_manager.local().wait_for_committed_writes(table);
+                });
+            }).get();
+            auto unplug_sc_apply_barrier = defer_verbose_shutdown("strongly consistent apply barrier", [&db] {
+                db.invoke_on_all(&replica::database::unplug_strongly_consistent_apply_barrier).get();
+            });
+
             checkpoint(stop_signal, "initializing strongly consistent coordinator");
             sharded<service::strong_consistency::coordinator> sc_coordinator;
             sc_coordinator.start(std::ref(groups_manager), std::ref(db), std::ref(gossiper), sc_coordinator_stats_key).get();
